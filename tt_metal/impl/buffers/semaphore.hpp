@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <variant>
 
 #include <tt-metalium/core_coord.hpp>
 #include <umd/device/soc_descriptor.hpp>
@@ -46,5 +47,13 @@ private:
     uint32_t initial_value_;  // Initial value of semaphore
     CoreType core_type_;
 };
+
+class Program;
+
+uint32_t CreateSemaphore(
+    Program& program,
+    const std::variant<CoreRange, CoreRangeSet>& core_spec,
+    uint32_t initial_value,
+    CoreType core_type);
 
 }  // namespace tt::tt_metal

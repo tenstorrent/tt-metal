@@ -95,6 +95,7 @@ target_link_libraries(
         capnp
         capnp-rpc
         protobuf::libprotobuf
+        libdwarf::dwarf-static
 )
 
 target_include_directories(

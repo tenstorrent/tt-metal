@@ -105,22 +105,27 @@ class VectorExportSource(VectorSource):
             self.export_dir = export_dir
 
     def _find_module_files(self, module_name: str) -> list[pathlib.Path]:
-        """Find all JSON files for a given module (including mesh variants)"""
+        """Find all JSON files for a given module (including grouped variants)."""
         all_files = []
 
-        # First try exact match (backward compatibility)
+        # First try exact match
         exact_match = list(self.export_dir.glob(f"{module_name}.json"))
         if exact_match:
             all_files.extend(exact_match)
 
-        # Also look for mesh-suffixed variants (e.g., module__mesh_2x4.json)
-        mesh_variants = list(self.export_dir.glob(f"{module_name}__mesh_*.json"))
+        # Also look for grouped variants using the dotted suffix format.
+        mesh_variants = list(self.export_dir.glob(f"{module_name}.mesh_*.json"))
         if mesh_variants:
             logger.info(f"Found {len(mesh_variants)} mesh variant file(s) for module '{module_name}'")
             all_files.extend(sorted(mesh_variants))  # Sort for consistent ordering
 
+        hardware_variants = list(self.export_dir.glob(f"{module_name}.hw_*.json"))
+        if hardware_variants:
+            logger.info(f"Found {len(hardware_variants)} hardware variant file(s) for module '{module_name}'")
+            all_files.extend(sorted(hardware_variants))
+
         if all_files:
-            return all_files
+            return sorted(set(all_files))
 
         logger.warning(f"No vector file found for module '{module_name}' in {self.export_dir}")
         try:
@@ -200,7 +205,7 @@ class VectorExportSource(VectorSource):
             return None
 
     def load_vectors(self, module_name: str, suite_name: str | None = None, vector_id: str | None = None) -> list[dict]:
-        """Load test vectors from vectors_export directory (including mesh variants)
+        """Load test vectors from vectors_export directory (including grouped variants)
 
         If MESH_DEVICE_SHAPE environment variable is set, filters vectors to only load
         those matching the current machine's configuration.
@@ -322,79 +327,53 @@ class VectorExportSource(VectorSource):
                                             pass
                                 return None
 
-                            # Filter vectors based on hardware compatibility.
-                            # Lead models use strict 4-field matching (board_type, device_series,
-                            # card_count, device_count) since they are routed to correct hardware.
-                            # Non-lead runs skip vectors whose traced card_count exceeds the current
-                            # machine's card_count (e.g. galaxy vectors are skipped on N150 but run
-                            # on galaxy machines).
+                            # Filter vectors based on hardware compatibility for all model_traced runs.
+                            # CI now routes model_traced work by traced hardware, so vectors should
+                            # only load when their traced machine metadata matches the current runner.
                             skip_for_resources = False
                             if current_machine_info and traced_machine_entries:
-                                if is_lead_models:
-                                    current_board = current_machine_info.get("board_type", "").lower()
-                                    current_series = current_machine_info.get("device_series", "").lower()
-                                    current_card_count = current_machine_info.get("card_count")
-                                    current_device_count = current_machine_info.get("device_count")
+                                current_board = current_machine_info.get("board_type", "").lower()
+                                current_series = current_machine_info.get("device_series", "").lower()
+                                current_card_count = current_machine_info.get("card_count")
+                                current_device_count = current_machine_info.get("device_count")
 
-                                    has_matching_hardware = False
-                                    for entry in traced_machine_entries:
-                                        traced_board = entry.get("board_type", "").lower()
-                                        traced_series = entry.get("device_series", "").lower()
-                                        traced_card_count = entry.get("card_count")
-                                        traced_device_count = entry.get("device_count")
+                                has_matching_hardware = False
+                                for entry in traced_machine_entries:
+                                    traced_board = entry.get("board_type", "").lower()
+                                    traced_series = entry.get("device_series", "").lower()
+                                    traced_card_count = entry.get("card_count")
+                                    traced_device_count = entry.get("device_count")
 
-                                        board_match = (
-                                            not traced_board
-                                            or not current_board
-                                            or traced_board == current_board
-                                            or ("wormhole" in traced_board and "wormhole" in current_board)
-                                        )
-                                        series_match = (
-                                            not traced_series or not current_series or traced_series == current_series
-                                        )
-                                        card_match = (
-                                            traced_card_count is None or traced_card_count == current_card_count
-                                        )
+                                    board_match = (
+                                        not traced_board
+                                        or not current_board
+                                        or traced_board == current_board
+                                        or ("wormhole" in traced_board and "wormhole" in current_board)
+                                    )
+                                    series_match = (
+                                        not traced_series or not current_series or traced_series == current_series
+                                    )
+                                    card_match = traced_card_count is None or traced_card_count == current_card_count
+                                    device_match = True
+                                    if is_lead_models:
                                         device_match = (
                                             traced_device_count is None or traced_device_count == current_device_count
                                         )
 
-                                        if board_match and series_match and card_match and device_match:
-                                            has_matching_hardware = True
-                                            break
+                                    if board_match and series_match and card_match and device_match:
+                                        has_matching_hardware = True
+                                        break
 
-                                    if not has_matching_hardware:
-                                        logger.debug(
-                                            f"Skipping vector - traced hardware does not match current machine "
-                                            f"(current: board_type={current_machine_info.get('board_type')}, "
-                                            f"device_series={current_machine_info.get('device_series')}, "
-                                            f"card_count={current_machine_info.get('card_count')}, "
-                                            f"device_count={current_machine_info.get('device_count')})"
-                                        )
-                                        machine_mismatch_count += 1
-                                        skip_for_resources = True
-                                else:
-                                    # For non-lead runs: skip vectors that require more hardware than the
-                                    # current machine provides. Compare traced card_count against
-                                    # current_machine_info.card_count so that galaxy vectors run on
-                                    # galaxy machines and are skipped only on machines with fewer cards
-                                    # (e.g. N150).  If the current card_count is unknown (None),
-                                    # skip this filter entirely to avoid incorrectly rejecting
-                                    # multi-card vectors on capable machines.
-                                    current_card_count = current_machine_info.get("card_count")
-                                    if current_card_count is not None:
-                                        has_compatible_card_count = any(
-                                            entry.get("card_count") is None
-                                            or entry.get("card_count", 1) <= current_card_count
-                                            for entry in traced_machine_entries
-                                        )
-                                        if not has_compatible_card_count:
-                                            logger.debug(
-                                                f"Skipping vector - traced card_count exceeds current machine "
-                                                f"card_count={current_card_count}"
-                                            )
-                                            machine_mismatch_count += 1
-                                            skip_for_resources = True
+                                if not has_matching_hardware:
+                                    logger.debug(
+                                        f"Skipping vector - traced hardware does not match current machine "
+                                        f"(current: board_type={current_machine_info.get('board_type')}, "
+                                        f"device_series={current_machine_info.get('device_series')}, "
+                                        f"card_count={current_machine_info.get('card_count')}, "
+                                        f"device_count={current_machine_info.get('device_count')})"
+                                    )
+                                    machine_mismatch_count += 1
+                                    skip_for_resources = True
 
                             if skip_for_resources:
                                 continue
@@ -461,12 +440,12 @@ class VectorExportSource(VectorSource):
         return all_vectors
 
     def get_available_suites(self, module_name: str) -> list[str]:
-        """Get list of available suites for a module from vectors_export directory (including mesh variants)"""
+        """Get list of available suites for a module from vectors_export directory (including grouped variants)."""
         module_files = self._find_module_files(module_name)
         if not module_files:
             return []
 
-        # Collect unique suite names across all mesh variant files
+        # Collect unique suite names across all grouped variant files
         all_suites = set()
         for module_file in module_files:
             try:

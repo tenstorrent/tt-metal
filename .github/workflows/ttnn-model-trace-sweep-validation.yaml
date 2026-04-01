@@ -1,0 +1,108 @@
+name: "ttnn - model trace sweep validation"
+
+run-name: >-
+  ttnn - sweep validation (${{
+    github.ref_name
+  }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      allow-partial-hash-changes:
+        type: boolean
+        description: "Continue if some, but not all, config hashes change during preflight"
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  display-manifest-options:
+    name: Display manifest configuration
+    runs-on: ubuntu-latest
+    outputs:
+      manifest-path: ${{ steps.parse-manifest.outputs.manifest_path }}
+      scope-targets: ${{ steps.parse-manifest.outputs.scope_targets }}
+      models: ${{ steps.parse-manifest.outputs.models }}
+      trace-ids: ${{ steps.parse-manifest.outputs.trace_ids }}
+      caller-id: ${{ format('{0}/run-{1}/attempt-{2}', github.workflow, github.run_id, github.run_attempt) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install manifest parser dependency
+        run: pip3 install PyYAML
+
+      - name: Parse manifest
+        id: parse-manifest
+        run: |
+          python3 - <<'PY'
+          import os
+          import yaml
+
+          manifest_path = "model_tracer/sweep_manifest.yaml"
+          with open(manifest_path, "r", encoding="utf-8") as f:
+              manifest = yaml.safe_load(f)
+
+          targets = manifest.get("targets", {})
+          target_keys = set(targets.keys())
+          if target_keys == {"lead_models"}:
+              scope_target = "lead_models"
+          elif target_keys == {"model_traced"}:
+              scope_target = "model_traced"
+          elif {"lead_models", "model_traced"}.issubset(target_keys):
+              scope_target = "all"
+          else:
+              scope_target = "none"
+
+          all_models = []
+          all_trace_ids = []
+          for entries in targets.values():
+              for entry in entries or []:
+                  all_models.extend(entry.get("model", []))
+                  all_trace_ids.extend(entry.get("trace", []))
+
+          unique_models = sorted(set(all_models))
+          unique_trace_ids = sorted(set(all_trace_ids))
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"manifest_path={manifest_path}\n")
+              out.write(f"scope_targets={scope_target}\n")
+              out.write(f"models={', '.join(unique_models) or 'none'}\n")
+              out.write(f"trace_ids={', '.join(str(trace_id) for trace_id in unique_trace_ids) or 'auto-resolve'}\n")
+          PY
+
+      - name: Display selected manifest options
+        run: |
+          echo "::group::🔧 Workflow Configuration Options"
+          echo "┌─────────────────────────────────────────────────────────────┐"
+          echo "│             TTNN Sweep Validation Configuration             │"
+          echo "├─────────────────────────────────────────────────────────────┤"
+          echo "│ Branch/Ref:           ${{ github.ref_name }}"
+          echo "│ Manifest:             ${{ steps.parse-manifest.outputs.manifest_path }}"
+          echo "│ Scope Target:         ${{ steps.parse-manifest.outputs.scope_targets }}"
+          echo "│ Models:               ${{ steps.parse-manifest.outputs.models }}"
+          echo "│ Trace IDs:            ${{ steps.parse-manifest.outputs.trace_ids }}"
+          echo "│ Allow Partial Changes:${{ inputs.allow-partial-hash-changes && ' true' || ' false' }}"
+          echo "└─────────────────────────────────────────────────────────────┘"
+          echo "::endgroup::"
+
+          echo "::group::📊 Workflow Context Information"
+          echo "Run ID: ${{ github.run_id }}"
+          echo "Run Number: ${{ github.run_number }}"
+          echo "Run Attempt: ${{ github.run_attempt }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "::endgroup::"
+
+  validate-model-traces:
+    needs: display-manifest-options
+    uses: ./.github/workflows/ttnn-sweep-validation-impl.yaml
+    secrets: inherit
+    with:
+      manifest-path: ${{ needs.display-manifest-options.outputs.manifest-path }}
+      scope-targets: ${{ needs.display-manifest-options.outputs.scope-targets }}
+      models: ${{ needs.display-manifest-options.outputs.models }}
+      trace-ids: ${{ needs.display-manifest-options.outputs.trace-ids }}
+      caller-id: ${{ needs.display-manifest-options.outputs.caller-id }}
+      allow-partial-hash-changes: ${{ inputs.allow-partial-hash-changes }}
