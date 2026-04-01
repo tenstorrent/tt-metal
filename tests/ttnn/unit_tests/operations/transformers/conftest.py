@@ -4,6 +4,10 @@
 
 """Directory-local fixtures for transformers op tests.
 
+Session-scoped device fixture not applied: tests in this group use
+@pytest.mark.parametrize("device_params", ...) which conflicts with a
+shared session device. Refactor those tests first.
+
 Do not define ``mesh_device`` here: it would shadow the repo-root fixture and break
 indirect parametrization (e.g. ``test_prefetcher_TG.py`` (2,2), ``test_paged_cache_mask.py`` (1,2)).
 
