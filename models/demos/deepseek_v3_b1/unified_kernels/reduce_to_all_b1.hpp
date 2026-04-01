@@ -281,7 +281,6 @@ struct ReduceToAllB1 {
             if constexpr (CTArgs::is_fabric_core) {
                 // FC NCRISC: forward R1(B) + R2(A) to BWD neighbor
                 // Identical pattern to sdpa_reduce_forwarder.hpp
-                DPRINT << "NCRISC FC BWD start" << ENDL();
 
                 const uint32_t buf_base = get_write_ptr(CTArgs::packet_cb) + CTArgs::ncrisc_buffer_offset;
                 const uint32_t r1_base = buf_base;
@@ -298,7 +297,6 @@ struct ReduceToAllB1 {
                 volatile tt_l1_ptr uint32_t* r2_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r2_sem_addr);
 
                 bwd_sender.open();
-                DPRINT << "NCRISC FC BWD conn open" << ENDL();
                 {
                     uint32_t r1_sent = 0;
                     uint32_t r2_sent = 0;
@@ -312,12 +310,10 @@ struct ReduceToAllB1 {
                 }
                 bwd_sender.close();
                 noc_async_full_barrier();
-                DPRINT << "NCRISC FC BWD done" << ENDL();
                 return;
             }
 
             // Worker NCRISC — receive data for 3 rounds
-            DPRINT << "NCRISC worker start" << ENDL();
             if constexpr (!SkipLocalCbPush) {
                 cb_reserve_back(CTArgs::local_cb, CTArgs::num_tiles);
                 cb_push_back(CTArgs::local_cb, CTArgs::num_tiles);
@@ -332,17 +328,14 @@ struct ReduceToAllB1 {
             cb_reserve_back(CTArgs::received_cb, CTArgs::num_tiles);
             wait_round(args.recv_sem_round1);
             cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
-            DPRINT << "NCRISC R1 done" << ENDL();
 
             cb_reserve_back(CTArgs::received_cb, CTArgs::num_tiles);
             wait_round(args.recv_sem_round2);
             cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
-            DPRINT << "NCRISC R2 done" << ENDL();
 
             cb_reserve_back(CTArgs::received_cb, CTArgs::num_tiles);
             wait_round(args.recv_sem_round3);
             cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
-            DPRINT << "NCRISC R3 done" << ENDL();
 
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================
@@ -351,8 +344,6 @@ struct ReduceToAllB1 {
             constexpr uint32_t pkt_hdr_bytes = sizeof(PACKET_HEADER_TYPE);
 
             if constexpr (CTArgs::is_fabric_core) {
-                DPRINT << "BRISC FC start" << ENDL();
-
                 const uint32_t buf_base = get_write_ptr(CTArgs::packet_cb);
                 const uint32_t r1_base = buf_base;
                 const uint32_t r2_base = buf_base + CTArgs::r2_buffer_offset;
@@ -372,7 +363,6 @@ struct ReduceToAllB1 {
 
                 // Phase 1: forward R1(A)+R2(B) to FWD neighbor
                 fwd_sender.open();
-                DPRINT << "BRISC FC FWD open" << ENDL();
                 {
                     uint32_t r1_sent = 0;
                     uint32_t r2_sent = 0;
@@ -386,13 +376,11 @@ struct ReduceToAllB1 {
                 }
                 fwd_sender.close();
                 noc_async_full_barrier();
-                DPRINT << "BRISC FC FWD done" << ENDL();
 
                 // Phase 2: forward R3 to cross-column partner
                 auto r3_sender =
                     tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
                 r3_sender.open();
-                DPRINT << "BRISC FC R3 open" << ENDL();
                 {
                     uint32_t r3_sent = 0;
                     do {
@@ -403,7 +391,6 @@ struct ReduceToAllB1 {
                 }
                 r3_sender.close();
                 noc_async_full_barrier();
-                DPRINT << "BRISC FC R3 done" << ENDL();
                 return;
             }
 
@@ -415,8 +402,6 @@ struct ReduceToAllB1 {
 
             PacketHeaderPool::reset();
             auto* packet_header = PacketHeaderPool::allocate_header(1);
-
-            DPRINT << "BRISC W start typeA=" << args.is_type_a << ENDL();
 
             // R1: Type A → FWD (fwd_dst), Type B → BWD (bwd_dst)
             {
@@ -441,7 +426,6 @@ struct ReduceToAllB1 {
                     args.r1_sem_addr,
                     args.r1_slot_bit);
             }
-            DPRINT << "BRISC W R1 done" << ENDL();
 
             // R2: Type A → BWD (bwd_dst), Type B → FWD (fwd_dst)
             {
@@ -472,7 +456,6 @@ struct ReduceToAllB1 {
                 cb_push_back(CTArgs::reload_cb, CTArgs::num_tiles);
                 cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
             }
-            DPRINT << "BRISC W R2 done" << ENDL();
 
             // R3: send column sum to FC for cross-column forwarding
             {
@@ -501,7 +484,6 @@ struct ReduceToAllB1 {
                 cb_push_back(CTArgs::reload_cb, CTArgs::num_tiles);
                 cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
             }
-            DPRINT << "BRISC W R3 done" << ENDL();
 
             // Output: write final result
             {
@@ -516,7 +498,6 @@ struct ReduceToAllB1 {
             if constexpr (SkipLocalCbPush) {
                 cb_pop_front(CTArgs::local_cb, CTArgs::num_tiles);
             }
-            DPRINT << "BRISC W done" << ENDL();
 
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================

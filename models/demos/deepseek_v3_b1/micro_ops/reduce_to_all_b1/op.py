@@ -114,9 +114,6 @@ class ReduceToAllB1:
 
         kernel_path = "models/demos/deepseek_v3_b1/micro_ops/reduce_to_all_b1/kernels/reduce_to_all_kernel.cpp"
 
-        print(f"[ReduceToAllB1] num_compute_tiles={num_compute_tiles} payload={payload_size_bytes}")
-        print(f"[ReduceToAllB1] num_workers_per_link={num_workers_per_link} total={len(shard_cores)}")
-
         # Forwarder bitmask semaphore IDs (program-local, matching sdpa_reduce_to_all)
         fwd_r1_sem_id = 0
         fwd_r2_sem_id = 1
@@ -195,13 +192,6 @@ class ReduceToAllB1:
                 ncrisc_buf_offset = brisc_buf_size
                 r3_buf_offset = 4 * slots_per_direction * slot_size_bytes
                 packet_cb_slots = 4 * slots_per_direction + num_workers_per_link
-
-                print(
-                    f"[ReduceToAllB1] dev({row},{col}) fwd=({fwd_row},{col}) bwd=({bwd_row},{col}) r3=({row},{r3_col})"
-                )
-                print(
-                    f"[ReduceToAllB1] dev({row},{col}) slots_per_dir={slots_per_direction} packet_cb_slots={packet_cb_slots}"
-                )
 
                 # Gather per-link info
                 links = []

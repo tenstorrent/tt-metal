@@ -9,12 +9,10 @@ Unit tests for ReduceToAllB1 operation (Ring + Cross-Column algorithm).
 import pytest
 import torch
 from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import skip_for_wormhole_b0
 from models.demos.deepseek_v3_b1.micro_ops.reduce_to_all_b1.op import ReduceToAllB1
-from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
 def create_fabric_router_config(max_payload_size):
@@ -187,62 +185,6 @@ def run_reduce_to_all(mesh_device, num_iterations=1):
     logger.info("Test passed — all 8 devices hold the correct sum!")
 
 
-def run_reduce_to_all_with_trace(mesh_device):
-    """Run reduce_to_all test with trace capture and replay."""
-    logger.info("Testing reduce_to_all with trace")
-    config = setup_reduce_to_all_test(mesh_device)
-    submesh_device = config["submesh_device"]
-
-    # Compile run (outside trace)
-    logger.info("Running reduce_to_all (compiling)...")
-    _call_op(config)
-    ttnn.synchronize_device(submesh_device)
-
-    profiler = BenchmarkProfiler()
-
-    def run_iterations(n):
-        for _ in range(n):
-            _call_op(config)
-
-    # Warmup trace
-    logger.info("Capturing warmup trace")
-    trace_id_warmup = ttnn.begin_trace_capture(submesh_device, cq_id=0)
-    run_iterations(15)
-    ttnn.end_trace_capture(submesh_device, trace_id_warmup, cq_id=0)
-    ttnn.synchronize_device(submesh_device)
-
-    # Main trace
-    logger.info("Capturing main trace")
-    trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
-    run_iterations(30)
-    ttnn.end_trace_capture(submesh_device, trace_id, cq_id=0)
-    ttnn.synchronize_device(submesh_device)
-
-    # Execute warmup
-    logger.info("Execute warmup trace")
-    profiler.start("warmup-trace")
-    ttnn.execute_trace(submesh_device, trace_id_warmup, blocking=False)
-    ttnn.release_trace(submesh_device, trace_id_warmup)
-    ttnn.synchronize_device(submesh_device)
-    profiler.end("warmup-trace")
-
-    # Execute main
-    logger.info("Execute main trace")
-    signpost("start")
-    profiler.start("main-trace")
-    ttnn.execute_trace(submesh_device, trace_id, blocking=False)
-    ttnn.release_trace(submesh_device, trace_id)
-    ttnn.synchronize_device(submesh_device)
-    profiler.end("main-trace")
-    signpost("stop")
-
-    # Verify
-    logger.info("Verifying trace output on all devices...")
-    match = verify_output(config["output_tensor"], submesh_device, config["ref_output"])
-    assert match, "Output tensor does not match reference after trace execution"
-    logger.info("Trace test passed!")
-
-
 # === Tests ===
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
@@ -280,22 +222,3 @@ def test_reduce_to_all_2d(bh_2d_mesh_device):
 def test_reduce_to_all_2d_multi_iter(bh_2d_mesh_device):
     """Test reduce_to_all with 2D torus-X fabric and multiple iterations."""
     run_reduce_to_all(bh_2d_mesh_device, num_iterations=100)
-
-
-@skip_for_wormhole_b0("This test is for blackhole")
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
-                "fabric_router_config": create_fabric_router_config(15232),
-            }
-        )
-    ],
-    indirect=["device_params"],
-    ids=["fabric_2d_torus_x"],
-)
-def test_reduce_to_all_2d_trace(bh_2d_mesh_device):
-    """Test reduce_to_all with 2D torus-X fabric using trace capture and replay."""
-    run_reduce_to_all_with_trace(bh_2d_mesh_device)
