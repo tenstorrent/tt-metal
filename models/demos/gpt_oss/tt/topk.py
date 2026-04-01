@@ -30,7 +30,7 @@ def topk_router(g, experts_per_token, use_throughput_experts, softmax_compute_co
     if softmax_compute_config is None:
         softmax_compute_config = ttnn.init_device_compute_kernel_config(
             g.device().arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi3,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -73,7 +73,7 @@ class TopKRouter:
         # Cache softmax compute config (same as what topk_router creates per-call)
         self.softmax_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi3,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
