@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: © 2015-2023 Norbert Juffa
 // SPDX-FileCopyrightText: © 2026 Jason Davies <jason@jasondavies.com>
 //
-// SPDX-License-Identifier: Apache-2.0 AND BSD-2-Clause
+// SPDX-License-Identifier: BSD-2-Clause
 
 /*
  * The log1p(x) code is derived from code by Norbert Juffa.
