@@ -358,7 +358,8 @@ class MoEGate(AbstractModule):
                 scaling_factor,
                 enable_sigmoid,
             )
-            topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.int32)
+            if cfg["mode"] == "prefill":
+                topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.int32)
             topk_experts_weights = ttnn.to_memory_config(topk_experts_weights, memory_config=ttnn.L1_MEMORY_CONFIG)
             topk_experts_indices = ttnn.to_memory_config(topk_experts_indices, memory_config=ttnn.L1_MEMORY_CONFIG)
             if cfg["mode"] == "prefill":
@@ -380,7 +381,8 @@ class MoEGate(AbstractModule):
         topk_experts_weights = ttnn.view(topk_experts_weights, (1, 1, total_batch_size, 8))
         topk_experts_indices = ttnn.view(topk_experts_indices, (1, 1, total_batch_size, 8))
         topk_experts_indices = ttnn.to_layout(topk_experts_indices, ttnn.TILE_LAYOUT)
-        topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.uint16)
+        if cfg["mode"] == "prefill":
+            topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.uint16)
 
         return topk_experts_weights, topk_experts_indices
 
