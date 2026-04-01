@@ -57,6 +57,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case MAXIMUM:
         case MINIMUM:
         case XLOGY:
+        case ATAN2:
         case POWER:
         case WHERE_TST:
         case WHERE_TTS: return true;
