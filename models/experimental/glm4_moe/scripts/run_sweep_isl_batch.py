@@ -15,9 +15,11 @@ Usage (from tt-metal repo root, PYTHONPATH=repo root, venv activated):
   export TT_METAL_HOME=/path/to/tt-metal   # optional; also accepts TT_METAL
   python models/experimental/glm4_moe/scripts/run_sweep_isl_batch.py [--dry-run] [--out-dir DIR]
 
-Override tuning by exporting GLM4_MOE_* before running; this script overwrites a small
-default set (see ``_glm4_moe_sweep_env``) — edit that function or export after if you
-need different precedence.
+Child runs use ``os.environ`` merged with ``_glm4_moe_sweep_env`` (same keys **replace**
+parent exports): native reduce, bf4 experts, ring CCL×4, DRAM shard, EP L1, SDPA L1, etc.
+— aligned with common ``debug_run_full_tt_greedy.py`` runs. Override CCL via
+``--ccl-num-links`` / ``--ccl-topology``; edit ``_glm4_moe_sweep_env`` for other MoE
+knobs.
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ import sys
 from pathlib import Path
 
 # Default sweep grids (override with --isl / --batch)
-ISL_VALUES = [2000, 4000, 8000, 16000, 32000, 64000, 128000]
+ISL_VALUES = [128, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]
 BATCH_SIZES = [1, 2, 4, 8, 16, 20, 24, 28, 30, 32]
 
 BASE_PROMPT = "Summarize the following document. "
@@ -68,22 +70,27 @@ def _glm4_moe_sweep_env(
     ccl_topology: str | None = None,
 ) -> dict[str, str]:
     """
-    Defaults aligned with common REAP MoE bring-up (trace-safe reduces, EP L1, BF4 experts).
+    Defaults aligned with ``debug_run_full_tt_greedy.py`` REAP MoE bring-up:
 
-    CCL multi-link / topology (optional): pass ``ccl_num_links`` / ``ccl_topology`` or set
-    ``GLM4_MOE_CCL_NUM_LINKS``, ``GLM4_MOE_CCL_TOPOLOGY``, or per-axis
-    ``GLM4_MOE_CCL_NUM_LINKS_AXIS0`` / ``_AXIS1`` in the environment before running.
-    Default stack behavior remains 1 link + linear if unset.
+    native device EP reduce, bf4 experts, ring CCL with 4 links (Opt5 wiring), DRAM-sharded
+    QKV, packer L1 acc, EP L1 for decode-sized MoE, SDPA L1, router fast path, distributed
+    QK norm toggle.
+
+    CCL: pass ``ccl_num_links`` / ``ccl_topology`` to override the defaults (4 / ring).
     """
     d: dict[str, str] = {
-        # Trace / all-reduce: avoid host reads during traced decode
         "GLM4_MOE_REDUCE_IMPL": "native",
         "GLM4_MOE_EP_REDUCE_DEVICE": "1",
-        # MoE / prefill
-        # "GLM4_MOE_EP_L1": "1",
-        # "GLM4_MOE_PREFILL_CHUNK_SIZE": str(prefill_chunk),
-        # Memory / expert weights (matches many lite sweeps using bf4 experts)
         "GLM4_MOE_EXPERTS_TT_DTYPE": "bf4",
+        "GLM4_MOE_DISTRIBUTED_QK_NORM": "1",
+        "GLM4_MOE_ROUTER_USE_BIASED_TOPK_VALUES": "1",
+        "GLM4_MOE_CCL_NUM_LINKS": "4",
+        "GLM4_MOE_CCL_TOPOLOGY": "ring",
+        "GLM4_MOE_DRAM_SHARD": "1",
+        "GLM4_MOE_PACKER_L1_ACC": "1",
+        "GLM4_MOE_EP_L1": "1",
+        "GLM4_MOE_SDPA_L1": "1",
+        "GLM4_MOE_PREFILL_CHUNK_SIZE": str(prefill_chunk),
     }
     if ccl_num_links is not None:
         d["GLM4_MOE_CCL_NUM_LINKS"] = str(max(1, int(ccl_num_links)))
@@ -645,13 +652,13 @@ def main() -> int:
         type=int,
         default=None,
         metavar="N",
-        help="Sets GLM4_MOE_CCL_NUM_LINKS=N in the child (omit for default 1). Per-axis: export GLM4_MOE_CCL_NUM_LINKS_AXIS0 / _AXIS1.",
+        help="Override GLM4_MOE_CCL_NUM_LINKS (sweep default: 4). Per-axis: export GLM4_MOE_CCL_NUM_LINKS_AXIS0 / _AXIS1 in the parent.",
     )
     ap.add_argument(
         "--ccl-topology",
         choices=["linear", "ring"],
         default=None,
-        help="Sets GLM4_MOE_CCL_TOPOLOGY in the child (omit for default linear).",
+        help="Override GLM4_MOE_CCL_TOPOLOGY (sweep default: ring).",
     )
     ap.add_argument(
         "--verbose-child-output",
