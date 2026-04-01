@@ -50,7 +50,7 @@ struct BufferTestParam {
 };
 
 class BufferTestFixture
-    : public TTNNFixtureWithSuiteDevice<BufferTestFixture>,
+    : public TTNNUnitMeshCQSharedFixture,
       public testing::WithParamInterface<std::tuple<BufferTestParam, tt::tt_metal::IGraphProcessor::RunMode>> {};
 
 TEST_P(BufferTestFixture, BufferTest) {
@@ -153,7 +153,7 @@ INSTANTIATE_TEST_SUITE_P(
     });
 }  // namespace ttnn::graph::test
 
-class TestScopedGraphCapture : public ttnn::TTNNFixtureWithDevice {};
+class TestScopedGraphCapture : public ttnn::TTNNUnitMeshCQSharedFixture {};
 TEST_F(TestScopedGraphCapture, ScopedGraphCapture) {
     tt::tt_metal::IDevice* device = device_;
 
@@ -662,7 +662,7 @@ TEST_F(TestScopedGraphCapture, SubtractArgumentOrderWithCapturedTensorsTest) {
     EXPECT_EQ(first_input_tensors[1], second_input_tensors[0]);
 }
 
-class DurationTrackingTest : public ttnn::TTNNFixtureWithDevice,
+class DurationTrackingTest : public ttnn::TTNNUnitMeshCQSharedFixture,
                              public testing::WithParamInterface<tt::tt_metal::IGraphProcessor::RunMode> {};
 
 TEST_P(DurationTrackingTest, DurationTracking) {
@@ -732,7 +732,7 @@ INSTANTIATE_TEST_SUITE_P(
     });
 
 // Test full tensor info capture (dtype, layout, memory_config, device_id, address, buffer_type)
-class TensorInfoTest : public ttnn::TTNNFixtureWithDevice,
+class TensorInfoTest : public ttnn::TTNNUnitMeshCQSharedFixture,
                        public testing::WithParamInterface<tt::tt_metal::IGraphProcessor::RunMode> {};
 
 TEST_P(TensorInfoTest, FullTensorInfoCaptured) {

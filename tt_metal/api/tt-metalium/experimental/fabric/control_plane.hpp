@@ -278,6 +278,18 @@ public:
     tt::tt_metal::AsicID get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
     const tt::tt_metal::PhysicalSystemDescriptor& get_physical_system_descriptor() const;
 
+    // Per-router L1 address info needed to host-drive a PAUSE/DRAIN/RUN cycle.
+    // state_address   — L1 addr of RouterStateManager::state   (4B, device-written)
+    // command_address — L1 addr of RouterStateManager::command (4B, host-written)
+    // The addresses are the same for every router on a given chip (arch constant) but are
+    // returned per-router so callers can iterate without a second lookup.
+    struct FabricRouterDrainInfo {
+        uint32_t state_address;
+        uint32_t command_address;
+        tt::tt_metal::CoreCoord logical_eth_core;
+    };
+    std::vector<FabricRouterDrainInfo> get_fabric_router_drain_info(ChipId physical_chip_id) const;
+
     // Getters
     FabricConfig get_fabric_config() const { return fabric_config_; }
     FabricReliabilityMode get_fabric_reliability_mode() const { return fabric_reliability_mode_; }

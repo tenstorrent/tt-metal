@@ -282,7 +282,7 @@ INSTANTIATE_TEST_SUITE_P(
     BlockFloatVectorConversionTest,
     ::testing::Values(DataType::BFLOAT4_B, DataType::BFLOAT8_B));
 
-using DeviceVectorConversionTest = TTNNFixtureWithDevice;
+using DeviceVectorConversionTest = TTNNUnitMeshCQSharedFixture;
 
 TEST_F(DeviceVectorConversionTest, RoundtripWithMemoryConfig) {
     ttnn::Shape shape{128, 128};

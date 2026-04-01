@@ -3353,6 +3353,30 @@ tt::tt_metal::AsicID ControlPlane::get_asic_id_from_fabric_node_id(const FabricN
     return topology_mapper_->get_asic_id_from_fabric_node_id(fabric_node_id);
 }
 
+std::vector<ControlPlane::FabricRouterDrainInfo> ControlPlane::get_fabric_router_drain_info(
+    ChipId physical_chip_id) const {
+    const auto fabric_node_id = get_fabric_node_id_from_physical_chip_id(physical_chip_id);
+    const auto& soc_desc = cluster_.get().get_soc_desc(physical_chip_id);
+    const auto active_channels = get_active_fabric_eth_channels(fabric_node_id);
+
+    const auto state_addr = static_cast<uint32_t>(hal_.get().get_dev_addr(
+        tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::ROUTER_STATE));
+    const auto cmd_addr = static_cast<uint32_t>(hal_.get().get_dev_addr(
+        tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::ROUTER_COMMAND));
+
+    std::vector<FabricRouterDrainInfo> result;
+    result.reserve(active_channels.size());
+    for (const auto& [chan_id, _] : active_channels) {
+        const auto umd_core = soc_desc.get_eth_core_for_channel(chan_id, CoordSystem::LOGICAL);
+        result.push_back(FabricRouterDrainInfo{
+            .state_address = state_addr,
+            .command_address = cmd_addr,
+            .logical_eth_core = tt_metal::CoreCoord{umd_core.x, umd_core.y},
+        });
+    }
+    return result;
+}
+
 ControlPlane::~ControlPlane() = default;
 
 }  // namespace tt::tt_fabric

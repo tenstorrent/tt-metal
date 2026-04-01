@@ -72,7 +72,12 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_replicated_input_m
 using namespace accessor_benchmarks;
 using namespace tt::tt_metal;
 
-class AccessorBenchmarks : public GenericMeshDeviceFixture, public ::testing::WithParamInterface<InputBufferParams> {};
+// Use a shared fixture so the MeshDevice (and its fabric state) is created once
+// for the entire AccessorBenchmarks suite rather than once per test case.
+// Without this, T3K's FABRIC_1D control plane is torn down and reinitialised ~42 times
+// per run, which progressively degrades the remote erisc cores and eventually causes
+// a dispatch timeout on ranks 5-7. The shared fixture reduces that to a single init.
+class AccessorBenchmarks : public GenericMeshDeviceSharedFixture, public ::testing::WithParamInterface<InputBufferParams> {};
 
 std::vector<tensor_accessor::ArgsConfig> get_all_static_args_config() {
     // Return only the all-static configuration (0000001 = only Sharded bit set)

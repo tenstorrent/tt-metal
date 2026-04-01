@@ -410,7 +410,9 @@ static void test_single_core_copy(
 using namespace tensor_accessor_device_tests;
 using namespace tt::tt_metal;
 
-class ShardedAccessorTestsReshardOnDevice : public GenericMeshDeviceFixture,
+// Shared fixture: device opened once for the full suite (~540 tests) to avoid
+// repeated FABRIC_1D reinit cycles that degrade remote erisc cores on T3K.
+class ShardedAccessorTestsReshardOnDevice : public GenericMeshDeviceSharedFixture,
                                             public ::testing::WithParamInterface<InputOutputBufferParams> {};
 
 TEST_P(ShardedAccessorTestsReshardOnDevice, SingleCoreReshard) {
@@ -635,7 +637,8 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
 INSTANTIATE_TEST_SUITE_P(
     ShardedAccessorTests, ShardedAccessorTestsReshardOnDevice, testing::ValuesIn(get_sharded_accessor_test_params()));
 
-class ShardedAccessorTestsCopyOnDevice : public GenericMeshDeviceFixture,
+// Shared fixture: see ShardedAccessorTestsReshardOnDevice comment above.
+class ShardedAccessorTestsCopyOnDevice : public GenericMeshDeviceSharedFixture,
                                          public ::testing::WithParamInterface<CopyParams> {};
 
 TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocal) {
@@ -691,7 +694,8 @@ TEST_P(ShardedAccessorTestsCopyOnDevice, SingleCoreCopyAllPages) {
     }
 }
 
-class InterleavedAccessorTestsCopyOnDevice : public GenericMeshDeviceFixture,
+// Shared fixture: see ShardedAccessorTestsReshardOnDevice comment above.
+class InterleavedAccessorTestsCopyOnDevice : public GenericMeshDeviceSharedFixture,
                                              public ::testing::WithParamInterface<CopyParams> {};
 
 TEST_P(InterleavedAccessorTestsCopyOnDevice, SingleCoreCopyAllPages) {

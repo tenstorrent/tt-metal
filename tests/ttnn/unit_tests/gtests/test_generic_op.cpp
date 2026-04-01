@@ -47,7 +47,7 @@
 
 namespace ttnn::operations::generic::test {
 
-TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
+TEST_F(TTNNUnitMeshCQSharedFixture, TestGenericOpArgmaxSingleCore) {
     uint32_t batch = 1;
     uint32_t channels = 4;
     ttnn::Shape shape{batch, channels, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
@@ -143,7 +143,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
     ASSERT_TRUE(allclose);
 }
 
-TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
+TEST_F(TTNNUnitMeshCQSharedFixture, TestGenericOpUnaryReluSharded) {
     const std::vector<std::pair<std::string, std::string>> defines_relu = {
         {"SFPU_OP_CHAIN_0", "SFPU_OP_CHAIN_0_INIT_0 SFPU_OP_CHAIN_0_FUNC_0"},
         {"SFPU_OP_CHAIN_0_FUNC_0", "relu_tile(0);"},
@@ -261,7 +261,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
     ASSERT_TRUE(allclose);
 }
 
-TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
+TEST_F(TTNNUnitMeshCQSharedFixture, TestGenericOpBinaryEltwiseAdd) {
     const std::vector<std::pair<std::string, std::string>> defines_eltwise_add = {
         {"ELTWISE_OP", "add_tiles"},
         {"ELTWISE_OP_TYPE", "EltwiseBinaryType::ELWADD"},
@@ -433,7 +433,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
     ASSERT_TRUE(allclose);
 }
 
-TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
+TEST_F(TTNNUnitMeshCQSharedFixture, TestGenericOpMatmul) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == tt::BoardType::P150) {
         GTEST_SKIP();
     }
@@ -690,7 +690,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
     ASSERT_TRUE(allclose);
 }
 
-TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
+TEST_F(TTNNUnitMeshCQSharedFixture, TestGenericOpEltwiseSFPU) {
     const std::vector<std::pair<std::string, std::string>> sfpu_defines = {
         {"SFPU_OP_EXP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}};
 
@@ -800,8 +800,18 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
     ASSERT_TRUE(allclose);
 }
 
-TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCache) {
+TEST_F(TTNNUnitMeshCQSharedFixture, TestGenericOpProgramCache) {
     log_info(tt::LogTest, "Running {}", __func__);
+
+    // Flush the program cache so this test starts from a known-empty state.
+    // The shared fixture accumulates cache entries across tests (unlike the old
+    // per-test fixture which got a fresh device each run). Without this flush,
+    // TestGenericOpEltwiseSFPU (which runs earlier with identical sfpu defines)
+    // may pre-cache our programs, causing TT_FATAL assertions below to fail.
+    this->device_->disable_and_clear_program_cache();
+    this->device_->enable_program_cache();
+
+    const size_t initial_cache_entries = this->device_->num_program_cache_entries();
 
     const std::vector<std::pair<std::string, std::string>> sfpu_defines = {
         {"SFPU_OP_EXP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}};
@@ -875,8 +885,10 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCache) {
     Tensor golden_1 = ttnn::exp(device_input_tensor_1);
     TT_FATAL(ttnn::allclose<bfloat16>(golden_1.cpu(), device_output_tensor_1.cpu()), "First run correctness failed");
     TT_FATAL(
-        this->device_->num_program_cache_entries() == 2,
-        "Expected 2 cache entries, got {}",
+        this->device_->num_program_cache_entries() == initial_cache_entries + 2,
+        "Expected {} cache entries (initial {} + 2), got {}",
+        initial_cache_entries + 2,
+        initial_cache_entries,
         this->device_->num_program_cache_entries());
 
     // Test 2: Program Cache Hit - same tensors
@@ -884,8 +896,10 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCache) {
     ttnn::generic_op(std::vector{device_input_tensor_1, device_output_tensor_1}, program_descriptor);
     TT_FATAL(ttnn::allclose<bfloat16>(golden_1.cpu(), device_output_tensor_1.cpu()), "Second run correctness failed");
     TT_FATAL(
-        this->device_->num_program_cache_entries() == 2,
-        "Expected 2 cache entries after cache hit, got {}",
+        this->device_->num_program_cache_entries() == initial_cache_entries + 2,
+        "Expected {} cache entries after cache hit (initial {} + 2), got {}",
+        initial_cache_entries + 2,
+        initial_cache_entries,
         this->device_->num_program_cache_entries());
 
     // Test 3: Program Cache Hit with different tensors (different addresses)
@@ -910,12 +924,14 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCache) {
         ttnn::allclose<bfloat16>(golden_2.cpu(), device_output_tensor_2.cpu()),
         "Third run with different addresses failed - override_runtime_arguments not working correctly!");
     TT_FATAL(
-        this->device_->num_program_cache_entries() == 2,
-        "Expected 2 cache entries after cache hit with new addresses, got {}",
+        this->device_->num_program_cache_entries() == initial_cache_entries + 2,
+        "Expected {} cache entries after cache hit with new addresses (initial {} + 2), got {}",
+        initial_cache_entries + 2,
+        initial_cache_entries,
         this->device_->num_program_cache_entries());
 }
 
-TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorValidId) {
+TEST_F(TTNNUnitMeshCQSharedFixture, TestGenericOpSemaphoreDescriptorValidId) {
     // Test that valid semaphore IDs work correctly
     log_info(tt::LogTest, "Running {}", __func__);
 
@@ -945,7 +961,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorValidId) {
     EXPECT_NO_THROW({ tt::tt_metal::Program program(program_descriptor); });
 }
 
-TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorInvalidIdExceedsMax) {
+TEST_F(TTNNUnitMeshCQSharedFixture, TestGenericOpSemaphoreDescriptorInvalidIdExceedsMax) {
     // Test that semaphore ID exceeding NUM_SEMAPHORES (16) throws an error
     log_info(tt::LogTest, "Running {}", __func__);
 
@@ -969,7 +985,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorInvalidIdExceedsMa
     EXPECT_THROW({ tt::tt_metal::Program program(program_descriptor); }, std::exception);
 }
 
-TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorDuplicateIdOnOverlappingCores) {
+TEST_F(TTNNUnitMeshCQSharedFixture, TestGenericOpSemaphoreDescriptorDuplicateIdOnOverlappingCores) {
     // Test that duplicate semaphore IDs on overlapping cores throw an error
     log_info(tt::LogTest, "Running {}", __func__);
 
@@ -999,7 +1015,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorDuplicateIdOnOverl
     EXPECT_THROW({ tt::tt_metal::Program program(program_descriptor); }, std::exception);
 }
 
-TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorSameIdNonOverlappingCores) {
+TEST_F(TTNNUnitMeshCQSharedFixture, TestGenericOpSemaphoreDescriptorSameIdNonOverlappingCores) {
     // Test that same semaphore ID on non-overlapping cores is allowed
     log_info(tt::LogTest, "Running {}", __func__);
 
@@ -1028,16 +1044,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorSameIdNonOverlappi
     EXPECT_NO_THROW({ tt::tt_metal::Program program(program_descriptor); });
 }
 
-class MeshDevice1x4FabricFixture : public MeshDeviceFixtureBase {
-protected:
-    MeshDevice1x4FabricFixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 4}}) {
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
-    }
-    void TearDown() override {
-        MeshDeviceFixtureBase::TearDown();
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
-    }
-};
+// Shared fixture: suite-level device open with FABRIC_1D — replaces manual SetFabricConfig in ctor/TearDown.
+using MeshDevice1x4FabricFixture = tt::tt_metal::MeshDevice1x4Fabric1DSharedFixture;
 
 TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
     // This test replicates AllGatherReturnedTensor test in test_multi_tensor_ccl.cpp but with the generic op.

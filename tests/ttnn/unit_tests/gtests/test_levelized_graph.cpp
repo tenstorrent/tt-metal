@@ -38,7 +38,7 @@ std::string shape_to_string(tt::stl::Span<const uint32_t> shape) {
     return ss.str();
 }
 
-class TestLevelizedGraphCapture : public ttnn::TTNNFixtureWithDevice {};
+class TestLevelizedGraphCapture : public ttnn::TTNNUnitMeshCQSharedFixture {};
 TEST_F(TestLevelizedGraphCapture, SimpleBinaryOp) {
     tt::tt_metal::IDevice* device = device_;
 

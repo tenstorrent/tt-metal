@@ -10,10 +10,12 @@
 #include "ttnn/operations/ccl/all_reduce/all_reduce.hpp"
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
-#include "test_fabric_edm_common.hpp"
 
 #include <vector>
 namespace tt::tt_metal {
+
+// Previously provided by the (now-removed) test_fabric_edm_common.hpp include.
+using distributed::MeshShape;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -30,25 +32,8 @@ std::vector<std::shared_ptr<distributed::MeshDevice>> get_line_devices(distribut
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-class MeshDevice1x4Fixture : public MeshDeviceFixtureBase {
-protected:
-    MeshDevice1x4Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 4}}) {
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
-    }
-    void TearDown() override {
-        MeshDeviceFixtureBase::TearDown();
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
-    }
-};
-
-class MultiCQFabricMeshDevice2x4Fixture : public MultiCQMeshDevice2x4Fixture {
-protected:
-    MultiCQFabricMeshDevice2x4Fixture() { tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D); }
-    void TearDown() override {
-        MultiCQMeshDevice2x4Fixture::TearDown();
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
-    }
-};
+using MeshDevice1x4Fixture = MeshDevice1x4Fabric1DSharedFixture;
+using MultiCQFabricMeshDevice2x4Fixture = MultiCQMeshDevice2x4Fabric1DSharedFixture;
 
 TEST_F(MeshDevice1x4Fixture, AllGatherReturnedTensor) {
     auto mesh_devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
