@@ -18,17 +18,9 @@ Owner:
     onenezicTT
 """
 
-import re
 from dataclasses import dataclass
 from inspector_data import run as get_inspector_data, InspectorException
 from triage import ScriptConfig, ScriptPriority, log_check, triage_field, run_script
-
-# Strip ANSI escape sequences and other terminal control characters
-_CONTROL_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07|\x1b[^[\]()]|[\x00-\x08\x0b\x0c\x0e-\x1f]")
-
-
-def _sanitize(value: str) -> str:
-    return _CONTROL_RE.sub("", value)
 
 
 script_config = ScriptConfig(
@@ -71,7 +63,7 @@ def run(args, context):
                 ConfigEntry(
                     scope=scope_name,
                     name=item.name,
-                    value=_sanitize(item.value),
+                    value=item.value,
                 )
             )
 
