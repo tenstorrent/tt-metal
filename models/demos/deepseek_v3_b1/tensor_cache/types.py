@@ -65,7 +65,50 @@ class TensorTarget:
     mesh_mapper_config: MeshMapperConfig = field(default_factory=ReplicateMeshMapper)
 
 
-ArtifactTarget = TensorTarget  # Will become TensorTarget | FusionGroupSpec in Phase 2
+@dataclass(frozen=True)
+class SubTensorSpec:
+    """One logical tensor within a fused buffer region."""
+
+    name: str
+    tensor_shape: tuple[int, int]
+    dtype: ttnn.DataType
+    tile_shape: tuple[int, int]
+
+
+@dataclass(frozen=True)
+class RegionSpec:
+    """Sub-tensors sharing a core range, stacked per core."""
+
+    core_range_set: ttnn.CoreRangeSet
+    subtensors: tuple[SubTensorSpec, ...]
+
+
+@dataclass(frozen=True)
+class FusionGroupSpec:
+    """Complete packing layout for an overlapped (fused) tensor group."""
+
+    kind: Literal["fusion_group"] = "fusion_group"
+    name: str = ""
+    regions: tuple[RegionSpec, ...] = ()
+    sharding_strategy: ttnn.TensorMemoryLayout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    mesh_mapper_config: MeshMapperConfig = field(default_factory=ReplicateMeshMapper)
+
+
+@dataclass(frozen=True)
+class OverlappedViewMeta:
+    """Stored metadata for one sub-tensor view (metadata.json, not hashed in fingerprint)."""
+
+    name: str
+    dtype: str
+    tensor_shape: tuple[int, int]
+    shard_shape: tuple[int, int]
+    tile_shape: tuple[int, int]
+    core_range_set_json: str
+    byte_offset: int
+    total_size: int
+
+
+ArtifactTarget = TensorTarget | FusionGroupSpec
 
 
 @dataclass(frozen=True)
