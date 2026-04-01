@@ -6,10 +6,16 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+# Ensure repository root is importable when running as `python tools/ci/<script>.py`.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from tools.ci.thread_signal_analysis import classify_thread_progress, detect_dev_fix_request
 
