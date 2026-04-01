@@ -156,7 +156,7 @@ static void BM_write_pinned_memory(benchmark::State& state, const std::shared_pt
                               .region(BufferRegion(0, static_cast<std::size_t>(transfer_size)));
     experimental::ShardDataTransferSetPinnedMemory(write_transfer, pinned_mem);
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         bool blocking = true;
         mesh_device->mesh_command_queue().enqueue_write_shards(device_buffer, {write_transfer}, blocking);
     }
@@ -269,7 +269,7 @@ static void BM_write_sharded(benchmark::State& state, const std::shared_ptr<Mesh
                               .host_data(host_buffer.data())
                               .region(BufferRegion(0, static_cast<std::size_t>(actual_buf_size)));
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         mesh_device->mesh_command_queue().enqueue_write_shards(device_buffer, {write_transfer}, /*blocking=*/true);
     }
 
@@ -322,7 +322,7 @@ static void BM_write_pinned_memory_sharded(benchmark::State& state, const std::s
     experimental::ShardDataTransferSetPinnedMemory(write_transfer, pinned_mem);
 
     bool used_pinned_memory = false;
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         mesh_device->mesh_command_queue().enqueue_write_shards(device_buffer, {write_transfer}, /*blocking=*/false);
         used_pinned_memory = pinned_mem->lock_may_block();
         mesh_device->mesh_command_queue().finish();
@@ -401,7 +401,7 @@ static void BM_read_pinned_memory(benchmark::State& state, const std::shared_ptr
                              .region(BufferRegion(0, static_cast<std::size_t>(transfer_size)));
     experimental::ShardDataTransferSetPinnedMemory(read_transfer, pinned_mem);
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         mesh_device->mesh_command_queue().enqueue_read_shards({read_transfer}, device_buffer, /*blocking=*/true);
     }
 
