@@ -1,7 +1,11 @@
 # Include source file lists (module owners maintain sources.cmake)
 include(sources.cmake)
 
-add_executable(fabric_unit_tests ${UNIT_TESTS_FABRIC_SRC})
+add_executable(
+    fabric_unit_tests
+    ${UNIT_TESTS_FABRIC_SRC}
+    ${PROJECT_SOURCE_DIR}/tt_metal/impl/experimental/disaggregation/kv_chunk_address_table_protobuf.cpp
+)
 
 target_link_libraries(
     fabric_unit_tests
@@ -9,6 +13,7 @@ target_link_libraries(
         tt_metal
         test_common_libs
         yaml-cpp::yaml-cpp
+        protobuf::libprotobuf
 )
 
 target_include_directories(
