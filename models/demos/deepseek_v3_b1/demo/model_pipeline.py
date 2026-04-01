@@ -101,7 +101,9 @@ class ModelPipeline:
         assert self.model is not None
         logger.debug(f"Prefilling with {len(tokens)} tokens...")
         prompt_token_tensors = [
-            to_spec_input(tid, user_id=0, position_id=i, page_size_datums=self._page_size_datums)
+            to_spec_input(
+                tid, user_id=0, position_id=i, page_size_datums=self._page_size_datums, token_type=TokenType.BASE
+            )
             for i, tid in enumerate(tokens)
         ]
         results = self.model.prefill(prompt_token_tensors)
@@ -125,8 +127,8 @@ class ModelPipeline:
     def _write_spec_pair(self, token_0: int, pos_0: int, token_1: int, pos_1: int, user_id: int = 0) -> None:
         """Write two tokens (base + speculation) into the pipeline."""
         assert self.model is not None
-        self.model.write_input(token_0, user_id, pos_0)
-        self.model.write_input(token_1, user_id, pos_1)
+        self.model.write_input(token_0, user_id, pos_0, token_type=TokenType.BASE)
+        self.model.write_input(token_1, user_id, pos_1, token_type=TokenType.SPEC)
 
     def run_inference(
         self,
