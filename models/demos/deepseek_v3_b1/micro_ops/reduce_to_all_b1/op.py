@@ -263,7 +263,6 @@ class ReduceToAllB1:
                 for link_info in links:
                     fc_phys = link_info["fc_phys"]
                     fc = link_info["fc"]
-                    link_idx = link_info["link_idx"]
 
                     # Direction configs — mirrors sdpa_reduce_to_all DirectionConfig
                     # FWD: buffer starts at packet_cb base (offset 0)
@@ -454,7 +453,6 @@ class ReduceToAllB1:
                 kernel_result = unified_kernel.get_kernel_descriptors()
 
                 fabric_group = kernel_result.get_group_by_arg("is_fabric_core", 1)
-                worker_group = kernel_result.get_group_by_arg("is_fabric_core", 0)
 
                 program = ttnn.ProgramDescriptor(
                     kernels=kernel_result.kernels,
