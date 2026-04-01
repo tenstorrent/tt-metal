@@ -7,16 +7,15 @@
 // Phase 1 (per output): Reads Wt partial (mean, var) tile pairs from
 // cb_partial (written by the compute kernel using
 // welford_finalize_to_row), combines them across W using the parallel
-// Welford merge formula, applies Bessel's correction and sqrtf() if
-// computing std, and writes the combined scalar into a Float32 tile
-// in cb_combined for the compute kernel to re-pack in the output format.
+// Welford merge formula, applies Bessel's correction, and writes the
+// combined scalar into a Float32 tile in cb_combined for the compute
+// kernel to apply sqrtf (if std) and re-pack in the output format.
 //
 // Phase 2 (per output): Waits for the compute kernel to pack the
 // output tile into cb_out (in the correct output data format), then
 // NOC-writes it to DRAM.
 
 #include <cstdint>
-#include <cmath>
 #include <cstring>
 
 #include "api/dataflow/dataflow_api.h"
@@ -36,8 +35,7 @@ void kernel_main() {
     constexpr uint32_t tile_width = get_compile_time_arg_val(2);
     constexpr uint32_t H = get_compile_time_arg_val(3);
     constexpr bool correction = get_compile_time_arg_val(4) != 0;
-    constexpr bool is_std = get_compile_time_arg_val(5) != 0;
-    constexpr uint32_t reduce_batch_size = get_compile_time_arg_val(6);
+    constexpr uint32_t reduce_batch_size = get_compile_time_arg_val(5);
 
     constexpr auto cb_partial = tt::CBIndex::c_21;
     // cb_combined: Float32 tile written by this kernel, read back by compute
@@ -46,7 +44,7 @@ void kernel_main() {
     // cb_out: output tile packed by compute in the correct data format.
     constexpr auto cb_out = tt::CBIndex::c_16;
 
-    constexpr auto dst_args = TensorAccessorArgs<7>();
+    constexpr auto dst_args = TensorAccessorArgs<6>();
 
     // welford_finalize_to_row stores 32 per-column values in tile row 0.
     // In tile format, row 0 spans Face 0 (columns 0-15) and Face 1 (columns 16-31).
@@ -105,9 +103,6 @@ void kernel_main() {
         if constexpr (correction) {
             uint32_t N = running.count;
             final_var = final_var * static_cast<float>(N) / static_cast<float>(N - 1);
-        }
-        if constexpr (is_std) {
-            final_var = sqrtf(final_var);
         }
 
         // Write the combined scalar into a Float32 tile in cb_combined.

@@ -104,10 +104,10 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
     //     each output element must fully reduce dim 2.  Slices 0–7 are the 8 values along
     //     dim 2 for (dim0=0, dim1=0); the writer Welford-combines all 8 and writes a final
     //     variance scalar.  A smaller reduce_batch_size (e.g. 2) would only combine 2 of
-    //     the 8 slices, producing a partial result.  The writer finalises the variance
-    //     (Bessel's correction, optional sqrt), so the intermediate Welford state
-    //     (mean, M2, count) is lost — there is no way to recombine those final scalars
-    //     afterwards.
+    //     the 8 slices, producing a partial result.  The writer applies Bessel's
+    //     correction and the compute kernel applies sqrt for std, so the
+    //     intermediate Welford state (mean, M2, count) is lost — there is no
+    //     way to recombine those final scalars afterwards.
     //
     //     Total work units = NC / reduce_batch_size = 96 / 8 = 12
     //     (one per (dim0, dim1) pair: 3 × 4 = 12).
@@ -203,9 +203,10 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
 
         // cb_combined (c_22): HW-reduce only -- holds the combined scalar result
         // (one Float32 tile per output) written by the writer kernel after
-        // W-combining all per-column partials.  The compute kernel reads this
-        // tile and re-packs it to cb_out in the correct output data format
-        // (the packer hardware is required for BFLOAT8_B conversion).
+        // W-combining all per-column partials and applying Bessel's correction.
+        // The compute kernel reads this tile, applies sqrt_tile for std, and
+        // re-packs it to cb_out in the correct output data format (the packer
+        // hardware is required for BFLOAT8_B conversion).
         CBIndex combined_cb_index = CBIndex::c_22;
         tt::DataFormat combined_cb_data_format = tt::DataFormat::Float32;
         uint32_t combined_single_tile_size = tt::tile_size(combined_cb_data_format);
@@ -256,13 +257,7 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
     if (reduce_hw) {
         // HW-reduce: custom writer that combines partial stats and constructs output tile.
         std::vector<uint32_t> writer_compile_time_args = {
-            Wt,
-            W,
-            tile_width,
-            H,
-            static_cast<uint32_t>(operation_attributes.correction),
-            static_cast<uint32_t>(is_std),
-            reduce_batch_size};
+            Wt, W, tile_width, H, static_cast<uint32_t>(operation_attributes.correction), reduce_batch_size};
         TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
         writer_kernel_id = tt_metal::CreateKernel(
             program,
@@ -285,7 +280,7 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
     std::string compute_kernel;
 
     if (reduce_hw) {
-        // HW-reduce compile args: {Ht, H, tile_height, Wt, do_scale, reduce_batch_size}
+        // HW-reduce compile args: {Ht, H, tile_height, Wt, do_scale, reduce_batch_size, is_std}
         compute_compile_args = {
             Ht,
             H,
@@ -293,6 +288,7 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
             Wt,
             static_cast<uint32_t>(do_scale),
             reduce_batch_size,
+            static_cast<uint32_t>(is_std),
         };
         compute_kernel = "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/welford_reduce_hw.cpp";
     } else {
