@@ -94,8 +94,13 @@ jobs:
     if: ${{ github.event_name == 'schedule' || inputs.deepseekv3_unit_tests || inputs.deepseekv3_module_tests || inputs.teacher_forced || inputs.demo || inputs.demo_stress }}
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON((github.event_name == 'schedule' && '{"include":[{"setup":"dual","runs_on":["multi-host-galaxy","arch-wormhole_b0","bare-metal","in-service"]}]}') || (inputs.setup == 'dual' && '{"include":[{"setup":"dual","runs_on":["multi-host-galaxy","arch-wormhole_b0","bare-metal","in-service"]}]}') || (inputs.setup == 'quad' && '{"include":[{"setup":"quad","runs_on":["multi-host-glx-4x","arch-wormhole_b0","bare-metal","in-service"]}]}') || '{"include":[{"setup":"dual","runs_on":["multi-host-galaxy","arch-wormhole_b0","bare-metal","in-service"]},{"setup":"quad","runs_on":["multi-host-glx-4x","arch-wormhole_b0","bare-metal","in-service"]}]}') }}
-    runs-on: ${{ matrix.runs_on }}
+      matrix:
+        setup: ${{ fromJSON(((github.event_name == 'schedule' || inputs.setup == 'dual') && '["dual"]') || (inputs.setup == 'quad' && '["quad"]') || '["dual", "quad"]') }}
+    runs-on:
+      - arch-wormhole_b0
+      - ${{ matrix.setup == 'quad' && 'multi-host-glx-4x' || 'multi-host-galaxy' }}
+      - bare-metal
+      - in-service
     needs: build-artifact
     steps:
       - name: ⬇️ Checkout
