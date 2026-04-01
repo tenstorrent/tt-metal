@@ -147,7 +147,7 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}
 
-  # Wormhole 6U - Galaxy sanity fabric ubench (most of quick-6u-health, skipping 2 tests)
+  # Wormhole 6U - Galaxy Quick Health (most of quick-6u-health, skipping 2 tests)
   wh-6u-fabric-tests:
     if: ${{ inputs.run-wh-6u-fabric-tests }}
     runs-on:
