@@ -21,6 +21,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "device_fixture.hpp"
@@ -38,6 +39,8 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
+#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -260,34 +263,139 @@ void run_single_core_unary_broadcast(
     auto dst_dram_buffer_0 = CreateDramBuffer(mesh_device, out0_t, num_tiles);
     auto src_dram_buffer_1 = CreateDramBuffer(mesh_device, in1_t, num_tiles);
     auto dst_dram_buffer_1 = CreateDramBuffer(mesh_device, out1_t, num_tiles);
-    CreateCircularBufferHelper(workload, core, block_size * 2, in0_t, 0);
-    CreateCircularBufferHelper(workload, core, block_size * 2, out0_t, 16);
-    CreateCircularBufferHelper(workload, core, block_size * 2, in1_t, 1);
-    CreateCircularBufferHelper(workload, core, block_size * 2, out1_t, 17);
+
+    const tt_metal::Tile tile_shape = tt_metal::Tile({constants::TILE_HEIGHT, constants::TILE_WIDTH});
+    const uint32_t dfb_num_entries = block_size * 2;
+
+    KernelHandle reader_kernel;
+    KernelHandle writer_kernel;
+    KernelHandle compute_kernel;
+
+    uint32_t src0_dfb = 0;
+    uint32_t src1_dfb = 0;
+    uint32_t dst0_dfb = 0;
+    uint32_t dst1_dfb = 0;
+
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        tt_metal::experimental::dfb::DataflowBufferConfig dfb_src0_config = {
+            .entry_size = tile_size(in0_t),
+            .num_entries = dfb_num_entries,
+            .num_producers = 1,
+            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .num_consumers = 1,
+            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = in0_t,
+            .tile = tile_shape,
+        };
+        tt_metal::experimental::dfb::DataflowBufferConfig dfb_src1_config = {
+            .entry_size = tile_size(in1_t),
+            .num_entries = dfb_num_entries,
+            .num_producers = 1,
+            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .num_consumers = 1,
+            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = in1_t,
+            .tile = tile_shape,
+        };
+        tt_metal::experimental::dfb::DataflowBufferConfig dfb_dst0_config = {
+            .entry_size = tile_size(out0_t),
+            .num_entries = dfb_num_entries,
+            .num_producers = 1,
+            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .num_consumers = 1,
+            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = out0_t,
+            .tile = tile_shape,
+        };
+        tt_metal::experimental::dfb::DataflowBufferConfig dfb_dst1_config = {
+            .entry_size = tile_size(out1_t),
+            .num_entries = dfb_num_entries,
+            .num_producers = 1,
+            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .num_consumers = 1,
+            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = out1_t,
+            .tile = tile_shape,
+        };
+
+        src0_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_src0_config);
+        src1_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_src1_config);
+        dst0_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_dst0_config);
+        dst1_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_dst1_config);
+        TT_FATAL(
+            src0_dfb == 0 && src1_dfb == 1 && dst0_dfb == 2 && dst1_dfb == 3,
+            "Unary broadcast test expects sequential DFB ids 0..3 (got {} {} {} {})",
+            src0_dfb,
+            src1_dfb,
+            dst0_dfb,
+            dst1_dfb);
+
+        reader_kernel = tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_dual_unary.cpp",
+            core,
+            tt_metal::experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1});
+
+        writer_kernel = tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_dual_unary.cpp",
+            core,
+            tt_metal::experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1});
+
+    } else {
+        CreateCircularBufferHelper(workload, core, dfb_num_entries, in0_t, 0);
+        CreateCircularBufferHelper(workload, core, dfb_num_entries, out0_t, 16);
+        CreateCircularBufferHelper(workload, core, dfb_num_entries, in1_t, 1);
+        CreateCircularBufferHelper(workload, core, dfb_num_entries, out1_t, 17);
+
+        reader_kernel = tt_metal::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_dual_unary.cpp",
+            core,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+
+        writer_kernel = tt_metal::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_dual_unary.cpp",
+            core,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+    }
 
     std::map<std::string, std::string> defines = {
         {"BCAST_DIM_0", broadcast_dim_to_type.at(test_config.broadcast_dim_0)},
         {"BCAST_DIM_1", broadcast_dim_to_type.at(test_config.broadcast_dim_1)}};
 
-    auto reader_kernel = tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_dual_unary.cpp",
-        core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        compute_kernel = tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/compute/unary_bcast.cpp",
+            core,
+            tt_metal::experimental::quasar::QuasarComputeConfig{
+                .num_threads_per_cluster = 1,
+                .compile_args = {num_blocks, block_size},
+                .defines = defines});
 
-    auto writer_kernel = tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_dual_unary.cpp",
-        core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
-
-    tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/compute/unary_bcast.cpp",
-        core,
-        tt_metal::ComputeConfig{.compile_args = {num_blocks, block_size}, .defines = defines});
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, src0_dfb, reader_kernel, compute_kernel);
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, src1_dfb, reader_kernel, compute_kernel);
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, dst0_dfb, compute_kernel, writer_kernel);
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, dst1_dfb, compute_kernel, writer_kernel);
+    } else {
+        compute_kernel = tt_metal::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/compute/unary_bcast.cpp",
+            core,
+            tt_metal::ComputeConfig{.compile_args = {num_blocks, block_size}, .defines = defines});
+    }
 
     tt_metal::SetRuntimeArgs(
         program_,
@@ -323,7 +431,9 @@ void run_single_core_unary_broadcast(
         in1_t, out1_t, num_tiles, test_config.broadcast_dim_1, packed_tilized_input_1, golden_packed_tilized_output_1);
     distributed::WriteShard(cq, src_dram_buffer_1, packed_tilized_input_1, zero_coord);
 
-    distributed::EnqueueMeshWorkload(cq, workload, false);
+    auto* device = mesh_device->get_devices()[0];
+    const bool blocking = device->arch() == ARCH::QUASAR;
+    distributed::EnqueueMeshWorkload(cq, workload, blocking);
     distributed::Finish(cq);
 
     std::vector<uint32_t> dest_buffer_data_0;
