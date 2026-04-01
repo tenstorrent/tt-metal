@@ -724,22 +724,6 @@ def test_attention_block(
     # ========================================================================
     # Create CCL tensors
     # ========================================================================
-    # CCL intermediate: receiver core (12,9) — remote data buffer for all-reduce
-    ccl_intermediate_shard_spec = ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR)
-    ccl_intermediate_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ccl_intermediate_shard_spec
-    )
-    mesh_ccl_intermediate_torch = torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0)
-    ttnn_ccl_intermediate = ttnn.from_torch(
-        mesh_ccl_intermediate_torch,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=ccl_intermediate_mem_config,
-        mesh_mapper=mesh_mapper,
-    )
-
     # Final output: receiver core (12,9) — all-reduce output + residual add
     output_shard_spec = ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
@@ -903,8 +887,6 @@ def test_attention_block(
             ttnn_sdpa_forwarder_scratch,
             program_config.device_chunk_size,  # sdpa_per_device_chunk_size
             ttnn_attention_block_output,
-            # CCL all-reduce tensors
-            ccl_intermediate_tensor=ttnn_ccl_intermediate,
             # Shared semaphores, and some default values
             attention_block_semaphores=attention_block_semaphores,
             reduce_cluster_axis=reduce_cluster_axis,

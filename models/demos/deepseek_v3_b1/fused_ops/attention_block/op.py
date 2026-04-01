@@ -232,8 +232,6 @@ class AttentionBlock:
         sdpa_forwarder_scratch_mesh,
         sdpa_per_device_chunk_size,
         attention_block_output_tensor,
-        # CCL all-reduce tensors
-        ccl_intermediate_tensor=None,
         # Shared semaphores, and some default values
         attention_block_semaphores=None,
         reduce_cluster_axis=1,
@@ -266,7 +264,6 @@ class AttentionBlock:
             position_ids_tensor: Position IDs tensor (sharded tensor for RoPE)
             output_tensor: Output tensor for pre-SDPA (sharded on SDPA grid, [8, 576] per core = 8 interleaved heads)
             sender_coord: Tuple (row, col) of sender device in mesh
-            ccl_intermediate_tensor: Mesh tensor sharded on receiver core (12,9) for CCL remote data
             semaphores: List of global semaphores for CCL/fused pipeline synchronization
             reduce_cluster_axis: Primary axis for CCL reduce (0=row, 1=col)
             num_links_bcast: Number of fabric links for broadcast
@@ -978,11 +975,12 @@ class AttentionBlock:
 
         attention_block_output_cb = ccl_output_cb  # Attention block output (receiver core)
 
-        # Configure AllReduceConfig (or bypass for single-device mode)
-        # input_tensor_mesh is not provided — gather3_dst_cb is externally managed via overlapped memory
+        # Configure AllReduceConfig in no-ownership mode:
+        # All CCL CBs are carved from overlapped memory (sdpa_kv_cache_buffer),
+        # not from separate tensors. AllReduceConfig only provides CT/RT args.
         allreduce_config = DeepseekMinimalAllReduce.configure(
             mesh_device=mesh_device,
-            intermediate_tensor=ccl_intermediate_tensor,
+            intermediate_tensor=None,
             output_tensor=attention_block_output_tensor,
             semaphores=ccl_fabric_semaphores + [ccl_local_ready_semaphore],
             cluster_axis=reduce_cluster_axis,
@@ -1736,7 +1734,7 @@ class AttentionBlock:
         ]
 
         # Append AllReduceConfig NCRISC CT args (writer on sender core + reader on receiver core)
-        post_sdpa_ncrisc_named_compile_time_args.extend(allreduce_config.get_ncrisc_named_ct_args(mesh_coord))
+        post_sdpa_ncrisc_named_compile_time_args.extend(allreduce_config.get_ncrisc_named_ct_args(sender_mesh_coord))
 
         # Add SDPA NCRISC compile-time args when enabled
         post_sdpa_ncrisc_named_compile_time_args.extend(
@@ -1805,7 +1803,7 @@ class AttentionBlock:
         ]
 
         # Append AllReduceConfig BRISC CT args (writer on sender core)
-        post_sdpa_brisc_named_compile_time_args.extend(allreduce_config.get_brisc_named_ct_args(mesh_coord))
+        post_sdpa_brisc_named_compile_time_args.extend(allreduce_config.get_brisc_named_ct_args(sender_mesh_coord))
 
         # Add SDPA BRISC compile-time args when enabled
         post_sdpa_brisc_named_compile_time_args.extend(
@@ -1858,7 +1856,7 @@ class AttentionBlock:
         ]
 
         # Append AllReduceConfig TRISC CT args (compute on receiver core)
-        post_sdpa_trisc_named_compile_time_args.extend(allreduce_config.get_trisc_named_ct_args(mesh_coord))
+        post_sdpa_trisc_named_compile_time_args.extend(allreduce_config.get_trisc_named_ct_args(sender_mesh_coord))
 
         # Add SDPA TRISC compile-time args when enabled
         post_sdpa_trisc_named_compile_time_args.extend(
@@ -2718,6 +2716,35 @@ class AttentionBlock:
         gather3_receiver_data_addr = ttnn.get_cb_address(gather3_dst_cb_descriptor)
         allreduce_config.set_local_data_addr(gather3_receiver_data_addr)
 
+        # CB: CCL remote data (overlapped with sdpa_kv_cache on mcast core)
+        # Fabric writes remote data here; TRISC reads it for reduction.
+        ccl_remote_data_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            ccl_remote_data_cb,
+            ref_sdpa_kv_cache_buffer,
+            address_offset=sdpa_kv_cache_running_offset_mcast_core,
+            total_size=num_tiles * tile_size,
+            core_ranges=full_device_grid,
+        )
+        ccl_remote_data_cb_descriptor.format_descriptors = [
+            ttnn.CBFormatDescriptor(
+                buffer_index=ccl_remote_data_cb,
+                data_format=data_format,
+                page_size=tile_size,
+                tile=tile_descriptor,
+            )
+        ]
+        sdpa_kv_cache_running_offset_mcast_core += ccl_remote_data_cb_descriptor.total_size
+        ccl_send_addr = ttnn.get_cb_address(ccl_remote_data_cb_descriptor)
+        allreduce_config.set_remote_data_addr(ccl_send_addr)
+
+        # CB: CCL output (backed by attention_block_output_tensor)
+        attention_block_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            attention_block_output_cb, ref_attention_block_output_tensor
+        )
+        attention_block_output_cb_descriptor.core_ranges = full_device_grid
+        attention_block_output_cb_descriptor.format_descriptors[0].tile = tile_descriptor
+        attention_block_output_cb_descriptor.format_descriptors[0].page_size = cb_page_size
+
         post_sdpa_cb_list = [
             matmul4_in0_cb_descriptor,
             matmul4_out_cb_descriptor,
@@ -2725,10 +2752,12 @@ class AttentionBlock:
             matmul5_in0_cb_descriptor,
             matmul5_out_cb_descriptor,
             gather3_dst_cb_descriptor,
+            ccl_remote_data_cb_descriptor,
+            attention_block_output_cb_descriptor,
         ]
 
-        # CCL CBs: generated by AllReduceConfig (recv local, remote, output, optional residual)
-        post_sdpa_cb_list.extend(allreduce_config.get_cb_descriptors(mesh_coord))
+        # In no-ownership mode, get_cb_descriptors() returns [] — all CCL CBs are above.
+        post_sdpa_cb_list.extend(allreduce_config.get_cb_descriptors(sender_mesh_coord))
 
         # CB 16: SDPA neighbor L (aliased to intermediate recv buffer)
         # The recv buffer holds both L and MS data, but this CB should only
@@ -3265,24 +3294,6 @@ class AttentionBlock:
                 mesh_coord = ttnn.MeshCoordinate(row, col)
                 device_idx = row * mesh_cols + col
 
-                # Ring index along the cluster axis
-                ring_index = row if reduce_cluster_axis == 0 else col
-                is_first_chip = ring_index == 0
-
-                # Determine CCL neighbor and semaphores based on position (only when CCL is enabled)
-                ccl_sender_link = 0 if is_first_chip else 1
-                ccl_receiver_link = 1 if is_first_chip else 0
-                ccl_sender_semaphore_addr = ccl_semaphore_addr
-                ccl_receiver_semaphore_addr = ccl_semaphore_addr
-
-                # Calculate neighbor coordinate
-                if is_first_chip:
-                    neighbor_row = row + 1 if reduce_cluster_axis == 0 else row
-                    neighbor_col = col if reduce_cluster_axis == 0 else col + 1
-                else:
-                    neighbor_row = row - 1 if reduce_cluster_axis == 0 else row
-                    neighbor_col = col if reduce_cluster_axis == 0 else col - 1
-
                 # Get per-device tensors needed for runtime args
                 qrope_cos_tensor_device = qrope_cos_tensors_per_device[device_idx]
                 qrope_sin_tensor_device = qrope_sin_tensors_per_device[device_idx]
@@ -3672,7 +3683,7 @@ class AttentionBlock:
                         "sdpa": sdpa_ctx,
                     }
                 )
-        attention_block_cbs = [in_cb_descriptor, *cbs_list, attention_block_output_cb_descriptor]
+        attention_block_cbs = [in_cb_descriptor, *cbs_list]
         return full_device_grid, attention_block_cbs, per_device_contexts
 
     @staticmethod
@@ -3707,8 +3718,6 @@ class AttentionBlock:
         sdpa_forwarder_scratch_mesh,
         sdpa_per_device_chunk_size,
         attention_block_output_tensor,
-        # CCL all-reduce tensors
-        ccl_intermediate_tensor=None,
         # Shared semaphores, and some default values
         attention_block_semaphores=None,
         reduce_cluster_axis=1,
@@ -3758,8 +3767,6 @@ class AttentionBlock:
             sdpa_forwarder_scratch_mesh,
             sdpa_per_device_chunk_size,
             attention_block_output_tensor,
-            # CCL all-reduce tensors
-            ccl_intermediate_tensor,
             # Shared semaphores, and some default values
             attention_block_semaphores,
             reduce_cluster_axis,
@@ -3804,8 +3811,6 @@ class AttentionBlock:
             sdpa_out_interm_buffer,
             attention_block_output_tensor,
         ]
-        if ccl_intermediate_tensor is not None:
-            io_tensors.append(ccl_intermediate_tensor)
 
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         for ctx in attention_block_per_device_contexts:

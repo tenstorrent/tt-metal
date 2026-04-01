@@ -228,9 +228,9 @@ class AllReduceConfig:
     def __init__(
         self,
         mesh_device,
-        intermediate_tensor,
-        output_tensor,
-        semaphores,
+        intermediate_tensor=None,
+        output_tensor=None,
+        semaphores=None,
         cluster_axis=0,
         num_links=1,
         chunk_num_tiles=None,
@@ -255,7 +255,13 @@ class AllReduceConfig:
         self.residual_cb_id = int(residual_cb_id) if self.has_residual else 0
         self._owns_residual_cb = self.has_residual and residual_tensor_mesh is not None
         self._owns_local_data_cb = input_tensor_mesh is not None
+        self._owns_remote_data_cb = intermediate_tensor is not None
         self.skip_local_push = bool(skip_local_push)
+
+        # All-or-nothing ownership: intermediate_tensor and input_tensor_mesh
+        # must be both provided (full ownership) or both None (no ownership).
+        if not self._owns_remote_data_cb and self._owns_local_data_cb:
+            raise ValueError("All-or-nothing: if intermediate_tensor is None, input_tensor_mesh must also be None")
 
         if self.num_links < 1 or self.num_links > MAX_NUM_LINKS:
             raise ValueError(f"num_links must be in [1, {MAX_NUM_LINKS}], got {self.num_links}")
@@ -274,9 +280,11 @@ class AllReduceConfig:
                 f"All-reduce currently supports exactly 2 devices along cluster_axis={self.cluster_axis}, got {axis_size}"
             )
 
-        self.input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh) if self._owns_local_data_cb else None
-        self.intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor)
         self.output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
+        self.input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh) if self._owns_local_data_cb else None
+        self.intermediate_tensors_per_device = (
+            ttnn.get_device_tensors(intermediate_tensor) if self._owns_remote_data_cb else None
+        )
         self.residual_tensors_per_device = (
             ttnn.get_device_tensors(residual_tensor_mesh) if self._owns_residual_cb else None
         )
@@ -299,6 +307,10 @@ class AllReduceConfig:
         self.data_format = metadata_sample.dtype
         self.standard_tile_descriptor = ttnn.TileDescriptor(CCL_TILE_H, CCL_TILE_W)
 
+        # Reference device — logical-to-virtual core translation is uniform
+        # across all devices; a single device suffices
+        ref_device = self.output_tensors_per_device[0].device()
+
         out_sample = self.output_tensors_per_device[0]
         out_grid_start = out_sample.memory_config().shard_spec.grid.bounding_box().start
         self.receiver_core = ttnn.CoreCoord(int(out_grid_start.x), int(out_grid_start.y))
@@ -315,11 +327,12 @@ class AllReduceConfig:
                 raise ValueError("sender_core must be provided when input_tensor_mesh is not supplied")
             self.sender_core = sender_core
 
-        im_grid_start = self.intermediate_tensors_per_device[0].memory_config().shard_spec.grid.bounding_box().start
-        if im_grid_start != self.receiver_core:
-            raise ValueError(
-                f"Intermediate must be L1-sharded on receiver core {self.receiver_core}, got {im_grid_start}"
-            )
+        if self._owns_remote_data_cb:
+            im_grid_start = self.intermediate_tensors_per_device[0].memory_config().shard_spec.grid.bounding_box().start
+            if im_grid_start != self.receiver_core:
+                raise ValueError(
+                    f"Intermediate must be L1-sharded on receiver core {self.receiver_core}, got {im_grid_start}"
+                )
         if self._owns_residual_cb:
             res_start = self.residual_tensors_per_device[0].memory_config().shard_spec.grid.bounding_box().start
             if res_start != self.receiver_core:
@@ -330,6 +343,15 @@ class AllReduceConfig:
             sem_addrs.append(0)
         self.local_ready_sem_addr = ttnn.get_global_semaphore_address(semaphores[self.num_links])
 
+        # Compute uniform values once using ref_device:
+        # virtual NOC coords are identical across all devices.
+        sender_phys = ref_device.worker_core_from_logical_core(self.sender_core)
+        receiver_phys = ref_device.worker_core_from_logical_core(self.receiver_core)
+        input_l1_addr = self.input_tensors_per_device[0].buffer_address() if self._owns_local_data_cb else 0
+        neighbor_intermediate_addr = (
+            self.intermediate_tensors_per_device[0].buffer_address() if self._owns_remote_data_cb else 0
+        )
+
         self._per_device = {}
         mesh_rows, mesh_cols = mesh_shape
         self.receiver_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(self.receiver_core, self.receiver_core)])
@@ -339,33 +361,21 @@ class AllReduceConfig:
             for col in range(mesh_cols):
                 coord = ttnn.MeshCoordinate(row, col)
                 device_idx = row * mesh_cols + col
-                device = mesh_device.get_device(coord)
 
                 if self.cluster_axis == 0:
                     neighbor_coord = ttnn.MeshCoordinate(1 - row, col)
                 else:
                     neighbor_coord = ttnn.MeshCoordinate(row, 1 - col)
-                neighbor_idx = int(neighbor_coord[0]) * mesh_cols + int(neighbor_coord[1])
-                neighbor_device = mesh_device.get_device(neighbor_coord)
-                neighbor_recv_phys = neighbor_device.worker_core_from_logical_core(self.receiver_core)
-                neighbor_intermediate_addr = self.intermediate_tensors_per_device[neighbor_idx].buffer_address()
-
-                sender_phys = device.worker_core_from_logical_core(self.sender_core)
-                receiver_phys = device.worker_core_from_logical_core(self.receiver_core)
-                input_l1_addr = (
-                    self.input_tensors_per_device[device_idx].buffer_address() if self._owns_local_data_cb else 0
-                )
 
                 self._per_device[coord] = {
                     "device_idx": device_idx,
-                    "device": device,
                     "receiver_core_physical": receiver_phys,
                     "sender_core_physical": sender_phys,
                     "sem_addrs": sem_addrs,
                     "fabric_node_id": mesh_device.get_fabric_node_id(coord),
                     "neighbor_fabric_node_id": mesh_device.get_fabric_node_id(neighbor_coord),
-                    "dest_noc_x": neighbor_recv_phys.x,
-                    "dest_noc_y": neighbor_recv_phys.y,
+                    "dest_noc_x": receiver_phys.x,
+                    "dest_noc_y": receiver_phys.y,
                     "neighbor_intermediate_buffer_address": neighbor_intermediate_addr,
                     "sender_local_data_l1_addr": input_l1_addr,
                     "local_ready_sem_addr": self.local_ready_sem_addr,
@@ -403,6 +413,16 @@ class AllReduceConfig:
         """
         for coord in self._per_device:
             self._per_device[coord]["sender_local_data_l1_addr"] = int(addr)
+
+    def set_remote_data_addr(self, addr):
+        """Set the L1 address of the remote data (intermediate) buffer.
+
+        Required when intermediate_tensor is not provided (no-ownership mode).
+        The address is uniform across devices (same overlapped memory layout).
+        Must be called before get_*_common_rt_args().
+        """
+        for coord in self._per_device:
+            self._per_device[coord]["neighbor_intermediate_buffer_address"] = int(addr)
 
     # ======================================================================
     # Public RISC-type based API
@@ -466,9 +486,14 @@ class AllReduceConfig:
     def get_cb_descriptors(self, coord):
         """Return CB descriptors owned by this config.
 
-        When ``_owns_local_data_cb`` is True the sender-side local data CB is
-        included; otherwise the caller is responsible for creating it externally.
+        In no-ownership mode (intermediate_tensor is None), returns [] — the
+        caller creates all CBs externally (e.g. from overlapped memory).
+        In full-ownership mode, returns CBs for local_data (if input_tensor
+        provided), recv_local, remote_data, output, and optionally residual.
         """
+        if not self._owns_remote_data_cb:
+            return []
+
         info = self._per_device[coord]
         idx = info["device_idx"]
         receiver_core_set = self.receiver_core_set
@@ -683,12 +708,9 @@ class BypassAllReduceConfig:
         for row in range(mesh_rows):
             for col in range(mesh_cols):
                 coord = ttnn.MeshCoordinate(row, col)
-                device = mesh_device.get_device(coord)
-                worker_core_physical = device.worker_core_from_logical_core(worker_core)
                 self._per_device[coord] = {
                     "worker_core": worker_core,
                     "worker_core_set": worker_core_set,
-                    "worker_core_physical": worker_core_physical,
                 }
 
     def get_ncrisc_named_ct_args(self, coord):
@@ -774,8 +796,8 @@ class DeepseekMinimalAllReduce:
 
         if semaphores is None:
             raise ValueError("Expected semaphore(s) via `semaphores` for non-skip all-reduce")
-        if intermediate_tensor is None or output_tensor is None:
-            raise ValueError("Expected `intermediate_tensor` and `output_tensor` for non-skip all-reduce")
+        if output_tensor is None:
+            raise ValueError("Expected `output_tensor` for non-skip all-reduce")
 
         return AllReduceConfig(
             mesh_device=mesh_device,
