@@ -16,6 +16,9 @@
 #include "trace/trace_node.hpp"
 
 namespace tt::tt_metal {
+
+class Hal;
+
 class SimpleTraceAllocator {
     friend class SimpleTraceAllocatorFixture;
 
@@ -30,7 +33,7 @@ public:
         worker_ringbuffer_start_(worker_ringbuffer_start),
         active_eth_ringbuffer_start_(active_eth_ringbuffer_start) {}
 
-    void allocate_trace_programs(std::vector<TraceNode*>& trace_nodes);
+    void allocate_trace_programs(const Hal& hal, std::vector<TraceNode*>& trace_nodes);
 
 private:
     struct ExtraData {
@@ -107,7 +110,8 @@ private:
         std::vector<ExtraData>& extra_data_;
     };
 
-    void allocate_trace_programs_on_subdevice(std::vector<TraceNode*>& trace_nodes, SubDeviceId sub_device_id);
+    void allocate_trace_programs_on_subdevice(
+        const Hal& hal, std::vector<TraceNode*>& trace_nodes, SubDeviceId sub_device_id);
 
     RegionAllocator worker_region_allocator_;
     RegionAllocator active_eth_region_allocator_;

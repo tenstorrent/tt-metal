@@ -9,8 +9,8 @@
 #include <set>
 #include <tuple>
 
-#include "impl/context/metal_context.hpp"
 #include "hal/generated/dev_msgs.hpp"
+#include "llrt/hal.hpp"
 
 namespace tt::tt_metal {
 
@@ -83,7 +83,7 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
                 // performance. This is critical for avoiding gaps between ops, so it's given a very high cost (the
                 // highest cost for a program is normally around 10,000).
                 constexpr uint32_t desired_write_ahead = std::min(dev_msgs::launch_msg_buffer_num_entries, 7u);
-                constexpr uint32_t stall_badness = 100000000;
+                constexpr float stall_badness = 100000000;
                 static_assert(
                     max_stall_history_size > desired_write_ahead,
                     "max_history_size must be greater than desired_write_ahead");
@@ -133,7 +133,7 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
     return {best_region_sync_idx, best_addr};
 }
 
-void SimpleTraceAllocator::allocate_trace_programs(std::vector<TraceNode*>& trace_nodes) {
+void SimpleTraceAllocator::allocate_trace_programs(const Hal& hal, std::vector<TraceNode*>& trace_nodes) {
     std::map<uint64_t, uint32_t> program_ids_use_map;
     extra_data_.resize(trace_nodes.size());
 
@@ -151,13 +151,12 @@ void SimpleTraceAllocator::allocate_trace_programs(std::vector<TraceNode*>& trac
     for (auto& sub_device_id : sub_device_ids) {
         worker_region_allocator_.reset_allocator();
         active_eth_region_allocator_.reset_allocator();
-        allocate_trace_programs_on_subdevice(trace_nodes, sub_device_id);
+        allocate_trace_programs_on_subdevice(hal, trace_nodes, sub_device_id);
     }
 }
 
 void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
-    std::vector<TraceNode*>& trace_nodes, SubDeviceId sub_device_id) {
-    const auto& hal = MetalContext::instance().hal();
+    const Hal& hal, std::vector<TraceNode*>& trace_nodes, SubDeviceId sub_device_id) {
 
     uint32_t expected_workers_completed = 0;
     std::optional<uint32_t> last_active_eth_sync_idx;
