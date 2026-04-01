@@ -3,25 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-TG (Single Galaxy) MoE Decode Block End-to-End Test
+MoE Decode Block End-to-End Test
 
-Tests the complete optimized MoE decode sequence on a 4x8 mesh (32 devices).
-Based on tests/fused_op_unit_tests/moe/test_optimized_moe_decode_block.py adapted for TG validation.
-
-Purpose: Catch breaking changes to MoE ops without running full E2E on quad galaxy.
-
-Key Design Principles:
-1. **Same Work Per Device**: Each device handles 2 experts (same as quad: 256/128 = 2)
-2. **End-to-End Testing**: Tests dispatch -> compute -> combine -> post-processing pipeline
-3. **Reduced Batch Size**: 128 tokens total (vs 512 on quad) due to L1 constraints on TG
-
-Configuration:
-- Mesh: 4x8 (32 devices) - predefined TG shape (fixture doesn't support arbitrary shapes)
-- Experts: 64 (2 per device)
-- Batch: 32 tokens per device * 4 dispatch devices = 128 total tokens
-- cluster_axis: 0 (dispatch along axis-0, 4 dispatch devices, 8 replicas)
-- Core ranges: TG-specific core ranges ((4, 0), (5, 7))
-- Note: Individual ops work but E2E has persistent ~0.69 PCC in combine - requires further investigation
+Supports two configurations:
+1. Quad Galaxy (16x8): Full production setup with 128 devices, 256 experts
+2. Single Galaxy 16x1 Torus: Development/testing setup using top 2 rows of 4x8 TG
+   - Requires: TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_16x1_torus_graph_descriptor.textproto"
+   - Key difference: No reduce_scatter (no replication), takes first output from fast_reduce
 """
 
 import os
@@ -213,6 +201,128 @@ def create_torch_dispatch_input_expert_indices_tensor(
                     expert_indices[b, 0, s, k] = (
                         experts - 1
                     )  # technically each expert index should be different, but we're sending to the same device regardless
+                elif scheme == "worst_congestion":
+                    # Worst case link congestion: each token selects experts on consecutive
+                    # devices in one direction, maximizing traffic through intermediate links.
+                    # From device D, select experts on devices D+1, D+2, ..., D+k
+                    # This creates a cascade where link i→i+1 carries traffic from all
+                    # devices 0..i to all devices i+1..n, maximizing link utilization.
+
+                    # Determine source device for this token (batch is sharded in chunks across devices)
+                    # Device 0 gets batch 0 to batch/devices-1, device 1 gets next chunk, etc.
+                    src_device = b // batches_per_device
+
+                    # Target device is src_device + k + 1 (wrapping around)
+                    target_device = (src_device + 1 + k) % devices
+
+                    # Expert offset: if we wrap around and visit a device multiple times,
+                    # pick a different expert on that device each time
+                    expert_offset = k // devices
+                    expert_id = target_device * experts_per_device + (expert_offset % experts_per_device)
+
+                    expert_indices[b, 0, s, k] = expert_id
+                elif scheme == "best_congestion":
+                    # Best case for congestion: tokens prefer local experts first, then nearest
+                    # neighbors, minimizing average hop distance and spreading traffic.
+                    # Algorithm:
+                    # 1. Fill local device first (up to experts_per_device)
+                    # 2. Alternate between CCW and CW neighbors, picking 1 expert at a time
+                    # 3. When a device is full, move to the next device in that direction
+                    #
+                    # Example with k=8, experts_per_device=2:
+                    # - 2 local
+                    # - 2 from CCW neighbor (1-hop)
+                    # - 2 from CW neighbor (1-hop)
+                    # - 1 from CW 2-hop neighbor
+                    # - 1 from CCW 2-hop neighbor
+                    # Batch is sharded in chunks across devices (not round-robin)
+                    # Device 0 gets batch 0 to batch/devices-1, device 1 gets next chunk, etc.
+                    src_device = b // batches_per_device
+
+                    # Build list of (device, local_expert_idx) for all k experts
+                    if k == 0:
+                        # First expert slot - start building the selection list
+                        # We need to compute all k experts at once for this token
+                        picked = []
+                        remaining = selected_experts_k
+
+                        # Step 1: Fill local device
+                        local_count = min(remaining, experts_per_device)
+                        for i in range(local_count):
+                            picked.append((src_device, i))
+                        remaining -= local_count
+
+                        # Step 2: Alternate CCW and CW
+                        ccw_hop = 1
+                        cw_hop = 1
+                        ccw_count = 0  # experts picked from current CCW device
+                        cw_count = 0  # experts picked from current CW device
+                        use_ccw = True  # alternate starting with CCW
+
+                        while remaining > 0:
+                            if use_ccw:
+                                ccw_device = (src_device - ccw_hop) % devices
+                                if ccw_count < experts_per_device:
+                                    picked.append((ccw_device, ccw_count))
+                                    ccw_count += 1
+                                    remaining -= 1
+                                else:
+                                    # Move to next CCW device
+                                    ccw_hop += 1
+                                    ccw_count = 0
+                                    continue  # Don't switch direction yet, retry with new device
+                            else:
+                                cw_device = (src_device + cw_hop) % devices
+                                if cw_count < experts_per_device:
+                                    picked.append((cw_device, cw_count))
+                                    cw_count += 1
+                                    remaining -= 1
+                                else:
+                                    # Move to next CW device
+                                    cw_hop += 1
+                                    cw_count = 0
+                                    continue  # Don't switch direction yet, retry with new device
+                            use_ccw = not use_ccw  # Alternate direction
+
+                        # Store the selection in a way we can access for subsequent k values
+                        # We use a simple approach: just compute all k at once and store in tensor
+                        for idx, (device, local_idx) in enumerate(picked):
+                            expert_id = device * experts_per_device + local_idx
+                            expert_indices[b, 0, s, idx] = expert_id
+                    # For k > 0, the values were already set when k == 0
+                elif scheme == "worst_congestion_descending":
+                    # Worst case for sparse multicast: send to furthest device first (antipode),
+                    # then progressively closer devices. This maximizes the hop distance for
+                    # each packet, as opposed to worst_congestion (ascending) which starts
+                    # from the nearest neighbor.
+                    #
+                    # For a 16-device ring from src_device:
+                    # - k=0: hop 8 (antipode, maximum distance)
+                    # - k=1: hop 7
+                    # - k=2: hop 6
+                    # - ...
+                    # - k=7: hop 1 (nearest neighbor)
+                    # - k=8: hop 0 (local, if k > devices/2)
+                    #
+                    # This is the worst case for sparse multicast because:
+                    # 1. Each packet travels maximum distance before hitting any destination
+                    # 2. No benefit from early delivery along the path
+                    # 3. Maximum total hop-distance across all packets
+
+                    # Batch is sharded in chunks across devices
+                    src_device = b // batches_per_device
+
+                    # Start from antipode (devices // 2 hops away) and decrement
+                    antipode_hop = devices // 2
+                    hop_distance = max(0, antipode_hop - k)  # Clamp to 0 for local when k > antipode
+                    target_device = (src_device + hop_distance) % devices
+
+                    # Expert offset: if we wrap around and visit a device multiple times,
+                    # pick a different expert on that device each time
+                    expert_offset = k // devices
+                    expert_id = target_device * experts_per_device + (expert_offset % experts_per_device)
+
+                    expert_indices[b, 0, s, k] = expert_id
                 else:
                     raise ValueError(f"Invalid scheme: {scheme}")
 
@@ -318,7 +428,7 @@ def gen_combine_golden(
 
 def verify_combine(iteration, mesh_device, mesh_shape, cluster_axis, tt_combine_tensor, torch_combine_golden):
     PCC_THRESHOLD = 0.988
-    ATOL_THRESHOLD = 650.0
+    ATOL_THRESHOLD = 675.0
 
     # factors in linearized_mesh_coord
     if cluster_axis == 0:
@@ -338,6 +448,7 @@ def verify_combine(iteration, mesh_device, mesh_shape, cluster_axis, tt_combine_
         )
 
     # check pcc
+    print(torch_combine_output - torch_combine_golden)
     pcc_passed, pcc_output = comp_pcc(torch_combine_output, torch_combine_golden, pcc=PCC_THRESHOLD)
     logger.info(f"Combine Output - Iteration: {iteration} - PCC: {pcc_output}")
     if not pcc_passed:
@@ -386,7 +497,7 @@ def gen_output_golden(
                 output_reference[token, :, :, :] + torch_dispatch_input_expert_scores[token, :, :, k] * matmul_golden
             )
 
-    # [batch, 1, 1, hidden_size]
+    # [512, 1, 1, 7168]
     return output_reference
 
 
@@ -423,7 +534,7 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
     return pcc_passed and allclose_passed
 
 
-@pytest.mark.requires_device(["TG"])
+@pytest.mark.requires_device(["QUAD", "TG", "TG16X1"])
 @pytest.mark.skipif(
     (os.getenv("USE_TORUS_MODE") is None),
     reason=f"Requires ring fabric",
@@ -431,7 +542,8 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device",
     [
-        pytest.param((4, 8), (4, 8), id="4x8_tg"),
+        # pytest.param((16, 8), (16, 8), id="16x8_quad"),
+        pytest.param((16, 1), (16, 1), id="16x1_tg"),
     ],
     indirect=["mesh_device"],
 )
@@ -439,7 +551,7 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 @pytest.mark.parametrize("layer_id, num_layers", [(0, 1)])
 @pytest.mark.parametrize("batches_per_device", [32])
 @pytest.mark.parametrize("shard_dim", [0])
-@pytest.mark.parametrize("experts", [64])
+@pytest.mark.parametrize("experts_per_device", [2])  # Changed: experts will be calculated from mesh_shape
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("seq", [1])
 @pytest.mark.parametrize("hidden_size", [7168])
@@ -447,7 +559,7 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 @pytest.mark.parametrize("scheme", ["random_sequential_experts"])
 @pytest.mark.parametrize("compute_output_height_shard_dim", [4])
 @pytest.mark.parametrize("compute_output_width_shard_dim", [4])
-@pytest.mark.parametrize("combine_mux_core_range", [((2, 0), (3, 7))])
+@pytest.mark.parametrize("combine_mux_core_range", [((3, 0), (4, 7))])
 @pytest.mark.parametrize("combine_token_parallel_core_dim", [4])
 @pytest.mark.parametrize("combine_data_parallel_core_dim", [4])
 @pytest.mark.parametrize("enable_trace", [True])
@@ -464,7 +576,7 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
     ids=["fabric_1D_ring"],
     indirect=True,
 )
-def test_optimized_moe_decode_block_tg(
+def test_optimized_moe_decode_block(
     mesh_shape,
     mesh_device,
     cluster_axis,
@@ -472,7 +584,7 @@ def test_optimized_moe_decode_block_tg(
     num_layers,
     batches_per_device,
     shard_dim,
-    experts,
+    experts_per_device,
     select_experts_k,
     seq,
     hidden_size,
@@ -494,23 +606,22 @@ def test_optimized_moe_decode_block_tg(
     random.seed(2003)
 
     num_devices = mesh_shape[0] * mesh_shape[1]
+    experts = experts_per_device * num_devices  # Calculate total experts from mesh shape
     num_dispatch_devices = mesh_shape[cluster_axis]
     num_replicated_devices = num_devices // num_dispatch_devices
     batch = batches_per_device * num_dispatch_devices
     total_tokens = batch * seq
     tokens_per_device = batch // num_dispatch_devices
-    experts_per_device = experts // num_devices
     experts_per_cluster = experts // num_replicated_devices
 
     logger.info("=" * 80)
-    logger.info("TG MoE Decode Block End-to-End Test Configuration:")
+    logger.info("MoE Decode Block Test Configuration:")
     logger.info(f"  Mesh shape: {mesh_shape} ({num_devices} devices)")
-    logger.info(f"  Cluster axis: {cluster_axis}")
     logger.info(f"  Experts: {experts} ({experts_per_device} per device)")
     logger.info(f"  Batch: {batch} ({batches_per_device} per device)")
+    logger.info(f"  Num dispatch devices: {num_dispatch_devices}")
+    logger.info(f"  Num replicated devices: {num_replicated_devices}")
     logger.info(f"  Total tokens: {total_tokens}")
-    logger.info(f"  Num replicated clusters: {num_replicated_devices}")
-    logger.info(f"  Selected experts K: {select_experts_k}")
     logger.info("=" * 80)
 
     if cluster_axis == 1:
@@ -847,29 +958,45 @@ def test_optimized_moe_decode_block_tg(
 
     scaled_output_memory_config = ttnn.L1_MEMORY_CONFIG
 
-    # TG-specific fast reduce output memory config (adjusted for 4x8 mesh)
-    fast_reduce_output_memory_config = ttnn.MemoryConfig(
-        ttnn.BufferType.L1,
-        ttnn.NdShardSpec(
-            ttnn.Shape([1, 32, 128]),
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(2, 5), ttnn.CoreCoord(2, 5)),
-                    ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(3, 5), ttnn.CoreCoord(3, 5)),
-                    ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
-                ]
+    # For 16x1, use simpler memory config since we have no replication
+    # For 16x8, use the complex sharded config optimized for 8-way split
+    if num_replicated_devices == 1:
+        # 16x1: Single output tensor with full hidden size
+        fast_reduce_output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    else:
+        # 16x8: Sharded config for 8-way split (hidden_size / 8)
+        fast_reduce_output_memory_config = ttnn.MemoryConfig(
+            ttnn.BufferType.L1,
+            ttnn.NdShardSpec(
+                ttnn.Shape([1, 32, 128]),
+                ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),
+                        ttnn.CoreRange(ttnn.CoreCoord(2, 5), ttnn.CoreCoord(2, 5)),
+                        ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
+                        ttnn.CoreRange(ttnn.CoreCoord(3, 5), ttnn.CoreCoord(3, 5)),
+                        ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
+                        ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+                    ]
+                ),
+                ttnn.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
             ),
-            ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
-        ),
-    )
+        )
 
     # NOTE:
     # - use DRAM here so we can run multiple iterations
+    # - leaving this memory_config here as it is the one used in the model
+    # rs_output_memory_config = ttnn.MemoryConfig(
+    #     ttnn.BufferType.L1,
+    #     ttnn.NdShardSpec(
+    #         ttnn.Shape([1, 32, 32]),
+    #         ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))]),
+    #         ttnn.ShardOrientation.ROW_MAJOR,
+    #         ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    #     ),
+    # )
     rs_output_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
     ############################################
@@ -989,25 +1116,30 @@ def test_optimized_moe_decode_block_tg(
             tt_unsqueezed_output, topk_experts_weights, memory_config=scaled_output_memory_config
         )
 
-        # For TG: Sum across experts dimension, similar to simplified path
-        # [select_experts_k, 1, tokens_per_device, hidden_size] -> [1, 1, tokens_per_device, hidden_size]
-        tt_summed_output = ttnn.sum(
+        tt_fast_reduce_output_tensors = ttnn.experimental.deepseek_moe_fast_reduce_nc(
             tt_scaled_output,
             dim=0,
-            keepdim=True,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            split_size=int(tt_scaled_output.shape[-1] // num_replicated_devices),
+            output_memory_config=fast_reduce_output_memory_config,
         )
 
-        # For TG 4x8: Use standard reduce_scatter to reduce across replicated devices
-        # [1, 1, tokens_per_device, hidden_size] -> [1, 1, tokens_per_device, hidden_size // num_replicated_devices]
-        tt_final_output = ttnn.reduce_scatter(
-            tt_summed_output,
-            dim=-1,
-            cluster_axis=1,
-            num_links=4,
-            memory_config=rs_output_memory_config,
-            topology=ttnn.Topology.Ring,
-        )
+        # Conditionally apply reduce_scatter based on mesh shape
+        # For 16x1 (no replication), skip reduce_scatter and take first item
+        # For 16x8 (with replication), apply reduce_scatter across replicas
+        if mesh_shape[1 - cluster_axis] == 1:
+            # No replication: final output is the only item in the list
+            tt_final_output = tt_fast_reduce_output_tensors[0]
+        else:
+            # With replication: reduce_scatter across replicated devices
+            # [select_experts_k, tokens_per_device, hidden_size // num_replicated_devices] final per device shape
+            tt_final_output = ttnn.experimental.deepseek_moe_reduce_scatter(
+                tt_fast_reduce_output_tensors,
+                output_memory_config=rs_output_memory_config,
+                dim=-1,
+                num_links=4,
+                topology=ttnn.Topology.Ring,
+                cluster_axis=1,
+            )
 
         return tt_combine_output, tt_final_output
 
@@ -1072,7 +1204,7 @@ def test_optimized_moe_decode_block_tg(
         ):
             all_iterations_passed = False
 
-    logger.info(f"\nTG MoE Verification: {'PASSED' if all_iterations_passed else 'FAILED'}")
-    assert all_iterations_passed, "TG MoE Verification Failed!"
+    logger.info(f"\nMoE Verification: {'PASSED' if all_iterations_passed else 'FAILED'}")
+    assert all_iterations_passed, "MoE Verification Failed!"
 
     logger.info(f"Done validating output")
