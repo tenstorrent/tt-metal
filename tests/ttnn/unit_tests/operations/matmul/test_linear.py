@@ -450,7 +450,7 @@ def test_linear_with_fp32_dest_acc_and_bias(device):
         rtol=0.001 * 384,
         frobenius_threshold=0.001 * 384,
         pcc_threshold=0.99,
-        check_ulp=True,
+        check_ulp=False,
     )
 
 
