@@ -90,3 +90,22 @@ def device(request):
 
     ttnn.close_device(device)
     logger.info("Module-scoped SDPA device closed")
+
+
+# ---------------------------------------------------------------------------
+# Per-test device-state reset (autouse)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _reset_device_state(device):
+    """
+    Reset shared device state before each test so module-scoped device
+    behaves like a fresh device for state-sensitive tests.
+
+    Clears program cache (prevents stale entries from affecting cache-count
+    assertions), loaded sub-device manager, and cache_entries_counter delta.
+    """
+    device.clear_program_cache()
+    device.clear_loaded_sub_device_manager()
+    device.cache_entries_counter.reset()
+    yield

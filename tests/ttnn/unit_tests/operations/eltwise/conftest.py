@@ -93,3 +93,28 @@ def device(request):
 
     ttnn.close_device(device)
     logger.info("Module-scoped eltwise device closed")
+
+
+# ---------------------------------------------------------------------------
+# Per-test device-state reset (autouse)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _reset_device_state(device):
+    """
+    Reset shared device state before each test so module-scoped device
+    behaves like a fresh device for state-sensitive tests.
+
+    Clears:
+    - Program cache: prevents prior-test programs from affecting cache-count
+      assertions or causing core-mismatch errors via stale sub-device programs.
+    - Loaded sub-device manager: tests that call load_sub_device_manager()
+      without cleanup would otherwise leave the sub-device config active for
+      the next test, causing 'num_intersections == num_cores' fatals.
+    - cache_entries_counter: resets the delta counter so per-test cache-entry
+      assertions start from zero.
+    """
+    device.clear_program_cache()
+    device.clear_loaded_sub_device_manager()
+    device.cache_entries_counter.reset()
+    yield
