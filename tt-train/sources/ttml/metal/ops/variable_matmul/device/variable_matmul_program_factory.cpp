@@ -106,7 +106,6 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     auto intermediate_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     auto intermediate_tile_size = tt::tile_size(intermediate_data_format);
 
-    // ----- Tile dimensions from max_M (compile-time) -----
     auto in0_tensor_shape = input_tensor.padded_shape();
     auto in1_tensor_shape = weight_tensor.padded_shape();
     uint32_t K = in0_tensor_shape[-1];
@@ -115,17 +114,12 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     uint32_t K_tiles = K / tt::constants::TILE_WIDTH;
     uint32_t N_tiles = N / tt::constants::TILE_WIDTH;
 
-    // actual_M from the input tensor
     uint32_t actual_M = input_tensor.physical_volume() / K;
     uint32_t actual_M_tiles = actual_M / tt::constants::TILE_HEIGHT;
 
-    // Two-program strategy: transpose_core_grid is based on actual_M vs N.
-    // This creates at most 2 cached programs (one per transpose variant).
-    // effective_max_M is capped to N for the non-transposed variant, since actual_M <= N in that case.
+    // Two-program strategy: transpose_core_grid from actual_M vs N.
+    // At most 2 cached programs (one per transpose variant).
     bool transpose_core_grid = actual_M > N;
-    uint32_t effective_max_M =
-        transpose_core_grid ? operation_attributes.max_M : std::min(operation_attributes.max_M, N);
-    uint32_t max_M_tiles = effective_max_M / tt::constants::TILE_HEIGHT;
 
     uint32_t M_block_tiles = config.M_block_size;
     uint32_t K_block_tiles = config.K_block_size;
@@ -146,25 +140,20 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     auto in1_risc = transpose_core_grid ? small_input_risc : large_input_risc;
     uint32_t in1_parallel_axis_cores = transpose_core_grid ? grid_size.y : grid_size.x;
 
-    // ----- Tile counts from max_M (for CB sizing) -----
-    uint32_t max_padded_M_tiles = tt::round_up(max_M_tiles, in0_parallel_axis_cores);
+    // ----- M tile counts (from actual_M — used for both compile-time and runtime args) -----
+    uint32_t actual_padded_M_tiles = tt::round_up(actual_M_tiles, in0_parallel_axis_cores);
     uint32_t padded_N_tiles = tt::round_up(N_tiles, in1_parallel_axis_cores);
     uint32_t padded_K_tiles = tt::round_up(K_tiles, K_block_tiles);
 
-    uint32_t max_M_tiles_per_core = max_padded_M_tiles / in0_parallel_axis_cores;
+    uint32_t actual_M_tiles_per_core = actual_padded_M_tiles / in0_parallel_axis_cores;
     uint32_t N_tiles_per_core = padded_N_tiles / in1_parallel_axis_cores;
 
     uint32_t K_blocks = padded_K_tiles / K_block_tiles;
 
-    uint32_t max_M_blocks_per_core = tt::div_up(max_M_tiles_per_core, M_block_tiles);
+    uint32_t actual_M_blocks_per_core = tt::div_up(actual_M_tiles_per_core, M_block_tiles);
     uint32_t N_blocks_per_core = tt::div_up(N_tiles_per_core, N_block_tiles);
 
-    // ----- Actual M tile counts (for runtime args) -----
-    uint32_t actual_padded_M_tiles = tt::round_up(actual_M_tiles, in0_parallel_axis_cores);
-    uint32_t actual_M_tiles_per_core = actual_padded_M_tiles / in0_parallel_axis_cores;
-    uint32_t actual_M_blocks_per_core = tt::div_up(actual_M_tiles_per_core, M_block_tiles);
-
-    // ----- CB sizing (uses max_M for worst-case allocation) -----
+    // ----- CB sizing (depends only on block sizes from config, not on total M) -----
     uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
     uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
@@ -175,23 +164,11 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     uint32_t out_cb_num_tiles = out_block_num_tiles * double_buffer_factor;
     uint32_t interm_cb_num_tiles = out_block_num_tiles;  // not double buffered
 
+    log_debug(tt::LogOp, "variable_matmul: actual_M={}, K={}, N={}", actual_M, K, N);
     log_debug(
         tt::LogOp,
-        "variable_matmul: max_M={}, effective_max_M={}, actual_M={}, K={}, N={}",
-        operation_attributes.max_M,
-        effective_max_M,
-        actual_M,
-        K,
-        N);
-    log_debug(
-        tt::LogOp,
-        "variable_matmul: max_M_tiles_per_core={}, actual_M_tiles_per_core={}",
-        max_M_tiles_per_core,
-        actual_M_tiles_per_core);
-    log_debug(
-        tt::LogOp,
-        "variable_matmul: max_M_blocks_per_core={}, actual_M_blocks_per_core={}",
-        max_M_blocks_per_core,
+        "variable_matmul: actual_M_tiles_per_core={}, actual_M_blocks_per_core={}",
+        actual_M_tiles_per_core,
         actual_M_blocks_per_core);
     log_debug(tt::LogOp, "variable_matmul: transpose_core_grid={} (from actual_M > N)", transpose_core_grid);
 
@@ -235,7 +212,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
 
     // ----- Kernel compile-time args -----
     // Layout matches original minimal_matmul exactly (22 args for in0, 21 for in1) so TensorAccessor
-    // offsets remain correct. max_M values are used for indices 0, 1, 9 (compile-time sizing).
+    // offsets remain correct. Indices 0, 1, 9 are unused by kernels (kept for arg layout compat).
     // N_chunks=1, N_tiles_per_chunk=N_tiles (dummy values for stripped features).
 
     bool in0_is_output_writer = !transpose_core_grid;
@@ -243,8 +220,8 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
 
     // in0 sender compile-time args (22 fixed + tensor accessor args)
     std::vector<uint32_t> in0_sender_compile_time_args = {
-        max_M_tiles,                // 0: M_tiles (max for CB sizing)
-        max_padded_M_tiles,         // 1: padded_M_tiles (max)
+        actual_M_tiles,             // 0: M_tiles (unused by kernel, kept for arg layout compat)
+        actual_padded_M_tiles,      // 1: padded_M_tiles (max)
         K_tiles,                    // 2: K_tiles
         padded_K_tiles,             // 3: padded_K_tiles
         N_tiles,                    // 4: N_tiles
@@ -252,7 +229,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         M_block_tiles,              // 6: M_block_tiles
         K_block_tiles,              // 7: K_block_tiles
         N_block_tiles,              // 8: N_block_tiles
-        max_M_blocks_per_core,      // 9: M_blocks_per_core (max)
+        actual_M_blocks_per_core,   // 9: M_blocks_per_core (unused by kernel, kept for arg layout compat)
         N_blocks_per_core,          // 10: N_blocks_per_core
         in0_tile_size,              // 11: in_tile_size
         out_tile_size,              // 12: out_tile_size
@@ -277,8 +254,8 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
 
     // in0 receiver compile-time args (same layout, is_injector_core=false)
     std::vector<uint32_t> in0_receiver_compile_time_args = {
-        max_M_tiles,
-        max_padded_M_tiles,
+        actual_M_tiles,
+        actual_padded_M_tiles,
         K_tiles,
         padded_K_tiles,
         N_tiles,
@@ -286,7 +263,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         M_block_tiles,
         K_block_tiles,
         N_block_tiles,
-        max_M_blocks_per_core,
+        actual_M_blocks_per_core,
         N_blocks_per_core,
         in0_tile_size,
         out_tile_size,
@@ -311,8 +288,8 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
 
     // in1 sender compile-time args (21 fixed + tensor accessor args, no in3_tile_size)
     std::vector<uint32_t> in1_sender_compile_time_args = {
-        max_M_tiles,
-        max_padded_M_tiles,
+        actual_M_tiles,
+        actual_padded_M_tiles,
         K_tiles,
         padded_K_tiles,
         N_tiles,
@@ -320,7 +297,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         M_block_tiles,
         K_block_tiles,
         N_block_tiles,
-        max_M_blocks_per_core,
+        actual_M_blocks_per_core,
         N_blocks_per_core,
         in1_tile_size,
         out_tile_size,
@@ -344,8 +321,8 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
 
     // in1 receiver compile-time args
     std::vector<uint32_t> in1_receiver_compile_time_args = {
-        max_M_tiles,
-        max_padded_M_tiles,
+        actual_M_tiles,
+        actual_padded_M_tiles,
         K_tiles,
         padded_K_tiles,
         N_tiles,
@@ -353,7 +330,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         M_block_tiles,
         K_block_tiles,
         N_block_tiles,
-        max_M_blocks_per_core,
+        actual_M_blocks_per_core,
         N_blocks_per_core,
         in1_tile_size,
         out_tile_size,
@@ -377,14 +354,14 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
 
     // ----- Compute kernel -----
     std::vector<uint32_t> compute_compile_time_args = {
-        K_blocks,               // 0: K_num_blocks
-        M_block_tiles,          // 1: M_block_tiles
-        K_block_tiles,          // 2: K_block_tiles
-        N_block_tiles,          // 3: N_block_tiles
-        max_M_blocks_per_core,  // 4: M_blocks_per_core (max)
-        N_blocks_per_core,      // 5: N_blocks_per_core
-        subblock_h,             // 6: subblock_h
-        subblock_w,             // 7: subblock_w
+        K_blocks,                  // 0: K_num_blocks
+        M_block_tiles,             // 1: M_block_tiles
+        K_block_tiles,             // 2: K_block_tiles
+        N_block_tiles,             // 3: N_block_tiles
+        actual_M_blocks_per_core,  // 4: M_blocks_per_core (unused by kernel, kept for arg layout compat)
+        N_blocks_per_core,         // 5: N_blocks_per_core
+        subblock_h,                // 6: subblock_h
+        subblock_w,                // 7: subblock_w
     };
 
     std::map<std::string, std::string> compute_defines;

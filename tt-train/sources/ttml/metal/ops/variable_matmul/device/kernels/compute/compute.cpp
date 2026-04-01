@@ -285,7 +285,7 @@ void kernel_main() {
     constexpr uint32_t M_block_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t K_block_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t N_block_tiles = get_compile_time_arg_val(3);
-    // Index 4 is max_M_blocks_per_core (compile-time), used only for CB sizing
+    // Index 4 is unused placeholder (kept for arg layout compat). Actual M_blocks_per_core from runtime args.
     constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(5);
     constexpr uint32_t subblock_h = get_compile_time_arg_val(6);
     constexpr uint32_t subblock_w = get_compile_time_arg_val(7);

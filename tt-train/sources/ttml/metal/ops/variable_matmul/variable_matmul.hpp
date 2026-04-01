@@ -16,11 +16,11 @@ namespace ttml::metal {
 // Re-export config type for convenience
 using VariableMatmulConfig = ttml::metal::ops::variable_matmul::device::VariableMatmulConfig;
 
-// Variable-M matmul: compiles once for max_M, dispatches with any actual_M <= max_M.
+// Variable-M matmul: compiles at most 2 programs (one per transpose variant),
+// then dispatches any M shape without recompilation.
 ttnn::Tensor variable_matmul(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    uint32_t max_M,
     const VariableMatmulConfig& config,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
