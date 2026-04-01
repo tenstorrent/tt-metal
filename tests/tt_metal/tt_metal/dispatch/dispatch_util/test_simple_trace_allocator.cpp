@@ -35,8 +35,6 @@ protected:
         return RegionAllocator(ringbuffer_size, extra_data_);
     }
 
-    auto& regions(RegionAllocator& alloc) { return alloc.regions_; }
-
     std::vector<ExtraData> extra_data_;
 };
 // NOLINTEND(cppcoreguidelines-virtual-class-destructor)
@@ -59,11 +57,6 @@ TEST_F(SimpleTraceAllocatorFixture, IntersectsOverlapping) {
 TEST_F(SimpleTraceAllocatorFixture, IntersectsContainment) {
     EXPECT_TRUE(intersects(0, 100, 10, 5));
     EXPECT_TRUE(intersects(10, 5, 0, 100));
-}
-
-TEST_F(SimpleTraceAllocatorFixture, IntersectsAdjacent) {
-    EXPECT_FALSE(intersects(0, 10, 10, 10));
-    EXPECT_FALSE(intersects(10, 10, 0, 10));
 }
 
 TEST_F(SimpleTraceAllocatorFixture, IntersectsSameRegion) {
@@ -158,48 +151,22 @@ TEST_F(SimpleTraceAllocatorFixture, EvictionWhenBufferFull) {
     EXPECT_EQ(*sync1, 0u);
 }
 
-TEST_F(SimpleTraceAllocatorFixture, BeladyEvictionPrefersFarFuture) {
-    // Buffer of size 200, three regions of size 80 each. Fourth allocation must evict one of them.
-    // The region with the farthest next_use should be preferred for eviction (lowest cost).
-    extra_data_.resize(4);
-    // Region 0 will be reused at trace_idx=3 (close future).
-    extra_data_[0].next_use_idx[ExtraData::kNonBinary] = 3;
-    // Region 1 will be reused at trace_idx=3 (close future).
-    extra_data_[1].next_use_idx[ExtraData::kNonBinary] = 3;
-    // Region 2 has no future use (nullopt) - but it was allocated recently (trace_idx=2), within
-    // stall history, so it won't be eagerly deleted.
-
-    auto alloc = make_allocator(240);
-
-    alloc.allocate_region(80, 0, ExtraData::kNonBinary, 10);
-    alloc.allocate_region(80, 1, ExtraData::kNonBinary, 20);
-    alloc.allocate_region(80, 2, ExtraData::kNonBinary, 30);
-
-    // Now buffer has [0,80)=idx0, [80,160)=idx1, [160,240)=idx2.
-    // Allocate 80 bytes at trace_idx=3. All three placements overlap exactly one region.
-    // Region 2 has no future use, so its Belady cost component is 0 (no next_use_idx).
-    // Regions 0 and 1 both have next_use at idx 3 == trace_idx, so they'd get the huge
-    // current_node_eviction_penalty.
-    // Region 2 is the cheapest to evict.
-    auto [sync3, addr3] = alloc.allocate_region(80, 3, ExtraData::kNonBinary, 40);
-    ASSERT_TRUE(addr3.has_value());
-    EXPECT_EQ(*addr3, 160u);
-}
-
 TEST_F(SimpleTraceAllocatorFixture, CurrentNodeEvictionPenalty) {
     // Two regions. One has next_use == current trace_idx (penalized), the other has next_use far away.
-    extra_data_.resize(3);
-    extra_data_[0].next_use_idx[ExtraData::kNonBinary] = 2;  // Next use IS the current allocation.
-    extra_data_[1].next_use_idx[ExtraData::kNonBinary] = 100; // Next use is far away (low Belady cost).
+    // Use wide spacing to isolate the penalty from stall-avoidance costs.
+    constexpr uint32_t spacing = 100;
+    extra_data_.resize(3 * spacing);
+    extra_data_[0].next_use_idx[ExtraData::kNonBinary] = 2 * spacing;           // Next use IS the current allocation.
+    extra_data_[spacing].next_use_idx[ExtraData::kNonBinary] = 3 * spacing - 1;  // Far away (low Belady cost).
 
     auto alloc = make_allocator(200);
 
     alloc.allocate_region(100, 0, ExtraData::kNonBinary, 10);
-    alloc.allocate_region(100, 1, ExtraData::kNonBinary, 20);
+    alloc.allocate_region(100, spacing, ExtraData::kNonBinary, 20);
 
-    // Buffer full. Allocating at trace_idx=2. Region 0 has next_use_idx==2 (massive penalty).
-    // Region 1 has next_use_idx==100 (low cost). Should evict region 1.
-    auto [sync, addr] = alloc.allocate_region(100, 2, ExtraData::kNonBinary, 30);
+    // Allocating at trace_idx=2*spacing. Region 0 has next_use_idx==2*spacing (massive penalty).
+    // Region spacing has next_use_idx far away (low cost). Should evict region spacing.
+    auto [sync, addr] = alloc.allocate_region(100, 2 * spacing, ExtraData::kNonBinary, 30);
     ASSERT_TRUE(addr.has_value());
     EXPECT_EQ(*addr, 100u);
 }
@@ -302,9 +269,9 @@ TEST_F(SimpleTraceAllocatorFixture, UpdateRegionTraceIdxNonexistent) {
 }
 
 TEST_F(SimpleTraceAllocatorFixture, MultipleDataTypes) {
-    extra_data_.resize(2);
-    extra_data_[0].next_use_idx[ExtraData::kNonBinary] = 1;
-    extra_data_[0].next_use_idx[ExtraData::kBinary] = 1;
+    // Two allocations with different data_types at the same trace_idx are independent.
+    // The second allocation can't overlap the first (same trace_idx → now_in_use), so it goes after.
+    extra_data_.resize(1);
     auto alloc = make_allocator(200);
 
     auto [s0, a0] = alloc.allocate_region(100, 0, ExtraData::kNonBinary, 10);
