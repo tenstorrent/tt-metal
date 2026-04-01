@@ -159,6 +159,7 @@ class DeepSeekV3:
         write_fn: Callable[[ttnn.Tensor], None],
         read_fn: Callable[[ttnn.Tensor], None],
         batch_size: int = 1,
+        pipeline_depth: int = 1,
     ) -> None:
         """
         Args:
@@ -166,12 +167,18 @@ class DeepSeekV3:
             read_fn: Called with an output tensor; implementation fills it (e.g. Pipeline.read_output).
             batch_size: Batch size B. Current implementation supports only B=1;
                 payload size is B * TOKEN_ID_BYTES (int32).
+            pipeline_depth: Number of pipeline stages between host write and readable
+                output. Prefill queues this many tokens before overlapping writes with
+                readback. Use 1 for direct loopback/no pipeline.
         """
         if batch_size != 1:
             raise ValueError(f"DeepSeekV3 currently supports only batch_size=1, got {batch_size}")
+        if pipeline_depth <= 0:
+            raise ValueError(f"pipeline_depth must be > 0, got {pipeline_depth}")
         self._write_fn = write_fn
         self._read_fn = read_fn
         self.batch_size = batch_size
+        self._pipeline_depth = pipeline_depth
         payload_bytes: int = batch_size * TOKEN_ID_BYTES
         logger.debug(f"Payload bytes: {payload_bytes} bytes")
         self._tensor_size_bytes: int = align_up(payload_bytes, PCIE_PAGE_ALIGNMENT_BYTES)
@@ -180,38 +187,56 @@ class DeepSeekV3:
         self._output_buffer: ttnn.Tensor = create_output_buffer(ACTIVATION_W_METADATA_PAGE_SIZE_BYTES // 4)
         logger.debug(f"Creating DeepSeekV3 model with batch size {batch_size}")
 
-    def prefill(self, prompt_tokens: list[ttnn.Tensor]) -> ttnn.Tensor:
+    def prefill(self, prompt_tokens: list[ttnn.Tensor]) -> list[DecodeResult]:
         """
-        Prefill-by-decode: for i = 0..S-1, send input_ids = x[i], get logits
-        (and device updates cache). Outputs for i < S-1 are discarded. Returns the
-        last step output so the caller can sample y0 (first generated token).
+        Prefill-by-decode with overlapped I/O: enqueue tokens until the pipeline is
+        saturated, then overlap readback per additional write, and finally drain
+        the remaining in-flight outputs.
+
+        Each write produces READS_PER_WRITE output pages (base + spec).
+        All outputs are discarded except the last READS_PER_WRITE (from the final
+        prompt token), which are parsed and returned so the decode state machine
+        can process both the base and speculative results.
 
         Args:
             prompt_tokens: List of ttnn.Tensor, each already padded for the socket
                 (PCIe-aligned, size in bytes equal to page_size_bytes(batch_size)).
-                Caller is responsible for padding; use to_padded_input() if needed.
+                Caller is responsible for padding; use to_spec_input() if needed.
 
         Returns:
-            Last step output tensor; valid data is first batch_size elements (logits
-            (B, V) in real decoder). None if prompt_tokens is empty. Caller uses this
-            to sample(logits) -> y0 for the generation loop.
+            List of READS_PER_WRITE DecodeResults from the last prompt token's outputs.
         """
         if len(prompt_tokens) == 0:
             raise ValueError("Expected at least one prompt token")
 
-        # last_output: ttnn.Tensor | None = None
-        for token in prompt_tokens:
-            self._write_fn(token)
+        num_writes_before_readback = min(self._pipeline_depth, len(prompt_tokens))
+        total_reads = len(prompt_tokens)
+
+        write_idx = 0
+        read_count = 0
+
+        # Phase 1: saturate the pipeline (no reads yet)
+        while write_idx < num_writes_before_readback:
+            self._write_fn(prompt_tokens[write_idx])
+            write_idx += 1
+
+        # Phase 2: overlap — drain outputs and issue remaining writes in steady state
+        while write_idx < len(prompt_tokens):
             self._read_fn(self._output_buffer)
-            slot_id = self._output_buffer[0][3584]
-            position_id = self._output_buffer[0][3585]
+            read_count += 1
+            self._write_fn(prompt_tokens[write_idx])
+            write_idx += 1
 
-            print(f"Iteration: {self._position}, Slot ID: {slot_id}, Position ID: {position_id}")
+        # Phase 3: drain remaining outputs; save the last output
+        last_results: list[DecodeResult] = []
+        while read_count < total_reads:
+            self._read_fn(self._output_buffer)
+            read_count += 1
+            if read_count > total_reads - 1:
+                last_results.append(parse_output_page(self._output_buffer))
 
-            # last_output = self._output_buffer
-            self._position += 1
-        # assert last_output is not None, "Last output tensor is None"
-        # return last_output
+        self._position += len(prompt_tokens)
+        return last_results
 
     def decode_step(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """
@@ -233,6 +258,16 @@ class DeepSeekV3:
         self._read_fn(self._output_buffer)
         self._position += 1
         return self._output_buffer
+
+    def write_input(self, token_id: int, user_id: int, position_id: int) -> None:
+        """Write a single spec-decode input page (token_id, user_id, position_id) to the pipeline."""
+        input_tensor = to_spec_input(token_id, user_id, position_id, self._page_size_datums)
+        self._write_fn(input_tensor)
+
+    def read_result(self) -> DecodeResult:
+        """Read one output page from the pipeline and return the parsed DecodeResult."""
+        self._read_fn(self._output_buffer)
+        return parse_output_page(self._output_buffer)
 
     @property
     def position(self) -> int:

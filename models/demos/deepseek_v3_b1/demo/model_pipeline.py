@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
@@ -20,7 +21,7 @@ from models.demos.deepseek_v3_b1.demo.weight_provider import (
     SyntheticWeightProvider,
     WeightProvider,
 )
-from models.demos.deepseek_v3_b1.model import TOKEN_ID_BYTES, DeepSeekV3, page_size_bytes, to_spec_input
+from models.demos.deepseek_v3_b1.model import TOKEN_ID_BYTES, DecodeResult, DeepSeekV3, page_size_bytes, to_spec_input
 
 
 class ModelPipeline:
@@ -93,9 +94,8 @@ class ModelPipeline:
             )
         logger.info(f"Created ModelPipeline for mesh id {self.pipeline.my_mesh_id}.")
 
-    def prefill_forward(self, tokens: list[int]) -> int:
-        """Prefill 1 user's prompt tokens and return the next token id."""
-        # Host-side model interface is only invoked on mesh id 0
+    def prefill_forward(self, tokens: list[int]) -> list[DecodeResult]:
+        """Prefill prompt tokens and return the DecodeResults from the last prompt token's outputs."""
         if self.pipeline.my_mesh_id != 0:
             raise RuntimeError("prefill_forward() should only be called on mesh id 0")
         assert self.model is not None
@@ -104,18 +104,12 @@ class ModelPipeline:
             to_spec_input(tid, user_id=0, position_id=i, page_size_datums=self._page_size_datums)
             for i, tid in enumerate(tokens)
         ]
-
-        self.position_id = len(tokens)
-
-        self.model.prefill(prompt_token_tensors)
-
-        # next_token_id = int(ttnn.to_torch(last_output).to(torch.int32)[0, 0].item())
-        # logger.debug(f"Done prefilling with {len(tokens)} tokens.")
-        # return next_token_id
+        results = self.model.prefill(prompt_token_tensors)
+        logger.debug(f"Done prefilling with {len(tokens)} tokens.")
+        return results
 
     def decode_forward(self, input_token: int) -> int:
-        """Run 1 decode step and return the next token id."""
-        # Host-side model interface is only invoked on mesh id 0
+        """Run 1 decode step and return the next token id (legacy non-speculative path)."""
         if self.pipeline.my_mesh_id != 0:
             raise RuntimeError("decode_forward() should only be called on mesh id 0")
         assert self.model is not None
@@ -128,6 +122,12 @@ class ModelPipeline:
         next_token_id = int(ttnn.to_torch(output).to(torch.int32)[0, 0].item())
         return next_token_id
 
+    def _write_spec_pair(self, token_0: int, pos_0: int, token_1: int, pos_1: int, user_id: int = 0) -> None:
+        """Write two tokens (base + speculation) into the pipeline."""
+        assert self.model is not None
+        self.model.write_input(token_0, user_id, pos_0)
+        self.model.write_input(token_1, user_id, pos_1)
+
     def run_inference(
         self,
         prompt_token_ids: list[int],
@@ -136,41 +136,84 @@ class ModelPipeline:
         eos_token_id: int | None = None,
         return_generated_tokens: bool = False,
     ) -> list[int] | None:
-        """Run full inference: prefill the prompt then decode until EOS or max_new_tokens.
-        Calls on_token(token_id) for each generated token (including the first
-        one sampled after prefill). Optionally returns the list of all generated token IDs.
+        """Run speculative-decode inference: prefill then decode with multi-token prediction.
+
+        The pipeline produces structured 2-token output pages (base + speculation).
+        Each output page carries position IDs that the host uses directly for
+        write-back, so no manual position tracking is needed.
+
+        The host drives the ACCEPT / REJECT / STALE / CONTINUE state machine:
+          - ACCEPT:   emit confirmed token, then read CONTINUE.
+          - CONTINUE: emit bonus token, write tokens at device-supplied positions.
+          - REJECT:   emit base output, write tokens at device-supplied positions.
+          - STALE:    discard and re-read.
         """
         if self.pipeline.my_mesh_id != 0:
             raise RuntimeError("run_inference() should only be called on mesh id 0")
+        assert self.model is not None
         assert max_new_tokens >= 1, f"max_new_tokens must be >= 1, got {max_new_tokens}"
 
-        # Prefill: send prompt tokens; discard outputs for i < S-1; use last output to sample y0.
-        self.prefill_forward(prompt_token_ids)
+        generated_tokens: list[int] = []
+        verified_spec_tokens: list[int] = []
+        unverified_spec_tokens: list[int] = []
 
-        return
+        def is_eos(token_id: int) -> bool:
+            """Returns True if a token is the EOS token"""
+            return eos_token_id is not None and token_id == eos_token_id
 
-        # if on_token is not None:
-        #     on_token(next_token_id)
-        # if return_generated_tokens:
-        #     generated_tokens = [next_token_id]
+        def emit(token_id: int) -> None:
+            """Emit a token to the caller"""
+            if on_token is not None:
+                on_token(token_id)
+            generated_tokens.append(token_id)
 
-        # Generation loop: feed y[t], get output, sample y[t+1].
-        # num_decode_steps = 0
-        # for i in range(max_new_tokens - 1):
-        #     if eos_token_id is not None and next_token_id == eos_token_id:
-        #         logger.debug("EOS token {} at decode step {}", eos_token_id, i)
-        #         break
-        #     next_token_id = self.decode_forward(next_token_id)
-        #     num_decode_steps += 1
-        #     if on_token is not None:
-        #         on_token(next_token_id)
-        #     if return_generated_tokens:
-        #         generated_tokens.append(next_token_id)
-        #     logger.debug("Decode step {} output token: {}", i + 1, next_token_id)
+        # --- Prefill --------------------------------------------------------
+        prefill_results = self.prefill_forward(prompt_token_ids)
 
-        # logger.debug("Generation complete ({} tokens generated)", 1 + num_decode_steps)
-        # if return_generated_tokens:
-        #     return generated_tokens
+        # Seed the state machine with both pages from the last prefill write,
+        # then read from the pipeline for all subsequent results.
+        pending: deque[DecodeResult] = deque(prefill_results)
+
+        # --- Speculative decode state machine --------------------------------
+        while len(generated_tokens) < max_new_tokens:
+            result = pending.popleft() if pending else self.model.read_result()
+
+            if not unverified_spec_tokens:
+                unverified_spec_tokens.append(result.token_1)
+                emit(result.token_0)
+            else:
+                if result.token_0_type == TokenType.BASE:
+                    # On acceptance, we check that the base token matches the first token of the last unverified spec token
+                    if result.token_0 == unverified_spec_tokens[-1]:
+                        verified_spec_tokens.append(unverified_spec_tokens.pop())
+                        emit(result.token_0)
+                        continue
+                    # On rejection, we discard the last unverified spec token and populate the new spec token
+                    else:
+                        unverified_spec_tokens.pop()
+                        unverified_spec_tokens.append(result.token_1)
+                        emit(result.token_0)
+                if result.token_0_type == TokenType.SPEC:
+                    # If we have a verified spec token it means we have an acceptance case, remove it and emit the token
+                    if verified_spec_tokens:
+                        verified_spec_tokens.pop()
+                        unverified_spec_tokens.append(result.token_1)
+                        emit(result.token_0)
+                    else:
+                        continue
+
+            if is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens:
+                break
+
+            self._write_spec_pair(
+                result.token_0,
+                result.token_0_pos,
+                result.token_1,
+                result.token_1_pos,
+            )
+
+        logger.debug("Generation complete ({} tokens generated)", len(generated_tokens))
+        return generated_tokens if return_generated_tokens else None
 
     def barrier(self) -> None:
         self.pipeline.barrier()
