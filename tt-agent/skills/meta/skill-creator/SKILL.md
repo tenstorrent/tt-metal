@@ -1,5 +1,5 @@
 ---
-name: tt-skill-creator
+name: skill-creator
 description: "Design and build skills for the tt-agent system — guides through rigorous design alignment before writing, then applies TT conventions. Use when creating, improving, or reviewing tt-agent skills"
 ---
 

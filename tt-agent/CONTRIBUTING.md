@@ -8,8 +8,8 @@
    - `skills/tools/` — single-purpose capabilities used during execution
    - `skills/meta/` — system-level utilities (extending or learning from the system)
 
-2. **Use tt-skill-creator.** Invoke the `tt-skill-creator` skill to create the SKILL.md.
-   It wraps `/skill-creator` and applies tt-agent conventions automatically.
+2. **Use `/tt:skill-creator`.** It wraps `/skill-creator` and applies tt-agent
+   conventions automatically.
 
 3. **Follow the golden rules:**
    - Skills describe *how to do something*, not *what the API is*

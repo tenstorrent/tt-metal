@@ -1,7 +1,7 @@
 # Decomposer: Orchestration Patterns for TT Development
 
 Guidance for breaking high-level requests into sequenced skill dispatches.
-Load this when `tt-orchestrator` reaches step 3 (Decompose).
+Load this when the orchestrator reaches step 3 (Decompose).
 
 ---
 
