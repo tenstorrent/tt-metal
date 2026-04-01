@@ -152,8 +152,12 @@ Tensor create_tt_tensor_from_host_data(
         if (mesh_mapper != nullptr) {
             TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
 
-            const bool construct_on_device = device != nullptr && !device->is_remote_only() && enable_device_typecast &&
-                                             !preserve_nan_values && tensor_shape.volume() > 0;
+            const bool construct_on_device =
+                device != nullptr && !device->is_remote_only() && enable_device_typecast && !preserve_nan_values &&
+                tensor_shape.volume() > 0 &&
+                (optional_tile.has_value() ? (optional_tile->get_width() % tt::constants::TILE_WIDTH == 0 &&
+                                              optional_tile->get_height() % tt::constants::TILE_HEIGHT == 0)
+                                           : true);
             return ttnn::distributed::create_distributed_tensor(
                 host_buffer.view_as<T>(),
                 tensor_shape,

@@ -23,22 +23,28 @@
 namespace {
 
 tt::tt_metal::Tensor allocate_tensor_on_device(
-    const tt::tt_metal::TensorSpec& tensor_spec, tt::tt_metal::distributed::MeshDevice* device) {
+    const tt::tt_metal::TensorSpec& tensor_spec,
+    tt::tt_metal::distributed::MeshDevice* device,
+    std::optional<tt::tt_metal::TensorTopology> topology) {
     using namespace tt::tt_metal;
     auto mesh_buffer = tensor_impl::allocate_device_buffer(device, tensor_spec);
-    std::vector<distributed::MeshCoordinate> coords;
-    coords.reserve(device->shape().mesh_size());
-    for (const auto& coord : distributed::MeshCoordinateRange(device->shape())) {
-        coords.push_back(coord);
-    }
-    DeviceStorage device_storage(std::move(mesh_buffer), coords);
-    // TODO (#25340): Implement correct logic and add test for this
-    ttsl::SmallVector<distributed::MeshMapperConfig::Placement> placements(device->shape().dims());
-    for (size_t i = 0; i < device->shape().dims(); i++) {
-        placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-    }
+    DeviceStorage device_storage(mesh_buffer);
 
-    auto tensor_topology = TensorTopology{device->shape(), placements, coords};
+    TensorTopology tensor_topology;
+    if (topology.has_value()) {
+        tensor_topology = std::move(*topology);
+    } else {
+        // Use Replicate as default value for placements in MeshMapperConfig
+        ttsl::SmallVector<distributed::MeshMapperConfig::Placement> placements(device->shape().dims());
+        for (size_t i = 0; i < device->shape().dims(); i++) {
+            placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+        }
+        tensor_topology = TensorTopology{
+            device->shape(),
+            placements,
+            std::vector<distributed::MeshCoordinate>(
+                device_storage.get_coords().begin(), device_storage.get_coords().end())};
+    }
     return Tensor(std::move(device_storage), tensor_spec, tensor_topology);
 }
 }  // namespace
@@ -63,7 +69,8 @@ Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshD
     return Tensor(HostTensor(std::move(distributed_host_buffer), tensor_spec, TensorTopology{}));
 }
 
-Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
+Tensor create_device_tensor(
+    const TensorSpec& tensor_spec, IDevice* device, std::optional<TensorTopology> tensor_topology) {
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::create_device_tensor",
         tensor_spec.logical_shape(),
@@ -74,7 +81,7 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
 
     Tensor output;
     distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device);
-    output = allocate_tensor_on_device(tensor_spec, mesh_device);
+    output = allocate_tensor_on_device(tensor_spec, mesh_device, std::move(tensor_topology));
     output = tt::tt_metal::set_tensor_id(output);
 
     GraphTracker::instance().track_function_end(output);
@@ -305,8 +312,7 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
         new_device_config,
         input_tensor.device(),
         input_tensor.mesh_buffer().address());
-    tt::tt_metal::DeviceStorage view_storage(
-        view_mesh_buffer, input_tensor.device_storage().coords, input_tensor.device_storage().get_root_mesh_buffer());
+    tt::tt_metal::DeviceStorage view_storage(input_tensor.device_storage(), view_mesh_buffer);
 
     return Tensor(view_storage, new_spec, input_tensor.tensor_topology());
 }

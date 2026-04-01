@@ -190,6 +190,11 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     dst.tile_counters[j] = producer_tcs[j];
                 }
                 dst.tiles_to_post = init_ptr->producer_txn_descriptor.num_entries_per_txn_id_per_tc;
+                // To avoid DM synchronization, the final credit sync that manually posts credits in DataflowBuffer::finish doesn't clear tiles to process
+                // do that here to avoid raising spurious interrupts
+                CMDBUF_CLEAR_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, txn_id);
+                asm volatile("nop");
+
                 SET_TILES_TO_PROCESS_THRES_TR_ACK(
                     txn_id, init_ptr->producer_txn_descriptor.num_entries_to_process_threshold);
             }
@@ -201,6 +206,11 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 for (uint8_t j = 0; j < dst.num_counters; j++) {
                     dst.tile_counters[j] = consumer_tcs[j];
                 }
+                // To avoid DM synchronization, the final credit sync that manually posts credits in DataflowBuffer::finish doesn't clear tiles to process
+                // do that here to avoid raising spurious interrupts
+                CMDBUF_CLEAR_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, txn_id);
+                asm volatile("nop");
+
                 dst.tiles_to_ack = init_ptr->consumer_txn_descriptor.num_entries_per_txn_id_per_tc;
                 SET_TILES_TO_PROCESS_THRES_WR_SENT(
                     txn_id, init_ptr->consumer_txn_descriptor.num_entries_to_process_threshold);

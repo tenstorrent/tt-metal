@@ -94,19 +94,19 @@ spec_return_value_t TopkRouterGptDeviceOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     auto input_shape = tensor_args.input_tensor.logical_shape();
     auto B = input_shape[0];
-    auto dram_rm = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto l1_rm = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
 
     uint32_t k_padded = tt::round_up(attrs.k, 8);
 
     // Slot 0: indices_rm [B, k_padded] uint16 RM
     auto idx_spec = TensorSpec(
         ttnn::Shape({B, k_padded}),
-        tt::tt_metal::TensorLayout(DataType::UINT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), dram_rm));
+        tt::tt_metal::TensorLayout(DataType::UINT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), l1_rm));
 
     // Slot 1: weights_rm [B, k_padded] bf16 RM
     auto wgt_spec = TensorSpec(
         ttnn::Shape({B, k_padded}),
-        tt::tt_metal::TensorLayout(DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), dram_rm));
+        tt::tt_metal::TensorLayout(DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), l1_rm));
 
     return {idx_spec, wgt_spec};
 }
