@@ -36,7 +36,6 @@ struct VariableMatmulDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
-        uint32_t max_M,
         const VariableMatmulConfig& config,
         ttnn::DeviceComputeKernelConfig compute_kernel_config);
 };
@@ -48,7 +47,6 @@ namespace ttnn::prim {
 ttnn::Tensor ttml_variable_matmul(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    uint32_t max_M,
     const ttml::metal::ops::variable_matmul::device::VariableMatmulConfig& config,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 

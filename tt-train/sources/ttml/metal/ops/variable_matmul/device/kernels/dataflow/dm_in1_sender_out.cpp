@@ -9,10 +9,8 @@
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 
 void kernel_main() {
-    // Compile-time args use max_M values (for CB sizing)
-    // Actual M values come from runtime args (variable-M support)
-    constexpr uint32_t max_M_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t max_padded_M_tiles = get_compile_time_arg_val(1);
+    // Indices 0, 1, 9 are unused placeholders (kept for compile-time arg layout compatibility).
+    // Actual M_tiles, padded_M_tiles, M_blocks_per_core come from runtime args.
     constexpr uint32_t K_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t padded_K_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t N_tiles = get_compile_time_arg_val(4);
@@ -20,7 +18,6 @@ void kernel_main() {
     constexpr uint32_t M_block_tiles = get_compile_time_arg_val(6);
     constexpr uint32_t K_block_tiles = get_compile_time_arg_val(7);
     constexpr uint32_t N_block_tiles = get_compile_time_arg_val(8);
-    // Index 9 is max_M_blocks_per_core (compile-time, for CB sizing only)
     constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(10);
     constexpr uint32_t in1_tile_size = get_compile_time_arg_val(11);
     constexpr uint32_t out_tile_size = get_compile_time_arg_val(12);
