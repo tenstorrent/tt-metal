@@ -29,6 +29,7 @@ on:
           - wan2.2
           - mochi
           - deepseek-modules
+          - gpt-oss-modules
       platform:
         required: false
         type: choice

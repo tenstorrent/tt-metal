@@ -110,6 +110,7 @@ on:
           - wan2.2
           - mochi
           - deepseek-modules
+          - gpt-oss-modules
       t3000-e2e:
         required: false
         type: boolean
