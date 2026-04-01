@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from tools.ci.thread_signal_analysis import classify_thread_progress, detect_dev_fix_request
+
 NON_ACTIONABLE_SUBTYPES = {
     "channel_join",
     "channel_leave",
@@ -24,6 +26,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stale-hours", type=float, default=32.0, help="Minimum age in hours")
     parser.add_argument("--channel-id", default="C0APK6215B5", help="Slack channel ID for permalink generation")
     parser.add_argument("--max-candidates", type=int, default=20, help="Optional max candidate count")
+    parser.add_argument(
+        "--hold-hours-after-progress",
+        type=float,
+        default=24.0,
+        help="Temporary hold window after high-confidence progress signals",
+    )
     return parser.parse_args()
 
 
@@ -85,6 +93,30 @@ def main() -> int:
             skipped.append({"ts": ts, "reason": "not_stale", "age_hours": round(age_hours, 2)})
             continue
 
+        thread_replies = msg.get("thread_replies", [])
+        if not isinstance(thread_replies, list):
+            thread_replies = []
+        progress = classify_thread_progress(
+            top_level_text=str(msg.get("text", "")),
+            thread_replies=thread_replies,
+            now_unix=now,
+            hold_hours_after_progress=args.hold_hours_after_progress,
+        )
+        fix_request = detect_dev_fix_request(
+            top_level_text=str(msg.get("text", "")),
+            thread_replies=thread_replies,
+        )
+        if bool(progress.get("defer_disable", False)):
+            skipped.append(
+                {
+                    "ts": ts,
+                    "reason": "defer_disable_due_to_progress",
+                    "progress_state": progress.get("progress_state"),
+                    "progress_reason": progress.get("reason"),
+                }
+            )
+            continue
+
         candidates.append(
             {
                 "source_slack_ts": ts,
@@ -97,7 +129,9 @@ def main() -> int:
                 "primary_issue_repo": primary_repo or None,
                 "primary_issue_url": primary_url or None,
                 "top_level_text": str(msg.get("text", "")),
-                "thread_reply_count": len(msg.get("thread_replies", [])),
+                "thread_reply_count": len(thread_replies),
+                "progress_signal": progress,
+                "fix_request_signal": fix_request,
             }
         )
 

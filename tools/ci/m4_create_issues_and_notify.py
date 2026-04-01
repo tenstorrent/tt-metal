@@ -1167,7 +1167,6 @@ def main() -> int:
         workflow_name = item["workflow_name"]
         job_name = item["job_name"]
         job_urls = item["job_urls"]
-        auto_triage_selection = parse_auto_triage_decision(decision)
         auto_triage_user_ids: list[str] = []
         job_owner_user_ids = sorted(
             job_owner_ids_for_failure(
@@ -1180,6 +1179,7 @@ def main() -> int:
         decision = decisions_by_key.get(key)
         if not decision:
             continue
+        auto_triage_selection = parse_auto_triage_decision(decision)
         reused_cache = key in reused_cache_keys
         review_cache_entries.append(
             {

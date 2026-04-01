@@ -8,9 +8,11 @@ Task:
 
 Decision rules:
 - Ignore any candidate where `issue_closed` is true (these should already be excluded).
+- Ignore/deprioritize any candidate where `progress_signal.defer_disable` is true.
 - If `primary_issue_number` is missing, skip unless top-level text clearly contains enough failure context.
 - During bootstrap testing, prefer `primary_issue_repo == "ebanerjeeTT/issue_dump"` when present.
 - Prefer entries with clear CI failure context and issue references.
+- If `fix_request_signal.requested` is true, include an explanatory `skipped` reason unless disable is still clearly required.
 - Keep action scope minimal and specific.
 
 Output contract:

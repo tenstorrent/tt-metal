@@ -333,6 +333,20 @@ jobs:
             --max-agent-reviews "${{ github.event.inputs['m4-max-agent-reviews'] || '0' }}" \
             --model "${{ github.event.inputs['auto-disable-model'] || 'claude-4-sonnet' }}"
 
+      - name: M5 lifecycle follow-up + assignment + post-disable notices
+        if: ${{ !inputs['data-gathering-mode'] }}
+        env:
+          ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: |
+          set -euo pipefail
+          python tools/ci/m5_manage_issue_lifecycle.py \
+            --slack-json "build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_threads.json" \
+            --state-json "build_ci/triage_state/ci_triage_state.json" \
+            --output-json "build_ci/ci_ticketing/create_tickets/m5_lifecycle_result.json" \
+            --summary-md "build_ci/ci_ticketing/create_tickets/m5_lifecycle_summary.md" \
+            --channel-id "C0APK6215B5"
+
       - name: Upload auto-disable artifacts
         if: ${{ !inputs['data-gathering-mode'] }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
@@ -349,6 +363,8 @@ jobs:
             build_ci/ci_ticketing/create_tickets/downloaded_logs
             build_ci/ci_ticketing/create_tickets/m4_issue_and_slack_result.json
             build_ci/ci_ticketing/create_tickets/m4_review_cache.json
+            build_ci/ci_ticketing/create_tickets/m5_lifecycle_result.json
+            build_ci/ci_ticketing/create_tickets/m5_lifecycle_summary.md
             build_ci/raw_data/slack_C0APK6215B5_last_14_days.json
           retention-days: 7
 
@@ -381,6 +397,11 @@ jobs:
           m4_json="build_ci/ci_ticketing/create_tickets/m4_issue_and_slack_result.json"
           if [ -s "$m4_json" ]; then
             python3 tools/ci/render_m4_summary.py --input-json "$m4_json" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          m5_md="build_ci/ci_ticketing/create_tickets/m5_lifecycle_summary.md"
+          if [ -s "$m5_md" ]; then
+            echo >> "$GITHUB_STEP_SUMMARY"
+            cat "$m5_md" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload data gathering report artifact
