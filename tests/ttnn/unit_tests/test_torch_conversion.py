@@ -906,3 +906,56 @@ def test_from_torch_zero_sized_dimension(mesh_device, shape, ttnn_dtype, ttnn_la
 
     assert ttnn_tensor.dtype == ttnn_dtype
     assert ttnn_tensor.layout == ttnn_layout
+
+
+@pytest.mark.parametrize(
+    "shard_height,shard_width,num_cores",
+    [
+        (1, 160, 4),
+        (1, 100, 8),
+        (7, 64, 4),
+    ],
+    ids=["deepseek_v3_lmhead_indices", "arbitrary_width", "non_tile_height"],
+)
+def test_from_torch_row_major_sharded_non_tile_aligned_shard_shape(mesh_device, shard_height, shard_width, num_cores):
+    """
+    Regression test: from_torch with ROW_MAJOR_LAYOUT and a WIDTH_SHARDED memory
+    config whose shard shape is not tile-aligned must not crash.
+
+    Reproduces TT_FATAL in tensor_layout.cpp:
+        Physical shard shape (1, 160) must be tile {32, 32} sized!
+
+    Derived from DeepSeek V3 LMHead stage (stage.py) which creates a uint32
+    indices tensor with per-core shard width of 160 in ROW_MAJOR_LAYOUT.
+    The ROW_MAJOR layout does not require tile-aligned shards, but from_torch
+    was internally constructing a TILE-layout TensorSpec that triggered the
+    tile-alignment assertion.
+    """
+    total_width = shard_width * num_cores
+
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_grid, (shard_height, shard_width), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    torch_tensor = torch.arange(shard_height * total_width, dtype=torch.int32).reshape(shard_height, total_width)
+
+    indices_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=1)
+
+    ttnn_tensor = ttnn.from_torch(
+        torch_tensor,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=memory_config,
+        mesh_mapper=indices_mesh_mapper,
+    )
+
+    assert ttnn_tensor.dtype == ttnn.uint32
+    assert ttnn_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert ttnn_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+
+    result = ttnn.to_torch(ttnn_tensor)
+    torch.testing.assert_close(torch_tensor, result.to(torch.int32))

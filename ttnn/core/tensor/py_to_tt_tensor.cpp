@@ -39,39 +39,49 @@ bool can_construct_on_device(
     const ttnn::Shape& tensor_shape,
     DataType src_dtype,
     DataType dst_dtype,
-    const MemoryConfig& memory_config,
     const std::optional<Tile>& optional_tile,
     bool enable_device_typecast,
     bool preserve_nan_values) {
-    if (device != nullptr && device->is_remote_only()) {
-        return false;
-    }
-    bool res = device != nullptr &&
-               // When on-device strategy is used, tensor spec needs a default alignment based on the target layout.
-               // Otherwise, the tensor loses the data in the `to_layout` conversion and type conversion. But, if the
-               // default alignment is used, the tensors of rank 5 and above are squeezed down to the rank 4 in
-               // `build_ndiml_tilize`, which causes the padding loss, and subqequently the failure to validate
-               // tilize operation, which requires `physical_volume() % tt::constants::TILE_HW == 0`
-               tensor_shape.rank() <= 4 && tensor_shape.volume() > 0 && can_exec_ops_on_device(src_dtype) &&
-               can_exec_ops_on_device(dst_dtype) &&
-               // If the memory config is sharded, the tensor must be constructed on the host. Even if we can borrow the
-               // buffer, the sharding spec may require padding, including cases where the shard dimension is larger
-               // than the shape dimension.
-               !memory_config.is_sharded() && enable_device_typecast &&
+    bool res = device != nullptr && !device->is_remote_only() && tensor_shape.volume() > 0 &&
+               can_exec_ops_on_device(src_dtype) && can_exec_ops_on_device(dst_dtype) && enable_device_typecast &&
                // TODO: Remove preserve_nan_values check after
                // https://github.com/tenstorrent/tt-metal/issues/31406
-               !preserve_nan_values &&
-               // Logical shape must match physical shape for the tensor to be constructed on the device(no padding
-               // required). TensorSpec creation must follow after memory_config.is_sharded() check to avoid fatal error
-               tt::tt_metal::logical_matches_physical(TensorSpec(
-                   tensor_shape, TensorLayout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config)));
+               !preserve_nan_values;
 
     if (optional_tile.has_value()) {
         // on-device tiling operation expects tiles to be divisible by 32x32.
         res &= ((optional_tile->get_width() % tt::constants::TILE_WIDTH) == 0) &&
                ((optional_tile->get_height() % tt::constants::TILE_HEIGHT) == 0);
     }
+
     return res;
+}
+
+bool can_construct_on_single_device(
+    const ttnn::Shape& tensor_shape, const TensorLayout& src_tensor_layout, const MemoryConfig& memory_config) {
+    // If the memory config is sharded, the tensor must be constructed on the host. Even if we can borrow the
+    // buffer, the sharding spec may require padding, including cases where the shard dimension is larger
+    // than the shape dimension.
+    if (memory_config.is_sharded()) {
+        return false;
+    }
+
+    // Logical shape must match physical shape for the tensor to be constructed on the device(no padding
+    // required). TensorSpec creation must follow after memory_config.is_sharded() check to avoid fatal error
+    if (!tt::tt_metal::logical_matches_physical(TensorSpec(tensor_shape, src_tensor_layout))) {
+        return false;
+    }
+
+    // When on-device strategy is used, tensor spec needs a default alignment based on the target layout.
+    // Otherwise, the tensor loses the data in the `to_layout` conversion and type conversion. But, if the
+    // default alignment is used, the tensors of rank 5 and above are squeezed down to the rank 4 in
+    // `build_ndiml_tilize`, which causes the padding loss, and subqequently the failure to validate
+    // tilize operation, which requires `physical_volume() % tt::constants::TILE_HW == 0`
+    if (tensor_shape.rank() > 4) {
+        return false;
+    }
+
+    return true;
 }
 
 // Estimates peak per-bank memory during the on-device conversion path (borrow → to_device →
@@ -148,16 +158,13 @@ Tensor create_tt_tensor_from_host_data(
 
     using namespace tt::tt_metal;
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
+        TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
         TensorLayout dst_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
-        if (mesh_mapper != nullptr) {
-            TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
 
-            const bool construct_on_device =
-                device != nullptr && !device->is_remote_only() && enable_device_typecast && !preserve_nan_values &&
-                tensor_shape.volume() > 0 &&
-                (optional_tile.has_value() ? (optional_tile->get_width() % tt::constants::TILE_WIDTH == 0 &&
-                                              optional_tile->get_height() % tt::constants::TILE_HEIGHT == 0)
-                                           : true);
+        const bool construct_on_device = can_construct_on_device(
+            device, tensor_shape, src_dtype, dst_dtype, optional_tile, enable_device_typecast, preserve_nan_values);
+
+        if (mesh_mapper != nullptr) {
             return ttnn::distributed::create_distributed_tensor(
                 host_buffer.view_as<T>(),
                 tensor_shape,
@@ -168,15 +175,6 @@ Tensor create_tt_tensor_from_host_data(
                 cq_id,
                 static_cast<T>(pad_value));
         }
-        const bool construct_on_device = can_construct_on_device(
-            device,
-            tensor_shape,
-            src_dtype,
-            dst_dtype,
-            memory_config,
-            optional_tile,
-            enable_device_typecast,
-            preserve_nan_values);
 
         // TODO: #https://github.com/tenstorrent/tt-metal/issues/40850
         // For single-device tensors, we cannot enable layout/data type changes due to tt-sim CI failures
@@ -196,7 +194,9 @@ Tensor create_tt_tensor_from_host_data(
         const bool can_borrow = src_dtype == convert_to_data_type<T>() && construct_on_device &&
                                 has_sufficient_device_memory(
                                     device, tensor_shape, src_dtype, dst_dtype, layout, memory_config, optional_tile) &&
-                                !is_data_transformation_required;
+                                !is_data_transformation_required &&
+                                can_construct_on_single_device(tensor_shape, src_tensor_layout, memory_config);
+
         if (can_borrow) {
             return Tensor::from_borrowed_data(host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile);
         }
