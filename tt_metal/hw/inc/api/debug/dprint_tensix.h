@@ -208,6 +208,14 @@ inline void dprint_tensix_dest_reg_row_uint8(uint32_t data_format, uint16_t row)
     dprint_array_with_data_type(data_format, rd_data, 8);
 }
 
+inline void dprint_tensix_dest_reg_row_int8(uint32_t data_format, uint16_t row) {
+    constexpr int ARRAY_LEN = 8;
+    uint32_t rd_data[ARRAY_LEN + 1];  // data + array type
+    row = get_dest_row_id(row, false);
+    dbg_read_dest_acc_row(row, rd_data);
+    dprint_array_with_data_type(data_format, rd_data, 8);
+}
+
 // Print the contents of tile with index tile_id within the destination register
 template <bool print_by_face = false>
 void dprint_tensix_dest_reg(int tile_id = 0) {
@@ -244,8 +252,7 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
                         dprint_tensix_dest_reg_row_uint8(data_format_reg_field_value, row);
                         break;
                     case (uint32_t)DataFormat::Int8:
-                        // Same function can be used here as for UInt8 since we are passing the data format to the function.
-                        dprint_tensix_dest_reg_row_uint8(data_format_reg_field_value, row);
+                        dprint_tensix_dest_reg_row_int8(data_format_reg_field_value, row);
                         break;
                     default: DPRINT << "Unsupported data format: " << data_format_reg_field_value << ENDL(); break;
                 }

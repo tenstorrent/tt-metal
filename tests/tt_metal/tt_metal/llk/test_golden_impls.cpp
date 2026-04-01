@@ -72,7 +72,7 @@ std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t>& src_ve
 }
 
 std::vector<uint32_t> gold_standard_tilize(const std::vector<uint32_t>& src_vec, const GoldenConfig& config) {
- vector<uint32_t> dst_vec;
+    std::vector<uint32_t> dst_vec;
 
     int num_rows = config.num_tiles_r_dim * config.face_r_dim * (config.num_faces > 2 ? 2 : 1);
     // Number of uint32 words per row: face_c_dim elements × (faces across) × datum_bytes / 4 bytes per uint32

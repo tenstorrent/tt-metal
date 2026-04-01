@@ -159,7 +159,11 @@ void run_single_core_tilize_program(
 
     uint32_t ouput_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = num_tiles;
-    // For 8-bit int formats, output format should remain as-is even with fp32_dest_acc_en
+
+    // For 8bit integer formats, output CB format must remain as-is even with fp32_dest_acc_en.
+    // Integer data packed from dest to L1 CB should not be reinterpreted as Float32, otherwise we get garbage.
+    // Floating-point formats (Fp8, Lf8, etc.) can be converted to Float32 since they share similar semantics.
+    // TODO: once we have tests for wider int formats, consider adding the check for them here.
     bool is_8bit_int =
         test_config.output_fmt == tt::DataFormat::Int8 || test_config.output_fmt == tt::DataFormat::UInt8;
     tt::DataFormat output_cb_format =
@@ -316,10 +320,13 @@ void run_single_core_tilize_program(
         },
         test_config.golden_function);
 
-    // For 8-bit int formats, output remains as-is even with fp32_dest_acc_en
-    bool is_8bit_int_golden =
+    // For integer formats, skip Float32 conversion in golden model.
+    // Converting integers to Float32 in the golden model would cause mismatches with actual hardware behavior.
+    // Floating-point formats can be converted since packer can handle FP format conversions semantically.
+    // TODO: once we have tests for wider int formats, consider adding the check for them here.
+    bool is_8bit_int =
         test_config.output_fmt == tt::DataFormat::Int8 || test_config.output_fmt == tt::DataFormat::UInt8;
-    if (test_config.fp32_dest_acc_en && !is_8bit_int_golden) {
+    if (test_config.fp32_dest_acc_en && !is_8bit_int) {
         vector<bfloat16> golden_unpacked = unpack_vector<bfloat16, uint32_t>(golden);
         // Increasing the size since from BFP16 two times, since storing is in FP32
         golden.resize(golden.size() * 2);
@@ -385,7 +392,7 @@ TEST_F(MeshDeviceFixture, TensixComputeUnpackTilize) {
 }
 
 TEST_F(BlackholeSingleCardFixture, TensixComputeUnpackTilizeFp8e4m3) {
-    vector<vector<uint32_t>> num_tiles = {{1, 1}};
+    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
             uint32_t num_tiles_total = num_tile[0] * num_tile[1];
@@ -413,8 +420,8 @@ TEST_F(BlackholeSingleCardFixture, TensixComputeUnpackTilizeInt8) {
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {false, true}) {
             uint32_t num_tiles_total = num_tile[0] * num_tile[1];
-            auto src_data = create_random_vector_of_int8(
-                tt::tile_size(tt::DataFormat::Int8) * num_tiles_total, /*min_val=*/-127, /*max_val=*/127, /*seed=*/42);
+            auto src_data =
+                create_random_vector_of_int8(tt::tile_size(tt::DataFormat::Int8) * num_tiles_total, /*seed=*/42);
             unit_tests::compute::tilize::TestConfig test_config = {
                 .dst_full_sync_en = dst_full_sync_en,
                 .fp32_dest_acc_en = true,
@@ -437,8 +444,8 @@ TEST_F(BlackholeSingleCardFixture, TensixComputeUnpackTilizeUInt8) {
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {false, true}) {
             uint32_t num_tiles_total = num_tile[0] * num_tile[1];
-            auto src_data = create_random_vector_of_uint8(
-                tt::tile_size(tt::DataFormat::UInt8) * num_tiles_total, /*min_val=*/0, /*max_val=*/255, /*seed=*/42);
+            auto src_data =
+                create_random_vector_of_uint8(tt::tile_size(tt::DataFormat::UInt8) * num_tiles_total, /*seed=*/42);
             unit_tests::compute::tilize::TestConfig test_config = {
                 .dst_full_sync_en = dst_full_sync_en,
                 .fp32_dest_acc_en = true,
@@ -584,8 +591,7 @@ TEST_F(BlackholeSingleCardFixture, TensixComputePackUntilizeInt8) {
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
             uint32_t num_t = num_tile[0] * num_tile[1];
-            auto src_data = create_random_vector_of_int8(
-                tt::tile_size(tt::DataFormat::Int8) * num_t, /*min_val=*/-127, /*max_val=*/127, /*seed=*/42);
+            auto src_data = create_random_vector_of_int8(tt::tile_size(tt::DataFormat::Int8) * num_t, /*seed=*/42);
             unit_tests::compute::tilize::TestConfig test_config = {
                 .dst_full_sync_en = dst_full_sync_en,
                 .fp32_dest_acc_en = true,
@@ -608,8 +614,7 @@ TEST_F(BlackholeSingleCardFixture, TensixComputePackUntilizeUInt8) {
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
             uint32_t num_t = num_tile[0] * num_tile[1];
-            auto src_data = create_random_vector_of_uint8(
-                tt::tile_size(tt::DataFormat::UInt8) * num_t, /*min_val=*/0, /*max_val=*/255, /*seed=*/42);
+            auto src_data = create_random_vector_of_uint8(tt::tile_size(tt::DataFormat::UInt8) * num_t, /*seed=*/42);
             unit_tests::compute::tilize::TestConfig test_config = {
                 .dst_full_sync_en = dst_full_sync_en,
                 .fp32_dest_acc_en = true,
