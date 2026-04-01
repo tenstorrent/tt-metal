@@ -61,6 +61,15 @@ def render_summary(data: dict[str, Any]) -> str:
             if isinstance(unresolved, list) and unresolved:
                 redacted = ", ".join(f"@{h}" for h in unresolved[:8])
                 lines.append(f"  - Unresolved GitHub handles: {redacted}")
+            auto_triage_selection = item.get("auto_triage_selection", {})
+            if isinstance(auto_triage_selection, dict):
+                if auto_triage_selection.get("used") and auto_triage_selection.get("permalinks"):
+                    permalink = str(auto_triage_selection.get("permalinks", [""])[0]).strip()
+                    if permalink:
+                        lines.append(f"  - Auto-triage evidence used: {permalink}")
+                else:
+                    reason = str(auto_triage_selection.get("reason", "")).strip() or "no relevant matches"
+                    lines.append(f"  - Auto-triage evidence not used: {reason}")
     if isinstance(skipped, list) and skipped:
         lines.append("")
         lines.append("## Top skip reasons")

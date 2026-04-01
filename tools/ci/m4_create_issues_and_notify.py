@@ -202,6 +202,11 @@ def build_recent_slack_context(messages: list[dict[str, Any]], cap: int = 10) ->
     return "\n".join(lines) if lines else "(none)"
 
 
+def slack_permalink(*, channel_id: str, ts: str) -> str:
+    compact_ts = ts.replace(".", "").strip()
+    return f"https://tenstorrent.slack.com/archives/{channel_id}/p{compact_ts}"
+
+
 def load_auto_triage_records(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -209,6 +214,9 @@ def load_auto_triage_records(path: Path) -> list[dict[str, Any]]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return []
+    channel_id = (
+        str(payload.get("channel_id", SLACK_CHANNEL_TEST)).strip() if isinstance(payload, dict) else SLACK_CHANNEL_TEST
+    )
     raw_messages = payload.get("messages", []) if isinstance(payload, dict) else []
     if not isinstance(raw_messages, list):
         return []
@@ -230,6 +238,9 @@ def load_auto_triage_records(path: Path) -> list[dict[str, Any]]:
         records.append(
             {
                 "ts": str(entry.get("ts", "")).strip(),
+                "permalink": slack_permalink(channel_id=channel_id, ts=str(entry.get("ts", "")).strip())
+                if str(entry.get("ts", "")).strip()
+                else "",
                 "text": root_text,
                 "combined": combined,
                 "tokens": tokens,
@@ -242,7 +253,7 @@ def load_auto_triage_records(path: Path) -> list[dict[str, Any]]:
 
 def build_auto_triage_context_for_job(
     records: list[dict[str, Any]], *, workflow_name: str, job_name: str, cap: int = 3
-) -> tuple[str, list[str]]:
+) -> tuple[str, list[str], dict[str, Any]]:
     hint_tokens = set(_tokenize_owner_hint(workflow_name) + _tokenize_owner_hint(job_name))
     scored: list[tuple[int, dict[str, Any]]] = []
     for rec in records:
@@ -257,20 +268,51 @@ def build_auto_triage_context_for_job(
             score += 5
         scored.append((score, rec))
     if not scored:
-        return "(none)", []
+        return (
+            "(none)",
+            [],
+            {
+                "used": False,
+                "reason": "no token-overlap match in last 14 days",
+                "selected_count": 0,
+                "high_confidence_count": 0,
+                "permalinks": [],
+            },
+        )
     scored.sort(key=lambda pair: pair[0], reverse=True)
     selected = [rec for _, rec in scored[:cap]]
     lines: list[str] = []
     mention_ids: set[str] = set()
+    permalinks: list[str] = []
+    high_conf_count = 0
     for rec in selected:
         ts = str(rec.get("ts", "")).strip()
         text = str(rec.get("text", "")).replace("\n", " ").strip()
         if len(text) > 220:
             text = text[:220] + "..."
         conf = "HIGH_CONFIDENCE" if rec.get("is_high_conf") else "context"
-        lines.append(f"- ts={ts} [{conf}] {text}")
-        mention_ids.update(rec.get("mention_ids", set()) if isinstance(rec.get("mention_ids"), set) else set())
-    return ("\n".join(lines) if lines else "(none)"), sorted(mention_ids)
+        permalink = str(rec.get("permalink", "")).strip()
+        if permalink:
+            lines.append(f"- ts={ts} [{conf}] {text} ({permalink})")
+            permalinks.append(permalink)
+        else:
+            lines.append(f"- ts={ts} [{conf}] {text}")
+        if rec.get("is_high_conf"):
+            high_conf_count += 1
+            mention_ids.update(rec.get("mention_ids", set()) if isinstance(rec.get("mention_ids"), set) else set())
+
+    if high_conf_count > 0:
+        reason = "used high-confidence auto-triage matches"
+    else:
+        reason = "matches found but none were HIGH CONFIDENCE"
+    selection_meta = {
+        "used": high_conf_count > 0,
+        "reason": reason,
+        "selected_count": len(selected),
+        "high_confidence_count": high_conf_count,
+        "permalinks": permalinks[:3],
+    }
+    return ("\n".join(lines) if lines else "(none)"), sorted(mention_ids), selection_meta
 
 
 def parse_codeowners(path: Path) -> list[tuple[str, list[str]]]:
@@ -1056,7 +1098,7 @@ def main() -> int:
             log_path = logs_root / job_slug / f"run{idx}.log"
             write_job_log_file(job_url=url, read_token=read_token, out_path=log_path)
             log_paths.append(str(log_path))
-        auto_triage_context, auto_triage_user_ids = build_auto_triage_context_for_job(
+        auto_triage_context, auto_triage_user_ids, auto_triage_selection = build_auto_triage_context_for_job(
             auto_triage_records,
             workflow_name=workflow_name,
             job_name=job_name,
@@ -1069,6 +1111,7 @@ def main() -> int:
                 "log_paths": log_paths,
                 "auto_triage_context": auto_triage_context,
                 "auto_triage_user_ids": auto_triage_user_ids,
+                "auto_triage_selection": auto_triage_selection,
             }
         )
 
@@ -1146,7 +1189,7 @@ def main() -> int:
         workflow_name = item["workflow_name"]
         job_name = item["job_name"]
         job_urls = item["job_urls"]
-        auto_triage_context, auto_triage_user_ids = build_auto_triage_context_for_job(
+        auto_triage_context, auto_triage_user_ids, auto_triage_selection = build_auto_triage_context_for_job(
             auto_triage_records,
             workflow_name=workflow_name,
             job_name=job_name,
@@ -1283,6 +1326,14 @@ def main() -> int:
             issue_url=issue_url,
             owner_mentions=owner_mentions,
         )
+        if auto_triage_selection.get("used") and auto_triage_selection.get("permalinks"):
+            permalink = str(auto_triage_selection.get("permalinks", [""])[0]).strip()
+            if permalink and permalink not in slack_text:
+                slack_text = slack_text.rstrip() + f"\nRelated auto-triage thread: {permalink}"
+        else:
+            reason = str(auto_triage_selection.get("reason", "")).strip()
+            if reason:
+                slack_text = slack_text.rstrip() + f"\nAuto-triage context: not used ({reason})."
         if unresolved_handles:
             slack_text = (
                 slack_text.rstrip()
@@ -1307,6 +1358,7 @@ def main() -> int:
                 "unresolved_owner_handles": unresolved_handles,
                 "owner_selection": owner_selection,
                 "auto_triage_context": auto_triage_context,
+                "auto_triage_selection": auto_triage_selection,
             }
         )
         log(f"Created issue and posted Slack bootstrap: {issue_url} (ts={slack_ts})")
