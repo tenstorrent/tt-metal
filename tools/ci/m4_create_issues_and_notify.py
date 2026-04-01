@@ -24,6 +24,7 @@ ISSUE_REPO_TEST = "ebanerjeeTT/issue_dump"
 SLACK_CHANNEL_TEST = "C0APK6215B5"
 MARKER = "===FINAL_M4_REVIEW_DECISION==="
 PATH_PATTERN = re.compile(r"(?<![A-Za-z0-9_.-])((?:tt_metal|ttnn|models|tests|\\.github)/[A-Za-z0-9_./-]+)")
+MAX_OWNER_MENTIONS = 3
 
 
 def log(message: str) -> None:
@@ -451,13 +452,15 @@ def render_owner_mentions(
     paths = extract_repo_paths(combined)
     codeowners = parse_codeowners(Path(".github/CODEOWNERS"))
     gh_usernames = owners_for_paths(paths, codeowners)
+    codeowners_weight = 2
     if not gh_usernames:
         gh_usernames = owners_from_workflow_name(
             workflow_name,
             rules=codeowners,
             workflow_root=Path(".github/workflows"),
         )
-    resolved_ids: set[str] = set()
+        codeowners_weight = 1
+    score_by_uid: dict[str, int] = {}
     unresolved_handles: list[str] = []
 
     for username in sorted(gh_usernames):
@@ -476,7 +479,7 @@ def render_owner_mentions(
         if not user_id and gh_name:
             user_id = slack_lookup_by_full_name(gh_name, members_cache)
         if user_id:
-            resolved_ids.add(user_id)
+            score_by_uid[user_id] = score_by_uid.get(user_id, 0) + codeowners_weight
         else:
             unresolved_handles.append(username)
 
@@ -484,9 +487,12 @@ def render_owner_mentions(
     for email in sorted(recent_author_emails_for_paths(paths)):
         user_id = slack_lookup_by_email(slack_token, email)
         if user_id:
-            resolved_ids.add(user_id)
+            # Recent commit authors are usually stronger relevance signals.
+            score_by_uid[user_id] = score_by_uid.get(user_id, 0) + 3
 
-    mentions = " ".join(sorted(f"<@{uid}>" for uid in resolved_ids))
+    ranked_uids = sorted(score_by_uid.items(), key=lambda kv: (-kv[1], kv[0]))
+    top_uids = [uid for uid, _ in ranked_uids[:MAX_OWNER_MENTIONS]]
+    mentions = " ".join(f"<@{uid}>" for uid in top_uids)
     return mentions, unresolved_handles
 
 

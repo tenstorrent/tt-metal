@@ -110,3 +110,34 @@ def test_owners_from_workflow_name_matches_codeowners_workflow_rules(tmp_path):
         workflow_root=wf_root,
     )
     assert owners == {"aliuTT", "cfjchu"}
+
+
+def test_render_owner_mentions_caps_to_top_three(monkeypatch):
+    mod = _load_m4_module()
+
+    monkeypatch.setattr(mod, "parse_codeowners", lambda _path: [("tests/", ["u1", "u2", "u3", "u4"])])
+    monkeypatch.setattr(mod, "extract_repo_paths", lambda _text: ["tests/foo.py"])
+    monkeypatch.setattr(mod, "owners_for_paths", lambda _paths, _rules: {"u1", "u2", "u3", "u4"})
+    monkeypatch.setattr(mod, "owners_from_workflow_name", lambda *_args, **_kwargs: set())
+    monkeypatch.setattr(
+        mod,
+        "github_user_info",
+        lambda _token, username: {"login": username, "name": username, "email": ""},
+    )
+    username_to_uid = {"u1": "U1", "u2": "U2", "u3": "U3", "u4": "U4"}
+    monkeypatch.setattr(mod, "slack_lookup_by_username", lambda *_args: username_to_uid[_args[1]])
+    monkeypatch.setattr(mod, "slack_lookup_by_full_name", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(mod, "recent_author_emails_for_paths", lambda _paths: set())
+    monkeypatch.setattr(mod, "slack_lookup_by_email", lambda *_args, **_kwargs: None)
+
+    mentions, unresolved = mod.render_owner_mentions(
+        issue_token="x",
+        slack_token="y",
+        workflow_name="wf",
+        job_name="job",
+        text_sources=["x"],
+        members_cache=[],
+    )
+    tokens = [tok for tok in mentions.split(" ") if tok.strip()]
+    assert len(tokens) == 3
+    assert unresolved == []
