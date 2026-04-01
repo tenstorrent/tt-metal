@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 import ttnn
 
 
@@ -59,8 +59,33 @@ def test_attn_matmul(num_loops, in0_dtype, in1_dtype, out_dtype, device):
             tt_output_tensor_on_device.deallocate()
             golden_output_tensor = (input_tensor_a.transpose(0, 2) @ input_tensor_b).transpose(0, 2)
 
-            allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
-            assert allclose, f"FAILED: {output}"
+            k = input_tensor_a.shape[-1]
+            if in0_dtype == ttnn.bfloat8_b or in1_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat8_b:
+                assert_numeric_metrics(
+                    golden_output_tensor,
+                    tt_output_tensor,
+                    atol=0.02 * k,
+                    rtol=72 * k,
+                    frobenius_threshold=0.001 * k,
+                    check_ulp=False,
+                )
+            elif in0_dtype == ttnn.bfloat16 or in1_dtype == ttnn.bfloat16 or out_dtype == ttnn.bfloat16:
+                assert_numeric_metrics(
+                    golden_output_tensor,
+                    tt_output_tensor,
+                    atol=0.02 * k,
+                    rtol=46.5 * k,
+                    frobenius_threshold=0.001 * k,
+                    check_ulp=False,
+                )
+            else:
+                assert_numeric_metrics(
+                    golden_output_tensor,
+                    tt_output_tensor,
+                    check_allclose=False,
+                    check_frobenius=False,
+                    check_ulp=False,
+                )
 
 
 @pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b])
@@ -98,8 +123,42 @@ def test_attn_matmul_fp32(num_loops, in_dtype, device):
 
             golden_output_tensor = (input_tensor_a.transpose(0, 2) @ input_tensor_b).transpose(0, 2)
 
-            allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
-            assert allclose, f"FAILED: {output}"
+            k = input_tensor_a.shape[-1]
+            if in_dtype == ttnn.bfloat8_b:
+                assert_numeric_metrics(
+                    golden_output_tensor,
+                    tt_output_tensor,
+                    atol=0.016 * k,
+                    rtol=38.75 * k,
+                    frobenius_threshold=0.001 * k,
+                    check_ulp=False,
+                )
+            elif in_dtype == ttnn.bfloat16:
+                assert_numeric_metrics(
+                    golden_output_tensor,
+                    tt_output_tensor,
+                    atol=0.02 * k,
+                    rtol=47.75 * k,
+                    frobenius_threshold=0.001 * k,
+                    check_ulp=False,
+                )
+            elif in_dtype == ttnn.float32:
+                assert_numeric_metrics(
+                    golden_output_tensor,
+                    tt_output_tensor,
+                    atol=0.02 * k,
+                    rtol=47.75 * k,
+                    frobenius_threshold=0.001 * k,
+                    check_ulp=False,
+                )
+            else:
+                assert_numeric_metrics(
+                    golden_output_tensor,
+                    tt_output_tensor,
+                    check_allclose=False,
+                    check_frobenius=False,
+                    check_ulp=False,
+                )
 
 
 @pytest.mark.parametrize("in0_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -129,8 +188,34 @@ def test_attn_matmul_with_program_cache(num_loops, in0_dtype, in1_dtype, out_dty
 
             golden_output_tensor = (input_tensor_a.transpose(0, 2) @ input_tensor_b).transpose(0, 2)
 
-            allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
-            assert allclose, f"FAILED: {output}"
+            k = input_tensor_a.shape[-1]
+            if in0_dtype == ttnn.bfloat8_b or in1_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat8_b:
+                assert_numeric_metrics(
+                    golden_output_tensor,
+                    tt_output_tensor,
+                    atol=0.016 * k,
+                    rtol=38.75 * k,
+                    frobenius_threshold=0.001 * k,
+                    check_ulp=False,
+                )
+            elif in0_dtype == ttnn.bfloat16 or in1_dtype == ttnn.bfloat16 or out_dtype == ttnn.bfloat16:
+                assert_numeric_metrics(
+                    golden_output_tensor,
+                    tt_output_tensor,
+                    atol=0.02 * k,
+                    rtol=47.75 * k,
+                    frobenius_threshold=0.001 * k,
+                    check_ulp=False,
+                )
+            else:
+                assert_numeric_metrics(
+                    golden_output_tensor,
+                    tt_output_tensor,
+                    atol=0.02 * k,
+                    rtol=47.75 * k,
+                    frobenius_threshold=0.001 * k,
+                    check_ulp=False,
+                )
 
 
 @pytest.mark.parametrize(
@@ -242,8 +327,14 @@ def test_group_attn_matmul(
         input_tensor_b = torch.repeat_interleave(input_tensor_b.to(torch.float), q_heads // kv_heads, dim=1)
         golden_output_tensor = (input_tensor_a.transpose(0, 2) @ input_tensor_b).transpose(0, 2)
 
-        allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
-        assert allclose, f"FAILED: {output}"
+        assert_numeric_metrics(
+            golden_output_tensor,
+            tt_output_tensor,
+            atol=0.016 * K,
+            rtol=33.628 * K,
+            frobenius_threshold=0.001 * K,
+            check_ulp=False,
+        )
 
 
 @pytest.mark.parametrize("sharded", [False, True])
@@ -324,9 +415,32 @@ def test_group_attn_matmul_with_program_cache(num_loops, in0_dtype, in1_dtype, o
             input_tensor_a = input_tensor_a.to(torch.float)
             input_tensor_b = torch.repeat_interleave(input_tensor_b.to(torch.float), q_heads // kv_heads, dim=1)
             golden_output_tensor = (input_tensor_a.transpose(0, 2) @ input_tensor_b).transpose(0, 2)
-
-            allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
-            assert allclose, f"FAILED: {output}"
+            if in0_dtype == ttnn.bfloat8_b or in1_dtype == ttnn.bfloat8_b or output_dtype == ttnn.bfloat8_b:
+                assert_numeric_metrics(
+                    golden_output_tensor,
+                    tt_output_tensor,
+                    atol=0.021 * K,
+                    rtol=37 * K,
+                    frobenius_threshold=0.001 * K,
+                    check_ulp=False,
+                )
+            elif in0_dtype == ttnn.bfloat16 or in1_dtype == ttnn.bfloat16 or output_dtype == ttnn.bfloat16:
+                assert_numeric_metrics(
+                    golden_output_tensor,
+                    tt_output_tensor,
+                    atol=0.022 * K,
+                    rtol=17.112 * K,
+                    frobenius_threshold=0.001 * K,
+                    check_ulp=False,
+                )
+            else:
+                assert_numeric_metrics(
+                    golden_output_tensor,
+                    tt_output_tensor,
+                    check_allclose=False,
+                    check_frobenius=False,
+                    check_ulp=False,
+                )
 
     assert num_cache_entries == 1
 
@@ -447,8 +561,32 @@ def test_group_attn_matmul_fp32(
         input_tensor_b = torch.repeat_interleave(input_tensor_b.to(torch.float), q_heads // kv_heads, dim=1)
         golden_output_tensor = (input_tensor_a.transpose(0, 2) @ input_tensor_b).transpose(0, 2)
 
-        allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
-        assert allclose, f"FAILED: {output}"
+        if in_dtype == ttnn.bfloat16:
+            assert_numeric_metrics(
+                golden_output_tensor,
+                tt_output_tensor,
+                atol=0.024 * K,
+                rtol=32.99 * K,
+                frobenius_threshold=0.001 * K,
+                check_ulp=False,
+            )
+        elif in_dtype == ttnn.float32:
+            assert_numeric_metrics(
+                golden_output_tensor,
+                tt_output_tensor,
+                atol=0.025 * K,
+                rtol=33.022 * K,
+                frobenius_threshold=0.001 * K,
+                check_ulp=False,
+            )
+        else:
+            assert_numeric_metrics(
+                golden_output_tensor,
+                tt_output_tensor,
+                check_allclose=False,
+                check_frobenius=False,
+                check_ulp=False,
+            )
 
 
 @pytest.mark.use_module_device
@@ -841,5 +979,4 @@ def test_attn_matmul_with_program_cache_exhaustive(
         b_eff = input_tensor_b_f[:, :, :n_round, :]
         golden_output_tensor = (input_tensor_a_f.transpose(0, 2) @ b_eff).transpose(0, 2)
 
-    allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
-    assert allclose, f"FAILED: {output}"
+    assert_numeric_metrics(tt_output_tensor, golden_output_tensor, check_allclose=False, check_frobenius=False, check_ulp=False)
