@@ -37,8 +37,29 @@ project(
 message(STATUS "Metalium version: ${PROJECT_VERSION}")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
-set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3 -ggnu-pubnames -DDEBUG -fno-omit-frame-pointer")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -ggnu-pubnames -DDEBUG -fno-omit-frame-pointer")
+# Augment CMake's built-in per-config flags rather than replacing them wholesale.
+# Using set(CMAKE_CXX_FLAGS_<CONFIG> ...) overwrites the variable entirely, silently
+# discarding toolchain-file settings and CMake defaults.  add_compile_options() with
+# config generators appends cleanly and composes correctly with toolchain files.
+#
+# Flags already provided by CMake defaults and therefore omitted here:
+#   Debug:          -O0 -g
+#   RelWithDebInfo: -O2 -g -DNDEBUG  (we keep -O3 below to preserve existing behaviour)
+add_compile_options(
+    # Richer debug info: include macro definitions and use GNU pubnames for faster GDB lookup
+    "$<$<CONFIG:Debug,RelWithDebInfo>:-g3>"
+    "$<$<CONFIG:Debug,RelWithDebInfo>:-ggnu-pubnames>"
+    # Keep frame pointers for profiling and stack unwinding in non-Release builds
+    "$<$<CONFIG:Debug,RelWithDebInfo>:-fno-omit-frame-pointer>"
+    # Non-standard DEBUG macro (CMake convention is absence of NDEBUG, but this preserves
+    # existing behaviour for code that gates on #ifdef DEBUG).
+    # Restricted to CXX: the original set(CMAKE_CXX_FLAGS_DEBUG …) never applied to C, and
+    # some C sources in third_party redefine DEBUG as a function-like macro which would
+    # conflict with -DDEBUG=1 and produce a -Wmacro-redefined error.
+    "$<$<AND:$<CONFIG:Debug,RelWithDebInfo>,$<COMPILE_LANGUAGE:CXX>>:-DDEBUG>"
+    # RelWithDebInfo: restore -O3 to match previous behaviour (CMake default is -O2)
+    "$<$<CONFIG:RelWithDebInfo>:-O3>"
+)
 
 # Defining build types is the purview of the top-level project
 if(PROJECT_IS_TOP_LEVEL)
