@@ -3,6 +3,7 @@
 
 """Unit tests for ttrun command-line utility."""
 
+import shlex
 import yaml
 import importlib
 from pathlib import Path
@@ -21,6 +22,7 @@ from ttnn.distributed.ttrun import (
     RankfileSyntax,
     build_rankfile_args,
     detect_rankfile_syntax,
+    normalize_rankfile_mpi_args,
     inject_rankfile_mpi_args,
     get_generate_rank_bindings_output_paths,
     build_generate_rank_bindings_mpi_cmd,
@@ -558,67 +560,22 @@ class TestRankfileInjection:
 
 
 class TestDetectRankfileSyntax:
-    """Test rankfile syntax detection."""
+    """Default portable rankfile form is ``--rankfile``."""
 
-    def test_detect_rankfile_syntax_map_by(self, temp_dir):
-        """Test detection of --map-by rankfile:file= for OpenMPI 5.x (mpirun-ulfm)."""
-        from unittest.mock import MagicMock
+    def test_detect_rankfile_syntax_default_is_rankfile(self):
+        assert detect_rankfile_syntax("mpirun") == RankfileSyntax.RANKFILE
+        assert detect_rankfile_syntax("/usr/bin/mpirun-ulfm") == RankfileSyntax.RANKFILE
 
-        def mock_run(cmd, **kwargs):
-            mock_result = MagicMock()
-            mock_result.stderr = ""
-            if len(cmd) > 1 and cmd[1] == "--version":
-                mock_result.stdout = "Open MPI) 5.0.0"
-            else:
-                mock_result.stdout = "OpenMPI help"
-            return mock_result
-
-        syntax = detect_rankfile_syntax("mpirun", subprocess_run=mock_run)
-        assert syntax == RankfileSyntax.MAP_BY_RANKFILE_FILE
-
-    def test_detect_rankfile_syntax_rankfile(self, temp_dir):
-        """Test detection of --rankfile syntax."""
-        from unittest.mock import MagicMock
-
-        # Mock subprocess.run to return help text with --rankfile
-        mock_result = MagicMock()
-        mock_result.stdout = """
-OpenMPI help text
---rankfile <file>  Specify rankfile for process mapping
-"""
-        mock_result.stderr = ""
-
-        def mock_run(cmd, **kwargs):
-            return mock_result
-
-        syntax = detect_rankfile_syntax("mpirun", subprocess_run=mock_run)
-        assert syntax == RankfileSyntax.RANKFILE
-
-    def test_detect_rankfile_syntax_fallback_mca(self, temp_dir):
-        """Test fallback to MCA parameter when no rankfile syntax found."""
-        from unittest.mock import MagicMock
-
-        # Mock subprocess.run to return help text without rankfile options
-        mock_result = MagicMock()
-        mock_result.stdout = "OpenMPI help text\n--np <n>  Number of processes"
-        mock_result.stderr = ""
-
-        def mock_run(cmd, **kwargs):
-            return mock_result
-
-        syntax = detect_rankfile_syntax("mpirun", subprocess_run=mock_run)
-        assert syntax == RankfileSyntax.MCA_RMAPS_RANKFILE_PATH
-
-    def test_detect_rankfile_syntax_error_fallback(self, temp_dir):
-        """Test fallback to MCA parameter on subprocess error."""
-        from unittest.mock import MagicMock
-
-        # Mock subprocess.run to raise FileNotFoundError
-        def mock_run(cmd, **kwargs):
-            raise FileNotFoundError("mpirun not found")
-
-        syntax = detect_rankfile_syntax("mpirun", subprocess_run=mock_run)
-        assert syntax == RankfileSyntax.MCA_RMAPS_RANKFILE_PATH
+    def test_normalize_map_by_rankfile_file_becomes_rankfile(self, temp_dir):
+        rf = temp_dir / "rankfile"
+        rf.write_text("rank 0=h slot=0\n")
+        out = normalize_rankfile_mpi_args(
+            ["--map-by", f"rankfile:file={rf}"],
+            RankfileSyntax.RANKFILE,
+            cwd=temp_dir,
+        )
+        assert out[0] == "--rankfile"
+        assert "rankfile:file=" not in shlex.join(out)
 
 
 class TestFindGenerateRankBindingsExecutable:

@@ -30,8 +30,10 @@ DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
 RANKFILE_LINE_PATTERN = re.compile(r"^\s*rank\s+\d+\s*=\s*([^\s]+)\s+slot\s*=.*$", re.IGNORECASE)
-RANKFILE_MAP_BY_PATH_PATTERN = re.compile(r"rankfile:file=([^,\s]+)", re.IGNORECASE)
 MPI_HOST_FLAGS = ("--host", "-host", "--hostfile", "-hostfile", "--default-hostfile")
+
+# Log once per process when forcing mpirun under Slurm (many call sites use get_mpi_launcher).
+_slurm_mpirun_choice_logged: bool = False
 
 # How to extend Phase 2 failure messages (see legacy_flow phase2_failure_hint).
 Phase2FailureHint = Optional[Literal["stale_phase1_cache", "legacy"]]
@@ -81,10 +83,16 @@ class RankfileSyntax(Enum):
 def get_mpi_launcher() -> str:
     """Get the MPI launcher executable for the current PATH.
 
-    Returns:
-        Absolute path to ``mpirun-ulfm`` from :func:`shutil.which` if found, else the string ``"mpirun"``.
+    When ``SLURM_JOB_ID`` is set, returns ``\"mpirun\"``. Otherwise prefers
+    ``mpirun-ulfm`` from :func:`shutil.which` if found, else ``\"mpirun\"``.
     """
-    # Prefer mpirun-ulfm (works in srun, interactive, and batch)
+    global _slurm_mpirun_choice_logged
+    if os.environ.get("SLURM_JOB_ID") is not None:
+        if not _slurm_mpirun_choice_logged:
+            logger.warning(f"{TT_RUN_PREFIX} SLURM job detected, using mpirun")
+            _slurm_mpirun_choice_logged = True
+        return "mpirun"
+
     mpi_launcher = shutil.which("mpirun-ulfm")
     if not mpi_launcher:
         logger.warning(f"{TT_RUN_PREFIX} mpirun-ulfm not found in PATH, falling back to mpirun")
@@ -156,6 +164,12 @@ def _parse_hosts_option(ctx: click.Context, param: click.Parameter, value: Optio
         if h in seen:
             raise click.ClickException(f"Duplicate hostname in --hosts: {h!r}")
         seen.add(h)
+        if h.startswith("-"):
+            raise click.ClickException(
+                f"Invalid hostname in --hosts: {h!r} looks like a CLI flag. "
+                "Often caused by an empty shell variable after bare --hosts. "
+                "Use a non-empty host list or --hosts=node1,node2."
+            )
         if any(c in h for c in "\n\r\t"):
             raise click.ClickException(f"Invalid hostname in --hosts (no newlines/tabs): {h!r}")
         if " " in h:
@@ -165,69 +179,14 @@ def _parse_hosts_option(ctx: click.Context, param: click.Parameter, value: Optio
     return hosts
 
 
-def get_mpi_version(mpi_launcher: str, subprocess_run=subprocess.run) -> Optional[tuple[int, int]]:
-    """Get MPI version (major, minor) from launcher.
+def detect_rankfile_syntax(_mpi_launcher: str, _subprocess_run=subprocess.run) -> RankfileSyntax:
+    """Default rankfile form: ``--rankfile`` (works with Open MPI 4.x and 5.x).
 
-    Tries mpirun --version (OpenMPI 5+) and ompi_info. Returns None if unparseable.
-
-    Args:
-        mpi_launcher: Path or name of MPI launcher
-        subprocess_run: Subprocess run function (injectable for testing)
-
-    Returns:
-        (major, minor) e.g. (5, 0) or (4, 1), or None
+    ``--map-by rankfile:file=`` is not used by default: Open MPI 4.x does not accept it,
+    and some 5.x / PRRTE / Slurm ``mpirun`` builds fail with "unrecognized modifier".
+    Use ``--rankfile-syntax map-by`` or ``mca`` to force another form.
     """
-    for cmd in [[mpi_launcher, "--version"], ["ompi_info", "--version"]]:
-        try:
-            result = subprocess_run(cmd, capture_output=True, text=True, timeout=5)
-            text = (result.stdout or "") + (result.stderr or "")
-            # Match "Open MPI) 4.1.5" or "Open MPI) 5.0.0" or "5.0.0"
-            match = re.search(r"(?:Open MPI\)\s*)?(\d+)\.(\d+)(?:\.\d+)?", text)
-            if match:
-                return (int(match.group(1)), int(match.group(2)))
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            continue
-    return None
-
-
-def detect_rankfile_syntax(mpi_launcher: str, subprocess_run=subprocess.run) -> RankfileSyntax:
-    """Detect which rankfile syntax variant the MPI launcher supports.
-
-    Uses MPI version when available: OpenMPI 5.x (mpirun-ulfm) uses --map-by rankfile:file=,
-    older versions use --rankfile. Falls back to --help parsing if version cannot be determined.
-
-    Args:
-        mpi_launcher: Path or name of MPI launcher (e.g., "mpirun", "mpirun-ulfm")
-        subprocess_run: Subprocess run function (injectable for testing)
-
-    Returns:
-        RankfileSyntax enum indicating which syntax to use
-    """
-    version = get_mpi_version(mpi_launcher, subprocess_run)
-    if version is not None:
-        major, _ = version
-        if major >= 5:
-            return RankfileSyntax.MAP_BY_RANKFILE_FILE
-        return RankfileSyntax.RANKFILE
-
-    # Fallback: parse --help when version unavailable
-    try:
-        result = subprocess_run(
-            [mpi_launcher, "--help"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        help_text = result.stdout + result.stderr
-        if "--rankfile" in help_text:
-            return RankfileSyntax.RANKFILE
-        return RankfileSyntax.MCA_RMAPS_RANKFILE_PATH
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
-        logger.warning(
-            f"{TT_RUN_PREFIX} Failed to detect rankfile syntax from {mpi_launcher}: {e}. "
-            f"Falling back to MCA parameter syntax."
-        )
-        return RankfileSyntax.MCA_RMAPS_RANKFILE_PATH
+    return RankfileSyntax.RANKFILE
 
 
 def mpi_args_contain_rankfile_options(mpi_args: Optional[List[str]]) -> bool:
@@ -265,20 +224,20 @@ def inject_rankfile_mpi_args(
 ) -> List[str]:
     """Inject rankfile MPI arguments into base MPI args.
 
-    Auto-detects the correct rankfile syntax for the MPI launcher and prepends
-    the appropriate arguments to base_mpi_args.
+    Uses :func:`detect_rankfile_syntax` (default ``--rankfile``) unless ``force_rankfile_syntax``
+    or a custom ``detect_fn`` is supplied.
 
     Args:
         rankfile: Path to the rankfile
         base_mpi_args: Existing MPI arguments to prepend to
-        mpi_launcher: MPI launcher executable name/path (for detection)
-        detect_fn: Function to detect rankfile syntax (injectable for testing)
+        mpi_launcher: MPI launcher executable name/path (passed to ``detect_fn``)
+        detect_fn: Returns :class:`RankfileSyntax` (default: :func:`detect_rankfile_syntax`)
         add_host_slots: If True, prepend ``--host host1:N,host2:N`` derived from the
             rankfile (for Phase 2 real cluster). Skip if the user already provided
             ``--host`` in ``base_mpi_args``. Does not add ``-np``; pass that in
             ``base_mpi_args`` when the launcher needs an explicit process count.
-        force_rankfile_syntax: If set, use this syntax instead of auto-detection
-            (e.g. RankfileSyntax.RANKFILE for suggested re-run commands).
+        force_rankfile_syntax: If set, use this syntax instead of ``detect_fn``
+            (e.g. ``RankfileSyntax.MAP_BY_RANKFILE_FILE``).
         cwd: Working directory for the MPI command (default: ORIGINAL_CWD).
             The rankfile path in the command will be relative to this.
 
@@ -867,7 +826,8 @@ class TTRunConfig(BaseModel):
         return bindings
 
     @field_validator("mesh_graph_desc_path", mode="before")
-    def validate_mesh_graph_exists(self, path: Union[str, Path], info: ValidationInfo) -> Path:
+    @classmethod
+    def validate_mesh_graph_exists(cls, path: Union[str, Path], info: ValidationInfo) -> Path:
         """Ensure mesh graph descriptor file exists.
 
         Uses resolve_path() to search multiple locations for relative paths.
@@ -1213,10 +1173,20 @@ def resolve_rankfile_for_mpi(rankfile_path: str) -> str:
 
 def extract_rankfile_path_from_map_by_policy(policy: str) -> Optional[str]:
     """Extract rankfile path from --map-by policy if using rankfile:file=... syntax."""
-    match = RANKFILE_MAP_BY_PATH_PATTERN.search(policy)
-    if not match:
+    idx = policy.lower().find("rankfile:file=")
+    if idx < 0:
         return None
-    return match.group(1)
+    rest = policy[idx + len("rankfile:file=") :]
+    end = len(rest)
+    for sep in (",", " "):
+        j = rest.find(sep)
+        if j >= 0:
+            end = min(end, j)
+    path = rest[:end].strip()
+    if not path:
+        logger.warning(f"{TT_RUN_PREFIX} Ignoring empty path in MPI --map-by policy segment {policy!r}")
+        return None
+    return path
 
 
 def extract_rankfile_hosts(rankfile_path: str) -> List[str]:
@@ -1279,15 +1249,20 @@ def has_mca_param(mpi_args: List[str], param_name: str) -> bool:
     return False
 
 
-def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
-    """Normalize rankfile MPI args and infer --host list when rankfile is provided.
+def normalize_rankfile_mpi_args(
+    mpi_args: Optional[List[str]], rankfile_syntax: RankfileSyntax, cwd: Optional[Path] = None
+) -> List[str]:
+    """Normalize rankfile-related MPI args and infer ``--host`` when a rankfile is present.
 
-    OpenMPI deprecates --rankfile in favor of --map-by rankfile:file=<path>.
-    This keeps backwards compatibility while avoiding deprecation warnings.
+    With the default portable form (:attr:`RankfileSyntax.RANKFILE`), ``--rankfile`` is kept
+    or produced, and ``--map-by`` … ``rankfile:file=`` is converted to ``--rankfile``.
+    For :attr:`RankfileSyntax.MAP_BY_RANKFILE_FILE`, paths inside ``rankfile:file=`` are
+    resolved but the map-by form is kept.
     """
     if not mpi_args:
         return []
 
+    cwd_resolved = cwd if cwd is not None else ORIGINAL_CWD
     normalized_args = []
     detected_rankfile_path: Optional[str] = None
     rewrote_rankfile_args = False
@@ -1304,7 +1279,7 @@ def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
                 continue
 
             detected_rankfile_path = resolve_rankfile_for_mpi(mpi_args[i + 1])
-            normalized_args.extend(["--map-by", f"rankfile:file={detected_rankfile_path}"])
+            normalized_args.extend(build_rankfile_args(rankfile_syntax, Path(detected_rankfile_path), cwd=cwd_resolved))
             rewrote_rankfile_args = True
             i += 2
             continue
@@ -1312,38 +1287,63 @@ def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
         if arg.startswith("--rankfile=") or arg.startswith("-rankfile="):
             rankfile_path = arg.split("=", 1)[1]
             detected_rankfile_path = resolve_rankfile_for_mpi(rankfile_path)
-            normalized_args.extend(["--map-by", f"rankfile:file={detected_rankfile_path}"])
+            normalized_args.extend(build_rankfile_args(rankfile_syntax, Path(detected_rankfile_path), cwd=cwd_resolved))
             rewrote_rankfile_args = True
             i += 1
             continue
 
         if arg == "--map-by":
-            normalized_args.append(arg)
             if i + 1 >= len(mpi_args):
+                normalized_args.append(arg)
                 i += 1
                 continue
 
             policy = mpi_args[i + 1]
             rankfile_path = extract_rankfile_path_from_map_by_policy(policy)
-            if rankfile_path:
+
+            if rankfile_path and rankfile_syntax == RankfileSyntax.MAP_BY_RANKFILE_FILE:
                 resolved_rankfile_path = resolve_rankfile_for_mpi(rankfile_path)
                 policy = policy.replace(f"rankfile:file={rankfile_path}", f"rankfile:file={resolved_rankfile_path}", 1)
                 detected_rankfile_path = resolved_rankfile_path
+                normalized_args.extend(["--map-by", policy])
+            elif rankfile_path and rankfile_syntax in (
+                RankfileSyntax.RANKFILE,
+                RankfileSyntax.MCA_RMAPS_RANKFILE_PATH,
+            ):
+                resolved_rankfile_path = resolve_rankfile_for_mpi(rankfile_path)
+                normalized_args.extend(
+                    build_rankfile_args(rankfile_syntax, Path(resolved_rankfile_path), cwd=cwd_resolved)
+                )
+                detected_rankfile_path = resolved_rankfile_path
+                rewrote_rankfile_args = True
+            else:
+                normalized_args.extend(["--map-by", mpi_args[i + 1]])
 
-            normalized_args.append(policy)
             i += 2
             continue
 
         if arg.startswith("--map-by="):
             policy = arg.split("=", 1)[1]
             rankfile_path = extract_rankfile_path_from_map_by_policy(policy)
-            if rankfile_path:
+
+            if rankfile_path and rankfile_syntax == RankfileSyntax.MAP_BY_RANKFILE_FILE:
                 resolved_rankfile_path = resolve_rankfile_for_mpi(rankfile_path)
                 policy = policy.replace(f"rankfile:file={rankfile_path}", f"rankfile:file={resolved_rankfile_path}", 1)
-                arg = f"--map-by={policy}"
                 detected_rankfile_path = resolved_rankfile_path
+                normalized_args.append(f"--map-by={policy}")
+            elif rankfile_path and rankfile_syntax in (
+                RankfileSyntax.RANKFILE,
+                RankfileSyntax.MCA_RMAPS_RANKFILE_PATH,
+            ):
+                resolved_rankfile_path = resolve_rankfile_for_mpi(rankfile_path)
+                normalized_args.extend(
+                    build_rankfile_args(rankfile_syntax, Path(resolved_rankfile_path), cwd=cwd_resolved)
+                )
+                detected_rankfile_path = resolved_rankfile_path
+                rewrote_rankfile_args = True
+            else:
+                normalized_args.append(arg)
 
-            normalized_args.append(arg)
             i += 1
             continue
 
@@ -1352,8 +1352,7 @@ def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
 
     if rewrote_rankfile_args and detected_rankfile_path:
         logger.debug(
-            f"{TT_RUN_PREFIX} Rewrote deprecated MPI rankfile args to "
-            f"--map-by rankfile:file={detected_rankfile_path}"
+            f"{TT_RUN_PREFIX} Normalized MPI rankfile args ({rankfile_syntax.value}) for {detected_rankfile_path}"
         )
 
     if detected_rankfile_path and not has_host_selection_args(normalized_args):
@@ -1372,20 +1371,16 @@ def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
 
 
 def build_mpi_command(
-    config: TTRunConfig, program: List[str], mpi_args: Optional[List[str]] = None, debug_gdbserver: bool = False
+    config: TTRunConfig,
+    program: List[str],
+    mpi_args: Optional[List[str]] = None,
+    debug_gdbserver: bool = False,
+    rankfile_syntax: Optional[RankfileSyntax] = None,
 ) -> List[str]:
     """Build OpenMPI command with per-rank environment variables."""
-    effective_mpi_args = normalize_rankfile_mpi_args(mpi_args)
-
-    # Check if running in SLURM interactive session
-    if os.environ.get("SLURM_JOB_ID") is not None and os.environ.get("SLURM_STEP_ID") is not None:
-        logger.warning(f"{TT_RUN_PREFIX} SLURM interactive session detected, using mpirun")
-
-    # Prefer mpirun-ulfm (Open MPI with ULFM fault tolerance), fall back to mpirun if not found
-    mpi_launcher = shutil.which("mpirun-ulfm")
-    if not mpi_launcher:
-        logger.warning(f"{TT_RUN_PREFIX} mpirun-ulfm not found in PATH, falling back to mpirun")
-        mpi_launcher = "mpirun"
+    mpi_launcher = get_mpi_launcher()
+    syntax = rankfile_syntax if rankfile_syntax is not None else detect_rankfile_syntax(mpi_launcher)
+    effective_mpi_args = normalize_rankfile_mpi_args(mpi_args, syntax)
 
     cmd = [mpi_launcher]
 
@@ -1733,6 +1728,9 @@ def legacy_flow(
 
     effective_mpi_args = list(mpi_args) if mpi_args else []
 
+    mpi_launcher = get_mpi_launcher()
+    effective_rankfile_syntax = rankfile_syntax if rankfile_syntax is not None else detect_rankfile_syntax(mpi_launcher)
+
     if not bare:
         user_has_btl_setting = has_mca_param(effective_mpi_args, "btl")
         user_has_tcp_include = has_mca_param(effective_mpi_args, "btl_tcp_if_include")
@@ -1786,7 +1784,6 @@ def legacy_flow(
                 f"To use the rankfile parameter, remove rankfile-related args from --mpi-args."
             )
         else:
-            mpi_launcher = get_mpi_launcher()
             rankfile_args: List[str] = []
 
             # Add --host host1:N,host2:N for Phase 2 real cluster (skip when mock)
@@ -1799,9 +1796,7 @@ def legacy_flow(
                         if verbose:
                             logger.info(f"{TT_RUN_PREFIX} Injected --host {host_str} from rankfile")
 
-            # Detect or use forced rankfile syntax and add rankfile args (use relpath from cwd)
-            syntax = rankfile_syntax or detect_rankfile_syntax(mpi_launcher)
-            rankfile_args.extend(build_rankfile_args(syntax, rankfile, cwd=ORIGINAL_CWD))
+            rankfile_args.extend(build_rankfile_args(effective_rankfile_syntax, rankfile, cwd=ORIGINAL_CWD))
             effective_mpi_args = rankfile_args + effective_mpi_args
             if verbose:
                 logger.info(f"{TT_RUN_PREFIX} Injected rankfile: {rankfile}")
@@ -1825,7 +1820,11 @@ def legacy_flow(
 
     # Build MPI command
     mpi_cmd = build_mpi_command(
-        config, program, effective_mpi_args if effective_mpi_args else None, debug_gdbserver=debug_gdbserver
+        config,
+        program,
+        effective_mpi_args if effective_mpi_args else None,
+        debug_gdbserver=debug_gdbserver,
+        rankfile_syntax=effective_rankfile_syntax,
     )
 
     if verbose or dry_run:
@@ -2167,7 +2166,7 @@ def new_mode_flow(
     "-v",
     "--verbose",
     is_flag=True,
-    help="Show path resolution diagnostics, environment propagation, and MPI command details",
+    help="Show path resolution diagnostics and tt-run DEBUG logs (launcher process only; worker ranks unchanged)",
 )
 @click.option(
     "--mpi-args",
@@ -2201,8 +2200,8 @@ def new_mode_flow(
     "--rankfile-syntax",
     type=click.Choice(["auto", "rankfile", "map-by", "mca"]),
     default="auto",
-    help="Rankfile MPI syntax. 'auto' (default) detects from MPI version. Use 'rankfile' (--rankfile) if "
-    "--map-by rankfile:file= fails with 'unrecognized qualifier' on mpirun-ulfm.",
+    help="Rankfile MPI syntax. 'auto' (default) uses --rankfile (Open MPI 4.x and 5.x). "
+    "Use 'map-by' for --map-by rankfile:file=... or 'mca' for -mca rmaps_rankfile_path.",
 )
 @click.option(
     "--force-rediscovery",
@@ -2248,6 +2247,10 @@ def main(
 
     For detailed documentation on legacy mode, see the legacy_flow function docstring.
     """
+    if not verbose:
+        logger.remove()
+        logger.add(sys.stderr, level="INFO")
+
     # Check for mutually exclusive options
     if rank_binding is not None and mesh_graph_descriptor is not None:
         raise click.ClickException(
