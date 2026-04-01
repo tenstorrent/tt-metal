@@ -51,6 +51,7 @@ CFLAGS="-std=gnu17" ./configure \
     --disable-dlopen \
     --enable-static \
     --with-slurm=/opt/slurm \
+    --without-munge \
     --with-pic
 
 make -j"$(nproc)"
@@ -67,6 +68,14 @@ elif [ ! -x "${OMPI_PREFIX}/bin/mpirun" ]; then
 else
     cd "${OMPI_PREFIX}/bin" && ln -s mpirun mpirun-ulfm
 fi
+
+# Guard: ensure no munge runtime dependency leaked into libmpi.so.
+# munge-devel must not be present in the builder image; this catches it if it ever is.
+if ldd "${OMPI_PREFIX}/lib/libmpi.so" 2>/dev/null | grep -q munge; then
+    echo "[ERROR] libmpi.so links against libmunge — runtime containers will fail to load." >&2
+    exit 1
+fi
+echo "==> Verified: libmpi.so has no munge runtime dependency"
 
 echo "OpenMPI ${OMPI_TAG} installed to ${OMPI_PREFIX}"
 if [ -x "${OMPI_PREFIX}/bin/mpicc" ]; then

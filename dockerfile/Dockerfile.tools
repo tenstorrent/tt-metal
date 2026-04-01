@@ -321,7 +321,6 @@ RUN dnf install -y \
     libevent-devel \
     libmpc-devel \
     mpfr-devel \
-    munge-devel \
     libzstd-devel \
     libtool \
     make \
