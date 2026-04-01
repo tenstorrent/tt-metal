@@ -26,6 +26,7 @@ from tools.ci.thread_signal_analysis import classify_thread_progress, detect_dev
 
 ISSUE_REPO_TEST = "ebanerjeeTT/issue_dump"
 SLACK_CHANNEL_TEST = "C0APK6215B5"
+ISSUE_URL_RE = re.compile(r"https://github\.com/ebanerjeeTT/issue_dump/issues/(\d+)")
 
 
 def now_unix() -> float:
@@ -440,6 +441,15 @@ def message_by_ts(slack_payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return out
 
 
+def issue_numbers_from_text(text: str) -> list[int]:
+    nums: list[int] = []
+    for m in ISSUE_URL_RE.finditer(text):
+        value = int(m.group(1))
+        if value not in nums:
+            nums.append(value)
+    return nums
+
+
 def summary_md(data: dict[str, Any]) -> str:
     lines = [
         "## M5 Lifecycle Summary",
@@ -670,6 +680,94 @@ def main() -> int:
                 output["post_disable_followups"].append(
                     {"source_slack_ts": ts, "issue_number": issue_number, "posted_ts": posted_ts, "pr_url": pr_url}
                 )
+
+    # Ad-hoc assignment path for unresolved Slack issues not yet represented in triage state.
+    tracked_issue_numbers = {
+        int(row.get("issue_number", 0))
+        for row in output.get("assignments_added", [])
+        if isinstance(row, dict) and int(row.get("issue_number", 0) or 0) > 0
+    }
+    for msg in slack_payload.get("messages", []):
+        if not isinstance(msg, dict):
+            continue
+        if bool(msg.get("issue_closed", False)):
+            continue
+        top_text = str(msg.get("text", "")).strip()
+        if not top_text:
+            continue
+        issue_numbers = issue_numbers_from_text(top_text)
+        if not issue_numbers:
+            continue
+        issue_number = issue_numbers[0]
+        if issue_number in tracked_issue_numbers:
+            continue
+        assignees = issue_assignees(issue_token, issue_number)
+        if assignees:
+            continue
+        ts = str(msg.get("ts", "")).strip()
+        if not ts:
+            continue
+        thread_replies = msg.get("thread_replies", [])
+        if not isinstance(thread_replies, list) or not thread_replies:
+            continue
+        thread_fingerprint = hashlib.sha256(
+            json.dumps(
+                [{"ts": r.get("ts"), "user": r.get("user"), "text": r.get("text")} for r in thread_replies[-16:]],
+                sort_keys=True,
+                ensure_ascii=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        claim_cache_key = f"{ts}:{thread_fingerprint}"
+        claim = owner_claim_cache.get(claim_cache_key)
+        if claim is None:
+            try:
+                claim = thread_owner_claim_via_agent(
+                    top_level_text=top_text,
+                    thread_replies=thread_replies,
+                    bot_user_ids=bot_user_ids,
+                    model=m5_agent_model,
+                )
+            except Exception as exc:
+                claim = {"claimed": False, "reason": f"agent_owner_claim_failed:{exc}"}
+            owner_claim_cache[claim_cache_key] = claim
+        if not claim.get("claimed"):
+            continue
+        claim_user_id = str(claim.get("slack_user_id", "")).strip()
+        github_login = slack_to_github_cache.get(claim_user_id)
+        if github_login is None and claim_user_id not in slack_to_github_cache:
+            profile = slack_profile_cache.get(claim_user_id)
+            if profile is None:
+                profile = slack_user_profile(slack_token, claim_user_id)
+                slack_profile_cache[claim_user_id] = profile
+            github_login = github_login_from_slack_profile(issue_token, profile)
+            slack_to_github_cache[claim_user_id] = github_login
+        if not github_login:
+            output["notes"].append(
+                f"ad_hoc_thread_claim_no_github_match_issue_{issue_number}:slack_user={claim_user_id}"
+            )
+            continue
+        try:
+            assign_issue(issue_token, issue_number, github_login)
+            output["assignments_added"].append(
+                {
+                    "issue_number": issue_number,
+                    "assigned_github_login": github_login,
+                    "source": "ad_hoc_thread_owner_claim",
+                    "source_slack_user_id": claim_user_id,
+                }
+            )
+            post_slack_thread_message(
+                slack_token=slack_token,
+                channel=args.channel_id,
+                thread_ts=ts,
+                text=(
+                    f"Acknowledged — assigning this incident to <@{claim_user_id}> "
+                    f"(GitHub: @{github_login}) based on thread ownership signal."
+                ),
+            )
+            tracked_issue_numbers.add(issue_number)
+        except Exception as exc:
+            output["notes"].append(f"ad_hoc_thread_claim_assignment_failed_issue_{issue_number}:{exc}")
 
     save_state(state_path, state)
     out_path = Path(args.output_json)

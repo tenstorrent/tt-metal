@@ -4,6 +4,7 @@ from pathlib import Path
 
 from tools.ci.m5_manage_issue_lifecycle import (
     candidate_github_owners_from_text,
+    issue_numbers_from_text,
     parse_json_after_marker,
     parse_codeowners,
 )
@@ -42,3 +43,11 @@ def test_parse_json_after_marker_missing_marker_raises() -> None:
         assert "marker not found" in str(exc)
     else:
         raise AssertionError("expected ValueError for missing marker")
+
+
+def test_issue_numbers_from_text_parses_issue_dump_urls() -> None:
+    text = (
+        "Investigate https://github.com/ebanerjeeTT/issue_dump/issues/851 and "
+        "https://github.com/ebanerjeeTT/issue_dump/issues/858"
+    )
+    assert issue_numbers_from_text(text) == [851, 858]

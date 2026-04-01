@@ -99,6 +99,18 @@ on:
         description: "Maximum CODEOWNERS GitHub users to test in testing mode"
         required: false
         default: "10"
+      run-scope:
+        description: "Which modular stage(s) to run"
+        required: false
+        type: choice
+        options:
+          - full
+          - data-report-only
+          - draft-prs-only
+          - create-issues-only
+          - thread-lifecycle-only
+          - bug-escape-only
+        default: "full"
 
 permissions:
   actions: write
@@ -159,8 +171,8 @@ jobs:
           git push "https://github.com/${TARGET_PR_REPO}.git" "HEAD:refs/heads/${probe_branch}"
           echo "Probe branch pushed to ${TARGET_PR_REPO}: ${probe_branch}"
 
-  triage-ci-autonomy:
-    name: "Run CI triage autonomy pipeline"
+  prep-triage-data:
+    name: "Prepare triage data"
     if: ${{ !inputs['fork-push-check-only'] && !inputs['testing-mode'] }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -260,8 +272,34 @@ jobs:
             exit 1
           fi
 
+      - name: Upload shared raw-data bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: triage-raw-data
+          path: |
+            build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_threads.json
+            build_ci/raw_data/slack_C0APK6215B5_last_14_days.json
+          retention-days: 7
+
+  run-data-report:
+    name: "Run data gathering report"
+    if: ${{ !inputs['fork-push-check-only'] && !inputs['testing-mode'] && inputs['data-gathering-mode'] && (inputs['run-scope'] == 'full' || inputs['run-scope'] == 'data-report-only') }}
+    needs: [prep-triage-data]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download shared raw-data bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: triage-raw-data
+          path: build_ci/raw_data
+
       - name: Generate Slack data gathering report with Cursor agent
-        if: ${{ inputs['data-gathering-mode'] }}
         env:
           CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
         uses: ./.github/actions/generate-slack-data-report
@@ -270,8 +308,42 @@ jobs:
           report-path: build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_report.md
           model: ${{ github.event.inputs['data-report-model'] || 'claude-4-sonnet' }}
 
+      - name: Upload data gathering report artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: slack-C0APK6215B5-U08GTDV8MDH-report
+          path: build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_report.md
+          retention-days: 7
+
+      - name: Publish report to run summary
+        run: |
+          set -euo pipefail
+          report_path="build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_report.md"
+          {
+            echo "# Slack Data Gathering Report"
+            echo
+            cat "$report_path"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  run-draft-prs:
+    name: "Run draft PR create/update stage"
+    if: ${{ !inputs['fork-push-check-only'] && !inputs['testing-mode'] && !inputs['data-gathering-mode'] && (inputs['run-scope'] == 'full' || inputs['run-scope'] == 'draft-prs-only') }}
+    needs: [prep-triage-data]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download shared raw-data bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: triage-raw-data
+          path: build_ci/raw_data
+
       - name: Auto-disable stale unresolved CI messages
-        if: ${{ !inputs['data-gathering-mode'] }}
         env:
           CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
@@ -290,8 +362,44 @@ jobs:
           dry-run: ${{ github.event.inputs['auto-disable-dry-run'] || 'false' }}
           output-dir: build_ci/auto_disable
 
+      - name: Upload draft PR stage artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: draft-pr-stage-artifacts
+          path: |
+            build_ci/auto_disable/stale_candidates.json
+            build_ci/auto_disable/disable_actions.json
+            build_ci/auto_disable/execution_result.json
+            build_ci/auto_disable/summary.md
+            build_ci/auto_disable/debug
+          retention-days: 7
+
+      - name: Upload triage state artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: triage-state
+          path: build_ci/triage_state/ci_triage_state.json
+          retention-days: 7
+
+  run-create-issues:
+    name: "Run issue creation stage"
+    if: ${{ !inputs['fork-push-check-only'] && !inputs['testing-mode'] && !inputs['data-gathering-mode'] && (inputs['run-scope'] == 'full' || inputs['run-scope'] == 'create-issues-only') }}
+    needs: [prep-triage-data]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download shared raw-data bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: triage-raw-data
+          path: build_ci/raw_data
+
       - name: M4 restore previous cache artifacts
-        if: ${{ !inputs['data-gathering-mode'] }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -303,7 +411,6 @@ jobs:
           fi
 
       - name: M4 extract deterministic failing jobs from aggregate workflow data
-        if: ${{ !inputs['data-gathering-mode'] }}
         env:
           # Use repo-scoped GITHUB_TOKEN for aggregate-workflow-data artifact reads.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -315,7 +422,6 @@ jobs:
             --output-json "build_ci/ci_ticketing/create_tickets/failing_jobs.json"
 
       - name: M4 create issues and post Slack bootstrap messages
-        if: ${{ !inputs['data-gathering-mode'] }}
         env:
           CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
           AGGREGATE_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -333,8 +439,54 @@ jobs:
             --max-agent-reviews "${{ github.event.inputs['m4-max-agent-reviews'] || '0' }}" \
             --model "${{ github.event.inputs['auto-disable-model'] || 'claude-4-sonnet' }}"
 
+      - name: Upload issue-creation artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: create-issues-stage-artifacts
+          path: |
+            build_ci/ci_ticketing/create_tickets/failing_jobs.json
+            build_ci/ci_ticketing/create_tickets/failing_jobs_cache.json
+            build_ci/ci_ticketing/create_tickets/downloaded_logs
+            build_ci/ci_ticketing/create_tickets/m4_issue_and_slack_result.json
+            build_ci/ci_ticketing/create_tickets/m4_review_cache.json
+          retention-days: 7
+
+  run-thread-lifecycle:
+    name: "Run thread analysis + assignment stage"
+    if: ${{ !inputs['fork-push-check-only'] && !inputs['testing-mode'] && !inputs['data-gathering-mode'] && (inputs['run-scope'] == 'full' || inputs['run-scope'] == 'thread-lifecycle-only') }}
+    needs: [prep-triage-data]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download shared raw-data bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: triage-raw-data
+          path: build_ci/raw_data
+
+      - name: Download triage state if present
+        uses: actions/download-artifact@v4
+        with:
+          name: triage-state
+          path: build_ci/triage_state
+        continue-on-error: true
+
+      - name: Ensure triage state file exists
+        run: |
+          set -euo pipefail
+          mkdir -p build_ci/triage_state
+          if [ ! -f "build_ci/triage_state/ci_triage_state.json" ]; then
+            cat > build_ci/triage_state/ci_triage_state.json <<'EOF'
+          {"version":1,"updated_at_utc":"","items":[]}
+          EOF
+          fi
+
       - name: M5 lifecycle follow-up + assignment + post-disable notices
-        if: ${{ !inputs['data-gathering-mode'] }}
         env:
           ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
@@ -347,8 +499,52 @@ jobs:
             --summary-md "build_ci/ci_ticketing/create_tickets/m5_lifecycle_summary.md" \
             --channel-id "C0APK6215B5"
 
+      - name: Upload thread lifecycle artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: thread-lifecycle-stage-artifacts
+          path: |
+            build_ci/ci_ticketing/create_tickets/m5_lifecycle_result.json
+            build_ci/ci_ticketing/create_tickets/m5_lifecycle_summary.md
+          retention-days: 7
+
+      - name: Upload triage state artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: triage-state
+          path: build_ci/triage_state/ci_triage_state.json
+          retention-days: 7
+
+  run-bug-escape:
+    name: "Run bug-escape enrichment stage"
+    if: ${{ always() && !inputs['fork-push-check-only'] && !inputs['testing-mode'] && !inputs['data-gathering-mode'] && (inputs['run-scope'] == 'full' || inputs['run-scope'] == 'bug-escape-only') && (needs.run-thread-lifecycle.result == 'success' || needs.run-thread-lifecycle.result == 'skipped') }}
+    needs: [run-thread-lifecycle]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download triage state
+        uses: actions/download-artifact@v4
+        with:
+          name: triage-state
+          path: build_ci/triage_state
+        continue-on-error: true
+
+      - name: Ensure triage state file exists
+        run: |
+          set -euo pipefail
+          mkdir -p build_ci/triage_state
+          if [ ! -f "build_ci/triage_state/ci_triage_state.json" ]; then
+            cat > build_ci/triage_state/ci_triage_state.json <<'EOF'
+          {"version":1,"updated_at_utc":"","items":[]}
+          EOF
+          fi
+
       - name: M6 bug-escape enrichment (test scope)
-        if: ${{ !inputs['data-gathering-mode'] }}
         env:
           ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
         run: |
@@ -359,8 +555,75 @@ jobs:
             --output-json "build_ci/ci_ticketing/create_tickets/m6_bug_escape_events.json" \
             --summary-md "build_ci/ci_ticketing/create_tickets/m6_bug_escape_summary.md"
 
+      - name: Upload bug-escape artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: bug-escape-stage-artifacts
+          path: |
+            build_ci/ci_ticketing/create_tickets/m6_bug_escape_events.json
+            build_ci/ci_ticketing/create_tickets/m6_bug_escape_summary.md
+          retention-days: 7
+
+      - name: Publish bug-escape summary to run summary
+        run: |
+          set -euo pipefail
+          m6_md="build_ci/ci_ticketing/create_tickets/m6_bug_escape_summary.md"
+          if [ -s "$m6_md" ]; then
+            echo "# M6 Bug Escape Summary" >> "$GITHUB_STEP_SUMMARY"
+            echo >> "$GITHUB_STEP_SUMMARY"
+            cat "$m6_md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No M6 summary produced." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  finalize-autonomy-artifacts:
+    name: "Finalize autonomy artifacts + summary"
+    if: ${{ always() && !inputs['fork-push-check-only'] && !inputs['testing-mode'] && !inputs['data-gathering-mode'] && inputs['run-scope'] == 'full' }}
+    needs: [run-draft-prs, run-create-issues, run-thread-lifecycle, run-bug-escape]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download draft PR stage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: draft-pr-stage-artifacts
+          path: build_ci
+        continue-on-error: true
+
+      - name: Download issue creation artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: create-issues-stage-artifacts
+          path: build_ci
+        continue-on-error: true
+
+      - name: Download thread lifecycle artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: thread-lifecycle-stage-artifacts
+          path: build_ci
+        continue-on-error: true
+
+      - name: Download bug escape artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: bug-escape-stage-artifacts
+          path: build_ci
+        continue-on-error: true
+
+      - name: Download raw-data bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: triage-raw-data
+          path: build_ci/raw_data
+        continue-on-error: true
+
       - name: Upload auto-disable artifacts
-        if: ${{ !inputs['data-gathering-mode'] }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
         with:
           name: auto-disable-artifacts
@@ -382,16 +645,7 @@ jobs:
             build_ci/raw_data/slack_C0APK6215B5_last_14_days.json
           retention-days: 7
 
-      - name: Upload triage state artifact
-        if: ${{ !inputs['data-gathering-mode'] }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
-        with:
-          name: triage-state
-          path: build_ci/triage_state/ci_triage_state.json
-          retention-days: 7
-
-      - name: Publish auto-disable summary to run summary
-        if: ${{ !inputs['data-gathering-mode'] }}
+      - name: Publish modular autonomy summary to run summary
         run: |
           set -euo pipefail
           summary_path="build_ci/auto_disable/summary.md"
@@ -422,25 +676,6 @@ jobs:
             echo >> "$GITHUB_STEP_SUMMARY"
             cat "$m6_md" >> "$GITHUB_STEP_SUMMARY"
           fi
-
-      - name: Upload data gathering report artifact
-        if: ${{ inputs['data-gathering-mode'] }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
-        with:
-          name: slack-C0APK6215B5-U08GTDV8MDH-report
-          path: build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_report.md
-          retention-days: 7
-
-      - name: Publish report to run summary
-        if: ${{ inputs['data-gathering-mode'] }}
-        run: |
-          set -euo pipefail
-          report_path="build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_report.md"
-          {
-            echo "# Slack Data Gathering Report"
-            echo
-            cat "$report_path"
-          } >> "$GITHUB_STEP_SUMMARY"
 
   triage-ci-testing-session:
     name: "Run CI triage testing session"
