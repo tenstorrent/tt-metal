@@ -17,6 +17,17 @@ from .tt_penalties import TTPenalties
 from .tt_sampling import TTSampling
 
 MAX_UINT32 = 2**32 - 1
+_SAMPLING_PARAM_DEFAULTS = {
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "top_k": 1,
+    "presence_penalty": 0.0,
+    "frequency_penalty": 0.0,
+    "repetition_penalty": 1.0,
+    "seed": None,
+    "num_logprobs": 0,
+    "enable_log_probs": False,
+}
 
 
 @dataclass(frozen=True)
@@ -383,23 +394,11 @@ def format_sampling_params(sampling_params, max_batch_size):
     assert target_len % 32 == 0, f"Sampling batch size must be a multiple of 32, got {target_len}"
 
     # Defaults used when padding short lists to target_len
-    defaults = {
-        "temperature": 0.0,
-        "top_p": 1.0,
-        "top_k": 1,
-        "presence_penalty": 0.0,
-        "frequency_penalty": 0.0,
-        "repetition_penalty": 1.0,
-        "seed": None,
-        "num_logprobs": 0,
-        "enable_log_probs": False,
-    }
-
     def _pad(lst, name):
         """Return a new list padded to target_len with the default for *name*."""
         if len(lst) >= target_len:
             return list(lst)
-        return list(lst) + [defaults[name]] * (target_len - len(lst))
+        return list(lst) + [_SAMPLING_PARAM_DEFAULTS[name]] * (target_len - len(lst))
 
     # Pad core sampling fields (scalar→list already done above)
     temperature = _pad(sampling_params.temperature, "temperature")
@@ -426,7 +425,7 @@ def format_sampling_params(sampling_params, max_batch_size):
     def _normalise_and_pad(name):
         value = getattr(sampling_params, name, None)
         if value is None:
-            lst = [defaults[name]]
+            lst = [_SAMPLING_PARAM_DEFAULTS[name]]
         elif isinstance(value, List):
             lst = list(value)
         else:
@@ -459,7 +458,7 @@ def format_sampling_params(sampling_params, max_batch_size):
             top_k[i] = 32
 
         if repetition_penalty[i] == 0:
-            repetition_penalty[i] = defaults["repetition_penalty"]
+            repetition_penalty[i] = _SAMPLING_PARAM_DEFAULTS["repetition_penalty"]
 
     kwargs = dict(
         temperature=temperature,
@@ -479,6 +478,48 @@ def format_sampling_params(sampling_params, max_batch_size):
         kwargs["enable_log_probs"] = enable_log_probs
 
     return replace(sampling_params, **kwargs)
+
+
+def _scatter_sampling_params_to_slots(
+    formatted_sampling_params: SamplingParams,
+    occupied_slots: list[int],
+    max_batch_size: int,
+) -> SamplingParams:
+    """
+    Scatter compact request-order params onto physical batch slots.
+
+    This is used by batched prefill, where request params arrive in compact order
+    but the requests may occupy arbitrary physical slots in the padded batch.
+
+    Seeds intentionally remain in compact request order because
+    ``SeedManager.reset_seed`` maps them onto ``occupied_slots`` separately.
+    """
+    if not occupied_slots:
+        return formatted_sampling_params
+
+    if max_batch_size % 32 != 0:
+        raise ValueError(f"Sampling batch size must be a multiple of 32, got {max_batch_size}")
+
+    kwargs = {}
+    for field_name in SAMPLING_PARAM_FIELDS:
+        value = getattr(formatted_sampling_params, field_name)
+        if field_name == "seed" or not isinstance(value, list):
+            kwargs[field_name] = value
+            continue
+
+        if len(value) < len(occupied_slots):
+            raise ValueError(
+                f"Sampling param '{field_name}' length {len(value)} is smaller than occupied slot count {len(occupied_slots)}"
+            )
+
+        scattered = [_SAMPLING_PARAM_DEFAULTS[field_name]] * max_batch_size
+        for request_idx, slot in enumerate(occupied_slots):
+            if slot < 0 or slot >= max_batch_size:
+                raise IndexError(f"Slot index {slot} is out of range for batch size {max_batch_size}")
+            scattered[slot] = value[request_idx]
+        kwargs[field_name] = scattered
+
+    return replace(formatted_sampling_params, **kwargs)
 
 
 def broadcast_sampling_params(

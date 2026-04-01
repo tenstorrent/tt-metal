@@ -24,6 +24,7 @@ from models.common.sampling import (
     chunk_sampling_params,
     format_sampling_params,
 )
+from models.common.sampling.generator import _scatter_sampling_params_to_slots
 from models.common.sampling.tt_log_probs import LogProbsResult, reformat_logprobs
 from models.common.warmup import WarmupForwardMixin
 from models.tt_transformers.tt.common import (
@@ -625,6 +626,9 @@ class Generator(WarmupForwardMixin):
                     sampling_executed = True
 
                     combined_params = format_sampling_params(sampling_params, padded_batch)
+                    # Batched prefill receives params in compact request order, but the
+                    # requests themselves may occupy arbitrary physical slots.
+                    slot_aligned_params = _scatter_sampling_params_to_slots(combined_params, empty_slots, padded_batch)
                     max_prompt_len = max(int(prompt_lens[i]) for i in range(len(empty_slots)))
                     combined_prompt_tokens = torch.zeros(padded_batch, max_prompt_len, dtype=torch.long)
                     for local_idx, slot in enumerate(empty_slots):
@@ -632,7 +636,7 @@ class Generator(WarmupForwardMixin):
                         combined_prompt_tokens[slot, :plen] = prefill_ids[slot, :plen]
 
                     sampling_module = self.model[model_id].sampling
-                    sampling_module.reset_sampling_params(combined_params)
+                    sampling_module.reset_sampling_params(slot_aligned_params)
                     if getattr(combined_params, "seed", None) is not None:
                         sampling_module.seed_manager.reset_seed(combined_params.seed, empty_slots)
                     sampling_module.seed_manager.get_new_values(empty_slots, replicate_seeds=False)
