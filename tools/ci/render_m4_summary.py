@@ -55,7 +55,8 @@ def render_summary(data: dict[str, Any]) -> str:
                         f"selected {selected} of {candidates} candidates from "
                         f"codeowners={source_counts.get('codeowners', 0)}, "
                         f"commit_history={source_counts.get('commit_history', 0)}, "
-                        f"auto_triage={source_counts.get('auto_triage', 0)}"
+                        f"auto_triage={source_counts.get('auto_triage', 0)}, "
+                        f"job_owners={source_counts.get('job_owners', 0)}"
                     )
             unresolved = item.get("unresolved_owner_handles", [])
             if isinstance(unresolved, list) and unresolved:

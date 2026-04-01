@@ -144,24 +144,33 @@ def test_render_owner_mentions_caps_to_top_three(monkeypatch):
     assert selection["selected_owner_count"] == 3
 
 
-def test_build_auto_triage_context_includes_permalink_and_reason():
+def test_parse_auto_triage_decision_includes_permalinks_and_reason():
+    mod = _load_m4_module()
+    decision = {
+        "auto_triage_used": True,
+        "auto_triage_reason": "matched HIGH CONFIDENCE thread",
+        "auto_triage_permalinks": [
+            "https://tenstorrent.slack.com/archives/C0APK6215B5/p1775000000123456",
+            "https://example.com/not-allowed",
+        ],
+    }
+    meta = mod.parse_auto_triage_decision(decision)
+    assert meta["used"] is True
+    assert meta["reason"] == "matched HIGH CONFIDENCE thread"
+    assert meta["permalinks"] == ["https://tenstorrent.slack.com/archives/C0APK6215B5/p1775000000123456"]
+
+
+def test_job_owner_ids_for_failure_matches_owners_json_entries():
     mod = _load_m4_module()
     records = [
         {
-            "ts": "1775000000.123456",
-            "permalink": "https://tenstorrent.slack.com/archives/C0APK6215B5/p1775000000123456",
-            "text": "HIGH CONFIDENCE for t3k ttnn tests regression",
-            "tokens": {"high", "confidence", "t3k", "ttnn", "tests"},
-            "mention_ids": {"U1"},
-            "is_high_conf": True,
+            "job-name-component": "t3000-unit-tests / t3k ttnn tests",
+            "owner": {"id": "UBHPP2NDP", "name": "Joseph Chu"},
         }
     ]
-    context, user_ids, meta = mod.build_auto_triage_context_for_job(
-        records,
+    ids = mod.job_owner_ids_for_failure(
         workflow_name="(T3K) T3000 unit tests",
         job_name="t3000-unit-tests / t3k_ttnn_tests",
+        job_owner_records=records,
     )
-    assert "https://tenstorrent.slack.com/archives/C0APK6215B5/p1775000000123456" in context
-    assert user_ids == ["U1"]
-    assert meta["used"] is True
-    assert meta["high_confidence_count"] == 1
+    assert ids == {"UBHPP2NDP"}

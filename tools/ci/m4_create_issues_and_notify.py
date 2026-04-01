@@ -25,6 +25,7 @@ SLACK_CHANNEL_TEST = "C0APK6215B5"
 MARKER = "===FINAL_M4_REVIEW_DECISION==="
 PATH_PATTERN = re.compile(r"(?<![A-Za-z0-9_.-])((?:tt_metal|ttnn|models|tests|\\.github)/[A-Za-z0-9_./-]+)")
 MAX_OWNER_MENTIONS = 3
+JOB_OWNERS_PATH = Path(".github/actions/analyze-workflow-data/owners.json")
 
 
 def log(message: str) -> None:
@@ -202,119 +203,6 @@ def build_recent_slack_context(messages: list[dict[str, Any]], cap: int = 10) ->
     return "\n".join(lines) if lines else "(none)"
 
 
-def slack_permalink(*, channel_id: str, ts: str) -> str:
-    compact_ts = ts.replace(".", "").strip()
-    return f"https://tenstorrent.slack.com/archives/{channel_id}/p{compact_ts}"
-
-
-def load_auto_triage_records(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return []
-    channel_id = (
-        str(payload.get("channel_id", SLACK_CHANNEL_TEST)).strip() if isinstance(payload, dict) else SLACK_CHANNEL_TEST
-    )
-    raw_messages = payload.get("messages", []) if isinstance(payload, dict) else []
-    if not isinstance(raw_messages, list):
-        return []
-    records: list[dict[str, Any]] = []
-    for entry in raw_messages:
-        if not isinstance(entry, dict):
-            continue
-        root_text = str(entry.get("text", ""))
-        replies = entry.get("replies", [])
-        reply_texts: list[str] = []
-        if isinstance(replies, list):
-            reply_texts = [str(r.get("text", "")) for r in replies if isinstance(r, dict)]
-        combined = "\n".join([root_text] + reply_texts)
-        text_for_tokens = combined.lower()
-        tokens = set(re.split(r"[^a-z0-9]+", text_for_tokens))
-        tokens = {t for t in tokens if len(t) >= 3}
-        mention_ids = set(re.findall(r"<@([A-Z0-9]+)>", combined))
-        is_high_conf = "HIGH CONFIDENCE" in combined.upper()
-        records.append(
-            {
-                "ts": str(entry.get("ts", "")).strip(),
-                "permalink": slack_permalink(channel_id=channel_id, ts=str(entry.get("ts", "")).strip())
-                if str(entry.get("ts", "")).strip()
-                else "",
-                "text": root_text,
-                "combined": combined,
-                "tokens": tokens,
-                "mention_ids": mention_ids,
-                "is_high_conf": is_high_conf,
-            }
-        )
-    return records
-
-
-def build_auto_triage_context_for_job(
-    records: list[dict[str, Any]], *, workflow_name: str, job_name: str, cap: int = 3
-) -> tuple[str, list[str], dict[str, Any]]:
-    hint_tokens = set(_tokenize_owner_hint(workflow_name) + _tokenize_owner_hint(job_name))
-    scored: list[tuple[int, dict[str, Any]]] = []
-    for rec in records:
-        rec_tokens = rec.get("tokens", set())
-        if not isinstance(rec_tokens, set):
-            continue
-        overlap = len(hint_tokens.intersection(rec_tokens))
-        if overlap <= 0:
-            continue
-        score = overlap * 2
-        if rec.get("is_high_conf"):
-            score += 5
-        scored.append((score, rec))
-    if not scored:
-        return (
-            "(none)",
-            [],
-            {
-                "used": False,
-                "reason": "no token-overlap match in last 14 days",
-                "selected_count": 0,
-                "high_confidence_count": 0,
-                "permalinks": [],
-            },
-        )
-    scored.sort(key=lambda pair: pair[0], reverse=True)
-    selected = [rec for _, rec in scored[:cap]]
-    lines: list[str] = []
-    mention_ids: set[str] = set()
-    permalinks: list[str] = []
-    high_conf_count = 0
-    for rec in selected:
-        ts = str(rec.get("ts", "")).strip()
-        text = str(rec.get("text", "")).replace("\n", " ").strip()
-        if len(text) > 220:
-            text = text[:220] + "..."
-        conf = "HIGH_CONFIDENCE" if rec.get("is_high_conf") else "context"
-        permalink = str(rec.get("permalink", "")).strip()
-        if permalink:
-            lines.append(f"- ts={ts} [{conf}] {text} ({permalink})")
-            permalinks.append(permalink)
-        else:
-            lines.append(f"- ts={ts} [{conf}] {text}")
-        if rec.get("is_high_conf"):
-            high_conf_count += 1
-            mention_ids.update(rec.get("mention_ids", set()) if isinstance(rec.get("mention_ids"), set) else set())
-
-    if high_conf_count > 0:
-        reason = "used high-confidence auto-triage matches"
-    else:
-        reason = "matches found but none were HIGH CONFIDENCE"
-    selection_meta = {
-        "used": high_conf_count > 0,
-        "reason": reason,
-        "selected_count": len(selected),
-        "high_confidence_count": high_conf_count,
-        "permalinks": permalinks[:3],
-    }
-    return ("\n".join(lines) if lines else "(none)"), sorted(mention_ids), selection_meta
-
-
 def parse_codeowners(path: Path) -> list[tuple[str, list[str]]]:
     if not path.exists():
         return []
@@ -388,6 +276,96 @@ def owners_from_workflow_name(
     for rel_path in matched_paths:
         owners.update(owners_for_paths([rel_path], rules))
     return owners
+
+
+def normalize_owner_component(value: str) -> str:
+    lowered = value.strip().lower()
+    lowered = lowered.replace("_", " ").replace("-", " ")
+    lowered = re.sub(r"[^a-z0-9/ ]+", " ", lowered)
+    lowered = re.sub(r"\s+", " ", lowered).strip()
+    return lowered
+
+
+def load_job_owner_records(path: Path = JOB_OWNERS_PATH) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    contains = payload.get("contains", []) if isinstance(payload, dict) else []
+    return [x for x in contains if isinstance(x, dict)] if isinstance(contains, list) else []
+
+
+def owner_ids_from_owner_field(value: Any) -> set[str]:
+    out: set[str] = set()
+    if isinstance(value, dict):
+        uid = str(value.get("id", "")).strip()
+        if uid:
+            out.add(uid)
+    elif isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict):
+                uid = str(item.get("id", "")).strip()
+                if uid:
+                    out.add(uid)
+    return out
+
+
+def job_owner_ids_for_failure(
+    *,
+    workflow_name: str,
+    job_name: str,
+    job_owner_records: list[dict[str, Any]],
+) -> set[str]:
+    if not job_owner_records:
+        return set()
+    candidates = {
+        normalize_owner_component(job_name),
+        normalize_owner_component(workflow_name),
+        normalize_owner_component(f"{workflow_name} / {job_name}"),
+    }
+    candidates = {c for c in candidates if c}
+    if not candidates:
+        return set()
+    matched: set[str] = set()
+    for rec in job_owner_records:
+        component = normalize_owner_component(str(rec.get("job-name-component", "")).strip())
+        if not component:
+            continue
+        is_match = component in candidates or any(component in c or c in component for c in candidates if len(c) >= 8)
+        if not is_match:
+            continue
+        matched.update(owner_ids_from_owner_field(rec.get("owner")))
+    return matched
+
+
+def parse_auto_triage_decision(decision: dict[str, Any]) -> dict[str, Any]:
+    used = bool(decision.get("auto_triage_used", False))
+    reason = str(decision.get("auto_triage_reason", "")).strip()
+    links_raw = decision.get("auto_triage_permalinks", [])
+    links: list[str] = []
+    if isinstance(links_raw, list):
+        for item in links_raw:
+            link = str(item).strip()
+            if link.startswith("https://tenstorrent.slack.com/archives/"):
+                links.append(link)
+    links = list(dict.fromkeys(links))[:3]
+    if used and links:
+        return {
+            "used": True,
+            "reason": reason or "agent selected relevant HIGH CONFIDENCE auto-triage context",
+            "selected_count": len(links),
+            "high_confidence_count": len(links),
+            "permalinks": links,
+        }
+    return {
+        "used": False,
+        "reason": reason or "agent did not find relevant HIGH CONFIDENCE auto-triage evidence",
+        "selected_count": len(links),
+        "high_confidence_count": 0,
+        "permalinks": links,
+    }
 
 
 def extract_repo_paths(text: str) -> list[str]:
@@ -561,6 +539,7 @@ def render_owner_mentions(
     text_sources: list[str],
     members_cache: list[dict[str, Any]] | None,
     auto_triage_user_ids: list[str] | None = None,
+    job_owner_user_ids: list[str] | None = None,
 ) -> tuple[str, list[str], dict[str, Any]]:
     combined = "\n".join(text_sources + [workflow_name, job_name])
     paths = extract_repo_paths(combined)
@@ -576,7 +555,7 @@ def render_owner_mentions(
         codeowners_weight = 1
     score_by_uid: dict[str, int] = {}
     unresolved_handles: list[str] = []
-    source_counts = {"codeowners": 0, "commit_history": 0, "auto_triage": 0}
+    source_counts = {"codeowners": 0, "commit_history": 0, "auto_triage": 0, "job_owners": 0}
 
     for username in sorted(gh_usernames):
         # CODEOWNERS teams (org/team) are not direct users and cannot map
@@ -611,6 +590,13 @@ def render_owner_mentions(
         if uid:
             score_by_uid[uid] = score_by_uid.get(uid, 0) + 1
             source_counts["auto_triage"] += 1
+
+    pipeline_reorg_related = any("pipeline_reorg/" in p for p in paths)
+    job_owner_weight = 4 if pipeline_reorg_related else 2
+    for uid in job_owner_user_ids or []:
+        if uid:
+            score_by_uid[uid] = score_by_uid.get(uid, 0) + job_owner_weight
+            source_counts["job_owners"] += 1
 
     ranked_uids = sorted(score_by_uid.items(), key=lambda kv: (-kv[1], kv[0]))
     top_uids = [uid for uid, _ in ranked_uids[:MAX_OWNER_MENTIONS]]
@@ -757,6 +743,7 @@ def agent_review_batch_prepare_outputs(
     jobs: list[dict[str, Any]],
     open_issue_context: str,
     recent_slack_context: str,
+    auto_triage_slack_json_path: str,
     model: str,
 ) -> list[dict[str, Any]]:
     create_ticket_spec = load_command_spec(
@@ -776,20 +763,17 @@ def agent_review_batch_prepare_outputs(
         if not isinstance(job_urls, list) or not isinstance(log_paths, list):
             continue
         lines = [f"[JOB {idx}]", f"Workflow: {workflow_name}", f"Job: {job_name}"]
-        auto_triage_context = str(job.get("auto_triage_context", "")).strip()
         for run_idx, (url, path) in enumerate(zip(job_urls, log_paths, strict=False), start=1):
             lines.append(f"Run {run_idx} URL: {url}")
             lines.append(f"Run {run_idx} local log path: {path}")
-        if auto_triage_context and auto_triage_context != "(none)":
-            lines.append("Relevant auto-triage evidence (last 14 days):")
-            lines.append(auto_triage_context)
+        lines.append(f"Auto-triage export JSON path (full, uncurated): {auto_triage_slack_json_path}")
         sections.append("\n".join(lines))
     prompt = (
         "You are the M4 reviewer for deterministic CI failures.\n"
         "For EACH provided job, manually compare all three logs and determine if terminal failure signatures are the same.\n"
         "You MUST review existing open issues and recent Slack messages before drafting outputs.\n"
-        "Use relevant auto-triage evidence as supporting context (especially HIGH_CONFIDENCE snippets), "
-        "but do not treat it as stronger than direct log evidence.\n"
+        "You MUST independently inspect the full auto-triage JSON export file and decide whether any "
+        "HIGH CONFIDENCE triage thread is relevant for each job. Do not rely on any pre-curated triage snippets.\n"
         "CRITICAL: logs are available as local files below; inspect those files directly.\n"
         "Use shell/read tools to inspect those paths and determine terminal failure signatures.\n"
         "Criteria: deterministic only if the same job failed 3 times in a row with semantically identical terminal failure.\n\n"
@@ -806,7 +790,7 @@ def agent_review_batch_prepare_outputs(
         + "\n\nOutput marker exactly on its own line:\n"
         + MARKER
         + "\nThen output compact JSON only:\n"
-        + '{"decisions":[{"workflow_name":"","job_name":"","job_urls":[],"deterministic":false,"confidence":"low|medium|high","signature":"","error_excerpt":"","reason":"","create_issue":false,"draft_slack":false,"issue_title":"","issue_body":"","slack_text":""}]}'
+        + '{"decisions":[{"workflow_name":"","job_name":"","job_urls":[],"deterministic":false,"confidence":"low|medium|high","signature":"","error_excerpt":"","reason":"","create_issue":false,"draft_slack":false,"issue_title":"","issue_body":"","slack_text":"","auto_triage_used":false,"auto_triage_reason":"","auto_triage_permalinks":[]}]}'
     )
     cmd = ["agent", "--trust", "-p", prompt]
     if model != "auto":
@@ -1024,7 +1008,8 @@ def main() -> int:
     recent_slack_messages = fetch_recent_slack_messages(
         slack_token=slack_token, channel_id=SLACK_CHANNEL_TEST, limit=20
     )
-    auto_triage_records = load_auto_triage_records(Path(args.auto_triage_slack_json))
+    auto_triage_json_path = str(Path(args.auto_triage_slack_json))
+    job_owner_records = load_job_owner_records()
     slack_members_cache = slack_list_members(slack_token)
     open_issue_context = build_open_issue_context(open_issues)
     recent_slack_context = build_recent_slack_context(recent_slack_messages)
@@ -1098,20 +1083,12 @@ def main() -> int:
             log_path = logs_root / job_slug / f"run{idx}.log"
             write_job_log_file(job_url=url, read_token=read_token, out_path=log_path)
             log_paths.append(str(log_path))
-        auto_triage_context, auto_triage_user_ids, auto_triage_selection = build_auto_triage_context_for_job(
-            auto_triage_records,
-            workflow_name=workflow_name,
-            job_name=job_name,
-        )
         to_review.append(
             {
                 "workflow_name": workflow_name,
                 "job_name": job_name,
                 "job_urls": job_urls,
                 "log_paths": log_paths,
-                "auto_triage_context": auto_triage_context,
-                "auto_triage_user_ids": auto_triage_user_ids,
-                "auto_triage_selection": auto_triage_selection,
             }
         )
 
@@ -1122,6 +1099,7 @@ def main() -> int:
                 jobs=to_review,
                 open_issue_context=open_issue_context,
                 recent_slack_context=recent_slack_context,
+                auto_triage_slack_json_path=auto_triage_json_path,
                 model=args.model,
             )
             fresh_agent_calls += 1
@@ -1189,10 +1167,14 @@ def main() -> int:
         workflow_name = item["workflow_name"]
         job_name = item["job_name"]
         job_urls = item["job_urls"]
-        auto_triage_context, auto_triage_user_ids, auto_triage_selection = build_auto_triage_context_for_job(
-            auto_triage_records,
-            workflow_name=workflow_name,
-            job_name=job_name,
+        auto_triage_selection = parse_auto_triage_decision(decision)
+        auto_triage_user_ids: list[str] = []
+        job_owner_user_ids = sorted(
+            job_owner_ids_for_failure(
+                workflow_name=workflow_name,
+                job_name=job_name,
+                job_owner_records=job_owner_records,
+            )
         )
         key = decision_key(workflow_name, job_name, job_urls)
         decision = decisions_by_key.get(key)
@@ -1320,6 +1302,7 @@ def main() -> int:
             text_sources=[issue_body, excerpt, reason, signature],
             members_cache=slack_members_cache,
             auto_triage_user_ids=auto_triage_user_ids,
+            job_owner_user_ids=job_owner_user_ids,
         )
         slack_text = normalize_slack_text(
             slack_text=slack_text,
@@ -1357,7 +1340,6 @@ def main() -> int:
                 "owner_mentions": owner_mentions,
                 "unresolved_owner_handles": unresolved_handles,
                 "owner_selection": owner_selection,
-                "auto_triage_context": auto_triage_context,
                 "auto_triage_selection": auto_triage_selection,
             }
         )
