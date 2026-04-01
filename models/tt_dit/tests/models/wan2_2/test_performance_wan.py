@@ -19,7 +19,7 @@ from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 
 from ....utils.test import line_params, ring_params
 
-DEVICE_PARAMS = {"trace_region_size": 100000000}
+DEVICE_PARAMS = {"trace_region_size": 120000000}
 
 
 def t2v_metrics(mesh_device, height):
