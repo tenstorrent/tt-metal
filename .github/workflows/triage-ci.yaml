@@ -495,6 +495,18 @@ jobs:
             exit 1
           fi
 
+      - name: Install Cursor CLI for M5 agent review
+        run: |
+          set -euo pipefail
+          install_script="$(mktemp)"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --tlsv1.2 \
+            https://cursor.com/install \
+            -o "$install_script"
+          bash "$install_script"
+          rm -f "$install_script"
+          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
+
       - name: M5 lifecycle follow-up + assignment + post-disable notices
         env:
           ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
