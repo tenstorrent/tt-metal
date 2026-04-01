@@ -440,7 +440,7 @@ void print_tile(const uint32_t cb_idx, const uint32_t tile_idx, const bool until
     DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
     DEVICE_PRINT("cb_idx: {} tile_idx: {}\n", cb_idx, tile_idx);
     DPRINT << "======" << ENDL();
-    DEVICE_PRINT("=====\n");
+    DEVICE_PRINT("======\n");
     for (uint16_t r = 0; r < 32; ++r) {
         DPRINT << (uint)r << " : "
                << TileSlice(

@@ -78,8 +78,8 @@ void core_agnostic_main() {
         DPRINT << "Not stopping at churn target as expected! Got: " << HEX() << *get_cb_tiles_received_ptr(CB_ID)
                << ". Expected: " << (std::uint32_t)CHURN_TARGET << ". Exiting" << ENDL();
         DEVICE_PRINT(
-            "Not stopping at churn target as expected! Got: {}, Expected: {}. Exiting\n",
-            HEX(*get_cb_tiles_received_ptr(CB_ID)),
+            "Not stopping at churn target as expected! Got: 0x{:x}, Expected: 0x{:x}. Exiting\n",
+            *get_cb_tiles_received_ptr(CB_ID),
             (std::uint32_t)CHURN_TARGET);
         return;
     }
@@ -104,7 +104,7 @@ void core_agnostic_main() {
         DPRINT << "Got: Acked: " << HEX() << *get_cb_tiles_acked_ptr(CB_ID)
                << ". Expected: " << (std::uint32_t)expected_acked << ENDL();
         DEVICE_PRINT(
-            "Got: Acked: {}, Expected: {}\n", HEX(*get_cb_tiles_acked_ptr(CB_ID)), (std::uint32_t)expected_acked);
+            "Got: Acked: 0x{:x}, Expected: 0x{:x}\n", *get_cb_tiles_acked_ptr(CB_ID), (std::uint32_t)expected_acked);
         return;
     }
 

@@ -361,15 +361,15 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
         DPRINT << field_value << "; ";                                                      \
     }
 
-#define dprint_tensix_struct_field(word, mask, shamt, name, printDec)     \
-    {                                                                     \
-        DPRINT << name << ": ";                                           \
-        if (printDec) {                                                   \
-            DPRINT << DEC();                                              \
-            DEVICE_PRINT(name " : {}", ((word) & (mask)) >> (shamt));     \
-        } else {                                                          \
-            DPRINT << "0x" << HEX();                                      \
-            DEVICE_PRINT(name " : 0x{:X}", ((word) & (mask)) >> (shamt)); \
-        }                                                                 \
-        DPRINT << (uint32_t)((((word) & (mask)) >> (shamt))) << ENDL();   \
+#define dprint_tensix_struct_field(word, mask, shamt, name, printDec)      \
+    {                                                                      \
+        DPRINT << name << ": ";                                            \
+        if (printDec) {                                                    \
+            DPRINT << DEC();                                               \
+            DEVICE_PRINT(name ": {}\n", ((word) & (mask)) >> (shamt));     \
+        } else {                                                           \
+            DPRINT << "0x" << HEX();                                       \
+            DEVICE_PRINT(name ": 0x{:X}\n", ((word) & (mask)) >> (shamt)); \
+        }                                                                  \
+        DPRINT << (uint32_t)((((word) & (mask)) >> (shamt))) << ENDL();    \
     }
