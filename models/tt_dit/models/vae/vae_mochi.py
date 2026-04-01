@@ -570,13 +570,13 @@ class CausalUpsampleBlock(Module):
     def reshard_output(self, x_NTHWC):
         N, T, H, W, C = x_NTHWC.shape
         num_devices = self.parallel_config.time_parallel.factor
+        if not (num_devices > 1 and self.temporal_expansion > 1):
+            return x_NTHWC
         expected_T = self.reshard_time_map[
             H * W * self.parallel_config.h_parallel.factor * self.parallel_config.w_parallel.factor
         ]
         input_is_padded = T * num_devices != expected_T
-        if (self.temporal_offset > 0 or input_is_padded) and (
-            self.parallel_config.time_parallel.factor > 1 and self.temporal_expansion > 1
-        ):
+        if self.temporal_offset > 0 or input_is_padded:
             padded_T = ((expected_T + num_devices - 1) // num_devices) * num_devices
             x_NTHWC = ttnn.squeeze(x_NTHWC, 0)
             x_NTHWC = vae_slice_reshard(
