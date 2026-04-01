@@ -20,6 +20,8 @@
 
 #include <fmt/format.h>
 
+extern "C" char** environ;  // POSIX global — all env vars in the process
+
 namespace tt::tt_metal::inspector {
 
 std::string stringify_tensor_specs(const std::vector<TensorSpec>& tensor_specs) {
@@ -437,155 +439,152 @@ void Data::populate_core_entries_by_category(
     }
 }
 
-// Single shared instance of the TTNN config callback, defined here so all DSOs
-// (TTNN and Inspector/Metalium) reference the same storage.
-ConfigCallback& ttnn_config_callback() {
-    static ConfigCallback callback;
-    return callback;
+static std::vector<ConfigCallback>& get_config_callbacks() {
+    static std::vector<ConfigCallback> callbacks;
+    return callbacks;
 }
 
-// Helper: add an rtoptions entry, catching any exceptions from getters that throw when unset
-#define RT_ENTRY(name_str, expr)                                                        \
-    try {                                                                               \
-        entries.push_back({name_str, fmt::format("{}", expr), ConfigScope::RtOptions}); \
-    } catch (...) {                                                                     \
-        entries.push_back({name_str, "(unset)", ConfigScope::RtOptions});               \
-    }
-#define RT_OPT_ENTRY(name_str, expr)                                                                       \
-    try {                                                                                                  \
-        auto v = expr;                                                                                     \
-        entries.push_back(                                                                                 \
-            {name_str, v.has_value() ? fmt::format("{}", v.value()) : "(unset)", ConfigScope::RtOptions}); \
-    } catch (...) {                                                                                        \
-        entries.push_back({name_str, "(unset)", ConfigScope::RtOptions});                                  \
+void add_config_callback(ConfigCallback callback) { get_config_callbacks().push_back(std::move(callback)); }
+
+template <typename T>
+void add_rt_entry(std::vector<ConfigurationEntry>& entries, std::string name, const T& value) {
+    entries.push_back({std::move(name), fmt::format("{}", value), ConfigScope::RtOptions});
+}
+
+template <typename T>
+void add_rt_entry(std::vector<ConfigurationEntry>& entries, std::string name, const std::optional<T>& value) {
+    entries.push_back(
+        {std::move(name), value.has_value() ? fmt::format("{}", value.value()) : "(unset)", ConfigScope::RtOptions});
+}
+
+#define RT(x) add_rt_entry(entries, #x, rt.get_##x())
+#define RT_CUSTOM(name_str, expr) add_rt_entry(entries, name_str, expr)
+#define RT_GUARDED(x, check)                  \
+    if (check) {                              \
+        RT(x);                                \
+    } else {                                  \
+        add_rt_entry(entries, #x, "(unset)"); \
     }
 
 void collect_environment_entries(std::vector<ConfigurationEntry>& entries) {
-    for (auto name : tt::llrt::get_env_var_names()) {
-        std::string name_str(name);
-        const char* val = std::getenv(name_str.c_str());
-        if (val) {
-            entries.push_back({std::move(name_str), std::string(val), ConfigScope::Environment});
+    for (char** env = environ; *env != nullptr; ++env) {
+        std::string_view entry(*env);
+        auto eq = entry.find('=');
+        if (eq == std::string_view::npos) {
+            continue;
         }
+        auto name = entry.substr(0, eq);
+        entries.push_back({std::string(name), std::string(entry.substr(eq + 1)), ConfigScope::Environment});
     }
 }
 
 void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const tt::llrt::RunTimeOptions& rt) {
     // clang-format off
     // Path configuration
-    RT_ENTRY("root_dir", rt.get_root_dir());
+    RT(root_dir);
     // These getters TT_THROW (which logs a critical message) when unset, so guard them
-    if (rt.is_cache_dir_specified()) { RT_ENTRY("cache_dir", rt.get_cache_dir()); }
-    else { entries.push_back({"cache_dir", "(unset)", ConfigScope::RtOptions}); }
-    RT_ENTRY("logs_dir", rt.get_logs_dir());
-    if (rt.is_kernel_dir_specified()) { RT_ENTRY("kernel_dir", rt.get_kernel_dir()); }
-    else { entries.push_back({"kernel_dir", "(unset)", ConfigScope::RtOptions}); }
-    RT_ENTRY("system_kernel_dir", rt.get_system_kernel_dir());
-    if (rt.is_core_grid_override_todeprecate()) { RT_ENTRY("core_grid_override_todeprecate", rt.get_core_grid_override_todeprecate()); }
-    else { entries.push_back({"core_grid_override_todeprecate", "(unset)", ConfigScope::RtOptions}); }
+    RT_GUARDED(cache_dir, rt.is_cache_dir_specified());
+    RT(logs_dir);
+    RT_GUARDED(kernel_dir, rt.is_kernel_dir_specified());
+    RT(system_kernel_dir);
+    RT_GUARDED(core_grid_override_todeprecate, rt.is_core_grid_override_todeprecate());
 
     // General
-    RT_ENTRY("build_map_enabled", rt.get_build_map_enabled());
-    RT_ENTRY("fast_dispatch", rt.get_fast_dispatch());
-    RT_ENTRY("num_hw_cqs", rt.get_num_hw_cqs());
-    RT_ENTRY("dram_backed_cq", rt.get_dram_backed_cq());
-    RT_ENTRY("numa_based_affinity", rt.get_numa_based_affinity());
-    RT_ENTRY("target_device", static_cast<int>(rt.get_target_device()));
-    RT_ENTRY("simulator_enabled", rt.get_simulator_enabled());
-    RT_ENTRY("simulator_path", rt.get_simulator_path().string());
-    RT_ENTRY("mock_enabled", rt.get_mock_enabled());
-    RT_ENTRY("mock_cluster_desc_path", rt.get_mock_cluster_desc_path());
-    RT_ENTRY("visible_devices", rt.get_visible_devices());
-    RT_ENTRY("arch_name", rt.get_arch_name());
+    RT(build_map_enabled);
+    RT(fast_dispatch);
+    RT(num_hw_cqs);
+    RT(dram_backed_cq);
+    RT(numa_based_affinity);
+    RT_CUSTOM("target_device", static_cast<int>(rt.get_target_device()));
+    RT(simulator_enabled);
+    RT_CUSTOM("simulator_path", rt.get_simulator_path().string());
+    RT(mock_enabled);
+    RT(mock_cluster_desc_path);
+    RT(visible_devices);
+    RT(arch_name);
 
     // Kernel execution
-    RT_ENTRY("kernels_nullified", rt.get_kernels_nullified());
-    RT_ENTRY("kernels_early_return", rt.get_kernels_early_return());
-    RT_ENTRY("skip_loading_fw", rt.get_skip_loading_fw());
-    RT_ENTRY("disable_precompiled_fw", rt.get_disable_precompiled_fw());
-    RT_ENTRY("force_jit_compile", rt.get_force_jit_compile());
-    RT_ENTRY("force_context_reinit", rt.get_force_context_reinit());
-    RT_ENTRY("log_kernels_compilation_commands", rt.get_log_kernels_compilation_commands());
-    RT_ENTRY("dump_build_commands", rt.get_dump_build_commands());
-    RT_ENTRY("compile_hash_string", rt.get_compile_hash_string());
-    RT_ENTRY("erisc_iram_enabled", rt.get_erisc_iram_enabled());
+    RT(kernels_nullified);
+    RT(kernels_early_return);
+    RT(skip_loading_fw);
+    RT(disable_precompiled_fw);
+    RT(force_jit_compile);
+    RT(force_context_reinit);
+    RT(log_kernels_compilation_commands);
+    RT(dump_build_commands);
+    RT(compile_hash_string);
+    RT(erisc_iram_enabled);
 
     // Memory
-    RT_ENTRY("clear_l1", rt.get_clear_l1());
-    RT_ENTRY("clear_dram", rt.get_clear_dram());
+    RT(clear_l1);
+    RT(clear_dram);
 
     // Hardware
-    RT_ENTRY("hw_cache_invalidation_enabled", rt.get_hw_cache_invalidation_enabled());
-    RT_ENTRY("relaxed_memory_ordering_disabled", rt.get_relaxed_memory_ordering_disabled());
-    RT_ENTRY("gathering_enabled", rt.get_gathering_enabled());
-    RT_ENTRY("enable_2_erisc_mode", rt.get_enable_2_erisc_mode());
-    RT_ENTRY("disable_fabric_2_erisc_mode", rt.get_disable_fabric_2_erisc_mode());
-    RT_ENTRY("disable_dma_ops", rt.get_disable_dma_ops());
-    RT_ENTRY("disable_sfploadmacro", rt.get_disable_sfploadmacro());
-    RT_ENTRY("disable_xip_dump", rt.get_disable_xip_dump());
-    RT_ENTRY("skip_eth_cores_with_retrain", rt.get_skip_eth_cores_with_retrain());
-    RT_ENTRY("use_mesh_graph_descriptor_2_0", rt.get_use_mesh_graph_descriptor_2_0());
-    RT_ENTRY("custom_fabric_mesh_graph_desc_path", rt.get_custom_fabric_mesh_graph_desc_path());
-    RT_ENTRY("arc_debug_buffer_size", rt.get_arc_debug_buffer_size());
-    RT_ENTRY("validate_kernel_binaries", rt.get_validate_kernel_binaries());
-    RT_ENTRY("record_noc_transfers", rt.get_record_noc_transfers());
-    RT_ENTRY("use_device_print", rt.get_use_device_print());
+    RT(hw_cache_invalidation_enabled);
+    RT(relaxed_memory_ordering_disabled);
+    RT(gathering_enabled);
+    RT(enable_2_erisc_mode);
+    RT(disable_fabric_2_erisc_mode);
+    RT(disable_dma_ops);
+    RT(disable_sfploadmacro);
+    RT(disable_xip_dump);
+    RT(skip_eth_cores_with_retrain);
+    RT(use_mesh_graph_descriptor_2_0);
+    RT(custom_fabric_mesh_graph_desc_path);
+    RT(arc_debug_buffer_size);
+    RT(validate_kernel_binaries);
+    RT(record_noc_transfers);
+    RT(use_device_print);
 
     // Timeouts
-    RT_ENTRY("timeout_duration_for_operations", fmt::format("{}s", rt.get_timeout_duration_for_operations().count()));
-    RT_ENTRY("dispatch_timeout_command_to_execute", rt.get_dispatch_timeout_command_to_execute());
-    RT_ENTRY("dispatch_progress_update_ms", rt.get_dispatch_progress_update_ms());
+    RT_CUSTOM("timeout_duration_for_operations", fmt::format("{}s", rt.get_timeout_duration_for_operations().count()));
+    RT(dispatch_timeout_command_to_execute);
+    RT(dispatch_progress_update_ms);
 
     // Fabric
-    RT_ENTRY("enable_fabric_telemetry", rt.get_enable_fabric_telemetry());
-    RT_ENTRY("enable_fabric_bw_telemetry", rt.get_enable_fabric_bw_telemetry());
-    RT_ENTRY("enable_fabric_code_profiling_rx_ch_fwd", rt.get_enable_fabric_code_profiling_rx_ch_fwd());
-    RT_ENTRY("enable_channel_trimming_capture", rt.get_enable_channel_trimming_capture());
-    RT_ENTRY("fabric_trimming_profile_path", rt.get_fabric_trimming_profile_path());
-    RT_ENTRY("fabric_trimming_override_path", rt.get_fabric_trimming_override_path());
-    RT_ENTRY("enable_fabric_vc2", rt.get_enable_fabric_vc2());
-    RT_OPT_ENTRY("fabric_router_sync_timeout_ms", rt.get_fabric_router_sync_timeout_ms());
-    RT_OPT_ENTRY("fabric_kernel_opt_level", [&]() -> std::optional<int> {
-        auto v = rt.get_fabric_kernel_opt_level();
-        return v.has_value() ? std::optional<int>(static_cast<int>(v.value())) : std::nullopt;
-    }());
-    RT_OPT_ENTRY("reliability_mode", [&]() -> std::optional<int> {
-        auto v = rt.get_reliability_mode();
-        return v.has_value() ? std::optional<int>(static_cast<int>(v.value())) : std::nullopt;
-    }());
+    RT(enable_fabric_telemetry);
+    RT(enable_fabric_bw_telemetry);
+    RT(enable_fabric_code_profiling_rx_ch_fwd);
+    RT(enable_channel_trimming_capture);
+    RT(fabric_trimming_profile_path);
+    RT(fabric_trimming_override_path);
+    RT(enable_fabric_vc2);
+    RT(fabric_router_sync_timeout_ms);
+    RT(fabric_kernel_opt_level);
+    RT(reliability_mode);
 
     // Profiler
-    RT_ENTRY("profiler_enabled", rt.get_profiler_enabled());
-    RT_ENTRY("profiler_do_dispatch_cores", rt.get_profiler_do_dispatch_cores());
-    RT_ENTRY("profiler_sync_enabled", rt.get_profiler_sync_enabled());
-    RT_ENTRY("profiler_trace_only", rt.get_profiler_trace_only());
-    RT_ENTRY("profiler_trace_tracking", rt.get_profiler_trace_tracking());
-    RT_ENTRY("profiler_mid_run_dump", rt.get_profiler_mid_run_dump());
-    RT_ENTRY("profiler_cpp_post_process", rt.get_profiler_cpp_post_process());
-    RT_ENTRY("profiler_sum", rt.get_profiler_sum());
-    RT_OPT_ENTRY("profiler_program_support_count", rt.get_profiler_program_support_count());
-    RT_ENTRY("profiler_buffer_usage_enabled", rt.get_profiler_buffer_usage_enabled());
-    RT_ENTRY("profiler_noc_events_enabled", rt.get_profiler_noc_events_enabled());
-    RT_ENTRY("profiler_perf_counter_mode", rt.get_profiler_perf_counter_mode());
-    RT_ENTRY("profiler_noc_events_report_path", rt.get_profiler_noc_events_report_path());
-    RT_ENTRY("profiler_disable_dump_to_files", rt.get_profiler_disable_dump_to_files());
-    RT_ENTRY("profiler_disable_push_to_tracy", rt.get_profiler_disable_push_to_tracy());
-    RT_ENTRY("experimental_noc_debug_dump_enabled", rt.get_experimental_noc_debug_dump_enabled());
-    RT_ENTRY("tracy_mid_run_push", rt.get_tracy_mid_run_push());
+    RT(profiler_enabled);
+    RT(profiler_do_dispatch_cores);
+    RT(profiler_sync_enabled);
+    RT(profiler_trace_only);
+    RT(profiler_trace_tracking);
+    RT(profiler_mid_run_dump);
+    RT(profiler_cpp_post_process);
+    RT(profiler_sum);
+    RT(profiler_program_support_count);
+    RT(profiler_buffer_usage_enabled);
+    RT(profiler_noc_events_enabled);
+    RT(profiler_perf_counter_mode);
+    RT(profiler_noc_events_report_path);
+    RT(profiler_disable_dump_to_files);
+    RT(profiler_disable_push_to_tracy);
+    RT(experimental_noc_debug_dump_enabled);
+    RT(tracy_mid_run_push);
 
     // Watcher
-    RT_ENTRY("watcher_enabled", rt.get_watcher_enabled());
-    RT_ENTRY("watcher_hash", rt.get_watcher_hash());
-    RT_ENTRY("watcher_interval", rt.get_watcher_interval());
-    RT_ENTRY("watcher_dump_all", rt.get_watcher_dump_all());
-    RT_ENTRY("watcher_append", rt.get_watcher_append());
-    RT_ENTRY("watcher_auto_unpause", rt.get_watcher_auto_unpause());
-    RT_ENTRY("watcher_noinline", rt.get_watcher_noinline());
-    RT_ENTRY("watcher_phys_coords", rt.get_watcher_phys_coords());
-    RT_ENTRY("watcher_text_start", rt.get_watcher_text_start());
-    RT_ENTRY("watcher_skip_logging", rt.get_watcher_skip_logging());
-    RT_ENTRY("watcher_noc_sanitize_linked_transaction", rt.get_watcher_noc_sanitize_linked_transaction());
-    RT_ENTRY("watcher_debug_delay", rt.get_watcher_debug_delay());
+    RT(watcher_enabled);
+    RT(watcher_hash);
+    RT(watcher_interval);
+    RT(watcher_dump_all);
+    RT(watcher_append);
+    RT(watcher_auto_unpause);
+    RT(watcher_noinline);
+    RT(watcher_phys_coords);
+    RT(watcher_text_start);
+    RT(watcher_skip_logging);
+    RT(watcher_noc_sanitize_linked_transaction);
+    RT(watcher_debug_delay);
     {
         const auto& disabled = rt.get_watcher_disabled_features();
         std::string joined;
@@ -595,57 +594,49 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
             }
             joined += s;
         }
-        entries.push_back({"watcher_disabled_features", joined.empty() ? "(empty)" : joined, ConfigScope::RtOptions});
+        RT_CUSTOM("watcher_disabled_features", joined.empty() ? "(empty)" : joined);
     }
 
     // Inspector
-    RT_ENTRY("inspector_enabled", rt.get_inspector_enabled());
-    RT_ENTRY("inspector_initialization_is_important", rt.get_inspector_initialization_is_important());
-    RT_ENTRY("inspector_warn_on_write_exceptions", rt.get_inspector_warn_on_write_exceptions());
-    RT_ENTRY("inspector_rpc_server_enabled", rt.get_inspector_rpc_server_enabled());
-    RT_ENTRY("inspector_rpc_server_host", rt.get_inspector_rpc_server_host());
-    RT_ENTRY("inspector_rpc_server_port", rt.get_inspector_rpc_server_port());
-    RT_ENTRY("inspector_rpc_server_address", rt.get_inspector_rpc_server_address());
-    RT_ENTRY("inspector_capture_tensor_specs", rt.get_inspector_capture_tensor_specs());
-    RT_ENTRY("inspector_log_runtime_entries", rt.get_inspector_log_runtime_entries());
-    RT_ENTRY("inspector_log_path", rt.get_inspector_log_path().string());
-    RT_ENTRY("serialize_inspector_on_dispatch_timeout", rt.get_serialize_inspector_on_dispatch_timeout());
-    RT_ENTRY("riscv_debug_info_enabled", rt.get_riscv_debug_info_enabled());
-    RT_ENTRY("jit_analytics_enabled", rt.get_jit_analytics_enabled());
-    RT_ENTRY("lightweight_kernel_asserts", rt.get_lightweight_kernel_asserts());
-    RT_ENTRY("llk_asserts", rt.get_llk_asserts());
+    RT(inspector_enabled);
+    RT(inspector_initialization_is_important);
+    RT(inspector_warn_on_write_exceptions);
+    RT(inspector_rpc_server_enabled);
+    RT(inspector_rpc_server_host);
+    RT(inspector_rpc_server_port);
+    RT(inspector_rpc_server_address);
+    RT(inspector_capture_tensor_specs);
+    RT(inspector_log_runtime_entries);
+    RT_CUSTOM("inspector_log_path", rt.get_inspector_log_path().string());
+    RT(serialize_inspector_on_dispatch_timeout);
+    RT(riscv_debug_info_enabled);
+    RT(jit_analytics_enabled);
+    RT(lightweight_kernel_asserts);
+    RT(llk_asserts);
 
     // Dispatch data / testing
-    RT_ENTRY("dispatch_data_collection_enabled", rt.get_dispatch_data_collection_enabled());
-    RT_ENTRY("test_mode_enabled", rt.get_test_mode_enabled());
+    RT(dispatch_data_collection_enabled);
+    RT(test_mode_enabled);
 
     // DispatchCoreConfig
     {
         static const char* dispatch_core_types[] = {"WORKER", "ETH"};
         static const char* dispatch_core_axes[] = {"ROW", "COL"};
-        try {
-            auto config = rt.get_dispatch_core_config();
-            auto type_idx = static_cast<int>(config.get_dispatch_core_type());
-            auto axis_idx = static_cast<int>(config.get_dispatch_core_axis());
-            entries.push_back({"dispatch_core_config_type", (type_idx < 2) ? dispatch_core_types[type_idx] : fmt::format("{}", type_idx), ConfigScope::RtOptions});
-            entries.push_back({"dispatch_core_config_axis", (axis_idx < 2) ? dispatch_core_axes[axis_idx] : fmt::format("{}", axis_idx), ConfigScope::RtOptions});
-        } catch (...) {
-            entries.push_back({"dispatch_core_config", "(unset)", ConfigScope::RtOptions});
-        }
+        auto config = rt.get_dispatch_core_config();
+        auto type_idx = static_cast<int>(config.get_dispatch_core_type());
+        auto axis_idx = static_cast<int>(config.get_dispatch_core_axis());
+        RT_CUSTOM("dispatch_core_config_type", (type_idx < 2) ? dispatch_core_types[type_idx] : fmt::format("{}", type_idx));
+        RT_CUSTOM("dispatch_core_config_axis", (axis_idx < 2) ? dispatch_core_axes[axis_idx] : fmt::format("{}", axis_idx));
     }
 
     // FabricTelemetrySettings
     {
-        try {
-            const auto& fts = rt.get_fabric_telemetry_settings();
-            entries.push_back({"fabric_telemetry_enabled", fmt::format("{}", fts.enabled), ConfigScope::RtOptions});
-            entries.push_back({"fabric_telemetry_chips_monitor_all", fmt::format("{}", fts.chips.monitor_all), ConfigScope::RtOptions});
-            entries.push_back({"fabric_telemetry_channels_monitor_all", fmt::format("{}", fts.channels.monitor_all), ConfigScope::RtOptions});
-            entries.push_back({"fabric_telemetry_eriscs_monitor_all", fmt::format("{}", fts.eriscs.monitor_all), ConfigScope::RtOptions});
-            entries.push_back({"fabric_telemetry_stats_mask", fmt::format("{}", fts.stats_mask), ConfigScope::RtOptions});
-        } catch (...) {
-            entries.push_back({"fabric_telemetry_settings", "(unset)", ConfigScope::RtOptions});
-        }
+        const auto& fts = rt.get_fabric_telemetry_settings();
+        RT_CUSTOM("fabric_telemetry_enabled", fts.enabled);
+        RT_CUSTOM("fabric_telemetry_chips_monitor_all", fts.chips.monitor_all);
+        RT_CUSTOM("fabric_telemetry_channels_monitor_all", fts.channels.monitor_all);
+        RT_CUSTOM("fabric_telemetry_eriscs_monitor_all", fts.eriscs.monitor_all);
+        RT_CUSTOM("fabric_telemetry_stats_mask", fts.stats_mask);
     }
 
     // Per-feature debug settings
@@ -653,18 +644,19 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
         for (int i = 0; i < tt::llrt::RunTimeDebugFeatureCount; ++i) {
             auto feature = static_cast<tt::llrt::RunTimeDebugFeatures>(i);
             const char* fname = tt::llrt::RunTimeDebugFeatureNames[i];
-            RT_ENTRY(fmt::format("feature_{}_enabled", fname), rt.get_feature_enabled(feature));
-            RT_ENTRY(fmt::format("feature_{}_file_name", fname), rt.get_feature_file_name(feature));
-            RT_ENTRY(fmt::format("feature_{}_one_file_per_risc", fname), rt.get_feature_one_file_per_risc(feature));
-            RT_ENTRY(fmt::format("feature_{}_prepend_device_core_risc", fname), rt.get_feature_prepend_device_core_risc(feature));
-            RT_ENTRY(fmt::format("feature_{}_all_chips", fname), rt.get_feature_all_chips(feature));
+            RT_CUSTOM(fmt::format("feature_{}_enabled", fname), rt.get_feature_enabled(feature));
+            RT_CUSTOM(fmt::format("feature_{}_file_name", fname), rt.get_feature_file_name(feature));
+            RT_CUSTOM(fmt::format("feature_{}_one_file_per_risc", fname), rt.get_feature_one_file_per_risc(feature));
+            RT_CUSTOM(fmt::format("feature_{}_prepend_device_core_risc", fname), rt.get_feature_prepend_device_core_risc(feature));
+            RT_CUSTOM(fmt::format("feature_{}_all_chips", fname), rt.get_feature_all_chips(feature));
         }
     }
     // clang-format on
 }
 
-#undef RT_ENTRY
-#undef RT_OPT_ENTRY
+#undef RT
+#undef RT_CUSTOM
+#undef RT_GUARDED
 
 void Data::rpc_get_configuration(rpc::Inspector::GetConfigurationResults::Builder& results) {
     std::vector<ConfigurationEntry> all_entries;
@@ -676,14 +668,11 @@ void Data::rpc_get_configuration(rpc::Inspector::GetConfigurationResults::Builde
     const auto& rt = MetalContext::instance().rtoptions();
     collect_rtoptions_entries(all_entries, rt);
 
-    // 3. TTNN config (registered via static callback at library load time)
-    auto& ttnn_cb = ttnn_config_callback();
-    if (ttnn_cb) {
-        auto ttnn_entries = ttnn_cb();
+    // 3. External config providers (e.g. TTNN, registered at library load time)
+    for (const auto& cb : get_config_callbacks()) {
+        auto cb_entries = cb();
         all_entries.insert(
-            all_entries.end(),
-            std::make_move_iterator(ttnn_entries.begin()),
-            std::make_move_iterator(ttnn_entries.end()));
+            all_entries.end(), std::make_move_iterator(cb_entries.begin()), std::make_move_iterator(cb_entries.end()));
     }
 
     // Serialize into Cap'n Proto
@@ -693,14 +682,10 @@ void Data::rpc_get_configuration(rpc::Inspector::GetConfigurationResults::Builde
         entry.setName(all_entries[i].name);
         entry.setValue(all_entries[i].value);
 
-        if (all_entries[i].scope == ConfigScope::Environment) {
-            entry.setScope(rpc::ConfigurationScope::ENVIRONMENT);
-        } else if (all_entries[i].scope == ConfigScope::RtOptions) {
-            entry.setScope(rpc::ConfigurationScope::RT_OPTIONS);
-        } else if (all_entries[i].scope == ConfigScope::TtnnConfig) {
-            entry.setScope(rpc::ConfigurationScope::TTNN_CONFIG);
-        } else {
-            entry.setScope(rpc::ConfigurationScope::UNKNOWN);
+        switch (all_entries[i].scope) {
+            case ConfigScope::Environment: entry.setScope(rpc::ConfigurationScope::ENVIRONMENT); break;
+            case ConfigScope::RtOptions: entry.setScope(rpc::ConfigurationScope::RT_OPTIONS); break;
+            case ConfigScope::TtnnConfig: entry.setScope(rpc::ConfigurationScope::TTNN_CONFIG); break;
         }
     }
 }

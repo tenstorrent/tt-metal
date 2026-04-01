@@ -35,14 +35,14 @@ std::vector<std::pair<std::string, std::string>> Config::get_config_entries() co
 // Auto-register TTNN config with Inspector at library load time.
 // The callback is invoked lazily when getConfiguration RPC is queried.
 static const int register_inspector_config = [] {
-    tt::tt_metal::inspector::ttnn_config_callback() = []() {
+    tt::tt_metal::inspector::add_config_callback([]() {
         std::vector<tt::tt_metal::inspector::ConfigurationEntry> entries;
         for (const auto& [name, value] : CONFIG.get_config_entries()) {
             entries.push_back(
                 {name, value == "nullopt" ? "(unset)" : value, tt::tt_metal::inspector::ConfigScope::TtnnConfig});
         }
         return entries;
-    };
+    });
     return 0;
 }();
 
