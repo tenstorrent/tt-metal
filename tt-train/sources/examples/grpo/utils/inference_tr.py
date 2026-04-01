@@ -13,6 +13,10 @@ from models.tt_transformers.tt.common import (
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision
 from dataclasses import dataclass
+from models.tt_transformers.tt.model_config import ModelArgs, DecodersPrecision
+from models.tt_transformers.tt.model import Transformer
+import uuid
+from pathlib import Path
 
 
 @dataclass
@@ -35,8 +39,10 @@ class TrInferenceCtx:
     instruct: bool = True
 
 
+# sets up a dummy model
 def setup_tt_transformers_inference(
     mesh_device,
+    tokenizer,  # pass ttml_ctx.tokenizer — dummy_weights=True gives None
     max_seq_len=1024,
     max_batch_size=32,
     max_tokens_to_complete=256,
@@ -47,19 +53,26 @@ def setup_tt_transformers_inference(
 ) -> TrInferenceCtx:
     paged_attention_config = PagedAttentionConfig(block_size=32, max_num_blocks=1024)
 
-    optimizations = lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name)
-
-    model_args, model, tt_kv_cache, _ = create_tt_model(
+    model_args = ModelArgs(
         mesh_device,
         instruct=instruct,
         max_batch_size=max_batch_size,
-        optimizations=optimizations,
         max_seq_len=max_seq_len,
-        paged_attention_config=paged_attention_config,
+        optimizations=lambda args: DecodersPrecision.performance(args.n_layers, args.model_name),
+    )
+    state_dict = model_args.load_state_dict()
+    empty_state_dict = {k: torch.zeros_like(v) for k, v in state_dict.items()}
+
+    model = Transformer(
+        args=model_args,
+        mesh_device=mesh_device,
         dtype=ttnn.bfloat8_b,
+        state_dict=empty_state_dict,
+        weight_cache_path=Path(f"/tmp/tt_zero_cache_{uuid.uuid4().hex}"),  # hack to make the cache not found always
+        paged_attention_config=paged_attention_config,
     )
 
-    tokenizer = model_args.tokenizer
+    tt_kv_cache = [l.attention.layer_past for l in model.layers]
 
     permutation = torch.randperm(paged_attention_config.max_num_blocks)
     reverse_permutation = torch.argsort(permutation)
@@ -87,6 +100,18 @@ def setup_tt_transformers_inference(
         max_batch_size=max_batch_size,
         instruct=instruct,
     )
+
+
+def get_stop_tokens(tokenizer):
+    stop_ids = set()
+    if tokenizer.eos_token_id is not None:
+        stop_ids.add(int(tokenizer.eos_token_id))
+    for tok_str in ["<|eot_id|>", "<|end_of_text|>", "<|eom_id|>"]:
+        tid = tokenizer.convert_tokens_to_ids(tok_str)
+        if tid is not None and tid >= 0 and tid != tokenizer.unk_token_id:
+            stop_ids.add(int(tid))
+
+    return stop_ids
 
 
 def completion_batched_multiple_prompts_tr(
@@ -149,6 +174,7 @@ def completion_batched_multiple_prompts_tr(
     current_pos = torch.tensor(decoding_pos)
     user_done = [False] * global_batch_size
 
+    stop_ids = get_stop_tokens(ctx.tokenizer)
     for iteration in range(ctx.max_tokens_to_complete):
         logits, _ = ctx.generator.decode_forward(
             out_tok,
@@ -172,7 +198,7 @@ def completion_batched_multiple_prompts_tr(
             tok = int(out_tok[user].item())
             if user_done[user]:
                 continue
-            if tok in ctx.tokenizer.stop_tokens:
+            if tok in stop_ids:
                 user_done[user] = True
             else:
                 all_generated[user].append(tok)
@@ -183,29 +209,89 @@ def completion_batched_multiple_prompts_tr(
     return all_generated
 
 
-def sync_ttml_to_tt_transformers_on_device(ttml_model, tr_model):
+def sync_ttml_to_tt_transformers(ttml_model, tr_model):
     params = ttml_model.parameters()
+    D = tr_model.args.dim  # hidden_size = 2048
 
-    def _sync(src_tensor, dst_tensor, transpose=False):
+    def _sync_weight(src_tensor, dst_tensor, transpose=False):
+        """Sync TILE DRAM INTERLEAVED → DRAM WIDTH_SHARDED weight."""
         w = src_tensor.get_value()
         if transpose:
             w = ttnn.transpose(w, -2, -1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         w = ttnn.typecast(w, dst_tensor.dtype)
-        w = ttnn.to_memory_config(w, memory_config=dst_tensor.memory_config())
-        ttnn.copy(w, output_tensor=dst_tensor)
+        return ttnn.copy_to_memory_config(w, dst_tensor.memory_config(), preallocated_output=dst_tensor)
 
+    def _sync_norm(src_tensor, dst_weight):
+        """Sync norm gamma [1,1,1,D] TILE → [1,1,D//32,32] ROW_MAJOR DRAM."""
+        w = src_tensor.get_value()
+        w = ttnn.to_layout(w, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        w = ttnn.reshape(w, [1, 1, D // 32, 32])
+        w = ttnn.typecast(w, dst_weight.dtype)
+        ttnn.copy_to_memory_config(w, dst_weight.memory_config(), preallocated_output=dst_weight)
+
+    # ── Token Embedding ────────────────────────────────────────────────────────
+    # fc and tok_emb are weight-tied; only fc/weight is in params.
+    # fc weight shape is [1,1,hidden,vocab]; embedding needs [1,1,vocab,hidden].
+    w_emb = params["Llama/fc/weight"].get_value()
+    if w_emb.shape[-2] < w_emb.shape[-1]:  # [1,1,hidden,vocab] → transpose
+        w_emb = ttnn.transpose(w_emb, -2, -1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    w_emb = ttnn.to_layout(w_emb, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    w_emb = ttnn.typecast(w_emb, tr_model.embd.weights.dtype)
+    ttnn.copy_to_memory_config(w_emb, tr_model.embd.weights.memory_config(), preallocated_output=tr_model.embd.weights)
+
+    # ── Final Norm ─────────────────────────────────────────────────────────────
+    _sync_norm(params["Llama/ln_fc/gamma"], tr_model.norm.norm.weight)
+
+    # ── LM Head ────────────────────────────────────────────────────────────────
+    # ttml fc/weight shape: [1, 1, vocab_size, hidden]
+    # LMHead expects weights as [hidden, vocab], device-interleaved and sharded.
+    w_lm = params["Llama/fc/weight"].get_value()  # [1, 1, vocab_size, hidden]
+    w_lm = ttnn.transpose(w_lm, -2, -1, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, hidden, vocab_size]
+    w_lm = ttnn.typecast(w_lm, tr_model.lm_head.dtype)
+
+    # Pad vocab dim to padded_vocab_size so every device slice is in-bounds.
+    # (e.g. 128256 → 131072; padding amount is tile-aligned so TILE_LAYOUT is fine.)
+    padded_vocab_size = tr_model.lm_head.padded_vocab_size
+    real_vocab_cols = w_lm.shape[3]
+    if real_vocab_cols < padded_vocab_size:
+        w_lm = ttnn.pad(
+            w_lm,
+            [(0, 0), (0, 0), (0, 0), (0, padded_vocab_size - real_vocab_cols)],
+            0,
+        )
+
+    num_devices = tr_model.lm_head.num_devices  # 2
+    size_per_dev = padded_vocab_size // num_devices  # 65536 for 1B
+
+    for idx, out_shard in enumerate(tr_model.lm_head.output_weights_dram_sharded):
+        split_size = tr_model.lm_head.split_sizes_dram_sharded[idx]
+        col_start = sum(tr_model.lm_head.split_sizes_dram_sharded[:idx])
+        col_end = col_start + split_size
+        chunk = ttnn.slice(
+            w_lm,
+            [0, 0, 0, col_start],
+            [1, 1, w_lm.shape[2], col_end],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        chunk = ttnn.reshape(chunk, [chunk.shape[2], chunk.shape[3]])
+        ttnn.copy_to_memory_config(chunk, out_shard.memory_config(), preallocated_output=out_shard)
+
+    # ── Per-Layer Weights ──────────────────────────────────────────────────────
     for i, block in enumerate(tr_model.layers):
         p = f"Llama/blocks/{i}"
         attn = block.attention
         ffn = block.feed_forward
 
-        # wqkv: fuse Q + K + V then sync
+        # Norm weights (attention pre-norm and FFN pre-norm)
+        _sync_norm(params[f"{p}/attention_norm/gamma"], block.attention_norm.norm.weight)
+        _sync_norm(params[f"{p}/mlp_norm/gamma"], block.ff_norm.norm.weight)
+
+        # wqkv: fuse Q + K + V and sync
         wq = params[f"{p}/attention/q_linear/weight"].get_value()
         kv = params[f"{p}/attention/kv_linear/weight"].get_value()
         half = kv.shape[2] // 2
         wk = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, half, kv.shape[3]], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         wv = ttnn.slice(kv, [0, 0, half, 0], [1, 1, kv.shape[2], kv.shape[3]], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
         wqkv = ttnn.concat(
             [
                 ttnn.transpose(wq, -2, -1, memory_config=ttnn.DRAM_MEMORY_CONFIG),
@@ -217,10 +303,10 @@ def sync_ttml_to_tt_transformers_on_device(ttml_model, tr_model):
         )
         wqkv = ttnn.typecast(wqkv, attn.wqkv.dtype)
         wqkv = ttnn.to_memory_config(wqkv, memory_config=attn.wqkv.memory_config())
-        ttnn.copy(wqkv, output_tensor=attn.wqkv)
+        ttnn.copy(input_a=wqkv, input_b=attn.wqkv)
 
-        # wo, w1, w3, w2: transpose then sync
-        _sync(params[f"{p}/attention/out_linear/weight"], attn.wo, transpose=True)
-        _sync(params[f"{p}/mlp/w1/weight"], ffn.w1, transpose=True)
-        _sync(params[f"{p}/mlp/w3/weight"], ffn.w3, transpose=True)
-        _sync(params[f"{p}/mlp/w2/weight"], ffn.w2, transpose=True)
+        # wo, w1, w3, w2
+        attn.wo = _sync_weight(params[f"{p}/attention/out_linear/weight"], attn.wo, transpose=True)
+        ffn.w1 = _sync_weight(params[f"{p}/mlp/w1/weight"], ffn.w1, transpose=True)
+        ffn.w3 = _sync_weight(params[f"{p}/mlp/w3/weight"], ffn.w3, transpose=True)
+        ffn.w2 = _sync_weight(params[f"{p}/mlp/w2/weight"], ffn.w2, transpose=True)
