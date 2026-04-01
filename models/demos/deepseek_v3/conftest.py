@@ -29,6 +29,20 @@ def pytest_addoption(parser):
     )
 
 
+@pytest.fixture(scope="function")
+def device_params(request):
+    params = getattr(request, "param", {})
+    if params is None:
+        params = {}
+    if not isinstance(params, dict):
+        return params
+
+    params = dict(params)
+    # Default DeepSeek tests to relaxed fabric bring-up so multi-host runs tolerate marginal links.
+    params.setdefault("reliability_mode", ttnn.FabricReliabilityMode.RELAXED_INIT)
+    return params
+
+
 def automatically_detect_current_device_type() -> str:
     """
     Automatically detect device type based on cluster type and device count.
@@ -125,8 +139,34 @@ def mesh_device(request, device_params):
     updated_device_params = get_updated_device_params(device_params)
 
     fabric_config = updated_device_params.pop("fabric_config", None)
+    fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
+    reliability_mode = updated_device_params.pop("reliability_mode", None)
+    fabric_manager = updated_device_params.pop("fabric_manager", None)
+    fabric_router_config = updated_device_params.pop("fabric_router_config", None)
     if fabric_config:
-        ttnn.set_fabric_config(fabric_config)
+        if fabric_tensix_config is None:
+            fabric_tensix_config = ttnn.FabricTensixConfig.DISABLED
+        if fabric_manager is None:
+            fabric_manager = ttnn.FabricManagerMode.DEFAULT
+        if fabric_router_config is not None:
+            ttnn.set_fabric_config(
+                fabric_config,
+                reliability_mode,
+                None,
+                fabric_tensix_config,
+                ttnn.FabricUDMMode.DISABLED,
+                fabric_manager,
+                fabric_router_config,
+            )
+        else:
+            ttnn.set_fabric_config(
+                fabric_config,
+                reliability_mode,
+                None,
+                fabric_tensix_config,
+                ttnn.FabricUDMMode.DISABLED,
+                fabric_manager,
+            )
 
     updated_device_params.setdefault("mesh_shape", mesh_shape)
     mesh_device = ttnn.open_mesh_device(**updated_device_params)
