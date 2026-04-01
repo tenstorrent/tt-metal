@@ -45,25 +45,22 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
     ttnn::bind_function<"tilize_with_val_padding">(
         mod,
         doc,
-        ttnn::overload_t(
-            nb::overload_cast<
-                const ttnn::Tensor&,
-                const ttnn::Shape&,
-                tt::tt_metal::PadValue,
-                const std::optional<MemoryConfig>&,
-                std::optional<DataType>,
-                bool,
-                const std::optional<CoreRangeSet>&>(&ttnn::tilize_with_val_padding),
-            nb::arg("input_tensor"),
-            nb::arg("output_tensor_shape"),
-            nb::arg("pad_value"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("use_multicore") = true,
-            nb::arg("sub_core_grids") = nb::none())
-
-    );
+        nb::overload_cast<
+            const ttnn::Tensor&,
+            const ttnn::Shape&,
+            tt::tt_metal::PadValue,
+            const std::optional<MemoryConfig>&,
+            std::optional<DataType>,
+            bool,
+            const std::optional<CoreRangeSet>&>(&ttnn::tilize_with_val_padding),
+        nb::arg("input_tensor"),
+        nb::arg("output_tensor_shape"),
+        nb::arg("pad_value"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("use_multicore") = true,
+        nb::arg("sub_core_grids") = nb::none());
 }
 
 void bind_tilize_with_zero_padding(nb::module_& mod) {
@@ -87,14 +84,13 @@ void bind_tilize_with_zero_padding(nb::module_& mod) {
     ttnn::bind_function<"tilize_with_zero_padding">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::tilize_with_zero_padding,
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_dtype") = nb::none(),
-            nb::arg("use_multicore") = true,
-            nb::arg("sub_core_grids") = nb::none()));
+        &ttnn::tilize_with_zero_padding,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_dtype") = nb::none(),
+        nb::arg("use_multicore") = true,
+        nb::arg("sub_core_grids") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement::detail
