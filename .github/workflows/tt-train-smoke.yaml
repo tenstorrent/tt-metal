@@ -42,7 +42,8 @@ jobs:
           fetch-depth: 1
           path: docker-job
 
-      - uses: ./docker-job/.github/actions/download-artifact-with-retry
+      - name: Download wheel artifact
+        uses: actions/download-artifact@v4
         timeout-minutes: 15
         with:
           name: ${{ inputs.wheel-artifact-name || 'wheel artifact unresolved!' }}
