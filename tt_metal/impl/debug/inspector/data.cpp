@@ -20,8 +20,6 @@
 
 #include <fmt/format.h>
 
-extern "C" char** environ;  // POSIX global — all env vars in the process
-
 namespace tt::tt_metal::inspector {
 
 std::string stringify_tensor_specs(const std::vector<TensorSpec>& tensor_specs) {
