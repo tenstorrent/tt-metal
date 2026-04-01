@@ -126,7 +126,6 @@ ttnn::Tensor narrow(
             storage.get_mesh_buffer().device(),
             storage.get_mesh_buffer().address() + offset_bytes);
 
-        tt::tt_metal::DeviceStorage subtensor_storage(storage, subtensor_mesh);
         TensorSpec subtensor_spec = TensorSpec(
             output_tensor_shape,
             tt::tt_metal::TensorLayout(
@@ -134,7 +133,9 @@ ttnn::Tensor narrow(
                 input_tensor.tensor_spec().page_config(),
                 input_tensor.tensor_spec().memory_config()));
 
-        return Tensor(subtensor_storage, subtensor_spec, input_tensor.tensor_topology());
+        tt::tt_metal::DeviceStorage subtensor_storage(
+            storage, tt::tt_metal::MeshTensor(subtensor_mesh, subtensor_spec, input_tensor.tensor_topology()));
+        return Tensor(std::move(subtensor_storage));
     }
 
     // Handle sharded L1 buffers
@@ -282,8 +283,6 @@ ttnn::Tensor narrow(
             storage.get_mesh_buffer().device(),
             storage.get_mesh_buffer().address() + (page_offset * buffer->aligned_page_size()));
 
-        tt::tt_metal::DeviceStorage subtensor_storage(storage, subtensor_mesh);
-
         auto narrowed_memory_config =
             MemoryConfig(input_tensor.memory_config().memory_layout(), BufferType::L1, narrowed_shard_spec);
 
@@ -292,7 +291,9 @@ ttnn::Tensor narrow(
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), input_tensor.tensor_spec().page_config(), narrowed_memory_config));
 
-        return Tensor(subtensor_storage, subtensor_spec, input_tensor.tensor_topology());
+        tt::tt_metal::DeviceStorage subtensor_storage(
+            storage, tt::tt_metal::MeshTensor(subtensor_mesh, subtensor_spec, input_tensor.tensor_topology()));
+        return Tensor(std::move(subtensor_storage));
     }
 
     // Unsupported tensor configuration

@@ -121,7 +121,7 @@ public:
      *
      * See: #38691, #38375
      */
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_invariant_breaking() const;
+    const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer_invariant_breaking() const;
 
     /**
      * Get the device the allocated device memory is on.
