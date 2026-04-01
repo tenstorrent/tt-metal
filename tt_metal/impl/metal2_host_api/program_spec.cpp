@@ -31,7 +31,7 @@ static constexpr uint32_t QUASAR_TENSIX_CORES_PER_NODE = 4;
 // Type Definitions
 // ============================================================================
 
-// Data structure built up from ProgramSpec to enable fast lookups.
+// Data structure built up from ProgramSpec to enable fast lookups
 struct CollectedSpecData {
     // Name -> spec lookups
     std::unordered_map<KernelSpecName, const KernelSpec*> kernel_by_name;
@@ -48,8 +48,7 @@ struct CollectedSpecData {
     std::unordered_map<DFBSpecName, DFBEndpointInfo> dfb_endpoints;
 };
 
-// Bitmask for tracking processor allocation on a node.
-// (Factory functions are defined with processor assignment helper functions.)
+// Bitmask for tracking processor allocation on a node
 template <uint8_t NUM_CORES>
 struct ProcessorMask {
     static_assert(NUM_CORES > 0 && NUM_CORES <= 8, "ProcessorMask supports 1-8 processors");
@@ -95,7 +94,7 @@ using DFBNameToIdMap = std::unordered_map<DFBSpecName, uint32_t>;
 // ============================================================================
 
 // Utilities
-inline tt::ARCH get_arch();  // Returns override if set, otherwise HAL
+inline tt::ARCH get_arch();
 inline bool is_gen2_arch();
 inline bool is_gen1_arch();
 NodeRangeSet to_node_range_set(const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes);
@@ -756,24 +755,135 @@ ComputeEngineMask AssignComputeProcessors(const KernelSpec* kernel_spec, const K
     return reserved.value();
 }
 
-// Solve kernel-to-core assignments using backtracking search.
+// ============================================================================
+// DM Processor Assignment
+// ============================================================================
 //
-// This is guaranteed to find a valid assignment if one exists under the
-// "simplifying assumption" (each DM kernel uses the same processor cores on all
-// nodes it targets). If no assignment is possible, it means the simplifying
-// assumption has been violated.
-//
-// If this ever happens in the wild, we will need to implement a more complex Quasar
-// runtime that permits different processor assignments for different nodes.
+// Solves kernel-to-core assignments for DM kernels. Guaranteed to find a valid
+// assignment if one exists under the "simplifying assumption" (each DM kernel
+// uses the same processor cores on all nodes it targets).
 //
 // Approach:
-//   1. Collect all DM kernels and sort by "most constrained first" (more nodes, more threads)
-//   2. Use recursive backtracking to try all possible processor assignments
-//   3. Track per-node used masks to detect conflicts early
+//   1. (Optional) Sort kernels by "most constrained first" (more nodes, more threads)
+//   2. Use greedy assignment: pick first available cores for each kernel
+//   3. If greedy fails, backtrack by trying different kernel orderings
 //
+// Sorting step is optional. Not yet sure whether it's useful or not.
+// It may be that straight greedy is sufficient in a majority of cases
+// ============================================================================
+
+namespace dm_solver {
+
+// State for tracking per-node processor usage
+class NodeUsageTracker {
+public:
+    DMProcessorMask& get_used_mask(const NodeCoord& node) {
+        if (!node_used_masks_.contains(node)) {
+            node_used_masks_[node] = CreateMask<QUASAR_DM_CORES_PER_NODE>(0x03);  // Reserve DM0, DM1
+        }
+        return node_used_masks_[node];
+    }
+
+    // Compute union of used masks across all target nodes
+    DMProcessorMask get_combined_used_mask(const NodeRangeSet& target_nodes) {
+        DMProcessorMask combined_used = CreateMask<QUASAR_DM_CORES_PER_NODE>(0x00);
+        for (const auto& range : target_nodes.ranges()) {
+            for (const auto& node : range) {
+                combined_used = combined_used | get_used_mask(node);
+            }
+        }
+        return combined_used;
+    }
+
+    // Mark cores as used on all target nodes
+    void mark_used(const NodeRangeSet& target_nodes, DMProcessorMask mask) {
+        for (const auto& range : target_nodes.ranges()) {
+            for (const auto& node : range) {
+                get_used_mask(node) |= mask;
+            }
+        }
+    }
+
+    // Unmark cores on all target nodes (for backtracking)
+    void unmark_used(const NodeRangeSet& target_nodes, DMProcessorMask mask) {
+        for (const auto& range : target_nodes.ranges()) {
+            for (const auto& node : range) {
+                get_used_mask(node) &= ~mask;
+            }
+        }
+    }
+
+    void reset() { node_used_masks_.clear(); }
+
+private:
+    std::map<NodeCoord, DMProcessorMask> node_used_masks_;
+};
+
+// Constraint score for sorting: higher = more constrained (should be assigned earlier)
+int ConstraintScore(const KernelSpec* k) {
+    NodeRangeSet nodes = to_node_range_set(k->target_nodes);
+    int node_count = static_cast<int>(nodes.num_cores());
+    int thread_count = k->num_threads;
+    return (node_count * 100) + thread_count;  // nodes dominate, threads break ties
+}
+
+// Sort kernels by constraint score
+void SortByConstraint(std::vector<const KernelSpec*>& kernels) {
+    std::sort(kernels.begin(), kernels.end(), [](const KernelSpec* a, const KernelSpec* b) {
+        return ConstraintScore(a) > ConstraintScore(b);
+    });
+}
+
+// Try to assign all kernels in the given order using greedy selection
+// Returns true if successful, populates result map
+bool TryGreedyAssignment(
+    const std::vector<const KernelSpec*>& kernel_order, NodeUsageTracker& tracker, DMProcessorMaskMap& result) {
+    for (const KernelSpec* kernel : kernel_order) {
+        NodeRangeSet target_nodes = to_node_range_set(kernel->target_nodes);
+        DMProcessorMask combined_used = tracker.get_combined_used_mask(target_nodes);
+
+        auto selected = ReserveProcessors(kernel->num_threads, combined_used);
+        if (!selected.has_value()) {
+            return false;  // Can't assign this kernel
+        }
+
+        result[kernel] = selected.value();
+        tracker.mark_used(target_nodes, selected.value());
+    }
+    return true;
+}
+
+// Backtracking solver over kernel orderings
+// Tries the initial ordering first, then permutations if needed
+bool SolveWithOrderingBacktrack(
+    std::vector<const KernelSpec*> kernels,  // by value - we'll permute it
+    NodeUsageTracker& tracker,
+    DMProcessorMaskMap& result) {
+    // Try current ordering
+    if (TryGreedyAssignment(kernels, tracker, result)) {
+        return true;
+    }
+
+    // Backtrack: try all permutations
+    // (std::next_permutation requires sorted input for full coverage)
+    std::sort(kernels.begin(), kernels.end());
+    do {
+        tracker.reset();
+        result.clear();
+        if (TryGreedyAssignment(kernels, tracker, result)) {
+            return true;
+        }
+    } while (std::next_permutation(kernels.begin(), kernels.end()));
+
+    return false;
+}
+
+}  // namespace dm_solver
+
+// Main entry point for processor assignment
 std::pair<DMProcessorMaskMap, ComputeEngineMaskMap> SolveKernelToProcessorAssignments(const ProgramSpec& spec) {
-    DMProcessorMaskMap kernels_to_dm_processor_mask;
-    ComputeEngineMaskMap kernels_to_compute_processor_mask;
+    DMProcessorMaskMap dm_assignments;
+    ComputeEngineMaskMap compute_assignments;
 
     // Collect DM kernels and compute kernels separately
     std::vector<const KernelSpec*> dm_kernels;
@@ -781,102 +891,28 @@ std::pair<DMProcessorMaskMap, ComputeEngineMaskMap> SolveKernelToProcessorAssign
         if (kernel.is_dm_kernel()) {
             dm_kernels.push_back(&kernel);
         } else {
-            // We do not currently permit more than one compute kernel per node.
-            // This makes assignment trivial; just assign threads sequentially from core 0.
-            kernels_to_compute_processor_mask[&kernel] = AssignComputeProcessors(&kernel, kernel.unique_id);
+            // Compute kernels: trivial assignment (one compute kernel per node assumption)
+            compute_assignments[&kernel] = AssignComputeProcessors(&kernel, kernel.unique_id);
         }
     }
 
-    // Sort DM kernels by constraint score (most constrained first)
-    // (This improves backtracking efficiency)
-    auto constraint_score = [](const KernelSpec* k) -> int {
-        NodeRangeSet nodes = to_node_range_set(k->target_nodes);
-        int node_count = static_cast<int>(nodes.num_cores());  // number of target nodes
-        int thread_count = k->num_threads;
-        return (node_count * 100) + thread_count;  // nodes dominate, threads break ties
-    };
-    std::sort(dm_kernels.begin(), dm_kernels.end(), [&](const KernelSpec* a, const KernelSpec* b) {
-        return constraint_score(a) > constraint_score(b);  // descending
-    });
+    // Sort by constraint score (most constrained first)
+    constexpr bool kSortByConstraint = true;  // Toggle to disable upfront sorting
+    if constexpr (kSortByConstraint) {
+        dm_solver::SortByConstraint(dm_kernels);
+    }
 
-    // Per-node mask of processors already in use (starts with DM0/DM1 reserved)
-    std::map<NodeCoord, DMProcessorMask> node_used_masks;
-    auto get_node_mask = [&](const NodeCoord& node) -> DMProcessorMask& {
-        if (!node_used_masks.contains(node)) {
-            node_used_masks[node] = CreateMask<QUASAR_DM_CORES_PER_NODE>(0x03);  // Reserve DM0, DM1
-        }
-        return node_used_masks[node];
-    };
+    // Solve DM assignments
+    dm_solver::NodeUsageTracker tracker;
+    bool success = dm_solver::SolveWithOrderingBacktrack(dm_kernels, tracker, dm_assignments);
 
-    // Generate all contiguous processor masks of size n starting from the reserved region
-    auto generate_candidate_masks = [](uint8_t n) -> std::vector<DMProcessorMask> {
-        std::vector<DMProcessorMask> candidates;
-        // Try all starting positions from core 2 (0,1 reserved) up to 8-n
-        for (uint8_t start = 2; start + n <= QUASAR_DM_CORES_PER_NODE; ++start) {
-            uint8_t mask = ((1 << n) - 1) << start;
-            candidates.push_back(CreateMask<QUASAR_DM_CORES_PER_NODE>(mask));
-        }
-        return candidates;
-    };
-
-    // Recursive backtracking solver
-    std::function<bool(size_t)> solve = [&](size_t kernel_idx) -> bool {
-        if (kernel_idx >= dm_kernels.size()) {
-            return true;  // All kernels assigned successfully!
-        }
-
-        const KernelSpec* kernel = dm_kernels[kernel_idx];
-        NodeRangeSet target_nodes = to_node_range_set(kernel->target_nodes);
-
-        // Find processors that are available on ALL target nodes
-        DMProcessorMask available = CreateMask<QUASAR_DM_CORES_PER_NODE>(0xFF);  // Start with all
-        for (const auto& range : target_nodes.ranges()) {
-            for (const auto& node : range) {
-                available = available & ~get_node_mask(node);
-            }
-        }
-
-        // Try each candidate mask
-        for (const auto& candidate : generate_candidate_masks(kernel->num_threads)) {
-            // Check if candidate fits in available space
-            if ((candidate & available) != candidate) {
-                continue;  // Some bits not available
-            }
-
-            // Make the assignment
-            kernels_to_dm_processor_mask[kernel] = candidate;
-            for (const auto& range : target_nodes.ranges()) {
-                for (const auto& node : range) {
-                    get_node_mask(node) |= candidate;
-                }
-            }
-
-            // Recurse
-            if (solve(kernel_idx + 1)) {
-                return true;  // Found a solution!
-            }
-
-            // Backtrack - undo the assignment
-            kernels_to_dm_processor_mask.erase(kernel);
-            for (const auto& range : target_nodes.ranges()) {
-                for (const auto& node : range) {
-                    get_node_mask(node) &= ~candidate;
-                }
-            }
-        }
-
-        return false;  // No valid assignment for this kernel
-    };
-
-    // Run the solver
-    bool success = solve(0);
     TT_FATAL(
         success,
         "Failed to find valid processor assignments for DM kernels. "
-        "Either legality checks were bypassed, or the \"same DM cores on every node\" simplifying assumption has been "
-        "violated.");
+        "Either the ProgramSpec is invalid, or that the \"same DM cores on every node\" "
+        "simplifying assumption has been violated.");
 
-    return std::make_pair(kernels_to_dm_processor_mask, kernels_to_compute_processor_mask);
+    return {dm_assignments, compute_assignments};
 }
 
 // ============================================================================
