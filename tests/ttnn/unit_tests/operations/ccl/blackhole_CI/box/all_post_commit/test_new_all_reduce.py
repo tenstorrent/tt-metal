@@ -89,6 +89,10 @@ def run_all_reduce_impl(
         all_reduce_topology = ttnn.Topology.Ring
         wrap_mesh = False
 
+    from tests.tests_common.cache_entries_counter import CacheEntriesCounter
+
+    mesh_device.cache_entries_counter = CacheEntriesCounter(mesh_device)
+
     worker_sub_device = ttnn.SubDevice([SUB_DEVICE_CRS])
 
     worker_sub_device_id = ttnn.SubDeviceId(0)
