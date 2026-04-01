@@ -5,11 +5,6 @@
 
 from __future__ import annotations
 
-import warnings
-
-warnings.filterwarnings("ignore", message=r".*SwigPy(Packed|Object).*", category=DeprecationWarning)
-warnings.filterwarnings("ignore", message=r".*swigvarlink.*", category=DeprecationWarning)
-
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -66,7 +61,7 @@ def create_test_inputs(config: LingbotVaInferenceConfig, batch_size: int = 1):
 
 
 def _inference_kwargs_from_config(config: LingbotVaInferenceConfig) -> dict:
-    """Keyword args for ``demo.run_inference`` / ``inference_torch.run_inference``."""
+    """Keyword args for ``demo.run_inference``."""
     return {
         "num_inference_steps": config.num_inference_steps,
         "action_num_inference_steps": config.action_num_inference_steps,
@@ -96,11 +91,6 @@ def _run_lingbot_va_ttnn_forward() -> None:
     assert "action" in out, "Expected 'action' in run_inference output"
     assert out["action"] is not None
     assert getattr(out["action"], "size", 0) > 0
-
-
-pytestmark = pytest.mark.filterwarnings(
-    "ignore:.*(SwigPy|swigvarlink).*:DeprecationWarning",
-)
 
 
 @pytest.mark.timeout(600)
