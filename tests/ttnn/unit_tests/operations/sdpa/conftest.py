@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Session-scoped ``device`` fixture for SDPA unit tests.
+Module-scoped ``device`` fixture for SDPA unit tests.
 
 Overrides the root function-scoped ``device`` fixture so that a single
-device is opened ONCE per pytest session and shared across all SDPA
+device is opened once per test module and shared across all SDPA
 tests.  This eliminates redundant CreateDevice / close_device round-trips
 in CI, cutting job wall-time significantly.
 """
@@ -59,10 +59,10 @@ _rc = _root_conftest()
 # Session-scoped device fixture
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def device(request):
     """
-    Open a single device for the entire SDPA test session.
+    Open a single device per test module for SDPA tests.
 
     This shadows the root function-scoped ``device`` fixture for every
     test collected under ``tests/ttnn/unit_tests/operations/sdpa/``.
@@ -85,8 +85,8 @@ def device(request):
 
     device.cache_entries_counter = CacheEntriesCounter(device)
 
-    logger.info("Session-scoped SDPA device opened (device_id={})", device_id)
+    logger.info("Module-scoped SDPA device opened (device_id={})", device_id)
     yield device
 
     ttnn.close_device(device)
-    logger.info("Session-scoped SDPA device closed")
+    logger.info("Module-scoped SDPA device closed")
