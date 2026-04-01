@@ -90,9 +90,9 @@ class TtLingbotVA:
         lingbot_demo._free_tt_model(models, "text_encoder")
 
         lingbot_demo._prepare_state_for_vae_encode(state, config)
-        lingbot_demo._load_tt_vae_into_models(models, config)
+        lingbot_demo._load_tt_vae_into_models(models)
         state["init_latent"] = lingbot_demo._encode_obs(models, state, message)
-        lingbot_demo._free_tt_vae_from_models(models, config)
+        lingbot_demo._free_tt_vae_from_models(models)
 
         lingbot_demo._load_transformer_into_models(models, config)
 

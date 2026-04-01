@@ -21,7 +21,7 @@ if str(_tt_metal_root) not in sys.path:
 
 from models.experimental.lingbot_va.tests.demo.demo import build_infer_message
 from models.experimental.lingbot_va.tests.mesh_utils import mesh_shape_request_param
-from models.experimental.lingbot_va.tt.tt_lingbot_va import TtLingbotVA
+from models.experimental.lingbot_va.tests.perf.tt_lingbot_va_perf import TtLingbotVA
 from models.perf.perf_utils import prep_perf_report
 from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
 
