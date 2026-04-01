@@ -911,3 +911,77 @@ jobs:
             echo
             cat "build_ci/testing/triage_e2e_session.md"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  publish-run-summary:
+    name: "Publish unified run summary"
+    if: ${{ always() }}
+    needs:
+      [
+        fork-push-check,
+        prep-triage-data,
+        run-data-report,
+        run-draft-prs,
+        run-create-issues,
+        run-thread-lifecycle,
+        run-bug-escape,
+        run-issue-lifecycle,
+        finalize-autonomy-artifacts,
+        triage-ci-testing-session,
+      ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download summary-relevant artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: build_ci/summary_artifacts
+        continue-on-error: true
+
+      - name: Publish always-on summary
+        run: |
+          set -euo pipefail
+          {
+            echo "# CI Triage Unified Summary"
+            echo
+            echo "- run-scope: \`${{ github.event.inputs['run-scope'] || 'full' }}\`"
+            echo "- data-gathering-mode: \`${{ github.event.inputs['data-gathering-mode'] || 'false' }}\`"
+            echo "- testing-mode: \`${{ github.event.inputs['testing-mode'] || 'false' }}\`"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          append_if_exists() {
+            file_path="$1"
+            title="$2"
+            if [ -s "$file_path" ]; then
+              {
+                echo "## $title"
+                echo
+                cat "$file_path"
+                echo
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          }
+
+          append_if_exists "build_ci/summary_artifacts/auto-disable-artifacts/summary.md" "Auto Disable"
+          append_if_exists "build_ci/summary_artifacts/thread-lifecycle-stage-artifacts/m5_lifecycle_summary.md" "Thread Lifecycle"
+          append_if_exists "build_ci/summary_artifacts/issue-lifecycle-stage-artifacts/issue_lifecycle_summary.md" "Issue Lifecycle"
+          append_if_exists "build_ci/summary_artifacts/bug-escape-stage-artifacts/m6_bug_escape_summary.md" "Bug Escape"
+          append_if_exists "build_ci/summary_artifacts/slack-C0APK6215B5-U08GTDV8MDH-report/slack_C0APK6215B5_U08GTDV8MDH_report.md" "Data Gathering Report"
+          append_if_exists "build_ci/summary_artifacts/triage-testing-session/owner_resolution_session.md" "Testing Session - Owner Resolution"
+          append_if_exists "build_ci/summary_artifacts/triage-testing-session/thread_persona_session.md" "Testing Session - Thread Persona"
+          append_if_exists "build_ci/summary_artifacts/triage-testing-session/triage_e2e_session.md" "Testing Session - E2E"
+
+          m4_json="build_ci/summary_artifacts/create-issues-stage-artifacts/m4_issue_and_slack_result.json"
+          if [ -s "$m4_json" ]; then
+            {
+              echo "## M4 Issue Creation"
+              echo
+              python3 tools/ci/render_m4_summary.py --input-json "$m4_json"
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
