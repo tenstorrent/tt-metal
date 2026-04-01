@@ -42,9 +42,9 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
     {
         LLK_ASSERT(num_faces_r_dim == num_faces_c_dim, "num_faces_r_dim must be equal to num_faces_c_dim when transpose_of_faces is true");
         LLK_ASSERT(
-            num_faces_c_dim == 2,
-            "num_faces_c_dim has to be 2 with transpose due to stride limitations in UNPACR instruction, this limitation can be removed when TensiorShapes are "
-            "passed compile time");
+            num_faces_c_dim == 1 || num_faces_c_dim == 2,
+            "num_faces_c_dim has to be either 1 or 2 with transpose due to stride limitations in UNPACR instruction,"
+            "this limitation can be removed when TensorShapes are passed at compile time");
     }
 
     static constexpr std::uint32_t unpack_srca = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
