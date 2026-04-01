@@ -108,7 +108,7 @@ def test_linear_regression_model_forward():
     """Verify LinearRegression model forward pass works."""
     from ttml.models.linear_regression import create_linear_regression_model
 
-    model = create_linear_regression_model(input_features=32, output_features=1)
+    model = create_linear_regression_model(in_features=32, out_features=1)
     model.eval()
 
     x = ttml.autograd.Tensor.from_numpy(np.random.randn(4, 1, 1, 32).astype(np.float32))
@@ -128,7 +128,7 @@ def test_linear_regression_training_loop():
 
     np.random.seed(42)
 
-    model = create_linear_regression_model(input_features=32, output_features=1)
+    model = create_linear_regression_model(in_features=32, out_features=1)
     params = model.parameters()
 
     config = ttml.optimizers.SGDConfig.make(0.01, 0.0, 0.0, 0.0, False)

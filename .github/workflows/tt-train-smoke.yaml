@@ -28,6 +28,8 @@ jobs:
       image: ${{ format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image) || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
+        TT_METAL_RUNTIME_ROOT: /work
+        LD_LIBRARY_PATH: /work/build/lib
         PYTHONPATH: /work
       volumes:
         - ${{ github.workspace }}/docker-job:/work
