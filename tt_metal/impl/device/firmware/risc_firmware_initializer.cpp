@@ -29,6 +29,8 @@
 #include "common/executor.hpp"
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
+#include "fabric/fabric_builder_context.hpp"
+#include "fabric/fabric_context.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "tt_align.hpp"
 #include <umd/device/types/xy_pair.hpp>
@@ -157,6 +159,8 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
     // See https://github.com/tenstorrent/tt-metal/issues/35701
     ZoneScopedN("Resets and FW Launch");
     if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
+        terminate_active_ethernet_cores_on_all_chips();
+
         for (tt::ChipId device_id : device_ids) {
             ClearNocData(descriptor_->env_impl(), device_id);
             reset_cores(device_id);
@@ -337,6 +341,38 @@ void RiscFirmwareInitializer::assert_dram_cores(tt::ChipId device_id) {
             CoreCoord virtual_core{dram_core.x, dram_core.y};
             cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
         }
+    }
+}
+
+void RiscFirmwareInitializer::terminate_active_ethernet_cores_on_all_chips() {
+    if (cluster_.arch() != ARCH::BLACKHOLE ||
+        !has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) ||
+        hal_.get_eth_fw_is_cooperative()) {
+        return;
+    }
+
+    constexpr auto k_ActiveEthCoreType = HalProgrammableCoreType::ACTIVE_ETH;
+    auto dev_msgs_factory = hal_.get_dev_msgs_factory(k_ActiveEthCoreType);
+    DeviceAddr launch_base_addr = hal_.get_dev_addr(k_ActiveEthCoreType, HalL1MemAddrType::LAUNCH);
+    DeviceAddr rd_ptr_addr = hal_.get_dev_addr(k_ActiveEthCoreType, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
+    auto launch_msg_size = dev_msgs_factory.size_of<dev_msgs::launch_msg_t>();
+    auto launch_msg_buf = dev_msgs_factory.create<dev_msgs::launch_msg_t>();
+
+    for (tt::ChipId chip_id : cluster_.all_chip_ids()) {
+        for (const auto& logical_core : this->get_control_plane_().get_active_ethernet_cores(chip_id)) {
+            CoreCoord virtual_core =
+                cluster_.get_virtual_coordinate_from_logical_coordinates(chip_id, logical_core, CoreType::ETH);
+            uint32_t rd_ptr = 0;
+            cluster_.read_core(&rd_ptr, sizeof(rd_ptr), tt_cxy_pair(chip_id, virtual_core), rd_ptr_addr);
+            rd_ptr &= (dev_msgs::launch_msg_buffer_num_entries - 1);
+            DeviceAddr launch_slot_addr = launch_base_addr + (rd_ptr * launch_msg_size);
+            cluster_.read_core(
+                launch_msg_buf.data(), launch_msg_buf.size(), tt_cxy_pair(chip_id, virtual_core), launch_slot_addr);
+            launch_msg_buf.view().kernel_config().exit_erisc_kernel() = 1;
+            cluster_.write_core(
+                launch_msg_buf.data(), launch_msg_buf.size(), tt_cxy_pair(chip_id, virtual_core), launch_slot_addr);
+        }
+        cluster_.l1_barrier(chip_id);
     }
 }
 
