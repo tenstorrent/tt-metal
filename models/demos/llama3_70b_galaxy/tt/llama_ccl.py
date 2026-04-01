@@ -332,7 +332,8 @@ class TT_CCL:
         persistent_buffers["LOGPROBS_LOGITS"] = tt_buffer
 
         # Binary Mult + Silu
-        # OLMo: 3456 (intermediate_dim_per_tp, 27 cores × 128), Qwen: 3200, Llama: 3584
+        # OLMo: Must use DRAM + bfloat16 for precision. L1 + bfloat8_b produces garbage
+        # after 64 layers due to ~3-8% error per layer compounding.
         if self.is_olmo:
             binary_mul_width = 3456  # intermediate_dim_per_tp (unpadded)
             binary_mul_mem_config = ttnn.DRAM_MEMORY_CONFIG

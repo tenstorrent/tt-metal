@@ -2738,6 +2738,11 @@ def num_to_corerange(x):
 
 
 def num_to_coregrid(x):
+    # OLMo: Use 5x8 (40) or 6x8 (48) grids to avoid col 7 (TG dispatch)
+    if x == 40:
+        return ttnn.CoreGrid(y=8, x=5)
+    if x == 48:
+        return ttnn.CoreGrid(y=8, x=6)
     if x % 8 == 0:
         return ttnn.CoreGrid(y=x // 8, x=8)
     if x == 12:
