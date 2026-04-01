@@ -29,9 +29,8 @@ void kernel_main() {
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
     uint32_t consumer_idx = static_cast<uint32_t>(__builtin_popcount(consumer_mask & ((1u << hartid) - 1u)));
 
-    // DPRINT << "consumer_idx: " << consumer_idx << " num_entries_per_consumer: " << num_entries_per_consumer <<
-    // ENDL();
-    // DEVICE_PRINT("consumer_idx: {} num_entries_per_consumer: {}\n", consumer_idx, num_entries_per_consumer);
+    DPRINT << "consumer_idx: " << consumer_idx << " num_entries_per_consumer: " << num_entries_per_consumer << ENDL();
+    DEVICE_PRINT("consumer_idx: {} num_entries_per_consumer: {}\n", consumer_idx, num_entries_per_consumer);
 
     uint32_t entry_size = dfb.get_entry_size();
     const auto tensor_accessor = TensorAccessor(dst_args, dst_addr_base, entry_size);
