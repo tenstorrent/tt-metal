@@ -916,8 +916,19 @@ void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
         const uint32_t pos = start_pos + i;
         const auto& slot = rb->slots[pos & mask];
 
-        // Slot not published yet (empty or in-flight). Fetch rest next poll.
         if (!debug_ring_buffer_is_slot_valid(slot.write_id, pos)) {
+            if (slot.write_id != 0) {
+                // Convert pos_idx back to actual position (pos_idx = actual_pos + 1)
+                uint32_t actual_pos =
+                    (debug_ring_buffer_get_pos_idx(slot.write_id) - 1) & DEBUG_RING_BUFFER_MPSC_POS_MASK;
+                uint32_t expected_pos = pos & DEBUG_RING_BUFFER_MPSC_POS_MASK;
+                if (actual_pos > expected_pos) {
+                    // producer Lapped consumer: resync to producer's actual position
+                    last_pos = actual_pos;
+                    log_warning(tt::LogMetal, "MPSC ring buffer overrun on {}, resyncing", core_str_);
+                }
+            }
+            // write_id == 0: empty or in-flight, wait for next poll
             break;
         }
         uint32_t thread_idx = debug_ring_buffer_get_thread_idx(slot.write_id);
