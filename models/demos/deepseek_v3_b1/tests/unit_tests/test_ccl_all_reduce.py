@@ -22,18 +22,13 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.micro_ops.ccl_all_reduce.op import DeepseekMinimalAllReduce
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
 
 TEST_SENDER_CORE = ttnn.CoreCoord(10, 9)
 TEST_RECEIVER_CORE = ttnn.CoreCoord(11, 9)
 from models.perf.benchmarking_utils import BenchmarkProfiler
-
-
-def create_fabric_router_config(max_payload_size):
-    """Helper to create FabricRouterConfig with custom max payload size."""
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
 
 
 @dataclass(frozen=True)
@@ -208,6 +203,9 @@ def test_ccl_all_reduce(
     num_iter,
     num_links,
 ):
+    if is_slow_dispatch():
+        pytest.skip("CCL all-reduce trace test needs fast dispatch")
+
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
         pytest.skip("Test requires more devices than are available on this platform")
 

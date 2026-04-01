@@ -37,7 +37,6 @@ Residual contract (three states):
 from dataclasses import dataclass
 
 import torch
-from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
@@ -934,7 +933,6 @@ class DeepseekMinimalAllReduce:
                 ]
                 brisc_per_core_rt.extend(allreduce_config.get_brisc_per_core_rt_args(coord, program, sender_core))
 
-                logger.info(f"adding program for coord: {coord}")
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 
         input_list = [input_tensor_mesh, output_tensor, intermediate_tensor]

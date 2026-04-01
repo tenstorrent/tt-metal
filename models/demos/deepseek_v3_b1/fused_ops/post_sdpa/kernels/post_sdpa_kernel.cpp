@@ -144,7 +144,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather3_sender_idx"),
     };
 #ifndef SKIP_CCL
-    using AllReduceWriterCTArgs = deepseek_b1_ops::AllReduce::WriterLinkCTArgs<
+    using AllReduceWriterCTArgs = deepseek_b1_ops::AllReduce::WriterCTArgs<
         get_named_compile_time_arg_val("allreduce_local_data_cb_id"),
         get_named_compile_time_arg_val("allreduce_input_num_tiles"),
         get_named_compile_time_arg_val("allreduce_page_size_bytes"),
@@ -225,7 +225,7 @@ void kernel_main() {
     };
 
 #ifndef SKIP_CCL
-    using AllReduceBriscWriterCTArgs = deepseek_b1_ops::AllReduce::WriterLinkCTArgs<
+    using AllReduceBriscWriterCTArgs = deepseek_b1_ops::AllReduce::WriterCTArgs<
         get_named_compile_time_arg_val("allreduce_local_data_cb_id"),
         get_named_compile_time_arg_val("allreduce_input_num_tiles"),
         get_named_compile_time_arg_val("allreduce_page_size_bytes"),
@@ -554,7 +554,7 @@ void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
     if constexpr (Core::is_allreduce_sender_core) {
         DeviceZoneScopedN("CCL_SENDER_WRITER");
-        deepseek_b1_ops::AllReduce::SenderFabricArgs args{};
+        deepseek_b1_ops::AllReduce::SenderArgs args{};
         args.intermediate_buffer_address = get_common_arg_val<uint32_t>(0);
         args.dest_noc_x = get_common_arg_val<uint32_t>(1);
         args.dest_noc_y = get_common_arg_val<uint32_t>(2);
@@ -578,7 +578,7 @@ void kernel_main() {
 #elif defined(COMPILE_FOR_BRISC)
     if constexpr (Core::is_allreduce_sender_core) {
         DeviceZoneScopedN("CCL_SENDER_WRITER");
-        deepseek_b1_ops::AllReduce::SenderFabricArgs args{};
+        deepseek_b1_ops::AllReduce::SenderArgs args{};
         args.intermediate_buffer_address = get_common_arg_val<uint32_t>(0);
         args.dest_noc_x = get_common_arg_val<uint32_t>(1);
         args.dest_noc_y = get_common_arg_val<uint32_t>(2);

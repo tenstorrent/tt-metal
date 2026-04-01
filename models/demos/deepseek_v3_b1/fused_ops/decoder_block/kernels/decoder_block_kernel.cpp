@@ -513,7 +513,7 @@ void kernel_main() {
     }
 
     // CCL All-Reduce NCRISC CTArgs: writer (sender core) + reader (receiver core)
-    using AllReduceWriterCTArgs = deepseek_b1_ops::AllReduce::WriterLinkCTArgs<
+    using AllReduceWriterCTArgs = deepseek_b1_ops::AllReduce::WriterCTArgs<
         get_named_compile_time_arg_val("allreduce_local_data_cb_id"),
         get_named_compile_time_arg_val("allreduce_input_num_tiles"),
         get_named_compile_time_arg_val("allreduce_page_size_bytes"),
@@ -537,7 +537,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("allreduce_num_chunks"),
         get_named_compile_time_arg_val("allreduce_num_links")>;
 
-    deepseek_b1_ops::AllReduce::SenderFabricArgs ccl_sender_args{};
+    deepseek_b1_ops::AllReduce::SenderArgs ccl_sender_args{};
     deepseek_b1_ops::AllReduce::ReceiverArgs ccl_receiver_args{};
 
     if constexpr (Core::is_allreduce_sender_core) {
@@ -837,7 +837,7 @@ void kernel_main() {
     }
 
     // CCL All-Reduce BRISC CTArgs: writer (sender core)
-    using AllReduceWriterCTArgs = deepseek_b1_ops::AllReduce::WriterLinkCTArgs<
+    using AllReduceWriterCTArgs = deepseek_b1_ops::AllReduce::WriterCTArgs<
         get_named_compile_time_arg_val("allreduce_local_data_cb_id"),
         get_named_compile_time_arg_val("allreduce_input_num_tiles"),
         get_named_compile_time_arg_val("allreduce_page_size_bytes"),
@@ -849,7 +849,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("allreduce_writer_signal_local_ready"),
         get_named_compile_time_arg_val("allreduce_skip_local_push")>;
 
-    deepseek_b1_ops::AllReduce::SenderFabricArgs ccl_sender_args{};
+    deepseek_b1_ops::AllReduce::SenderArgs ccl_sender_args{};
     if constexpr (Core::is_allreduce_sender_core) {
         ccl_sender_args.intermediate_buffer_address = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         ccl_sender_args.dest_noc_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++);

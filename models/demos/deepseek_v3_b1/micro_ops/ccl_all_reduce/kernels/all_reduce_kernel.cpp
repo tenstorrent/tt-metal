@@ -11,7 +11,7 @@ void kernel_main() {
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
     if constexpr (is_sender) {
-        using WriterCT = deepseek_b1_ops::AllReduce::WriterLinkCTArgs<
+        using WriterCT = deepseek_b1_ops::AllReduce::WriterCTArgs<
             get_named_compile_time_arg_val("allreduce_local_data_cb_id"),
             get_named_compile_time_arg_val("allreduce_input_num_tiles"),
             get_named_compile_time_arg_val("allreduce_page_size_bytes"),
@@ -23,7 +23,7 @@ void kernel_main() {
             get_named_compile_time_arg_val("allreduce_writer_signal_local_ready"),
             get_named_compile_time_arg_val("allreduce_skip_local_push")>;
 
-        deepseek_b1_ops::AllReduce::SenderFabricArgs args{};
+        deepseek_b1_ops::AllReduce::SenderArgs args{};
         args.intermediate_buffer_address = get_common_arg_val<uint32_t>(0);
         args.dest_noc_x = get_common_arg_val<uint32_t>(1);
         args.dest_noc_y = get_common_arg_val<uint32_t>(2);

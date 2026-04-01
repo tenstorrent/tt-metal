@@ -55,7 +55,7 @@ template <
     uint32_t linkIndex,
     uint32_t signalLocalReady,
     uint32_t skipLocalPush>
-struct WriterLinkCTArgs {
+struct WriterCTArgs {
     static constexpr uint32_t local_data_cb_id = localDataCbId;
     static constexpr uint32_t input_num_tiles = inputNumTiles;
     static constexpr uint32_t page_size_bytes = pageSizeBytes;
@@ -115,7 +115,7 @@ struct ComputeCTArgs {
 // signal_local_ready: [local_ready_noc_x, local_ready_noc_y,
 // local_ready_sem_bank_addr]; then fabric connection args from
 // setup_fabric_connection.
-struct SenderFabricArgs {
+struct SenderArgs {
     uint32_t intermediate_buffer_address;
     uint32_t dest_noc_x;
     uint32_t dest_noc_y;
@@ -133,17 +133,17 @@ struct ReceiverArgs {
 
 struct ComputeArgs {};
 
-using RTArgs = unified_kernels::SelectByRISCV<SenderFabricArgs, SenderFabricArgs, ComputeArgs>;
+using RTArgs = unified_kernels::SelectByRISCV<SenderArgs, SenderArgs, ComputeArgs>;
 
-template <typename CT>
+template <typename CTArgs>
 class WriterSingleLink {
 public:
-    void operator()(const SenderFabricArgs& args) { impl(args); }
+    void operator()(const SenderArgs& args) { impl(args); }
 
 private:
-    void impl([[maybe_unused]] const SenderFabricArgs& args) {
+    void impl([[maybe_unused]] const SenderArgs& args) {
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-        if constexpr (CT::link_index >= CT::num_links) {
+        if constexpr (CTArgs::link_index >= CTArgs::num_links) {
             return;
         }
 
@@ -153,7 +153,7 @@ private:
         const uint32_t link_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
 
         uint64_t local_ready_noc_addr = 0;
-        if constexpr (CT::signal_local_ready) {
+        if constexpr (CTArgs::signal_local_ready) {
             const uint32_t local_ready_dest_noc_x = get_arg_val<uint32_t>(arg_idx++);
             const uint32_t local_ready_dest_noc_y = get_arg_val<uint32_t>(arg_idx++);
             const uint32_t local_ready_sem_bank = get_arg_val<uint32_t>(arg_idx++);
@@ -174,33 +174,33 @@ private:
         const uint64_t remote_sem_noc = safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, link_sem_bank_addr, 0);
 
         // Ensure local data is available in the CB before signaling or sending.
-        if constexpr (CT::skip_local_push) {
+        if constexpr (CTArgs::skip_local_push) {
             // Fused path: preceding op (e.g. gather3) pushes to this CB.
-            cb_wait_front(CT::local_data_cb_id, CT::input_num_tiles);
-        } else if constexpr (CT::signal_local_ready) {
+            cb_wait_front(CTArgs::local_data_cb_id, CTArgs::input_num_tiles);
+        } else if constexpr (CTArgs::signal_local_ready) {
             // Standalone path: push the sharded tensor into the CB.
             // Only the RISC with signal_local_ready does the push; the other
             // RISC reads get_read_ptr directly (CB base points to the tensor).
-            cb_reserve_back(CT::local_data_cb_id, CT::input_num_tiles);
-            cb_push_back(CT::local_data_cb_id, CT::input_num_tiles);
+            cb_reserve_back(CTArgs::local_data_cb_id, CTArgs::input_num_tiles);
+            cb_push_back(CTArgs::local_data_cb_id, CTArgs::input_num_tiles);
         }
 
         // Signal local_ready AFTER data is confirmed present so the receiver
         // can safely NOC-read from the sender's L1.
-        if constexpr (CT::signal_local_ready) {
+        if constexpr (CTArgs::signal_local_ready) {
             noc_semaphore_inc(local_ready_noc_addr, 1);
             noc_async_atomic_barrier();
         }
 
-        const uint32_t src_base_addr = get_read_ptr(CT::local_data_cb_id);
+        const uint32_t src_base_addr = get_read_ptr(CTArgs::local_data_cb_id);
 
         connection.open_finish();
 
-        constexpr uint32_t stride_bytes = CT::num_links * CT::tiles_per_chunk * CT::page_size_bytes;
-        uint32_t offset = CT::link_index * CT::tiles_per_chunk * CT::page_size_bytes;
+        constexpr uint32_t stride_bytes = CTArgs::num_links * CTArgs::tiles_per_chunk * CTArgs::page_size_bytes;
+        uint32_t offset = CTArgs::link_index * CTArgs::tiles_per_chunk * CTArgs::page_size_bytes;
 
-        constexpr uint32_t regular_payload_bytes = CT::tiles_per_chunk * CT::page_size_bytes;
-        constexpr uint32_t last_payload_bytes = CT::last_chunk_tiles * CT::page_size_bytes;
+        constexpr uint32_t regular_payload_bytes = CTArgs::tiles_per_chunk * CTArgs::page_size_bytes;
+        constexpr uint32_t last_payload_bytes = CTArgs::last_chunk_tiles * CTArgs::page_size_bytes;
 
         auto send_payload = [&](uint32_t chunk_offset, uint32_t payload_bytes) __attribute__((always_inline)) {
             header->to_noc_fused_unicast_write_atomic_inc(
@@ -212,21 +212,21 @@ private:
                 reinterpret_cast<uint32_t>(header), sizeof(PACKET_HEADER_TYPE));
         };
 
-        uint32_t chunk_idx = CT::link_index;
-        for (; chunk_idx < CT::num_chunks - 1; chunk_idx += CT::num_links) {
+        uint32_t chunk_idx = CTArgs::link_index;
+        for (; chunk_idx < CTArgs::num_chunks - 1; chunk_idx += CTArgs::num_links) {
             send_payload(offset, regular_payload_bytes);
             offset += stride_bytes;
             noc_async_writes_flushed();
         }
 
-        if (chunk_idx < CT::num_chunks) {
+        if (chunk_idx < CTArgs::num_chunks) {
             send_payload(offset, last_payload_bytes);
         }
 
         connection.close_start();
 
-        if constexpr (CT::signal_local_ready) {
-            cb_pop_front(CT::local_data_cb_id, CT::input_num_tiles);
+        if constexpr (CTArgs::signal_local_ready) {
+            cb_pop_front(CTArgs::local_data_cb_id, CTArgs::input_num_tiles);
         }
 
         connection.close_finish();
@@ -236,7 +236,7 @@ private:
     }
 };
 
-template <typename CT>
+template <typename CTArgs>
 class Reader {
 public:
     void operator()(const ReceiverArgs& args) { impl(args); }
@@ -244,17 +244,17 @@ public:
 private:
     void impl([[maybe_unused]] const ReceiverArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
-        if constexpr (CT::has_residual) {
-            cb_reserve_back(CT::residual_cb_id, CT::total_num_tiles);
-            cb_push_back(CT::residual_cb_id, CT::total_num_tiles);
+        if constexpr (CTArgs::has_residual) {
+            cb_reserve_back(CTArgs::residual_cb_id, CTArgs::total_num_tiles);
+            cb_push_back(CTArgs::residual_cb_id, CTArgs::total_num_tiles);
         }
 
-        cb_reserve_back(CT::recv_local_data_cb_id, CT::total_num_tiles);
-        cb_reserve_back(CT::remote_data_cb_id, CT::total_num_tiles);
-        constexpr uint32_t local_payload_bytes = CT::total_num_tiles * CT::page_size_bytes;
+        cb_reserve_back(CTArgs::recv_local_data_cb_id, CTArgs::total_num_tiles);
+        cb_reserve_back(CTArgs::remote_data_cb_id, CTArgs::total_num_tiles);
+        constexpr uint32_t local_payload_bytes = CTArgs::total_num_tiles * CTArgs::page_size_bytes;
         const uint64_t local_data_src_noc =
             safe_get_noc_addr(args.sender_noc_x, args.sender_noc_y, args.sender_local_data_l1_addr, 0);
-        const uint32_t local_data_dst = get_write_ptr(CT::recv_local_data_cb_id);
+        const uint32_t local_data_dst = get_write_ptr(CTArgs::recv_local_data_cb_id);
 
         volatile tt_l1_ptr uint32_t* local_ready_sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.local_ready_sem_bank_addr);
@@ -264,30 +264,31 @@ private:
         noc_async_read(local_data_src_noc, local_data_dst, local_payload_bytes);
 
         const std::array<uint32_t, MAX_NUM_LINKS> sem_addrs = {args.sem_bank_addr_0, args.sem_bank_addr_1};
-        std::array<volatile tt_l1_ptr uint32_t*, CT::num_links> sem_ptrs;
-        std::array<uint32_t, CT::num_links> link_counters = {};
+        std::array<volatile tt_l1_ptr uint32_t*, CTArgs::num_links> sem_ptrs;
+        std::array<uint32_t, CTArgs::num_links> link_counters = {};
 
-        for (uint32_t link_idx = 0; link_idx < CT::num_links; link_idx++) {
+        for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
             sem_ptrs[link_idx] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addrs[link_idx]);
         }
 
         noc_async_read_barrier();
-        cb_push_back(CT::recv_local_data_cb_id, CT::total_num_tiles);
+        cb_push_back(CTArgs::recv_local_data_cb_id, CTArgs::total_num_tiles);
 
         uint32_t current_link = 0;
-        for (uint32_t chunk_idx = 0; chunk_idx < CT::num_chunks; chunk_idx++) {
-            const uint32_t tiles = (chunk_idx < CT::num_chunks - 1) ? CT::tiles_per_chunk : CT::last_chunk_tiles;
+        for (uint32_t chunk_idx = 0; chunk_idx < CTArgs::num_chunks; chunk_idx++) {
+            const uint32_t tiles =
+                (chunk_idx < CTArgs::num_chunks - 1) ? CTArgs::tiles_per_chunk : CTArgs::last_chunk_tiles;
 
             link_counters[current_link]++;
             noc_semaphore_wait_min(sem_ptrs[current_link], link_counters[current_link]);
-            cb_push_back(CT::remote_data_cb_id, tiles);
+            cb_push_back(CTArgs::remote_data_cb_id, tiles);
 
-            if (++current_link == CT::num_links) {
+            if (++current_link == CTArgs::num_links) {
                 current_link = 0;
             }
         }
 
-        for (uint32_t link_idx = 0; link_idx < CT::num_links; link_idx++) {
+        for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
             if (link_counters[link_idx] > 0) {
                 unified_kernels::semaphore_dec(sem_ptrs[link_idx], link_counters[link_idx]);
             }
@@ -296,7 +297,7 @@ private:
     }
 };
 
-template <typename CT>
+template <typename CTArgs>
 class Compute {
 public:
     void operator()(const ComputeArgs&) { impl(); }
@@ -309,6 +310,7 @@ private:
     static FORCE_INLINE void batched_add(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out, uint32_t num_tiles) {
         uint32_t num_batches = (num_tiles + MAX_DST_TILES - 1) / MAX_DST_TILES;
 
+        // For safety
         MATH((t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU)));
 
         cb_reserve_back(cb_out, num_tiles);
@@ -357,22 +359,25 @@ private:
 
     void impl() {
 #if defined(COMPILE_FOR_TRISC)
-        reconfig_data_format<false, true>(CT::cb_local, CT::cb_remote);
-        pack_reconfig_data_format<true>(CT::cb_out);
+        reconfig_data_format<false, true>(CTArgs::cb_local, CTArgs::cb_remote);
+        pack_reconfig_data_format<true>(CTArgs::cb_out);
 
-        if constexpr (CT::has_residual) {
-            copy_tile_to_dst_init_short(CT::cb_residual);
-            cb_wait_front(CT::cb_residual, CT::num_tiles);
+        // TODO: Fix this to account for actual dst size
+        static_assert(CTArgs::num_tiles <= 8, "num_tiles must be less than or equal to 8");
+
+        if constexpr (CTArgs::has_residual) {
+            copy_tile_to_dst_init_short(CTArgs::cb_residual);
+            cb_wait_front(CTArgs::cb_residual, CTArgs::num_tiles);
             tile_regs_acquire();
-            for (uint32_t i = 0; i < CT::num_tiles; i++) {
-                copy_tile(CT::cb_residual, i, i);
+            for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
+                copy_tile(CTArgs::cb_residual, i, i);
             }
-            cb_pop_front(CT::cb_residual, CT::num_tiles);
-            add_tiles_init(CT::cb_local, CT::cb_remote, true);
-            batched_add<false>(CT::cb_local, CT::cb_remote, CT::cb_out, CT::num_tiles);
+            cb_pop_front(CTArgs::cb_residual, CTArgs::num_tiles);
+            add_tiles_init(CTArgs::cb_local, CTArgs::cb_remote, true);
+            batched_add<false>(CTArgs::cb_local, CTArgs::cb_remote, CTArgs::cb_out, CTArgs::num_tiles);
         } else {
-            add_tiles_init(CT::cb_local, CT::cb_remote);
-            batched_add<true>(CT::cb_local, CT::cb_remote, CT::cb_out, CT::num_tiles);
+            add_tiles_init(CTArgs::cb_local, CTArgs::cb_remote);
+            batched_add<true>(CTArgs::cb_local, CTArgs::cb_remote, CTArgs::cb_out, CTArgs::num_tiles);
         }
 #endif
     }
