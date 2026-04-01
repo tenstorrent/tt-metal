@@ -9,6 +9,10 @@ Overrides the root function-scoped ``device`` fixture so that a single
 device is opened once per test module and shared across all SDPA
 tests.  This eliminates redundant CreateDevice / close_device round-trips
 in CI, cutting job wall-time significantly.
+
+Tests marked with ``@pytest.mark.requires_fresh_device`` get a dedicated
+per-test device with an empty program cache.  The shared device is
+temporarily closed while the fresh device is in use.
 """
 
 import importlib.util
@@ -56,40 +60,143 @@ _rc = _root_conftest()
 
 
 # ---------------------------------------------------------------------------
-# Session-scoped device fixture
+# Custom markers
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(scope="module")
-def device(request):
-    """
-    Open a single device per test module for SDPA tests.
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "requires_fresh_device: test needs a dedicated per-test device (empty program cache)",
+    )
 
-    This shadows the root function-scoped ``device`` fixture for every
-    test collected under ``tests/ttnn/unit_tests/operations/sdpa/``.
-    """
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _resolve_device_id(config):
+    """Return the device_id from CLI options, accounting for TG clusters."""
+    device_id = config.getoption("device_id")
+    if _rc.is_tg_cluster() and not device_id:
+        device_id = _rc.first_available_tg_device()
+    return device_id
+
+
+def _open_device(device_id):
+    """Open a device and attach a CacheEntriesCounter."""
     import ttnn
 
     from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 
-    device_id = request.config.getoption("device_id")
-
-    # On TG clusters, target the first user-exposed device, not device 0.
-    if _rc.is_tg_cluster() and not device_id:
-        device_id = _rc.first_available_tg_device()
-
-    request.node.pci_ids = [ttnn.GetPCIeDeviceID(device_id)]
-
     updated_device_params = get_updated_device_params({})
-    device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
-    ttnn.SetDefaultDevice(device)
+    dev = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
+    ttnn.SetDefaultDevice(dev)
+    dev.cache_entries_counter = CacheEntriesCounter(dev)
+    return dev
 
-    device.cache_entries_counter = CacheEntriesCounter(device)
 
-    logger.info("Module-scoped SDPA device opened (device_id={})", device_id)
-    yield device
+def _close_device(dev):
+    import ttnn
 
-    ttnn.close_device(device)
-    logger.info("Module-scoped SDPA device closed")
+    ttnn.close_device(dev)
+
+
+# ---------------------------------------------------------------------------
+# Module-scoped device manager
+# ---------------------------------------------------------------------------
+
+class _DeviceManager:
+    """
+    Manages a module-scoped shared device that can be temporarily closed
+    when a test needs a fresh device.
+
+    The shared device is opened lazily on first ``get()`` call, avoiding
+    unnecessary open/close cycles when all tests in a module use fresh
+    devices (e.g. program-cache test modules).
+    """
+
+    def __init__(self, device_id):
+        self.device = None
+        self.device_id = device_id
+
+    def get(self):
+        """Return the shared device, opening it if necessary."""
+        if self.device is None:
+            self.device = _open_device(self.device_id)
+            logger.info("Module-scoped SDPA device opened (device_id={})", self.device_id)
+        return self.device
+
+    def close(self):
+        if self.device is not None:
+            _close_device(self.device)
+            logger.info("Module-scoped SDPA device closed")
+            self.device = None
+
+    def suspend(self):
+        """Temporarily close the shared device so a fresh device can use the hardware."""
+        if self.device is not None:
+            _close_device(self.device)
+            logger.info("Module-scoped SDPA device suspended for fresh-device test")
+            self.device = None
+
+    def resume(self):
+        """Reopen the shared device after a fresh-device test completes.
+
+        Note: this is a no-op — the device will be lazily reopened on next
+        ``get()`` call.  This avoids unnecessary reopen when the next test
+        also needs a fresh device.
+        """
+        pass
+
+
+@pytest.fixture(scope="module")
+def _device_manager(request):
+    """Module-scoped device manager that owns the shared device lifecycle."""
+    import ttnn
+
+    device_id = _resolve_device_id(request.config)
+    mgr = _DeviceManager(device_id)
+    request.node.pci_ids = [ttnn.GetPCIeDeviceID(device_id)]
+    yield mgr
+    mgr.close()
+
+
+# ---------------------------------------------------------------------------
+# Per-test device fixture
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="function")
+def device(request, _device_manager):
+    """
+    Per-test device fixture for SDPA tests.
+
+    By default, returns the shared module-scoped device.  If the test is
+    decorated with ``@pytest.mark.requires_fresh_device``, the shared
+    device is temporarily closed and a brand-new device is opened for that
+    single test, then closed — and the shared device is lazily reopened.
+
+    This is necessary for tests that depend on empty program-cache state
+    (e.g. absolute cache-count assertions) because ``clear_program_cache()``
+    cannot be used safely.
+    """
+    import ttnn
+
+    if request.node.get_closest_marker("requires_fresh_device"):
+        # Close shared device (if open) so the hardware is free
+        _device_manager.suspend()
+
+        device_id = _device_manager.device_id
+        request.node.pci_ids = [ttnn.GetPCIeDeviceID(device_id)]
+        fresh = _open_device(device_id)
+
+        logger.info("Fresh per-test device opened for {}", request.node.name)
+        yield fresh
+
+        _close_device(fresh)
+        logger.info("Fresh per-test device closed for {}", request.node.name)
+        # Shared device will be lazily reopened on next get() call
+    else:
+        yield _device_manager.get()
 
 
 # ---------------------------------------------------------------------------

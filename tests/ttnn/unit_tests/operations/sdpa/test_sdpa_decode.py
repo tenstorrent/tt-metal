@@ -88,6 +88,7 @@ def test_sdpa_decode_non_tile_aligned_heads(device, b, nh, nkv, s, d, dtype, gri
     )
 
 
+@pytest.mark.requires_fresh_device
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
@@ -147,6 +148,7 @@ def test_sdpa_decode_ignore_users(device, b, nh, nkv, s, d, dtype, grid_size, q_
     )
 
 
+@pytest.mark.requires_fresh_device
 @pytest.mark.parametrize(
     "kv_dtype, q_dtype",
     [
@@ -213,6 +215,7 @@ def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype
     )
 
 
+@pytest.mark.requires_fresh_device
 @pytest.mark.parametrize(
     "dtype",
     [ttnn.bfloat8_b],

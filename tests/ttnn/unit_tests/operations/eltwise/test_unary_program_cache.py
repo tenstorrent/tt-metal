@@ -31,6 +31,13 @@ import pytest
 import torch
 
 import ttnn
+
+# Every test in this module asserts on exact program-cache entry counts
+# (e.g. "running this config twice produces exactly 1 cache entry").  With a
+# shared module-scoped device, prior tests leave entries in the cache that
+# make these assertions invalid.  Each test needs an empty program cache,
+# which requires a fresh device (clear_program_cache() is unsafe).
+pytestmark = pytest.mark.requires_fresh_device
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import is_wormhole_b0
 
