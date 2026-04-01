@@ -24,7 +24,7 @@ At a high level (no GPU path; reference and prep run on **CPU**, model math on *
 **Key details:**
 
 - Transformer and VAE TT code live under `tt/`; weights are mapped from the reference checkpoints.
-- Demo entrypoint is `**tests/demo/demo.py`** (TTNN path); `tests/demo/inference_torch.py` is a CPU PyTorch reference runner for comparison/debug.
+- Demo entrypoint is `**tests/demo/demo.py`** (TTNN path);
 
 ## Performance
 
@@ -69,7 +69,7 @@ lingbot_va/
 ├── tests/
 │   ├── pcc/                    # PCC (accuracy) tests vs reference
 │   ├── perf/                   # Device perf + E2E pipeline perf (pytest)
-│   ├── demo/                   # demo.py, inference_torch.py, sample_images/
+│   ├── demo/                   # demo.py, sample_images/
 │   └── download_pretrained_weights.py # Script to download the pretrained weights
 ├── PR_SUMMARY.md               # PR / release template (problem, PCC table, host paths)
 └── README.md
@@ -132,7 +132,7 @@ TTNN vs PyTorch reference; values are **PCC × 100** (%).
 
 ```bash
 # One file
-pytest models/experimental/lingbot_va/tests/pcc/test_lingbot_va.py -v
+pytest models/experimental/lingbot_va/tests/pcc/test_transformer_wan.py
 
 # All PCC tests in this model
 pytest models/experimental/lingbot_va/tests/pcc/ -v
@@ -145,10 +145,10 @@ pytest models/experimental/lingbot_va/tests/pcc/test_encoder_wan.py::test_umt5_e
 ### Performance Tests
 
 
-| File                                      | Test function                            | Notes                                                                                                              |
-| ----------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `tests/perf/test_perf_ttnn_lingbot_va.py` | `test_perf_device_bare_metal_lingbot_va` | Device profiler (Tracy); nested run of `test_lingbot_va_ttnn_forward_run`                                          |
-| `tests/perf/test_perf_e2e.py`             | `test_perf_lingbot_va_e2e_2cq_no_trace`  | `TtLingbotVA` + `tt_cnn` pipeline, 2 command queues, no trace; requires checkpoints under `reference/checkpoints/` |
+| File                                      | Test function                            | Notes                                                                                                               |
+| ----------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `tests/perf/test_perf_ttnn_lingbot_va.py` | `test_perf_device_bare_metal_lingbot_va` | Device profiler (Tracy); nested run of `test_lingbot_va_ttnn_forward_run`                                           |
+| `tests/perf/test_perf_e2e.py`             | `test_perf_lingbot_va_e2e_2cq_trace`     | `TtLingbotVA` + `tt_cnn` pipeline, 2 command queues with trace; requires checkpoints under `reference/checkpoints/` |
 
 
 **Device perf (Tracy / bare-metal):**
@@ -195,7 +195,7 @@ Ensure `--images-dir` contains the three `observation.images.*.png` files, or se
 
 1. **PyTorch reference runtime:** Running the full **PyTorch reference** stack to completion can take a long time, so it is not always practical to drive bit-for-bit comparisons from an on-demand reference run on the same box.
 2. **PCC and intermediate dumps:** For several checks, **TT outputs and PCC are validated against intermediate tensors** produced by the PyTorch reference on a **separate host** (saved dumps from that run), rather than from a freshly executed reference path collocated with every TT invocation.
-3. **tt-perf-report:** When generating reports from the device perf test, some versions of tt-perf-report crash in evaluate_fidelity with KeyError: 'FLOAT32' because the matmul advice path does not list FLOAT32 in its internal datatype → mantissa lookup.
+3. **TT-Perf-Report:** When generating reports from the device perf test, some versions of tt-perf-report crash in evaluate_fidelity with KeyError: 'FLOAT32' because the matmul advice path does not list FLOAT32 in its internal datatype → mantissa lookup.
 
 ## Model Notes
 

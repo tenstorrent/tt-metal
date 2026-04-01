@@ -534,7 +534,7 @@ def _free_tt_vae_from_models(models: dict, config) -> None:
     else:
         models["streaming_vae_half"] = None
     gc.collect()
-    logger.info("Freed TT VAE from device; using PyTorch VAE wrapper for rest of run.")
+    logger.info("Freed TT VAE from device")
 
 
 def _load_transformer_into_models(models: dict, config) -> None:

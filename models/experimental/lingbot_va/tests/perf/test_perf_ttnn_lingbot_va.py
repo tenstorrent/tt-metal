@@ -8,22 +8,11 @@ The forward run lives in ``test_perf_ttnn_lingbot_va_runner.py``.
 
 from __future__ import annotations
 
-import warnings
-
-# Before any import that may pull ttnn/SWIG (so Python does not emit these during import).
-warnings.filterwarnings("ignore", message=r".*SwigPy(Packed|Object).*", category=DeprecationWarning)
-warnings.filterwarnings("ignore", message=r".*swigvarlink.*", category=DeprecationWarning)
-
-
 import pytest
 from tracy.process_model_log import run_device_profiler
 
 import models
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
-
-pytestmark = pytest.mark.filterwarnings(
-    "ignore:.*(SwigPy|swigvarlink).*:DeprecationWarning",
-)
 
 
 def _run_device_profiler_op_support_count(*args, **kwargs):
