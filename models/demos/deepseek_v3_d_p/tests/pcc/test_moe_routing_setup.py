@@ -76,7 +76,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             },
             1,
             ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-4x2"),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="mesh-2x4",
         ),
     ],
