@@ -1079,10 +1079,29 @@ def main() -> int:
             continue
         job_slug = sanitize_for_path(f"{workflow_name}-{job_name}")[:120]
         log_paths: list[str] = []
+        log_fetch_error = ""
         for idx, url in enumerate(job_urls, start=1):
             log_path = logs_root / job_slug / f"run{idx}.log"
-            write_job_log_file(job_url=url, read_token=read_token, out_path=log_path)
-            log_paths.append(str(log_path))
+            try:
+                write_job_log_file(job_url=url, read_token=read_token, out_path=log_path)
+                log_paths.append(str(log_path))
+            except Exception as exc:
+                log_fetch_error = str(exc)
+                break
+        if log_fetch_error:
+            skipped.append(
+                {
+                    "job_name": job_name,
+                    "workflow_name": workflow_name,
+                    "reason": "log_fetch_failed",
+                    "details": log_fetch_error[:500],
+                }
+            )
+            log(
+                "Skipped candidate due to log fetch failure "
+                f"workflow={workflow_name} job={job_name}: {log_fetch_error[:220]}"
+            )
+            continue
         to_review.append(
             {
                 "workflow_name": workflow_name,
