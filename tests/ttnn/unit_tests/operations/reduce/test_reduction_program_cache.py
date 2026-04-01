@@ -27,6 +27,8 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
+TEST_PADDING_VALUE = -42
+
 
 @pytest.fixture
 def isolate_program_cache(device):
@@ -46,6 +48,7 @@ def run_reduce_op(device, op, shape, dim, dtype=ttnn.bfloat16, memory_config=ttn
     torch_result = ttnn_ops[op](torch_a, dim=dim, keepdim=True)
 
     tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+    ttnn.fill_implicit_tile_padding(tt_a, TEST_PADDING_VALUE)  # garbage padding to test that reduce removes it
     with device.cache_entries_counter.measure():
         tt_result = op(tt_a, dim=dim, keepdim=True, memory_config=memory_config)
     tt_result = ttnn.to_torch(tt_result)
@@ -258,6 +261,7 @@ def test_reduce_cache_miss_sub_core_grids(device, isolate_program_cache):
     grid_b = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 5))])
 
     tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.fill_implicit_tile_padding(tt_a, TEST_PADDING_VALUE)  # garbage padding to test that reduce removes it
     with device.cache_entries_counter.measure():
         tt_out1 = ttnn.sum(tt_a, dim=-1, keepdim=True, sub_core_grids=grid_a)
         tt_out2 = ttnn.sum(tt_a, dim=-1, keepdim=True, sub_core_grids=grid_b)

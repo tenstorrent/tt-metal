@@ -10,6 +10,8 @@ from models.common.utility_functions import is_watcher_enabled
 import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
+TEST_PADDING_VALUE = -42
+
 
 @pytest.mark.parametrize(
     "T, B, C, cores_y, cores_x",
@@ -37,7 +39,9 @@ def test_ema(device, T, B, C, cores_y, cores_x):
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-
+    ttnn.fill_implicit_tile_padding(
+        ttnn_input_tensor, TEST_PADDING_VALUE
+    )  # garbage padding to test that the operation removes it
     alpha = 0.25
     num_itr = 2  # second iteration to help catch potential runtime args issue.
     for _ in range(num_itr):

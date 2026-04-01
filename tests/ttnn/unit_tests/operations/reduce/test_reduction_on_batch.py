@@ -12,6 +12,8 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import torch_random
 
+TEST_PADDING_VALUE = -42
+
 
 @pytest.mark.parametrize(
     "shape,shard_shape",
@@ -59,7 +61,7 @@ def test_reduce_on_batch(shape, shard_shape, dim, interleaved, device):
     input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, device=device
     )
-
+    ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)  # garbage padding to test that sum removes it
     output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=True, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
 

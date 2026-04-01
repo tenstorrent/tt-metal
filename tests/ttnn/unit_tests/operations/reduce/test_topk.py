@@ -11,6 +11,7 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_equal, assert_numeric_metrics
 
 UINT16_MAX = 65535
+TEST_PADDING_VALUE = -42
 
 
 def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids=None, pass_indices_tensor=False):
@@ -26,6 +27,9 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     torch_dtype = torch.bfloat16
     input = torch.randn(shape, dtype=torch_dtype) * 0.9
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
+    ttnn.fill_implicit_tile_padding(
+        ttnn_input, TEST_PADDING_VALUE
+    )  # garbage padding to test that the operation removes it
 
     pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
 
@@ -258,6 +262,9 @@ def run_topk_bfloat8_inf_test(N, C, H, W, k, dim, sub_core_grids, device):
     pyt_values, _ = torch.topk(input_torch, k, dim=dim, largest=True, sorted=True)
 
     ttnn_input = ttnn.from_torch(input_torch, ttnn.bfloat8_b, layout=ttnn.Layout.TILE, device=device)
+    ttnn.fill_implicit_tile_padding(
+        ttnn_input, TEST_PADDING_VALUE
+    )  # garbage padding to test that the operation removes it
     ttnn_values, ttnn_indices = ttnn.topk(
         ttnn_input, k, dim=dim, largest=True, sorted=True, sub_core_grids=sub_core_grids
     )
@@ -344,6 +351,9 @@ def test_topk_input_dtypes_raise(torch_input_tensor_dtype, ttnn_input_tensor_dty
         input_torch = torch.randint(0, 100, shape, dtype=torch_input_tensor_dtype)
 
     ttnn_input = ttnn.from_torch(input_torch, ttnn_input_tensor_dtype, layout=ttnn.Layout.TILE, device=device)
+    ttnn.fill_implicit_tile_padding(
+        ttnn_input, TEST_PADDING_VALUE
+    )  # garbage padding to test that the operation removes it
 
     with pytest.raises(Exception):
         ttnn.topk(ttnn_input, k=32, dim=-1, largest=True, sorted=True)
@@ -366,7 +376,9 @@ def test_topk_preallocated_dtype_raise(value_dtype, index_dtype, device):
 
     input_torch = torch.randn(shape, dtype=torch.bfloat16)
     ttnn_input = ttnn.from_torch(input_torch, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
-
+    ttnn.fill_implicit_tile_padding(
+        ttnn_input, TEST_PADDING_VALUE
+    )  # garbage padding to test that the operation removes it
     value_tensor = ttnn.empty_like(ttnn_input, dtype=value_dtype)
     index_tensor = ttnn.empty_like(ttnn_input, dtype=index_dtype)
 
