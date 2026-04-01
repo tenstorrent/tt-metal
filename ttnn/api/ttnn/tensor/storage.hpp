@@ -170,7 +170,7 @@ struct DeviceStorage {
     //
     // These are considered internal functions and are not part of the public API.
     // They will be replaced with a new initiative as described in: #38093
-    DeviceStorage(const DeviceStorage& owning_storage, std::shared_ptr<distributed::MeshBuffer> surface_buffer);
+    DeviceStorage(const DeviceStorage& owning_storage, MeshTensor surface_mesh_tensor);
     // End internal functions.
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -196,14 +196,14 @@ private:
     DeviceStorage(
         std::shared_ptr<MeshTensor> mesh_tensor,
         std::vector<distributed::MeshCoordinate> coords,
-        std::shared_ptr<distributed::MeshBuffer> root_mesh_buffer);
+        std::shared_ptr<MeshTensor> root_mesh_tensor);
 
     std::shared_ptr<MeshTensor> mesh_tensor_;
     std::vector<distributed::MeshCoordinate> coords_;
 
     // Experimental features for viewing an existing DeviceStorage
-    const std::shared_ptr<distributed::MeshBuffer>& get_root_mesh_buffer() const;
-    std::shared_ptr<distributed::MeshBuffer> root_mesh_buffer;
+    const std::shared_ptr<MeshTensor>& get_root_mesh_tensor() const;
+    std::shared_ptr<MeshTensor> root_mesh_tensor_;
     // End experimental features
 };
 

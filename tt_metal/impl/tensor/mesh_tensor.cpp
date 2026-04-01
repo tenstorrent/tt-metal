@@ -72,7 +72,7 @@ MeshTensor::~MeshTensor() = default;
 
 distributed::MeshBuffer& MeshTensor::mesh_buffer() const { return *mesh_buffer_invariant_breaking(); }
 
-std::shared_ptr<distributed::MeshBuffer> MeshTensor::mesh_buffer_invariant_breaking() const {
+const std::shared_ptr<distributed::MeshBuffer>& MeshTensor::mesh_buffer_invariant_breaking() const {
     TT_ASSERT(impl != nullptr, "MeshTensor is in default constructed state.");
     return impl->mesh_buffer();
 }

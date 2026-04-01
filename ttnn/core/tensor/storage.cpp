@@ -82,20 +82,22 @@ DeviceStorage::DeviceStorage(MeshTensor mesh_tensor_, std::vector<distributed::M
     DeviceStorage(std::make_shared<MeshTensor>(std::move(mesh_tensor_)), std::move(coords), nullptr) {}
 
 DeviceStorage::DeviceStorage(const DeviceStorage& other, std::vector<distributed::MeshCoordinate> coords) :
-    DeviceStorage(other.mesh_tensor_, std::move(coords), other.root_mesh_buffer) {}
+    DeviceStorage(other.mesh_tensor_, std::move(coords), other.root_mesh_tensor_) {}
 
-// TODO: what do we do with this?
-// DeviceStorage::DeviceStorage(
-//     const DeviceStorage& owning_storage, std::shared_ptr<distributed::MeshBuffer> surface_buffer) :
-//     DeviceStorage(std::move(surface_buffer), owning_storage.coords_, owning_storage.get_root_mesh_buffer()) {}
+DeviceStorage::DeviceStorage(const DeviceStorage& owning_storage, MeshTensor surface_mesh_tensor) :
+    DeviceStorage(
+        std::make_shared<MeshTensor>(std::move(surface_mesh_tensor)),
+        owning_storage.coords_,
+        owning_storage.get_root_mesh_tensor()) {}
 
 DeviceStorage::DeviceStorage(
     std::shared_ptr<MeshTensor> mesh_tensor,
     std::vector<distributed::MeshCoordinate> coords,
-    std::shared_ptr<distributed::MeshBuffer> root_mesh_buffer) :
-    mesh_tensor_(std::move(mesh_tensor)), coords_(std::move(coords)), root_mesh_buffer(std::move(root_mesh_buffer)) {
+    std::shared_ptr<MeshTensor> root_mesh_tensor) :
+    mesh_tensor_(std::move(mesh_tensor)), coords_(std::move(coords)), root_mesh_tensor_(std::move(root_mesh_tensor)) {
     if (!is_allocated()) {
-        this->root_mesh_buffer = nullptr;
+        this->mesh_tensor_ = nullptr;
+        this->root_mesh_tensor_ = nullptr;
         return;
     }
     CMAKE_UNIQUE_NAMESPACE::validate_mesh_coordinates(coords_, get_device());
@@ -109,7 +111,9 @@ const distributed::MeshBuffer& DeviceStorage::get_mesh_buffer() const {
 }
 
 bool DeviceStorage::is_sole_owner_of_device_memory() const {
-    return mesh_tensor_.use_count() == 1 && get_root_mesh_buffer().use_count() == 1;
+    const auto& surface_mesh_buffer = mesh_tensor_->mesh_buffer_invariant_breaking();
+    const auto& root_mesh_buffer = get_root_mesh_tensor()->mesh_buffer_invariant_breaking();
+    return surface_mesh_buffer.use_count() == 1 && root_mesh_buffer.use_count() == 1;
 }
 
 const MeshTensor& DeviceStorage::get_mesh_tensor() const {
@@ -122,18 +126,17 @@ std::shared_ptr<distributed::MeshBuffer> DeviceStorage::get_mesh_buffer_leak_own
     return mesh_tensor_->mesh_buffer_invariant_breaking();
 }
 
-// TODO: what do we do with this?
-// const std::shared_ptr<distributed::MeshBuffer>& DeviceStorage::get_root_mesh_buffer() const {
-//     return root_mesh_buffer ? root_mesh_buffer : mesh_buffer;
-// }
+const std::shared_ptr<MeshTensor>& DeviceStorage::get_root_mesh_tensor() const {
+    return root_mesh_tensor_ ? root_mesh_tensor_ : mesh_tensor_;
+}
 
 void DeviceStorage::deallocate() {
     if (!is_allocated()) {
         return;
     }
 
-    get_root_mesh_buffer()->deallocate();
-    root_mesh_buffer = nullptr;
+    get_root_mesh_tensor()->mesh_buffer().deallocate();
+    root_mesh_tensor_ = nullptr;
     mesh_tensor_ = nullptr;
 }
 
