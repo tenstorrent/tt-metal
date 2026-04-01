@@ -152,6 +152,37 @@ def _test_cache_context(mesh_shape: tuple[int, int] = (4, 2)) -> CacheContext:
     )
 
 
+def _deallocate_attention_weights(attn: AttentionWeights) -> None:
+    """Deallocate fused tensors and optional gate_bias for attention-only cache tests."""
+    seen: set[int] = set()
+    for f in (
+        "q_a_proj",
+        "q_b_proj",
+        "kv_a_proj",
+        "o_proj",
+        "attn_norm",
+        "q_norm",
+        "kv_norm",
+        "ffn_norm",
+        "kv_b1_proj",
+        "kv_b2_proj",
+    ):
+        ot = getattr(attn, f, None)
+        if ot is not None and hasattr(ot, "fused_tensor"):
+            fid = id(ot.fused_tensor)
+            if fid not in seen:
+                seen.add(fid)
+                ttnn.deallocate(ot.fused_tensor, force=True)
+    gm = getattr(attn, "gate_mm", None)
+    if gm is not None and hasattr(gm, "fused_tensor"):
+        fid = id(gm.fused_tensor)
+        if fid not in seen:
+            ttnn.deallocate(gm.fused_tensor, force=True)
+    gb = getattr(attn, "gate_bias", None)
+    if gb is not None:
+        ttnn.deallocate(gb, force=True)
+
+
 # Expected placements for 4x2 mesh (mla_tp=2, moe_tp=8)
 _PLACEMENTS_SHARD_NONE_1 = [ttnn.PlacementReplicate(), ttnn.PlacementShard(1)]
 _PLACEMENTS_SHARD_NONE_0 = [ttnn.PlacementReplicate(), ttnn.PlacementShard(0)]
@@ -1265,8 +1296,230 @@ def test_prepare_lm_head_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
+def test_prepare_attention_weights_with_cache_dense_4x2(bh_2d_mesh_device, tmp_path):
+    """Attention fusion groups (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms) via TensorCache: miss then hit."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    cache_config = CacheConfig(cache=TensorCache(tmp_path), context=_test_cache_context())
+
+    state = _layer_state_dict(0, is_moe=False)
+    bdw = BlitzDecodeWeights(submesh)
+
+    attn = prepare_attention_weights(bdw, state, 0, is_moe=False, cache_config=cache_config)
+    assert attn.gate_mm is None
+    assert attn.q_a_proj.tensor_shape == (3584, 3072)
+
+    _deallocate_attention_weights(attn)
+
+    attn_hit = prepare_attention_weights(bdw, state, 0, is_moe=False, cache_config=cache_config)
+    assert attn_hit.gate_mm is None
+    assert attn_hit.q_a_proj.tensor_shape == attn.q_a_proj.tensor_shape
+
+    objects_dir = cache_config.cache.local_root / "objects"
+    artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
+    assert (
+        len(artifact_dirs) >= 3
+    ), f"Expected 3 fusion artifacts (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms), found {len(artifact_dirs)}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_prepare_attention_weights_with_cache_moe_4x2(bh_2d_mesh_device, tmp_path):
+    """Attention fusion groups + gate_bias via TensorCache on MoE layer: miss then hit."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    cache_config = CacheConfig(cache=TensorCache(tmp_path), context=_test_cache_context())
+
+    state = _layer_state_dict(0, is_moe=True, seed=43)
+    bdw = BlitzDecodeWeights(submesh)
+
+    attn = prepare_attention_weights(bdw, state, 0, is_moe=True, cache_config=cache_config)
+    assert attn.gate_mm is not None
+    assert attn.gate_bias is not None
+
+    _deallocate_attention_weights(attn)
+
+    attn_hit = prepare_attention_weights(bdw, state, 0, is_moe=True, cache_config=cache_config)
+    assert attn_hit.gate_mm is not None
+    assert attn_hit.gate_bias.shape == (16, 16)
+
+    objects_dir = cache_config.cache.local_root / "objects"
+    artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
+    assert len(artifact_dirs) >= 4, f"Expected 3 fusion artifacts + gate_bias, found {len(artifact_dirs)}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_prepare_shared_expert_weights_with_cache_dense_4x2(bh_2d_mesh_device, tmp_path):
+    """gate_up fusion group via TensorCache (dense path): miss then hit."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    cache_config = CacheConfig(cache=TensorCache(tmp_path), context=_test_cache_context())
+
+    state = _layer_state_dict(0, is_moe=False)
+    bdw = BlitzDecodeWeights(submesh)
+
+    shared = prepare_shared_expert_weights(bdw, state, 0, is_moe=False, cache_config=cache_config)
+    assert shared.shared_gate_proj.tensor_shape is not None
+
+    ttnn.deallocate(shared.shared_gate_proj.fused_tensor, force=True)
+    ttnn.deallocate(shared.shared_up_proj.fused_tensor, force=True)
+    ttnn.deallocate(shared.shared_down_proj, force=True)
+
+    shared_hit = prepare_shared_expert_weights(bdw, state, 0, is_moe=False, cache_config=cache_config)
+    assert shared_hit.shared_gate_proj.tensor_shape == shared.shared_gate_proj.tensor_shape
+
+    objects_dir = cache_config.cache.local_root / "objects"
+    artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
+    assert len(artifact_dirs) >= 2, f"Expected gate_up + shared_down_proj artifacts, found {len(artifact_dirs)}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_prepare_shared_expert_weights_with_cache_moe_4x2(bh_2d_mesh_device, tmp_path):
+    """gate_up fusion group via TensorCache (MoE path): miss then hit."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    cache_config = CacheConfig(cache=TensorCache(tmp_path), context=_test_cache_context())
+
+    state = _layer_state_dict(0, is_moe=True, seed=43)
+    bdw = BlitzDecodeWeights(submesh)
+
+    shared = prepare_shared_expert_weights(bdw, state, 0, is_moe=True, cache_config=cache_config)
+    assert shared.shared_gate_proj.tensor_shape is not None
+
+    ttnn.deallocate(shared.shared_gate_proj.fused_tensor, force=True)
+    ttnn.deallocate(shared.shared_up_proj.fused_tensor, force=True)
+    ttnn.deallocate(shared.shared_down_proj, force=True)
+
+    shared_hit = prepare_shared_expert_weights(bdw, state, 0, is_moe=True, cache_config=cache_config)
+    assert shared_hit.shared_gate_proj.tensor_shape == shared.shared_gate_proj.tensor_shape
+
+    objects_dir = cache_config.cache.local_root / "objects"
+    artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
+    assert len(artifact_dirs) >= 2, f"Expected gate_up + shared_down_proj artifacts, found {len(artifact_dirs)}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_prepare_routed_expert_weights_with_cache_dense_4x2(bh_2d_mesh_device, tmp_path):
+    """Dense MLP routed projections (stacked on mesh) via TensorCache: miss then hit."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    cache_config = CacheConfig(cache=TensorCache(tmp_path), context=_test_cache_context())
+
+    state = _layer_state_dict(0, is_moe=False)
+    bdw = BlitzDecodeWeights(submesh)
+
+    routed = prepare_routed_expert_weights(bdw, state, 0, is_moe=False, cache_config=cache_config)
+    assert isinstance(routed, DenseRoutedExpertWeights)
+
+    ttnn.deallocate(routed.routed_gate_proj, force=True)
+    ttnn.deallocate(routed.routed_up_proj, force=True)
+    ttnn.deallocate(routed.routed_down_proj, force=True)
+
+    routed_hit = prepare_routed_expert_weights(bdw, state, 0, is_moe=False, cache_config=cache_config)
+    assert isinstance(routed_hit, DenseRoutedExpertWeights)
+
+    objects_dir = cache_config.cache.local_root / "objects"
+    artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
+    assert len(artifact_dirs) >= 3, f"Expected 3 stacked routed artifacts (gate/up/down), found {len(artifact_dirs)}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_prepare_routed_expert_weights_with_cache_moe_4x2(bh_2d_mesh_device, tmp_path):
+    """MoE routed experts (per-expert DRAM) via TensorCache: miss then hit."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    cache_config = CacheConfig(cache=TensorCache(tmp_path), context=_test_cache_context())
+
+    state = _layer_state_dict(0, is_moe=True, seed=43)
+    bdw = BlitzDecodeWeights(submesh)
+
+    routed = prepare_routed_expert_weights(
+        bdw,
+        state,
+        0,
+        is_moe=True,
+        num_routed_experts=NUM_ROUTED_EXPERTS_FOR_TESTS,
+        cache_config=cache_config,
+    )
+    assert isinstance(routed, MoERoutedExpertWeights)
+    assert len(routed.routed_gate_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
+
+    for t in routed.routed_gate_proj + routed.routed_up_proj + routed.routed_down_proj:
+        ttnn.deallocate(t, force=True)
+
+    routed_hit = prepare_routed_expert_weights(
+        bdw,
+        state,
+        0,
+        is_moe=True,
+        num_routed_experts=NUM_ROUTED_EXPERTS_FOR_TESTS,
+        cache_config=cache_config,
+    )
+    assert isinstance(routed_hit, MoERoutedExpertWeights)
+
+    objects_dir = cache_config.cache.local_root / "objects"
+    artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
+    assert (
+        len(artifact_dirs) >= NUM_ROUTED_EXPERTS_FOR_TESTS * 3
+    ), f"Expected {NUM_ROUTED_EXPERTS_FOR_TESTS * 3} per-expert routed artifacts, found {len(artifact_dirs)}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_prepare_dense_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
+    """Full dense layer via TensorCache: attention + gate_up + shared_down + routed; miss then hit."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    cache_config = CacheConfig(cache=TensorCache(tmp_path), context=_test_cache_context())
+
+    state = _layer_state_dict(0, is_moe=False)
+    bdw = BlitzDecodeWeights(submesh)
+
+    layer = prepare_dense_layer_weights(bdw, state, 0, cache_config=cache_config)
+    assert isinstance(layer, DeepSeekV3DenseLayerWeights)
+
+    _deallocate_layer(layer)
+
+    layer_hit = prepare_dense_layer_weights(bdw, state, 0, cache_config=cache_config)
+    assert isinstance(layer_hit, DeepSeekV3DenseLayerWeights)
+    assert layer_hit.q_a_proj.tensor_shape == layer.q_a_proj.tensor_shape
+
+    objects_dir = cache_config.cache.local_root / "objects"
+    artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
+    assert (
+        len(artifact_dirs) >= 8
+    ), f"Expected 3 attention fusion + gate_up + shared_down + 3 routed stacked (8), found {len(artifact_dirs)}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
 def test_prepare_moe_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
-    """Prepare MoE layer via TensorCache on 4x2 mesh: verifies gate_bias caching (cold miss then warm hit)."""
+    """Prepare MoE layer via TensorCache: fusion + gate_bias + gate_up + shared_down + routed experts."""
     _skip_unless_4x2_mesh(bh_2d_mesh_device)
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     cache_config = CacheConfig(cache=TensorCache(tmp_path), context=_test_cache_context())
@@ -1301,7 +1554,12 @@ def test_prepare_moe_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
 
     objects_dir = cache_config.cache.local_root / "objects"
     artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
-    assert len(artifact_dirs) >= 1, f"Expected at least 1 cached artifact (gate_bias), found {len(artifact_dirs)}"
+    n_r = NUM_ROUTED_EXPERTS_FOR_TESTS
+    # 3 attention fusion + gate_bias + gate_up + shared_down + n_r * 3 routed = 6 + n_r * 3
+    assert len(artifact_dirs) >= 6 + n_r * 3, (
+        f"Expected 3 attn + gate_bias + gate_up + shared_down + {n_r * 3} routed ({6 + n_r * 3}), "
+        f"found {len(artifact_dirs)}"
+    )
 
 
 @pytest.mark.parametrize(
