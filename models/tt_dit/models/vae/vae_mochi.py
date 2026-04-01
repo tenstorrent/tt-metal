@@ -157,8 +157,7 @@ class ResBlock(Module):
             },
         }
         self.num_out_blocks_map = {
-            # Entries for various H*W gathered spatial sizes.
-            # Keys are (H_full * W_full) after all-gather; -1 = auto-compute.
+            # Tuned entries for known H*W gathered spatial sizes.
             768: {
                 40 * 50: 2,
                 60 * 106: 8,
@@ -176,6 +175,10 @@ class ResBlock(Module):
                 480 * 848: 140,
             },
         }
+        # Max spatial elements per GroupNorm block, derived from tuned entries above.
+        # Used as fallback for HW sizes not in the map (e.g. from padding differences
+        # between Galaxy/T3K configs).
+        self._max_hw_per_block = {768: 1000, 512: 2000, 256: 2133, 128: 2560}
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
 
@@ -397,7 +400,9 @@ class ResBlock(Module):
 
         HW = x_tiled_NTHWC.shape[2]
         C = x_tiled_NTHWC.shape[3]
-        num_out_blocks = self.num_out_blocks_map.get(C, {}).get(HW, -1)
+        num_out_blocks = self.num_out_blocks_map.get(C, {}).get(
+            HW, (HW + self._max_hw_per_block.get(C, 1000) - 1) // self._max_hw_per_block.get(C, 1000)
+        )
 
         x_norm_tiled_NTHWC = self.norm1(x_tiled_NTHWC, num_out_blocks)
 
@@ -434,7 +439,9 @@ class ResBlock(Module):
 
         HW = x_conv1_tiled_NTHWC.shape[2]
         C = x_conv1_tiled_NTHWC.shape[3]
-        num_out_blocks = self.num_out_blocks_map.get(C, {}).get(HW, -1)
+        num_out_blocks = self.num_out_blocks_map.get(C, {}).get(
+            HW, (HW + self._max_hw_per_block.get(C, 1000) - 1) // self._max_hw_per_block.get(C, 1000)
+        )
         x_tiled_NTHWC = self.norm2(x_conv1_tiled_NTHWC, num_out_blocks)
         ttnn.deallocate(x_conv1_tiled_NTHWC)
         x_tiled_NTHWC = ttnn.silu(x_tiled_NTHWC, output_tensor=x_tiled_NTHWC)  # in-place
