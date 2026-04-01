@@ -793,7 +793,10 @@ jobs:
   ttnn-generate-sweeps:
     name: Generate Sweep Vectors ${{ needs.resolve-inputs.outputs.arch }} ${{ needs.resolve-inputs.outputs.runner-label }}
     needs: [resolve-inputs, build-artifact, generate-master-json-from-db]
-    if: always() && (needs.generate-master-json-from-db.result == 'success' || needs.generate-master-json-from-db.result == 'skipped')
+    if: >-
+      always() &&
+      needs.build-artifact.result == 'success' &&
+      (needs.generate-master-json-from-db.result == 'success' || needs.generate-master-json-from-db.result == 'skipped')
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
