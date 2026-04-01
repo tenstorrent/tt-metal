@@ -20,6 +20,7 @@ inline void llk_math_eltwise_unary_sfpu_selu(
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_selu<APPROXIMATE, is_fp32_dest_acc_en, ITERATIONS>,
         dst_index,
+        dst_index,
         vector_mode,
         scale,
         alpha);

@@ -23,7 +23,7 @@ namespace sfpu {
           t4) *                                                                                                   \
      t4)
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_i0() {
+inline void calculate_i0(uint32_t dst_index_in, uint32_t dst_index_out) {
 #pragma GCC unroll 0
 
     for (int d = 0; d < ITERATIONS; d++) {

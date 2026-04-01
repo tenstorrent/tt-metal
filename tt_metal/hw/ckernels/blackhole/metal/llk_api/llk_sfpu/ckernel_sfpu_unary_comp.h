@@ -13,7 +13,7 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_unary_ne(uint value) {
+inline void calculate_unary_ne(uint32_t dst_index_in, uint32_t dst_index_out, uint value) {
     // SFPU microcode
     sfpi::vFloat s = Converter::as_float(value);
 
@@ -31,7 +31,7 @@ inline void calculate_unary_ne(uint value) {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_unary_eq(uint value) {
+inline void calculate_unary_eq(uint32_t dst_index_in, uint32_t dst_index_out, uint value) {
     // SFPU microcode
     sfpi::vFloat s = Converter::as_float(value);
 
@@ -49,7 +49,7 @@ inline void calculate_unary_eq(uint value) {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_unary_gt(uint value) {
+inline void calculate_unary_gt(uint32_t dst_index_in, uint32_t dst_index_out, uint value) {
     // SFPU microcode
     sfpi::vFloat s = Converter::as_float(value);
 
@@ -67,7 +67,7 @@ inline void calculate_unary_gt(uint value) {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_unary_lt(uint value) {
+inline void calculate_unary_lt(uint32_t dst_index_in, uint32_t dst_index_out, uint value) {
     // SFPU microcode
     sfpi::vFloat s = Converter::as_float(value);
 
@@ -85,7 +85,7 @@ inline void calculate_unary_lt(uint value) {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_unary_ge(uint value) {
+inline void calculate_unary_ge(uint32_t dst_index_in, uint32_t dst_index_out, uint value) {
     // SFPU microcode
     sfpi::vFloat s = Converter::as_float(value);
 
@@ -103,7 +103,7 @@ inline void calculate_unary_ge(uint value) {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_unary_le(uint value) {
+inline void calculate_unary_le(uint32_t dst_index_in, uint32_t dst_index_out, uint value) {
     // SFPU microcode
     sfpi::vFloat s = Converter::as_float(value);
 

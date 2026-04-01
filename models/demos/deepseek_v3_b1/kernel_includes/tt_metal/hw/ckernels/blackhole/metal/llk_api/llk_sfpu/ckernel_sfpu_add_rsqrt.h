@@ -14,7 +14,8 @@ namespace ckernel::sfpu {
 // param0 is the bit representation of a float
 // This is useful for operations like RMSNorm: rsqrt(variance + epsilon)
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool fp32_dest_acc_en, bool FAST_APPROX>
-inline void calculate_add_rsqrt(uint32_t param0) {
+inline void calculate_add_rsqrt(
+    [[maybe_unused]] uint32_t dst_index_in, [[maybe_unused]] uint32_t dst_index_out, uint32_t param0) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];

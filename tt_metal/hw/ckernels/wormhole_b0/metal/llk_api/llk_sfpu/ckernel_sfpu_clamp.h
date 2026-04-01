@@ -13,25 +13,25 @@ enum { Max = true, Min = false };  // Clamp Mode
 
 // out = min(max(x, min_val), max_val)
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_clamp(uint min_val, uint max_val) {
+inline void calculate_clamp(uint32_t dst_index_in, uint32_t dst_index_out, uint min_val, uint max_val) {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         load_value_param_float(min_val);
-        calculate_unary_max_min_float_body<Max>();
+        calculate_unary_max_min_float_body<Max>(dst_index_in, dst_index_out);
         load_value_param_float(max_val);
-        calculate_unary_max_min_float_body<Min>();
+        calculate_unary_max_min_float_body<Min>(dst_index_in, dst_index_out);
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_clamp_int32(uint min_val, uint max_val) {
+inline void calculate_clamp_int32(uint32_t dst_index_in, uint32_t dst_index_out, uint min_val, uint max_val) {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         load_value_param_int(min_val);
-        calculate_unary_max_min_int32_body<Max>(min_val);
+        calculate_unary_max_min_int32_body<Max>(dst_index_in, dst_index_out, min_val);
         load_value_param_int(max_val);
-        calculate_unary_max_min_int32_body<Min>(max_val);
+        calculate_unary_max_min_int32_body<Min>(dst_index_in, dst_index_out, max_val);
         sfpi::dst_reg++;
     }
 }

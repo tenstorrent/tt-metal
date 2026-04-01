@@ -34,7 +34,7 @@ sfpi_inline vInt sfpu_sign_mag_to_twos_comp(vInt value) {
 #endif  // SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
-inline void calculate_comp(uint exponent_size_8) {
+inline void calculate_comp(uint32_t dst_index_in, uint32_t dst_index_out, uint exponent_size_8) {
     const vFloat zero = 0.0f;
     const vFloat one = 1.0f;
     for (int d = 0; d < ITERATIONS; d++) {
@@ -88,7 +88,7 @@ inline void calculate_comp(uint exponent_size_8) {
 }
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
-inline void calculate_comp_int() {
+inline void calculate_comp_int(uint32_t dst_index_in, uint32_t dst_index_out) {
     for (int d = 0; d < ITERATIONS; d++) {
         vInt v = dst_reg[0];
         vInt zero = 0;
@@ -141,7 +141,7 @@ inline void calculate_comp_int() {
 }
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
-inline void calculate_comp_uint16() {
+inline void calculate_comp_uint16(uint32_t dst_index_in, uint32_t dst_index_out) {
     static_assert((COMP_MODE == SfpuType::equal_zero) or (COMP_MODE == SfpuType::not_equal_zero));
     constexpr int check = ((COMP_MODE == SfpuType::equal_zero) ? SFPSETCC_MOD1_LREG_EQ0 : SFPSETCC_MOD1_LREG_NE0);
     for (int d = 0; d < ITERATIONS; d++) {
@@ -162,7 +162,7 @@ inline void calculate_comp_uint16() {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_eqz_uint32() {
+inline void calculate_eqz_uint32(uint32_t dst_index_in, uint32_t dst_index_out) {
     int scalar = -5;  // used for shift operation
     _sfpu_load_imm32_(p_sfpu::LREG2, scalar);
     for (int d = 0; d < ITERATIONS; d++) {
@@ -175,7 +175,7 @@ inline void calculate_eqz_uint32() {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_nez_uint32() {
+inline void calculate_nez_uint32(uint32_t dst_index_in, uint32_t dst_index_out) {
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_3, 0);
         // initially put 0 into output
@@ -193,7 +193,7 @@ inline void calculate_nez_uint32() {
 }
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
-inline void calculate_comp_unary_int(int scalar) {
+inline void calculate_comp_unary_int(uint32_t dst_index_in, uint32_t dst_index_out, int scalar) {
     // Convert both operands to two's complement format
     //
     // LOGIC:

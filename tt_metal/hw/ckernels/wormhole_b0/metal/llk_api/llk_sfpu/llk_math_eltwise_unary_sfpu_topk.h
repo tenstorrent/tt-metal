@@ -28,6 +28,7 @@ inline void llk_math_eltwise_unary_sfpu_topk_local_sort(
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_bitonic_topk_phases_steps<APPROXIMATE, is_fp32_dest_acc_en, STABLE_SORT>,
         dst_index,
+        dst_index,
         vector_mode,
         idir,
         i_end_phase,
@@ -41,6 +42,7 @@ inline void llk_math_eltwise_unary_sfpu_topk_merge(
     uint dst_index, int m_iter, int k, int vector_mode = (int)VectorMode::RC_custom) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_bitonic_topk_merge<APPROXIMATE, is_fp32_dest_acc_en, idir, STABLE_SORT>,
+        dst_index,
         dst_index,
         vector_mode,
         m_iter,
@@ -58,6 +60,7 @@ inline void llk_math_eltwise_unary_sfpu_topk_rebuild(
     int vector_mode = (int)VectorMode::RC_custom) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_bitonic_topk_rebuild<APPROXIMATE, is_fp32_dest_acc_en, STABLE_SORT>,
+        dst_index,
         dst_index,
         vector_mode,
         idir,

@@ -114,7 +114,7 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_improved_<true>(sfpi::vFloat val) {
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
-inline void calculate_expm1() {
+inline void calculate_expm1(uint32_t dst_index_in, uint32_t dst_index_out) {
     if constexpr (APPROXIMATION_MODE) {
         // Use original approximation mode
         for (int d = 0; d < ITERATIONS; d++) {

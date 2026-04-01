@@ -50,7 +50,7 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat in) {
 }
 
 template <bool APPROXIMATION_MODE>
-inline void calculate_erfinv() {
+inline void calculate_erfinv(uint32_t dst_index_in, uint32_t dst_index_out) {
     // SFPU microcode
     constexpr int ITERATIONS = 8;
     for (int d = 0; d < ITERATIONS; d++) {

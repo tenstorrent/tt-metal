@@ -116,7 +116,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
-inline void calculate_tanh() {
+inline void calculate_tanh(uint32_t dst_index_in, uint32_t dst_index_out) {
     if constexpr (APPROXIMATION_MODE) {
         // SFPU microcode
         sfpi::vUInt l0 = l_reg[sfpi::LRegs::LReg0];

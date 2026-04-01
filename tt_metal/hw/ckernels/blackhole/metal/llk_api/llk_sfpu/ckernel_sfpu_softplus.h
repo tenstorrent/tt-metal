@@ -97,19 +97,24 @@ inline vFloat softplus(vFloat x) {
 }
 
 template <bool APPROXIMATION_MODE>
-inline void calculate_softplus_body(const float beta, const float beta_reciprocal, const float threshold) {
+inline void calculate_softplus_body(
+    uint32_t dst_index_in,
+    uint32_t dst_index_out,
+    const float beta,
+    const float beta_reciprocal,
+    const float threshold) {
     vFloat x = beta * dst_reg[0];
     v_if(x < threshold) { dst_reg[0] = beta_reciprocal * softplus(x); }
     v_endif;
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_softplus(uint param0, uint param1, uint param2) {
+inline void calculate_softplus(uint32_t dst_index_in, uint32_t dst_index_out, uint param0, uint param1, uint param2) {
     const float beta = Converter::as_float(param0);
     const float beta_reciprocal = Converter::as_float(param1);
     const float threshold = Converter::as_float(param2);
     for (int d = 0; d < ITERATIONS; d++) {
-        calculate_softplus_body<APPROXIMATION_MODE>(beta, beta_reciprocal, threshold);
+        calculate_softplus_body<APPROXIMATION_MODE>(dst_index_in, dst_index_out, beta, beta_reciprocal, threshold);
         dst_reg++;
     }
 }

@@ -13,7 +13,7 @@ namespace ckernel::sfpu {
 sfpi_inline void load_value_param_float(uint value) { sfpi::vConstIntPrgm0 = value; }
 
 template <bool IS_MAX_OP>
-sfpi_inline void calculate_unary_max_min_float_body() {
+sfpi_inline void calculate_unary_max_min_float_body(uint32_t dst_index_in, uint32_t dst_index_out) {
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
 
     if constexpr (IS_MAX_OP) {
@@ -27,7 +27,7 @@ sfpi_inline void calculate_unary_max_min_float_body() {
 }
 
 template <bool IS_MAX_OP = true, bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_unary_max_min(uint value) {
+inline void calculate_unary_max_min(uint32_t dst_index_in, uint32_t dst_index_out, uint value) {
     // This uses SFPLOADMACRO to achieve a throughput of 2 cycles per input row.
     //
     // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
@@ -43,7 +43,7 @@ inline void calculate_unary_max_min(uint value) {
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        calculate_unary_max_min_float_body<IS_MAX_OP>();
+        calculate_unary_max_min_float_body<IS_MAX_OP>(dst_index_in, dst_index_out);
         sfpi::dst_reg++;
     }
 #else
@@ -67,7 +67,7 @@ sfpi_inline void load_value_param_int(uint value) {
 }
 
 template <bool IS_MAX_OP, bool IS_UNSIGNED = false>
-sfpi_inline void calculate_unary_max_min_int32_body(uint value) {
+sfpi_inline void calculate_unary_max_min_int32_body(uint32_t dst_index_in, uint32_t dst_index_out, uint value) {
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
 
     if (IS_UNSIGNED ^ ((int)value >= 0)) {
@@ -91,13 +91,13 @@ sfpi_inline void calculate_unary_max_min_int32_body(uint value) {
 }
 
 template <bool IS_MAX_OP = true, bool IS_UNSIGNED = false, bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_unary_max_min_int32(uint value) {
+inline void calculate_unary_max_min_int32(uint32_t dst_index_in, uint32_t dst_index_out, uint value) {
     load_value_param_int<IS_UNSIGNED>(value);
 
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        calculate_unary_max_min_int32_body<IS_MAX_OP, IS_UNSIGNED>(value);
+        calculate_unary_max_min_int32_body<IS_MAX_OP, IS_UNSIGNED>(dst_index_in, dst_index_out, value);
         sfpi::dst_reg++;
     }
 #else

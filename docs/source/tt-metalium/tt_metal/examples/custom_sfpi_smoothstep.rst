@@ -178,7 +178,7 @@ The ``my_smoothstep_tiles`` function uses the layered abstraction pattern shown 
     #ifdef TRISC_MATH
 
     // Low-level function operating on a tile face
-    void my_smoothstep_tile_face(float edge0, float edge1, float inv_delta) {
+    void my_smoothstep_tile_face(uint32_t dst_index_in, uint32_t dst_index_out, float edge0, float edge1, float inv_delta) {
         constexpr size_t vectors_per_face = 8;
         for (size_t i = 0; i < vectors_per_face; i++) {
             vFloat x = dst_reg[i];
@@ -197,6 +197,7 @@ The ``my_smoothstep_tiles`` function uses the layered abstraction pattern shown 
     inline void my_smoothstep_tile(uint32_t idx_dst0, float edge0, float edge1, float inv_delta) {
         MATH(_llk_math_eltwise_unary_sfpu_params_<false>(
             smoothstep_tile_face,
+            idx_dst0,
             idx_dst0,
             VectorMode::RC, // Apply on all 4 faces of the tile
             edge0,

@@ -15,7 +15,7 @@ namespace ckernel {
 namespace sfpu {
 
 // inputs are lreg0, lreg1. output is lreg4
-inline void calculate_sfpu_mul_u16_to_u32_body() {
+inline void calculate_sfpu_mul_u16_to_u32_body(uint32_t dst_index_in, uint32_t dst_index_out) {
     // mask
     TTI_SFPLOADI(p_sfpu::LREG7, SFPLOADI_MOD0_USHORT, 0xff);
     // copy
@@ -61,7 +61,7 @@ inline void calculate_sfpu_lcm(const uint dst_index_in0, const uint dst_index_in
         TT_SFPLOAD(p_sfpu::LREG1, 4, 3, dst_index_in1 * dst_tile_size);  // b
 
         // Binary GCD algorithm; assumes abs(a) < 2^15 and abs(b) < 2^15, hence gcd(a, b) < 2^15
-        calculate_sfpu_gcd_body<15>();
+        calculate_sfpu_gcd_body<15>(0, 0);
 
         // Two iterations of Newton's method to find reciprocal of gcd(a, b)
         TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG2, 0);
@@ -98,7 +98,7 @@ inline void calculate_sfpu_lcm(const uint dst_index_in0, const uint dst_index_in
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, 6);
 
 	// Finally, compute lcm(a, b) = a/gcd(a, b) * b
-        calculate_sfpu_mul_u16_to_u32_body();
+        calculate_sfpu_mul_u16_to_u32_body(0, 0);
 
         TT_SFPSTORE(p_sfpu::LREG4, 4, 3, dst_index_out * dst_tile_size);
         dst_reg++;

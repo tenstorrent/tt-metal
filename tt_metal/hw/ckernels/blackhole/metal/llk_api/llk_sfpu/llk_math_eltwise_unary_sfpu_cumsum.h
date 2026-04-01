@@ -21,6 +21,7 @@ inline void llk_math_eltwise_unary_sfpu_cumsum(
     uint dst_index, bool first, int vector_mode = (int)VectorMode::RC_custom /*unused*/) {
     _llk_math_eltwise_unary_sfpu_params_<false>(
         ckernel::sfpu::calculate_cumsum<false>,  // There is only non APPROXIMATE implementation
+        dst_index,                               // There is only non APPROXIMATE implementation
         dst_index,
         VectorMode::RC_custom,  // Can only work in RC_custom mode
         first);

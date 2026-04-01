@@ -39,7 +39,7 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_sigmoid() {
+inline void calculate_sigmoid(uint32_t dst_index_in, uint32_t dst_index_out) {
     if constexpr (!APPROXIMATION_MODE) {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
@@ -53,7 +53,7 @@ inline void calculate_sigmoid() {
             sfpi::dst_reg++;
         }
     } else {
-        calculate_sigmoid_appx<ITERATIONS>();
+        calculate_sigmoid_appx<ITERATIONS>(dst_index_in, dst_index_out);
     }
 }
 

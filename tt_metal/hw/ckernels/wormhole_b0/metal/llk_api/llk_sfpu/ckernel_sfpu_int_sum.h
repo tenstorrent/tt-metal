@@ -42,7 +42,7 @@ sfpi_inline vInt sfpu_twos_comp_to_sign_mag(vInt value) {
 }
 
 template <bool APPROXIMATION_MODE>
-inline void calculate_sum_int_col() {
+inline void calculate_sum_int_col(uint32_t dst_index_in, uint32_t dst_index_out) {
     for (unsigned i = 0; i < 2; ++i) {
         vInt a = dst_reg[i];
         a = sfpu_twos_comp_to_sign_mag(a);
@@ -65,7 +65,7 @@ inline void calculate_sum_int_col() {
 }
 
 template <bool APPROXIMATION_MODE>
-inline void calculate_sum_int_row() {
+inline void calculate_sum_int_row(uint32_t dst_index_in, uint32_t dst_index_out) {
     for (unsigned i = 0; i < 8; i += 2) {
         vInt a = dst_reg[i];
         a = sfpu_twos_comp_to_sign_mag(a);

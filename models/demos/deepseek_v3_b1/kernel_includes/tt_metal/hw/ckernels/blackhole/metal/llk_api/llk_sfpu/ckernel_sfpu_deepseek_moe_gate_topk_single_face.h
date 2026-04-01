@@ -14,18 +14,18 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-inline void deepseek_moe_gate_sum_top2() {
-    _deepseek_moe_gate_sum_top2<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
+inline void deepseek_moe_gate_sum_top2(uint32_t dst_index_in, uint32_t dst_index_out) {
+    _deepseek_moe_gate_sum_top2<APPROXIMATION_MODE, is_fp32_dest_acc_en>(dst_index_in, dst_index_out);
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-inline void deepseek_moe_gate_sort_top4_groups() {
-    _deepseek_moe_gate_sort_top4_groups<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
+inline void deepseek_moe_gate_sort_top4_groups(uint32_t dst_index_in, uint32_t dst_index_out) {
+    _deepseek_moe_gate_sort_top4_groups<APPROXIMATION_MODE, is_fp32_dest_acc_en>(dst_index_in, dst_index_out);
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-inline void deepseek_moe_gate_top8(uint32_t eps, uint32_t scale) {
-    _deepseek_moe_gate_top8<APPROXIMATION_MODE, is_fp32_dest_acc_en>(eps, scale);
+inline void deepseek_moe_gate_top8(uint32_t dst_index_in, uint32_t dst_index_out, uint32_t eps, uint32_t scale) {
+    _deepseek_moe_gate_top8<APPROXIMATION_MODE, is_fp32_dest_acc_en>(dst_index_in, dst_index_out, eps, scale);
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>

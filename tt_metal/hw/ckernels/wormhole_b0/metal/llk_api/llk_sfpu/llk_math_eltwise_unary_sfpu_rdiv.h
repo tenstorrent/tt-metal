@@ -21,6 +21,7 @@ inline void llk_math_eltwise_unary_sfpu_rdiv(
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_rdiv<APPROXIMATE, fp32_dest_acc_en, rounding_mode, ITERATIONS>,
         dst_index,
+        dst_index,
         vector_mode,
         value);
 }

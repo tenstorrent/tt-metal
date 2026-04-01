@@ -27,7 +27,12 @@
  *
  * This function only processes ONE FACE of a tile. The wrapper will call it for each face.
  */
-inline void smoothstep_tile_face(float edge0, float edge1, float inv_delta) {
+inline void smoothstep_tile_face(
+    [[maybe_unused]] uint32_t dst_index_in,
+    [[maybe_unused]] uint32_t dst_index_out,
+    float edge0,
+    float edge1,
+    float inv_delta) {
     constexpr size_t vectors_per_face = 8;
     for (size_t i = 0; i < vectors_per_face; i++) {
         vFloat x = dst_reg[i];
@@ -57,7 +62,7 @@ inline void smoothstep_tile_face(float edge0, float edge1, float inv_delta) {
  */
 inline void my_smoothstep_tiles(uint32_t idx_dst0, float edge0, float edge1, float inv_delta) {
     MATH(_llk_math_eltwise_unary_sfpu_params_<false>(
-        smoothstep_tile_face, idx_dst0, VectorMode::RC, edge0, edge1, inv_delta));
+        smoothstep_tile_face, idx_dst0, idx_dst0, VectorMode::RC, edge0, edge1, inv_delta));
 }
 
 void kernel_main() {

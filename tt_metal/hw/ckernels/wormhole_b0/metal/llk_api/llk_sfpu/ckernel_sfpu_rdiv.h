@@ -11,7 +11,7 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, RoundingMode rounding_mode, int ITERATIONS>
-inline void calculate_rdiv(const uint value) {
+inline void calculate_rdiv(uint32_t dst_index_in, uint32_t dst_index_out, const uint value) {
     sfpi::vFloat val = Converter::as_float(value);
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {

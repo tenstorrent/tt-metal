@@ -190,7 +190,7 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat val) {
  * @tparam ITERATIONS Number of iterations for given face
  */
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_log1p() {
+inline void calculate_log1p(uint32_t dst_index_in, uint32_t dst_index_out) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];

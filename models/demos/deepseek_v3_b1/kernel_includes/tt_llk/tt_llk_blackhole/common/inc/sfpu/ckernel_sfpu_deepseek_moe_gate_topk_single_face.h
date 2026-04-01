@@ -325,7 +325,8 @@ void reverse_sort_order() {
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-inline void _deepseek_moe_gate_sum_top2() {
+inline void _deepseek_moe_gate_sum_top2(
+    [[maybe_unused]] uint32_t dst_index_in, [[maybe_unused]] uint32_t dst_index_out) {
     constexpr bool idir = false;  // Sort descending order
     constexpr int load_store_replay_count = 8;
     constexpr int load_replay_offset = 0;
@@ -365,7 +366,8 @@ inline void _deepseek_moe_gate_sum_top2() {
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-inline void _deepseek_moe_gate_sort_top4_groups() {
+inline void _deepseek_moe_gate_sort_top4_groups(
+    [[maybe_unused]] uint32_t dst_index_in, [[maybe_unused]] uint32_t dst_index_out) {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     // Sort top4
     // Load the top2 sums and concat indices
@@ -392,7 +394,8 @@ inline void _deepseek_moe_gate_sort_top4_groups() {
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-inline void _deepseek_moe_gate_top8(uint32_t eps, uint32_t scale) {
+inline void _deepseek_moe_gate_top8(
+    [[maybe_unused]] uint32_t dst_index_in, [[maybe_unused]] uint32_t dst_index_out, uint32_t eps, uint32_t scale) {
     constexpr bool idir = false;  // Sort descending order
 
     // Combine and sort 4 groups of 8 values to 2 groups of 8 values

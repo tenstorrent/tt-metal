@@ -11,8 +11,8 @@
 namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_square() {
-    _calculate_square_<APPROXIMATION_MODE, ITERATIONS>();
+inline void calculate_square(uint32_t dst_index_in, uint32_t dst_index_out) {
+    _calculate_square_<APPROXIMATION_MODE, ITERATIONS>(dst_index_in, dst_index_out);
 }
 
 }  // namespace ckernel::sfpu
