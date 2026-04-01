@@ -1686,6 +1686,113 @@ def test_binary_sharded_scalar_row_major(scalar, a_shape, shard_type, shard_size
     assert_with_pcc(tt_out, torch.add(a_pt, scalar))
 
 
+class TestBinaryRowMajor:
+    SHAPES = [
+        pytest.param((1, 1, 32, 32), id="tile_aligned"),
+        pytest.param((1, 1, 35, 35), id="non_tile_aligned"),
+        pytest.param((4, 2, 17, 19), id="weird_nc_hw"),
+        pytest.param((2, 3, 33, 64), id="multi_nc_multi_row"),
+        pytest.param((1, 1, 3, 1025), id="wide_over_1024"),
+        pytest.param((1, 1, 1025, 32), id="tall_over_1024"),
+        pytest.param((1, 1, 1, 1), id="tiny"),
+        pytest.param((1, 1, 1, 1024), id="width_eq_stride"),
+        pytest.param((1, 1, 1, 1025), id="width_gt_stride_remainder"),
+        pytest.param((1, 1, 1, 2048), id="two_full_chunks"),
+        pytest.param((1, 1, 1, 2049), id="two_full_chunks_remainder"),
+        pytest.param((1, 1, 1, 4096), id="extreme_row_width"),
+        pytest.param((1, 1, 2, 1, 1, 3, 1025), id="rank7_weird_wide"),
+    ]
+
+    DTYPE_CASES = [
+        pytest.param(torch.bfloat16, ttnn.bfloat16, id="bfloat16"),
+        pytest.param(torch.float32, ttnn.float32, id="float32"),
+        pytest.param(torch.int32, ttnn.int32, id="int32"),
+        pytest.param(torch.uint32, ttnn.uint32, id="uint32"),
+    ]
+
+    BROADCAST_CASES = [
+        pytest.param("native", "b", id="native"),
+        pytest.param("scalar", "b", id="scalar_b"),
+        pytest.param("row", "a", id="row_a"),
+        pytest.param("row", "b", id="row_b"),
+        pytest.param("col", "a", id="col_a"),
+        pytest.param("col", "b", id="col_b"),
+        pytest.param("mixed", "a", id="mixed_row_a_col_b"),
+        pytest.param("mixed", "b", id="mixed_col_a_row_b"),
+    ]
+
+    MEMORY_CONFIG_CASES = [
+        pytest.param(ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, None, id="default"),
+        pytest.param(ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, id="dram_dram_dram"),
+        pytest.param(ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, id="l1_l1_l1"),
+        pytest.param(ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, id="dram_l1_dram"),
+        pytest.param(ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, id="l1_dram_l1"),
+    ]
+
+    @pytest.mark.parametrize("shape", SHAPES)
+    @pytest.mark.parametrize("dtype_pt,dtype_tt", DTYPE_CASES)
+    @pytest.mark.parametrize("mode,bcast_on", BROADCAST_CASES)
+    @pytest.mark.parametrize("a_config,b_config,out_config", MEMORY_CONFIG_CASES)
+    def test_binary_row_major(self, device, shape, dtype_pt, dtype_tt, mode, bcast_on, a_config, b_config, out_config):
+        torch.manual_seed(0)
+
+        if mode == "mixed":
+            row_shape = tuple(shape[:-2]) + (1, shape[-1])
+            col_shape = tuple(shape[:-2]) + (shape[-2], 1)
+            a_shape, b_shape = (row_shape, col_shape) if bcast_on == "a" else (col_shape, row_shape)
+        else:
+            if mode == "native":
+                bcast_shape = tuple(shape)
+            elif mode == "scalar":
+                bcast_shape = (1,) * len(shape)
+            elif mode == "row":
+                bcast_shape = tuple(shape[:-2]) + (1, shape[-1])
+            else:
+                bcast_shape = tuple(shape[:-2]) + (shape[-2], 1)
+            a_shape, b_shape = (bcast_shape, tuple(shape)) if bcast_on == "a" else (tuple(shape), bcast_shape)
+
+        if dtype_pt in (torch.bfloat16, torch.float32):
+            pt_a = torch.randn(a_shape, dtype=dtype_pt)
+            pt_b = torch.randn(b_shape, dtype=dtype_pt)
+        elif dtype_pt == torch.int32:
+            pt_a = torch.randint(-1000, 1000, a_shape, dtype=dtype_pt)
+            pt_b = torch.randint(-1000, 1000, b_shape, dtype=dtype_pt)
+        else:
+            pt_a = torch.randint(0, 1000, a_shape, dtype=torch.int64).to(torch.uint32)
+            pt_b = torch.randint(0, 1000, b_shape, dtype=torch.int64).to(torch.uint32)
+
+        tt_a = ttnn.from_torch(
+            pt_a,
+            dtype=dtype_tt,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=a_config,
+        )
+        tt_b = ttnn.from_torch(
+            pt_b,
+            dtype=dtype_tt,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=b_config,
+        )
+
+        add_kwargs = {"use_legacy": None}
+        if out_config is not None:
+            add_kwargs["memory_config"] = out_config
+
+        with ttnn.manage_config("throw_exception_on_fallback", True):
+            tt_out = ttnn.add(tt_a, tt_b, **add_kwargs)
+
+        tt_out = ttnn.to_torch(tt_out)
+        if dtype_pt == torch.uint32:
+            reference = torch.add(pt_a.to(torch.int64), pt_b.to(torch.int64)).to(tt_out.dtype)
+            assert torch.equal(tt_out, reference)
+        elif dtype_pt == torch.int32:
+            assert torch.equal(tt_out, torch.add(pt_a, pt_b))
+        else:
+            assert_with_pcc(tt_out, torch.add(pt_a, pt_b))
+
+
 @pytest.mark.parametrize(
     "a_shape, b_shape, a_shard_size, b_shard_size, core_range",
     (
