@@ -34,6 +34,7 @@ void matmul_blocks(
         for (uint32_t ns = 0; ns < current_N; ns += subblock_w) {
             uint32_t current_sw = std::min(subblock_w, current_N - ns);
 
+            // Only reconfigure when subblock size changes (edge tiles)
             if (current_sh != last_sh || current_sw != last_sw) {
                 mm_block_init_short(in0_cb, in1_cb, true, current_sw, current_sh, 1);
                 last_sh = current_sh;
@@ -63,6 +64,7 @@ void matmul_blocks(
             tile_regs_release();
         }
     }
+    // Restore full subblock size for next call
     if (last_sh != subblock_h || last_sw != subblock_w) {
         mm_block_init_short(in0_cb, in1_cb, true, subblock_w, subblock_h, 1);
     }
@@ -73,8 +75,6 @@ void matmul_blocks(
 // REDUCE_SENDER: identity copy with FP32 → BF16 format conversion.
 void pack_subblock_pernsb(uint32_t in_cb, uint32_t out_cb, uint32_t current_M, uint32_t current_N) {
 #ifdef REDUCE_SENDER_TRANSPOSE
-    // Transpose tile content + swap indices: out[n*M+m] = transpose(in[m*N+n])
-    // This produces row-major layout from the receiver's perspective.
     transpose_wh_init(in_cb, out_cb);
     reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(out_cb);
@@ -90,7 +90,6 @@ void pack_subblock_pernsb(uint32_t in_cb, uint32_t out_cb, uint32_t current_M, u
         }
     }
 #else
-    // Identity copy with FP32 → BF16 format conversion
     copy_tile_to_dst_init_short(in_cb);
     reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(out_cb);
