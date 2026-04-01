@@ -494,6 +494,18 @@ jobs:
             --output-json "build_ci/testing/thread_persona_session.json" \
             --summary-md "build_ci/testing/thread_persona_session.md"
 
+      - name: Run testing-mode triage E2E thread session
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+        run: |
+          set -euo pipefail
+          python tools/ci/testing_triage_e2e_session.py \
+            --slack-channel-id "C0APK6215B5" \
+            --max-threads 3 \
+            --output-json "build_ci/testing/triage_e2e_session.json" \
+            --summary-md "build_ci/testing/triage_e2e_session.md"
+
       - name: Upload testing session artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
         with:
@@ -503,6 +515,8 @@ jobs:
             build_ci/testing/owner_resolution_session.md
             build_ci/testing/thread_persona_session.json
             build_ci/testing/thread_persona_session.md
+            build_ci/testing/triage_e2e_session.json
+            build_ci/testing/triage_e2e_session.md
           retention-days: 7
 
       - name: Publish testing summary to run summary
@@ -515,4 +529,6 @@ jobs:
             cat "$summary_path"
             echo
             cat "build_ci/testing/thread_persona_session.md"
+            echo
+            cat "build_ci/testing/triage_e2e_session.md"
           } >> "$GITHUB_STEP_SUMMARY"
