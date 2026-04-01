@@ -9,7 +9,7 @@ from utils.gsm8k import get_gsm8k
 from utils.inference import completion_batched_multiple_prompts
 
 # =========== Config ==========
-YAML_CONFIG = "tt-train/sources/examples/grpo/grpo_model_accuracy.yaml"
+YAML_CONFIG = "tt-train/sources/examples/grpo/example_completion.yaml"
 HF_MODEL_ID = "unsloth/Llama-3.2-1B-Instruct"
 CHECKPOINT = None  # set to a .safetensors path to load trained weights
 MAX_BATCH = 32

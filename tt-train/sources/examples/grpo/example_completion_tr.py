@@ -14,7 +14,7 @@ from utils.inference_tr import (
 )
 
 # =========== Config ==========
-YAML_CONFIG = "tt-train/sources/examples/grpo/grpo_model_accuracy.yaml"
+YAML_CONFIG = "tt-train/sources/examples/grpo/example_completion.yaml"
 HF_MODEL_ID = "unsloth/Llama-3.2-1B-Instruct"
 CHECKPOINT = None  # set to a .safetensors path to load trained weights
 MAX_SEQ_LEN = 2048
