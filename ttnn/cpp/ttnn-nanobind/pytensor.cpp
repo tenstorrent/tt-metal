@@ -1324,9 +1324,12 @@ void pytensor_module(nb::module_& mod) {
 
         )doc")
         .def(
-            "per_core_buffer_address",
+            "experimental_per_core_buffer_address",
             [](const Tensor& self, const CoreCoord& core) -> uint32_t {
-                TT_FATAL(is_device_tensor(self), "{} doesn't support per_core_buffer_address", self.storage_type());
+                TT_FATAL(
+                    is_device_tensor(self),
+                    "{} doesn't support experimental_per_core_buffer_address",
+                    self.storage_type());
                 TT_FATAL(self.is_allocated(), "Tensor is not allocated.");
                 return experimental::per_core_allocation::get_per_core_address(self.mesh_buffer(), core);
             },
@@ -1336,7 +1339,7 @@ void pytensor_module(nb::module_& mod) {
 
             .. code-block:: python
 
-                address = tt_tensor.per_core_buffer_address(ttnn.CoreCoord(0, 0))
+                address = tt_tensor.experimental_per_core_buffer_address(ttnn.CoreCoord(0, 0))
 
         )doc")
         .def(

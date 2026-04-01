@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Tests for per-core L1 allocation via MemoryConfig.set_per_core_allocation().
+Tests for per-core L1 allocation via MemoryConfig.experimental_set_per_core_allocation().
 
-Each test creates single-core HEIGHT_SHARDED tensors with set_per_core_allocation(),
+Each test creates single-core HEIGHT_SHARDED tensors with experimental_set_per_core_allocation(),
 which triggers the per-bank allocator (AllocatorID bank_id+1) instead of lockstep.
 
 The local conftest.py sets TT_METAL_ALLOCATOR_MODE_HYBRID=1 and creates the device.
@@ -83,7 +83,7 @@ def _create_single_core_tensor(device, core, shard_bytes):
         ttnn.BufferType.L1,
         shard_spec,
     )
-    mem_config.set_per_core_allocation(True)
+    mem_config.experimental_set_per_core_allocation(True)
     data = torch.zeros(1, shard_bytes, dtype=torch.uint8)
     return ttnn.from_torch(
         data, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config
@@ -122,7 +122,7 @@ def test_per_core_round_trip(device):
         ttnn.BufferType.L1,
         shard_spec,
     )
-    mem_config.set_per_core_allocation(True)
+    mem_config.experimental_set_per_core_allocation(True)
     data = torch.arange(shard_bytes, dtype=torch.uint8).reshape(1, shard_bytes)
     tensor = ttnn.from_torch(
         data, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config
@@ -154,19 +154,19 @@ def test_per_core_sharded_dealloc_realloc(device):
         ttnn.BufferType.L1,
         shard_spec,
     )
-    mem_config.set_per_core_allocation(True)
+    mem_config.experimental_set_per_core_allocation(True)
     data = torch.zeros(num_cores, SHARD_BYTES, dtype=torch.uint8)
 
     # First allocation
     t1 = ttnn.from_torch(data, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config)
-    addrs1 = [t1.per_core_buffer_address(c) for c in cores]
+    addrs1 = [t1.experimental_per_core_buffer_address(c) for c in cores]
 
     # Deallocate
     del t1
 
     # Second allocation — should reuse the same per-core space
     t2 = ttnn.from_torch(data, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config)
-    addrs2 = [t2.per_core_buffer_address(c) for c in cores]
+    addrs2 = [t2.experimental_per_core_buffer_address(c) for c in cores]
 
     assert (
         addrs1 == addrs2
@@ -433,7 +433,7 @@ def test_triangle_allocation_then_uniform_sharded(device):
         ttnn.BufferType.L1,
         shard_spec,
     )
-    mem_config.set_per_core_allocation(True)
+    mem_config.experimental_set_per_core_allocation(True)
     sharded_data = torch.zeros(num_cores, shard_bytes, dtype=torch.uint8)
     sharded_tensor = ttnn.from_torch(
         sharded_data, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config
@@ -442,7 +442,7 @@ def test_triangle_allocation_then_uniform_sharded(device):
     # Verify: per-core addresses form an inverse triangle
     # Core at flat index 0 consumed least → highest address
     # Core at flat index N-1 consumed most → lowest address
-    addrs = [sharded_tensor.per_core_buffer_address(c) for c in cores]
+    addrs = [sharded_tensor.experimental_per_core_buffer_address(c) for c in cores]
     for i in range(num_cores - 1):
         assert addrs[i] > addrs[i + 1], (
             f"Expected inverse triangle: core {i} ({cores[i].x},{cores[i].y}) addr={addrs[i]:#x} "
