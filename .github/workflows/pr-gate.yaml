@@ -347,12 +347,23 @@ jobs:
           mv .clang-tidy-new .clang-tidy
         fi
         cat .clang-tidy
+    - name: Restore CPM cache
+      # actions/cache works in containerized jobs when the path is under
+      # $GITHUB_WORKSPACE — that directory is a bind-mount shared between the
+      # container and the host, so the host-side tar/restore step can see it.
+      # The previous attempt used a path outside the workspace; this is the fix.
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ github.workspace }}/.cpmcache
+        key: cpm-${{ runner.os }}-${{ hashFiles('**/CMakeLists.txt', '**/*.cmake') }}
+        restore-keys: |
+          cpm-${{ runner.os }}-
     - name: CMake configure
-      # CPM downloads third-party packages from the internet; give a generous
-      # timeout to accommodate slow network days.
-      # Note: actions/cache doesn't work with containerized jobs (post-step
-      # runs after the container is removed, hashFiles fails). Dropped for now.
+      # CPM_SOURCE_CACHE directs CPM to store/read downloaded packages from
+      # .cpmcache under the workspace — the same path restored above.
       timeout-minutes: 25
+      env:
+        CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpmcache
       run: |
         cmake -B build \
           -DCMAKE_BUILD_TYPE=Debug \
@@ -366,6 +377,13 @@ jobs:
     - name: Build generated files
       timeout-minutes: 10
       run: cmake --build build --target all_generated_files
+    - name: Save CPM cache
+      # Save even if later steps fail, so partial downloads aren't wasted.
+      if: always()
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ github.workspace }}/.cpmcache
+        key: cpm-${{ runner.os }}-${{ hashFiles('**/CMakeLists.txt', '**/*.cmake') }}
     - name: 'Install jq'
       uses: dcarbone/install-jq-action@v2
     - name: Create results directory
