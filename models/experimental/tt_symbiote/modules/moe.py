@@ -12,9 +12,19 @@ from transformers.configuration_utils import PretrainedConfig
 from torch.nn import functional as F
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+
+def _unwrap_ttnn(x):
+    """Unwrap TorchTTNNTensor to raw ttnn.Tensor if wrapped, else return as-is."""
+    if isinstance(x, TorchTTNNTensor):
+        return x.ttnn_tensor
+    return x
+
+
 from ttnn.model_preprocessing import preprocess_linear_weight
 from models.experimental.tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch
 from models.experimental.tt_symbiote.modules.linear import (
+    TTNNLinear,
     TTNNLinearSilu,
     TTNNLinearLLamaIColShardedWRowSharded,
     TTNNLinearIColShardedWRowSharded,
@@ -1645,7 +1655,296 @@ class TTNNBailingMoE(TTNNMoE):
         if hasattr(bailing_gate, "expert_bias"):
             adapted.e_score_correction_bias = bailing_gate.expert_bias
         else:
-            # Fallback if expert_bias doesn't exist
             adapted.e_score_correction_bias = torch.zeros(bailing_gate.weight.shape[0])
 
         return adapted
+
+
+def _to_torch_for_fallback(tensor):
+    """Convert symbiote/ttnn input to torch for fallback."""
+    if isinstance(tensor, torch.Tensor):
+        if not isinstance(tensor, TorchTTNNTensor):
+            return tensor
+        if getattr(tensor, "ttnn_tensor", None) is not None:
+            return ttnn.to_torch(tensor.ttnn_tensor)
+        return getattr(tensor, "to_torch", tensor.elem if getattr(tensor, "elem", None) is not None else tensor)
+    if hasattr(tensor, "ttnn_tensor") and tensor.ttnn_tensor is not None:
+        return ttnn.to_torch(tensor.ttnn_tensor)
+    try:
+        if getattr(ttnn, "is_tensor_storage_on_device", None) and ttnn.is_tensor_storage_on_device(tensor):
+            return ttnn.to_torch(tensor)
+    except Exception:
+        pass
+    if hasattr(tensor, "to_torch"):
+        out = tensor.to_torch
+        if callable(out):
+            return out()
+        return out
+    return tensor
+
+
+class TTNNDeepseekV2MoE(TTNNModule):
+    """TTNN symbiote for DeepSeek V2 MoE.
+    Uses TTNNDeepseekOCRMoEGate, reuses TTNNExperts for moe_infer, and TTNNGlm4MoeMLP for shared expert.
+    """
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.hidden_size = config.hidden_size
+        self.num_experts_per_tok = config.num_experts_per_tok
+        self.n_routed_experts = config.n_routed_experts
+
+    @classmethod
+    def from_torch(cls, torch_moe):
+        module = cls(torch_moe.config)
+        module._fallback_torch_layer = torch_moe
+
+        module.gate = TTNNDeepseekOCRMoEGate.from_torch(torch_moe.gate)
+
+        stacked_experts = cls._stack_deepseek_v2_experts(torch_moe.experts, torch_moe.config)
+        module.experts = TTNNExperts.from_torch(stacked_experts)
+
+        if getattr(torch_moe, "shared_experts", None) is not None:
+            module.shared_experts = TTNNGlm4MoeMLP.from_torch(torch_moe.shared_experts)
+        else:
+            module.shared_experts = None
+
+        return module
+
+    @staticmethod
+    def _stack_deepseek_v2_experts(experts_module_list, config):
+        """Build a single object with gate_up_proj and down_proj from a ModuleList of
+        DeepseekV2MLP-style experts (each with gate_proj, up_proj, down_proj).
+        Compatible with TTNNExperts.from_torch().
+        """
+        experts = list(experts_module_list)
+        gate_up_list = []
+        down_list = []
+        for expert in experts:
+            if expert is None:
+                continue
+            gate_w = expert.gate_proj.weight
+            up_w = expert.up_proj.weight
+            down_w = expert.down_proj.weight
+            gate_up_list.append(torch.cat([gate_w, up_w], dim=0))
+            down_list.append(down_w.T)
+        gate_up_proj = torch.stack(gate_up_list, dim=0)
+        down_proj = torch.stack(down_list, dim=0)
+        out = type("DeepseekV2ExpertsStack", (), {})()
+        out.config = config
+        out.gate_up_proj = gate_up_proj
+        out.down_proj = down_proj
+        return out
+
+    def preprocess_weights_impl(self):
+        if hasattr(self.gate, "init_parameters"):
+            self.gate.init_parameters()
+        self.gate.preprocess_weights()
+        self.experts.preprocess_weights()
+        if self.shared_experts is not None:
+            self.shared_experts.preprocess_weights()
+
+    def _forward_ttnn(self, hidden_states):
+        hidden_states = _unwrap_ttnn(hidden_states)
+        orig_shape = list(hidden_states.shape)
+        if len(orig_shape) == 3:
+            batch, seq, hidden = orig_shape
+            hidden_states_4d = ttnn.reshape(hidden_states, (batch, 1, seq, hidden))
+        else:
+            hidden_states_4d = hidden_states
+            batch, _, seq, hidden = hidden_states_4d.shape
+            orig_shape = [batch, seq, hidden]
+
+        topk_idx, topk_weight, _ = self.gate(hidden_states)
+        topk_idx = topk_idx[:, :, : self.num_experts_per_tok]
+        topk_weight = topk_weight[:, :, : self.num_experts_per_tok]
+
+        routed_output = self.experts(hidden_states_4d, topk_idx, topk_weight)
+        routed_output = routed_output[:, :, :, : self.hidden_size]
+        routed_output = _unwrap_ttnn(routed_output)
+
+        if self.shared_experts is not None:
+            shared_out = _unwrap_ttnn(self.shared_experts(hidden_states_4d))
+            routed_output = ttnn.to_device(routed_output, self.device)
+            routed_output = ttnn.add(routed_output, shared_out)
+
+        return ttnn.reshape(routed_output, orig_shape)
+
+    def forward(self, hidden_states):
+        self._used_fallback = False
+        device = getattr(self, "device", None)
+        if device is None:
+            self._used_fallback = True
+            inp = _to_torch_for_fallback(hidden_states)
+            with torch.no_grad():
+                return self._fallback_torch_layer(inp)
+        try:
+            return self._forward_ttnn(hidden_states)
+        except Exception:
+            self._used_fallback = True
+            inp = _to_torch_for_fallback(hidden_states)
+            with torch.no_grad():
+                return self._fallback_torch_layer(inp)
+
+
+class TTNNDeepseekOCRMoEGate(TTNNModule):
+    """MoEGate module for DeepSeek OCR."""
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.top_k = config.num_experts_per_tok
+        self.n_routed_experts = config.n_routed_experts
+        self.routed_scaling_factor = config.routed_scaling_factor
+        self.scoring_func = config.scoring_func
+        self.alpha = config.aux_loss_alpha
+        self.seq_aux = config.seq_aux
+        self.topk_method = config.topk_method
+        self.n_group = config.n_group
+        self.topk_group = config.topk_group
+        self.norm_topk_prob = config.norm_topk_prob
+        self.gating_dim = config.hidden_size
+
+    @classmethod
+    def from_torch(cls, torch_gate):
+        ttnn_gate = cls(torch_gate.config)
+        ttnn_gate._fallback_torch_layer = torch_gate
+        return ttnn_gate
+
+    def init_parameters(self):
+        self.linear = TTNNLinear.from_parameters(weight=self._fallback_torch_layer.weight, bias=None)
+        self.linear.preprocess_weights()
+        self.scatter_input = None
+        self.scatter_src = None
+        self.e_score_correction_bias = None
+        if self.topk_method in ("group_limited_greedy", "noaux_tc"):
+            self.scatter_input = ttnn.from_torch(torch.zeros((1, 1, 1, self.n_group), dtype=torch.bfloat16))
+            self.scatter_src = ttnn.from_torch(torch.ones((1, 1, 1, self.topk_group), dtype=torch.bfloat16))
+        if self.topk_method == "noaux_tc" and hasattr(self._fallback_torch_layer, "e_score_correction_bias"):
+            bias = self._fallback_torch_layer.e_score_correction_bias
+            bias = bias.reshape(1, 1, 1, -1).to(torch.bfloat16)
+            self.e_score_correction_bias = ttnn.from_torch(bias, dtype=ttnn.bfloat16)
+
+    def move_weights_to_device_impl(self):
+        if self.linear is not None:
+            self.linear.to_device(self.device)
+            self.linear.move_weights_to_device()
+        if self.scatter_input is not None:
+            self.scatter_input = ttnn.to_device(self.scatter_input, self.device)
+            self.scatter_input = ttnn.to_layout(
+                self.scatter_input, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+        if self.scatter_src is not None:
+            self.scatter_src = ttnn.to_device(self.scatter_src, self.device)
+            self.scatter_src = ttnn.to_layout(self.scatter_src, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if self.e_score_correction_bias is not None:
+            self.e_score_correction_bias = ttnn.to_device(self.e_score_correction_bias, self.device)
+            self.e_score_correction_bias = ttnn.to_layout(
+                self.e_score_correction_bias, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+
+    def _forward_group_limited_greedy(self, scores: ttnn.Tensor):
+        if scores.layout != ttnn.TILE_LAYOUT:
+            scores = ttnn.to_layout(scores, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if len(scores.shape) == 3:
+            scores = ttnn.unsqueeze(scores, 1)
+        T = scores.shape[2]
+        n_experts = scores.shape[3]
+        experts_per_group = n_experts // self.n_group
+        grouped = ttnn.reshape(scores, ttnn.Shape((1, T, self.n_group, experts_per_group)))
+        group_scores = ttnn.max(grouped, dim=3, keepdim=True)
+        ttnn.deallocate(grouped)
+        _, topk_group_idx = ttnn.topk(group_scores, k=self.topk_group, dim=2, sorted=False)
+        ttnn.deallocate(group_scores)
+        topk_group_idx = ttnn.typecast(topk_group_idx, ttnn.uint32)
+        if len(topk_group_idx.shape) == 4 and topk_group_idx.shape[-1] == 1:
+            topk_group_idx = ttnn.squeeze(topk_group_idx, -1)
+        if len(topk_group_idx.shape) == 3:
+            topk_group_idx = ttnn.unsqueeze(topk_group_idx, 1)
+        input_mask = ttnn.repeat(self.scatter_input, ttnn.Shape((1, 1, T, 1)))
+        src_tensor = ttnn.repeat(self.scatter_src, ttnn.Shape((1, 1, T, 1)))
+        active_groups_mask = ttnn.scatter(input=input_mask, index=topk_group_idx, src=src_tensor, dim=3)
+        ttnn.deallocate(input_mask)
+        ttnn.deallocate(src_tensor)
+        ttnn.deallocate(topk_group_idx)
+        active_groups_mask = ttnn.reshape(active_groups_mask, ttnn.Shape((1, T, self.n_group, 1)))
+        active_experts_mask = ttnn.repeat(active_groups_mask, ttnn.Shape((1, 1, 1, experts_per_group)))
+        ttnn.deallocate(active_groups_mask)
+        active_experts_mask = ttnn.reshape(active_experts_mask, ttnn.Shape((1, 1, T, n_experts)))
+        masked_scores = ttnn.mul(scores, active_experts_mask)
+        ttnn.deallocate(active_experts_mask)
+        topk_weight, topk_idx = ttnn.topk(masked_scores, k=self.top_k, dim=3, sorted=False)
+        ttnn.deallocate(masked_scores)
+        return topk_idx, topk_weight
+
+    def _forward_noaux_tc(self, scores: ttnn.Tensor):
+        if scores.layout != ttnn.TILE_LAYOUT:
+            scores = ttnn.to_layout(scores, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if len(scores.shape) == 3:
+            scores = ttnn.unsqueeze(scores, 1)
+        T = scores.shape[2]
+        n_experts = scores.shape[3]
+        experts_per_group = n_experts // self.n_group
+        bias = ttnn.repeat(self.e_score_correction_bias, ttnn.Shape((1, 1, T, 1)))
+        bias = ttnn.to_layout(bias, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        scores_for_choice = ttnn.add(scores, bias)
+        ttnn.deallocate(bias)
+        grouped = ttnn.reshape(scores_for_choice, ttnn.Shape((1, T, self.n_group, experts_per_group)))
+        top2_scores, _ = ttnn.topk(grouped, k=2, dim=3)
+        ttnn.deallocate(grouped)
+        group_scores = ttnn.sum(top2_scores, dim=3, keepdim=True)
+        ttnn.deallocate(top2_scores)
+        _, topk_group_idx = ttnn.topk(group_scores, k=self.topk_group, dim=2, sorted=False)
+        ttnn.deallocate(group_scores)
+        topk_group_idx = ttnn.typecast(topk_group_idx, ttnn.uint32)
+        if len(topk_group_idx.shape) == 4 and topk_group_idx.shape[-1] == 1:
+            topk_group_idx = ttnn.squeeze(topk_group_idx, -1)
+        if len(topk_group_idx.shape) == 3:
+            topk_group_idx = ttnn.unsqueeze(topk_group_idx, 1)
+        input_mask = ttnn.repeat(self.scatter_input, ttnn.Shape((1, 1, T, 1)))
+        src_tensor = ttnn.repeat(self.scatter_src, ttnn.Shape((1, 1, T, 1)))
+        active_groups_mask = ttnn.scatter(input=input_mask, index=topk_group_idx, src=src_tensor, dim=3)
+        ttnn.deallocate(input_mask)
+        ttnn.deallocate(src_tensor)
+        ttnn.deallocate(topk_group_idx)
+        active_groups_mask = ttnn.reshape(active_groups_mask, ttnn.Shape((1, T, self.n_group, 1)))
+        active_experts_mask = ttnn.repeat(active_groups_mask, ttnn.Shape((1, 1, 1, experts_per_group)))
+        ttnn.deallocate(active_groups_mask)
+        active_experts_mask = ttnn.reshape(active_experts_mask, ttnn.Shape((1, 1, T, n_experts)))
+        masked_scores = ttnn.mul(scores_for_choice, active_experts_mask)
+        ttnn.deallocate(active_experts_mask)
+        _, topk_idx = ttnn.topk(masked_scores, k=self.top_k, dim=3, sorted=False)
+        ttnn.deallocate(masked_scores)
+        ttnn.deallocate(scores_for_choice)
+        topk_weight = ttnn.gather(scores, dim=3, index=topk_idx)
+        return topk_idx, topk_weight
+
+    def forward(self, hidden_states: ttnn.Tensor):
+        hidden_states = _unwrap_ttnn(hidden_states)
+        logits = _unwrap_ttnn(self.linear(hidden_states))
+
+        if self.scoring_func == "softmax":
+            scores = ttnn.softmax(logits, dim=-1)
+        elif self.scoring_func == "sigmoid":
+            scores = ttnn.sigmoid(logits)
+        else:
+            raise NotImplementedError(f"insupportable scoring function for MoE gating: {self.scoring_func}")
+
+        if self.topk_method == "greedy":
+            topk_weight, topk_idx = ttnn.topk(scores, k=self.top_k, dim=-1, sorted=False)
+        elif self.topk_method == "group_limited_greedy":
+            topk_idx, topk_weight = self._forward_group_limited_greedy(scores)
+        elif self.topk_method == "noaux_tc":
+            topk_idx, topk_weight = self._forward_noaux_tc(scores)
+        else:
+            raise NotImplementedError(f"topk_method {self.topk_method!r} not supported")
+
+        if self.top_k > 1 and self.norm_topk_prob:
+            denominator = ttnn.sum(topk_weight, dim=-1, keepdim=True)
+            denominator = ttnn.add(denominator, 1e-20)
+            topk_weight = ttnn.div(topk_weight, denominator)
+        topk_weight = ttnn.mul(topk_weight, self.routed_scaling_factor)
+
+        aux_loss = None
+        return topk_idx, topk_weight, aux_loss

@@ -4,14 +4,23 @@
 
 """Linear layer implementations for TTNN."""
 
+import math
+
 import torch
 from torch import nn
+from torch.nn import functional as F
+from typing import Optional
 
 import ttnn
 from models.tt_cnn.tt.builder import Conv2dConfiguration, MaxPool2dConfiguration, TtConv2d, TtMaxPool2d
 from models.experimental.tt_symbiote.core.module import TTNNModule
-from models.experimental.tt_symbiote.modules.activation import TTNNReLU
+from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+from models.experimental.tt_symbiote.modules.activation import TTNNReLU, TTNNGelu
+from models.experimental.tt_symbiote.modules.attention import TTNNSAMAttention
+from models.experimental.tt_symbiote.modules.linear import TTNNLinear
+from models.experimental.tt_symbiote.modules.normalization import TTNNLayerNorm
 from models.experimental.tt_symbiote.modules.tensor import TTNNPermute, TTNNReshape
+from models.experimental.tt_symbiote.modules.transformer import TTNNNoTPTransformer
 from models.experimental.tt_symbiote.core.run_config import trace_enabled
 
 
@@ -33,6 +42,44 @@ def get_shape_from_module_name(module_name, model_config):
     if config.get("reshape_output", False):
         return None
     return config.get("input_shapes", None)
+
+
+class TTNNSAMLayerNorm(TTNNLayerNorm):
+    """SAM-only LayerNorm: passes epsilon from torch layer (default 1e-5) for PCC match."""
+
+    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        input_tensor = _unwrap_ttnn(input_tensor)
+        if input_tensor.layout != ttnn.TILE_LAYOUT:
+            input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        eps = getattr(self.torch_layer, "eps", 1e-5)
+        tt_output = ttnn.layer_norm(
+            input_tensor,
+            weight=self.tt_weight,
+            bias=self.tt_bias,
+            epsilon=eps,
+        )
+        return tt_output
+
+
+class NHWCLayerNorm2dWrapper(nn.Module):
+    """Wraps LayerNorm2d so that when called with NHWC (from TTNN path), it permutes to NCHW and back."""
+
+    def __init__(self, layer_norm_2d: nn.Module):
+        super().__init__()
+        self.layer_norm_2d = layer_norm_2d
+
+    @property
+    def weight(self) -> torch.Tensor:
+        return self.layer_norm_2d.weight
+
+    @property
+    def bias(self) -> torch.Tensor:
+        return self.layer_norm_2d.bias
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.permute(0, 3, 1, 2)
+        x = self.layer_norm_2d(x)
+        return x.permute(0, 2, 3, 1)
 
 
 class NHWCConvPytorch(nn.Module):
@@ -764,3 +811,423 @@ class TTNNConv2dNHWCInputMultipleOf16(TTNNConv2dNHWC):
         )
         new_conv._fallback_torch_layer = NHWCConvPytorch(conv)
         return new_conv
+
+
+def _unwrap_ttnn(x):
+    """Unwrap TorchTTNNTensor to raw ttnn.Tensor if wrapped."""
+    if isinstance(x, TorchTTNNTensor):
+        return x.ttnn_tensor
+    return x
+
+
+class TTNNSAMMLPBlock(TTNNModule):
+    """TTNN version of SAM MLPBlock (lin1 -> act -> lin2). Input/output shape (B, H, W, C)."""
+
+    def __init__(self):
+        super().__init__()
+
+    def initialize_submodules(self):
+        assert (
+            self._fallback_torch_layer is not None
+        ), "Fallback torch layer must be set before initializing submodules."
+        self.lin1 = TTNNLinear.from_torch(self.torch_layer.lin1)
+        self.lin2 = TTNNLinear.from_torch(self.torch_layer.lin2)
+        self.act = TTNNGelu()
+
+    @classmethod
+    def from_torch(cls, mlp_block: "nn.Module") -> "TTNNSAMMLPBlock":
+        new_mlp = cls()
+        new_mlp._fallback_torch_layer = mlp_block
+        new_mlp.initialize_submodules()
+        return new_mlp
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        out = _unwrap_ttnn(self.lin1(x))
+        out = self.act(out)
+        out = _unwrap_ttnn(self.lin2(out))
+        return out
+
+
+class TTNNSAMBlock(TTNNModule):
+    """TTNN version of SAM Block.
+    Residual: norm1 -> attn -> +shortcut; norm2 -> mlp -> +shortcut.
+    """
+
+    def __init__(self, window_size: int = 0):
+        super().__init__()
+        self.window_size = window_size
+
+    def initialize_submodules(self):
+        assert (
+            self._fallback_torch_layer is not None
+        ), "Fallback torch layer must be set before initializing submodules."
+        blk = self.torch_layer
+        self.norm1 = TTNNSAMLayerNorm.from_torch(blk.norm1)
+        self.attn = TTNNSAMAttention.from_torch(blk.attn, window_size=self.window_size)
+        self.norm2 = TTNNSAMLayerNorm.from_torch(blk.norm2)
+        self.mlp = TTNNSAMMLPBlock.from_torch(blk.mlp)
+
+    @classmethod
+    def from_torch(cls, block: "nn.Module", window_size: int = 0) -> "TTNNSAMBlock":
+        new_block = cls(window_size=window_size)
+        new_block._fallback_torch_layer = block
+        new_block.initialize_submodules()
+        return new_block
+
+    def forward(self, x):
+        """x: (B, H, W, C). Output: (B, H, W, C)."""
+        x = _unwrap_ttnn(x)
+        if isinstance(x, torch.Tensor):
+            x = ttnn.from_torch(x, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        shortcut = x
+        x = _unwrap_ttnn(self.norm1(x))
+        attn_out = _unwrap_ttnn(self.attn(x))
+        ttnn.deallocate(x)
+        x = ttnn.add(_unwrap_ttnn(shortcut), attn_out)
+        ttnn.deallocate(attn_out)
+
+        shortcut = x
+        x = _unwrap_ttnn(self.norm2(x))
+        x = _unwrap_ttnn(self.mlp(x))
+        x = ttnn.add(_unwrap_ttnn(shortcut), x)
+        ttnn.deallocate(shortcut)
+        return x
+
+
+class TTNNImageEncoderViT(TTNNModule):
+    """TTNN SAM ImageEncoderViT: patch_embed, pos_embed, blocks, neck, net_2, net_3.
+    Input NCHW, output BCHW.
+    """
+
+    def __init__(self, depth: int, window_size: int = 0):
+        super().__init__()
+        self.depth = depth
+        self.window_size = window_size
+
+    def initialize_submodules(self):
+        assert (
+            self._fallback_torch_layer is not None
+        ), "Fallback torch layer must be set before initializing submodules."
+        enc = self.torch_layer
+        self.patch_embed = TTNNConv2dNHWC.from_torch(enc.patch_embed.proj)
+        self.blocks = []
+        for i in range(self.depth):
+            win_sz = getattr(enc.blocks[i], "window_size", 0)
+            self.blocks.append(TTNNSAMBlock.from_torch(enc.blocks[i], window_size=win_sz))
+        neck_list = list(enc.neck.children())
+        self.neck_conv1 = TTNNConv2dNHWC.from_torch(neck_list[0])
+        self.neck_ln1 = TTNNSAMLayerNorm.from_torch(neck_list[1])
+        self.neck_ln1._fallback_torch_layer = NHWCLayerNorm2dWrapper(neck_list[1])
+        self.neck_conv2 = TTNNConv2dNHWC.from_torch(neck_list[2])
+        self.neck_ln2 = TTNNSAMLayerNorm.from_torch(neck_list[3])
+        self.neck_ln2._fallback_torch_layer = NHWCLayerNorm2dWrapper(neck_list[3])
+        self.net_2 = TTNNConv2dNHWC.from_torch(enc.net_2)
+        self.net_3 = TTNNConv2dNHWC.from_torch(enc.net_3)
+
+    @classmethod
+    def from_torch(cls, encoder: "nn.Module", window_size: int = 0) -> "TTNNImageEncoderViT":
+        depth = len(encoder.blocks)
+        new_enc = cls(depth=depth, window_size=window_size)
+        new_enc._fallback_torch_layer = encoder
+        new_enc.initialize_submodules()
+        return new_enc
+
+    def preprocess_weights_impl(self):
+        for child in self.__dict__.values():
+            if isinstance(child, TTNNModule):
+                child.preprocess_weights()
+        for blk in self.blocks:
+            if isinstance(blk, TTNNModule):
+                blk.preprocess_weights()
+        return self
+
+    def move_weights_to_device_impl(self):
+        for child in self.__dict__.values():
+            if isinstance(child, TTNNModule):
+                child.move_weights_to_device()
+        for blk in self.blocks:
+            if isinstance(blk, TTNNModule):
+                blk.move_weights_to_device()
+        return self
+
+    def forward(self, x):
+        """x: NCHW. Output: BCHW."""
+        x = _unwrap_ttnn(x)
+        if isinstance(x, torch.Tensor):
+            x = ttnn.from_torch(x, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        x = ttnn.permute(x, (0, 2, 3, 1))
+        x = _unwrap_ttnn(self.patch_embed(x))
+
+        if self.torch_layer.pos_embed is not None:
+            B, H, W, C = x.shape
+            pos = self.torch_layer.pos_embed
+            src_size = pos.shape[1]
+            if src_size != H:
+                pos_nchw = pos.permute(0, 3, 1, 2).float()
+                pos_resized = F.interpolate(
+                    pos_nchw, size=(H, W), mode="bicubic", antialias=True, align_corners=False
+                ).to(pos.dtype)
+                pos = pos_resized.permute(0, 2, 3, 1)
+            pos_tt = ttnn.from_torch(
+                pos.expand(B, -1, -1, -1), device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
+            x = ttnn.add(x, pos_tt)
+
+        for blk in self.blocks:
+            x = _unwrap_ttnn(blk(x))
+
+        x = _unwrap_ttnn(self.neck_conv1(x))
+        x = _unwrap_ttnn(self.neck_ln1(x))
+        x = _unwrap_ttnn(self.neck_conv2(x))
+        x = _unwrap_ttnn(self.neck_ln2(x))
+        x = _unwrap_ttnn(self.net_2(x))
+        x = _unwrap_ttnn(self.net_3(x))
+
+        x = ttnn.permute(x, (0, 3, 1, 2))
+        return x
+
+
+class TTNNClipVisionEmbeddings(TTNNModule):
+    """CLIP Vision Embeddings using TTNN operations."""
+
+    def __init__(self, hidden_size=1024, image_size=224, patch_size=14, num_channels=3):
+        super().__init__()
+        self.embed_dim = hidden_size
+        self.image_size = image_size
+        self.patch_size = patch_size
+        self.num_channels = num_channels
+        self.num_patches = (self.image_size // self.patch_size) ** 2
+        self.num_positions = self.num_patches + 1
+        self.torch_layer_cp = None
+
+    @classmethod
+    def from_torch(cls, visionEmbedding):
+        new_clip = cls(
+            hidden_size=visionEmbedding.embed_dim,
+            image_size=visionEmbedding.image_size,
+            patch_size=visionEmbedding.patch_size,
+            num_channels=3,
+        )
+        new_clip.torch_layer_cp = visionEmbedding
+        new_clip._fallback_torch_layer = visionEmbedding
+        return new_clip
+
+    def preprocess_weights_impl(self):
+        self.class_embedding = ttnn.from_torch(
+            self.torch_layer_cp.class_embedding.data,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        conv_weight = self.torch_layer_cp.patch_embedding.weight.data
+        linear_weight = conv_weight.view(self.embed_dim, -1).T
+        self.patch_embedding_weight = ttnn.from_torch(
+            linear_weight,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        conv_bias = None
+        if self.torch_layer_cp.patch_embedding.bias is not None:
+            conv_bias = self.torch_layer_cp.patch_embedding.bias.data
+        if conv_bias is not None:
+            self.patch_embedding_bias = ttnn.from_torch(
+                conv_bias.unsqueeze(0),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            self.patch_embedding_bias = None
+        position_embedding_weight = self.torch_layer_cp.position_embedding.weight.data
+        self.position_embedding = ttnn.from_torch(
+            position_embedding_weight.unsqueeze(0),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def move_weights_to_device_impl(self):
+        self.class_embedding = ttnn.to_device(self.class_embedding, self.device)
+        self.patch_embedding_weight = ttnn.to_device(self.patch_embedding_weight, self.device)
+        self.position_embedding = ttnn.to_device(self.position_embedding, self.device)
+        if self.patch_embedding_bias is not None:
+            self.patch_embedding_bias = ttnn.to_device(self.patch_embedding_bias, self.device)
+
+    def deallocate_weights_impl(self):
+        ttnn.deallocate(self.class_embedding)
+        ttnn.deallocate(self.patch_embedding_weight)
+        ttnn.deallocate(self.position_embedding)
+        if self.patch_embedding_bias is not None:
+            ttnn.deallocate(self.patch_embedding_bias)
+
+    def _unfold_patches(self, pixel_values: ttnn.Tensor) -> ttnn.Tensor:
+        batch_size = pixel_values.shape[0]
+        img_h, img_w = pixel_values.shape[2], pixel_values.shape[3]
+        patches_h = img_h // self.patch_size
+        patches_w = img_w // self.patch_size
+        pixel_values = ttnn.reshape(
+            pixel_values, (batch_size, self.num_channels, patches_h, self.patch_size, patches_w, self.patch_size)
+        )
+        pixel_values = ttnn.permute(pixel_values, (0, 2, 4, 1, 3, 5))
+        pixel_values = ttnn.reshape(
+            pixel_values, (batch_size, patches_h * patches_w, self.patch_size * self.patch_size * self.num_channels)
+        )
+        return pixel_values
+
+    def get_abs_pos_ttnn(self, abs_pos: ttnn.Tensor, tgt_size: int, device: ttnn.Device) -> ttnn.Tensor:
+        abs_pos_torch = ttnn.to_torch(abs_pos)
+        cls_token = abs_pos_torch[:, :1, :]
+        old_pos_embed = abs_pos_torch[:, 1:, :]
+        src_size = int(math.sqrt(old_pos_embed.shape[1]))
+        tgt_size_sqrt = int(math.sqrt(tgt_size))
+        if src_size != tgt_size_sqrt:
+            old_pos_embed_2d = old_pos_embed.view(1, src_size, src_size, -1).permute(0, 3, 1, 2).contiguous().float()
+            new_pos_embed_2d = torch.nn.functional.interpolate(
+                old_pos_embed_2d,
+                size=(tgt_size_sqrt, tgt_size_sqrt),
+                mode="bicubic",
+                antialias=True,
+                align_corners=False,
+            ).to(old_pos_embed.dtype)
+            new_pos_embed = new_pos_embed_2d.permute(0, 2, 3, 1).contiguous().view(1, tgt_size, -1)
+            vision_pos_embed = torch.cat([cls_token, new_pos_embed], dim=1)
+        else:
+            vision_pos_embed = abs_pos_torch
+        return ttnn.from_torch(
+            vision_pos_embed,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def forward(self, pixel_values: ttnn.Tensor, patch_embeds: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
+        pixel_values = _unwrap_ttnn(pixel_values)
+        if isinstance(pixel_values, torch.Tensor):
+            pixel_values = ttnn.from_torch(
+                pixel_values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
+        if pixel_values.layout != ttnn.TILE_LAYOUT:
+            pixel_values = ttnn.to_layout(pixel_values, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if patch_embeds is not None:
+            patch_embeds = _unwrap_ttnn(patch_embeds)
+            if isinstance(patch_embeds, torch.Tensor):
+                patch_embeds = ttnn.from_torch(
+                    patch_embeds, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+                )
+            if patch_embeds.layout != ttnn.TILE_LAYOUT:
+                patch_embeds = ttnn.to_layout(patch_embeds, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        batch_size = pixel_values.shape[0]
+        if patch_embeds is None:
+            patches = self._unfold_patches(pixel_values)
+            patch_embeds = ttnn.linear(
+                patches,
+                self.patch_embedding_weight,
+                bias=self.patch_embedding_bias,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(patches)
+
+        class_embeds = ttnn.reshape(self.class_embedding, (1, 1, self.embed_dim))
+        class_embeds = ttnn.repeat(class_embeds, (batch_size, 1, 1))
+        embeddings = ttnn.concat([class_embeds, patch_embeds], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(class_embeds)
+
+        actual_seq_len = embeddings.shape[1]
+        num_patches_actual = actual_seq_len - 1
+        pos_embeds = self.get_abs_pos_ttnn(self.position_embedding, num_patches_actual, self.device)
+        embeddings = ttnn.add(embeddings, pos_embeds, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(pos_embeds)
+        return embeddings
+
+
+class TTNNVitModel(TTNNModule):
+    """Vision Transformer Model using TTNN operations."""
+
+    def __init__(self):
+        super().__init__()
+        self.torch_layer_cp = None
+        self.embeddings = None
+        self.transformer = None
+        self.pre_layernorm_epsilon = 1e-5
+
+    @classmethod
+    def from_torch(cls, VitModel):
+        new_VitModel = cls()
+        new_VitModel.embeddings = TTNNClipVisionEmbeddings.from_torch(VitModel.embeddings)
+        new_VitModel.transformer = TTNNNoTPTransformer.from_torch(VitModel.transformer)
+        new_VitModel.torch_layer_cp = VitModel
+        new_VitModel._fallback_torch_layer = VitModel
+        return new_VitModel
+
+    def preprocess_weights_impl(self):
+        pre_norm_weight = self.torch_layer_cp.pre_layrnorm.weight.data
+        pre_norm_bias = self.torch_layer_cp.pre_layrnorm.bias.data
+        self.pre_layrnorm_weight = ttnn.from_torch(
+            pre_norm_weight,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self.pre_layrnorm_bias = ttnn.from_torch(
+            pre_norm_bias,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self.embeddings.preprocess_weights_impl()
+        self.transformer.preprocess_weights_impl()
+
+    def move_weights_to_device_impl(self):
+        self.pre_layrnorm_weight = ttnn.to_device(self.pre_layrnorm_weight, self.device)
+        self.pre_layrnorm_bias = ttnn.to_device(self.pre_layrnorm_bias, self.device)
+        self.embeddings.move_weights_to_device_impl()
+        self.transformer.move_weights_to_device_impl()
+
+    def deallocate_weights_impl(self):
+        ttnn.deallocate(self.pre_layrnorm_weight)
+        ttnn.deallocate(self.pre_layrnorm_bias)
+        self.embeddings.deallocate_weights_impl()
+        self.transformer.deallocate_weights_impl()
+
+    def forward(self, x: ttnn.Tensor, patch_embeds: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
+        x = _unwrap_ttnn(x)
+        if isinstance(x, torch.Tensor):
+            x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if patch_embeds is not None:
+            patch_embeds = _unwrap_ttnn(patch_embeds)
+            if isinstance(patch_embeds, torch.Tensor):
+                patch_embeds = ttnn.from_torch(
+                    patch_embeds,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                )
+            if patch_embeds.layout != ttnn.TILE_LAYOUT:
+                patch_embeds = ttnn.to_layout(patch_embeds, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if len(patch_embeds.shape) == 4:
+                patch_embeds = ttnn.reshape(patch_embeds, shape=[patch_embeds.shape[0], patch_embeds.shape[1], -1])
+                patch_embeds = ttnn.transpose(patch_embeds, 1, 2)
+
+        x = self.embeddings.forward(x, patch_embeds)
+        hidden_states = ttnn.layer_norm(
+            x,
+            weight=self.pre_layrnorm_weight,
+            bias=self.pre_layrnorm_bias,
+            epsilon=self.pre_layernorm_epsilon,
+        )
+        ttnn.deallocate(x)
+        output = self.transformer.forward(hidden_states)
+        ttnn.deallocate(hidden_states)
+        return output
