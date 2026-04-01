@@ -11,7 +11,7 @@ import random
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 @pytest.mark.parametrize("mkn", [(16, 128, 512)])
