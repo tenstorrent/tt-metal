@@ -40,7 +40,11 @@ def capitals_via_ttml():
         batch = tokenized_prompts[i : i + MAX_BATCH]
         completions.extend(completion_batched_multiple_prompts(ctx, batch))
 
-    print(f"{len(completions)} completions done, elapsed time: {time.perf_counter() - start_time} s")
+    elapsed = time.perf_counter() - start_time
+    print(f"{len(completions)} completions done, elapsed time: {elapsed} s")
+    total_tokens = sum(len(c) for c in completions)
+    print(f"total tokens generated: {total_tokens}")
+    print(f"throughput: {total_tokens / elapsed:.1f} tok/s")
 
     for i in range(len(completions)):
         print(f"completion {i} length = {len(completions[i])} tokens")

@@ -20,7 +20,7 @@ CHECKPOINT = None  # set to a .safetensors path to load trained weights
 MAX_SEQ_LEN = 2048
 MAX_BATCH = 32
 MAX_NEW_TOKS = 512
-TEMPERATURE = 0.0  # greedy
+TEMPERATURE = 0.8  # greedy
 # =============================
 
 
@@ -61,7 +61,11 @@ def capitals_via_ttml_weights():
     for i in range(0, len(user_prompts), MAX_BATCH):
         completions.extend(completion_batched_multiple_prompts_tr(tr_ctx, user_prompts[i : i + MAX_BATCH]))
 
-    print(f"{len(completions)} completions done, elapsed time: {time.perf_counter() - start_time} s")
+    elapsed = time.perf_counter() - start_time
+    print(f"{len(completions)} completions done, elapsed time: {elapsed} s")
+    total_tokens = sum(len(c) for c in completions)
+    print(f"total tokens generated: {total_tokens}")
+    print(f"throughput: {total_tokens / elapsed:.1f} tok/s")
 
     for i in range(32):
         print(f"completion {i} length = {len(completions[i])} tokens")
