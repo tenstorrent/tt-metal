@@ -493,7 +493,7 @@ jobs:
         run: |
           set -euo pipefail
           python tools/ci/m5_manage_issue_lifecycle.py \
-            --slack-json "build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_threads.json" \
+            --slack-json "build_ci/raw_data/slack_C0APK6215B5_last_14_days.json" \
             --state-json "build_ci/triage_state/ci_triage_state.json" \
             --output-json "build_ci/ci_ticketing/create_tickets/m5_lifecycle_result.json" \
             --summary-md "build_ci/ci_ticketing/create_tickets/m5_lifecycle_summary.md" \
