@@ -2186,7 +2186,7 @@ void py_module(nb::module_& mod) {
     bind_unary_clip(mod);
     bind_unary_clamp(mod);
     {
-        auto doc = R"doc(
+        const auto* doc = R"doc(
         Performs selu function on :attr:`input_tensor`.
 
         Args:
@@ -2215,7 +2215,7 @@ void py_module(nb::module_& mod) {
             nb::arg("sub_core_grids") = nb::none());
     }
     {
-        auto doc = R"doc(
+        const auto* doc = R"doc(
         Performs hardtanh function on :attr:`input_tensor`.
 
         Args:
@@ -2244,7 +2244,7 @@ void py_module(nb::module_& mod) {
             nb::arg("sub_core_grids") = nb::none());
     }
     {
-        auto doc = R"doc(
+        const auto* doc = R"doc(
         Performs threshold function on :attr:`input_tensor`, :attr:`threshold`, :attr:`value`.
 
         Args:

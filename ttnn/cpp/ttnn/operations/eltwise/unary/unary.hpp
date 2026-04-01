@@ -9,9 +9,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/operations/eltwise/unary_ng/unary_ng.hpp"
 
-namespace ttnn {
-
-namespace detail {
+namespace ttnn::detail {
 
 Tensor unary_impl(
     const Tensor& input_tensor,
@@ -20,6 +18,4 @@ Tensor unary_impl(
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
-}  // namespace detail
-
-}  // namespace ttnn
+}  // namespace ttnn::detail
