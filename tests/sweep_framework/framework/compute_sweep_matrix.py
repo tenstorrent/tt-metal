@@ -131,6 +131,7 @@ _SCHEDULE_TYPES = {
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+
 def chunk_modules(items, size):
     """Split modules into batches of specified size."""
     return [",".join(items[i : i + size]) for i in range(0, len(items), size)] if items else []
@@ -170,8 +171,11 @@ def _hw_label(hardware_group):
 def _log_module_groups(header, modules, groups):
     """Print a summary of module grouping to stderr."""
     total_base = len(set(strip_grouping_suffix(m) for m in modules))
-    print(f"{header}: {len(modules)} vector files ({total_base} unique modules), "
-          f"{sum(1 for g in groups for _ in g[1])} matrix entries", file=sys.stderr)
+    print(
+        f"{header}: {len(modules)} vector files ({total_base} unique modules), "
+        f"{sum(1 for g in groups for _ in g[1])} matrix entries",
+        file=sys.stderr,
+    )
     for label, entries in groups:
         unique = len(set(strip_grouping_suffix(m) for m in entries))
         print(f"  {label}: {len(entries)} vectors ({unique} unique modules)", file=sys.stderr)
@@ -191,6 +195,7 @@ def _build_entries(runner_config, batches, batch_display_prefix, suite_name):
 
 
 # ── Matrix computation per run type ─────────────────────────────────────────
+
 
 def compute_lead_models_matrix(modules, batch_size):
     """Compute matrix for lead models with mesh-aware runner assignment."""
@@ -251,9 +256,7 @@ def compute_lead_models_matrix(modules, batch_size):
 
         batches.extend(runner_batches)
         mesh_label = "+".join(runner_def["mesh_shapes"])
-        include_entries.extend(
-            _build_entries(runner_config, runner_batches, mesh_label, runner_def["suite_name"])
-        )
+        include_entries.extend(_build_entries(runner_config, runner_batches, mesh_label, runner_def["suite_name"]))
         log_groups.append((mesh_label, runner_modules))
 
     # Log
@@ -302,8 +305,10 @@ def compute_standard_matrix(modules, batch_size, suite_name):
     """Compute matrix for nightly/comprehensive runs."""
     base_modules = sorted(set(strip_grouping_suffix(m) for m in modules))
     ccl_modules = [m for m in base_modules if m.startswith("ccl.")]
+    regular_modules = [m for m in base_modules if not m.startswith("ccl.")]
 
-    regular_batches = chunk_modules(base_modules, batch_size)
+    # Keep CCL modules off the default runner path; they get their own N300 lane below.
+    regular_batches = chunk_modules(regular_modules, batch_size)
     ccl_batches = chunk_modules(ccl_modules, batch_size)
 
     n150_config = _get_runner("wormhole-n150-sweeps")
@@ -311,14 +316,13 @@ def compute_standard_matrix(modules, batch_size, suite_name):
 
     if ccl_batches:
         ccl_config = _get_runner("n300-llmbox-ccl")
-        include_entries.extend(
-            _build_entries(ccl_config, ccl_batches, "ccl", "generality_suite_fabric_1d")
-        )
+        include_entries.extend(_build_entries(ccl_config, ccl_batches, "ccl", "generality_suite_fabric_1d"))
 
     return include_entries, list(regular_batches), ccl_batches
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
+
 
 def main():
     """Main entry point."""
