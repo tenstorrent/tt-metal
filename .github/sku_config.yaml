@@ -59,6 +59,11 @@ skus:
       - topology-6u
       - in-release
 
+  wh_galaxy_uf_test:
+    runs_on:
+      - UF-EV-A12-GWH01
+      - in-service
+
   bh_galaxy:
     runs_on:
       - arch-blackhole
