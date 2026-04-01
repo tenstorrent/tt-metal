@@ -2801,6 +2801,11 @@ class DeepseekGenerator(WarmupForwardMixin):
         logger.warning("Warmup model prefill not implemented for DeepseekGenerator")
         logger.warning("Tracing in prefill mode is not supported for DeepseekGenerator")
 
+    def warmup_model_decode(
+        self, kv_cache, enable_trace, max_batch_size, num_blocks, can_sample_on_device, non_greedy_decoding_on_device
+    ) -> None:
+        logger.warning("Warmup model decode not implemented for DeepseekGenerator")
+
     def get_kv_cache(self):
         assert self.model_state is not None, "Model state is not initialized"
 
