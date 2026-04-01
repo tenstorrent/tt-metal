@@ -573,14 +573,13 @@ inline auto invoke_binary_ng_impl(
                 std::nullopt,
                 sub_core_grids);
 
-            // if both inputs are in row major, convert the output to row major
-            // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
-            // since it leads to better perf
-            if (input_a_rm and input_b_rm) {
-                return operations::binary::detail::to_layout(result, Layout::ROW_MAJOR);
-            }
-            return result;
+        // if both inputs are in row major, convert the output to row major
+        // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
+        // since it leads to better perf
+        if (input_a_rm and input_b_rm) {
+            return operations::binary::detail::to_layout(result, Layout::ROW_MAJOR);
         }
+        return result;
     }
     const auto input_a = operations::binary::detail::to_dtype(lhs, DataType::BFLOAT16);
     const auto input_b = operations::binary::detail::to_dtype(rhs, DataType::BFLOAT16);
