@@ -230,7 +230,7 @@ class Model:
                 args=self.args if hasattr(self, "args") else self._make_sampling_args(hf_config, mesh_device),
                 mesh_device=mesh_device,
                 tt_ccl=None,
-                enable_internal_trace=True,
+                enable_internal_trace=False,
             )
             # Hook reset_sampling_params to set prefill flag — Generator calls this
             # before prefill forward; tells _forward_layers_and_head to skip TP all-gather
