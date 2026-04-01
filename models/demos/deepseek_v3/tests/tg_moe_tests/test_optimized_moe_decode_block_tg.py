@@ -447,7 +447,7 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 @pytest.mark.parametrize("scheme", ["random_sequential_experts"])
 @pytest.mark.parametrize("compute_output_height_shard_dim", [4])
 @pytest.mark.parametrize("compute_output_width_shard_dim", [4])
-@pytest.mark.parametrize("combine_mux_core_range", [((4, 0), (5, 7))])  # TG-specific core range
+@pytest.mark.parametrize("combine_mux_core_range", [((2, 0), (3, 7))])  # TG-specific core range
 @pytest.mark.parametrize("combine_token_parallel_core_dim", [4])
 @pytest.mark.parametrize("combine_data_parallel_core_dim", [4])
 @pytest.mark.parametrize("enable_trace", [True])
@@ -490,8 +490,8 @@ def test_optimized_moe_decode_block_tg(
     # initial setup
     ############################################
 
-    torch.manual_seed(2005)
-    random.seed(2005)
+    torch.manual_seed(2003)
+    random.seed(2003)
 
     num_devices = mesh_shape[0] * mesh_shape[1]
     num_dispatch_devices = mesh_shape[cluster_axis]
