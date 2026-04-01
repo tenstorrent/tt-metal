@@ -7,7 +7,7 @@
 constexpr uint16_t PERF_COUNTER_PROFILER_ID = 9090;
 
 enum PerfCounterGroup : uint8_t { FPU, PACK, UNPACK, L1_0, L1_1, INSTRN, L1_2, L1_3, L1_4 };
-enum PerfCounterType : uint8_t {
+enum PerfCounterType : uint16_t {
     UNDEF = 0,
     // FPU Group (3 counters)
     FPU_COUNTER,
@@ -256,14 +256,65 @@ enum PerfCounterType : uint8_t {
     ETH_L1_0_NOC_RING0_OUTGOING_0_GRANT,
     ETH_L1_0_NOC_RING0_OUTGOING_1_GRANT,
     ETH_L1_0_NOC_RING0_INCOMING_0_GRANT,
-    ETH_L1_0_NOC_RING0_INCOMING_1_GRANT
+    ETH_L1_0_NOC_RING0_INCOMING_1_GRANT,
+    // BH Ethernet L1 mux 1 (ports 4-7): NOC Ring 1
+    ETH_L1_1_NOC_RING1_OUTGOING_0,
+    ETH_L1_1_NOC_RING1_OUTGOING_1,
+    ETH_L1_1_NOC_RING1_INCOMING_0,
+    ETH_L1_1_NOC_RING1_INCOMING_1,
+    ETH_L1_1_PORT_4,
+    ETH_L1_1_PORT_5,
+    ETH_L1_1_PORT_6,
+    ETH_L1_1_PORT_7,
+    ETH_L1_1_NOC_RING1_OUTGOING_0_GRANT,
+    ETH_L1_1_NOC_RING1_OUTGOING_1_GRANT,
+    ETH_L1_1_NOC_RING1_INCOMING_0_GRANT,
+    ETH_L1_1_NOC_RING1_INCOMING_1_GRANT,
+    ETH_L1_1_PORT_4_GRANT,
+    ETH_L1_1_PORT_5_GRANT,
+    ETH_L1_1_PORT_6_GRANT,
+    ETH_L1_1_PORT_7_GRANT,
+    // BH Ethernet L1 mux 2 (ports 8-11): ECC, RISC, ETH0 MAC
+    ETH_L1_2_ECC_SCRUBBER,
+    ETH_L1_2_RISC,
+    ETH_L1_2_ETH0_0,
+    ETH_L1_2_ETH0_1,
+    ETH_L1_2_PORT_12,
+    ETH_L1_2_PORT_13,
+    ETH_L1_2_PORT_14,
+    ETH_L1_2_PORT_15,
+    ETH_L1_2_ECC_SCRUBBER_GRANT,
+    ETH_L1_2_RISC_GRANT,
+    ETH_L1_2_ETH0_0_GRANT,
+    ETH_L1_2_ETH0_1_GRANT,
+    ETH_L1_2_PORT_12_GRANT,
+    ETH_L1_2_PORT_13_GRANT,
+    ETH_L1_2_PORT_14_GRANT,
+    ETH_L1_2_PORT_15_GRANT,
+    // BH Ethernet L1 mux 3 (ports 12-15): ETH1 MAC, unused
+    ETH_L1_3_ETH1_0,
+    ETH_L1_3_ETH1_1,
+    ETH_L1_3_UNUSED_2,
+    ETH_L1_3_UNUSED_3,
+    ETH_L1_3_PORT_20,
+    ETH_L1_3_PORT_21,
+    ETH_L1_3_PORT_22,
+    ETH_L1_3_PORT_23,
+    ETH_L1_3_ETH1_0_GRANT,
+    ETH_L1_3_ETH1_1_GRANT,
+    ETH_L1_3_UNUSED_2_GRANT,
+    ETH_L1_3_UNUSED_3_GRANT,
+    ETH_L1_3_PORT_20_GRANT,
+    ETH_L1_3_PORT_21_GRANT,
+    ETH_L1_3_PORT_22_GRANT,
+    ETH_L1_3_PORT_23_GRANT
 };
 
 union PerfCounter {
     struct {
         uint32_t counter_value;
-        uint32_t ref_cnt : 24;
-        uint32_t counter_type : 8;
+        uint32_t ref_cnt : 23;
+        uint32_t counter_type : 9;
     } __attribute__((packed));
     uint64_t raw_data;
 
@@ -389,7 +440,27 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_0_counters = {
 #endif
 constexpr size_t NUM_L1_0_COUNTERS = 16;
 
-// L1 bank 1 counters (MUX_CTRL[6:4] = 1): packer/risc, ext unpacker, ring1 NOC
+#if defined(COMPILE_FOR_ERISC) && defined(ARCH_BLACKHOLE)
+// BH Ethernet L1 bank 1 (mux=1): NOC Ring 1
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_1_counters = {
+    {{PerfCounterType::ETH_L1_1_NOC_RING1_OUTGOING_0, 0},
+     {PerfCounterType::ETH_L1_1_NOC_RING1_OUTGOING_1, 1},
+     {PerfCounterType::ETH_L1_1_NOC_RING1_INCOMING_0, 2},
+     {PerfCounterType::ETH_L1_1_NOC_RING1_INCOMING_1, 3},
+     {PerfCounterType::ETH_L1_1_PORT_4, 4},
+     {PerfCounterType::ETH_L1_1_PORT_5, 5},
+     {PerfCounterType::ETH_L1_1_PORT_6, 6},
+     {PerfCounterType::ETH_L1_1_PORT_7, 7},
+     {PerfCounterType::ETH_L1_1_NOC_RING1_OUTGOING_0_GRANT, 256},
+     {PerfCounterType::ETH_L1_1_NOC_RING1_OUTGOING_1_GRANT, 257},
+     {PerfCounterType::ETH_L1_1_NOC_RING1_INCOMING_0_GRANT, 258},
+     {PerfCounterType::ETH_L1_1_NOC_RING1_INCOMING_1_GRANT, 259},
+     {PerfCounterType::ETH_L1_1_PORT_4_GRANT, 260},
+     {PerfCounterType::ETH_L1_1_PORT_5_GRANT, 261},
+     {PerfCounterType::ETH_L1_1_PORT_6_GRANT, 262},
+     {PerfCounterType::ETH_L1_1_PORT_7_GRANT, 263}}};
+#else
+// Tensix L1 bank 1 (MUX_CTRL[6:4] = 1): packer/risc, ext unpacker, ring1 NOC
 // Port 8 differs between architectures: BH has RISC core, WH has TDMA packer 2
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_1_counters = {
 #if defined(ARCH_BLACKHOLE)
@@ -413,10 +484,30 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_1_counters = {
      {PerfCounterType::L1_1_NOC_RING1_OUTGOING_1_GRANT, 261},
      {PerfCounterType::L1_1_NOC_RING1_INCOMING_0_GRANT, 262},
      {PerfCounterType::L1_1_NOC_RING1_INCOMING_1_GRANT, 263}}};
+#endif
 constexpr size_t NUM_L1_1_COUNTERS = 16;
 
-// L1 bank 2 counters (BH only, MUX_CTRL[6:4] = 2): NOC Ring 2 ports 16-23
-// BH has NUM_NOCS=2 so these ports may be inactive; included for completeness.
+#if defined(COMPILE_FOR_ERISC) && defined(ARCH_BLACKHOLE)
+// BH Ethernet L1 bank 2 (mux=2): ECC, RISC, ETH0 MAC
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_2_counters = {
+    {{PerfCounterType::ETH_L1_2_ECC_SCRUBBER, 0},
+     {PerfCounterType::ETH_L1_2_RISC, 1},
+     {PerfCounterType::ETH_L1_2_ETH0_0, 2},
+     {PerfCounterType::ETH_L1_2_ETH0_1, 3},
+     {PerfCounterType::ETH_L1_2_PORT_12, 4},
+     {PerfCounterType::ETH_L1_2_PORT_13, 5},
+     {PerfCounterType::ETH_L1_2_PORT_14, 6},
+     {PerfCounterType::ETH_L1_2_PORT_15, 7},
+     {PerfCounterType::ETH_L1_2_ECC_SCRUBBER_GRANT, 256},
+     {PerfCounterType::ETH_L1_2_RISC_GRANT, 257},
+     {PerfCounterType::ETH_L1_2_ETH0_0_GRANT, 258},
+     {PerfCounterType::ETH_L1_2_ETH0_1_GRANT, 259},
+     {PerfCounterType::ETH_L1_2_PORT_12_GRANT, 260},
+     {PerfCounterType::ETH_L1_2_PORT_13_GRANT, 261},
+     {PerfCounterType::ETH_L1_2_PORT_14_GRANT, 262},
+     {PerfCounterType::ETH_L1_2_PORT_15_GRANT, 263}}};
+#else
+// Tensix L1 bank 2 (BH only, MUX_CTRL[6:4] = 2): NOC Ring 2 ports 16-23
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_2_counters = {
     {{PerfCounterType::L1_2_NOC_RING2_PORT_0, 0},
      {PerfCounterType::L1_2_NOC_RING2_PORT_1, 1},
@@ -434,9 +525,30 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_2_counters = {
      {PerfCounterType::L1_2_NOC_RING2_PORT_5_GRANT, 261},
      {PerfCounterType::L1_2_NOC_RING2_PORT_6_GRANT, 262},
      {PerfCounterType::L1_2_NOC_RING2_PORT_7_GRANT, 263}}};
+#endif
 constexpr size_t NUM_L1_2_COUNTERS = 16;
 
-// L1 bank 3 counters (BH only, MUX_CTRL[6:4] = 3): NOC Ring 3 ports 24-31
+#if defined(COMPILE_FOR_ERISC) && defined(ARCH_BLACKHOLE)
+// BH Ethernet L1 bank 3 (mux=3): ETH1 MAC, unused
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_3_counters = {
+    {{PerfCounterType::ETH_L1_3_ETH1_0, 0},
+     {PerfCounterType::ETH_L1_3_ETH1_1, 1},
+     {PerfCounterType::ETH_L1_3_UNUSED_2, 2},
+     {PerfCounterType::ETH_L1_3_UNUSED_3, 3},
+     {PerfCounterType::ETH_L1_3_PORT_20, 4},
+     {PerfCounterType::ETH_L1_3_PORT_21, 5},
+     {PerfCounterType::ETH_L1_3_PORT_22, 6},
+     {PerfCounterType::ETH_L1_3_PORT_23, 7},
+     {PerfCounterType::ETH_L1_3_ETH1_0_GRANT, 256},
+     {PerfCounterType::ETH_L1_3_ETH1_1_GRANT, 257},
+     {PerfCounterType::ETH_L1_3_UNUSED_2_GRANT, 258},
+     {PerfCounterType::ETH_L1_3_UNUSED_3_GRANT, 259},
+     {PerfCounterType::ETH_L1_3_PORT_20_GRANT, 260},
+     {PerfCounterType::ETH_L1_3_PORT_21_GRANT, 261},
+     {PerfCounterType::ETH_L1_3_PORT_22_GRANT, 262},
+     {PerfCounterType::ETH_L1_3_PORT_23_GRANT, 263}}};
+#else
+// Tensix L1 bank 3 (BH only, MUX_CTRL[6:4] = 3): NOC Ring 3 ports 24-31
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_3_counters = {
     {{PerfCounterType::L1_3_NOC_RING3_PORT_0, 0},
      {PerfCounterType::L1_3_NOC_RING3_PORT_1, 1},
@@ -454,6 +566,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_3_counters = {
      {PerfCounterType::L1_3_NOC_RING3_PORT_5_GRANT, 261},
      {PerfCounterType::L1_3_NOC_RING3_PORT_6_GRANT, 262},
      {PerfCounterType::L1_3_NOC_RING3_PORT_7_GRANT, 263}}};
+#endif
 constexpr size_t NUM_L1_3_COUNTERS = 16;
 
 // L1 bank 4 counters (BH only, MUX_CTRL[6:4] = 4): misc ports 32-39
