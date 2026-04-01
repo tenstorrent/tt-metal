@@ -1,11 +1,17 @@
-name: Auto-approve SFPI version bump
+name: Auto-approve dependency bumps
 
-# Fires on every PR open/update. The job itself guards with author + file checks.
+# Automatically approves and enables auto-merge for PRs where the component
+# author bumps their own dependency version file — no human review needed.
+#
+# Currently covers:
+#   - SFPI: @nathan-TT bumping tt_metal/sfpi-version
+#
+# To add a new component: add a new job following the same pattern.
 #
 # Security note: pull_request_target runs with write access to the base repo
 # even for fork PRs. We mitigate this by:
-#   1. Only acting on PRs from the known SFPI author (nathan-TT)
-#   2. Verifying the PR touches ONLY the allowed SFPI files via API — no code checkout
+#   1. Gating on a known author per job
+#   2. Verifying the PR touches ONLY the allowlisted files via API — no checkout
 #   3. Never executing any code from the PR branch
 
 on:
@@ -17,6 +23,9 @@ permissions:
   contents: read
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # SFPI — @nathan-TT bumping tt_metal/sfpi-version
+  # ---------------------------------------------------------------------------
   auto-approve-sfpi:
     name: Auto-approve SFPI bump
     runs-on: ubuntu-latest
@@ -73,8 +82,9 @@ jobs:
         if: steps.verify.outputs.safe == 'true'
         env:
           # Must be a token for an account in tenstorrent/codeowner-bypass.
-          # See repo Settings → Secrets → SFPI_AUTO_APPROVE_PAT.
-          GH_TOKEN: ${{ secrets.SFPI_AUTO_APPROVE_PAT }}
+          # Shared secret for all auto-approve jobs.
+          # See repo Settings → Secrets → AUTO_APPROVE_PAT.
+          GH_TOKEN: ${{ secrets.AUTO_APPROVE_PAT }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           gh pr review "$PR_NUMBER" \
@@ -85,7 +95,7 @@ jobs:
       - name: Enable auto-merge
         if: steps.verify.outputs.safe == 'true'
         env:
-          GH_TOKEN: ${{ secrets.SFPI_AUTO_APPROVE_PAT }}
+          GH_TOKEN: ${{ secrets.AUTO_APPROVE_PAT }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           # Enables auto-merge: GitHub will merge automatically once all required
