@@ -223,9 +223,9 @@ class TtRFDETR:
 
         img_h, img_w = image_tensor.shape[-2:]
         detections = self.postprocess(outputs_class, outputs_coord, (img_h, img_w))
-        ttnn.deallocate(outputs_class)
-        ttnn.deallocate(outputs_coord)
 
         return {
+            "outputs_class": outputs_class,
+            "outputs_coord": outputs_coord,
             "detections": detections,
         }

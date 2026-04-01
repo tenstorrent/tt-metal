@@ -26,88 +26,88 @@ from models.experimental.rfdetr_medium.common import (
     load_torch_model,
 )
 
-COCO_CLASSES = [
-    "person",
-    "bicycle",
-    "car",
-    "motorcycle",
-    "airplane",
-    "bus",
-    "train",
-    "truck",
-    "boat",
-    "traffic light",
-    "fire hydrant",
-    "stop sign",
-    "parking meter",
-    "bench",
-    "bird",
-    "cat",
-    "dog",
-    "horse",
-    "sheep",
-    "cow",
-    "elephant",
-    "bear",
-    "zebra",
-    "giraffe",
-    "backpack",
-    "umbrella",
-    "handbag",
-    "tie",
-    "suitcase",
-    "frisbee",
-    "skis",
-    "snowboard",
-    "sports ball",
-    "kite",
-    "baseball bat",
-    "baseball glove",
-    "skateboard",
-    "surfboard",
-    "tennis racket",
-    "bottle",
-    "wine glass",
-    "cup",
-    "fork",
-    "knife",
-    "spoon",
-    "bowl",
-    "banana",
-    "apple",
-    "sandwich",
-    "orange",
-    "broccoli",
-    "carrot",
-    "hot dog",
-    "pizza",
-    "donut",
-    "cake",
-    "chair",
-    "couch",
-    "potted plant",
-    "bed",
-    "dining table",
-    "toilet",
-    "tv",
-    "laptop",
-    "mouse",
-    "remote",
-    "keyboard",
-    "cell phone",
-    "microwave",
-    "oven",
-    "toaster",
-    "sink",
-    "refrigerator",
-    "book",
-    "clock",
-    "vase",
-    "scissors",
-    "teddy bear",
-    "hair drier",
-    "toothbrush",
-]
+COCO_ID_TO_NAME = {
+    1: "person",
+    2: "bicycle",
+    3: "car",
+    4: "motorcycle",
+    5: "airplane",
+    6: "bus",
+    7: "train",
+    8: "truck",
+    9: "boat",
+    10: "traffic light",
+    11: "fire hydrant",
+    13: "stop sign",
+    14: "parking meter",
+    15: "bench",
+    16: "bird",
+    17: "cat",
+    18: "dog",
+    19: "horse",
+    20: "sheep",
+    21: "cow",
+    22: "elephant",
+    23: "bear",
+    24: "zebra",
+    25: "giraffe",
+    27: "backpack",
+    28: "umbrella",
+    31: "handbag",
+    32: "tie",
+    33: "suitcase",
+    34: "frisbee",
+    35: "skis",
+    36: "snowboard",
+    37: "sports ball",
+    38: "kite",
+    39: "baseball bat",
+    40: "baseball glove",
+    41: "skateboard",
+    42: "surfboard",
+    43: "tennis racket",
+    44: "bottle",
+    46: "wine glass",
+    47: "cup",
+    48: "fork",
+    49: "knife",
+    50: "spoon",
+    51: "bowl",
+    52: "banana",
+    53: "apple",
+    54: "sandwich",
+    55: "orange",
+    56: "broccoli",
+    57: "carrot",
+    58: "hot dog",
+    59: "pizza",
+    60: "donut",
+    61: "cake",
+    62: "chair",
+    63: "couch",
+    64: "potted plant",
+    65: "bed",
+    67: "dining table",
+    70: "toilet",
+    72: "tv",
+    73: "laptop",
+    74: "mouse",
+    75: "remote",
+    76: "keyboard",
+    77: "cell phone",
+    78: "microwave",
+    79: "oven",
+    80: "toaster",
+    81: "sink",
+    82: "refrigerator",
+    84: "book",
+    85: "clock",
+    86: "vase",
+    87: "scissors",
+    88: "teddy bear",
+    89: "hair drier",
+    90: "toothbrush",
+}
 
 
 def download_sample_images(output_dir):
@@ -199,7 +199,7 @@ def draw_detections(image, detections, class_names, title=""):
             x1, y1, x2, y2 = box
 
             draw.rectangle([x1, y1, x2, y2], outline=color, width=2)
-            class_name = class_names[label] if label < len(class_names) else f"cls_{label}"
+            class_name = class_names.get(label, f"cls_{label}")
             text = f"{class_name}: {score:.2f}"
             draw.text((x1, y1 - 16), text, fill=color, font=font)
 
@@ -225,11 +225,13 @@ def run_ttnn_model(torch_model, image_tensor, device, score_thr=0.3):
     from models.experimental.rfdetr_medium.tt.tt_rfdetr import TtRFDETR
     from models.experimental.rfdetr_medium.tt.model_preprocessing import (
         load_backbone_weights,
+        load_projector_weights,
         load_decoder_weights,
         load_detection_head_weights,
     )
 
     backbone_params = load_backbone_weights(torch_model, device)
+    projector_params = load_projector_weights(torch_model, device)
     decoder_params = load_decoder_weights(torch_model, device)
     head_params = load_detection_head_weights(torch_model, device)
 
@@ -237,6 +239,7 @@ def run_ttnn_model(torch_model, image_tensor, device, score_thr=0.3):
         device=device,
         torch_model=torch_model,
         backbone_params=backbone_params,
+        projector_params=projector_params,
         decoder_params=decoder_params,
         head_params=head_params,
     )
@@ -285,7 +288,7 @@ def main():
 
         # Draw PyTorch results
         ref_image = pil_image.copy().resize((RESOLUTION, RESOLUTION))
-        ref_image = draw_detections(ref_image, ref_dets, COCO_CLASSES, "PyTorch Reference")
+        ref_image = draw_detections(ref_image, ref_dets, COCO_ID_TO_NAME, "PyTorch Reference")
         ref_path = os.path.join(args.output_dir, f"ref_{Path(image_path).stem}.jpg")
         ref_image.save(ref_path)
         print(f"  Saved: {ref_path}")
@@ -303,7 +306,7 @@ def main():
 
                 # Draw TTNN results
                 tt_image = pil_image.copy().resize((RESOLUTION, RESOLUTION))
-                tt_image = draw_detections(tt_image, tt_dets, COCO_CLASSES, "TTNN")
+                tt_image = draw_detections(tt_image, tt_dets, COCO_ID_TO_NAME, "TTNN")
                 tt_path = os.path.join(args.output_dir, f"ttnn_{Path(image_path).stem}.jpg")
                 tt_image.save(tt_path)
                 print(f"  Saved: {tt_path}")

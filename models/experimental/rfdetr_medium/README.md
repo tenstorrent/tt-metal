@@ -141,7 +141,7 @@ models/experimental/rfdetr_medium/
 ```bash
 cd $TT_METAL_HOME
 source python_env/bin/activate
-pip install rfdetr
+python_env/bin/pip3 install rfdetr
 ```
 
 ## Run PCC Tests
