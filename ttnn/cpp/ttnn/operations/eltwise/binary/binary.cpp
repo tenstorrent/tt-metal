@@ -554,12 +554,12 @@ inline auto invoke_binary_ng_impl(
                 sub_core_grids);
 
             return result;
-        } else {
-            // Either one or both are tiles
-            const auto input_a = operations::binary::detail::to_layout(lhs, Layout::TILE);
-            const auto input_b = operations::binary::detail::to_layout(rhs, Layout::TILE);
+        }
+        // Either one or both are tiles
+        const auto input_a = operations::binary::detail::to_layout(lhs, Layout::TILE);
+        const auto input_b = operations::binary::detail::to_layout(rhs, Layout::TILE);
 
-            auto result = ttnn::prim::binary_ng(
+        auto result = ttnn::prim::binary_ng(
                 input_a,
                 input_b,
                 binary_op_type,
