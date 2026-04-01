@@ -172,6 +172,18 @@
   team: models
   model-name: qwenimage
 
+- name: t3k_gpt_oss_module_tests
+  cmd: |
+    uv pip install -r models/demos/gpt_oss/requirements.txt
+    TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ \
+      pytest models/demos/gpt_oss/tests/unit/test_modules.py -k "mesh_1x8" --timeout 600 --durations=0
+  skus:
+    wh_llmbox:
+      timeout: 25
+  owner_id: U08TJ70UFRT # Stuti Raizada
+  team: models
+  model-name: gpt-oss-modules
+
 - name: t3k_deepseek_module_tests
   cmd: |
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
