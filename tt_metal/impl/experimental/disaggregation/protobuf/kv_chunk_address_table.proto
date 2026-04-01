@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package tt.disaggregation.proto;
+
+message FabricNodeId {
+    uint32 mesh_id = 1;
+    uint32 chip_id = 2;
+}
+
+message DeviceGroup {
+    repeated FabricNodeId fabric_node_ids = 1;
+}
+
+message FabricNodeHost {
+    uint32 mesh_id = 1;
+    uint32 chip_id = 2;
+    string host_name = 3;
+}
+
+message KvCacheEntry {
+    uint32 slot = 1;
+    uint32 layer = 2;
+    uint32 position = 3;
+    uint64 noc_addr = 4;
+    uint32 size_bytes = 5;
+    uint32 device_group_index = 6;
+}
+
+message KvChunkAddressTable {
+    uint32 num_layers = 1;
+    uint32 max_sequence_length = 2;
+    uint32 num_slots = 3;
+    uint32 chunk_n_tokens = 4;
+    uint32 chunk_size_bytes = 5;
+    repeated DeviceGroup device_groups = 6;
+    repeated FabricNodeHost fabric_node_hosts = 7;
+    repeated KvCacheEntry entries = 8;
+}
