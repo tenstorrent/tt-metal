@@ -8,6 +8,7 @@
 
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded_nanobind.hpp"
 #include "ttnn/operations/data_movement/sharded/reshard/reshard_nanobind.hpp"
+#include "ttnn/operations/data_movement/sharded/copy_to_memory_config/copy_to_memory_config_nanobind.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved_nanobind.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast_nanobind.hpp"
 #include "ttnn/operations/data_movement/chunk/chunk_nanobind.hpp"
@@ -94,6 +95,7 @@ void py_module(nb::module_& mod) {
     bind_sharded_to_interleaved_partial(mod);
     bind_squeeze(mod);
     bind_stack(mod);
+    bind_copy_to_memory_config(mod);
     bind_unsqueeze(mod);
     bind_roll(mod);
     detail::bind_sort_operation(mod);
