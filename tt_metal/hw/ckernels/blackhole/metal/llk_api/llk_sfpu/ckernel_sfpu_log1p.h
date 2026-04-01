@@ -98,7 +98,7 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
             r = r * m + 0x1.274p-3f;
             r = r * m + -0x1.55p-3f;
             r = r * m + 0x1.998p-3f;
-            e_float = sfpi::int32_to_float(abs_e);
+            e_float = sfpi::int32_to_float(abs_e, 0);
             r = r * m + sfpi::vConstFloatPrgm1;
             s = m * m;
             r = r * m + sfpi::vConstFloatPrgm2;
@@ -107,7 +107,7 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
             // log1p(x) = x + x*x * (-0x1.008p-1 + x * (0x1.744p-2 + x * (-0x1p-2)))
 
             m = m + t;
-            e_float = sfpi::int32_to_float(abs_e);
+            e_float = sfpi::int32_to_float(abs_e, 0);
             r = neg_quarter * m + sfpi::vConstFloatPrgm1;
             s = m * m;
             r = r * m + sfpi::vConstFloatPrgm2;
