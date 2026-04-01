@@ -227,7 +227,7 @@ The following metrics are automatically computed from raw counters. Each metric 
 *Write Port Analysis*
 
 - **SrcB Write Port Blocked Rate (%)**: Cycles where srcB DMA write was blocked by write port unavailability.
-- **SrcA/SrcB Write Actual Efficiency (%)**: Fraction of write attempts that succeeded. 100% = no blocking. (SrcB Write Actual Efficiency is Wormhole-only.)
+- **SrcA Write Actual Efficiency (%)**: Fraction of srcA write attempts that succeeded. 100% = no blocking.
 
 *L1 Memory Utilization*
 
@@ -254,8 +254,12 @@ The following metrics are automatically computed from raw counters. Each metric 
 
 *Wormhole-Only Metrics*
 
-- **HiFi2/LoFi/HiFi4 Instrn Rate (%)**: Fraction of math instructions at each fidelity level.
+These metrics depend on hardware signals inactive on Blackhole and are automatically hidden from BH output.
+
+- **Math Pipeline Utilization (%)**: Math instruction flow efficiency (MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE).
 - **Math Src Data Ready Rate (%)**: Cycles where math was not blocked by source data.
+- **SrcB Write Actual Efficiency (%)**: Fraction of srcB write attempts that succeeded.
+- **HiFi2/LoFi/HiFi4 Instrn Rate (%)**: Fraction of math instructions at each fidelity level.
 - **Packer Engine 0/1/2 Util (%)**: Per-engine packer utilization (Wormhole has 4 packer engines).
 - **Unpacker0/1 Write Efficiency (%)**: Source register write throughput per unpacker.
 - **FPU Execution Efficiency (%)**: FPU active cycles as fraction of math instruction availability.
@@ -266,7 +270,7 @@ The following metrics are automatically computed from raw counters. Each metric 
 
 **Architecture Differences**
 
-Wormhole collects 172 raw counters and computes 86 derived metrics. Blackhole collects 190 raw counters (126 Tensix + 64 ERISC) and computes 74 derived metrics. The difference is due to 6 TDMA signals that are inactive on Blackhole (PACK_COUNT=1, ``o_math_instrnbuf_rden`` tied off). Blackhole has additional L1 mux positions (3 extra for Tensix, 3 for Ethernet) providing deeper memory visibility.
+Wormhole collects 172 raw counters and computes 86 derived metrics. Blackhole collects 190 raw counters (126 Tensix + 64 ERISC) and computes 74 derived metrics. The difference is due to TDMA signals that are inactive on Blackhole (``PACK_COUNT=1``, ``o_math_instrnbuf_rden`` tied off). Metrics that depend on dead signals are automatically hidden from the Blackhole output. Blackhole has additional L1 mux positions (3 extra for Tensix, 3 for Ethernet) providing deeper memory visibility.
 
 For detailed hardware counter documentation including register maps and signal definitions, see ``tech_reports/PerfCounters/perf-counters.md``.
 

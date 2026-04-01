@@ -143,7 +143,7 @@ Packer Efficiency = PACKER_DEST_READ_AVAILABLE / PACKER_BUSY * 100
 
 **5. Math-to-Pack Handoff Efficiency**
 
-Measures pipeline balance between math output and packer consumption.
+Measures pipeline balance between math output and packer consumption. Capped at 100%.
 
 | | |
 |---|---|
@@ -151,14 +151,13 @@ Measures pipeline balance between math output and packer consumption.
 | **Counter group** | PACK |
 
 ```
-Math-to-Pack Handoff = AVAILABLE_MATH / PACKER_BUSY * 100
+Math-to-Pack Handoff = min(100, AVAILABLE_MATH / PACKER_BUSY * 100)
 ```
 
-- **High value (>100%)**: Math produces output faster than packer consumes (packer is bottleneck).
-- **Value near 100%**: Math and packer are well-balanced.
+- **High value (100%)**: Math produces output as fast or faster than packer consumes. Good pipeline balance.
 - **Low value (<50%)**: Packer is busy but math output isn't ready (math is bottleneck).
 
-**Use case:** Identifies whether math or packer is the pipeline bottleneck.
+**Use case:** Identifies whether math is keeping up with the packer. Low values indicate math is the bottleneck.
 
 ---
 
@@ -536,24 +535,25 @@ SFPU Idle Stall Pct T1 = WAITING_FOR_SFPU_IDLE_1 / THREAD_STALLS_1 * 100
 
 ### Write Port Analysis
 
-**23. SrcA/SrcB Write Actual Efficiency**
+**23. SrcA Write Actual Efficiency**
 
-Fraction of source register write attempts that actually succeeded.
+Fraction of srcA write attempts that actually succeeded.
 
 | | |
 |---|---|
-| **Architectures** | SrcA: Both. SrcB: Wormhole only (dead on BH). |
+| **Architectures** | Wormhole, Blackhole |
 | **Counter group** | UNPACK |
 
 ```
 SrcA Write Actual Efficiency = SRCA_WRITE_ACTUAL / SRCA_WRITE_AVAILABLE * 100
-SrcB Write Actual Efficiency = SRCB_WRITE_ACTUAL / SRCB_WRITE_AVAILABLE * 100
 ```
 
-- **High value (100%)**: Every write attempt succeeds. No write port blocking.
-- **Low value (<80%)**: Significant fraction of writes are blocked.
+- **High value (100%)**: Every srcA write attempt succeeds. No write port blocking.
+- **Low value (<80%)**: Significant fraction of srcA writes are blocked.
 
-**Use case:** Measures effective write throughput to source registers. Low values indicate write port contention.
+**Note:** SrcB Write Actual Efficiency is Wormhole-only (see WH-only metrics section).
+
+**Use case:** Measures effective srcA write throughput. Low values indicate write port contention.
 
 ---
 
@@ -885,7 +885,75 @@ TDMA vs NOC = (TDMA_Bundle_0 + TDMA_Bundle_1) / (TDMA + NOC_Out + NOC_In) * 100
 
 ### Wormhole-Only Metrics
 
-**39. HiFi2/LoFi/HiFi4 Instrn Rate**
+These metrics depend on hardware signals that are inactive on Blackhole. They are only computed when the required counters are present in the profiler data.
+
+**39. Math Pipeline Utilization**
+
+Measures math instruction flow efficiency through the pipeline.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole only |
+| **Counter group** | UNPACK |
+
+```
+Math Pipeline Utilization = MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE * 100
+```
+
+- **High value (>80%)**: Math pipeline efficiently moves instructions (no pipe stalls).
+- **Low value (<30%)**: Instructions in pipe but not starting (pipeline stalled).
+
+**Not available on Blackhole**: `MATH_INSTRN_STARTED` (`o_math_instrnbuf_rden`) is inactive on BH.
+
+**Use case:** Detects math pipeline stalls. Values consistently near 100% indicate excellent pipeline health.
+
+---
+
+**40. Math Src Data Ready Rate**
+
+Fraction of cycles where math was not blocked by source data unavailability.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole only |
+| **Counter group** | UNPACK |
+
+```
+Math Src Data Ready Rate = MATH_INSTRN_NOT_BLOCKED_SRC / MATH_INSTRN_AVAILABLE * 100
+```
+
+- **High value (>90%)**: Source data is almost always ready when math needs it.
+- **Low value (<50%)**: Math frequently blocked waiting for source data from unpackers.
+
+**Not available on Blackhole**: `MATH_INSTRN_NOT_BLOCKED_SRC` is inactive on BH.
+
+**Use case:** Identifies source data starvation as the cause of math pipeline stalls.
+
+---
+
+**41. SrcB Write Actual Efficiency**
+
+Fraction of srcB write attempts that actually succeeded.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole only |
+| **Counter group** | UNPACK |
+
+```
+SrcB Write Actual Efficiency = SRCB_WRITE_ACTUAL / SRCB_WRITE_AVAILABLE * 100
+```
+
+- **High value (100%)**: Every srcB write attempt succeeds.
+- **Low value (<80%)**: Significant fraction of srcB writes are blocked.
+
+**Not available on Blackhole**: `SRCB_WRITE_ACTUAL` (counter_sel 259, bank 3 grant) is inactive on BH because `o_math_instrnbuf_rden` is tied off.
+
+**Use case:** Measures effective srcB write throughput.
+
+---
+
+**43. HiFi2/LoFi/HiFi4 Instrn Rate**
 
 Fraction of math instructions at each fidelity level.
 
@@ -909,7 +977,7 @@ HiFi4 Rate = (MATH_INSTRN_STARTED - HF2 - HF1) / MATH_INSTRN_STARTED * 100
 
 ---
 
-**40. Packer Engine 0/1/2 Util**
+**44. Packer Engine 0/1/2 Util**
 
 Per-engine packer utilization.
 
@@ -928,7 +996,7 @@ Packer Engine N Util = PACKER_BUSY_N / ref_cnt * 100
 
 ---
 
-**41. Unpacker0/1 Write Efficiency**
+**45. Unpacker0/1 Write Efficiency**
 
 Source register write throughput per unpacker.
 
@@ -951,7 +1019,7 @@ Unpacker1 Efficiency = SRCB_WRITE / UNPACK1_BUSY_THREAD0 * 100
 
 ---
 
-**42. FPU Execution Efficiency**
+**46. FPU Execution Efficiency**
 
 FPU active cycles as fraction of math instruction availability.
 
