@@ -11,7 +11,7 @@ import pytest
 from loguru import logger
 from tracy.process_model_log import get_latest_ops_log_filename
 
-from models.demos.llama3_70b_galaxy.tests.test_prefill_device_perf import (
+from models.demos.nlp.llms.llama3_70b.galaxy.tests.test_prefill_device_perf import (
     average_per_instance_dict,
     build_duration_dict,
     build_duration_per_instance_dict,
