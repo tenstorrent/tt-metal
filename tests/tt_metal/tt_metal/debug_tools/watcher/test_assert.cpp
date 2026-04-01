@@ -222,13 +222,13 @@ static void RunTest(
         EXPECT_TRUE(std::regex_match(exception, std::regex(pattern)))
             << "Expected pattern: " << pattern << "\nActual: " << exception;
     } else if (assert_type == dev_msgs::DebugAssertHwFault) {
-        // Build regex pattern from string expected, replacing PC 0x0 with PC 0x\d+
+        // Build regex pattern from string expected, replacing PC 0x0 with PC 0x[\da-fA-F]+
         std::string pattern = regex_escape(expected);
         const std::string pc_placeholder = "PC 0x0";
         size_t pos = pattern.find(pc_placeholder);
         ASSERT_NE(pos, std::string::npos)
             << "Expected placeholder '" << pc_placeholder << "' not found in exception: " << pattern;
-        pattern.replace(pos, pc_placeholder.length(), "PC 0x\\d+");
+        pattern.replace(pos, pc_placeholder.length(), "PC 0x[\\da-fA-F]+");
         EXPECT_TRUE(std::regex_match(exception, std::regex(pattern)))
             << "Expected pattern: " << pattern << "\nActual: " << exception;
     } else {
