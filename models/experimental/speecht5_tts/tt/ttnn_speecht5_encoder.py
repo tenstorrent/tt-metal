@@ -636,7 +636,9 @@ class TTNNSpeechT5Encoder:
             inplace=False,
         )
 
-    def _run_wrapped_encoder(self, hidden_states: ttnn.Tensor, attention_mask: ttnn.Tensor = None) -> Tuple[ttnn.Tensor]:
+    def _run_wrapped_encoder(
+        self, hidden_states: ttnn.Tensor, attention_mask: ttnn.Tensor = None
+    ) -> Tuple[ttnn.Tensor]:
         """
         Run the shared wrapped SpeechT5 encoder stack on precomputed features.
 
