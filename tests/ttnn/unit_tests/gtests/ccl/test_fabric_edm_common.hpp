@@ -194,28 +194,27 @@ class MeshFabric1DFixture : public BaseFabricFixture {
 public:
     std::shared_ptr<MeshDevice> mesh_device_;
 
-    void SetupDevices() override {
+    void SetupDevices() override { DoSetup(); }
+
+    void TearDown() override { DoCleanup(); }
+
+    MeshFabric1DFixture() { DoSetup(); }
+
+    MeshFabric1DFixture(tt::tt_fabric::FabricConfig fabric_config) : BaseFabricFixture(fabric_config) { DoSetup(); }
+
+    ~MeshFabric1DFixture() override { DoCleanup(); }
+
+private:
+    void DoSetup() {
         ValidateEnvironment();
         mesh_device_ = MeshDevice::create(MeshDeviceConfig(GetDeterminedMeshShape()));
         device_open = true;
     }
 
-    void TearDown() override {
+    void DoCleanup() {
         if (device_open) {
             mesh_device_->close();
             device_open = false;
-        }
-    }
-
-    MeshFabric1DFixture() { this->SetupDevices(); }
-
-    MeshFabric1DFixture(tt::tt_fabric::FabricConfig fabric_config) : BaseFabricFixture(fabric_config) {
-        this->SetupDevices();
-    }
-
-    ~MeshFabric1DFixture() override {
-        if (device_open) {
-            TearDown();
         }
     }
 };
