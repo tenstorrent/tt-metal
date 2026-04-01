@@ -53,6 +53,7 @@
 
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 
 #include <tracy/Tracy.hpp>
 
@@ -1320,6 +1321,22 @@ void pytensor_module(nb::module_& mod) {
             .. code-block:: python
 
                 address = tt_tensor.buffer_address()
+
+        )doc")
+        .def(
+            "per_core_buffer_address",
+            [](const Tensor& self, const CoreCoord& core) -> uint32_t {
+                TT_FATAL(is_device_tensor(self), "{} doesn't support per_core_buffer_address", self.storage_type());
+                TT_FATAL(self.is_allocated(), "Tensor is not allocated.");
+                return experimental::per_core_allocation::get_per_core_address(self.mesh_buffer(), core);
+            },
+            nb::arg("core"),
+            R"doc(
+            Get the per-core L1 address for a specific core (experimental per-core allocation).
+
+            .. code-block:: python
+
+                address = tt_tensor.per_core_buffer_address(ttnn.CoreCoord(0, 0))
 
         )doc")
         .def(
