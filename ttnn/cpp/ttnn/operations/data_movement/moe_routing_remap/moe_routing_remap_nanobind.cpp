@@ -53,15 +53,14 @@ Returns:
     ttnn::bind_function<"moe_routing_remap">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::moe_routing_remap,
-            nb::arg("routing_weights_tensor").noconvert(),
-            nb::arg("non_zero_weight_size"),
-            nb::arg("expert_parallel_size"),
-            nb::arg("cluster_axis"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("optional_output_tensor") = nb::none()));
+        &ttnn::moe_routing_remap,
+        nb::arg("routing_weights_tensor").noconvert(),
+        nb::arg("non_zero_weight_size"),
+        nb::arg("expert_parallel_size"),
+        nb::arg("cluster_axis"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("optional_output_tensor") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement::detail

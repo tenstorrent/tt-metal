@@ -34,15 +34,12 @@ void bind_repeat(nb::module_& mod) {
     ttnn::bind_function<"repeat">(
         mod,
         doc,
-        ttnn::overload_t(
-            nb::overload_cast<
-                const ttnn::Tensor&,
-                const ttnn::SmallVector<uint32_t>&,
-                const std::optional<MemoryConfig>&>(&ttnn::repeat),
-            nb::arg("input_tensor"),
-            nb::arg("repeat_dims"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()));
+        nb::overload_cast<const ttnn::Tensor&, const ttnn::SmallVector<uint32_t>&, const std::optional<MemoryConfig>&>(
+            &ttnn::repeat),
+        nb::arg("input_tensor"),
+        nb::arg("repeat_dims"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement

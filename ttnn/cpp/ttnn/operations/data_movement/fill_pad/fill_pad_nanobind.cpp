@@ -34,12 +34,11 @@ void bind_fill_pad_op(nb::module_& mod) {
     ttnn::bind_function<"fill_implicit_tile_padding">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::fill_implicit_tile_padding,
-            nb::arg("input_tensor"),
-            nb::arg("fill_value"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()));
+        &ttnn::fill_implicit_tile_padding,
+        nb::arg("input_tensor"),
+        nb::arg("fill_value"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace

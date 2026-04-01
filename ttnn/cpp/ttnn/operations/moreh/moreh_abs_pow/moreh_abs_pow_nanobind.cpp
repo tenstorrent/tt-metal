@@ -18,13 +18,12 @@ void bind_moreh_abs_pow_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_abs_pow">(
         mod,
         "Moreh Pow Operation",
-        ttnn::overload_t(
-            &ttnn::moreh_abs_pow,
-            nb::arg("input"),
-            nb::arg("p"),
-            nb::kw_only(),
-            nb::arg("output") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::moreh_abs_pow,
+        nb::arg("input"),
+        nb::arg("p"),
+        nb::kw_only(),
+        nb::arg("output") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 }  // namespace ttnn::operations::moreh::moreh_abs_pow

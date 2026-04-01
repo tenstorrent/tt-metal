@@ -33,8 +33,10 @@ void bind_non_zero(nb::module_& mod) {
     ttnn::bind_function<"nonzero">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::nonzero, nb::arg("input_tensor").noconvert(), nb::kw_only(), nb::arg("memory_config") = nb::none()));
+        &ttnn::nonzero,
+        nb::arg("input_tensor").noconvert(),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace
