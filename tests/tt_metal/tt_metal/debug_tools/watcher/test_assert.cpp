@@ -213,8 +213,15 @@ static void RunTest(
         kernel);
 
     if (assert_type == dev_msgs::DebugAssertTripped) {
-        // Build regex pattern from string expected, replacing "on line 0" with "on line \d+"
+        // Build regex pattern from string expected, replacing "unknown file" with a wildcard
+        // (the kernel reports its actual file hash which the watcher resolves to a real path)
+        // and replacing "on line 0" with "\d+" (line number shifts as kernel code changes).
         std::string pattern = regex_escape(expected);
+        const std::string file_placeholder = "unknown file";
+        size_t file_pos = pattern.find(file_placeholder);
+        ASSERT_NE(file_pos, std::string::npos)
+            << "Expected placeholder '" << file_placeholder << "' not found in escaped pattern: " << pattern;
+        pattern.replace(file_pos, file_placeholder.length(), ".+");
         const std::string placeholder = "on line 0";
         size_t pos = pattern.find(placeholder);
         ASSERT_NE(pos, std::string::npos)
