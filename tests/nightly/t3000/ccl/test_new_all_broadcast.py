@@ -185,33 +185,34 @@ def run_all_broadcast_impl(
         input_tensor_mesh_list.append(input_tensor_mesh)
 
     tt_out_tensor_list = []
-    if trace_mode:
-        tt_out_tensor = run_with_trace(
-            mesh_device,
-            all_broadcast_topology,
-            input_tensor_mesh_list[0],
-            num_links,
-            output_mem_config,
-            cluster_axis=cluster_axis,
-            num_iter=num_iters,
-            subdevice_id=worker_sub_device_id,
-        )
-        tt_out_tensor_list.append(tt_out_tensor)
-    else:
-        for i in range(num_iters):
-            tt_out_tensors = ttnn.all_broadcast(
-                input_tensor_mesh_list[i],
-                num_links=num_links,
-                memory_config=output_mem_config,
+    with mesh_device.cache_entries_counter.measure():
+        if trace_mode:
+            tt_out_tensor = run_with_trace(
+                mesh_device,
+                all_broadcast_topology,
+                input_tensor_mesh_list[0],
+                num_links,
+                output_mem_config,
                 cluster_axis=cluster_axis,
-                topology=all_broadcast_topology,
+                num_iter=num_iters,
                 subdevice_id=worker_sub_device_id,
             )
-            tt_out_tensor_list.append(tt_out_tensors)
+            tt_out_tensor_list.append(tt_out_tensor)
+        else:
+            for i in range(num_iters):
+                tt_out_tensors = ttnn.all_broadcast(
+                    input_tensor_mesh_list[i],
+                    num_links=num_links,
+                    memory_config=output_mem_config,
+                    cluster_axis=cluster_axis,
+                    topology=all_broadcast_topology,
+                    subdevice_id=worker_sub_device_id,
+                )
+                tt_out_tensor_list.append(tt_out_tensors)
 
-        logger.info(f"Waiting for op")
-        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
-        logger.info(f"Done op")
+            logger.info(f"Waiting for op")
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+            logger.info(f"Done op")
 
     passed = True
     for tensor_index in range(len(tt_out_tensor_list)):
@@ -231,8 +232,8 @@ def run_all_broadcast_impl(
                     passed = False
                     assert eq, f"{i} FAILED: {output}"
     assert (
-        mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
-    ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
+        mesh_device.cache_entries_counter.total == 1 or mesh_device.cache_entries_counter.total == num_iters
+    ), f"Device has {mesh_device.cache_entries_counter.total} program cache entries"
     mesh_device.reset_sub_device_stall_group()
     if use_sub_devices:
         mesh_device.clear_loaded_sub_device_manager()

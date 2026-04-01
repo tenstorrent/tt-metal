@@ -19,9 +19,12 @@ void kernel_main() {
     uint32_t out_block_tile_cnt = get_compile_time_arg_val(6);
 
 #ifdef ARCH_QUASAR
-    experimental::DataflowBuffer dfb0(0);
-    experimental::DataflowBuffer dfb1(1);
-    experimental::DataflowBuffer dfb_out(2);
+    constexpr uint32_t dfb0_id = get_compile_time_arg_val(7);
+    constexpr uint32_t dfb1_id = get_compile_time_arg_val(8);
+    constexpr uint32_t dfb_out_id = get_compile_time_arg_val(9);
+    experimental::DataflowBuffer dfb0(dfb0_id);
+    experimental::DataflowBuffer dfb1(dfb1_id);
+    experimental::DataflowBuffer dfb_out(dfb_out_id);
 #endif
 
 #if (TEST_INIT_SHORT == 1)
