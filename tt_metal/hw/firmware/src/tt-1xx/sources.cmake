@@ -6,6 +6,7 @@ set(FIRMWARE_JIT_API_FILES
     active_erisck.cc
     brisc.cc
     brisck.cc
+    drisc.cc
     erisc.cc
     erisc-crt0.cc
     erisck.cc
