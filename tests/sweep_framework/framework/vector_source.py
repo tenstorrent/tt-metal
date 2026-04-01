@@ -2,12 +2,22 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ast
 import json
 import pathlib
+import sys
 from abc import ABC, abstractmethod
 
-from framework.sweeps_logger import sweeps_logger as logger
+if __package__ in (None, ""):
+    REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+
+from tests.sweep_framework.framework.execution_capabilities import (
+    is_requirement_eligible,
+    requirements_from_vector_data,
+    resolve_active_profile,
+)
+from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
 
 
 class VectorSource(ABC):
@@ -138,119 +148,26 @@ class VectorExportSource(VectorSource):
             pass
         return []
 
-    def _get_machine_info(self):
-        """Get machine info using get_machine_info from generic_ops_tracer."""
+    def _get_active_profile(self):
+        """Resolve the active execution capability profile for the current host."""
         try:
-            import sys
-            import os
-
-            # Add model_tracer to path if not already there
-            # Go up 4 levels from this file (tests/sweep_framework/framework/vector_source.py)
-            # to get to repo root, then into model_tracer
-            model_tracer_path = pathlib.Path(__file__).resolve().parent.parent.parent.parent / "model_tracer"
-            model_tracer_path_str = str(model_tracer_path)
-
-            if model_tracer_path_str not in sys.path:
-                sys.path.insert(0, model_tracer_path_str)
-
-            # Import the module
-            from generic_ops_tracer import get_machine_info
-
-            machine_info = get_machine_info()
-
-            # get_machine_info() might return None if tt-smi fails
-            if machine_info is None:
-                logger.warning("get_machine_info() returned None - tt-smi might have failed")
-                return None
-
-            # Validate that board_type is a recognized arch name (e.g. "Wormhole",
-            # "Blackhole"). Reject PCI addresses and device paths — an invalid
-            # board type would cause lead-model strict matching to filter out
-            # every vector.
-            board = machine_info.get("board_type", "")
-            if not board or ":" in board or "/" in board:
-                logger.warning(
-                    f"get_machine_info() returned suspicious board_type='{board}' "
-                    f"— ignoring machine info to avoid incorrect hardware filtering."
-                )
-                return None
-
-            # Validate that card_count is present and usable. Downstream filtering
-            # assumes this is known; if it is missing or invalid, disable
-            # machine-based filtering by returning None.
-            card_count = machine_info.get("card_count")
-            if not isinstance(card_count, int) or card_count <= 0:
-                logger.warning(
-                    f"get_machine_info() returned invalid card_count='{card_count}' "
-                    f"— ignoring machine info to avoid incorrect hardware filtering."
-                )
-                return None
-
-            # Optionally sanity-check device_count if provided: if present but
-            # invalid, treat machine info as unusable.
-            if "device_count" in machine_info:
-                device_count = machine_info.get("device_count")
-                if not isinstance(device_count, int) or device_count <= 0:
-                    logger.warning(
-                        f"get_machine_info() returned invalid device_count='{device_count}' "
-                        f"— ignoring machine info to avoid incorrect hardware filtering."
-                    )
-                    return None
-            logger.debug(f"Successfully retrieved machine info: {machine_info}")
-            return machine_info
-        except Exception as e:
-            import traceback
-
-            logger.warning(f"Failed to get machine info: {e}\n{traceback.format_exc()}")
+            profile = resolve_active_profile()
+            logger.info(f"Using execution capability profile '{profile.name}' for vector filtering")
+            return profile
+        except RuntimeError as e:
+            logger.warning(f"Execution capability profile selection skipped: {e}")
             return None
 
     def load_vectors(self, module_name: str, suite_name: str | None = None, vector_id: str | None = None) -> list[dict]:
-        """Load test vectors from vectors_export directory (including grouped variants)
-
-        If MESH_DEVICE_SHAPE environment variable is set, filters vectors to only load
-        those matching the current machine's configuration.
-        """
-        import os
-
+        """Load test vectors from vectors_export directory (including grouped variants)."""
         module_files = self._find_module_files(module_name)
         if not module_files:
             return []
 
-        # Check if this is a model_traced run (resource filtering only applies to model_traced)
-        is_model_traced = "model_traced" in module_name
-        is_lead_models = os.environ.get("LEAD_MODELS_RUN", "").strip() == "1"
-
-        # Get current machine info (for device/card filtering in model_traced runs)
-        current_machine_info = None
-        if is_model_traced:
-            current_machine_info = self._get_machine_info()
-
-        # Check if mesh filtering is enabled via environment variable
-        mesh_filter = os.environ.get("MESH_DEVICE_SHAPE", "").strip()
-        target_mesh = None
-
-        if mesh_filter:
-            logger.info(f"Mesh filtering enabled: MESH_DEVICE_SHAPE={mesh_filter}")
-
-            if current_machine_info:
-                logger.info(
-                    f"Current machine: board_type={current_machine_info['board_type']}, "
-                    f"device_series={current_machine_info['device_series']}, "
-                    f"card_count={current_machine_info['card_count']}"
-                )
-            else:
-                logger.warning("Could not determine current machine info from tt-smi")
-
-            # Parse target mesh shape from the env var (e.g., "1x2" -> (1, 2))
-            try:
-                target_rows, target_cols = map(int, mesh_filter.lower().split("x"))
-                target_mesh = (target_rows, target_cols)
-            except (ValueError, AttributeError):
-                logger.warning(f"Invalid MESH_DEVICE_SHAPE format: {mesh_filter}, expected NxM (e.g., 1x2)")
+        active_profile = self._get_active_profile()
 
         all_vectors = []
         filtered_count = 0
-        machine_mismatch_count = 0
 
         # Load vectors from all matching files (e.g., base + mesh variants)
         for module_file in module_files:
@@ -287,153 +204,20 @@ class VectorExportSource(VectorSource):
                             if "sweep_name" not in vector_data:
                                 vector_data["sweep_name"] = module_name
 
-                            # Normalize traced_machine_info to a list of dict entries.
-                            # Some vectors carry multiple machine descriptors; filtering
-                            # should accept a vector if ANY entry matches.
-                            traced_machine_info = vector_data.get("traced_machine_info")
-                            traced_machine_entries = []
-                            if isinstance(traced_machine_info, dict):
-                                traced_machine_entries = [traced_machine_info]
-                            elif isinstance(traced_machine_info, list):
-                                traced_machine_entries = [
-                                    entry for entry in traced_machine_info if isinstance(entry, dict)
-                                ]
-
-                            def _extract_mesh_shape(entry: dict) -> tuple[int, int] | None:
-                                """Extract mesh shape from machine entry when present."""
-                                mesh = entry.get("mesh_device_shape")
-                                if isinstance(mesh, list) and len(mesh) == 2:
-                                    return (mesh[0], mesh[1])
-                                if isinstance(mesh, str):
-                                    try:
-                                        parsed = ast.literal_eval(mesh)
-                                        if isinstance(parsed, list) and len(parsed) == 2:
-                                            return (parsed[0], parsed[1])
-                                    except (SyntaxError, ValueError):
-                                        pass
-
-                                # Legacy location used by some vectors
-                                placements = entry.get("tensor_placements")
-                                if isinstance(placements, list) and placements:
-                                    placement_mesh = placements[0].get("mesh_device_shape")
-                                    if isinstance(placement_mesh, list) and len(placement_mesh) == 2:
-                                        return (placement_mesh[0], placement_mesh[1])
-                                    if isinstance(placement_mesh, str):
-                                        try:
-                                            parsed = ast.literal_eval(placement_mesh)
-                                            if isinstance(parsed, list) and len(parsed) == 2:
-                                                return (parsed[0], parsed[1])
-                                        except (SyntaxError, ValueError):
-                                            pass
-                                return None
-
-                            # Filter vectors based on hardware compatibility for all model_traced runs.
-                            # CI now routes model_traced work by traced hardware, so vectors should
-                            # only load when their traced machine metadata matches the current runner.
-                            skip_for_resources = False
-                            if current_machine_info and traced_machine_entries:
-                                current_board = current_machine_info.get("board_type", "").lower()
-                                current_series = current_machine_info.get("device_series", "").lower()
-                                current_card_count = current_machine_info.get("card_count")
-                                current_device_count = current_machine_info.get("device_count")
-
-                                has_matching_hardware = False
-                                for entry in traced_machine_entries:
-                                    traced_board = entry.get("board_type", "").lower()
-                                    traced_series = entry.get("device_series", "").lower()
-                                    traced_card_count = entry.get("card_count")
-                                    traced_device_count = entry.get("device_count")
-
-                                    board_match = (
-                                        not traced_board
-                                        or not current_board
-                                        or traced_board == current_board
-                                        or ("wormhole" in traced_board and "wormhole" in current_board)
-                                    )
-                                    series_match = (
-                                        not traced_series or not current_series or traced_series == current_series
-                                    )
-                                    card_match = traced_card_count is None or traced_card_count == current_card_count
-                                    device_match = True
-                                    if is_lead_models:
-                                        device_match = (
-                                            traced_device_count is None or traced_device_count == current_device_count
-                                        )
-
-                                    if board_match and series_match and card_match and device_match:
-                                        has_matching_hardware = True
-                                        break
-
-                                if not has_matching_hardware:
-                                    logger.debug(
-                                        f"Skipping vector - traced hardware does not match current machine "
-                                        f"(current: board_type={current_machine_info.get('board_type')}, "
-                                        f"device_series={current_machine_info.get('device_series')}, "
-                                        f"card_count={current_machine_info.get('card_count')}, "
-                                        f"device_count={current_machine_info.get('device_count')})"
-                                    )
-                                    machine_mismatch_count += 1
-                                    skip_for_resources = True
-
-                            if skip_for_resources:
-                                continue
-
-                            # Apply mesh filtering if enabled
-                            if mesh_filter and target_mesh:
-                                # If mesh shape is missing in JSON, do not filter out.
-                                # Otherwise, accept when ANY traced entry matches target mesh.
-                                traced_mesh_entries = []
-                                for entry in traced_machine_entries:
-                                    mesh_shape = _extract_mesh_shape(entry)
-                                    if mesh_shape is not None:
-                                        traced_mesh_entries.append((entry, mesh_shape))
-
-                                if traced_mesh_entries:
-                                    matching_entries = [
-                                        entry for entry, mesh_shape in traced_mesh_entries if mesh_shape == target_mesh
-                                    ]
-                                    if not matching_entries:
-                                        filtered_count += 1
-                                        continue
-
-                                    # Optional machine compatibility check: require at least one compatible entry.
-                                    if current_machine_info:
-                                        current_board = current_machine_info.get("board_type", "").lower()
-                                        current_series = current_machine_info.get("device_series", "").lower()
-                                        has_compatible_entry = False
-                                        for entry in matching_entries:
-                                            traced_board = entry.get("board_type", "").lower()
-                                            traced_series = entry.get("device_series", "").lower()
-
-                                            board_match = True
-                                            if traced_board and current_board:
-                                                board_match = traced_board == current_board or (
-                                                    "wormhole" in traced_board and "wormhole" in current_board
-                                                )
-
-                                            series_match = True
-                                            if traced_series and current_series:
-                                                series_match = traced_series == current_series
-
-                                            if board_match and series_match:
-                                                has_compatible_entry = True
-                                                break
-
-                                        if not has_compatible_entry:
-                                            machine_mismatch_count += 1
-                                            continue
+                            if active_profile is not None:
+                                requirement = requirements_from_vector_data(vector_data, module_name=module_file.stem)
+                                if not is_requirement_eligible(requirement, active_profile):
+                                    filtered_count += 1
+                                    continue
 
                             all_vectors.append(vector_data)
 
             except (json.JSONDecodeError, IOError) as e:
                 logger.error(f"Error loading vectors from {module_file}: {e}")
 
-        # Log filtering results if filtering was enabled
-        if mesh_filter and (filtered_count > 0 or machine_mismatch_count > 0):
-            total_filtered = filtered_count + machine_mismatch_count
+        if active_profile is not None and filtered_count > 0:
             logger.info(
-                f"Filtered out {total_filtered} vectors "
-                f"(mesh mismatch: {filtered_count}, machine mismatch: {machine_mismatch_count}), "
+                f"Filtered out {filtered_count} vectors via execution capability profile, "
                 f"loaded {len(all_vectors)} vectors"
             )
 

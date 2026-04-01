@@ -25,7 +25,22 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-from constants import get_mesh_shape_string, parse_hardware_suffix, strip_grouping_suffix
+if __package__ in (None, ""):
+    REPO_ROOT = Path(__file__).resolve().parents[3]
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+
+from tests.sweep_framework.framework.constants import (
+    get_mesh_shape_string,
+    parse_hardware_suffix,
+    strip_grouping_suffix,
+)
+from tests.sweep_framework.framework.execution_capabilities import (
+    load_execution_capability_profiles,
+    load_vector_file_summaries,
+    resolve_active_profile,
+    select_eligible_vector_summaries,
+)
 
 # ── Runner config registry ───────────────────────────────────────────────────
 # All runner configurations live here.  Every function that needs a runner
@@ -337,10 +352,26 @@ def main():
         print(f"Error: Vectors directory not found: {vectors_dir}", file=sys.stderr)
         sys.exit(1)
 
-    modules = sorted([f.stem for f in vectors_path.glob("*.json")])
-    if not modules:
+    vector_summaries = load_vector_file_summaries(vectors_path)
+    if not vector_summaries:
         print(f"Error: No vector JSON files found in {vectors_dir}", file=sys.stderr)
         sys.exit(1)
+
+    profiles = load_execution_capability_profiles()
+    try:
+        active_profile = resolve_active_profile(profiles=profiles)
+        print(f"Active execution capability profile: {active_profile.name}", file=sys.stderr)
+        vector_summaries = select_eligible_vector_summaries(vector_summaries, active_profile)
+        if not vector_summaries:
+            print(
+                f"Error: No vector JSON files are eligible for capability profile {active_profile.name}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    except RuntimeError as exc:
+        print(f"Capability profile selection skipped: {exc}", file=sys.stderr)
+
+    modules = sorted(summary.module_name for summary in vector_summaries)
 
     # Detect run type: explicit sweep name takes precedence, then schedule cron
     run_type = _SWEEP_TYPES.get(sweep_name) or _SCHEDULE_TYPES.get(schedule_expr, "nightly")
