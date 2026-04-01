@@ -63,5 +63,4 @@ Low-level kernels (LLK):
 tt-agent skills:
   tt-agent/skills/                               # Agentic workflow skills
   tt-agent/knowledge/                            # Stable hardware knowledge + references
-  notes/                                         # Shared blackboard (agent + developer findings)
 ```

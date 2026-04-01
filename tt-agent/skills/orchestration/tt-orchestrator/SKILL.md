@@ -1,6 +1,6 @@
 ---
 name: tt-orchestrator
-description: "Route, plan, and decompose high-level Tenstorrent hardware development requests — new kernels, ops, models, CI failures, regressions, optimizations — into sequenced skill dispatches with tracked plans in notes/"
+description: "Route, plan, and decompose high-level Tenstorrent hardware development requests — new kernels, ops, models, CI failures, regressions, optimizations — into sequenced skill dispatches with tracked plans"
 ---
 
 # TT Orchestrator
@@ -36,11 +36,11 @@ analyze → scope → decompose → dispatch → verify → iterate
 2. **Scope**: Identify the target — kernel, op, model, or pipeline. Determine which
    hardware tier is involved (bare-metal kernel, ttnn op, model layer).
 
-3. **Decompose**: Break the request into ordered sub-tasks. Write PLAN.md to `notes/`.
-   See `decomposer.md` for standard patterns.
+3. **Decompose**: Break the request into ordered sub-tasks. Write PLAN.md to
+   `~/.tt-agent/notes`. See `decomposer.md` for standard patterns.
 
 4. **Dispatch**: Execute sub-tasks by invoking the appropriate skills (see table below).
-   Track progress in STATUS.md in `notes/`.
+   Track progress in STATUS.md in `~/.tt-agent/notes`.
 
 5. **Verify**: After each major step, confirm outputs meet the TT quality bar:
    PCC > 0.999 vs PyTorch reference, CB sizing fits L1, tile alignment correct.
@@ -64,12 +64,12 @@ analyze → scope → decompose → dispatch → verify → iterate
 
 ## Document Protocol
 
-All plans and status produced during orchestration are written to `notes/`:
+All plans and status are written to `~/.tt-agent/notes`:
 
-| Document | Path pattern | Purpose |
+| Document | Name pattern | Purpose |
 |---|---|---|
-| Plan | `notes/plan-<task>.md` | Ordered sub-tasks, decision rationale |
-| Status | `notes/status-<task>.md` | Current step, blockers, findings so far |
+| Plan | `plan-<task>.md` | Ordered sub-tasks, decision rationale |
+| Status | `status-<task>.md` | Current step, blockers, findings so far |
 
 Each document must include: date, tt-metal commit hash, skills invoked.
 
