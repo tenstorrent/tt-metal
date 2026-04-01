@@ -446,3 +446,76 @@ def test_sdpa_decode_sliding_window(
             start_indices=[cur_pos + i for i in range(b)],  # test a batch with different start positions
             sliding_window_size=sliding_window_size,
         )
+
+
+@pytest.mark.parametrize("cur_pos", [4, 14, 24, 30])
+@pytest.mark.parametrize("num_users", [2, 8])
+@pytest.mark.timeout(120)
+def test_sdpa_decode_causal_mask_padding_leak(device, num_users, cur_pos):
+    """Regression test: causal mask must exclude positions beyond cur_pos.
+
+    When cache blocks contain non-zero data at positions [cur_pos+1, block_size),
+    that data must not affect the attention output. This test fills padding
+    positions with large values and verifies the output matches a clean
+    (zero-padded) cache.
+
+    Bug: the causal mask fails to exclude these positions, causing KV cache
+    bleed in batched inference (users see other users' content).
+    See https://github.com/tenstorrent/tt-xla/issues/3899
+    """
+    num_kv_heads = 8
+    head_dim = 64
+    block_size = 32  # == TILE_HEIGHT, has_block_padding=false
+
+    torch.manual_seed(42)
+    q = torch.randn(1, num_users, num_kv_heads, head_dim, dtype=torch.bfloat16)
+    page_table = torch.arange(num_users, dtype=torch.int32).unsqueeze(1)
+    cur_pos_tensor = torch.tensor([cur_pos] * num_users, dtype=torch.int32)
+
+    # Cache with real data + non-zero padding
+    k = torch.zeros(num_users, num_kv_heads, block_size, head_dim, dtype=torch.bfloat16)
+    v = torch.zeros(num_users, num_kv_heads, block_size, head_dim, dtype=torch.bfloat16)
+    for u in range(num_users):
+        torch.manual_seed(1000 + u)
+        k[u, :, : cur_pos + 1, :] = torch.randn(num_kv_heads, cur_pos + 1, head_dim).bfloat16()
+        v[u, :, : cur_pos + 1, :] = torch.randn(num_kv_heads, cur_pos + 1, head_dim).bfloat16()
+        pad = torch.randn(num_kv_heads, 1, head_dim).bfloat16() * 2.0
+        k[u, :, cur_pos + 1 :, :] = pad.expand(-1, block_size - cur_pos - 1, -1)
+        v[u, :, cur_pos + 1 :, :] = pad.expand(-1, block_size - cur_pos - 1, -1)
+
+    # Clean cache: zeros at padding positions
+    k_clean = k.clone()
+    v_clean = v.clone()
+    k_clean[:, :, cur_pos + 1 :, :] = 0
+    v_clean[:, :, cur_pos + 1 :, :] = 0
+
+    q_tt = ttnn.from_torch(q, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    pt_tt = ttnn.from_torch(page_table, device=device, dtype=ttnn.int32)
+    cp_tt = ttnn.from_torch(cur_pos_tensor, device=device, dtype=ttnn.int32)
+
+    out_dirty = ttnn.to_torch(
+        ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            q_tt,
+            ttnn.from_torch(k, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16),
+            ttnn.from_torch(v, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16),
+            pt_tt,
+            cur_pos_tensor=cp_tt,
+            is_causal=True,
+        )
+    )
+    out_clean = ttnn.to_torch(
+        ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            q_tt,
+            ttnn.from_torch(k_clean, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16),
+            ttnn.from_torch(v_clean, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16),
+            pt_tt,
+            cur_pos_tensor=cp_tt,
+            is_causal=True,
+        )
+    )
+
+    max_diff = (out_dirty.float() - out_clean.float()).abs().max().item()
+    assert max_diff < 0.1, (
+        f"Causal mask leaks padding data: max_diff={max_diff:.4f} "
+        f"(cur_pos={cur_pos}, num_users={num_users}, block_size={block_size})"
+    )
