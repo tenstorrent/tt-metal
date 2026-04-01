@@ -43,16 +43,15 @@ void bind_moreh_softmax_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_softmax">(
         mod,
         moreh_softmax_doc,
-        ttnn::overload_t(
-            &ttnn::moreh_softmax,
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("dim").noconvert(),
-            nb::kw_only(),
-            nb::arg("output_tensor") = nb::none(),
-            nb::arg("op") = MorehSoftmaxOp::SOFTMAX,
-            nb::arg("strategy") = MorehSoftmaxOpParallelizationStrategy::NONE,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::moreh_softmax,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("dim").noconvert(),
+        nb::kw_only(),
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("op") = MorehSoftmaxOp::SOFTMAX,
+        nb::arg("strategy") = MorehSoftmaxOpParallelizationStrategy::NONE,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 
     const auto* moreh_softmin_doc =
         R"doc(
@@ -78,16 +77,15 @@ void bind_moreh_softmax_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_softmin">(
         mod,
         moreh_softmin_doc,
-        ttnn::overload_t(
-            &ttnn::moreh_softmin,
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("dim").noconvert(),
-            nb::kw_only(),
-            nb::arg("output_tensor") = nb::none(),
-            nb::arg("op") = MorehSoftmaxOp::SOFTMIN,
-            nb::arg("strategy") = MorehSoftmaxOpParallelizationStrategy::NONE,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::moreh_softmin,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("dim").noconvert(),
+        nb::kw_only(),
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("op") = MorehSoftmaxOp::SOFTMIN,
+        nb::arg("strategy") = MorehSoftmaxOpParallelizationStrategy::NONE,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 
     const auto* moreh_logsoftmax_doc =
         R"doc(
@@ -113,16 +111,15 @@ void bind_moreh_softmax_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_logsoftmax">(
         mod,
         moreh_logsoftmax_doc,
-        ttnn::overload_t(
-            &ttnn::moreh_logsoftmax,
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("dim").noconvert(),
-            nb::kw_only(),
-            nb::arg("output_tensor") = nb::none(),
-            nb::arg("op") = MorehSoftmaxOp::LOGSOFTMAX,
-            nb::arg("strategy") = MorehSoftmaxOpParallelizationStrategy::NONE,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::moreh_logsoftmax,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("dim").noconvert(),
+        nb::kw_only(),
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("op") = MorehSoftmaxOp::LOGSOFTMAX,
+        nb::arg("strategy") = MorehSoftmaxOpParallelizationStrategy::NONE,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::moreh::moreh_softmax
