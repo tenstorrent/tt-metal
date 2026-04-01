@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
 import time
 from dataclasses import dataclass
@@ -147,43 +146,34 @@ class TensorCache:
         fingerprint: Fingerprint,
         tensor_host: ttnn.Tensor,
     ) -> ContentAddressedStoragePaths:
-        tmp = self._tmp_dir / f"{artifact_id}_{os.getpid()}"
-        tmp.mkdir(parents=True, exist_ok=True)
-        try:
-            data_path = tmp / "data.tensorbin"
-            ttnn.dump_tensor(data_path, tensor_host)
+        dest = self._content_addressed_paths(artifact_id)
+        dest.object_dir.mkdir(parents=True, exist_ok=True)
 
-            content_hash = _sha256_file(data_path)
-            size_bytes = data_path.stat().st_size
+        data_path = dest.object_dir / "data.tensorbin"
 
-            manifest_dict = {
-                "fingerprint": canonical(fingerprint),
-                "logical_name": _logical_name_from_fingerprint(fingerprint),
-            }
-            with open(tmp / "manifest.json", "w") as f:
-                json.dump(manifest_dict, f, indent=2, sort_keys=True)
+        logger.info("Dumping tensor to {}", data_path)
+        ttnn.dump_tensor(data_path, tensor_host, mode=ttnn.DumpTensorMode.LOCAL)
 
-            metadata_dict = {
-                "artifact_id": artifact_id,
-                "content_hash": content_hash,
-                "size_bytes": size_bytes,
-                "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            }
-            with open(tmp / "metadata.json", "w") as f:
-                json.dump(metadata_dict, f, indent=2, sort_keys=True)
+        logger.info("Computing content hash for {}", data_path)
+        content_hash = _sha256_file(data_path)
+        size_bytes = data_path.stat().st_size
 
-            dest = self._content_addressed_paths(artifact_id)
-            dest.object_dir.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                os.rename(str(tmp), str(dest.object_dir))
-            except OSError:
-                # Another process wrote the same artifact concurrently -- that's fine,
-                # same fingerprint guarantees same content.
-                shutil.rmtree(tmp, ignore_errors=True)
-            return dest
-        except BaseException:
-            shutil.rmtree(tmp, ignore_errors=True)
-            raise
+        manifest_dict = {
+            "fingerprint": canonical(fingerprint),
+            "logical_name": _logical_name_from_fingerprint(fingerprint),
+        }
+        with open(dest.object_dir / "manifest.json", "w") as f:
+            json.dump(manifest_dict, f, indent=2, sort_keys=True)
+
+        metadata_dict = {
+            "artifact_id": artifact_id,
+            "content_hash": content_hash,
+            "size_bytes": size_bytes,
+            "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        with open(dest.object_dir / "metadata.json", "w") as f:
+            json.dump(metadata_dict, f, indent=2, sort_keys=True)
+        return dest
 
     def _load(self, paths: ContentAddressedStoragePaths, device) -> ttnn.Tensor:
         return ttnn.load_tensor(paths.data_path, device=device)
@@ -196,43 +186,33 @@ class TensorCache:
         views: dict[str, OverlappedTensor],
     ) -> ContentAddressedStoragePaths:
         """Persist fused host tensor and per-view metadata (OverlappedTensor, without device)."""
-        tmp = self._tmp_dir / f"{artifact_id}_{os.getpid()}"
-        tmp.mkdir(parents=True, exist_ok=True)
-        try:
-            data_path = tmp / "data.tensorbin"
-            ttnn.dump_tensor(data_path, fused_host)
+        dest = self._content_addressed_paths(artifact_id)
+        dest.object_dir.mkdir(parents=True, exist_ok=True)
 
-            content_hash = _sha256_file(data_path)
-            size_bytes = data_path.stat().st_size
+        data_path = dest.object_dir / "data.tensorbin"
+        ttnn.dump_tensor(data_path, fused_host, mode=ttnn.DumpTensorMode.LOCAL)
 
-            manifest_dict = {
-                "fingerprint": canonical(fingerprint),
-                "logical_name": _logical_name_from_fingerprint(fingerprint),
-            }
-            with open(tmp / "manifest.json", "w") as f:
-                json.dump(manifest_dict, f, indent=2, sort_keys=True)
+        content_hash = _sha256_file(data_path)
+        size_bytes = data_path.stat().st_size
 
-            metadata_dict = {
-                "artifact_id": artifact_id,
-                "artifact_kind": "fusion_group",
-                "content_hash": content_hash,
-                "size_bytes": size_bytes,
-                "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "views": views_dict_from_overlapped(views),
-            }
-            with open(tmp / "metadata.json", "w") as f:
-                json.dump(metadata_dict, f, indent=2, sort_keys=True)
+        manifest_dict = {
+            "fingerprint": canonical(fingerprint),
+            "logical_name": _logical_name_from_fingerprint(fingerprint),
+        }
+        with open(dest.object_dir / "manifest.json", "w") as f:
+            json.dump(manifest_dict, f, indent=2, sort_keys=True)
 
-            dest = self._content_addressed_paths(artifact_id)
-            dest.object_dir.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                os.rename(str(tmp), str(dest.object_dir))
-            except OSError:
-                shutil.rmtree(tmp, ignore_errors=True)
-            return dest
-        except BaseException:
-            shutil.rmtree(tmp, ignore_errors=True)
-            raise
+        metadata_dict = {
+            "artifact_id": artifact_id,
+            "artifact_kind": "fusion_group",
+            "content_hash": content_hash,
+            "size_bytes": size_bytes,
+            "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "views": views_dict_from_overlapped(views),
+        }
+        with open(dest.object_dir / "metadata.json", "w") as f:
+            json.dump(metadata_dict, f, indent=2, sort_keys=True)
+        return dest
 
     def _load_fused(self, paths: ContentAddressedStoragePaths, device) -> dict[str, OverlappedTensor]:
         fused = ttnn.load_tensor(paths.data_path, device=device)
