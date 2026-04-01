@@ -7,6 +7,7 @@ import argparse
 import fnmatch
 import json
 import os
+import hashlib
 import re
 import shlex
 import subprocess
@@ -182,6 +183,163 @@ def slack_lookup_by_email(token: str, email: str) -> str | None:
     return uid or None
 
 
+def parse_json_after_marker(text: str, marker: str) -> dict[str, Any]:
+    idx = text.find(marker)
+    if idx < 0:
+        raise ValueError(f"marker not found: {marker}")
+    payload = text[idx + len(marker) :].strip()
+    if not payload:
+        raise ValueError("empty json payload after marker")
+    obj = json.loads(payload)
+    if not isinstance(obj, dict):
+        raise ValueError("payload after marker is not a JSON object")
+    return obj
+
+
+def slack_auth_user_id(token: str) -> str | None:
+    try:
+        payload = slack_api_form(token, "auth.test", {})
+    except Exception:
+        return None
+    if not payload.get("ok"):
+        return None
+    user_id = str(payload.get("user_id", "")).strip()
+    return user_id or None
+
+
+def slack_user_profile(token: str, user_id: str) -> dict[str, Any]:
+    if not user_id:
+        return {}
+    try:
+        payload = slack_api_form(token, "users.info", {"user": user_id})
+    except Exception:
+        return {}
+    if not payload.get("ok"):
+        return {}
+    user = payload.get("user", {})
+    if not isinstance(user, dict):
+        return {}
+    profile = user.get("profile", {})
+    if not isinstance(profile, dict):
+        profile = {}
+    return {
+        "user_id": str(user.get("id", "")).strip(),
+        "real_name": str(profile.get("real_name", "")).strip(),
+        "display_name": str(profile.get("display_name", "")).strip(),
+        "email": str(profile.get("email", "")).strip(),
+    }
+
+
+def thread_owner_claim_via_agent(
+    *,
+    top_level_text: str,
+    thread_replies: list[dict[str, Any]],
+    bot_user_ids: set[str],
+    model: str,
+) -> dict[str, Any]:
+    curated_replies = []
+    for reply in thread_replies[-16:]:
+        if not isinstance(reply, dict):
+            continue
+        curated_replies.append(
+            {
+                "ts": str(reply.get("ts", "")).strip(),
+                "user": str(reply.get("user", "")).strip(),
+                "text": str(reply.get("text", "")).strip(),
+            }
+        )
+    prompt_payload = {
+        "top_level_text": top_level_text[:1600],
+        "thread_replies": curated_replies,
+        "bot_user_ids": sorted(bot_user_ids),
+        "task": (
+            "Determine whether a non-bot thread reply contains a clear ownership claim "
+            "(e.g., the person says they are working on it / will fix)."
+        ),
+    }
+    prompt = (
+        "You are classifying CI triage thread ownership claims.\n"
+        "Token-efficiency rule: do one short pass and output only final JSON contract.\n"
+        "Rules:\n"
+        "- Only consider non-bot replies (exclude user ids in bot_user_ids).\n"
+        "- Return claimed=true only for explicit self-ownership/fix intent.\n"
+        "- Do not infer from vague or generic text.\n"
+        "- Prefer precision over recall.\n"
+        "At end print marker exactly on its own line:\n"
+        "===FINAL_OWNER_CLAIM_JSON===\n"
+        "Then print only JSON object:\n"
+        "{\n"
+        '  "claimed": true|false,\n'
+        '  "slack_user_id": "U123" or "",\n'
+        '  "confidence": "high|medium|low",\n'
+        '  "reason": "short reason"\n'
+        "}\n\n"
+        f"Input JSON:\n{json.dumps(prompt_payload, ensure_ascii=True)}\n"
+    )
+    cmd = ["agent", "--trust", "-p", prompt]
+    model_name = model.strip()
+    if model_name and model_name != "auto":
+        cmd.extend(["--model", model_name])
+    proc = run(cmd)
+    parsed = parse_json_after_marker(proc.stdout or "", "===FINAL_OWNER_CLAIM_JSON===")
+    claimed = bool(parsed.get("claimed", False))
+    user_id = str(parsed.get("slack_user_id", "")).strip()
+    if claimed and not user_id:
+        return {"claimed": False, "slack_user_id": "", "confidence": "low", "reason": "claimed_without_user_id"}
+    return {
+        "claimed": claimed,
+        "slack_user_id": user_id,
+        "confidence": str(parsed.get("confidence", "low")).strip() or "low",
+        "reason": str(parsed.get("reason", "unspecified")).strip() or "unspecified",
+    }
+
+
+def github_search_login(token: str, query: str) -> str | None:
+    q = query.strip()
+    if not q:
+        return None
+    req = urllib.request.Request(
+        f"https://api.github.com/search/users?q={urllib.parse.quote(q)}&per_page=1",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "tt-metal-m5-lifecycle",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+    items = payload.get("items", [])
+    if not isinstance(items, list) or not items:
+        return None
+    first = items[0]
+    if not isinstance(first, dict):
+        return None
+    login = str(first.get("login", "")).strip()
+    return login or None
+
+
+def github_login_from_slack_profile(token: str, profile: dict[str, Any]) -> str | None:
+    email = str(profile.get("email", "")).strip()
+    real_name = str(profile.get("real_name", "")).strip()
+    display_name = str(profile.get("display_name", "")).strip()
+    if email:
+        login = github_search_login(token, f"{email} in:email")
+        if login:
+            return login
+    if real_name:
+        login = github_search_login(token, f'"{real_name}" in:fullname')
+        if login:
+            return login
+    if display_name:
+        login = github_search_login(token, f"{display_name} in:login")
+        if login:
+            return login
+    return None
+
+
 def load_state(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {"version": 1, "updated_at_utc": now_utc(), "items": []}
@@ -320,6 +478,12 @@ def main() -> int:
     by_ts = message_by_ts(slack_payload)
     rules = parse_codeowners(Path(".github/CODEOWNERS"))
     now = now_unix()
+    bot_user_id = slack_auth_user_id(slack_token)
+    bot_user_ids: set[str] = {bot_user_id} if bot_user_id else set()
+    slack_profile_cache: dict[str, dict[str, Any]] = {}
+    slack_to_github_cache: dict[str, str | None] = {}
+    owner_claim_cache: dict[str, dict[str, Any]] = {}
+    m5_agent_model = os.environ.get("M5_AGENT_MODEL", "").strip() or "auto"
 
     output: dict[str, Any] = {
         "generated_at_utc": now_utc(),
@@ -374,6 +538,66 @@ def main() -> int:
             output["notes"].append(f"skip_closed_issue:{issue_number}")
             continue
 
+        assignees = issue_assignees(issue_token, issue_number)
+        if not assignees:
+            thread_fingerprint = hashlib.sha256(
+                json.dumps(
+                    [{"ts": r.get("ts"), "user": r.get("user"), "text": r.get("text")} for r in thread_replies[-16:]],
+                    sort_keys=True,
+                    ensure_ascii=True,
+                ).encode("utf-8")
+            ).hexdigest()
+            claim_cache_key = f"{ts}:{thread_fingerprint}"
+            claim = owner_claim_cache.get(claim_cache_key)
+            if claim is None:
+                try:
+                    claim = thread_owner_claim_via_agent(
+                        top_level_text=top_text,
+                        thread_replies=thread_replies,
+                        bot_user_ids=bot_user_ids,
+                        model=m5_agent_model,
+                    )
+                except Exception as exc:
+                    claim = {"claimed": False, "reason": f"agent_owner_claim_failed:{exc}"}
+                owner_claim_cache[claim_cache_key] = claim
+            if claim.get("claimed"):
+                claim_user_id = str(claim.get("slack_user_id", "")).strip()
+                github_login = slack_to_github_cache.get(claim_user_id)
+                if github_login is None and claim_user_id not in slack_to_github_cache:
+                    profile = slack_profile_cache.get(claim_user_id)
+                    if profile is None:
+                        profile = slack_user_profile(slack_token, claim_user_id)
+                        slack_profile_cache[claim_user_id] = profile
+                    github_login = github_login_from_slack_profile(issue_token, profile)
+                    slack_to_github_cache[claim_user_id] = github_login
+                if github_login:
+                    try:
+                        assign_issue(issue_token, issue_number, github_login)
+                        output["assignments_added"].append(
+                            {
+                                "issue_number": issue_number,
+                                "assigned_github_login": github_login,
+                                "source": "thread_owner_claim",
+                                "source_slack_user_id": claim_user_id,
+                            }
+                        )
+                        post_slack_thread_message(
+                            slack_token=slack_token,
+                            channel=args.channel_id,
+                            thread_ts=ts,
+                            text=(
+                                f"Acknowledged — assigning this incident to <@{claim_user_id}> "
+                                f"(GitHub: @{github_login}) based on thread ownership signal."
+                            ),
+                        )
+                        assignees = [github_login]
+                    except Exception as exc:
+                        output["notes"].append(f"thread_claim_assignment_failed_issue_{issue_number}:{exc}")
+                else:
+                    output["notes"].append(
+                        f"thread_claim_no_github_match_issue_{issue_number}:slack_user={claim_user_id}"
+                    )
+
         # Stage warnings unless thread has active high-confidence progress.
         if not bool(progress.get("defer_disable", False)):
             if age_hours >= args.warning_hours and not notif.get("warning_24h_sent_ts"):
@@ -413,7 +637,6 @@ def main() -> int:
         if pr_url and not notif.get("post_disable_followup_sent_ts"):
             info = pr_merge_info(issue_token, pr_url)
             if info.get("merged"):
-                assignees = issue_assignees(issue_token, issue_number)
                 assigned_login = assignees[0] if assignees else ""
                 if not assigned_login:
                     owners = candidate_github_owners_from_text(top_text, rules)

@@ -5,6 +5,7 @@ Task:
 - Only include entries where a disable PR should be attempted now.
 - Prioritize highest age first.
 - Cap actions to __MAX_ACTIONS__.
+- Token-efficiency rule: do this in one pass; avoid verbose reasoning and avoid unnecessary extra analysis.
 
 Decision rules:
 - Ignore any candidate where `issue_closed` is true (these should already be excluded).
