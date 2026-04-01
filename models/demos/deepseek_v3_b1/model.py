@@ -11,11 +11,10 @@ read_fn(output_tensor); e.g. Pipeline.write_token / Pipeline.read_output.
 
 Algorithm (prefill-by-decode then generation):
   - Prefill: for i = 0..S-1, call with input_ids = x[i] (B, 1); device uses/updates
-    cache; ignore logits for i < S-1. prefill() returns the last step output (logits
-    in real decoder) so caller can sample y0.
-  - Start generation: last_logits = prefill(prompt_tokens); y0 = sample(last_logits).
-  - Generation loop: for t = 0,1,..., feed y[t] (B, 1) via decode_step(), get logits,
-    sample y[t+1], repeat.
+    cache; ignore outputs for i < S-1. prefill() returns the last output token.
+  - Start generation: y0 = prefill(prompt_tokens).
+  - Generation loop: for t = 0,1,..., feed y[t] (B, 1) via decode_step(), get y[t+1],
+    repeat.
 
 Input tensor shape (H2D):
   - Only (B, 1) is supported: one token per batch element per step. The embedding layer
@@ -84,6 +83,7 @@ class DeepSeekV3:
         write_fn: Callable[[ttnn.Tensor], None],
         read_fn: Callable[[ttnn.Tensor], None],
         batch_size: int = 1,
+        pipeline_depth: int = 1,
     ) -> None:
         """
         Args:
@@ -91,12 +91,18 @@ class DeepSeekV3:
             read_fn: Called with an output tensor; implementation fills it (e.g. Pipeline.read_output).
             batch_size: Batch size B. Current implementation supports only B=1;
                 payload size is B * TOKEN_ID_BYTES (int32).
+            pipeline_depth: Number of pipeline stages between host write and readable
+                output. Prefill queues this many tokens before overlapping writes with
+                readback. Use 1 for direct loopback/no pipeline.
         """
         if batch_size != 1:
             raise ValueError(f"DeepSeekV3 currently supports only batch_size=1, got {batch_size}")
+        if pipeline_depth <= 0:
+            raise ValueError(f"pipeline_depth must be > 0, got {pipeline_depth}")
         self._write_fn = write_fn
         self._read_fn = read_fn
         self.batch_size = batch_size
+        self._pipeline_depth = pipeline_depth
         payload_bytes: int = batch_size * TOKEN_ID_BYTES
         logger.debug(f"Payload bytes: {payload_bytes} bytes")
         self._tensor_size_bytes: int = align_up(payload_bytes, PCIE_PAGE_ALIGNMENT_BYTES)
@@ -107,9 +113,9 @@ class DeepSeekV3:
 
     def prefill(self, prompt_tokens: list[ttnn.Tensor]) -> ttnn.Tensor:
         """
-        Prefill-by-decode: for i = 0..S-1, send input_ids = x[i], get logits
-        (and device updates cache). Outputs for i < S-1 are discarded. Returns the
-        last step output so the caller can sample y0 (first generated token).
+        Prefill-by-decode with overlapped I/O: enqueue tokens until the pipeline is
+        saturated, then overlap one readback per additional write, and finally drain
+        the remaining in-flight outputs. Returns the last output token.
 
         Args:
             prompt_tokens: List of ttnn.Tensor, each already padded for the socket
@@ -117,19 +123,26 @@ class DeepSeekV3:
                 Caller is responsible for padding; use to_padded_input() if needed.
 
         Returns:
-            Last step output tensor; valid data is first batch_size elements (logits
-            (B, V) in real decoder). None if prompt_tokens is empty. Caller uses this
-            to sample(logits) -> y0 for the generation loop.
+            Last step output tensor; valid data is first batch_size elements.
         """
         if len(prompt_tokens) == 0:
             raise ValueError("Expected at least one prompt token")
 
         last_output: ttnn.Tensor | None = None
-        for token in prompt_tokens:
-            self._write_fn(token)
-            self._read_fn(self._output_buffer)
-            last_output = self._output_buffer
-            self._position += 1
+        num_writes_before_readback = min(self._pipeline_depth, len(prompt_tokens))
+        # Schedules exactly len(prompt_tokens) writes and len(prompt_tokens) reads.
+        total_iterations = len(prompt_tokens) + num_writes_before_readback - 1
+
+        for i in range(total_iterations):
+            if i < len(prompt_tokens):
+                self._write_fn(prompt_tokens[i])
+
+            # Start draining once the pipeline is full or all prompt tokens have been written.
+            if i >= num_writes_before_readback - 1:
+                self._read_fn(self._output_buffer)
+                last_output = self._output_buffer
+                self._position += 1
+
         assert last_output is not None, "Last output tensor is None"
         return last_output
 

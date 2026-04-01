@@ -7,9 +7,13 @@
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h"
 #include "internal/tt-2xx/quasar/overlay/llk_intf_api.hpp"
 
+inline __attribute__((always_inline)) void enable_dfb_tile_isr();
+inline __attribute__((always_inline)) void disable_dfb_tile_isr();
+
 inline __attribute__((always_inline)) void dfb_tile_poster_irq_handler() {
 #ifndef COMPILE_FOR_TRISC
-    uint64_t fired_trids = CMDBUF_RD_REG(OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET);
+    uint64_t fired_trids =
+        CMDBUF_RD_REG(OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET);
     uint64_t pending = (fired_trids >> 32) & 0xFFFFFFFFULL;
     while (pending) {
         uint64_t trid = __builtin_ctzll(pending);
@@ -37,7 +41,8 @@ inline __attribute__((always_inline)) void dfb_tile_poster_irq_handler() {
 
 inline __attribute__((always_inline)) void dfb_tile_acker_irq_handler() {
 #ifndef COMPILE_FOR_TRISC
-    uint64_t fired_trids = CMDBUF_RD_REG(OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET);
+    uint64_t fired_trids =
+        CMDBUF_RD_REG(OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET);
     uint64_t pending = fired_trids & 0xFFFFFFFFULL;
     while (pending) {
         uint64_t trid = __builtin_ctzll(pending);
@@ -63,7 +68,7 @@ inline __attribute__((always_inline)) void dfb_tile_acker_irq_handler() {
 #endif
 }
 
-inline __attribute__((interrupt, hot)) void dfb_implicit_sync_handler() {
+inline __attribute__((always_inline)) void dfb_implicit_sync_handler() {
 #ifndef COMPILE_FOR_TRISC
     dfb_tile_poster_irq_handler();
     dfb_tile_acker_irq_handler();

@@ -50,11 +50,21 @@ constexpr static std::uint32_t get_dram_profiler_size(
 #endif
 }
 
-constexpr static std::uint32_t get_dram_unreserved_base(std::uint32_t dram_profiler_size) {
+constexpr static std::uint32_t get_dram_backed_command_queues_base(std::uint32_t dram_profiler_size) {
     return DRAM_PROFILER_BASE + dram_profiler_size;
 }
-constexpr static std::uint32_t get_dram_unreserved_size(std::uint32_t dram_profiler_size) {
-    return MEM_DRAM_SIZE - get_dram_unreserved_base(dram_profiler_size);
+
+constexpr static std::uint32_t get_dram_backed_command_queues_size(bool enable_dram_backed_cq) {
+    return enable_dram_backed_cq ? (1 << 28)  // 256 MB
+                                 : 0;
+}
+
+constexpr static std::uint32_t get_dram_unreserved_base(std::uint32_t dram_profiler_size, bool enable_dram_backed_cq) {
+    return get_dram_backed_command_queues_base(dram_profiler_size) +
+           get_dram_backed_command_queues_size(enable_dram_backed_cq);
+}
+constexpr static std::uint32_t get_dram_unreserved_size(std::uint32_t dram_profiler_size, bool enable_dram_backed_cq) {
+    return MEM_DRAM_SIZE - get_dram_unreserved_base(dram_profiler_size, enable_dram_backed_cq);
 }
 
 static constexpr float EPS_QA = 1.19209e-7f;  // TODO: verify
@@ -343,7 +353,7 @@ public:
     }
 };
 
-void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
+void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq) {
     using namespace quasar;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
@@ -367,10 +377,14 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = DRAM_PROFILER_BASE;
     const std::uint32_t dram_profiler_size = get_dram_profiler_size(profiler_dram_bank_size_per_risc_bytes);
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = dram_profiler_size;
+    this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES)] =
+        get_dram_backed_command_queues_base(dram_profiler_size);
+    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES)] =
+        get_dram_backed_command_queues_size(enable_dram_backed_cq);
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] =
-        get_dram_unreserved_base(dram_profiler_size);
+        get_dram_unreserved_base(dram_profiler_size, enable_dram_backed_cq);
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] =
-        get_dram_unreserved_size(dram_profiler_size);
+        get_dram_unreserved_size(dram_profiler_size, enable_dram_backed_cq);
 
     this->mem_alignments_.resize(static_cast<std::size_t>(HalMemType::COUNT));
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::L1)] = L1_ALIGNMENT;

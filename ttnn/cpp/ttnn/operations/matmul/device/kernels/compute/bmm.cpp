@@ -6,6 +6,7 @@
 
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
+#include "experimental/circular_buffer.h"
 
 using std::uint32_t;
 
@@ -26,6 +27,10 @@ void kernel_main() {
     constexpr uint32_t cb_in1 = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
 
+    experimental::CircularBuffer in0_cb(cb_in0);
+    experimental::CircularBuffer in1_cb(cb_in1);
+    experimental::CircularBuffer out_cb(cb_out);
+
     mm_init(cb_in0, cb_in1, cb_out);
 
     // the simplest possible version of outer product blocked matmul
@@ -36,18 +41,18 @@ void kernel_main() {
             {
                 acquire_dst();
                 for (uint32_t kt = 0; kt < Kt; kt++) {
-                    cb_wait_front(cb_in0, onetile);
-                    cb_wait_front(cb_in1, onetile);
+                    in0_cb.wait_front(onetile);
+                    in1_cb.wait_front(onetile);
 
                     matmul_tiles(cb_in0, cb_in1, 0, 0, 0);
 
-                    cb_pop_front(cb_in0, onetile);
-                    cb_pop_front(cb_in1, onetile);
+                    in0_cb.pop_front(onetile);
+                    in1_cb.pop_front(onetile);
                 }
 
-                cb_reserve_back(cb_out, onetile);
+                out_cb.reserve_back(onetile);
                 pack_tile(0, cb_out);
-                cb_push_back(cb_out, onetile);
+                out_cb.push_back(onetile);
 
                 release_dst();
             }

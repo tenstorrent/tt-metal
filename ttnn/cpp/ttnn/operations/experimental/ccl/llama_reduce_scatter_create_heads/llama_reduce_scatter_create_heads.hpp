@@ -19,7 +19,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> llama_rs_create_heads(
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     ttnn::ccl::Topology topology,
-    uint32_t num_links,
+    std::optional<uint32_t> num_links,
     uint32_t num_heads,
     uint32_t num_kv_heads,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,

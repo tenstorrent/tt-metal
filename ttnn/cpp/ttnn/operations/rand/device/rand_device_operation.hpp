@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
+#include "ttnn/device_operation.hpp"
 #include <tt-metalium/mesh_coord.hpp>
 
 namespace ttnn::operations::rand {

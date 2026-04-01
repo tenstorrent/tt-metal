@@ -12,6 +12,12 @@ NOC_WIDTHS = {
     # Add other architectures as needed
 }
 
+# NOC clock frequencies in GHz (fallback for tests that don't log the real clock)
+NOC_FREQ_GHZ = {
+    "wormhole_b0": 1.0,
+    "blackhole": 1.35,
+}
+
 # Plot configuration
 DEFAULT_PLOT_WIDTH = 12
 DEFAULT_PLOT_HEIGHT = 6

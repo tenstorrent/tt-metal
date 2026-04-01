@@ -1026,14 +1026,15 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
         )
 
         # Run batched matmul
-        output_t = ttnn.matmul(
-            in0_t,
-            in1_t,
-            program_config=program_config,
-            memory_config=out_memory_config,
-            dtype=ttnn.bfloat16,
-            output_tile=ttnn.Tile((tile_h, tile_w)),
-        )
+        with device.cache_entries_counter.measure():
+            output_t = ttnn.matmul(
+                in0_t,
+                in1_t,
+                program_config=program_config,
+                memory_config=out_memory_config,
+                dtype=ttnn.bfloat16,
+                output_tile=ttnn.Tile((tile_h, tile_w)),
+            )
 
         # Validate correctness
         output_tensor = ttnn.to_torch(output_t)
@@ -1053,7 +1054,7 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
 
 
 @pytest.mark.parametrize(
@@ -1115,6 +1116,7 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
 )
 @pytest.mark.parametrize("seq_len", [128])  # Longer sequence lengths are 1024, 4096, 8192, 32768, 131072
 @skip_for_blackhole("Deepseek tests target Wormhole")
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 def test_prefill_mm_interleaved_sharded(device, test_case, seq_len):
     """
     Tests the MLA prefill matmuls with in0 DRAM interleaved and in1 DRAM sharded.

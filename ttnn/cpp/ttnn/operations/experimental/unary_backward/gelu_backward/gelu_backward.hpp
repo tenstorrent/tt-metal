@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/core.hpp"
-#include "ttnn/decorators.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::experimental {
 

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "ttnn/decorators.hpp"
 #include <ttnn/distributed/distributed_configs.hpp>
 #include <optional>
 

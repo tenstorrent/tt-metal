@@ -15,8 +15,10 @@
 
 namespace tt::tt_metal {
 
-DispatchMemMap::DispatchMemMap(const CoreType& core_type, uint32_t num_hw_cqs, const Hal& hal, bool is_galaxy_cluster) :
-    settings(DispatchSettings(num_hw_cqs, core_type, is_galaxy_cluster, hal.get_alignment(HalMemType::L1))),
+DispatchMemMap::DispatchMemMap(
+    const CoreType& core_type, uint32_t num_hw_cqs, const Hal& hal, bool is_galaxy_cluster, bool are_cqs_dram_backed) :
+    settings(DispatchSettings(
+        num_hw_cqs, core_type, is_galaxy_cluster, are_cqs_dram_backed, hal.get_alignment(HalMemType::L1))),
     host_alignment_(hal.get_alignment(HalMemType::HOST)),
     l1_alignment_(hal.get_alignment(HalMemType::L1)),
     noc_overlay_start_addr_(hal.get_noc_overlay_start_addr()),

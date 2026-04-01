@@ -10,8 +10,9 @@
 // Inputs:
 //   - input [sp_dim, topk_dim]: UINT16 height-sharded tensor of expert indices
 //     selected for each token (one row per token, one column per top-k slot).
-//   - expert_mask [n_routed_experts]: UINT32 tensor where nonzero means the
-//     expert is present on this device and should be counted, zero means skip.
+//   - expert_dispatch_table [n_routed_experts]: INT32 tensor mapping experts to
+//     chip IDs. Negative (-1) means absent (skip), non-negative values (chip IDs)
+//     mean present (count).
 //
 // Output:
 //   - histogram [n_routed_experts]: UINT32 count of token assignments per expert.
@@ -63,7 +64,7 @@ void kernel_main() {
     constexpr uint32_t input_page_size = get_compile_time_arg_val(2);
     constexpr uint32_t output_page_size = get_compile_time_arg_val(3);
     constexpr uint32_t h_count = get_compile_time_arg_val(4);
-    constexpr uint32_t W = get_compile_time_arg_val(5);
+    constexpr uint32_t num_experts_per_token = get_compile_time_arg_val(5);
     constexpr uint32_t n_routed_experts = get_compile_time_arg_val(6);
     constexpr bool is_initializer = (bool)get_compile_time_arg_val(7);
     constexpr uint32_t init_sem_idx = get_compile_time_arg_val(8);
@@ -111,14 +112,14 @@ void kernel_main() {
         noc_semaphore_wait(init_sem_ptr, 1);
     }
 
-    volatile tt_l1_ptr uint32_t* mask = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mask_l1_addr);
+    volatile tt_l1_ptr int32_t* mask = reinterpret_cast<volatile tt_l1_ptr int32_t*>(mask_l1_addr);
 
     for (uint32_t h = 0; h < h_count; h++) {
         volatile tt_l1_ptr uint16_t* row =
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(in_base_addr + h * input_page_size);
-        for (uint32_t w = 0; w < W; w++) {
+        for (uint32_t w = 0; w < num_experts_per_token; w++) {
             uint32_t expert_idx = row[w];
-            if (expert_idx < n_routed_experts && mask[expert_idx] != 0) {
+            if (expert_idx < n_routed_experts && mask[expert_idx] >= 0) {
                 uint64_t noc_addr = get_noc_addr(out_addr + expert_idx * sizeof(uint32_t));
                 noc_semaphore_inc(noc_addr, 1);
             }
