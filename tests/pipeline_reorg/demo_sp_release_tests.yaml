@@ -139,8 +139,7 @@
 - name: bh_lb_DeepSeek_B1_Decoder_MoE_SlowDispatch
   cmd: |
     TT_METAL_SLOW_DISPATCH_MODE=1 pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_decoder_block.py::test_decoder \
-      -k "mesh_rows_4 and mesh_cols_2 and position_id_0 and rigged_groups8" \
-      -vvv --tb=short --timeout 600
+      -m "not skip_post_commit" -vvv --tb=short --timeout 600
   model: deepseek_decode
   skus:
     bh_loudbox:
@@ -151,8 +150,7 @@
 - name: bh_lb_DeepSeek_B1_Decoder_MoE_FastDispatch
   cmd: |
     pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_decoder_block.py::test_decoder \
-      -k "mesh_rows_4 and mesh_cols_2 and position_id_0 and rigged_groups8" \
-      -vvv --tb=short --timeout 600
+      -m "not skip_post_commit" -vvv --tb=short --timeout 600
   model: deepseek_decode
   skus:
     bh_loudbox:
@@ -163,8 +161,7 @@
 - name: bh_lb_DeepSeek_B1_Decoder_DenseMLP_SlowDispatch
   cmd: |
     TT_METAL_SLOW_DISPATCH_MODE=1 pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_decoder_block.py::test_decoder_mlp \
-      -k "mesh_rows_4 and mesh_cols_2 and position_id_0" \
-      -vvv --tb=short --timeout 600
+      -m "not skip_post_commit" -vvv --tb=short --timeout 600
   model: deepseek_decode
   skus:
     bh_loudbox:
@@ -175,8 +172,7 @@
 - name: bh_lb_DeepSeek_B1_Decoder_DenseMLP_FastDispatch
   cmd: |
     pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_decoder_block.py::test_decoder_mlp \
-      -k "mesh_rows_4 and mesh_cols_2 and position_id_0" \
-      -vvv --tb=short --timeout 600
+      -m "not skip_post_commit" -vvv --tb=short --timeout 600
   model: deepseek_decode
   skus:
     bh_loudbox:
@@ -187,8 +183,7 @@
 - name: bh_lb_DeepSeek_B1_Post_SDPA_4x2_SlowDispatch
   cmd: |
     TT_METAL_SLOW_DISPATCH_MODE=1 pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_post_sdpa.py \
-      -k "mesh_rows_4 and mesh_cols_2" \
-      -vvv --tb=short --timeout 600
+      -m "not skip_post_commit" -vvv --tb=short --timeout 600
   model: deepseek_decode
   skus:
     bh_loudbox:
@@ -199,8 +194,7 @@
 - name: bh_lb_DeepSeek_B1_Post_SDPA_4x2_FastDispatch
   cmd: |
     pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_post_sdpa.py \
-      -k "mesh_rows_4 and mesh_cols_2" \
-      -vvv --tb=short --timeout 600
+      -m "not skip_post_commit" -vvv --tb=short --timeout 600
   model: deepseek_decode
   skus:
     bh_loudbox:
@@ -210,8 +204,8 @@
 
 - name: bh_lb_DeepSeek_B1_Sampling_4x2_SlowDispatch
   cmd: |
-    TT_METAL_SLOW_DISPATCH_MODE=1 pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_sampling.py::test_sampling_argmax_mesh_4x2_axis_x \
-      -vvv --tb=short --timeout 600
+    TT_METAL_SLOW_DISPATCH_MODE=1 pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_sampling.py \
+      -m "not skip_post_commit" -vvv --tb=short --timeout 600
   model: deepseek_decode
   skus:
     bh_loudbox:
@@ -221,8 +215,8 @@
 
 - name: bh_lb_DeepSeek_B1_Sampling_4x2_FastDispatch
   cmd: |
-    pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_sampling.py::test_sampling_argmax_mesh_4x2_axis_x \
-      -vvv --tb=short --timeout 600
+    pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_sampling.py \
+      -m "not skip_post_commit" -vvv --tb=short --timeout 600
   model: deepseek_decode
   skus:
     bh_loudbox:
@@ -233,8 +227,7 @@
 - name: bh_lb_DeepSeek_B1_PrepareWeights_4x2_SlowDispatch
   cmd: |
     TT_METAL_SLOW_DISPATCH_MODE=1 pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_prepare_weights.py \
-      -k "4x2" \
-      -vvv --tb=short --timeout 900
+      -m "not skip_post_commit" -vvv --tb=short --timeout 900
   model: deepseek_decode
   skus:
     bh_loudbox:
@@ -245,8 +238,7 @@
 - name: bh_lb_DeepSeek_B1_PrepareWeights_4x2_FastDispatch
   cmd: |
     pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_prepare_weights.py \
-      -k "4x2" \
-      -vvv --tb=short --timeout 900
+      -m "not skip_post_commit" -vvv --tb=short --timeout 900
   model: deepseek_decode
   skus:
     bh_loudbox:
