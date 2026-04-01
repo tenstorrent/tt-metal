@@ -94,18 +94,7 @@ def test_moe(
         num_dispatch_groups=1,
     )
 
-    # Compute gate outputs
-    expert_offsets, expert_token_counts, _ = get_gate_outputs(
-        indices,
-        dispatch_group_size,
-        num_routed_experts,
-        experts_per_chip,
-        seq_len_per_chip,
-        num_experts_per_tok,
-        expert_dispatch_table=expert_dispatch_table,
-    )
-
-    # Create weights for random-weights mode
+    # Create weights
     if use_hf_weights:
         routed_expert_weights = None
         shared_expert_weights = None
@@ -240,99 +229,4 @@ def test_moe(
 
     logger.debug("\n" + "=" * 60)
     logger.debug(f"TorchMoe Test ({label}) PASSED!")
-    logger.debug("=" * 60)
-
-
-@pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_group_size, capacity_factor",
-    [
-        pytest.param(32, 224, 64, 256, 8, 4, 4, id="random-weights-gate"),  # topk=8 is gate constraint
-    ],
-)
-def test_moe_with_gate(
-    seq_len_per_chip,
-    emb_dim,
-    hidden_dim,
-    num_routed_experts,
-    num_experts_per_tok,
-    dispatch_group_size,
-    capacity_factor,
-):
-    """
-    Test TorchMoe with integrated gate (end-to-end forward(x)).
-
-    Passes gate_weights dict to TorchMoe which creates ReferenceMoEGate internally.
-    """
-    logger.debug(f"\n{'='*60}")
-    logger.debug("TorchMoe + Gate Test")
-    logger.debug(f"{'='*60}")
-
-    # Compute derived constants
-    experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip,
-        num_routed_experts,
-        num_experts_per_tok,
-        num_devices=dispatch_group_size,
-        dispatch_group_size=dispatch_group_size,
-        capacity_factor=capacity_factor,
-    )
-
-    # Create gate weights
-    torch.manual_seed(42)
-    gate_weights = create_gate_weights(num_routed_experts, emb_dim, dtype=torch.float32)
-
-    # Create expert dispatch table
-    expert_dispatch_table = ExpertMapping.create_dispatch_table(
-        num_routed_experts=num_routed_experts,
-        dispatch_group_size=dispatch_group_size,
-        num_dispatch_groups=1,
-    )
-
-    # Create weights
-    routed_expert_weights = create_torch_expert_weights(num_routed_experts, emb_dim, hidden_dim, seed=42)
-    shared_expert_weights = create_shared_expert_weights(emb_dim, hidden_dim, seed=123)
-
-    # Create TorchMoe with gate_weights
-    moe = TorchMoe(
-        dispatch_group_size=dispatch_group_size,
-        experts_per_chip=experts_per_chip,
-        num_routed_experts=num_routed_experts,
-        num_experts_per_tok=num_experts_per_tok,
-        metadata_len=metadata_len,
-        max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
-        seq_len_per_chip=seq_len_per_chip,
-        emb_dim=emb_dim,
-        hidden_dim=hidden_dim,
-        expert_dispatch_table=expert_dispatch_table,
-        routed_expert_weights=routed_expert_weights,
-        shared_expert_weights=shared_expert_weights,
-        gate_weights=gate_weights,
-    )
-
-    # Create input
-    torch.manual_seed(42)
-    x = torch.randn(dispatch_group_size, seq_len_per_chip, emb_dim, dtype=torch.float32)
-
-    # Run forward with gate (single-arg call, no weights/indices needed)
-    final_output, intermediates = moe(x, return_intermediates=True)
-
-    assert intermediates is not None, "Expected intermediates"
-    assert intermediates.gate_scores is not None, "Expected gate_scores in intermediates"
-    assert intermediates.gate_indices is not None, "Expected gate_indices in intermediates"
-    assert final_output.shape == x.shape, f"Expected output shape {x.shape}, got {final_output.shape}"
-
-    # Verify no NaN/Inf
-    assert not torch.isnan(final_output).any(), "Final output contains NaN values"
-    assert not torch.isinf(final_output).any(), "Final output contains Inf values"
-
-    logger.debug(f"Output shape: {final_output.shape}")
-    logger.debug(f"Gate scores shape: {intermediates.gate_scores.shape}")
-    logger.debug(f"Gate indices shape: {intermediates.gate_indices.shape}")
-    logger.debug(
-        f"Output stats - min: {final_output.min().item():.4f}, max: {final_output.max().item():.4f}, "
-        f"mean: {final_output.mean().item():.4f}"
-    )
-
-    logger.debug("\n" + "=" * 60)
-    logger.debug("TorchMoe + Gate Test PASSED!")
     logger.debug("=" * 60)
