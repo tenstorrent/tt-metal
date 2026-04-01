@@ -49,7 +49,7 @@ def test_tensor_shape():
 @pytest.mark.smoke
 def test_tensor_layout_row_major():
     """Verify tensor creation with ROW_MAJOR layout."""
-    data = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float32)
+    data = np.random.randn(1, 1, 32, 32).astype(np.float32)
     tensor = ttml.autograd.Tensor.from_numpy(data, layout=ttnn.Layout.ROW_MAJOR)
 
     assert tensor is not None
