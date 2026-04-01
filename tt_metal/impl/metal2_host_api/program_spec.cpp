@@ -750,10 +750,15 @@ int ConstraintScore(const KernelSpec* k) {
     return (node_count * 100) + thread_count;  // nodes dominate, threads break ties
 }
 
-// Sort kernels by constraint score
 void SortByConstraint(std::vector<const KernelSpec*>& kernels) {
     std::sort(kernels.begin(), kernels.end(), [](const KernelSpec* a, const KernelSpec* b) {
-        return ConstraintScore(a) > ConstraintScore(b);
+        int score_a = ConstraintScore(a);
+        int score_b = ConstraintScore(b);
+        if (score_a != score_b) {
+            return score_a > score_b;  // Higher score first
+        }
+        // In the case of a tie, use unique_id as (deterministic) tiebreaker
+        return a->unique_id < b->unique_id;
     });
 }
 
@@ -777,7 +782,12 @@ bool TryGreedyAssignment(
 }
 
 // Backtracking solver over kernel orderings
-// Tries the initial ordering first, then permutations if needed
+// Note: In the worst case, this is O(N!) in the number of kernels.
+//       In practice, I expect this will almost always solve in the first greedy attempt (if sorted).
+//       The backtracking is just here for pathological cases.
+//       Even then, it shouldn't be horrendous. We won't have a a huge number of kernels in a ProgramSpec.
+//       And in the common case (traced), Program creation isn't on the critical path.
+//       We can revisit if this ever becomes a problem.
 bool SolveWithOrderingBacktrack(
     std::vector<const KernelSpec*> kernels,  // by value - we'll permute it
     NodeUsageTracker& tracker,
@@ -788,15 +798,17 @@ bool SolveWithOrderingBacktrack(
     }
 
     // Backtrack: try all permutations
-    // (std::next_permutation requires sorted input for full coverage)
-    std::sort(kernels.begin(), kernels.end());
+    // (std::next_permutation requires sorted input)
+    // Sort by unique_id for deterministic permutation order
+    auto by_name = [](const KernelSpec* a, const KernelSpec* b) { return a->unique_id < b->unique_id; };
+    std::sort(kernels.begin(), kernels.end(), by_name);
     do {
         tracker.reset();
         result.clear();
         if (TryGreedyAssignment(kernels, tracker, result)) {
             return true;
         }
-    } while (std::next_permutation(kernels.begin(), kernels.end()));
+    } while (std::next_permutation(kernels.begin(), kernels.end(), by_name));
 
     return false;
 }
@@ -1077,14 +1089,17 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
     auto program_impl = std::make_shared<detail::ProgramImpl>();
 
     // Create DataflowBuffers and build name -> ID map for unpack_to_dest_mode
+    // NOTE: Iterate over spec.dataflow_buffers (not collected.dfb_endpoints) to ensure
+    //       deterministic DFB ID assignment based on user-specified order.
     DFBNameToIdMap dfb_name_to_id;
-    for (const auto& [dfb_name, dfb_endpoint_info] : collected.dfb_endpoints) {
-        const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(dfb_name);
+    for (const auto& dfb_spec : spec.dataflow_buffers) {
+        const DFBSpecName& dfb_name = dfb_spec.unique_id;
+        const auto& dfb_endpoint_info = collected.dfb_endpoints.at(dfb_name);
         const experimental::dfb::DataflowBufferConfig config = MakeDataflowBufferConfig(
-            dfb_spec, dfb_endpoint_info, kernel_to_dm_processor_mask_map, kernel_to_compute_processor_mask_map);
+            &dfb_spec, dfb_endpoint_info, kernel_to_dm_processor_mask_map, kernel_to_compute_processor_mask_map);
 
         // Add the DFB to the ProgramImpl, and register the name -> handle mapping
-        uint32_t dfb_id = program_impl->add_dataflow_buffer(to_node_range_set(dfb_spec->target_nodes), config);
+        uint32_t dfb_id = program_impl->add_dataflow_buffer(to_node_range_set(dfb_spec.target_nodes), config);
         program_impl->register_dfb_spec_name(dfb_name, dfb_id);
         dfb_name_to_id[dfb_name] = dfb_id;
     }
