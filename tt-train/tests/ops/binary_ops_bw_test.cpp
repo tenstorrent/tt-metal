@@ -2,6 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// GCC 12 emits a false-positive -Wnonnull inside xtensor's xbroadcast::has_linear_assign
+// when std::equal is inlined over empty-vector iterators. Fixed in GCC 13.
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ < 13
+#pragma GCC diagnostic ignored "-Wnonnull"
+#endif
+
 #include <gtest/gtest.h>
 
 #include <stdexcept>
