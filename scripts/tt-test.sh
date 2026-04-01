@@ -10,8 +10,8 @@
 # Simulator mode (TT_METAL_SIMULATOR set):
 #   Skips flock, device resets, dirty tracking, and triage (these require real
 #   hardware). --dev features (watcher, asserts) still work on the simulator.
-#   Keeps dispatch timeout for hang detection (default 120s, override via
-#   TT_METAL_OPERATION_TIMEOUT_SECONDS).
+#   Uses cycle-count timeout (TT_METAL_SIM_CYCLE_TIMEOUT, default 100M cycles)
+#   instead of wall-clock timeout, since sim runs at kHz not GHz.
 #
 # Usage: scripts/tt-test.sh [--dev] [--run-all] <test_path> [extra_pytest_args...]
 #
@@ -19,7 +19,8 @@
 #   --dev       Enables polling watcher (NoC sanitizer, waypoints, CB
 #               sanitization), lightweight ebreak asserts, and auto-triage
 #               on hang with full triage + watcher log dump.
-#               (on simulator: watcher and asserts work; triage is skipped)
+#               (on simulator: watcher works with NoC sanitize disabled
+#                since the sim validates NoC natively; triage is skipped)
 #   --run-all   Run all tests instead of stopping on first failure (-x).
 #               Useful for eval scoring where you need full pass/fail counts.
 #
@@ -50,10 +51,15 @@ if [[ -n "${TT_METAL_SIMULATOR:-}" ]]; then
     export TT_METAL_DISABLE_SFPLOADMACRO=1
 fi
 
-# Sim is much slower than silicon — use a higher default timeout.
-# User can override via TT_METAL_OPERATION_TIMEOUT_SECONDS.
+# Silicon: wall-clock dispatch timeout (seconds).
+# Simulator: cycle-count timeout (sim cycles). Wall-clock timeout is disabled
+# in the dispatch layer because sim runs at kHz, not GHz — wall-clock time is
+# meaningless. Instead, TT_METAL_SIM_CYCLE_TIMEOUT sets a cycle budget that
+# wait_until_cores_done enforces by tracking cycles consumed during polling.
+# User can override via the respective env vars.
 if [[ "$SIM_MODE" == true ]]; then
-    DISPATCH_TIMEOUT=${TT_METAL_OPERATION_TIMEOUT_SECONDS:-120}
+    DISPATCH_TIMEOUT=0  # wall-clock timeout disabled for sim
+    SIM_CYCLE_TIMEOUT=${TT_METAL_SIM_CYCLE_TIMEOUT:-100000000}  # 100M cycles default
 else
     DISPATCH_TIMEOUT=5
 fi
@@ -126,6 +132,9 @@ else
 fi
 
 export TT_METAL_OPERATION_TIMEOUT_SECONDS="$DISPATCH_TIMEOUT"
+if [[ "$SIM_MODE" == true ]]; then
+    export TT_METAL_SIM_CYCLE_TIMEOUT="$SIM_CYCLE_TIMEOUT"
+fi
 
 # --- Hang detection setup ---
 # On timeout, the dispatch layer runs this command. On hardware we get a full
@@ -157,7 +166,11 @@ if [[ "$DEV_MODE" == true ]]; then
         # ebreak which just causes a hang — without triage there's nothing to
         # capture the callstack, so they're useless. Leave them off and let
         # watcher handle asserts directly.
-        echo "TT_TEST: [sim+dev] watcher=polling(+assert) triage=OFF timeout=${DISPATCH_TIMEOUT}s" >&2
+        #
+        # NoC sanitization is redundant on the simulator — the sim itself
+        # validates NoC transactions natively. Disable it to avoid overhead.
+        export TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1
+        echo "TT_TEST: [sim+dev] watcher=polling(+assert,noc_sanitize=OFF) triage=OFF cycle_timeout=${SIM_CYCLE_TIMEOUT}" >&2
     else
         # Lightweight asserts: compiles ASSERT() as ebreak, halting the core at
         # the exact instruction. The dispatch timeout then fires and runs triage,
@@ -177,7 +190,7 @@ if [[ "$DEV_MODE" == true ]]; then
         echo "TT_TEST: [dev] asserts=ebreak llk_asserts=ON watcher=polling triage=ON timeout=${DISPATCH_TIMEOUT}s" >&2
     fi
 elif [[ "$SIM_MODE" == true ]]; then
-    echo "TT_TEST: [sim] dispatch_timeout=${DISPATCH_TIMEOUT}s" >&2
+    echo "TT_TEST: [sim] cycle_timeout=${SIM_CYCLE_TIMEOUT}" >&2
 else
     echo "TT_TEST: dispatch_timeout=${DISPATCH_TIMEOUT}s" >&2
 fi
