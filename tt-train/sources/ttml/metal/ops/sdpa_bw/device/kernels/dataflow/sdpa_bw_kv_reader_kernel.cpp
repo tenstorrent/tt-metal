@@ -50,9 +50,10 @@ void kernel_main() {
     constexpr auto intermediates_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t onetile = 1U;
-    constexpr uint32_t num_of_interm_tiles = 2U;
+    constexpr uint32_t num_of_interm_tiles = 1U;
 
     const uint32_t tile_bytes = get_tile_size(cb_grad_output);
+    const uint32_t interm_tile_bytes = get_tile_size(cb_intermediates);
 
     // Create TensorAccessor generators
     const auto grad_output_address_generator = TensorAccessor(grad_output_args, grad_output_addr, tile_bytes);
@@ -63,7 +64,8 @@ void kernel_main() {
 #ifdef USE_ATTN_MASK
     const auto mask_address_generator = TensorAccessor(mask_args, mask_addr, tile_bytes);
 #endif
-    const auto intermediates_address_generator = TensorAccessor(intermediates_args, intermediates_addr, tile_bytes);
+    const auto intermediates_address_generator =
+        TensorAccessor(intermediates_args, intermediates_addr, interm_tile_bytes);
 
     generate_matmul_row_reduce_tile(cb_matmul_reduce);  // generate tile for matmul row reduce (auto-detects data type)
 
@@ -105,7 +107,7 @@ void kernel_main() {
                     intermediates_address_generator,
                     intermediates_idx,
                     num_of_interm_tiles,
-                    tile_bytes,
+                    interm_tile_bytes,
                     num_of_interm_tiles);
 
                 read_tiles_by_row(cb_grad_output, grad_output_address_generator, q_start_idx, qWt, tile_bytes, qWt);
@@ -186,16 +188,13 @@ void kernel_main() {
 #endif
                 // Note: For CAUSAL_MASK, the mask tile is generated once by writer and reused by compute
 
-                // Read intermediates - one tile per row (contains 1/sum_exp values from forward pass)
-                // TODO[improve](vmelnykov): Now we share two intermediates values per head row: row-wise max value and
-                // 1/sum_exp In future we can think about optimizing this by sharing logsumexp only
                 uint32_t intermediates_idx = intermediates_offset + h * num_of_interm_tiles;
                 read_tiles_by_row(
                     cb_intermediates,
                     intermediates_address_generator,
                     intermediates_idx,
                     num_of_interm_tiles,
-                    tile_bytes,
+                    interm_tile_bytes,
                     num_of_interm_tiles);
 
                 read_tiles_by_row(cb_grad_output, grad_output_address_generator, q_start_idx, qWt, tile_bytes, qWt);

@@ -52,7 +52,7 @@ constexpr auto kUScalarRowCbIndex = tt::CBIndex::c_12;
 constexpr auto kGradQueryCbIndex = tt::CBIndex::c_13;
 
 constexpr uint32_t kSingleTileBuffer = 1U;
-constexpr uint32_t kNumOfIntermCBTiles = 2U;
+constexpr uint32_t kNumOfIntermCBTiles = 1U;  // single FP32 logsumexp tile per Q row
 
 const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
 const std::string kCausalMaskDefKey = "CAUSAL_MASK";
@@ -353,8 +353,8 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             program,
             all_cores,
             kIntermediatesCbIndex,
-            data_format,
-            bfloat16_single_tile_size_bytes,
+            precise_data_format,
+            float32_single_tile_size_bytes,
             2 * kNumOfIntermCBTiles);
 
     [[maybe_unused]] auto cb_mat_mul_reduce =  // CBIndex::c_7
@@ -482,10 +482,12 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     // 4) Create compute kernels
     // -------------------------------------------------------------------------
 
-    // Set UnpackToDestFp32 only for accumulator buffers (used with SFPU/copy, not FPU matmul)
+    // Set UnpackToDestFp32 for buffers that must preserve full FP32 in DST registers.
+    // These buffers use unpack-to-dest + SFPU path, never FPU (which truncates to TF32).
     auto create_unpack_to_dest_mode = []() {
         std::vector<UnpackToDestMode> mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
         mode[tt::CBIndex::c_8] = UnpackToDestMode::UnpackToDestFp32;  // kGradQueryAccumCbIndex
+        mode[tt::CBIndex::c_9] = UnpackToDestMode::UnpackToDestFp32;  // kAttentionWeightsCbIndex
         return mode;
     };
 

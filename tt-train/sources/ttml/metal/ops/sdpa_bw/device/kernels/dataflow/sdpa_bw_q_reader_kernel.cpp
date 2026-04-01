@@ -55,10 +55,12 @@ void kernel_main() {
     const auto key_addr_generator = TensorAccessor(key_args, key_addr, tile_bytes);
     const auto value_addr_generator = TensorAccessor(value_args, value_addr, tile_bytes);
     const auto mask_addr_generator = TensorAccessor(mask_args, mask_addr, tile_bytes);
-    const auto intermediates_addr_generator = TensorAccessor(intermediates_args, intermediates_addr, tile_bytes);
+
+    const uint32_t interm_tile_bytes = get_tile_size(cb_intermediates);
+    const auto intermediates_addr_generator = TensorAccessor(intermediates_args, intermediates_addr, interm_tile_bytes);
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
-    const uint32_t num_of_interm_tiles = 2U;
+    const uint32_t num_of_interm_tiles = 1U;
 
 #ifdef BALANCED_PARALLELISM
     constexpr uint32_t pairs_per_seq = Ht / 2;
@@ -82,7 +84,7 @@ void kernel_main() {
             intermediates_addr_generator,
             intermediates_idx,
             num_of_interm_tiles,
-            tile_bytes,
+            interm_tile_bytes,
             num_of_interm_tiles);
 
         for (uint32_t h = 0; h < num_kv_tiles_to_read; ++h) {
@@ -145,14 +147,14 @@ void kernel_main() {
 #endif
 
         // read intermediates for current row of Q
-        // intermediates shape: (B, qNH, S, 64) -> (batch, heads, seq_len, 2 tiles)
+        // intermediates shape: (B, qNH, S, 32) -> (batch, heads, seq_len, 1 FP32 tile)
         const uint32_t intermediates_idx = global_row_idx * num_of_interm_tiles;
         read_tiles_by_row(
             cb_intermediates,
             intermediates_addr_generator,
             intermediates_idx,
             num_of_interm_tiles,
-            tile_bytes,
+            interm_tile_bytes,
             num_of_interm_tiles);
 
         for (uint32_t h = 0; h < num_kv_tiles_to_read; ++h) {

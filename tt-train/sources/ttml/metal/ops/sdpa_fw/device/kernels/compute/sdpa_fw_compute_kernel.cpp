@@ -47,7 +47,7 @@ constexpr uint32_t cb_attn_mask = tt::CBIndex::c_3;
 constexpr uint32_t cb_intermediates = tt::CBIndex::c_4;
 constexpr uint32_t cb_reduction_scaler = tt::CBIndex::c_5;
 constexpr uint32_t cb_matmul_reduce = tt::CBIndex::c_6;  // isn't used right now, for debugging only
-constexpr uint32_t cb_qk_result = tt::CBIndex::c_7;      // used for Q by K^t result
+constexpr uint32_t cb_attention_weights = tt::CBIndex::c_7;
 
 constexpr uint32_t cb_prev_max = tt::CBIndex::c_8;       // used to store previous max value
 constexpr uint32_t cb_cur_max = tt::CBIndex::c_9;        // used to store current max value
@@ -108,29 +108,23 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
 
 #if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
         // For causal mask: apply triangular mask on diagonal tile (h == q_row_tile)
+        // Scaling is deferred to after max-subtraction for better precision
         if (h == q_row_tile) {
-            // Transforms mask from 1/0 to 0/-1e9F and applies it on dest_reg
-            apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
-        } else {
-            // For non-diagonal tiles (past tokens): no mask needed but still need to scale
-            binop_with_scalar_tile_init();
-            mul_unary_tile(matmul_accum_reg, scaler_bits);
+            apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, minus_one_bits, custom_inf_bits);
         }
+        // Non-diagonal tiles: no mask and no scaling needed here
 #elif defined(USE_ATTN_MASK)
-        // Transforms mask from 1/0 to 0/-1e9F and applies it on dest_reg
-        apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
-#else
-        // NO MASK: just scale attention scores
-        binop_with_scalar_tile_init();
-        mul_unary_tile(matmul_accum_reg, scaler_bits);
+        apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, minus_one_bits, custom_inf_bits);
 #endif
+        // NO MASK / non-diagonal: scores pass through unscaled.
+        // Scale is applied in apply_exp_inplace_and_find_exp_sum after max subtraction.
         tile_regs_commit();
         tile_regs_wait();
-        cb_reserve_back(cb_qk_result, onetile);
-        pack_reconfig_data_format(cb_qk_result);
-        pack_tile(matmul_accum_reg, cb_qk_result);
+        cb_reserve_back(cb_attention_weights, onetile);
+        pack_reconfig_data_format(cb_attention_weights);
+        pack_tile(matmul_accum_reg, cb_attention_weights);
         tile_regs_release();
-        cb_push_back(cb_qk_result, onetile);
+        cb_push_back(cb_attention_weights, onetile);
 #ifdef USE_ATTN_MASK
         // For USE_ATTN_MASK: each mask tile is unique, pop after use
         cb_pop_front(cb_attn_mask, onetile);
@@ -148,16 +142,16 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
          *  cur_max = max(qk, dim=-1)
          */
         update_cur_row_max_value<PoolType::MAX, ReduceDim::REDUCE_ROW>(
-            cb_qk_result,
+            cb_attention_weights,
             cb_reduction_scaler,
             alias_cb_cur_max,
             alias_cb_prev_max,
             /* if it first reduction in a row*/ h > 0);
 
-        apply_exp_inplace_and_find_exp_sum(cb_qk_result, alias_cb_cur_max, alias_cb_cur_sum_exp);
+        apply_exp_inplace_and_find_exp_sum(cb_attention_weights, alias_cb_cur_max, alias_cb_cur_sum_exp, scaler_bits);
 
-        matmul_qk_by_v(qWt, block_size, cb_qk_result, cb_value, alias_cb_cur_mm_out);
-        cb_pop_front(cb_qk_result, onetile);
+        matmul_qk_by_v(qWt, block_size, cb_attention_weights, cb_value, alias_cb_cur_mm_out);
+        cb_pop_front(cb_attention_weights, onetile);
         cb_pop_front(cb_value, qWt);
 
         /* if we process not first row of K and V:
@@ -166,7 +160,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
          * we need to update previous matmul output with exp_max_diff and add it to current matmul output
          */
         if (h > 0) {
-            update_exp_max_diff(alias_cb_prev_max, alias_cb_cur_max, cb_exp_max_diff);
+            update_exp_max_diff(alias_cb_prev_max, alias_cb_cur_max, cb_exp_max_diff, scaler_bits);
             cb_pop_front(alias_cb_prev_max, onetile);
 
             update_cur_exp_sum_inplace(alias_cb_prev_sum_exp, alias_cb_cur_sum_exp, cb_exp_max_diff);
@@ -185,28 +179,42 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
 
     // Finalize output
     cb_wait_front(alias_cb_prev_mm_out, qWt);
-    reduce_and_recip_tile_inplace<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_reduction_scaler, cb_matmul_reduce>(
-        alias_cb_prev_sum_exp);
+
+    row_reduce_tile_inplace<cb_reduction_scaler, cb_matmul_reduce>(alias_cb_prev_sum_exp);
     cb_wait_front(alias_cb_prev_sum_exp, onetile);
 
-    // Pack intermediates: max_val (col 0) and recip_sum_exp (col 32)
-    // Total 2 tiles: [max_val_tile, recip_sum_exp_tile]
-    // Writer will write these to shape (B, H, S, 64)
-    // cb_matmul_reduce is used as mask tile (1.0 in col 0, 0.0 elsewhere) to ensure zeros elsewhere
 #ifdef RETURN_INTERMEDIATES
-    pack_intermediate_result(alias_cb_prev_max, cb_intermediates, cb_matmul_reduce);
-    pack_intermediate_result(alias_cb_prev_sum_exp, cb_intermediates, cb_matmul_reduce);
+    // Compute lse = scale*max + log(sum_exp) in FP32 DST, pack to FP32 intermediates CB.
+    // Max is unscaled; scale is applied here to produce correct LSE for backward pass.
+    compute_and_pack_lse(alias_cb_prev_sum_exp, alias_cb_prev_max, cb_intermediates, cb_matmul_reduce, scaler_bits);
 #endif
+
+    // recip(sum_exp) still needed for output normalization: O = mm_out * (1/sum_exp)
+    recip_tile_inplace(alias_cb_prev_sum_exp);
+    cb_wait_front(alias_cb_prev_sum_exp, onetile);
 
     cb_reserve_back(cb_output, qWt);
     pack_reconfig_data_format(cb_output);
-    reconfig_data_format(alias_cb_prev_mm_out, alias_cb_prev_sum_exp);
-    mul_bcast_cols_init_short(alias_cb_prev_mm_out, alias_cb_prev_sum_exp);
     for (uint32_t tile_idx = 0; tile_idx < qWt; tile_idx += block_size) {
         tile_regs_acquire();
+
+        // Load mm_out tiles via UnpackToDestFp32 (full FP32 in DST)
+        reconfig_data_format(alias_cb_prev_mm_out, alias_cb_prev_mm_out);
+        copy_tile_init(alias_cb_prev_mm_out);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            mul_tiles_bcast_cols(alias_cb_prev_mm_out, alias_cb_prev_sum_exp, tile_idx + block_idx, 0, block_idx);
+            copy_tile(alias_cb_prev_mm_out, tile_idx + block_idx, block_idx);
         }
+
+        // Load 1/sum_exp with column broadcast to DST[block_size]
+        init_unary_bcast_col(alias_cb_prev_mm_out, alias_cb_prev_sum_exp);
+        unary_bcast<BroadcastType::COL>(alias_cb_prev_sum_exp, 0, block_size);
+
+        // SFPU multiply: DST[i] = mm_out[i] * (1/sum_exp)
+        mul_binary_tile_init();
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            mul_binary_tile(block_idx, block_size, block_idx);
+        }
+
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
@@ -234,7 +242,7 @@ void kernel_main() {
 
     init_sfpu(cb_query, cb_output);
     binary_op_init_common(cb_query, cb_key, cb_value);
-    mm_init(cb_query, cb_key, cb_qk_result);
+    mm_init(cb_query, cb_key, cb_attention_weights);
 
     cb_wait_front(cb_reduction_scaler, onetile);
 

@@ -30,8 +30,9 @@ void kernel_main() {
     const auto output_addr_generator = TensorAccessor(output_args, output_addr, tile_bytes);
 
 #ifdef RETURN_INTERMEDIATES
+    const uint32_t interm_tile_bytes = get_tile_size(cb_intermediates);
     constexpr auto intermediates_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
-    const auto intermediates_addr_generator = TensorAccessor(intermediates_args, intermediates_addr, tile_bytes);
+    const auto intermediates_addr_generator = TensorAccessor(intermediates_args, intermediates_addr, interm_tile_bytes);
 #endif
 
     constexpr uint32_t onetile = 1U;
@@ -52,7 +53,7 @@ void kernel_main() {
 #endif
 
     const uint32_t tiles_per_head = qWt;
-    constexpr uint32_t kIntermediateTilesPerRow = 2U;
+    constexpr uint32_t kIntermediateTilesPerRow = 1U;
 
 #ifdef BALANCED_PARALLELISM
     // Balanced parallelism mode: write outputs for pairs of rows (light + heavy).
@@ -72,10 +73,8 @@ void kernel_main() {
             ((batch_idx * q_heads + q_head_idx) * Ht + s_tile_idx) * kIntermediateTilesPerRow;
 
         cb_wait_front(cb_intermediates, kIntermediateTilesPerRow);
-        uint32_t l1_intermediates_read_addr = get_read_ptr(cb_intermediates);
+        const uint32_t l1_intermediates_read_addr = get_read_ptr(cb_intermediates);
         noc_async_write_tile(intermediate_base_idx, intermediates_addr_generator, l1_intermediates_read_addr);
-        l1_intermediates_read_addr += tile_bytes;
-        noc_async_write_tile(intermediate_base_idx + 1, intermediates_addr_generator, l1_intermediates_read_addr);
         noc_async_write_barrier();
         cb_pop_front(cb_intermediates, kIntermediateTilesPerRow);
 #endif
@@ -114,23 +113,13 @@ void kernel_main() {
         write_tiles_by_row(cb_output, output_addr_generator, out_start_idx, tiles_per_head, tile_bytes, tiles_per_head);
 
 #ifdef RETURN_INTERMEDIATES
-        // -------- Intermediates: (B, qNH, S, 64) = 2 tiles wide --------
-        // Tile 0: max_val at col 0, rest padded
-        // Tile 1: recip_sum_exp at col 32 (col 0 of second tile), rest padded
-        // Linear index for [B, qNH, S, 64]: ((b * q_heads + h) * Ht + s_tile) * 2 + tile_offset
+        // -------- Intermediates: (B, qNH, S, 32) = 1 FP32 tile: logsumexp --------
         const uint32_t intermediate_base_idx =
             ((batch_idx * q_heads + q_head_idx) * Ht + s_tile_idx) * kIntermediateTilesPerRow;
 
         cb_wait_front(cb_intermediates, kIntermediateTilesPerRow);
-        uint32_t l1_intermediates_read_addr = get_read_ptr(cb_intermediates);
-
-        // Write tile 0 (max_val)
+        const uint32_t l1_intermediates_read_addr = get_read_ptr(cb_intermediates);
         noc_async_write_tile(intermediate_base_idx, intermediates_addr_generator, l1_intermediates_read_addr);
-        l1_intermediates_read_addr += tile_bytes;
-
-        // Write tile 1 (recip_sum_exp)
-        noc_async_write_tile(intermediate_base_idx + 1, intermediates_addr_generator, l1_intermediates_read_addr);
-
         noc_async_write_barrier();
         cb_pop_front(cb_intermediates, kIntermediateTilesPerRow);
 #endif

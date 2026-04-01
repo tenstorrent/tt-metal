@@ -267,7 +267,7 @@ autograd::TensorPtr scaled_dot_product_attention(
         /*return_intermediates=*/true);  // Need intermediates for backward pass
 
     auto attn_output = fw_result[0].value();    // (B, H, S, D)
-    auto intermediates = fw_result[1].value();  // (B, H, S, 2 tiles) - stores [max_val, 1/sum_exp] per row for softmax
+    auto intermediates = fw_result[1].value();  // (B, H, S, 32) FP32 logsumexp per row for softmax
 
     auto out = ttml::autograd::create_tensor(attn_output);
 

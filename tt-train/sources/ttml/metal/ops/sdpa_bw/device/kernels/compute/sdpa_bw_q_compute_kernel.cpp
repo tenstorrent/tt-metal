@@ -83,7 +83,7 @@ constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_12;       // u_scalar per ro
 constexpr uint32_t cb_grad_query = tt::CBIndex::c_13;         // Output: grad_Q
 
 const uint32_t tiles_per_row = qWt;       // number of tiles per row (qWt == kWt == vWt)
-const uint32_t num_of_interm_tiles = 2U;  // number of tiles in intermediates buffer per head
+const uint32_t num_of_interm_tiles = 1U;  // single FP32 logsumexp tile per Q row
 
 /**
  * Process a single row of the SDPA backward Q computation.
@@ -110,6 +110,8 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
 #else
     const uint32_t num_kv_tiles_to_process = Ht;
 #endif
+
+    cb_wait_front(cb_intermediates, num_of_interm_tiles);
 
     const uint32_t matmul_accum_reg = 0;
     for (uint32_t h = 0; h < num_kv_tiles_to_process; ++h) {
@@ -142,14 +144,18 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         binop_with_scalar_tile_init();
         mul_unary_tile(matmul_accum_reg, scaler_bits);
 #endif
+
+        // Fused softmax: scores are still in DST at full FP32 from the matmul.
+        // Apply exp(S - lse) directly on DST — no CB roundtrip, no TF32 truncation.
+        apply_softmax_statistics_on_dst(matmul_accum_reg, cb_intermediates, cb_query);
+
         tile_regs_commit();
         tile_regs_wait();
+        cb_reserve_back(cb_attention_weights, onetile);
         pack_reconfig_data_format(cb_attention_weights);
         pack_tile(matmul_accum_reg, cb_attention_weights);
         tile_regs_release();
         cb_push_back(cb_attention_weights, onetile);
-
-        apply_statistics_inplace(cb_attention_weights, cb_intermediates, num_of_interm_tiles);
 
         compute_grad_attn_weights(cb_grad_output, cb_value, tiles_per_row, cb_grad_attn_weights, scaler_bits);
 
