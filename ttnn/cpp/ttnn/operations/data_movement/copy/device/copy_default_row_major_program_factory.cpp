@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "copy_to_memory_config_row_major_default_program_factory.hpp"
+#include "copy_default_row_major_program_factory.hpp"
 
 #include <cmath>
 
@@ -22,12 +22,9 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-CopyToMemoryConfigRowMajorDefaultProgramFactory::cached_program_t
-CopyToMemoryConfigRowMajorDefaultProgramFactory::create(
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
-    const auto& input = tensor_args.input_tensor;
+CopyDefaultRowMajorProgramFactory::cached_program_t CopyDefaultRowMajorProgramFactory::create(
+    const CopyParams& /*operation_attributes*/, const CopyInputs& tensor_args, Tensor& output_tensor) {
+    const auto& input = tensor_args.input;
     const auto& output = output_tensor;
     tt::tt_metal::Program program{};
 
@@ -135,14 +132,14 @@ CopyToMemoryConfigRowMajorDefaultProgramFactory::create(
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/copy_to_memory_config/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/"
         "redistribute_pages_row_major_reader.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/copy_to_memory_config/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/"
         "redistribute_pages_row_major_writer.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
@@ -166,18 +163,18 @@ CopyToMemoryConfigRowMajorDefaultProgramFactory::create(
 
     return {std::move(program), {reader_kernel_id, writer_kernel_id, ordered_cores}};
 }
-void CopyToMemoryConfigRowMajorDefaultProgramFactory::override_runtime_arguments(
+void CopyDefaultRowMajorProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const CopyParams& /*operation_attributes*/,
+    const CopyInputs& tensor_args,
+    Tensor& output_tensor) {
     const auto& program = cached_program.program;
     const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
     auto& runtime_args_by_core_reader = GetRuntimeArgs(program, reader_kernel_id);
     auto& runtime_args_by_core_writer = GetRuntimeArgs(program, writer_kernel_id);
     const auto& cores = cached_program.shared_variables.cores;
-    const auto& input_buffer = tensor_args.input_tensor.buffer();
+    const auto& input_buffer = tensor_args.input.buffer();
     const auto& output_buffer = output_tensor.buffer();
     for (const auto& core : cores) {
         auto& runtime_args_reader = runtime_args_by_core_reader[core.x][core.y];
