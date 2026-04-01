@@ -815,24 +815,21 @@ def catalog():
         "pretrain": "Pretrain",
     }
 
-    trainers = []
-    for trainer_id in sorted(TRAINING_TYPES.keys()):
-        trainers.append(
-            {
-                "id": trainer_id,
-                "display_name": trainer_display_names.get(trainer_id, trainer_id.upper()),
-                "supported": True,  # All registered trainers are supported
-            }
-        )
-
     # Trainers known to clients but not yet available in the registry
     future_trainers: set = {"grpo"}
-    for trainer_id in sorted(future_trainers - set(TRAINING_TYPES.keys())):
+
+    # Return trainers in expected usage order: Pretrain -> LoRA -> SFT -> GRPO
+    trainer_order = ["pretrain", "lora", "sft", "grpo"]
+    all_trainer_ids = list(TRAINING_TYPES.keys()) + sorted(future_trainers - set(TRAINING_TYPES.keys()))
+    all_trainer_ids.sort(key=lambda t: trainer_order.index(t) if t in trainer_order else len(trainer_order))
+
+    trainers = []
+    for trainer_id in all_trainer_ids:
         trainers.append(
             {
                 "id": trainer_id,
                 "display_name": trainer_display_names.get(trainer_id, trainer_id.upper()),
-                "supported": False,
+                "supported": trainer_id in TRAINING_TYPES,
             }
         )
 
