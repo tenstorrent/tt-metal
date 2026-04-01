@@ -8,6 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -qq && apt-get install -qq -y --no-install-recommends \
     clangd \
     fzf \
+    git-lfs \
     lcov \
     nano \
     python3-dev \
