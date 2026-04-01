@@ -124,11 +124,7 @@ class DispatcherData:
             device_unique_id = run_checks.devices[0].unique_id
 
             build_env = self._build_env_cache[device_unique_id]
-            # Cache DRAM RISC enable flag if provided by Inspector (optional field for forward/backward compat)
-            try:
-                self._drisc_enabled_flag: bool | None = bool(build_env.dramProgrammableCoresEnabled)
-            except Exception:
-                self._drisc_enabled_flag = None
+            self._drisc_enabled_flag: bool | None = bool(build_env.dramProgrammableCoresEnabled)
             # Use build_env for initial firmware paths
             brisc_elf_path = os.path.join(build_env.firmwarePath, "brisc", "brisc.elf")
             idle_erisc_elf_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
@@ -278,9 +274,7 @@ class DispatcherData:
         raise TTTriageError(f"Kernel {watcher_kernel_id} not found in inspector data.")
 
     def drisc_enabled(self) -> bool:
-        if hasattr(self, "_drisc_enabled_flag") and self._drisc_enabled_flag is not None:
-            return self._drisc_enabled_flag
-        return False
+        return self._drisc_enabled_flag
 
     def risc_enabled(self, risc_name: str) -> bool:
         if risc_name == "drisc":
