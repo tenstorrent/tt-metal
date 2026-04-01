@@ -8,7 +8,6 @@ Handles BERT feature extraction for prosody modeling.
 Supports:
 1. Preprocessed features (fastest)
 2. CPU-based BERT extraction (fallback)
-3. Dummy features for testing
 
 BERT models used by MeloTTS:
 - English/most languages: chinese-roberta-wwm-ext-large (1024 dim)
@@ -38,10 +37,9 @@ class BERTFeatureExtractor:
     """
     Extract BERT features for MeloTTS.
 
-    Can operate in three modes:
-    1. 'dummy' - Return zero features (for testing)
-    2. 'precomputed' - Load from cache
-    3. 'live' - Run BERT model on CPU
+    Can operate in two modes:
+    1. 'precomputed' - Load from cache
+    2. 'live' - Run BERT model on CPU
     """
 
     # Model configurations
@@ -58,7 +56,7 @@ class BERTFeatureExtractor:
 
     def __init__(
         self,
-        mode: str = "dummy",
+        mode: str = "live",
         cache_dir: Optional[str] = None,
         device: str = "cpu",
     ):
@@ -66,7 +64,7 @@ class BERTFeatureExtractor:
         Initialize BERT feature extractor.
 
         Args:
-            mode: 'dummy', 'precomputed', or 'live'
+            mode: 'precomputed' or 'live'
             cache_dir: Directory for precomputed features
             device: Device for BERT model ('cpu' or 'cuda')
         """
@@ -124,18 +122,10 @@ class BERTFeatureExtractor:
         Returns:
             Tuple of (bert_features [1, 1024, T], ja_bert_features [1, 768, T])
         """
-        if self.mode == "dummy":
-            return self._dummy_features(seq_len or 100)
-        elif self.mode == "precomputed":
+        if self.mode == "precomputed":
             return self._load_precomputed(text)
         else:
             return self._extract_live(text, language, seq_len)
-
-    def _dummy_features(self, seq_len: int) -> Tuple["torch.Tensor", "torch.Tensor"]:
-        """Return zero features for testing."""
-        bert = torch.zeros(1, 1024, seq_len)
-        ja_bert = torch.zeros(1, 768, seq_len)
-        return bert, ja_bert
 
     def _load_precomputed(self, text: str) -> Tuple["torch.Tensor", "torch.Tensor"]:
         """Load precomputed features from cache."""
@@ -148,13 +138,11 @@ class BERTFeatureExtractor:
         text_hash = hashlib.md5(text.encode()).hexdigest()[:16]
         cache_path = self.cache_dir / f"{text_hash}.pt"
 
-        if cache_path.exists():
-            data = torch.load(cache_path)
-            return data["bert"], data["ja_bert"]
-        else:
-            # Fall back to dummy
-            print(f"Warning: Precomputed features not found for text, using dummy")
-            return self._dummy_features(100)
+        if not cache_path.exists():
+            raise FileNotFoundError(f"Precomputed features not found: {cache_path}")
+
+        data = torch.load(cache_path)
+        return data["bert"], data["ja_bert"]
 
     def _extract_live(
         self,
@@ -255,14 +243,14 @@ class BERTFeatureExtractor:
 
 
 def get_bert_extractor(
-    mode: str = "dummy",
+    mode: str = "live",
     cache_dir: Optional[str] = None,
 ) -> BERTFeatureExtractor:
     """
     Get BERT feature extractor.
 
     Args:
-        mode: 'dummy', 'precomputed', or 'live'
+        mode: 'precomputed' or 'live'
         cache_dir: Cache directory for precomputed features
 
     Returns:
