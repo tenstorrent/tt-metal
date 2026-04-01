@@ -32,7 +32,7 @@ tt-run --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/my_mesh.te
 
 # With mock cluster mapping: --hosts not required
 # Each rank uses its corresponding mock cluster descriptor (TT_METAL_MOCK_CLUSTER_DESC_PATH).
-# All processes run on localhost; process count = number of rankings in the mapping file.
+# All processes run on localhost; process count = number of ranks in the mapping file.
 tt-run --mesh-graph-descriptor path/to/mgd.textproto \
   --mock-cluster-rank-binding path/to/mock_mapping.yaml \
   ./my_app
