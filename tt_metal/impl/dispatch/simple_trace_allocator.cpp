@@ -4,6 +4,7 @@
 
 #include "simple_trace_allocator.hpp"
 
+#include <deque>
 #include <limits>
 #include <set>
 #include <tuple>
@@ -164,6 +165,7 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
     uint32_t expected_workers_completed = 0;
     std::optional<uint32_t> last_active_eth_sync_idx;
     std::optional<int> last_stall_idx;
+    std::deque<size_t> subdevice_launch_window;
 
     for (size_t i = 0; i < trace_nodes.size(); i++) {
         auto& node = *trace_nodes[i];
@@ -239,7 +241,9 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
 
         // Do adjustments to the sync index to ensure we don't overflow the worker launch message buffer. We could
         // ignore programs that only use active ethernet, but that's a very rare case and not worth the complexity.
-        int final_binary_sync_idx = static_cast<int>(i) - max_queued_programs;
+        int final_binary_sync_idx = subdevice_launch_window.size() >= max_queued_programs
+                                        ? static_cast<int>(subdevice_launch_window.front())
+                                        : -1;
         if (binary_sync_idx.has_value()) {
             final_binary_sync_idx = std::max(final_binary_sync_idx, static_cast<int>(binary_sync_idx.value()));
         }
@@ -281,6 +285,10 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
             last_stall_idx = sync_count_to_use;
         }
         expected_workers_completed += node.num_workers;
+        subdevice_launch_window.push_back(i);
+        if (subdevice_launch_window.size() > max_queued_programs) {
+            subdevice_launch_window.pop_front();
+        }
     }
 }
 
