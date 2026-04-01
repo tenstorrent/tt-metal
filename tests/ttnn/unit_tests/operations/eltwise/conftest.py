@@ -13,6 +13,11 @@ close_device round-trips in CI, cutting job wall-time significantly.
 Tests marked with ``@pytest.mark.requires_fresh_device`` get a dedicated
 per-test device with an empty program cache.  The shared device is
 temporarily closed while the fresh device is in use.
+
+Tests marked with ``@pytest.mark.manages_own_device`` open their own
+device internally (e.g. via ``ttnn.manage_device()``) and must not have
+any fixture device open at the same time.  The shared device is
+suspended before these tests run and lazily reopened afterward.
 """
 
 import importlib.util
@@ -67,6 +72,11 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "requires_fresh_device: test needs a dedicated per-test device (empty program cache)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "manages_own_device: test opens its own device internally (e.g. ttnn.manage_device) "
+        "and must not have a fixture device open concurrently",
     )
 
 
@@ -204,26 +214,31 @@ def device(request, _device_manager):
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(autouse=True)
-def _reset_device_state(device):
+def _reset_device_state(request, _device_manager):
     """
     Reset shared device state before each test so module-scoped device
     behaves like a fresh device for state-sensitive tests.
 
-    Clears:
-    - Loaded sub-device manager: tests that call load_sub_device_manager()
-      without cleanup would otherwise leave the sub-device config active for
-      the next test, causing 'num_intersections == num_cores' fatals.
-    - cache_entries_counter: resets the delta counter so per-test cache-entry
-      assertions (which measure new entries since reset, not absolute counts)
-      start from zero.
+    For tests marked ``manages_own_device``: the shared device is suspended
+    so the hardware is free for the test to open on its own.
 
-    Note: program cache is intentionally NOT cleared here. Clearing it
-    invalidates pre-compiled ethernet dispatch kernel binaries stored in
-    command_queue_programs_, causing 'binary not found' fatals during CQ
-    re-init in tests that use ethernet dispatch (e.g. test_ttnn_where_forge).
-    Tests that check absolute program cache entry counts must instead use
-    @pytest.mark.requires_fresh_device to get a dedicated device.
+    For all other tests: if the shared device is open, clears loaded
+    sub-device manager and resets cache_entries_counter delta.
+
+    Depends on ``_device_manager`` (not ``device``) to avoid forcing the
+    shared device open for tests that manage their own device handle.
+
+    Program cache is intentionally NOT cleared — doing so invalidates
+    pre-compiled ethernet dispatch kernel binaries and causes 'binary not
+    found' fatals during CQ re-init.
     """
-    device.clear_loaded_sub_device_manager()
-    device.cache_entries_counter.reset()
+    if request.node.get_closest_marker("manages_own_device"):
+        # Suspend shared device so the hardware is free for the test's own open
+        _device_manager.suspend()
+        yield
+        return
+
+    if _device_manager.device is not None:
+        _device_manager.device.clear_loaded_sub_device_manager()
+        _device_manager.device.cache_entries_counter.reset()
     yield

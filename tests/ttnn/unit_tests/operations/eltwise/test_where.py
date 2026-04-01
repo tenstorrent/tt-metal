@@ -180,6 +180,7 @@ def test_ttnn_where_bfloat8b(tor_dtype, ttnn_dtype, c_shape, t_shape, f_shape, s
     assert torch.equal(result, golden)
 
 
+@pytest.mark.manages_own_device
 def test_ttnn_where_forge():
     cond = torch.tensor([[1, 0, 1, 0]], dtype=torch.int32)
     x = torch.tensor([[10, 20, 30, 40]], dtype=torch.int32)
