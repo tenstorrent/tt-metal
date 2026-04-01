@@ -180,6 +180,7 @@ def create_single_galaxy_combined_spec_decode_pipeline_configuration(
             persistent_mode=persistent_mode,
             mtp_weights=weight_provider.load_mtp(device),
             send_mtp_output_downstream=True,
+            embedding_weights=weight_provider.load_embedding(device),
         )
 
     return PipelineConfiguration(

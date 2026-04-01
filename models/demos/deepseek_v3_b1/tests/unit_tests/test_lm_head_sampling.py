@@ -789,7 +789,7 @@ class _SyntheticWeightProvider:
             move_to_device=True,
         )
 
-    def load_mtp_weights(self, device):
+    def load_mtp(self, device):
         M = 1
         K = _EMBED_HIDDEN
         embedding_dim = _EMBED_HIDDEN
@@ -813,17 +813,10 @@ class _SyntheticWeightProvider:
         )
 
         torch_embedding, torch_h_gamma, torch_e_gamma, torch_eh_proj = self.make_mtp_torch(num_devices)
+
         torch_eh_proj_padded = torch.zeros((K + embedding_dim, mtp_padded_dim), dtype=torch.bfloat16)
         torch_eh_proj_padded[:, :mtp_output_dim] = torch_eh_proj
 
-        ttnn_embedding = ttnn.from_torch(
-            torch_embedding,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-        )
         ttnn_h_gamma = ttnn.from_torch(
             torch_h_gamma,
             dtype=ttnn.bfloat16,
@@ -868,12 +861,22 @@ class _SyntheticWeightProvider:
         )
 
         return DeepSeekV3MTPWeights(
-            embedding=ttnn_embedding,
             h_gamma=ttnn_h_gamma,
             e_gamma=ttnn_e_gamma,
             eh_projection=ttnn_eh_proj,
-            decoder=None,
         )
+
+def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
+    torch_embedding, torch_h_gamma, torch_e_gamma, torch_eh_proj = self.make_mtp_torch(num_devices)
+    ttnn_embedding = ttnn.from_torch(
+        torch_embedding,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
+    return DeepSeekV3EmbeddingLayerWeights(embedding=ttnn_embedding)
 
 
 def create_single_pod_passthrough_pipeline_configuration(
@@ -1273,7 +1276,7 @@ def _prepare_reference_mtp_weights(device: ttnn.MeshDevice, hf_state_dict) -> De
     )
 
     return DeepSeekV3MTPWeights(
-        embedding=ttnn_embedding, h_gamma=ttnn_h_gamma, e_gamma=ttnn_e_gamma, eh_projection=ttnn_eh_proj, decoder=None
+        embedding=ttnn_embedding, h_gamma=ttnn_h_gamma, e_gamma=ttnn_e_gamma, eh_projection=ttnn_eh_proj
     )
 
 
@@ -4946,7 +4949,7 @@ def test_persistent_mode_pod(mesh_device, use_fp32, device_params):
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
-            "worker_l1_size": 1499000,
+            "worker_l1_size": 1485568,
         }
     ],
     indirect=True,
