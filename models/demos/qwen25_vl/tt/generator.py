@@ -111,9 +111,41 @@ class Generator(WarmupForwardMixin):
 
         return trace_id, tt_out, device_inputs
 
+    def _trace_inputs_match(self, trace_key, tokens_embd, rot_mats_user, page_table_user, model_id=0):
+        """Check if new host inputs have the same shapes as the stored device inputs."""
+        device_inputs = self.trace_inputs_prefill.get(trace_key)
+        if device_inputs is None:
+            return False
+        model_inst = self._ttt_generator.model[model_id]
+        host_inputs = model_inst.prepare_prefill_inputs_trace(
+            tokens_embd, rot_mats=rot_mats_user, page_table=page_table_user
+        )
+        for h, d in zip(host_inputs, device_inputs):
+            if (h is None) != (d is None):
+                return False
+            if h is not None and h.shape != d.shape:
+                return False
+        return True
+
+    def _release_trace_prefill(self, trace_key):
+        """Release a previously captured prefill trace."""
+        mesh = self.trace_mesh_prefill.get(trace_key)
+        trace_id = self.trace_id_prefill.get(trace_key)
+        if mesh is not None and trace_id is not None:
+            ttnn.release_trace(mesh, trace_id)
+        self.trace_id_prefill[trace_key] = None
+        self.trace_inputs_prefill.pop(trace_key, None)
+        self.trace_output_prefill.pop(trace_key, None)
+        self.trace_mesh_prefill.pop(trace_key, None)
+
     def _easy_trace_prefill(self, tokens_embd, rot_mats_user, page_table_user, kv_cache, padded_len, model_id=0):
         """Capture trace on first call per (padded_len, model_id), replay on subsequent calls."""
         trace_key = f"{padded_len}_{model_id}"
+
+        if self.trace_id_prefill[trace_key] is not None:
+            if not self._trace_inputs_match(trace_key, tokens_embd, rot_mats_user, page_table_user, model_id):
+                logger.warning(f"Prefill trace shape mismatch for key={trace_key}, recapturing")
+                self._release_trace_prefill(trace_key)
 
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out, device_inputs = self._capture_trace_prefill(
@@ -208,6 +240,22 @@ class Generator(WarmupForwardMixin):
                 group_size = group_end - group_start
                 chunk_size = min(group_size, max_batch)
 
+                # Cap per-chunk total tokens to avoid attention OOM on smaller
+                # device counts.  MAX_BATCHED_PREFILL_SEQ_LEN is sized for T3K
+                # (8 devices); scale down proportionally for fewer devices.
+                num_devices = self.model_args.num_devices
+                if num_devices < 8:
+                    max_chunk_tokens = MAX_BATCHED_PREFILL_SEQ_LEN * num_devices // 8
+                else:
+                    max_chunk_tokens = MAX_BATCHED_PREFILL_SEQ_LEN
+                chunk_size = min(chunk_size, max(1, max_chunk_tokens // batch_seq_len))
+
+                # The attention W_o matmul reshapes to [1, total_seq//1024, 1024, -1]
+                # which requires total_seq = chunk_size * batch_seq_len to be a
+                # multiple of 1024.  Ensure this by capping to at most 1024 total.
+                if batch_seq_len < 1024:
+                    chunk_size = min(chunk_size, 1024 // batch_seq_len)
+
                 for chunk_start in range(0, group_size, chunk_size):
                     chunk_end = min(chunk_start + chunk_size, group_size)
                     abs_start = group_start + chunk_start
@@ -219,7 +267,6 @@ class Generator(WarmupForwardMixin):
                         kv_cache=group_kv_cache,
                         prompt_lens=prompt_lens[abs_start:abs_end],
                         prefill_seq_len=batch_seq_len,
-                        slot_offset=chunk_start,
                         model_id=dp_group,
                     )
                     output_logits[abs_start:abs_end] = chunk_logits
@@ -310,13 +357,12 @@ class Generator(WarmupForwardMixin):
         kv_cache,
         prompt_lens,
         prefill_seq_len,
-        slot_offset=0,
         model_id=0,
     ):
         model_inst = self._ttt_generator.model[model_id]
         batch_size = tokens.shape[0]
         last_token_idx = [int(pl) - 1 for pl in prompt_lens]
-        batch_user_ids = list(range(slot_offset, slot_offset + batch_size))
+        batch_user_ids = list(range(batch_size))
 
         page_table_user = self._ttt_generator._get_prefill_user_page_table(
             page_table,
@@ -335,10 +381,11 @@ class Generator(WarmupForwardMixin):
             batch_size=batch_size,
         )
 
+        forward_user_id = batch_user_ids if batch_size > 1 else 0
         tt_out = model_inst.ttnn_prefill_forward(
             prefill_input,
             rot_mats_global=rot_mats_prefill,
-            user_id=batch_user_ids,
+            user_id=forward_user_id,
             page_table=page_table_tt,
             get_last_token=-1,
             kv_cache=kv_cache,
