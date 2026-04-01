@@ -18,7 +18,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_gate_outputs,
     get_sp_mesh_composer,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateFallbackMode, TtMoEGateConfig, TtMoEGatePrefill
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     ValidationResult,
     compare_exact,
@@ -33,7 +33,7 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import adjust_shapes_for_test
 @pytest.mark.parametrize(
     "gate_fallback_mode",
     [
-        GateFallbackMode.HOST_ALL,
+        GateComputeMode.HOST_ALL,
     ],
 )
 @pytest.mark.parametrize(
