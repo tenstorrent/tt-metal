@@ -18,7 +18,7 @@ grpo_config:
   group_size: 1
 
 eval_config:
-  temperature: 0.8
+  temperature: 0.0
 
 device_config:
   enable_ddp: false

@@ -20,7 +20,7 @@ CHECKPOINT = None  # set to a .safetensors path to load trained weights
 MAX_SEQ_LEN = 2048
 MAX_BATCH = 32
 MAX_NEW_TOKS = 512
-TEMPERATURE = 0.8  # greedy
+TEMPERATURE = 0.0  # greedy
 # =============================
 
 
