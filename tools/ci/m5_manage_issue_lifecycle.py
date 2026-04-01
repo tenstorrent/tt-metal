@@ -450,6 +450,28 @@ def message_replies(msg: dict[str, Any]) -> list[dict[str, Any]]:
     return [row for row in replies if isinstance(row, dict)]
 
 
+def infer_notification_state_from_thread_replies(
+    notif: dict[str, Any],
+    thread_replies: list[dict[str, Any]],
+) -> None:
+    if not isinstance(notif, dict):
+        return
+    warning_24_prefix = "CI auto triage follow-up: this issue is still unresolved after"
+    warning_final_prefix = "CI auto triage final warning: issue remains unresolved near disable SLA threshold."
+    post_disable_prefix = "disable PR merged for this incident"
+    for reply in thread_replies:
+        text = str(reply.get("text", "")).strip()
+        ts = str(reply.get("ts", "")).strip()
+        if not text or not ts:
+            continue
+        if warning_24_prefix in text and not notif.get("warning_24h_sent_ts"):
+            notif["warning_24h_sent_ts"] = ts
+        if warning_final_prefix in text and not notif.get("warning_final_sent_ts"):
+            notif["warning_final_sent_ts"] = ts
+        if post_disable_prefix in text and not notif.get("post_disable_followup_sent_ts"):
+            notif["post_disable_followup_sent_ts"] = ts
+
+
 def issue_numbers_from_text(text: str) -> list[int]:
     nums: list[int] = []
     for m in ISSUE_URL_RE.finditer(text):
@@ -583,6 +605,7 @@ def main() -> int:
         if not isinstance(notif, dict):
             notif = {}
             item["notification"] = notif
+        infer_notification_state_from_thread_replies(notif, thread_replies)
 
         issue_closed = bool(msg.get("issue_closed", False))
         if issue_closed:

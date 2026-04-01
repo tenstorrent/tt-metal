@@ -155,6 +155,25 @@ def issue_view(issue_repo: str, issue_number: int, issue_token: str) -> dict[str
     return payload if isinstance(payload, dict) else {}
 
 
+def has_recent_lifecycle_comment(issue_payload: dict[str, Any], *, now: dt.datetime, hours: float) -> bool:
+    if hours <= 0:
+        return False
+    threshold = now - dt.timedelta(hours=hours)
+    comments = issue_payload.get("comments", [])
+    if not isinstance(comments, list):
+        return False
+    for row in comments[-30:]:
+        if not isinstance(row, dict):
+            continue
+        body = str(row.get("body", "")).strip()
+        if "Auto-triage lifecycle review" not in body and "Auto Triage Refresh" not in body:
+            continue
+        created = parse_iso_utc(str(row.get("createdAt", "")).strip())
+        if created and created >= threshold:
+            return True
+    return False
+
+
 def extract_latest_run_job_url(issue_payload: dict[str, Any]) -> tuple[int, int] | None:
     corpus = [str(issue_payload.get("body", ""))]
     comments = issue_payload.get("comments", [])
@@ -552,6 +571,19 @@ def main() -> int:
             ] or [str(row["job_url"]) for row in selected[:3]]
             current_signature = str(decision.get("current_signature", "")).strip()
             if action == "close":
+                if has_recent_lifecycle_comment(payload, now=now, hours=max(0.0, args.processed_hours)):
+                    result["skipped"].append(
+                        {
+                            "issue_number": issue_number,
+                            "reason": "recent_lifecycle_comment_guard",
+                        }
+                    )
+                    issues_state[str(issue_number)] = {
+                        "last_processed_utc": now_iso(),
+                        "last_action": "unchanged",
+                        "last_reason": "recent_lifecycle_comment_guard",
+                    }
+                    continue
                 close_comment = comment or (
                     "Auto-triage lifecycle review: closing as latest 3 runs suggest this ticket is no longer the "
                     "right active failure signature.\n\n"
@@ -561,6 +593,19 @@ def main() -> int:
                 close_issue(args.issue_repo, issue_number, issue_token)
                 result["closed_count"] += 1
             elif action == "update":
+                if has_recent_lifecycle_comment(payload, now=now, hours=max(0.0, args.processed_hours)):
+                    result["skipped"].append(
+                        {
+                            "issue_number": issue_number,
+                            "reason": "recent_lifecycle_comment_guard",
+                        }
+                    )
+                    issues_state[str(issue_number)] = {
+                        "last_processed_utc": now_iso(),
+                        "last_action": "unchanged",
+                        "last_reason": "recent_lifecycle_comment_guard",
+                    }
+                    continue
                 updated_body = update_issue_body_minimal(
                     str(payload.get("body", "")),
                     most_recent_job_url=most_recent_job_url,
