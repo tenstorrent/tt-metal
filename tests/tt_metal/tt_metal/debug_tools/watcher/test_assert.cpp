@@ -226,7 +226,7 @@ static void RunTest(
         const std::string pc_placeholder = "PC 0x0";
         size_t pos = pattern.find(pc_placeholder);
         ASSERT_NE(pos, std::string::npos)
-            << "Expected placeholder '" << pc_placeholder << "' not found in exception: " << pattern;
+            << "Expected placeholder '" << pc_placeholder << "' not found in escaped pattern: " << pattern;
         pattern.replace(pos, pc_placeholder.length(), "PC 0x[\\da-fA-F]+");
         EXPECT_TRUE(std::regex_match(exception, std::regex(pattern)))
             << "Expected pattern: " << pattern << "\nActual: " << exception;
