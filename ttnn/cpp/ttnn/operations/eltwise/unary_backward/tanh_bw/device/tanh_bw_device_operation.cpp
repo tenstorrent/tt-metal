@@ -29,13 +29,13 @@ void TanhBwDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         output_datatype == input_tensor.dtype(),
         "TANH_BW operation requires input and output data types to match. Input data type: {}, Output data type: {}",
-        static_cast<int>(input_tensor.dtype()),
-        static_cast<int>(output_datatype));
+        input_tensor.dtype(),
+        output_datatype);
 
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE,
         "TANH_BW operation requires input to be on Device. Input storage type: {}",
-        static_cast<int>(input_tensor.storage_type()));
+        input_tensor.storage_type());
 
     TT_FATAL(
         input_tensor.buffer() != nullptr,
@@ -44,8 +44,8 @@ void TanhBwDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == out_memory_config.memory_layout(),
         "TANH_BW operation requires Input and Output memory layout to match. Input layout: {}, Output layout: {}",
-        static_cast<int>(input_tensor.memory_config().memory_layout()),
-        static_cast<int>(out_memory_config.memory_layout()));
+        input_tensor.memory_config().memory_layout(),
+        out_memory_config.memory_layout());
 
     TT_FATAL(!input_tensor.is_sharded(), "TANH_BW operation does not support sharded input tensor.");
 
@@ -53,7 +53,7 @@ void TanhBwDeviceOperation::validate_on_program_cache_miss(
         input_tensor.layout() == Layout::TILE,
         "TANH_BW operation requires tensor to be in Tile layout when working with non-sharded input tensor. Input "
         "tensor layout: {}",
-        static_cast<int>(input_tensor.layout()));
+        input_tensor.layout());
 
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,

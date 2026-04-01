@@ -146,8 +146,8 @@ void TanhBwProgramFactory::override_runtime_arguments(
     uint32_t num_cores = shared_vars.num_cores;
     uint32_t num_cores_y = shared_vars.num_cores_y;
 
-    const auto& input = tensor_args.input;
-    const auto& grad_output = tensor_args.grad_output;
+    const Tensor& input = tensor_args.input;
+    const Tensor& grad_output = tensor_args.grad_output;
     auto* src0_buffer = grad_output.buffer();
     auto* src1_buffer = input.buffer();
     auto* dst_buffer = output.buffer();
@@ -156,14 +156,14 @@ void TanhBwProgramFactory::override_runtime_arguments(
     auto& compute_runtime_args = GetRuntimeArgs(program, compute_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
 
-    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = input.physical_volume() / input.tensor_spec().tile().get_tile_hw();
     tt::tt_metal::IDevice* device = input.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto [_, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
 
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
+    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
