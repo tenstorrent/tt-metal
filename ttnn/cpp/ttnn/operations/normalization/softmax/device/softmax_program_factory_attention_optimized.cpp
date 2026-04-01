@@ -57,9 +57,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
         get_compute_kernel_config_args(device->arch(), attributes.compute_kernel_config);
 
     const tt::DataFormat max_scaler_cb_data_format =
-        (in0_cb_data_format == tt::DataFormat::Float32 && device->arch() != tt::ARCH::BLACKHOLE)
-            ? tt::DataFormat::Float32
-            : tt::DataFormat::Float16_b;
+        in0_cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const uint32_t max_scaler_tile_size = tt::tile_size(max_scaler_cb_data_format);
     const uint32_t fused_attention_scale_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
 
@@ -75,9 +73,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
     const uint32_t im_tile_size = tt::tile_size(im_cb_data_format);
 
     const tt::DataFormat sum_scaler_cb_data_format =
-        (im_cb_data_format == tt::DataFormat::Float32 && device->arch() != tt::ARCH::BLACKHOLE)
-            ? tt::DataFormat::Float32
-            : tt::DataFormat::Float16_b;
+        im_cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const uint32_t sum_scaler_tile_size = tt::tile_size(sum_scaler_cb_data_format);
 
     uint32_t block_size =
