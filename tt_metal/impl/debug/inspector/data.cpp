@@ -474,7 +474,9 @@ void collect_environment_entries(std::vector<ConfigurationEntry>& entries) {
             continue;
         }
         auto name = entry.substr(0, eq);
-        entries.push_back({std::string(name), std::string(entry.substr(eq + 1)), ConfigScope::Environment});
+        if (name.starts_with("TT_") || name.starts_with("TTNN_")) {
+            entries.push_back({std::string(name), std::string(entry.substr(eq + 1)), ConfigScope::Environment});
+        }
     }
 }
 
