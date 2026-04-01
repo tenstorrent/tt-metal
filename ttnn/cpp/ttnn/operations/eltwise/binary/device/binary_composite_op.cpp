@@ -502,7 +502,7 @@ Tensor remainder(
     const Tensor& input_a,
     const Tensor& input_b,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     return ttnn::detail::invoke_binary_ng(
         input_a,
         input_b,
@@ -513,7 +513,9 @@ Tensor remainder(
         {},
         {},
         {},
-        std::nullopt);
+        std::nullopt,
+        std::nullopt,
+        sub_core_grids);
 }
 
 Tensor remainder(

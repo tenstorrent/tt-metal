@@ -133,21 +133,31 @@ sfpi_inline void calculate_remainder_int32_body(
     // Load signed inputs
     // Equivalent to: sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi] = a_signed;
     sfpi::vInt a_signed = __builtin_rvtt_sfpload(
-        4, sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].get(), sfpi::SFPLOAD_ADDR_MODE_NOINC);
+        sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].get(), 4, sfpi::SFPLOAD_ADDR_MODE_NOINC);
     // Equivalent to: sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi] = b_signed;
     sfpi::vInt b_signed = __builtin_rvtt_sfpload(
-        4, sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].get(), sfpi::SFPLOAD_ADDR_MODE_NOINC);
+        sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].get(), 4, sfpi::SFPLOAD_ADDR_MODE_NOINC);
 
     // Compute unsigned remainder
     sfpi::vInt r = compute_unsigned_remainder_int32(a_signed, b_signed);
 
     // Remainder sign handling
-    v_if(a_signed < 0) { r = -r; }
+    sfpi::vInt sign = a_signed ^ b_signed;
+    v_if(r != 0) {
+        v_if(sign < 0) {
+            // When signs differ, floor(a/b) = trunc(a/b) - 1, so remainder needs adjustment
+            v_if(a_signed < 0) { r = b_signed - r; }
+            v_else { r += b_signed; }
+            v_endif;
+        }
+        v_elseif(a_signed < 0 && b_signed < 0) { r = -r; }
+        v_endif;
+    }
     v_endif;
 
     // Equivalent to: sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
     __builtin_rvtt_sfpstore(
-        r.get(), 4, sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].get(), sfpi::SFPLOAD_ADDR_MODE_NOINC);
+        r.get(), sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].get(), 4, sfpi::SFPLOAD_ADDR_MODE_NOINC);
 }
 
 template <bool is_fp32_dest_acc_en>
@@ -197,7 +207,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_remainder_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-#pragma GCC unroll 0
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_remainder_int32_body(dst_index_in0, dst_index_in1, dst_index_out);
         sfpi::dst_reg++;

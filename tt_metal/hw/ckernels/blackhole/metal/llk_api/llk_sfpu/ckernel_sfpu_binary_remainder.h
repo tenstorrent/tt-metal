@@ -92,7 +92,17 @@ sfpi_inline void calculate_remainder_int32_body(
     sfpi::vInt r = compute_unsigned_remainder_int32(a_signed, b_signed);
 
     // Remainder sign handling
-    v_if(a_signed < 0) { r = -r; }
+    sfpi::vInt sign = a_signed ^ b_signed;
+    v_if(r != 0) {
+        v_if(sign < 0) {
+            // When signs differ, floor(a/b) = trunc(a/b) - 1, so remainder needs adjustment
+            v_if(a_signed < 0) { r = b_signed - r; }
+            v_else { r += b_signed; }
+            v_endif;
+        }
+        v_elseif(a_signed < 0 && b_signed < 0) { r = -r; }
+        v_endif;
+    }
     v_endif;
 
     sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = r;
@@ -145,7 +155,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_remainder_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-#pragma GCC unroll 8
+#pragma GCC unroll 2
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_remainder_int32_body(dst_index_in0, dst_index_in1, dst_index_out);
         sfpi::dst_reg++;
