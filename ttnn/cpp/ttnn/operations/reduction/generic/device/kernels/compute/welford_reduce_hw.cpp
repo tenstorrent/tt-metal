@@ -11,8 +11,9 @@
 // parallel Welford merge formula.
 //
 // Phase 2 (per output): Reads the combined Float32 scalar tile from
-// cb_combined (produced by the writer after W-combining all partials),
-// and re-packs it to cb_out in the output data format.  This ensures
+// cb_combined (produced by the writer after W-combining all partials
+// and applying Bessel's correction), applies sqrt_tile when computing
+// std, and re-packs to cb_out in the output data format.  This ensures
 // the packer hardware handles format conversion (required for
 // BFLOAT8_B and for matching the output dtype to the input dtype).
 
@@ -22,6 +23,7 @@
 #include "api/compute/welford.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
+#include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "experimental/circular_buffer.h"
 
@@ -36,6 +38,7 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(3);
     constexpr bool do_scale = get_compile_time_arg_val(4) != 0;
     constexpr uint32_t reduce_batch_size = get_compile_time_arg_val(5);
+    constexpr bool is_std = get_compile_time_arg_val(6) != 0;
 
     constexpr uint32_t onetile = 1;
 
@@ -151,11 +154,12 @@ void kernel_main() {
             }
         }
 
-        // --- Phase 2: Read combined scalar from writer, repack to output format ---
+        // --- Phase 2: Read combined scalar from writer, apply sqrt if std, repack ---
         // The writer W-combines all per-column partials from Phase 1 into a
-        // single Float32 scalar tile in cb_combined.  We unpack it and re-pack
-        // into cb_out using the packer, which converts to the output data
-        // format (handles BFLOAT8_B and all other formats).
+        // single Float32 scalar tile in cb_combined (with Bessel's correction
+        // already applied).  We unpack it, apply sqrt_tile for std, and
+        // re-pack into cb_out using the packer, which converts to the output
+        // data format (handles BFLOAT8_B and all other formats).
         cb_combined_obj.wait_front(onetile);
         // Explicit srca reconfig is required because the unpacker was last
         // configured for cb_in's format (e.g. Float16_b) during Phase 1.
@@ -164,6 +168,10 @@ void kernel_main() {
         tile_regs_acquire();
         copy_tile_to_dst_init_short(cb_combined);
         copy_tile(cb_combined, 0, input_dst);
+        if constexpr (is_std) {
+            sqrt_tile_init();
+            sqrt_tile(input_dst);
+        }
         tile_regs_commit();
         cb_combined_obj.pop_front(onetile);
 
