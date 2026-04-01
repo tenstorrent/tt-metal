@@ -1895,6 +1895,7 @@ void detail::ProgramImpl::set_program_offsets_and_sizes(uint32_t index, const Pr
     program_config.dfb_offset = state.dfb_offset;
     program_config.dfb_size = state.dfb_size;
     program_config.kernel_text_offset = state.kernel_text_offset;
+    program_config.kernel_text_size = state.kernel_text_size;
     program_config_sizes_[index] = state.offset;
 }
 
@@ -1995,7 +1996,8 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             kernels_getter(index),
             kernel_groups_getter(index),
             state.offset,
-            state.kernel_text_offset);
+            state.kernel_text_offset,
+            state.kernel_text_size);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 

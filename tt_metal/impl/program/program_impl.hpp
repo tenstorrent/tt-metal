@@ -109,6 +109,7 @@ struct ProgramConfig {
     uint32_t dfb_size;
     uint32_t local_cb_size;
     uint32_t kernel_text_offset;  // offset of first kernel bin
+    uint32_t kernel_text_size;    // max size of all kernel bins across all kernel groups
 };
 
 // Represents the status of Program Kernel Binaries in Device DRAM with respect to the dispatcher
@@ -137,8 +138,9 @@ struct ProgramOffsetsState {
     uint32_t local_cb_size = 0;
     uint32_t dfb_offset = 0;
     uint32_t dfb_size = 0;
-    // Kernel binary offset.
+    // Kernel binary offsets and sizes.
     uint32_t kernel_text_offset = 0;
+    uint32_t kernel_text_size = 0;
 };
 
 // Callable types for dependency injection
