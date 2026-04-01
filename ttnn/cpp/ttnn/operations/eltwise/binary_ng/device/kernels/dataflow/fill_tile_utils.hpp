@@ -155,3 +155,53 @@ FORCE_INLINE void fill_tile_with_first_column(uint32_t cb_id) {
         }
     }
 }
+
+// Row-major helpers for 32-bit elements (float32/int32/uint32).
+FORCE_INLINE void fill_tile_with_first_column_rm(uint32_t ptr_arg, uint32_t row_width) {
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ptr_arg);
+    const uint32_t first_elem = ptr[0];
+    for (uint32_t i = 1; i < row_width; i++) {
+        ptr[i] = first_elem;
+    }
+}
+
+FORCE_INLINE void fill_tile_with_first_row_rm(uint32_t ptr_arg, uint32_t row_width, uint32_t num_rows) {
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ptr_arg);
+    for (uint32_t row = 1; row < num_rows; row++) {
+        const uint32_t row_offset = row * row_width;
+        for (uint32_t col = 0; col < row_width; col++) {
+            ptr[row_offset + col] = ptr[col];
+        }
+    }
+}
+FORCE_INLINE void fill_tile_with_first_column_rm_bfloat16(uint32_t ptr_arg, uint32_t row_width) {
+    auto* ptr16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(ptr_arg);
+    const uint16_t first_elem = ptr16[0];
+    const uint32_t packed = (static_cast<uint32_t>(first_elem) << 16) | first_elem;
+    const uint32_t row_width_words = row_width >> 1;
+    auto* ptr32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ptr_arg);
+    for (uint32_t i = 0; i < row_width_words; i++) {
+        ptr32[i] = packed;
+    }
+    if (row_width & 1) {
+        ptr16[row_width - 1] = first_elem;
+    }
+}
+
+FORCE_INLINE void fill_tile_with_first_row_rm_bfloat16(uint32_t ptr_arg, uint32_t row_width, uint32_t num_rows) {
+    const uint32_t row_width_words = row_width >> 1;
+    auto* ptr32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ptr_arg);
+    for (uint32_t i = 1; i < num_rows; i++) {
+        const uint32_t row_offset = i * row_width_words;
+        for (uint32_t j = 0; j < row_width_words; j++) {
+            ptr32[row_offset + j] = ptr32[j];
+        }
+    }
+    if (row_width & 1) {
+        auto* ptr16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(ptr_arg);
+        const uint32_t last_elem = row_width - 1;
+        for (uint32_t i = 1; i < num_rows; i++) {
+            ptr16[i * row_width + last_elem] = ptr16[last_elem];
+        }
+    }
+}
