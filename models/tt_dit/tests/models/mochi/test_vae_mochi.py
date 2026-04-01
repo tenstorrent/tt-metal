@@ -50,10 +50,11 @@ def make_mochi_vae_parallel_config(mesh_device):
 def get_shard_dims(parallel_config):
     """Get ShardTensor2dMesh/ConcatMesh2dToTensor dims based on parallel config.
 
-    For axes with no parallelism (factor=1), uses dim 0 as a dummy.
-    This is safe because those axes have mesh_shape=1 (no actual sharding/concat).
+    For axes with no parallelism (factor=1), uses dummy dims.
+    These are safe because those axes have mesh_shape=1 (no actual sharding/concat).
+    Dims must be unique (required by the framework).
     """
-    dims = [0, 0]
+    dims = [0, 1]
     if parallel_config.h_parallel.factor > 1:
         dims[parallel_config.h_parallel.mesh_axis] = 2
     if parallel_config.w_parallel.factor > 1:

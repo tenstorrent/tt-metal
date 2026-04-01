@@ -181,6 +181,8 @@ class ResBlock(Module):
         self._max_hw_per_block = {768: 1000, 512: 2000, 256: 2133, 128: 2560}
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        self.mesh_device = mesh_device
+        self._spatial_mask_cache: dict[tuple, ttnn.Tensor | None] = {}
 
         grid_size_x = mesh_device.core_grid.x
         grid_size_y = (
@@ -319,8 +321,8 @@ class ResBlock(Module):
             )
         return x_tiled
 
-    def _partition_hw(self, x_NTHWC, N, T, H, W, C):
-        """Sequentially mesh_partition on H then W axes, then neighbor pad."""
+    def _partition_hw(self, x_NTHWC, N, T, H, W, C, spatial_mask=None):
+        """Sequentially mesh_partition on H then W axes, mask padding, then neighbor pad."""
         h_factor = self.parallel_config.h_parallel.factor
         w_factor = self.parallel_config.w_parallel.factor
         # x_NTHWC is (N, T, H_full, W_full, C) in ROW_MAJOR
@@ -339,6 +341,11 @@ class ResBlock(Module):
                 memory_config=x_NTHWC.memory_config(),
             )
         x_NTHWC = ttnn.squeeze(x_NTHWC, 0)  # Get rid of N
+        # Pre-conv mask: zero out padding positions before neighbor_pad.
+        # Follows the Wan VAE pattern (WanCausalConv3d pre-conv mask).
+        # Ensures padding data is not exchanged as halos to neighboring devices.
+        if spatial_mask is not None:
+            x_NTHWC = ttnn.mul(x_NTHWC, spatial_mask)
         if h_factor > 1:
             x_NTHWC = vae_neighbor_pad(
                 self.ccl_manager,
@@ -362,13 +369,90 @@ class ResBlock(Module):
         x_NTHWC = ttnn.unsqueeze(x_NTHWC, 0)
         return x_NTHWC
 
+    @staticmethod
+    def _valid_norm_grid(norm, batch_size, HW):
+        """Find a valid core_grid for GroupNorm given the actual tensor dimensions.
+
+        The ttnn group_norm kernel requires:
+            num_virtual_rows = (grid_x / num_virtual_cols) * grid_y
+            Ht % num_virtual_rows == 0  and  num_virtual_rows <= Ht
+        where Ht = batch_size * ceil(HW / 32).
+
+        The grid computed at init time may be invalid when the actual HW differs
+        from what was expected (e.g. after slicing padding, or on topologies
+        where the per-device T differs).
+        """
+        Ht = batch_size * ((HW + 31) // 32)
+        grid_x = norm.core_grid.x
+        nvc = norm.num_virtual_cols
+        for gy in range(norm.core_grid.y, 0, -1):
+            nvr = (grid_x // nvc) * gy
+            if nvr <= Ht and Ht % nvr == 0:
+                return ttnn.CoreGrid(x=grid_x, y=gy)
+        return ttnn.CoreGrid(x=grid_x, y=1)
+
+    def _run_norm(self, norm, x_tiled, batch_size, HW, num_out_blocks):
+        """Run GroupNorm with auto-validated core_grid."""
+        original_grid = norm.core_grid
+        valid_grid = self._valid_norm_grid(norm, batch_size, HW)
+        if valid_grid.y != original_grid.y:
+            norm.core_grid = valid_grid
+        x_tiled = norm(x_tiled, num_out_blocks)
+        if norm.core_grid is not original_grid:
+            norm.core_grid = original_grid
+        return x_tiled
+
+    def _get_spatial_mask(self, H_full, W_full, logical_h, logical_w):
+        """Get (or create and cache) a per-device mask that zeros padding positions.
+
+        Following the Wan VAE pattern: the mask is created at full spatial size
+        with 1.0 for valid positions and 0.0 for padding, then sharded across
+        devices. Applied before neighbor_pad to prevent padding data from being
+        exchanged as halos.
+        """
+        key = (H_full, W_full, logical_h, logical_w)
+        if key not in self._spatial_mask_cache:
+            needs_h = logical_h > 0 and H_full > logical_h
+            needs_w = logical_w > 0 and W_full > logical_w
+            if not (needs_h or needs_w):
+                self._spatial_mask_cache[key] = None
+                return None
+
+            mask = torch.ones(1, H_full, W_full, 1)
+            if needs_h:
+                mask[:, logical_h:, :, :] = 0.0
+            if needs_w:
+                mask[:, :, logical_w:, :] = 0.0
+
+            h_axis = self.parallel_config.h_parallel.mesh_axis
+            w_axis = self.parallel_config.w_parallel.mesh_axis
+            shard_dims = [0, 0]
+            shard_dims[h_axis] = 1  # H dim in (1, H, W, 1)
+            shard_dims[w_axis] = 2  # W dim in (1, H, W, 1)
+
+            mask_tt = ttnn.from_torch(
+                mask,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device,
+                    mesh_shape=tuple(self.mesh_device.shape),
+                    dims=shard_dims,
+                ),
+            )
+            self._spatial_mask_cache[key] = mask_tt
+        return self._spatial_mask_cache[key]
+
     def _norm_silu_spatial(self, x_4d, norm, N, T, H_full, W_full, C, logical_h, logical_w):
         """GroupNorm+silu on all-gathered spatial data, removing padding before norm.
 
         When spatial parallel factors don't evenly divide the spatial dimensions,
         the tensor is padded with zeros. These zeros contaminate GroupNorm statistics
         (which normalizes across spatial dimensions). This method slices to logical
-        (unpadded) dims before GroupNorm, then re-pads with zeros after silu.
+        (unpadded) dims before GroupNorm, then re-pads with replicated edge values
+        after silu.
 
         Args:
             x_4d: (N*T, H_full, W_full, C) in TILE layout after all-gather
@@ -397,7 +481,7 @@ class ResBlock(Module):
         num_out_blocks = self.num_out_blocks_map.get(C, {}).get(
             HW, (HW + self._max_hw_per_block.get(C, 1000) - 1) // self._max_hw_per_block.get(C, 1000)
         )
-        x_tiled = norm(x_tiled, num_out_blocks)
+        x_tiled = self._run_norm(norm, x_tiled, N * T, HW, num_out_blocks)
         x_tiled = ttnn.silu(x_tiled, output_tensor=x_tiled)
 
         x_rm = ttnn.to_layout(x_tiled, ttnn.ROW_MAJOR_LAYOUT)
@@ -443,13 +527,14 @@ class ResBlock(Module):
             num_out_blocks = self.num_out_blocks_map.get(C, {}).get(
                 HW, (HW + self._max_hw_per_block.get(C, 1000) - 1) // self._max_hw_per_block.get(C, 1000)
             )
-            x_norm_tiled_NTHWC = self.norm1(x_tiled_NTHWC, num_out_blocks)
+            x_norm_tiled_NTHWC = self._run_norm(self.norm1, x_tiled_NTHWC, N * T, HW, num_out_blocks)
             x_norm_tiled_NTHWC = ttnn.silu(x_norm_tiled_NTHWC, output_tensor=x_norm_tiled_NTHWC)
             x_NTHWC = self.untilize_reshape(x_norm_tiled_NTHWC, gathered_shapes)
             ttnn.deallocate(x_norm_tiled_NTHWC)
 
         if is_spatial_parallel:
-            x_NTHWC = self._partition_hw(x_NTHWC, N, T, H, W, C)
+            spatial_mask = self._get_spatial_mask(H_full, W_full, logical_h, logical_w)
+            x_NTHWC = self._partition_hw(x_NTHWC, N, T, H, W, C, spatial_mask)
 
         x_conv1_NTHWC = self.conv1(x_NTHWC)
         ttnn.deallocate(x_NTHWC)
@@ -469,14 +554,14 @@ class ResBlock(Module):
             num_out_blocks = self.num_out_blocks_map.get(C, {}).get(
                 HW, (HW + self._max_hw_per_block.get(C, 1000) - 1) // self._max_hw_per_block.get(C, 1000)
             )
-            x_tiled_NTHWC = self.norm2(x_conv1_tiled_NTHWC, num_out_blocks)
+            x_tiled_NTHWC = self._run_norm(self.norm2, x_conv1_tiled_NTHWC, N * T, HW, num_out_blocks)
             ttnn.deallocate(x_conv1_tiled_NTHWC)
             x_tiled_NTHWC = ttnn.silu(x_tiled_NTHWC, output_tensor=x_tiled_NTHWC)
             x_NTHWC = self.untilize_reshape(x_tiled_NTHWC, gathered_shapes)
             ttnn.deallocate(x_tiled_NTHWC)
 
         if is_spatial_parallel:
-            x_NTHWC = self._partition_hw(x_NTHWC, N, T, H, W, C)
+            x_NTHWC = self._partition_hw(x_NTHWC, N, T, H, W, C, spatial_mask)
 
         x_conv2_NTHWC = self.conv2(x_NTHWC)
         ttnn.deallocate(x_NTHWC)
@@ -760,10 +845,11 @@ class MochiVAEDecoder(Module):
     def _get_shard_dims(self):
         """Get ShardTensor2dMesh/ConcatMesh2dToTensor dims based on parallel config.
 
-        For axes with no parallelism (factor=1), uses dim 0 as a dummy.
-        This is safe because those axes have mesh_shape=1 (no actual sharding/concat).
+        For axes with no parallelism (factor=1), uses dummy dims.
+        These are safe because those axes have mesh_shape=1 (no actual sharding/concat).
+        Dims must be unique (required by the framework).
         """
-        dims = [0, 0]
+        dims = [0, 1]
         if self.parallel_config.h_parallel.factor > 1:
             dims[self.parallel_config.h_parallel.mesh_axis] = 2
         if self.parallel_config.w_parallel.factor > 1:
