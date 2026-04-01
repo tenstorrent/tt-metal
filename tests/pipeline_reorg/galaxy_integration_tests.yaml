@@ -41,7 +41,7 @@
   cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model sd35
   model: sd35
   skus:
-    wh_galaxy:
+    wh_galaxy_perf:
       timeout: 50
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: ttnn
