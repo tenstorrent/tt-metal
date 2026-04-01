@@ -192,10 +192,10 @@ Tensor create_tt_tensor_from_host_data(
         // Example: src_dtype = FLOAT32, dst_dtype = BFLOAT16.
         // The f32 tensor does not fit in L1, but bf16 does, so the typecast is performed on the host.
         const bool can_borrow = src_dtype == convert_to_data_type<T>() && construct_on_device &&
-                                has_sufficient_device_memory(
-                                    device, tensor_shape, src_dtype, dst_dtype, layout, memory_config, optional_tile) &&
                                 !is_data_transformation_required &&
-                                can_construct_on_single_device(tensor_shape, src_tensor_layout, memory_config);
+                                can_construct_on_single_device(tensor_shape, src_tensor_layout, memory_config) &&
+                                has_sufficient_device_memory(
+                                    device, tensor_shape, src_dtype, dst_dtype, layout, memory_config, optional_tile);
 
         if (can_borrow) {
             return Tensor::from_borrowed_data(host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile);

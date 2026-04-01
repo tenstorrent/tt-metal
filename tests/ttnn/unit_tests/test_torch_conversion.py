@@ -530,6 +530,7 @@ def test_numpy_conversion_unsigned_edge_cases_fixed(
         (torch.float32, ttnn.bfloat16, [1, 7, 1, 128], [7 * 32, 32], 4, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
         (torch.bfloat16, ttnn.bfloat16, [1, 3, 1, 64], [3 * 32, 32], 2, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
         (torch.bfloat16, ttnn.bfloat16, [2, 7, 64, 128], [2 * 32 * 2, 128], 7, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (torch.bfloat16, ttnn.bfloat16, [1, 1, 1, 7 * 32], [32, 32], 7, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
     ],
 )
 def test_from_torch_sharded_tile_layout_non_tile_aligned_height(
