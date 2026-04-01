@@ -198,15 +198,16 @@ def run_all_broadcast_impl(
         )
         tt_out_tensor_list.append(tt_out_tensor)
     else:
-        for i in range(num_iters):
-            tt_out_tensors = ttnn.all_broadcast(
-                input_tensor_mesh_list[i],
-                num_links=num_links,
-                memory_config=output_mem_config,
-                topology=all_broadcast_topology,
-                subdevice_id=worker_sub_device_id,
-            )
-            tt_out_tensor_list.append(tt_out_tensors)
+        with mesh_device.cache_entries_counter.measure():
+            for i in range(num_iters):
+                tt_out_tensors = ttnn.all_broadcast(
+                    input_tensor_mesh_list[i],
+                    num_links=num_links,
+                    memory_config=output_mem_config,
+                    topology=all_broadcast_topology,
+                    subdevice_id=worker_sub_device_id,
+                )
+                tt_out_tensor_list.append(tt_out_tensors)
 
         logger.info(f"Waiting for op")
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
