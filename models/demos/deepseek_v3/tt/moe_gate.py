@@ -8,7 +8,7 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
+from models.demos.deepseek_v3.tt.deepseek_moe_gate.op import DeepseekMoeGateOp
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
     BinaryOpConfig,
@@ -340,7 +340,7 @@ class MoEGate(AbstractModule):
         ttnn_output_indices = ttnn_output_indices[:batch_size_per_iter, :, :]
 
         # we can only have one token per core at a time
-        # this while loop is designed to handle the huge batch size (4096)
+        # this loop is designed to handle the huge batch size (4096)
         topk_experts_weights_list = []
         topk_experts_indices_list = []
         for start_index in range(0, total_batch_size + padding_shape, batch_size_per_iter):
@@ -348,7 +348,7 @@ class MoEGate(AbstractModule):
             cur_logits = ttnn.reshape(cur_logits, reshaped_input_shape)  # maybe remove this
             cur_logits = ttnn.to_memory_config(cur_logits, memory_config=input_output_mem_config)
 
-            topk_experts_weights, topk_experts_indices = DeepseekMoeGateSingleCore.op(
+            topk_experts_weights, topk_experts_indices = DeepseekMoeGateOp.op(
                 cur_logits,
                 scores_correction_bias,
                 ttnn_output_tensor,
