@@ -347,6 +347,31 @@ constexpr size_t NUM_COUNTER_GROUPS = sizeof(counter_groups) / sizeof(counter_gr
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 3> fpu_counters = {
     {{PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257}}};
 constexpr size_t NUM_FPU_COUNTERS = 3;
+#if defined(ARCH_BLACKHOLE)
+// BH: MATH_INSTRN_STARTED, MATH_INSTRN_NOT_BLOCKED_SRC, INSTRN_2_HF_CYCLES,
+// INSTRN_1_HF_CYCLE are tied to 0 (o_math_instrnbuf_rden signal inactive on BH).
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 18> unpack_counters = {
+    {{PerfCounterType::MATH_SRC_DATA_READY, 0},
+     {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
+     {PerfCounterType::FIDELITY_PHASE_STALLS, 2},
+     {PerfCounterType::MATH_INSTRN_AVAILABLE, 4},
+     {PerfCounterType::SRCB_WRITE_AVAILABLE, 5},
+     {PerfCounterType::SRCA_WRITE_AVAILABLE, 6},
+     {PerfCounterType::UNPACK0_BUSY_THREAD0, 7},
+     {PerfCounterType::UNPACK1_BUSY_THREAD0, 8},
+     {PerfCounterType::UNPACK0_BUSY_THREAD1, 9},
+     {PerfCounterType::UNPACK1_BUSY_THREAD1, 10},
+     {PerfCounterType::SRCB_WRITE_ACTUAL, 259},
+     {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_OVR, 260},
+     {PerfCounterType::SRCA_WRITE_ACTUAL, 261},
+     {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_PORT, 262},
+     {PerfCounterType::SRCA_WRITE_THREAD0, 263},
+     {PerfCounterType::SRCB_WRITE_THREAD0, 264},
+     {PerfCounterType::SRCA_WRITE_THREAD1, 265},
+     {PerfCounterType::SRCB_WRITE_THREAD1, 266}}};
+constexpr size_t NUM_UNPACK_COUNTERS = 18;
+#else
+// WH: all 22 counters active
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
      {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
@@ -359,7 +384,6 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters =
      {PerfCounterType::UNPACK1_BUSY_THREAD0, 8},
      {PerfCounterType::UNPACK0_BUSY_THREAD1, 9},
      {PerfCounterType::UNPACK1_BUSY_THREAD1, 10},
-     // Grant counters (counter_sel with bit 16 set = out_fmt grant mode)
      {PerfCounterType::MATH_INSTRN_NOT_BLOCKED_SRC, 256},
      {PerfCounterType::INSTRN_2_HF_CYCLES, 257},
      {PerfCounterType::INSTRN_1_HF_CYCLE, 258},
@@ -372,24 +396,36 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters =
      {PerfCounterType::SRCA_WRITE_THREAD1, 265},
      {PerfCounterType::SRCB_WRITE_THREAD1, 266}}};
 constexpr size_t NUM_UNPACK_COUNTERS = 22;
+#endif
+#if defined(ARCH_BLACKHOLE)
+// BH: PACK_COUNT=1, only 2 req (counter_sel 11,18) and 3 grant (267,271,272) active.
+// Per-engine busy (15-17), dest read 1-3 (12-14), dest granted 1-3 (268-270) tied to 0.
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 5> pack_counters = {
+    {{PerfCounterType::PACKER_DEST_READ_AVAILABLE, 11},
+     {PerfCounterType::PACKER_BUSY, 18},
+     {PerfCounterType::DEST_READ_GRANTED_0, 267},
+     {PerfCounterType::MATH_NOT_STALLED_DEST_WR_PORT, 271},
+     {PerfCounterType::AVAILABLE_MATH, 272}}};
+constexpr size_t NUM_PACK_COUNTERS = 5;
+#else
+// WH: PACK_COUNT=4, all 14 counters active
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 14> pack_counters = {
     {{PerfCounterType::PACKER_DEST_READ_AVAILABLE, 11},
      {PerfCounterType::PACKER_BUSY, 18},
-     // Additional req counters (WH: active, BH: packer engines 1-3 tied to 0)
      {PerfCounterType::PACKER_DEST_READ_1, 12},
      {PerfCounterType::PACKER_DEST_READ_2, 13},
      {PerfCounterType::PACKER_DEST_READ_3, 14},
      {PerfCounterType::PACKER_BUSY_0, 15},
      {PerfCounterType::PACKER_BUSY_1, 16},
      {PerfCounterType::PACKER_BUSY_2, 17},
-     // Grant counters (counter_sel with bit 16 set)
      {PerfCounterType::DEST_READ_GRANTED_0, 267},
      {PerfCounterType::DEST_READ_GRANTED_1, 268},
      {PerfCounterType::DEST_READ_GRANTED_2, 269},
      {PerfCounterType::DEST_READ_GRANTED_3, 270},
      {PerfCounterType::MATH_NOT_STALLED_DEST_WR_PORT, 271},
-     {PerfCounterType::AVAILABLE_MATH, 272}}};  // AVAILABLE_MATH = math not stalled by scoreboard
+     {PerfCounterType::AVAILABLE_MATH, 272}}};
 constexpr size_t NUM_PACK_COUNTERS = 14;
+#endif
 
 // L1 bank 0 counters — port mapping differs between Tensix and Ethernet cores
 #if defined(COMPILE_FOR_ERISC)
