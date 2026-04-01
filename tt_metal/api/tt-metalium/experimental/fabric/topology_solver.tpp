@@ -888,6 +888,46 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
 }
 
 template <typename TargetNode, typename GlobalNode>
+bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
+    const std::set<TargetNode>& target_nodes, const std::set<GlobalNode>& global_nodes) {
+    if (target_nodes.empty() || global_nodes.empty()) {
+        log_info(
+            tt::LogFabric,
+            "add_forbidden_constraint: target_nodes and global_nodes must both be non-empty explicit lists "
+            "(Cartesian product); got {} target(s) and {} global(s)",
+            target_nodes.size(),
+            global_nodes.size());
+        return false;
+    }
+
+    std::vector<std::pair<TargetNode, GlobalNode>> pairs;
+    for (const auto& t : target_nodes) {
+        for (const auto& g : global_nodes) {
+            pairs.emplace_back(t, g);
+        }
+    }
+
+    std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state;
+    for (const auto& [t, g] : pairs) {
+        forbidden_pairs_.insert({t, g});
+        auto it = valid_mappings_.find(t);
+        if (it != valid_mappings_.end()) {
+            if (saved_state.find(t) == saved_state.end()) {
+                saved_state[t] = std::make_optional(it->second);
+            }
+            it->second.erase(g);
+        }
+    }
+    const bool ok = validate(saved_state.empty() ? nullptr : &saved_state);
+    if (!ok) {
+        for (const auto& [t, g] : pairs) {
+            forbidden_pairs_.erase({t, g});
+        }
+    }
+    return ok;
+}
+
+template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::add_cardinality_constraint(
     const std::set<std::pair<TargetNode, GlobalNode>>& mapping_pairs, size_t min_count) {
     if (mapping_pairs.empty()) {
