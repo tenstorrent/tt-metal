@@ -99,9 +99,9 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
             r = r * m + -0x1.55p-3f;
             r = r * m + 0x1.998p-3f;
             e_float = sfpi::int32_to_float(abs_e);
-            r = r * m + neg_quarter;
-            s = m * m;
             r = r * m + sfpi::vConstFloatPrgm1;
+            s = m * m;
+            r = r * m + sfpi::vConstFloatPrgm2;
             r = r * m + -0.5f;
         } else {
             // log1p(x) = x + x*x * (-0x1.008p-1 + x * (0x1.744p-2 + x * (-0x1p-2)))
@@ -161,8 +161,9 @@ inline void log1p_init() {
     sfpi::vConstFloatPrgm0 = LOG_TWO * TWO_TO_M23;
 
     if constexpr (is_fp32_dest_acc_en) {
-        // Horner coefficient used by fp32 polynomial
-        sfpi::vConstFloatPrgm1 = 0x1.555566p-2f;
+        // Horner coefficients used by fp32 polynomial
+        sfpi::vConstFloatPrgm1 = -0x1.00001ap-2f;
+        sfpi::vConstFloatPrgm2 = 0x1.555572p-2f;
     } else {
         // Horner coefficients used by bf16 polynomial
         sfpi::vConstFloatPrgm1 = 0x1.744p-2f;
