@@ -5,7 +5,6 @@
 #include "to_memory_config_op.hpp"
 
 #include "ttnn/core.hpp"
-#include "ttnn/operations/data_movement/sharded/copy_to_memory_config/copy_to_memory_config.hpp"
 #include "ttnn/operations/data_movement/sharded/reshard/reshard.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp"
@@ -34,7 +33,11 @@ Tensor to_memory_config(
 
     if (tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED ||
         memory_config.memory_layout() == TensorMemoryLayout::ND_SHARDED) {
-        return ttnn::copy_to_memory_config(tensor, memory_config, dtype.value_or(tensor.dtype()), output_tensor);
+        return ttnn::prim::copy(
+            tensor,
+            memory_config,
+            dtype.value_or(tensor.dtype()),
+            optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
     }
 
     if (memory_config.is_sharded()) {
@@ -53,7 +56,11 @@ Tensor to_memory_config(
                 if (dtype.has_value()) {
                     // throw std::runtime_error(
                     //     "dtype cannot be specified when converting sharded tensor to sharded tensor");
-                    return ttnn::copy_to_memory_config(tensor, memory_config, dtype, output_tensor);
+                    return ttnn::prim::copy(
+                        tensor,
+                        memory_config,
+                        dtype.value_or(tensor.dtype()),
+                        optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
                 }
                 return ttnn::reshard(tensor, memory_config, output_tensor);
             }  // for row-major tensors where shard-spec[1] is different for input shard and output shard

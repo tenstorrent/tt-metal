@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "copy_to_memory_config_tilized_default_program_factory.hpp"
+#include "copy_default_tilized_program_factory.hpp"
 
 #include <cmath>
 
@@ -23,11 +23,9 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-CopyToMemoryConfigTilizedDefaultProgramFactory::cached_program_t CopyToMemoryConfigTilizedDefaultProgramFactory::create(
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
-    const auto& input = tensor_args.input_tensor;
+CopyDefaultTilizedProgramFactory::cached_program_t CopyDefaultTilizedProgramFactory::create(
+    const CopyParams& /*operation_attributes*/, const CopyInputs& tensor_args, Tensor& output_tensor) {
+    const auto& input = tensor_args.input;
     const auto& output = output_tensor;
     tt::tt_metal::Program program{};
 
@@ -137,18 +135,18 @@ CopyToMemoryConfigTilizedDefaultProgramFactory::cached_program_t CopyToMemoryCon
 
     return {std::move(program), {reader_kernel_id, writer_kernel_id, ordered_cores}};
 }
-void CopyToMemoryConfigTilizedDefaultProgramFactory::override_runtime_arguments(
+void CopyDefaultTilizedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const CopyParams& /*operation_attributes*/,
+    const CopyInputs& tensor_args,
+    Tensor& output_tensor) {
     const auto& program = cached_program.program;
     const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
     auto& runtime_args_by_core_reader = GetRuntimeArgs(program, reader_kernel_id);
     auto& runtime_args_by_core_writer = GetRuntimeArgs(program, writer_kernel_id);
     const auto& cores = cached_program.shared_variables.cores;
-    const auto& input_buffer = tensor_args.input_tensor.buffer();
+    const auto& input_buffer = tensor_args.input.buffer();
     const auto& output_buffer = output_tensor.buffer();
     for (const auto& core : cores) {
         auto& runtime_args_reader = runtime_args_by_core_reader[core.x][core.y];
