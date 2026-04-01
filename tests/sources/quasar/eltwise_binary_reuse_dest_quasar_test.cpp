@@ -165,7 +165,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
-    _llk_pack_init_<p_pacr::PACK0>(buf_desc_id, 1);
+    _llk_pack_init_(buf_desc_id, 1);
 
     const int output_tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const int output_num_blocks     = params.OUTPUT_NUM_BLOCKS;
@@ -175,7 +175,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (int tile = 0; tile < output_tiles_in_block; tile++)
         {
             int res_tile_idx = (block * output_tiles_in_block) + tile;
-            _llk_pack_<p_pacr::PACK0>(res_tile_idx, res_tile_idx);
+            _llk_pack_(res_tile_idx, res_tile_idx);
         }
         _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }

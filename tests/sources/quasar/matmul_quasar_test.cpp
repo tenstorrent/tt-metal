@@ -125,9 +125,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _configure_buf_desc_table_(tdma_desc_dst.buf_desc_id, tdma_desc_dst.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc_dst);
-    _llk_pack_matmul_init_<p_pacr::PACK0>(buf_desc_id_dst, RT_DIM, CT_DIM, 1); // Use destination buffer descriptor for packing output
+    _llk_pack_matmul_init_(buf_desc_id_dst, RT_DIM, CT_DIM, 1); // Use destination buffer descriptor for packing output
 
-    _llk_pack_matmul_<p_pacr::PACK0>(0, 0);
+    _llk_pack_matmul_(0, 0);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
 
