@@ -35,13 +35,20 @@ void TestProgressMonitor::poll_until_complete() {
         auto progress = poll_devices();
 
         if (total_active_devices_ == 0) {
-            total_active_devices_ = static_cast<uint32_t>(progress.size());
+            for (const auto& [_, prog] : progress) {
+                if (prog.num_senders > 0) {
+                    total_active_devices_++;
+                }
+            }
         }
 
         check_for_hung_devices(progress);
 
         programs_complete = true;
         for (const auto& [device_id, prog] : progress) {
+            if (prog.num_senders == 0) {
+                continue;
+            }
             if (prog.current_packets >= prog.total_packets && prog.total_packets > 0) {
                 if (!completed_devices_.contains(device_id)) {
                     completed_devices_.insert(device_id);
