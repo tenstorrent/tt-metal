@@ -319,6 +319,8 @@ def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
             return x.to(torch.bfloat16)
         elif tt_output_dtype == ttnn.int32 or tt_output_dtype == ttnn.uint16 or tt_output_dtype == ttnn.uint32:
             return x.to(torch.int32)
+        else:
+            return x
     else:
         return x
 

@@ -6,7 +6,6 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import skip_for_blackhole
 
 mem_configs = [
     ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
