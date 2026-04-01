@@ -720,7 +720,8 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                 auto views = load_overlapped_tensors(file_name, device);
                 nb::dict result;
                 for (auto& v : views) {
-                    result[nb::cast(v.name)] = nb::cast(std::move(v));
+                    auto key = nb::cast(v.name);
+                    result[key] = nb::cast(std::move(v));
                 }
                 return result;
             },

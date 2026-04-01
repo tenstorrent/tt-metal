@@ -1321,14 +1321,10 @@ _OVERLAPPED_SERIALIZED_FIELDS = {
     "byte_offset",
     "total_size",
 }
-_OVERLAPPED_SKIP_FIELDS = {"fused_tensor"}
 
 
 def _overlapped_tensor_to_json(ot: OverlappedTensor) -> dict:
     """Serialize one OverlappedTensor's metadata to a JSON-serializable dict."""
-    all_fields = {f.name for f in fields(OverlappedTensor)}
-    missing = all_fields - _OVERLAPPED_SERIALIZED_FIELDS - _OVERLAPPED_SKIP_FIELDS
-    assert not missing, f"OverlappedTensor has new fields not serialized: {missing}"
     dtype_str = _DTYPE_TO_STR.get(ot.dtype)
     if dtype_str is None:
         dtype_str = str(ot.dtype)
@@ -1415,18 +1411,20 @@ def _dump_overlapped_fusion_groups(
     layer_dir: Path,
     field_tuples: list[tuple[str, OverlappedTensor]],
 ) -> dict:
-    """Dump fused tensors for the given (field_name, OverlappedTensor) pairs; return fusion_groups dict."""
-    by_fused: dict[int, list[tuple[str, OverlappedTensor]]] = {}
+    """Dump fused tensors for the given (field_name, OverlappedTensor) pairs; return fusion_groups dict.
+
+    Groups fields by their fusion group name (from ``_FIELD_TO_FUSION_GROUP``)
+    rather than by Python object identity, because the C++ OverlappedTensor may
+    return a fresh wrapper from ``.fused_tensor`` on each access.
+    """
+    by_group: dict[str, list[tuple[str, OverlappedTensor]]] = {}
     for name, ot in field_tuples:
-        fid = id(ot.fused_tensor)
-        if fid not in by_fused:
-            by_fused[fid] = []
-        by_fused[fid].append((name, ot))
-    fusion_groups: dict[str, dict] = {}
-    for fid, group_fields in by_fused.items():
-        group_name = _FIELD_TO_FUSION_GROUP.get(group_fields[0][0])
+        group_name = _FIELD_TO_FUSION_GROUP.get(name)
         if group_name is None:
-            raise KeyError(f"Unknown field for fusion group: {group_fields[0][0]}")
+            raise KeyError(f"Unknown field for fusion group: {name}")
+        by_group.setdefault(group_name, []).append((name, ot))
+    fusion_groups: dict[str, dict] = {}
+    for group_name, group_fields in by_group.items():
         tensorbin_name = f"{group_name}.tensorbin"
         ttnn.dump_tensor(layer_dir / tensorbin_name, group_fields[0][1].fused_tensor)
         fusion_groups[group_name] = {
