@@ -119,7 +119,6 @@ class Model:
         self.mesh_device = mesh_device
         self.vocab_size = hf_config.vocab_size
         self.hf_config = hf_config
-        # hf_config.num_hidden_layers = 1
         self.core_grid = ttnn.CoreCoord(8, 8)
         self.head_dim = hf_config.head_dim
         self.max_local_batch_size = max_local_batch_size
@@ -180,6 +179,7 @@ class Model:
                 max_local_batch_size=max_local_batch_size,
                 users_row_sharded=users_row_sharded,
                 use_throughput_experts=use_throughput_experts,
+                tokens_per_device=max_local_batch_size,
             )
             for layer_idx in range(hf_config.num_hidden_layers)
         ]

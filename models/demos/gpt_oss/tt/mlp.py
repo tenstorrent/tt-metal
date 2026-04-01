@@ -10,7 +10,7 @@ from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 
 from .experts import ExpertConfig, Experts
-from .experts_throughput import ThroughputExpertConfig, ThroughputExperts
+from .experts_throughput import ThroughputExpertConfig, ThroughputExperts, create_fused_moe_gpt_config
 from .topk import TopKRouter
 
 
@@ -27,6 +27,7 @@ class MLP:
         tensor_cache_path=None,
         mesh_config=None,
         use_throughput_experts=True,
+        tokens_per_device=32,
     ):
         # Split state dict
         router_state_dict = substate(state_dict, "router")
@@ -40,7 +41,6 @@ class MLP:
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "router"),
         )
 
-        # TODO: Replace this with a factory method
         self.use_throughput_experts = use_throughput_experts
         if self.use_throughput_experts:
             # Create TT config
@@ -51,6 +51,17 @@ class MLP:
                 num_experts_per_tok=hf_config.num_experts_per_tok,
                 num_devices=mesh_device.get_num_devices(),
             )
+
+            # Create fused MoE config if requested
+            fused_config = None
+            if use_throughput_experts:
+                fused_config = create_fused_moe_gpt_config(
+                    mesh_device=mesh_device,
+                    config=throughput_expert_config,
+                    state_dict=experts_state_dict,
+                    tokens_per_device=tokens_per_device,
+                    tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
+                )
 
             # Create TT experts module
             self.experts = ThroughputExperts(
@@ -63,6 +74,7 @@ class MLP:
                 tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
                 mesh_config=mesh_config,
                 ccl_manager=ccl_manager,
+                fused_config=fused_config,
             )
         else:
             # Create expert config from HF config
