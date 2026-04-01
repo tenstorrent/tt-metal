@@ -230,6 +230,19 @@ class TTSampling(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    def _next_power_of_2(self, n):
+        """Return the smallest power of 2 >= n."""
+        if n <= 0:
+            return 1
+        # If already power of 2, return as-is
+        if (n & (n - 1)) == 0:
+            return n
+        # Find next power of 2
+        p = 1
+        while p < n:
+            p *= 2
+        return p
+
     def _create_indices_tensors(self):
         """Create the indices tensors needed for distributed top-k operations."""
         # Create indices tensor for device offsets
@@ -247,15 +260,34 @@ class TTSampling(LightweightModule):
                     1,
                 ), f"sampling_all_gather_axis must be 0 or 1 for 2D meshes, got {self.sampling_all_gather_axis}"
                 num_devices_in_mesh = self.cluster_shape[self.sampling_all_gather_axis]
+
+        # padded_per_device: tile-aligned width matching actual logit tensors
+        padded_per_device = self.padded_vocab_size // num_devices_in_mesh
+        self.original_per_device = padded_per_device
+
+        # Multi-core TopK requires width to be power of 2 and >= 8192.
+        # Pad to next power of 2 to enable multi-core TopK (~39x speedup).
+        TOPK_MULTICORE_MIN_WIDTH = 8192
+        if padded_per_device >= TOPK_MULTICORE_MIN_WIDTH:
+            topk_padded_per_device = self._next_power_of_2(padded_per_device)
+        else:
+            topk_padded_per_device = padded_per_device
+        self.topk_padded_per_device = topk_padded_per_device
+        self.topk_pad_amount = topk_padded_per_device - padded_per_device
+
+        if self.topk_pad_amount > 0:
+            logger.info(
+                f"TopK padding: {padded_per_device} -> {topk_padded_per_device} "
+                f"(+{self.topk_pad_amount}) to enable multi-core TopK"
+            )
+
         indices_device_offsets = torch.ones(
             1, 1, self.max_batch_size, self.max_top_k * num_devices_in_mesh, dtype=torch.int64
         )
-        # padded_per_device: tile-aligned width matching actual logit tensors (for indices tensor)
-        padded_per_device = self.padded_vocab_size // num_devices_in_mesh
 
         for device_id in range(num_devices_in_mesh):
             indices_device_offsets[:, :, :, device_id * self.max_top_k : (device_id + 1) * self.max_top_k] = (
-                device_id * padded_per_device
+                device_id * padded_per_device  # Use original padded_per_device for offsets
             )
         self.tt_indices_device_offsets = ttnn.from_torch(
             indices_device_offsets,
@@ -266,11 +298,11 @@ class TTSampling(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Create local indices tensor for top-k operations (must match logit width)
-        indices_tensor_torch = torch.zeros(1, 1, self.max_batch_size, padded_per_device, dtype=torch.int32)
-        for i in range(padded_per_device):
+        # Create local indices tensor for top-k operations (use topk_padded_per_device for multi-core)
+        indices_tensor_torch = torch.zeros(1, 1, self.max_batch_size, topk_padded_per_device, dtype=torch.int32)
+        for i in range(topk_padded_per_device):
             indices_tensor_torch[:, :, :, i] = i
-        indices_dtype = self._select_topk_indices_dtype(padded_per_device, self.multi_step_reduction)
+        indices_dtype = self._select_topk_indices_dtype(topk_padded_per_device, self.multi_step_reduction)
         self.tt_indices_tensor = ttnn.from_torch(
             indices_tensor_torch,
             dtype=indices_dtype,
@@ -403,6 +435,14 @@ class TTSampling(LightweightModule):
 
         # Convert to bfloat16 for top-k operations (typecast is no-op if already bfloat16)
         x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)
+
+        # Pad input to power-of-2 width to enable multi-core TopK (requires width to be 2^N)
+        if self.topk_pad_amount > 0:
+            x_bf16 = ttnn.pad(
+                x_bf16,
+                padding=((0, 0), (0, 0), (0, 0), (0, self.topk_pad_amount)),
+                value=-1e9,  # Large negative value so TopK never selects padding
+            )
 
         if self.multi_step_reduction:
             x_bf16_list = ttnn.split(x_bf16, x_bf16.shape[-1] // 2, dim=3)
