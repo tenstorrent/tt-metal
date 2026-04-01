@@ -142,7 +142,7 @@ std::set<tt::tt_metal::experimental::quasar::QuasarComputeProcessor> GetComputeP
 // ============================================================================
 
 Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
-    log_info(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.program_id);
+    log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.program_id);
 
     // Collect derived data (builds lookup tables, checks structural invariants)
     CollectedSpecData collected = CollectSpecData(spec);
@@ -755,9 +755,9 @@ ComputeEngineMask AssignComputeProcessors(const KernelSpec* kernel_spec, const K
     return reserved.value();
 }
 
-// ============================================================================
+// ----------------------------------------------------------------------------
 // DM Processor Assignment
-// ============================================================================
+// ----------------------------------------------------------------------------
 //
 // Solves kernel-to-core assignments for DM kernels. Guaranteed to find a valid
 // assignment if one exists under the "simplifying assumption" (each DM kernel
@@ -770,7 +770,7 @@ ComputeEngineMask AssignComputeProcessors(const KernelSpec* kernel_spec, const K
 //
 // Sorting step is optional. Not yet sure whether it's useful or not.
 // It may be that straight greedy is sufficient in a majority of cases
-// ============================================================================
+// ----------------------------------------------------------------------------
 
 namespace dm_solver {
 
