@@ -401,59 +401,6 @@ def print_counter_statistics_summary(perf_counter_df: pd.DataFrame, device_id: i
             f"{max_vals.max():>15.1f} {avg_vals.mean():>15.1f}"
         )
 
-    print("\n" + "=" * 100)
-    print("COUNTER REFERENCE COUNTS")
-    print("=" * 100)
-    print(f"{'Counter Type':<40} {'Statistic':<12} {'Ops':>8} {'Min':>15} {'Median':>15} {'Max':>15} {'Avg':>15}")
-    print("-" * 100)
-
-    for counter_type in counter_types:
-        counter_data = perf_counter_df[perf_counter_df["counter type"] == counter_type]
-        counter_grouped = counter_data.groupby(["run_host_id", "trace_id_count"])
-
-        # Calculate statistics for reference counts
-        min_refs = counter_grouped["ref cnt"].min()
-        median_refs = counter_grouped["ref cnt"].median()
-        max_refs = counter_grouped["ref cnt"].max()
-        avg_refs = counter_grouped["ref cnt"].mean()
-
-        ops_with_data = len(counter_grouped)
-
-        # Print ref count statistics
-        print(
-            f"{counter_type:<40} {'Ref Count':<12} {ops_with_data:>8} "
-            f"{min_refs.min():>15.1f} {median_refs.median():>15.1f} "
-            f"{max_refs.max():>15.1f} {avg_refs.mean():>15.1f}"
-        )
-
-    print("\n" + "=" * 100)
-    print("COUNTER UTILIZATION (%)")
-    print("=" * 100)
-    print(f"{'Counter Type':<40} {'Statistic':<12} {'Ops':>8} {'Min':>15} {'Median':>15} {'Max':>15} {'Avg':>15}")
-    print("-" * 100)
-
-    for counter_type in counter_types:
-        counter_data = perf_counter_df[perf_counter_df["counter type"] == counter_type].copy()
-        counter_data["util"] = (counter_data["value"] / counter_data["ref cnt"] * 100).replace(
-            [float("inf"), -float("inf")], nan
-        )
-        counter_grouped = counter_data.groupby(["run_host_id", "trace_id_count"])
-
-        # Calculate utilization statistics
-        min_utils = counter_grouped["util"].min()
-        median_utils = counter_grouped["util"].median()
-        max_utils = counter_grouped["util"].max()
-        avg_utils = counter_grouped["util"].mean()
-
-        ops_with_data = len(counter_grouped)
-
-        # Print utilization statistics
-        print(
-            f"{counter_type:<40} {'Utilization':<12} {ops_with_data:>8} "
-            f"{min_utils.min():>14.2f}% {median_utils.median():>14.2f}% "
-            f"{max_utils.max():>14.2f}% {avg_utils.mean():>14.2f}%"
-        )
-
     print("\n" + "=" * 100 + "\n")
 
 
