@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 
 import torch
@@ -1999,6 +2001,8 @@ def test_copy_rm_legacy_2d_sharded_to_interleaved(
 def test_copy_rm_interleaved_to_nd_sharded_large_row(
     device, tensor_shape, shard_shape, grid, shard_orientation, buffer_type
 ):
+    if os.environ.get("TT_METAL_SIMULATOR"):
+        pytest.skip("Skipping large row test on ttsim to avoid timeout")
     num_device_dram_banks = device.dram_grid_size().x
     required_banks = grid.num_cores()
     if required_banks > num_device_dram_banks:
@@ -2036,6 +2040,8 @@ def test_copy_rm_interleaved_to_nd_sharded_large_row(
 def test_copy_rm_interleaved_to_legacy_2D_sharded_large_row(
     device, tensor_shape, shard_shape, grid, shard_orientation, buffer_type
 ):
+    if os.environ.get("TT_METAL_SIMULATOR"):
+        pytest.skip("Skipping large row test on ttsim to avoid timeout")
     num_device_dram_banks = device.dram_grid_size().x
     required_banks = grid.num_cores()
     if required_banks > num_device_dram_banks:
@@ -2082,6 +2088,8 @@ def test_copy_rm_interleaved_to_legacy_2D_sharded_large_row(
 def test_copy_rm_nd_sharded_to_interleaved_large_row(
     device, tensor_shape, shard_shape, grid, shard_orientation, buffer_type
 ):
+    if os.environ.get("TT_METAL_SIMULATOR"):
+        pytest.skip("Skipping large row test on ttsim to avoid timeout")
     num_device_dram_banks = device.dram_grid_size().x
     required_banks = grid.num_cores()
     if required_banks > num_device_dram_banks:
