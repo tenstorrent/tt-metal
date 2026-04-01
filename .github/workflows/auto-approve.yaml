@@ -82,9 +82,9 @@ jobs:
         if: steps.verify.outputs.safe == 'true'
         env:
           # Must be a token for an account in tenstorrent/codeowner-bypass.
-          # Shared secret for all auto-approve jobs.
-          # See repo Settings → Secrets → AUTO_APPROVE_PAT.
-          GH_TOKEN: ${{ secrets.AUTO_APPROVE_PAT }}
+          # Reuses the existing codeowners bypass PAT — already a member of
+          # tenstorrent/codeowner-bypass. See codeowners-group-analysis.yaml.
+          GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           gh pr review "$PR_NUMBER" \
@@ -95,7 +95,7 @@ jobs:
       - name: Enable auto-merge
         if: steps.verify.outputs.safe == 'true'
         env:
-          GH_TOKEN: ${{ secrets.AUTO_APPROVE_PAT }}
+          GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           # Enables auto-merge: GitHub will merge automatically once all required
