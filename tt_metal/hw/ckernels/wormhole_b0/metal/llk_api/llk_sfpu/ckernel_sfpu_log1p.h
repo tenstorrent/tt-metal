@@ -78,6 +78,8 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
         // t = -s' / 4 - 1 = 2^(-k) - 1
         sfpi::vFloat t = __builtin_rvtt_sfpmad(neg_quarter.get(), s.get(), neg1.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
+        sfpi::vInt abs_e = sfpi::abs(e);
+
         // Minimax approximations for log1p(m) on [-0.25, 0.5]. Both paths keep the
         // exact linear term m explicit and approximate only the nonlinear
         // correction m^2 * P(m); the fp32 path keeps more terms than the
@@ -89,31 +91,26 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
             //   x * (-0x1.55p-3 + x * (0x1.274p-3 + x * (-0x1.0c4p-3 + x *
             //   (0x1.b84p-4 + x * (-0x1.92cp-5)))))))))
 
-            r = -0x1.92cp-5f;
             m = m + t;
-            t = 0x1.b84p-4f;
-
-            s = m * m;
-            r = r * s + -0x1.0c4p-3f;
-            t = t * s + 0x1.274p-3f;
-            r = r * s + -0x1.55p-3f;
-            t = t * s + 0x1.998p-3f;
-            sfpi::vInt abs_e = sfpi::abs(e);
-            r = r * s + neg_quarter;
+            r = -0x1.92cp-5f;
+            r = r * m + 0x1.b84p-4f;
+            r = r * m + -0x1.0c4p-3f;
+            r = r * m + 0x1.274p-3f;
+            r = r * m + -0x1.55p-3f;
+            r = r * m + 0x1.998p-3f;
             e_float = sfpi::int32_to_float(abs_e);
-            r = t * m + r;
+            r = r * m + neg_quarter;
+            s = m * m;
             r = r * m + sfpi::vConstFloatPrgm1;
             r = r * m + -0.5f;
         } else {
             // log1p(x) = x + x*x * (-0x1.008p-1 + x * (0x1.744p-2 + x * (-0x1p-2)))
 
-            sfpi::vInt abs_e = sfpi::abs(e);
             m = m + t;
             e_float = sfpi::int32_to_float(abs_e);
-
+            r = neg_quarter * m + sfpi::vConstFloatPrgm1;
             s = m * m;
-            r = neg_quarter * m + 0x1.744p-2f;
-            r = r * m + -0x1.008p-1f;
+            r = r * m + sfpi::vConstFloatPrgm2;
         }
         // int32_to_float returns |e| as a real number in exponent-bit units;
         // restore sign and multiply by log(2) * 2^(-23) to recover k * log(2).
@@ -164,8 +161,12 @@ inline void log1p_init() {
     sfpi::vConstFloatPrgm0 = LOG_TWO * TWO_TO_M23;
 
     if constexpr (is_fp32_dest_acc_en) {
-        // Middle Horner coefficient used only by the fp32 polynomial.
+        // Horner coefficient used by fp32 polynomial
         sfpi::vConstFloatPrgm1 = 0x1.555566p-2f;
+    } else {
+        // Horner coefficients used by bf16 polynomial
+        sfpi::vConstFloatPrgm1 = 0x1.744p-2f;
+        sfpi::vConstFloatPrgm2 = -0x1.008p-1f;
     }
 }
 
