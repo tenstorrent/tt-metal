@@ -125,11 +125,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
-    _llk_pack_init_<p_pacr::PACK0>(buf_desc_id, 1 /*num_tiles_per_pack*/);
+    _llk_pack_init_(buf_desc_id, 1 /*num_tiles_per_pack*/);
     _llk_pack_reduce_mask_config_<REDUCE_DIM>();
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        _llk_pack_<p_pacr::PACK0>(i, i);
+        _llk_pack_(i, i);
     }
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
     _llk_pack_reduce_mask_clear_();
