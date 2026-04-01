@@ -90,127 +90,7 @@ using ComputeEngineMaskMap = std::unordered_map<const KernelSpec*, ComputeEngine
 using DFBNameToIdMap = std::unordered_map<DFBSpecName, uint32_t>;
 
 // ============================================================================
-// Helper Function Forward Declarations
-// ============================================================================
-
-// Utilities
-inline tt::ARCH get_arch();
-inline bool is_gen2_arch();
-inline bool is_gen1_arch();
-NodeRangeSet to_node_range_set(const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes);
-bool nodes_intersect(
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& a,
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& b);
-bool nodes_contains(
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& superset,
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& subset);
-bool nodes_equal(
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& a,
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& b);
-void accumulate_nodes(
-    std::unordered_map<std::string, NodeRangeSet>& node_map,
-    const std::string& key,
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes_to_add);
-
-// Phase 1: Validate ProgramSpec and collect derived data
-CollectedSpecData CollectSpecData(const ProgramSpec& spec);
-void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& collected);
-
-// Phase 2: Processor assignment
-template <uint8_t NUM_CORES>
-ProcessorMask<NUM_CORES> CreateMask(uint8_t mask);
-template <uint8_t NUM_CORES>
-std::optional<ProcessorMask<NUM_CORES>> ReserveProcessors(uint8_t n, const ProcessorMask<NUM_CORES>& already_in_use);
-std::pair<DMProcessorMaskMap, ComputeEngineMaskMap> SolveKernelToProcessorAssignments(const ProgramSpec& spec);
-
-// Phase 3: Program building
-experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
-    const DataflowBufferSpec* dfb_spec,
-    const CollectedSpecData::DFBEndpointInfo& dfb_endpoint_info,
-    const DMProcessorMaskMap& kernel_to_dm_processor_mask_map,
-    const ComputeEngineMaskMap& kernel_to_compute_processor_mask_map);
-tt::tt_metal::KernelSource MakeKernelSource(const KernelSpec& kernel_spec);
-tt::tt_metal::experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(
-    const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id);
-tt::tt_metal::experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
-    const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id);
-std::set<tt::tt_metal::DataMovementProcessor> GetDMProcessorSet(DMProcessorMask mask);
-std::set<tt::tt_metal::experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(ComputeEngineMask mask);
-
-// ============================================================================
-//  PUBLIC ENTRY POINT: MakeProgramFromSpec
-// ============================================================================
-
-Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
-    log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.program_id);
-
-    // Collect derived data (builds lookup tables, checks structural invariants)
-    CollectedSpecData collected = CollectSpecData(spec);
-
-    // Validate semantic rules (can be skipped for trusted inputs)
-    if (!skip_validation) {
-        ValidateProgramSpec(spec, collected);
-    }
-
-    // Solve kernel-to-core assignments
-    // NOTE: Current solver assumes that a given DM kernel uses the _same_ set of DM cores on every node/cluster.
-    auto [kernel_to_dm_processor_mask_map, kernel_to_compute_processor_mask_map] =
-        SolveKernelToProcessorAssignments(spec);
-
-    // Build the Program
-    auto program_impl = std::make_shared<detail::ProgramImpl>();
-
-    // Create DataflowBuffers and build name -> ID map for unpack_to_dest_mode
-    DFBNameToIdMap dfb_name_to_id;
-    for (const auto& [dfb_name, dfb_endpoint_info] : collected.dfb_endpoints) {
-        const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(dfb_name);
-        const experimental::dfb::DataflowBufferConfig config = MakeDataflowBufferConfig(
-            dfb_spec, dfb_endpoint_info, kernel_to_dm_processor_mask_map, kernel_to_compute_processor_mask_map);
-
-        // Add the DFB to the ProgramImpl, and register the name -> handle mapping
-        uint32_t dfb_id = program_impl->add_dataflow_buffer(to_node_range_set(dfb_spec->target_nodes), config);
-        program_impl->register_dfb_spec_name(dfb_name, dfb_id);
-        dfb_name_to_id[dfb_name] = dfb_id;
-    }
-
-    // Create Kernels
-    for (const KernelSpec& kernel_spec : spec.kernels) {
-        KernelSource kernel_src = MakeKernelSource(kernel_spec);
-        NodeRangeSet node_ranges = to_node_range_set(kernel_spec.target_nodes);
-
-        std::shared_ptr<Kernel> kernel;
-
-        if (kernel_spec.is_dm_kernel()) {
-            auto config = MakeQuasarDataMovementConfig(kernel_spec, dfb_name_to_id);
-            auto processors = GetDMProcessorSet(kernel_to_dm_processor_mask_map.at(&kernel_spec));
-            kernel = std::make_shared<experimental::quasar::QuasarDataMovementKernel>(
-                kernel_src, node_ranges, config, processors);
-        } else {
-            auto config = MakeQuasarComputeConfig(kernel_spec, dfb_name_to_id);
-            auto processors = GetComputeProcessorSet(kernel_to_compute_processor_mask_map.at(&kernel_spec));
-            kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(
-                kernel_src, node_ranges, config, processors);
-        }
-
-        // Add the kernel to the ProgramImpl and register the name -> handle mapping
-        KernelHandle handle = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);
-        program_impl->register_kernel_spec_name(kernel_spec.unique_id, handle);
-
-        // Register the RTA schema for validation
-        const auto& schema = kernel_spec.runtime_arguments_schema;
-        std::unordered_map<CoreCoord, size_t> num_rtas_per_node;
-        for (const auto& [node_coord, num_args] : schema.num_runtime_args_per_node) {
-            num_rtas_per_node[node_coord] = num_args;
-        }
-        program_impl->register_kernel_rta_schema(
-            kernel_spec.unique_id, num_rtas_per_node, schema.num_common_runtime_args);
-    }
-
-    return Program(std::move(program_impl));
-}
-
-// ============================================================================
-// IMPLEMENTATION: Utilities
+// Basic Utility Helpers
 // ============================================================================
 
 inline tt::ARCH get_arch() { return tt::tt_metal::hal::get_arch(); }
@@ -281,7 +161,7 @@ void accumulate_nodes(
 }
 
 // ============================================================================
-// IMPLEMENTATION: Collection & Validation
+// Step 1: Spec Collection & Validation
 // ============================================================================
 
 // ----------------------------------------------------------------------------
@@ -675,7 +555,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
 }
 
 // ============================================================================
-// IMPLEMENTATION: Processor assignment helpers
+// Step 2: Processor Assignment
 // ============================================================================
 
 // ProcessorMask factory functions
@@ -916,7 +796,7 @@ std::pair<DMProcessorMaskMap, ComputeEngineMaskMap> SolveKernelToProcessorAssign
 }
 
 // ============================================================================
-// IMPLEMENTATION: Program building helpers
+// Step 3: Program Building Helpers
 // ============================================================================
 
 // Create a DataflowBufferConfig from a DataflowBufferSpec and endpoint info.
@@ -1109,6 +989,77 @@ std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(Co
         }
     }
     return processors;
+}
+
+// ============================================================================
+// Public Entry Point
+// ============================================================================
+
+Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
+    log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.program_id);
+
+    // Step 1a: Collect derived data (builds lookup tables, checks structural invariants)
+    CollectedSpecData collected = CollectSpecData(spec);
+
+    // Step 1b: Validate semantic rules (can be skipped for trusted inputs)
+    if (!skip_validation) {
+        ValidateProgramSpec(spec, collected);
+    }
+
+    // Step 2: Solve kernel-to-core assignments
+    auto [kernel_to_dm_processor_mask_map, kernel_to_compute_processor_mask_map] =
+        SolveKernelToProcessorAssignments(spec);
+
+    // Step 3: Build the Program
+    auto program_impl = std::make_shared<detail::ProgramImpl>();
+
+    // Create DataflowBuffers and build name -> ID map for unpack_to_dest_mode
+    DFBNameToIdMap dfb_name_to_id;
+    for (const auto& [dfb_name, dfb_endpoint_info] : collected.dfb_endpoints) {
+        const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(dfb_name);
+        const experimental::dfb::DataflowBufferConfig config = MakeDataflowBufferConfig(
+            dfb_spec, dfb_endpoint_info, kernel_to_dm_processor_mask_map, kernel_to_compute_processor_mask_map);
+
+        // Add the DFB to the ProgramImpl, and register the name -> handle mapping
+        uint32_t dfb_id = program_impl->add_dataflow_buffer(to_node_range_set(dfb_spec->target_nodes), config);
+        program_impl->register_dfb_spec_name(dfb_name, dfb_id);
+        dfb_name_to_id[dfb_name] = dfb_id;
+    }
+
+    // Create Kernels
+    for (const KernelSpec& kernel_spec : spec.kernels) {
+        KernelSource kernel_src = MakeKernelSource(kernel_spec);
+        NodeRangeSet node_ranges = to_node_range_set(kernel_spec.target_nodes);
+
+        std::shared_ptr<Kernel> kernel;
+
+        if (kernel_spec.is_dm_kernel()) {
+            auto config = MakeQuasarDataMovementConfig(kernel_spec, dfb_name_to_id);
+            auto processors = GetDMProcessorSet(kernel_to_dm_processor_mask_map.at(&kernel_spec));
+            kernel = std::make_shared<experimental::quasar::QuasarDataMovementKernel>(
+                kernel_src, node_ranges, config, processors);
+        } else {
+            auto config = MakeQuasarComputeConfig(kernel_spec, dfb_name_to_id);
+            auto processors = GetComputeProcessorSet(kernel_to_compute_processor_mask_map.at(&kernel_spec));
+            kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(
+                kernel_src, node_ranges, config, processors);
+        }
+
+        // Add the kernel to the ProgramImpl and register the name -> handle mapping
+        KernelHandle handle = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);
+        program_impl->register_kernel_spec_name(kernel_spec.unique_id, handle);
+
+        // Register the RTA+CRTA schema
+        const auto& schema = kernel_spec.runtime_arguments_schema;
+        std::unordered_map<CoreCoord, size_t> num_rtas_per_node;
+        for (const auto& [node_coord, num_args] : schema.num_runtime_args_per_node) {
+            num_rtas_per_node[node_coord] = num_args;
+        }
+        program_impl->register_kernel_rta_schema(
+            kernel_spec.unique_id, num_rtas_per_node, schema.num_common_runtime_args);
+    }
+
+    return Program(std::move(program_impl));
 }
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api
