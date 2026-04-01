@@ -72,7 +72,7 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
         // Use s' = -4 * 2^(-k) instead of 4 * 2^(-k); see -0.25 for explanation.
         sfpi::vFloat s = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(neg_four) - e);
 
-        // Use -0.25 (instead of 0.25) so we can reuse as polynomial coefficient later.
+        // Use -0.25 (instead of 0.25) so we can reuse it in the bf16 Horner step later.
         sfpi::vFloat neg_quarter = -0.25f;
         sfpi::vFloat neg1 = sfpi::vConstNeg1;
         // t = -s' / 4 - 1 = 2^(-k) - 1
@@ -86,10 +86,10 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
         // bf16-rounded path. fp16 or bf16 constants are used where possible to
         // reduce instruction count.
         if constexpr (is_fp32_dest_acc_en) {
-            // log1p(x) = x + x*x * (
-            //   -0x1p-1 + x * (0x1.555566p-2 + x * (-0x1p-2 + x * (0x1.998p-3 +
-            //   x * (-0x1.55p-3 + x * (0x1.274p-3 + x * (-0x1.0c4p-3 + x *
-            //   (0x1.b84p-4 + x * (-0x1.92cp-5)))))))))
+            // log1p(m) ~= m + m*m * (
+            //   -0x1p-1 + m * (0x1.555572p-2 + m * (-0x1.00001ap-2 + m * (0x1.998p-3 +
+            //   m * (-0x1.55p-3 + m * (0x1.274p-3 + m * (-0x1.0c4p-3 + m *
+            //   (0x1.b84p-4 + m * (-0x1.92cp-5)))))))))
 
             m = m + t;
             r = -0x1.92cp-5f;
@@ -99,9 +99,9 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
             r = r * m + -0x1.55p-3f;
             r = r * m + 0x1.998p-3f;
             e_float = sfpi::int32_to_float(abs_e);
-            r = r * m + neg_quarter;
-            s = m * m;
             r = r * m + sfpi::vConstFloatPrgm1;
+            s = m * m;
+            r = r * m + sfpi::vConstFloatPrgm2;
             r = r * m + -0.5f;
         } else {
             // log1p(x) = x + x*x * (-0x1.008p-1 + x * (0x1.744p-2 + x * (-0x1p-2)))
@@ -161,8 +161,10 @@ inline void log1p_init() {
     sfpi::vConstFloatPrgm0 = LOG_TWO * TWO_TO_M23;
 
     if constexpr (is_fp32_dest_acc_en) {
-        // Horner coefficient used by fp32 polynomial
-        sfpi::vConstFloatPrgm1 = 0x1.555566p-2f;
+        // Stored separately because the tuned fp32 m^3 and m^4 coefficients are
+        // no longer the shared exact 1/3 and -1/4 values used in the bf16 path.
+        sfpi::vConstFloatPrgm1 = -0x1.00001ap-2f;
+        sfpi::vConstFloatPrgm2 = 0x1.555572p-2f;
     } else {
         // Horner coefficients used by bf16 polynomial
         sfpi::vConstFloatPrgm1 = 0x1.744p-2f;
