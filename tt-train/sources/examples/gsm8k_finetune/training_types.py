@@ -40,14 +40,14 @@ _MODEL_ID_TO_TYPE = {
     "tinyllama": "llama",
     "gpt2": "gpt2",
     "llama8b": "llama",
-    "qwen3_0_6B": "qwen3",
+    "qwen3_0_6b": "qwen3",
 }
 
 _MODEL_ID_TO_RELATIVE_CONFIG_PATH = {
     "tinyllama": "model_configs/tinyllama.yaml",
     "gpt2": "model_configs/gpt2s.yaml",
     "llama8b": "model_configs/llama8b.yaml",
-    "qwen3_0_6B": "model_configs/qwen3_0_6B.yaml",
+    "qwen3_0_6b": "model_configs/qwen3_0_6b.yaml",
 }
 
 
@@ -357,7 +357,7 @@ def build_grpo_config(config: dict, output_dir: Path) -> Path:
 sft_training_config = TrainingTypeConfig(
     name="sft",
     script_path="gsm8k_finetune/gsm8k_finetune.py",
-    supported_model_ids={"tinyllama", "gpt2", "llama8b", "qwen3_0_6B"},
+    supported_model_ids={"tinyllama", "gpt2", "llama8b", "qwen3_0_6b"},
     param_validator=validate_sft_params,
     config_builder=build_sft_config,
 )
@@ -366,7 +366,7 @@ sft_training_config = TrainingTypeConfig(
 lora_training_config = TrainingTypeConfig(
     name="lora",
     script_path="gsm8k_finetune/gsm8k_finetune.py",
-    supported_model_ids={"tinyllama", "gpt2", "llama8b", "qwen3_0_6B"},
+    supported_model_ids={"tinyllama", "gpt2", "llama8b", "qwen3_0_6b"},
     param_validator=validate_lora_params,
     config_builder=build_lora_config,
 )

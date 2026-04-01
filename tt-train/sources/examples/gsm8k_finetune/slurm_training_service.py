@@ -783,7 +783,7 @@ def catalog():
         "tinyllama": "TinyLlama 1.1B",
         "gpt2": "GPT-2",
         "llama8b": "Llama 3.1 8B",
-        "qwen3_0_6B": "Qwen3 0.6B",
+        "qwen3_0_6b": "Qwen3 0.6B",
     }
 
     models = []
@@ -797,7 +797,7 @@ def catalog():
         )
 
         # Mark smaller models as supported by default, larger ones may need more resources
-        is_supported = model_id in {"tinyllama", "gpt2", "qwen3_0_6B"}
+        is_supported = model_id in {"tinyllama", "gpt2", "qwen3_0_6b"}
 
         models.append(
             {
