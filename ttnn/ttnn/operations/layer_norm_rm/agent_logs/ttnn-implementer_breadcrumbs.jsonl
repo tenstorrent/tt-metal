@@ -1,0 +1,1 @@
+{"event":"test_run","status":"pass","test":"test_layer_norm_rm_pure[shape=(32, 32)]","path":"tests/ttnn/unit_tests/operations/layer_norm_rm/test_layer_norm_rm.py","ts":"2026-04-01T21:16:14+00:00"}
