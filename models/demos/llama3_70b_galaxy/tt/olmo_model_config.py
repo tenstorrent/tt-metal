@@ -144,15 +144,27 @@ class TtOlmoModelArgs(TtModelArgs):
         # Prefetcher setup
         _, _, _, self.pf_receiver_cores_list, _, _, _, _ = get_core_ranges(12, 2, False)
 
-        # sub_core_grids: cores used for memory layout / sharding (same whether prefetcher is on or off).
-        # With prefetcher OFF, the single 70-core sub-device includes all of these 50 cores, so
-        # no "Kernel group cores do not match" errors occur even without passing sub_core_grids.
+        # sub_core_grids: cores used for memory layout / sharding.
+        # OLMo doesn't use prefetcher, so cols 0 and 4 are technically free. However, changing
+        # sub_core_grids from 50 to 70 cores breaks multiple operations:
+        # - CREATE_HEAD_OUTPUT_MEMCFG uses sub_core_grids directly for HEIGHT_SHARDED output
+        # - RoPE core mapping assumes cores start at (1,0) with specific bounding box
+        # Keep original 50-core grid for compatibility. For FF optimization, use ff_sub_core_grids.
         self.sub_core_grids = ttnn.CoreRangeSet(
             [
                 ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
                 ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
             ]
         )
+        # FF operations can use the full 70-core grid (cols 0-6) since OLMo doesn't use prefetcher.
+        # This allows FF1/FF3 to use 27 cores for 3456 intermediate dim without padding.
+        self.ff_sub_core_grids = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9)),
+            ]
+        )
+        self.ff_start_core = ttnn.CoreCoord(0, 0)  # Start at (0,0) for FF operations
+
         self.sub_core_grid_topk = ttnn.CoreRangeSet(
             [
                 ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
@@ -520,14 +532,16 @@ class TtOlmoModelArgs(TtModelArgs):
             use_height_and_width_as_shard_shape=True,
         )
 
-        # OLMo-specific FF2 input config: intermediate_dim_per_tp=3456 = 27 cores × 128
+        # OLMo-specific FF2 input config: intermediate_dim_per_tp=3456 = 54 cores × 64
         # Used for all_gather output after reduce_scatter in MLP decode
-        OLMO_FF2_IN_CORES = 27
+        # Use ff_sub_core_grids (70 cores, cols 0-6) since OLMo doesn't use prefetcher
+        # 54 cores: 3456/54=64 elements, 64/32=2 tiles per core (tile-aligned)
+        OLMO_FF2_IN_CORES = 54
         olmo_ff2_in_core_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-            self.start_core, OLMO_FF2_IN_CORES, self.sub_core_grids, row_wise=True
+            self.ff_start_core, OLMO_FF2_IN_CORES, self.ff_sub_core_grids, row_wise=True
         )
         self.model_config["FF2_IN_OLMO_MEMCFG"] = ttnn.create_sharded_memory_config(
-            shape=(32, self.intermediate_dim_per_tp // OLMO_FF2_IN_CORES),  # (32, 3456//27) = (32, 128)
+            shape=(32, self.intermediate_dim_per_tp // OLMO_FF2_IN_CORES),  # (32, 3456//54) = (32, 64)
             core_grid=olmo_ff2_in_core_grid,
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,

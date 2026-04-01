@@ -1,5 +1,157 @@
 # OLMo-3.1-32B Bring-up Log
 
+## Session: 2026-04-01 (evening)
+
+### Status: ff_sub_core_grids (70 cores) for FF2 SUCCESSFUL
+
+### Summary
+
+OLMo doesn't use prefetcher, so columns 0 and 4 are free for compute. Added `ff_sub_core_grids` (70 cores, cols 0-6) for FF operations while keeping the original 50-core `sub_core_grids` for operations that break with expanded grid (CREATE_HEAD_OUTPUT_MEMCFG, RoPE).
+
+### Changes
+
+1. Added `ff_sub_core_grids = CoreRangeSet[(0,0)-(6,9)]` (70 cores)
+2. Added `ff_start_core = CoreCoord(0, 0)` for FF operations
+3. Updated `FF2_IN_OLMO_MEMCFG` to use 54 cores from `ff_sub_core_grids` (3456/54=64, 2 tiles/core)
+
+### Why sub_core_grids expansion breaks things
+
+Expanding `sub_core_grids` from 50 to 70 cores causes garbage output because:
+- `CREATE_HEAD_OUTPUT_MEMCFG` uses `sub_core_grids` directly for HEIGHT_SHARDED output (line 736)
+- RoPE core mapping assumes cores start at (1,0) with specific bounding box (lines 162-170)
+- Changing core count breaks sharding assumptions in downstream ops
+
+### Results
+
+| Config | Speed | Output |
+|--------|-------|--------|
+| Baseline (50-core grid) | 17.68 tok/s | Coherent |
+| FF2_IN with 27 cores (70-core grid) | 17.74 tok/s | Coherent |
+| FF2_IN with 54 cores (70-core grid) | 17.69 tok/s | **Coherent** |
+
+### Verification
+
+```
+pytest models/demos/llama3_70b_galaxy/demo/demo_olmo_decode.py::test_olmo_demo -k "isl-128-b1" -s
+# PASSED - coherent output, 17.74 tok/s
+```
+
+---
+
+## Session: 2026-04-01 (afternoon)
+
+### Status: FF1/FF3 Unpadded (27-core) optimization FAILED - dispatch core constraint
+
+### Summary
+
+Attempted to remove padding from FF1/FF3 intermediate dimension (3840→3456) by using 27 cores (3456/27=128 tiles, 128/32=4 tiles each) instead of 24 cores with padding.
+
+### Root Cause
+
+**`num_to_coregrid(27) = CoreGrid(y=3, x=9)` places kernels on dispatch cores (columns 0 and 4).**
+
+Error during `ttnn.to_memory_config(sharded → DRAM_MEMORY_CONFIG)`:
+```
+Illegal kernel placement for writer_unary_sharded_blocks_interleaved_start_id, Kernels cannot be placed on dispatch cores!
+```
+
+On Wormhole B0, columns 0 and 4 are DRAM/dispatch columns that cannot run compute kernels. A 3×9 grid (27 cores) includes:
+- Row 0: columns 0,1,2,3,4,5,6,7,8 → **columns 0 and 4 are illegal**
+- Row 1: columns 0,1,2,3,4,5,6,7,8 → **columns 0 and 4 are illegal**
+- Row 2: columns 0,1,2,3,4,5,6,7,8 → **columns 0 and 4 are illegal**
+
+### Attempted Workaround
+
+Tried using `ttnn.num_cores_to_corerangeset_in_subcoregrids()` to create a 27-core grid avoiding columns 0 and 4. However, `MatmulMultiCoreReuseMultiCast1DProgramConfig` uses `compute_with_storage_grid_size=(9, 3)` which forces kernel placement on the 0,0-based grid, ignoring the output memory config's shard spec.
+
+### Valid Core Counts (avoiding cols 0 & 4)
+
+With sub_core_grids = cols {1,2,3,5,6} × rows {0-9} = 50 cores:
+| Cores | 3456/cores | Tiles | Works? |
+|-------|------------|-------|--------|
+| 24 | 144 | 4.5 | ✗ (need padding to 3840) |
+| 27 | 128 | 4 | ✗ (9×3 grid hits cols 0,4) |
+| 36 | 96 | 3 | ✗ (6×6 or 9×4 hits cols 0,4) |
+| 54 | 64 | 2 | ✗ (exceeds 50 available) |
+
+**No valid tile-aligned core count exists** that:
+1. Divides 3456 evenly
+2. Results in 32-aligned shard width
+3. Maps to a rectangular grid avoiding columns 0 and 4
+
+### Conclusion
+
+Keep 24-core padded config (3840) with slice operation. The ~10% padding overhead cannot be eliminated without kernel-level changes to matmul program config grid selection.
+
+### Future Work
+
+1. Modify `matmul_1d_ring_config` to accept explicit core grid instead of using `num_to_coregrid()`
+2. Create specialized 27-core program config that uses valid cores (would require ttnn changes)
+3. Accept the slice overhead as cost of tile alignment
+
+---
+
+## Session: 2026-04-01
+
+### Status: FF2 L1 optimization FAILED - adds overhead even with explicit program config
+
+### Summary
+
+Attempted to optimize OLMo MLP decode by using L1 sharded tensors throughout FF2 path instead of DRAM.
+
+### Optimization Attempted
+
+**Goal**: Eliminate DRAM write/read by keeping tensors in L1 throughout FF2.
+
+**Baseline path** (17.35 tok/s, coherent):
+1. all_gather → DRAM (persistent buffer)
+2. ttnn.linear → DRAM interleaved
+3. to_memory_config → L1 WIDTH_SHARDED (10 cores)
+4. all_reduce
+
+**L1 paths attempted**:
+| Attempt | Path | Result |
+|---------|------|--------|
+| 1. L1 interleaved output | linear → L1 interleaved → L1 sharded | Garbage, 17.38 tok/s |
+| 2. L1 sharded (auto config) | DRAM→L1(4)→linear→L1(4)→L1(10) | Garbage, 15.75 tok/s |
+| 3. L1 sharded (explicit `FF2_L1_PROGCFG_OLMO`) | DRAM→L1(4)→linear→L1(4)→L1(10) | **Coherent, 15.8 tok/s** |
+
+### Results
+
+| Path | Decode Speed | Output Quality |
+|------|--------------|----------------|
+| Baseline (DRAM) | **17.35 tok/s** | **Coherent** |
+| L1 + explicit program config | 15.8 tok/s | Coherent |
+
+**Conclusion**: L1 path with explicit program config is coherent but **9% slower** due to extra resharding.
+
+### Root Cause Analysis
+
+1. **Fundamental constraint**: all_gather must output to DRAM (persistent buffer for trace compatibility)
+2. **matmul_1d_ring_config requires L1 sharded input**: This forces an extra DRAM→L1 resharding step
+3. **Extra resharding overhead**: DRAM→L1(4)→L1(4)→L1(10) has more latency than DRAM→DRAM→L1(10)
+4. **Auto-selected program config garbage**: Without explicit `FF2_L1_PROGCFG_OLMO`, L1 output produces garbage
+
+### Key Finding
+
+The only way to achieve coherent L1 output is with explicit `FF2_L1_PROGCFG_OLMO` (4-core matmul_1d_ring_config). But this adds DRAM→L1 input resharding overhead that negates any benefit.
+
+### Configs Added (kept for reference)
+
+- `olmo_model_config.py`:
+  - `FF2_INPUT_L1_MEMCFG`: L1 WIDTH_SHARDED (4 cores, [32, 864])
+  - `FF2_OUTPUT_L1_MEMCFG`: L1 WIDTH_SHARDED (4 cores, [32, 320])
+  - `FF2_L1_PROGCFG_OLMO`: matmul_1d_ring_config for 4 cores
+- `model_config.py`: num_to_coregrid(4) support
+
+### Recommendation
+
+Keep current DRAM-based FF2 path (17.35 tok/s). Future optimizations should explore:
+1. **Fix AGMM kernel**: Currently disabled because `llama_1d_mm_fusion.cpp` requires K divisible by 4×32 (OLMo has K=27 tiles)
+2. **Fused all_gather+linear**: Eliminate DRAM persistent buffer by fusing operations (requires kernel changes)
+
+---
+
 ## Session: 2026-03-28
 
 ### Status: 8K 30%, 16K 20%, 32K 0% reliability - CCL warmup deadlocks
