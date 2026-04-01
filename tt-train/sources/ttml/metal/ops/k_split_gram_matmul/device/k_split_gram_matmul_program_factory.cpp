@@ -61,8 +61,8 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
 
     const bool mirror_active = (attrs.output_mode == ttml::metal::OutputMode::Full);
 
-    // Joint optimization of K_block_tiles and M_block with N_block = M_block streaming.
-    // Mirror mode adds c_4 (mb tiles) + c_7 (mb tiles) L1 overhead
+    // Find the largest M_block and K_block_tiles (kb) that fit all CBs in L1.
+    // Minimizes num_m_blocks (fewer subblock passes), then maximizes kb (fewer DRAM reads).
     const uint32_t L1_BUDGET =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const uint32_t mirror_out_overhead = mirror_active ? 2 * out_tile_sz : 0;  // per-mb extra for c_4 + c_7
