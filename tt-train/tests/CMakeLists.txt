@@ -79,6 +79,7 @@ set(SOURCES
     ops/binary_ops_fw_test.cpp
     ops/binary_ops_bw_test.cpp
     ops/mla_qkv_assemble_op_test.cpp
+    ops/variable_matmul_test.cpp
     utils/memory_utils_test.cpp
     ops/mla_q_rope_op_test.cpp
 )
