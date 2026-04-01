@@ -25,7 +25,6 @@ void kernel_main() {
     const uint32_t num_rows = get_arg_val<uint32_t>(0);
     const uint32_t tiles_per_row = get_arg_val<uint32_t>(1);
 
-    experimental::CircularBuffer cb_start_obj(cb_start);
     experimental::CircularBuffer cb_in_obj(cb_in);
     experimental::CircularBuffer cb_out_obj(cb_out);
     experimental::CircularBuffer cb_acc_obj(cb_acc);
@@ -38,20 +37,12 @@ void kernel_main() {
     BINARY_OP_INIT();
 #endif  // USE_FPU
 
-    DPRINT << "default acc value = " << DEFAULT_ACC_VALUE << ENDL();
-    DPRINT << "tiles per row = " << tiles_per_row << ENDL();
-    DPRINT << "num rows = " << num_rows << ENDL();
-    DPRINT << "cb in = " << cb_in << ENDL();
-
     constexpr uint32_t DST_IN = 0;
     constexpr uint32_t DST_ACC = 1;
 
     for (uint32_t i = 0; i < num_rows; i++) {
-        DPRINT << "i = " << i << ENDL();
-
         cb_acc_obj.wait_front(ONE_TILE);
 
-        // Fill cb_acc to default values
         tile_regs_acquire();
 
         fill_tile_init();
@@ -70,10 +61,7 @@ void kernel_main() {
         cb_acc_obj.push_back(ONE_TILE);
 
         for (uint32_t j = 0; j < tiles_per_row; j++) {
-            UNPACK(DPRINT << "j = " << j << ENDL(););
-
             // Synchronize unpacker-packer
-
             cb_acc_obj.reserve_back(ONE_TILE);
             cb_acc_obj.push_back(ONE_TILE);
 
@@ -90,21 +78,9 @@ void kernel_main() {
             copy_tile_to_dst_init_short(cb_in);
             copy_tile(cb_in, 0, DST_IN);
 
-            // UNPACK(
-            //	DPRINT << "cb in = " << ENDL();
-            //	);
-            // dprint_tensix_dest_reg(DST_IN);
-
-            // TODO: reconfig buffer for fp32 acc if using bfloat16 or float32
-
             reconfig_data_format(cb_acc, cb_acc);
             copy_tile_to_dst_init_short(cb_acc);
             copy_tile(cb_acc, 0, DST_ACC);
-
-            // UNPACK(
-            //	DPRINT << "cb acc = " << ENDL();
-            //	);
-            // dprint_tensix_dest_reg(DST_ACC);
 
             BINARY_OP(DST_IN, DST_ACC, DST_ACC);
 #endif  // USE_FPU
@@ -130,5 +106,4 @@ void kernel_main() {
             cb_acc_obj.pop_front(ONE_TILE);
         }
     }
-    DPRINT << "done" << ENDL();
 }

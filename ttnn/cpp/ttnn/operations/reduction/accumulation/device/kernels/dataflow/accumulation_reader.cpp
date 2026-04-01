@@ -33,16 +33,10 @@ void kernel_main() {
     const uint32_t ublock_size_bytes = get_tile_size(cb_in);
     const uint32_t input_tile_bytes = ublock_size_bytes;
 
-    DPRINT << "rows/core = " << num_rows_per_core << ENDL();
-    DPRINT << "tiles/row = " << tiles_per_row << ENDL();
-    DPRINT << "cb in = " << cb_in << ENDL();
-
     const auto input_addrg = TensorAccessor(input_addrg_args, input_base_addr, input_tile_bytes);
 
     for (uint32_t i = start_id; i < start_id + num_rows_per_core; ++i) {
-        DPRINT << "reader i = " << i << ENDL();
         for (uint32_t j = 0; j < tiles_per_row; ++j) {
-            DPRINT << "writer j = " << j << ENDL();
             const uint32_t tile_j = flip ? (tiles_per_row - j - 1) : j;
             const uint32_t read_tile_id{
                 get_tile_id(low_rank_offset, high_rank_offset, tile_j, tiles_per_row, input_tile_offset)};
@@ -57,5 +51,4 @@ void kernel_main() {
             ++low_rank_offset;
         }
     }
-    DPRINT << "reader done" << ENDL();
 }

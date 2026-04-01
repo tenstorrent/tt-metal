@@ -49,5 +49,4 @@ void kernel_main() {
             ++low_rank_offset;
         }
     }
-    DPRINT << "done" << ENDL();
 }
