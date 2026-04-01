@@ -492,6 +492,11 @@ class ttMLA:
             **self._get_mm_kwargs("wkv_b2", seq_len_local),
         )
 
+        from tracy import Profiler
+
+        profiler = Profiler()
+
+        profiler.enable()
         ttnn.synchronize_device(self.mesh_device)
         ttnn.distributed_context_barrier()
 
@@ -525,6 +530,8 @@ class ttMLA:
             is_balanced=self.is_balanced,
         )
         ttnn.synchronize_device(self.mesh_device)
+        profiler.disable()
+
         # ttnn.distributed_context_barrier()
         end = time.time()
         logger.debug(f"SDPA time: {end - start}s")
