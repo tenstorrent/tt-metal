@@ -101,20 +101,15 @@ DeviceStorage::DeviceStorage(
     CMAKE_UNIQUE_NAMESPACE::validate_mesh_coordinates(coords_, get_device());
 }
 
-Buffer* DeviceStorage::get_buffer() const {
-    if (this->mesh_buffer != nullptr) {
-        return this->mesh_buffer->get_reference_buffer();
-    }
-    TT_THROW("Buffer is not allocated");
-}
+Buffer* DeviceStorage::get_buffer() const { return get_mesh_buffer().get_reference_buffer(); }
 
 const distributed::MeshBuffer& DeviceStorage::get_mesh_buffer() const {
-    TT_FATAL(mesh_buffer != nullptr, "Buffer is not allocated");
-    return *mesh_buffer;
+    TT_FATAL(mesh_tensor_ != nullptr, "Device Memory is not allocated");
+    return mesh_tensor_->mesh_buffer();
 }
 
 bool DeviceStorage::is_sole_owner_of_device_memory() const {
-    return mesh_buffer.use_count() == 1 && get_root_mesh_buffer().use_count() == 1;
+    return mesh_tensor_.use_count() == 1 && get_root_mesh_buffer().use_count() == 1;
 }
 
 const MeshTensor& DeviceStorage::get_mesh_tensor() const {
@@ -139,22 +134,24 @@ void DeviceStorage::deallocate() {
 
     get_root_mesh_buffer()->deallocate();
     root_mesh_buffer = nullptr;
-    mesh_buffer = nullptr;
+    mesh_tensor_ = nullptr;
 }
 
-bool DeviceStorage::is_allocated() const { return this->mesh_buffer != nullptr && this->mesh_buffer->is_allocated(); }
+bool DeviceStorage::is_allocated() const {
+    return this->mesh_tensor_ != nullptr && this->mesh_tensor_->mesh_buffer().is_allocated();
+}
 
 distributed::MeshDevice* DeviceStorage::get_device_bypass_deallocate_check() const {
-    return this->mesh_buffer ? this->mesh_buffer->device() : nullptr;
+    return this->mesh_tensor_ ? this->mesh_tensor_->mesh_buffer().device() : nullptr;
 }
 
 distributed::MeshDevice& DeviceStorage::get_device() const { return *get_mesh_buffer().device(); }
 
 bool DeviceStorage::is_uniform_storage() const {
-    if (mesh_buffer == nullptr) {
+    if (mesh_tensor_ == nullptr) {
         return true;
     }
-    return coords_.size() == mesh_buffer->device()->num_devices();
+    return coords_.size() == mesh_tensor_->device().num_devices();
 }
 
 std::span<const distributed::MeshCoordinate> DeviceStorage::get_coords() const {
@@ -168,12 +165,12 @@ DeviceStorage DeviceStorage::combine_device_storages(
     TT_FATAL(!storages.empty(), "Cannot aggregate empty vector of DeviceStorages");
 
     const auto& model_storage = storages.front().get();
-    // TT_FATAL(
-    //     std::all_of(
-    //         storages.begin(),
-    //         storages.end(),
-    //         [&](const auto& storage) { return storage.get().mesh_buffer == model_storage.mesh_buffer; }),
-    //     "All DeviceStorages must point to the same device memory");
+    TT_FATAL(
+        std::all_of(
+            storages.begin(),
+            storages.end(),
+            [&](const auto& storage) { return storage.get().mesh_tensor_ == model_storage.mesh_tensor_; }),
+        "All DeviceStorages must point to the same device memory");
 
     auto num_coords = std::accumulate(storages.begin(), storages.end(), 0, [](size_t sum, const auto& storage) {
         return sum + storage.get().get_coords().size();
@@ -193,6 +190,11 @@ DeviceStorage DeviceStorage::combine_device_storages(
         model_storage, std::vector<distributed::MeshCoordinate>(joint_coords.begin(), joint_coords.end()));
     res.update_tensor_topology(topology);
     return res;
+}
+
+void DeviceStorage::update_tensor_topology(const TensorTopology& tensor_topology) {
+    TT_FATAL(mesh_tensor_ != nullptr, "Device memory is not allocated");
+    mesh_tensor_->update_tensor_topology(tensor_topology);
 }
 
 }  // namespace tt::tt_metal

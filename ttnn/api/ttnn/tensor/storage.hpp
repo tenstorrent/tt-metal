@@ -200,7 +200,6 @@ private:
 
     std::shared_ptr<MeshTensor> mesh_tensor_;
     std::vector<distributed::MeshCoordinate> coords_;
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer;
 
     // Experimental features for viewing an existing DeviceStorage
     const std::shared_ptr<distributed::MeshBuffer>& get_root_mesh_buffer() const;
