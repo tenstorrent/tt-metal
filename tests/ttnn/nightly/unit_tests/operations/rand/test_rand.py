@@ -170,6 +170,100 @@ def test_rand_different_from_to_values(device):
     device.disable_and_clear_program_cache()
 
 
+@pytest.mark.parametrize(
+    "mesh_device",
+    [pytest.param(2, id="1x2_grid"), pytest.param((2, 1), id="2x1_grid")],
+    indirect=True,
+)
+def test_rand_program_cache_with_mesh_mapper(mesh_device):
+    """
+    Exercise the program cache across replicated and sharded ttnn.rand calls
+    that share the same per-device shape.  Because mesh_dim_is_sharded only
+    affects runtime args (seed offset) and override_runtime_arguments handles
+    it correctly, the two configurations should share a single cache entry
+    while still producing correct output:
+
+      - replicated (no mapper) → identical data on every device
+      - sharded (with mapper)  → distinct data per shard device
+    """
+    num_devices = mesh_device.get_num_devices()
+    if num_devices < 2:
+        pytest.skip("Need at least 2 devices")
+
+    mesh_device.enable_program_cache()
+
+    seed = 42
+    shard_dim = 0
+    per_device_rows = 256
+    cols = 256
+    shard_shape = (per_device_rows, cols)
+    full_shape = (per_device_rows * num_devices, cols)
+    dtype = ttnn.float32
+    mesh_shape = tuple(mesh_device.shape)
+    placements = _shard_placements(mesh_shape, shard_dim)
+
+    # --- Call 1: no mesh_mapper (replicated) ---
+    t_rep = ttnn.rand(shard_shape, mesh_device, dtype=dtype, seed=seed)
+    entries_after_rep = mesh_device.num_program_cache_entries()
+
+    # --- Call 2: with mesh_mapper, shard shape == shard_shape (cache hit) ---
+    t_shard = ttnn.rand(
+        full_shape,
+        mesh_device,
+        dtype=dtype,
+        seed=seed,
+        mesh_mapper=ttnn.MeshMapperConfig(placements),
+    )
+    assert mesh_device.num_program_cache_entries() == entries_after_rep, (
+        f"Expected cache entries to stay at {entries_after_rep} (same per-device shape), "
+        f"got {mesh_device.num_program_cache_entries()}"
+    )
+
+    # --- Call 3: repeat sharded call — still a cache hit ---
+    t_shard2 = ttnn.rand(
+        full_shape,
+        mesh_device,
+        dtype=dtype,
+        seed=seed,
+        mesh_mapper=ttnn.MeshMapperConfig(placements),
+    )
+    assert mesh_device.num_program_cache_entries() == entries_after_rep, (
+        f"Expected cache entries to stay at {entries_after_rep} after repeated sharded call, "
+        f"got {mesh_device.num_program_cache_entries()}"
+    )
+
+    # --- Call 4: back to replicated — still a cache hit ---
+    t_rep2 = ttnn.rand(shard_shape, mesh_device, dtype=dtype, seed=seed)
+    assert mesh_device.num_program_cache_entries() == entries_after_rep, (
+        f"Expected cache entries to stay at {entries_after_rep} after switching back to replicated, "
+        f"got {mesh_device.num_program_cache_entries()}"
+    )
+
+    # --- Correctness: replicated calls produce identical data on all devices ---
+    for label, tensor in [("rep1", t_rep), ("rep2", t_rep2)]:
+        shards = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(tensor)]
+        for i in range(1, len(shards)):
+            assert torch.equal(
+                shards[0], shards[i]
+            ), f"{label}: device 0 and device {i} should be identical (replicated)"
+
+    # --- Correctness: sharded calls produce distinct data per device ---
+    for label, tensor in [("shard1", t_shard), ("shard2", t_shard2)]:
+        shards = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(tensor)]
+        for i in range(1, len(shards)):
+            assert not torch.equal(shards[0], shards[i]), f"{label}: device 0 and device {i} should differ (sharded)"
+
+    # --- Correctness: repeated calls with the same seed are deterministic ---
+    shard1_data = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(t_shard)]
+    shard2_data = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(t_shard2)]
+    for i in range(len(shard1_data)):
+        assert torch.equal(
+            shard1_data[i], shard2_data[i]
+        ), f"Device {i}: two sharded calls with the same seed should be deterministic"
+
+    mesh_device.disable_and_clear_program_cache()
+
+
 def test_rand_invalid_args(device):
     """
     Passing invalid args should raise TypeError.
