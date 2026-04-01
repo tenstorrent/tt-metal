@@ -400,10 +400,13 @@ Tensor convert_python_tensor_to_tt_tensor(
 
     if (device) {
         output = output.to_device(device.value(), memory_config, cq_id);
-        set_layout(layout);
         if (output.dtype() != dst_dtype) {
+            // Need to perform final data conversion on device, typecast requires TILE layout.
+            set_layout(Layout::TILE);
             output = ttnn::typecast(output, dst_dtype);
         }
+
+        set_layout(layout);
     } else {
         set_layout(layout);
     }
