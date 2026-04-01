@@ -26,7 +26,6 @@ from ttnn.distributed.ttrun import (
     build_generate_rank_bindings_mpi_cmd,
     run_phase1_generate_rank_bindings,
     find_generate_rank_bindings_executable,
-    rankfile_needs_oversubscribe,
     compute_phase1_cache_id,
     compute_phase1_cache_fingerprint_full,
     write_phase1_openmpi_hostfile,
