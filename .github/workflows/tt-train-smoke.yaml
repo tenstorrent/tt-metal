@@ -6,6 +6,9 @@ on:
       docker-image:
         required: true
         type: string
+      build-artifact-name:
+        required: true
+        type: string
       wheel-artifact-name:
         required: true
         type: string
@@ -42,23 +45,22 @@ jobs:
           fetch-depth: 1
           path: docker-job
 
-      - name: Download wheel artifact
-        uses: actions/download-artifact@v4
-        timeout-minutes: 15
-        with:
-          name: ${{ inputs.wheel-artifact-name || 'wheel artifact unresolved!' }}
-          path: /work/wheels/
-
-      - name: Install wheel packages
+      - name: Setup Job
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
-        run: |
-          # Install ttnn wheel
-          pip install /work/wheels/ttnn-*.whl
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
-          # Install ttml module by adding paths
-          SITE_PACKAGES=$(pip show ttnn | sed -n 's/^Location: //p')
-          TTML_SRC_DIR="/work/tt-train/sources/ttml"
+      - name: Install ttml module
+        timeout-minutes: 5
+        run: |
+          # Install ttml module by adding paths to site-packages
+          SITE_PACKAGES=$(uv pip show ttnn | sed -n 's/^Location: //p')
+          TTML_SRC_DIR="$TT_METAL_HOME/tt-train/sources/ttml"
+          TTML_BUILD_DIR="$TT_METAL_HOME/build/tt-train/sources/ttml"
           echo "$TTML_SRC_DIR" > "$SITE_PACKAGES/ttml.pth"
+          echo "$TTML_BUILD_DIR" > "$SITE_PACKAGES/_ttml.pth"
 
           # Verify ttml can be imported
           python -c "import ttml; print('ttml imported successfully')"
