@@ -4,7 +4,7 @@
 
 #pragma once
 
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
 #include <pthread.h>
 #endif
 #if __has_include(<sanitizer/lsan_interface.h>)
@@ -24,15 +24,25 @@ using Executor = tf::Executor;
 using ExecTask = tf::Task;
 
 inline Executor& GetExecutor() {
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     // After fork(), the child process must reinitialize the Executor because
     // the parent's worker threads do not survive across fork boundaries.
     // Without this, the child hangs trying to dispatch work to dead threads.
     //
     // Only the *child* handler recreates the Executor.  The parent's Executor
     // is left untouched -- destroying and recreating it in prepare/parent
-    // would needlessly tear down the thread pool on every fork() call
-    // (including those from posix_spawn fallback paths or Python subprocess).
+    // would needlessly tear down the thread pool on every fork() call.
+    // This matters because fork() is triggered in ways callers do not control:
+    //   - Python subprocess.Popen() may fall back from posix_spawn to fork()
+    //   - Python multiprocessing.Process() always uses fork() by default
+    //   - MPI launchers may fork internally
+    // In all these cases the parent's thread pool should remain undisturbed.
+    //
+    // In the child we intentionally leak the old Executor rather than delete
+    // it.  This is the canonical approach for fork-unsafe objects: the threads
+    // and synchronization primitives inherited from the parent are in an
+    // indeterminate state post-fork, and calling the destructor would deadlock
+    // or crash.  The same pattern is used by jemalloc and glibc malloc.
     static Executor* exec = [] {
         auto* e = new Executor(EXECUTOR_NTHREADS);
         std::atexit([] {
@@ -42,6 +52,16 @@ inline Executor& GetExecutor() {
         pthread_atfork(
             /*prepare=*/
             [] {
+                // fork() with in-flight Taskflow work is unsafe: the child will
+                // inherit a half-initialized executor state and may hang when it
+                // tries to dispatch tasks to the dead parent threads.  We warn
+                // here rather than aborting because fork() is sometimes called
+                // from paths the application cannot control (e.g. Python's
+                // subprocess fallback from posix_spawn).
+                // Note: fprintf is used here instead of log_warning to avoid
+                // pulling tt-logger into this header and because this callback
+                // must remain lightweight (atfork handlers run in constrained
+                // process context).
                 if (exec && exec->num_topologies() != 0) {
                     fprintf(
                         stderr,
@@ -53,11 +73,12 @@ inline Executor& GetExecutor() {
             /*parent=*/nullptr,
             /*child=*/
             [] {
-        // The parent's threads are gone in the child; replace with a
-        // fresh Executor.  Intentionally leak the old one -- its
-        // internal state (mutexes, threads) is invalid post-fork and
-        // destroying it would deadlock or crash.
-#ifdef __lsan_ignore_object
+                // The parent's threads are gone in the child; replace with a
+                // fresh Executor.  Intentionally leak the old one -- its
+                // internal state (mutexes, threads) is invalid post-fork and
+                // destroying it would deadlock or crash.  Suppress the leak in
+                // ASan/LSan builds so it is not reported as unintentional.
+#if __has_include(<sanitizer/lsan_interface.h>)
                 __lsan_ignore_object(exec);
 #endif
                 exec = new Executor(EXECUTOR_NTHREADS);
