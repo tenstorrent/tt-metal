@@ -6,10 +6,10 @@
 #include "argmax_device_operation_types.hpp"
 #include "argmax_multi_core_program_factory.hpp"
 #include "argmax_single_core_program_factory.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include <optional>
+#include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 

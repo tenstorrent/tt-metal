@@ -5,6 +5,7 @@
 #pragma once
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/memory_config/memory_config.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::full {
 struct operation_attributes_t {

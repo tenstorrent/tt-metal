@@ -8,7 +8,7 @@
 #include <optional>
 
 #include "loss_types.hpp"
-#include "ttnn/decorators.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 Tensor mse_loss(

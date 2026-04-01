@@ -6,9 +6,10 @@
 
 #include <variant>
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn/device_operation.hpp"
 
 #define MOREH_ABS_POW_FACTORY_H(name)                                                       \
     struct name {                                                                           \

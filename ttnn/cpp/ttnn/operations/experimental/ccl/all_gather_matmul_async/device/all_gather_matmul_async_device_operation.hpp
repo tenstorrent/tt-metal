@@ -7,11 +7,10 @@
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_device_operation_types.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_program_factory.hpp"
 
-#include "ttnn/decorators.hpp"
-
 #include <optional>
 #include <variant>
 #include <vector>
+#include "ttnn/types.hpp"
 
 namespace ttnn::experimental::prim {
 

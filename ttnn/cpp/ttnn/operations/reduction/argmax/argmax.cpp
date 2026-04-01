@@ -5,7 +5,6 @@
 #include "device/argmax_utils.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
 #include "ttnn/operations/creation/creation.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 
 #include <utility>

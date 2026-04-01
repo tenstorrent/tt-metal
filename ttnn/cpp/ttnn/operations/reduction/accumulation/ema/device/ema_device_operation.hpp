@@ -5,10 +5,10 @@
 
 #include "ema_device_operation_types.hpp"
 #include "ema_program_factory.hpp"
-#include "ttnn/decorators.hpp"
 
 #include <optional>
 #include <variant>
+#include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 

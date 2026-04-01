@@ -7,9 +7,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "fill_pad_program_factory.hpp"
 
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
-
 #include "fill_pad_device_operation_types.hpp"
 
 namespace ttnn::prim {

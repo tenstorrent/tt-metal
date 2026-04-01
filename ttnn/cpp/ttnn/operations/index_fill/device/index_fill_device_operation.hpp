@@ -7,9 +7,10 @@
 #include <optional>
 #include <variant>
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/device_operation.hpp"
+
 namespace ttnn::operations::index_fill {
 struct IndexFillOperation {
     struct operation_attributes_t {

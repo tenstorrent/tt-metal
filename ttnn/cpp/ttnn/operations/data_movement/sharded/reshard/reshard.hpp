@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include <tt-metalium/core_coord.hpp>
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

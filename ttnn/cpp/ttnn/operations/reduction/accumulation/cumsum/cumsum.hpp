@@ -6,9 +6,9 @@
 
 #include <cstdint>
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

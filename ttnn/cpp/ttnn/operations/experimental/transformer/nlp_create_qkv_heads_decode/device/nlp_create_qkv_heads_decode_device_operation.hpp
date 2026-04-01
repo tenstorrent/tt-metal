@@ -12,9 +12,6 @@
 #include "nlp_create_qkv_heads_decode_sharded_program_factory.hpp"
 #include "nlp_create_qkv_heads_decode_sharded_subcoregrid_program_factory.hpp"
 
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
-
 namespace ttnn::experimental::prim {
 
 struct NLPCreateQKVHeadsDecodeDeviceOperation {

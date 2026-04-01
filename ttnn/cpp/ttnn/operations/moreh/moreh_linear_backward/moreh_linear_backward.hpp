@@ -5,8 +5,8 @@
 #pragma once
 
 #include "device/moreh_linear_backward_device_operation.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

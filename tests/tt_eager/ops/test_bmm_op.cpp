@@ -15,7 +15,6 @@
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/tile.hpp>
 #include "ttnn/operations/creation/creation.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/tensor/shape/shape.hpp"

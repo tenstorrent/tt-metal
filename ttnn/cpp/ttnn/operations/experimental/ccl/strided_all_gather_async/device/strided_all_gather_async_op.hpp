@@ -19,11 +19,10 @@
 #include "strided_all_gather_async_device_operation_types.hpp"
 #include "strided_all_gather_async_program.hpp"
 
-#include "ttnn/decorators.hpp"
-
 #include <optional>
 #include <utility>
 #include <vector>
+#include "ttnn/types.hpp"
 
 namespace ttnn::experimental::prim {
 

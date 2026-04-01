@@ -20,7 +20,6 @@
 #include <tt-metalium/shape_base.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/creation/creation.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
