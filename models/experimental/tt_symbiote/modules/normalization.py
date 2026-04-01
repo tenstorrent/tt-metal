@@ -7,8 +7,9 @@
 from torch import nn
 import torch
 import ttnn
-from models.experimental.tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch
-from models.experimental.tt_symbiote.core.run_config import trace_enabled
+from models.experimental.tt_symbiote.core.module import TTNNModule, tree_map, run_on_devices, DeviceArch
+from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig, trace_enabled
 
 
 class TTNNLayerNorm(TTNNModule):
@@ -171,6 +172,39 @@ class TTNNDistributedRMSNorm(TTNNModule):
 
     """
 
+    @property
+    def _is_distributed(self):
+        """True when running on a multi-device mesh (col-sharded activations; CCL not required for output metadata)."""
+        return self.device is not None and self.device.get_num_devices() > 1
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        """Col-sharded activations: same mesh composer / logical shape as Qwen decoder attention (dim=-1)."""
+
+        def set_col_sharded_config(e):
+            if isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None:
+                if self._is_distributed and self.device is not None:
+                    mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=-1)
+                    mesh_mapper = ttnn.ShardTensorToMesh(self.device, dim=-1)
+
+                    def logical_shape_for_col_sharded(shape):
+                        shape_list = list(shape)
+                        num_devices = self.device.get_num_devices()
+                        shape_list[-1] = shape_list[-1] * num_devices
+                        return tuple(shape_list)
+
+                    e.set_distributed_tensor_config(
+                        DistributedTensorConfig(
+                            mesh_mapper=mesh_mapper,
+                            mesh_composer=mesh_composer,
+                            logical_shape_fn=logical_shape_for_col_sharded,
+                        )
+                    )
+            return e
+
+        if not self._is_distributed:
+            return super().set_output_tensors_config_impl(output_tensors)
+        return tree_map(set_col_sharded_config, output_tensors)
+
     @classmethod
     def from_torch(cls, rms_norm: "RMSNorm"):
         """Create from PyTorch RMSNorm."""
@@ -183,16 +217,42 @@ class TTNNDistributedRMSNorm(TTNNModule):
 
     def move_weights_to_device_impl(self):
         """Move weights to TTNN device."""
-        dim = self.torch_layer.weight.shape[0]
-        # Pad to nearest multiple of 32 for TILE compatibility
+        dim = int(self.torch_layer.weight.shape[0])
+        # Pad to nearest multiple of 32 for TILE compatibility (matches rms_norm_post_all_gather).
         padded_dim = ((dim + 31) // 32) * 32
         weight = self.torch_layer.weight
         if padded_dim != dim:
             weight = torch.nn.functional.pad(weight, (0, padded_dim - dim), value=1.0)
+        w_bf16 = weight.to(torch.bfloat16)
+
+        if self.device is None or self.device.get_num_devices() <= 1:
+            relayout = w_bf16.view(1, 1, padded_dim // 32, 32)
+            self.weight_distributed = ttnn.as_tensor(relayout, layout=ttnn.ROW_MAJOR_LAYOUT)
+            self.weight_distributed = ttnn.to_device(self.weight_distributed, self.device)
+            return
+
+        mesh_shape = list(self.device.shape)
+        ncol = int(mesh_shape[-1])
+        ntiles = padded_dim // 32
+
+        # ShardTensor2dMesh(..., dims=(None, 2), mesh_shape=(1, ncol)) requires the sharded axis
+        # (tile rows) to align with the mesh — e.g. code_predictor q_norm (dim=128 → 4 tiles) on T3K
+        # (ncol=8) does not shard as 8 chunks. Width-sharding [1,1,1,dim] breaks
+        # rms_norm_post_all_gather (gamma last dim must pad to TILE_WIDTH=32). Use PyTorch RMSNorm
+        # for those subgraphs instead (see test_qwen_omni ``_restore_torch_rmsnorm_in_code_predictor``).
+        if ntiles % ncol == 0:
+            relayout = w_bf16.view(1, 1, ntiles, 32)
+            mesh_mapper = ttnn.ShardTensor2dMesh(self.device, dims=(None, 2), mesh_shape=mesh_shape)
+        else:
+            raise RuntimeError(
+                f"TTNNDistributedRMSNorm: gamma (dim={dim}, padded_dim={padded_dim}, ntiles={ntiles}) is incompatible with mesh {mesh_shape}: "
+                f"need (padded_dim//32) % mesh_width == 0. For small norms (e.g. talker code_predictor), keep HF RMSNorm on CPU."
+            )
+
         self.weight_distributed = ttnn.as_tensor(
-            weight.unsqueeze(0).view(1, 1, padded_dim).reshape([1, 1, padded_dim // 32, 32]).to(torch.bfloat16),
+            relayout,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=(ttnn.ShardTensor2dMesh(self.device, dims=(None, 2), mesh_shape=list(self.device.shape))),
+            mesh_mapper=mesh_mapper,
         )
         self.weight_distributed = ttnn.to_device(self.weight_distributed, self.device)
 

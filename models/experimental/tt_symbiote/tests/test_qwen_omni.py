@@ -12,9 +12,13 @@ from transformers import Qwen3OmniMoeConfig, Qwen3OmniMoeForConditionalGeneratio
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeAudioAttention,
     Qwen3OmniMoeCode2WavAttention,
+    Qwen3OmniMoeCode2WavRMSNorm,
+    Qwen3OmniMoeRMSNorm,
     Qwen3OmniMoeTalkerResizeMLP,
     Qwen3OmniMoeTalkerTextSparseMoeBlock,
+    Qwen3OmniMoeTextRMSNorm,
     Qwen3OmniMoeThinkerTextAttention,
+    Qwen3OmniMoeThinkerTextRMSNorm,
     Qwen3OmniMoeThinkerTextSparseMoeBlock,
     Qwen3OmniMoeVisionMLP,
     Qwen3OmniMoeVisionAttention,
@@ -35,6 +39,7 @@ from models.experimental.tt_symbiote.modules.linear import (
     TTNNQwen3OmniTalkerResizeMLP,
     TTNNQwen3OmniVisionMLP,
 )
+from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 
@@ -44,17 +49,22 @@ _ALLOWED_SYMBIOTE_RUN_MODES = frozenset({"CPU", "NORMAL", "NORMAL_WITH_FALLBACK"
 NN_TO_TTNN_THINKER = {
     Qwen3OmniMoeThinkerTextSparseMoeBlock: TTNNQwen3OmniThinkerNaiveMoE,
     Qwen3OmniMoeThinkerTextAttention: TTNNQwen3OmniAttention,
+    # Width-sharded hidden on mesh: gamma must match pre/post all_gather path (not full-width TTNNRMSNorm).
+    Qwen3OmniMoeThinkerTextRMSNorm: TTNNDistributedRMSNorm,
+    Qwen3OmniMoeTextRMSNorm: TTNNDistributedRMSNorm,
     Qwen3OmniMoeVisionAttention: TTNNQwen3VLMoeVisionAttention,
     Qwen3OmniMoeVisionMLP: TTNNQwen3OmniVisionMLP,
     Qwen3OmniMoeAudioAttention: TTNNQwenAudioAttention,
 }
 NN_TO_TTNN_CODE2WAV = {
     Qwen3OmniMoeCode2WavAttention: TTNNQwen3OmniMoeCode2WavAttention,
+    Qwen3OmniMoeCode2WavRMSNorm: TTNNDistributedRMSNorm,
 }
 NN_TO_TTNN_TALKER = {
     Qwen3OmniMoeTalkerTextSparseMoeBlock: TTNNQwen3TalkerMoE,
     Qwen3OmniMoeThinkerTextAttention: TTNNQwen3Attention,
     Qwen3OmniMoeTalkerResizeMLP: TTNNQwen3OmniTalkerResizeMLP,
+    Qwen3OmniMoeRMSNorm: TTNNDistributedRMSNorm,
 }
 
 MODEL_NAME = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
@@ -92,6 +102,24 @@ def _register_code2wav_nn_to_ttnn(model) -> dict:
     if code2wav is None or getattr(code2wav, "pre_transformer", None) is None:
         return {}
     return register_module_replacement_dict(code2wav, NN_TO_TTNN_CODE2WAV, model_config=None)
+
+
+def _restore_torch_rmsnorm_in_code_predictor(model) -> None:
+    """``code_predictor`` uses small head dims (e.g. 128); ``TTNNDistributedRMSNorm`` needs ``(dim//32) % mesh_width == 0``
+    and ``rms_norm_post_all_gather`` requires TILE-aligned gamma. Keep HF ``Qwen3OmniMoeRMSNorm`` there."""
+    talker = getattr(model, "talker", None)
+    cp = getattr(talker, "code_predictor", None) if talker is not None else None
+    if cp is None:
+        return
+
+    def _replace_under(m: torch.nn.Module) -> None:
+        for name, child in list(m.named_children()):
+            if isinstance(child, TTNNDistributedRMSNorm) and child.torch_layer is not None:
+                setattr(m, name, child.torch_layer)
+            else:
+                _replace_under(child)
+
+    _replace_under(cp)
 
 
 def _require_symbiote_run_mode():
@@ -561,6 +589,7 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
     register_module_replacement_dict(model.thinker, NN_TO_TTNN_THINKER, model_config=None)
     register_module_replacement_dict(model.talker, NN_TO_TTNN_TALKER, model_config=None)
     _register_code2wav_nn_to_ttnn(model)
+    _restore_torch_rmsnorm_in_code_predictor(model)
     set_device(model, mesh_device)
     _patch_thinker_talker_device_dtype(model)
 
@@ -652,6 +681,7 @@ def test_qwen_omni(mesh_device):
     register_module_replacement_dict(model.thinker, NN_TO_TTNN_THINKER, model_config=None)
     register_module_replacement_dict(model.talker, NN_TO_TTNN_TALKER, model_config=None)
     _register_code2wav_nn_to_ttnn(model)
+    _restore_torch_rmsnorm_in_code_predictor(model)
 
     # Set device for all TTNN modules
     print(f"Setting device for TTNN modules (mesh: {mesh_device.get_num_devices()} device(s))...")
