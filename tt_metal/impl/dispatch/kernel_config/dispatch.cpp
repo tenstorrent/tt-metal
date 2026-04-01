@@ -4,9 +4,9 @@
 
 #include "dispatch.hpp"
 
-#include <host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_metal.hpp>
+#include "impl/buffers/semaphore.hpp"
 #include <map>
 #include <string>
 #include <variant>

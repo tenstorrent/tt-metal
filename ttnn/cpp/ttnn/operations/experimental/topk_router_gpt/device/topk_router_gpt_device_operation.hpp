@@ -8,8 +8,6 @@
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 #include "topk_router_gpt_device_operation_types.hpp"
 #include "topk_router_gpt_program_factory.hpp"
 
@@ -45,8 +43,11 @@ struct TopkRouterGptDeviceOperation {
 
 namespace ttnn::experimental {
 
-constexpr auto topk_router_gpt = ttnn::register_operation<
-    "ttnn::experimental::topk_router_gpt",
-    ttnn::operations::experimental::topk_router_gpt::TopkRouterGptDeviceOperation>();
+std::tuple<Tensor, Tensor> topk_router_gpt(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    const ttnn::Tensor& bias_tensor,
+    uint32_t k,
+    uint32_t num_experts);
 
 }  // namespace ttnn::experimental

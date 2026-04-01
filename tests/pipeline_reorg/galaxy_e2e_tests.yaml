@@ -36,7 +36,7 @@
     bh_galaxy:
       timeout: 30
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
-  team: fabric
+  team: scaleout
 
 - name: Galaxy Fabric 2D Torus Nightly Tests
   cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_2d_torus_nightly.yaml
@@ -44,7 +44,7 @@
     wh_galaxy:
       timeout: 45
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
-  team: fabric
+  team: scaleout
 
 - name: Galaxy Fabric Multi-Mesh 4x4 and 2x4s stability tests
   cmd: |
@@ -54,7 +54,7 @@
     wh_galaxy:
       timeout: 15
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
-  team: fabric
+  team: scaleout
 
 - name: Galaxy Fabric Multi-mesh 2x8 and 2x4s stability tests
   cmd: |
@@ -64,7 +64,7 @@
     wh_galaxy:
       timeout: 15
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
-  team: fabric
+  team: scaleout
 
 # Blackhole Galaxy e2e tests
 - name: BH Galaxy CCL tests
@@ -81,7 +81,7 @@
     bh_galaxy:
       timeout: 20
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
-  team: fabric
+  team: scaleout
 
 - name: BH Galaxy Socket Pipeline Single Galaxy
   cmd: |
@@ -91,4 +91,4 @@
     bh_galaxy:
       timeout: 10
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
-  team: fabric
+  team: scaleout

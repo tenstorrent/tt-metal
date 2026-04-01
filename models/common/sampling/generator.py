@@ -461,8 +461,7 @@ def format_sampling_params(sampling_params, max_batch_size):
         if repetition_penalty[i] == 0:
             repetition_penalty[i] = defaults["repetition_penalty"]
 
-    return replace(
-        sampling_params,
+    kwargs = dict(
         temperature=temperature,
         top_p=top_p,
         top_k=top_k,
@@ -470,9 +469,16 @@ def format_sampling_params(sampling_params, max_batch_size):
         frequency_penalty=frequency_penalty,
         repetition_penalty=repetition_penalty,
         seed=seed,
-        num_logprobs=num_logprobs,
-        enable_log_probs=enable_log_probs,
     )
+    # Only include logprobs fields if the input dataclass has them
+    # (vLLM's TTSamplingParams may not have these fields)
+    input_fields = {f.name for f in fields(sampling_params)}
+    if "num_logprobs" in input_fields:
+        kwargs["num_logprobs"] = num_logprobs
+    if "enable_log_probs" in input_fields:
+        kwargs["enable_log_probs"] = enable_log_probs
+
+    return replace(sampling_params, **kwargs)
 
 
 def broadcast_sampling_params(
