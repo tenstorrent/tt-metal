@@ -9,6 +9,7 @@
 #include <optional>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 
 #include "hostdev/device_print_common.h"
 #include "hostdev/device_print_structures.h"
@@ -589,7 +590,7 @@ struct device_print_type_info {
 };
 
 // Type-to-info mapping for format strings and serialization
-template <typename T>
+template <typename T, typename = void>
 struct device_print_type {
     static constexpr device_print_type_info value = {'#', 0};  // Unknown type default
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, T argument) {
@@ -700,6 +701,28 @@ struct device_print_type<bf16_t> {
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, bf16_t argument) {
         *reinterpret_cast<device_print_buffer_ptr<uint16_t>>(device_print_buffer + offset) =
             static_cast<uint16_t>(argument.val);
+    }
+};
+
+// On some platforms (e.g. 32-bit RISC-V), 'int'/'unsigned int' are distinct types from
+// 'int32_t'/'uint32_t' (which are typedefs for 'long'/'unsigned long'). Add forwarding
+// specializations so that enum underlying types resolve correctly.
+template <typename T>
+struct device_print_type<
+    T,
+    std::enable_if_t<
+        std::is_integral_v<T> && !std::is_same_v<T, bool> && sizeof(T) == 4 && !std::is_same_v<T, std::int32_t> &&
+        !std::is_same_v<T, std::uint32_t>>> {
+    static constexpr device_print_type_info value =
+        std::is_signed_v<T> ? device_print_type<std::int32_t>::value : device_print_type<std::uint32_t>::value;
+    static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, T argument) {
+        if constexpr (std::is_signed_v<T>) {
+            device_print_type<std::int32_t>::serialize(
+                device_print_buffer, offset, static_cast<std::int32_t>(argument));
+        } else {
+            device_print_type<std::uint32_t>::serialize(
+                device_print_buffer, offset, static_cast<std::uint32_t>(argument));
+        }
     }
 };
 
@@ -814,6 +837,19 @@ struct device_print_type<TileSlice<128>> {
 };
 #endif
 
+// Enum types: serialized as their underlying type.
+template <typename T>
+struct device_print_type<T, std::enable_if_t<std::is_enum_v<T>>> {
+    using underlying_type = std::underlying_type_t<T>;
+
+    static constexpr device_print_type_info value = device_print_type<underlying_type>::value;
+
+    static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, T argument) {
+        device_print_type<underlying_type>::serialize(
+            device_print_buffer, offset, static_cast<underlying_type>(argument));
+    }
+};
+
 // Helper to get type character for a single type, removing cv-qualifiers and references
 template <typename T>
 constexpr device_print_type_info get_type_info() {
@@ -866,6 +902,107 @@ constexpr std::array<uint32_t, sizeof...(Args)> get_arg_offsets() {
     return arg_offset;
 }
 
+// Extracts the fully-qualified type name from __PRETTY_FUNCTION__ at compile time.
+// GCC format: "... [with T = test::deep::Enum1]"
+template <typename T>
+constexpr auto get_type_name_string() {
+#if defined(__GNUC__)
+    constexpr const char* fn = __PRETTY_FUNCTION__;
+#else
+    static_assert(false, "get_type_name_string requires __PRETTY_FUNCTION__ (GCC/Clang)");
+#endif
+    std::size_t fn_len = 0;
+    while (fn[fn_len] != '\0') {
+        fn_len++;
+    }
+
+    // Search for "T = " in "[with T = TypeName]"
+    std::size_t name_start = 0;
+    for (std::size_t i = 0; i + 3 < fn_len; i++) {
+        if (fn[i] == 'T' && fn[i + 1] == ' ' && fn[i + 2] == '=' && fn[i + 3] == ' ') {
+            name_start = i + 4;
+            break;
+        }
+    }
+    // End is at ']' (last char before null, or ';' for multiple template params)
+    std::size_t name_end = fn_len - 1;
+
+    helpers::static_string<1024> result;
+    for (std::size_t i = name_start; i < name_end; i++) {
+        result.push_back(fn[i]);
+    }
+    return result;
+}
+
+// Returns the extra characters needed in the format string for an enum type argument.
+// Non-enum types contribute 0 extra chars.
+template <typename T>
+constexpr std::size_t enum_extra_format_chars() {
+    using base = std::remove_cv_t<std::remove_reference_t<T>>;
+    if constexpr (std::is_enum_v<base>) {
+        constexpr auto name = get_type_name_string<base>();
+        return 4 + name.size;  // '/e_' + base_type_char + '_' + name  (minus the 1 char already in baseline)
+    } else {
+        return 0;
+    }
+}
+
+// Detect at compile time whether an enum type has an operator| that returns the enum type itself
+// (i.e. is a flag/bitmask enum). Unscoped enums implicitly convert to int so T|T works for all
+// of them via integer promotion — we require the result type to be T to distinguish true flag enums.
+template <typename T, typename = void>
+struct is_flag_enum : std::false_type {};
+
+template <typename T>
+struct is_flag_enum<
+    T,
+    std::enable_if_t<std::is_enum_v<T> && std::is_same_v<T, decltype(std::declval<T>() | std::declval<T>())>>>
+    : std::true_type {};
+
+// Writes the type format info for a single type into the result string.
+// Simple types: single character (e.g. 'I' for uint32_t)
+// Regular enums: /e_<base_char>_<EnumTypeName>
+// Flag enums (with operator|): /E_<base_char>_<EnumTypeName>
+template <typename T, std::size_t MaxLen>
+constexpr void write_type(helpers::static_string<MaxLen>& result) {
+    using base = std::remove_cv_t<std::remove_reference_t<T>>;
+    if constexpr (std::is_enum_v<base>) {
+        constexpr auto enum_name = get_type_name_string<base>();
+        result.push_back('/');
+        result.push_back(is_flag_enum<base>::value ? 'E' : 'e');
+        result.push_back('_');
+        result.push_back(device_print_type<base>::value.type_char);
+        result.push_back('_');
+        for (std::size_t j = 0; j < enum_name.size; j++) {
+            result.push_back(enum_name.data[j]);
+        }
+    } else {
+        result.push_back(device_print_type<base>::value.type_char);
+    }
+}
+
+// Finds the arg_index-th type in the Args... pack and calls write_type for it.
+template <typename... Types>
+struct TypeWriter;
+
+template <>
+struct TypeWriter<> {
+    template <std::size_t MaxLen>
+    static constexpr void write(helpers::static_string<MaxLen>&, uint32_t, uint32_t = 0) {}
+};
+
+template <typename First, typename... Rest>
+struct TypeWriter<First, Rest...> {
+    template <std::size_t MaxLen>
+    static constexpr void write(helpers::static_string<MaxLen>& result, uint32_t arg_index, uint32_t current = 0) {
+        if (current == arg_index) {
+            write_type<First>(result);
+        } else {
+            TypeWriter<Rest...>::write(result, arg_index, current + 1);
+        }
+    }
+};
+
 // Main function to update format string with type information
 // Supports both {} and {N} placeholder styles (fmtlib-compatible)
 template <std::size_t N, typename... Args>
@@ -881,7 +1018,8 @@ constexpr auto update_format_string(const char (&format)[N]) {
     // Use sizeof...(Args) to pick the right bound rather than always assuming 2.
     constexpr std::size_t num_args_ = sizeof...(Args);
     constexpr std::size_t max_index_digits_ = (num_args_ <= 9) ? 1 : (num_args_ <= 99) ? 2 : (num_args_ <= 999) ? 3 : 4;
-    constexpr std::size_t result_len = format_len + (format_len / 2 + 1) * (2 + max_index_digits_);
+    constexpr std::size_t enum_extra_ = (enum_extra_format_chars<Args>() + ... + 0);
+    constexpr std::size_t result_len = format_len + (format_len / 2 + 1) * (2 + max_index_digits_) + enum_extra_;
 
     helpers::static_string<result_len> result;
 
@@ -911,9 +1049,9 @@ constexpr auto update_format_string(const char (&format)[N]) {
             // Output the index (updated with reordered index)
             result.push_back_uint32(arg_reorder[arg_index]);
 
-            // Add comma and type character
+            // Add comma and type character (enum types emit extended type info)
             result.push_back(',');
-            result.push_back(type_infos[arg_index].type_char);
+            TypeWriter<Args...>::write(result, arg_index);
 
             // If there are any format specifiers, add them
             bool has_format_spec = token.fill.has_value() || token.align.has_value() || token.sign.has_value() ||
@@ -1083,45 +1221,50 @@ void release_lock();
 
 // Takes lock unconditionally. Prints kernel id message if needed.
 void acquire_lock() {
+    // We need to acquire lock only if we have more than 1 processor, otherwise there is no contention.
+    if constexpr (DevicePrintMemoryLayout::PROCESSOR_COUNT > 1) {
 #if defined(ARCH_WORMHOLE)
-    volatile uint32_t* lock_ptr = &(get_device_print_buffer()->aux.lock);
+        volatile uint32_t* lock_ptr = &(get_device_print_buffer()->aux.lock);
 
-    while (true) {
-    again:
-        // Wait until lock is free (0)
-        while (*lock_ptr != 0) {
+        while (true) {
+        again:
+            // Wait until lock is free (0)
+            while (*lock_ptr != 0) {
+                invalidate_l1_cache();
+#if defined(COMPILE_FOR_ERISC)
+                internal_::risc_context_switch();
+#endif
+            }
+
+            // Write risc_id to lock to attempt to acquire it
+            *lock_ptr = PROCESSOR_INDEX + 1;  // Use 1-based index to avoid writing 0 which is the free state
+
+            for (uint32_t repeat = 0; repeat < DevicePrintMemoryLayout::PROCESSOR_COUNT; ++repeat) {
+                // Make sure the write has propagated and other riscs see the updated value.
+                invalidate_l1_cache();
+                if (*lock_ptr != PROCESSOR_INDEX + 1) {
+                    goto again;
+                }
+            }
+
+            // One last check that we have successfully acquired the lock.
+            invalidate_l1_cache();
+            if (*lock_ptr == PROCESSOR_INDEX + 1) {
+                break;  // Successfully acquired lock
+            }
+        }
+#else
+        auto& lock_atomic = get_device_print_buffer()->aux.lock;
+
+        while (lock_atomic.exchange(1) != 0) {
+            // Failed to acquire lock, wait and try again
             invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
             internal_::risc_context_switch();
 #endif
         }
-
-        // Write risc_id to lock to attempt to acquire it
-        *lock_ptr = PROCESSOR_INDEX + 1;  // Use 1-based index to avoid writing 0 which is the free state
-
-        // Make sure the write has propagated and other riscs see the updated value.
-        invalidate_l1_cache();
-        if (*lock_ptr != PROCESSOR_INDEX + 1) {
-            goto again;
-        }
-
-        // One last check that we have successfully acquired the lock.
-        invalidate_l1_cache();
-        if (*lock_ptr == PROCESSOR_INDEX + 1) {
-            break;  // Successfully acquired lock
-        }
-    }
-#else
-    auto& lock_atomic = get_device_print_buffer()->aux.lock;
-
-    while (lock_atomic.exchange(1) != 0) {
-        // Failed to acquire lock, wait and try again
-        invalidate_l1_cache();
-#if defined(COMPILE_FOR_ERISC)
-        internal_::risc_context_switch();
 #endif
     }
-#endif
 
     // After acquiring the lock, invalidate our L1 cache to ensure we see the most up-to-date data in the buffer
     invalidate_l1_cache();

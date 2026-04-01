@@ -34,8 +34,7 @@ std::pair<
     ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
     tt::tt_metal::distributed::MeshShape>
 compute_output_placements_and_shape(
-    const std::vector<std::reference_wrapper<const tt::tt_metal::Tensor>>& tensors,
-    const tt::tt_metal::Tensor& first_tensor);
+    const std::vector<std::reference_wrapper<const tt::tt_metal::Tensor>>& tensors);
 
 /**
  * Non-template implementation of tensor coordinate extraction.

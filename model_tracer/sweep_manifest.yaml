@@ -43,7 +43,7 @@ targets:
   lead_models:
     - model:
         - deepseek_v3
-      trace: [35]
+      trace: [2]
 
   model_traced:
     - model:
@@ -59,35 +59,39 @@ targets:
         - qwen2.5-coder-32b
         - qwen2.5-coder-7b-instruct
         - qwen3-32b
-        - qwen3-32b-test
+        - qwen3-32b_2
         - segmentation
         - sentence_bert
         - stable_diffusion_xl_base
-        - vit-base-patch16-224
-        - vit_performant_imagenet_inference
+        - vit
+        - vit_2
         - whisper
-      trace: [1,538,548]
+      trace: [1,3,4]
 
 registry:
   - trace_id: 1
     status: active
     models: [whisper]
     hardware: {board_type: Blackhole, device_series: p150b, card_count: 1}
+    trace_uid: migrated-v5-trace-1-2f0ed61c-b2ae-4c5b-9472-4c924f34e579
     tt_metal_sha: null
     config_count: 318
-    loaded_at: '2026-03-14'
-    notes: 'Consolidated p150 trace — whisper blackhole (v2.5 migration)'
+    loaded_at: '2026-03-30'
+    notes: 'migrated from ttnn_ops_v5 by reconstructing trace 1 from v5 and loading in v6'
 
-  - trace_id: 35
+
+  - trace_id: 2
     status: active
     models: [deepseek_v3]
     hardware: {board_type: Wormhole, device_series: tt-galaxy-wh, card_count: 32}
+    trace_uid: migrated-v5-trace-35-61aef8ba-9232-47d2-86e2-24279cc72cba
     tt_metal_sha: null
     config_count: 323
-    loaded_at: '2026-03-14'
-    notes: 'Consolidated lead_models traces (v2.5 migration)'
+    loaded_at: '2026-03-30'
+    notes: 'migrated from ttnn_ops_v5 by reconstructing trace 35 from v5 and loading in v6'
 
-  - trace_id: 538
+
+  - trace_id: 3
     status: active
     models:
       - deepseek-llm-7b-chat
@@ -102,24 +106,27 @@ registry:
       - segmentation
       - sentence_bert
       - stable_diffusion_xl_base
-      - vit-base-patch16-224
-      - vit_performant_imagenet_inference
+      - vit
+      - vit_2
       - whisper
     hardware: {board_type: Wormhole, device_series: n300, card_count: 1}
+    trace_uid: migrated-v5-trace-538-079b2e30-eaf2-4f68-804f-144a768a4d2a
     tt_metal_sha: null
     config_count: 6199
-    loaded_at: '2026-03-21'
-    notes: 'Consolidated n300 trace — single-card models (v2.5 migration)'
+    loaded_at: '2026-03-30'
+    notes: 'migrated from ttnn_ops_v5 by reconstructing trace 538 from v5 and loading in v6'
 
-  - trace_id: 548
+
+  - trace_id: 4
     status: active
     models:
       - deepseek-r1-distill-qwen-32b
       - qwen2.5-coder-32b
       - qwen3-32b
-      - qwen3-32b-test
+      - qwen3-32b_2
     hardware: {board_type: Wormhole, device_series: n300, card_count: 4}
+    trace_uid: migrated-v5-trace-548-10ca75b6-0ec7-4beb-ad58-5026556c162d
     tt_metal_sha: null
     config_count: 831
-    loaded_at: '2026-03-24'
-    notes: 'Split from trace 538: card_count=4 multi-card configs'
+    loaded_at: '2026-03-30'
+    notes: 'migrated from ttnn_ops_v5 by reconstructing trace 548 from v5 and loading in v6'

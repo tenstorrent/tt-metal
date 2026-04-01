@@ -192,7 +192,7 @@ public:
     [[nodiscard]] Tensor reshape(
         const tt::tt_metal::Shape& new_logical_shape, const tt::tt_metal::Shape& new_padded_shape) const;
 
-    Tensor with_tensor_topology(TensorTopology tensor_topology) const;
+    void update_tensor_topology(const TensorTopology& tensor_topology);
     // ======================================================================================
     //                                      Getters
     // ======================================================================================

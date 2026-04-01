@@ -60,20 +60,22 @@ void kernel_main() {
     constexpr uint32_t MtKt = get_compile_time_arg_val(19);  // if 0
     constexpr uint32_t in0_B = get_compile_time_arg_val(20);
     constexpr uint32_t in1_B = get_compile_time_arg_val(21);
+    constexpr uint32_t in0_reuse_in_CB = get_compile_time_arg_val(22);
 
     // sparsity args
 
-    constexpr uint32_t batchB = get_compile_time_arg_val(22);
-    constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(23);
+    constexpr uint32_t batchB = get_compile_time_arg_val(23);
+    constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(24);
     // Boolean that is set when input A is sparse. If set, both input A and B are assumed to be sparse.
     // Based on the sparsity tensor, the corresponding batch in input A and B are skipped.
-    constexpr bool bcast_A = (bool)get_compile_time_arg_val(24);
+    constexpr bool bcast_A = (bool)get_compile_time_arg_val(25);
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
-    constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(25);
+    constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(26);
 
-    constexpr bool fuse_op = (bool)get_compile_time_arg_val(26);
+    constexpr bool fuse_op = (bool)get_compile_time_arg_val(27);
 
-    constexpr auto in0_args = TensorAccessorArgs<27>();
+    constexpr auto in0_args = TensorAccessorArgs<28>();
+
     constexpr auto sparsity_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
 
     // 0 is used to specify "INVALID" state, i.e. when the multicasted data has not been received by the receiver.
@@ -384,7 +386,7 @@ void kernel_main() {
         // optimization we just read the tensor slice once into each core's L1 and keep it there for all weight
         // batches since the needed in0 data is already in L1 after batch 0, we can just move read pointer for this
         // CB so compute kernel thinks it has new data
-        if (in0_B == 1 && in1_B > 1) {
+        if (in0_reuse_in_CB) {
             for (uint32_t fake_batch = 0; fake_batch < in1_B - in0_B; ++fake_batch) {
                 for (uint32_t blk = 0; blk < num_blocks_inner_dim; ++blk) {
                     cb_in0.reserve_back(in0_block_num_tiles);
