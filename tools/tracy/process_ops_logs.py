@@ -456,6 +456,39 @@ PERF_COUNTER_CSV_HEADERS = [
     "RISC Core L1 Util Median (%)",
     "RISC Core L1 Util Max (%)",
     "RISC Core L1 Util Avg (%)",
+    # === L1 composite metrics ===
+    "L1 Total Bandwidth Util Min (%)",
+    "L1 Total Bandwidth Util Median (%)",
+    "L1 Total Bandwidth Util Max (%)",
+    "L1 Total Bandwidth Util Avg (%)",
+    "L1 Read vs Write Ratio Min (%)",
+    "L1 Read vs Write Ratio Median (%)",
+    "L1 Read vs Write Ratio Max (%)",
+    "L1 Read vs Write Ratio Avg (%)",
+    "NOC Ring 0 Asymmetry Min (%)",
+    "NOC Ring 0 Asymmetry Median (%)",
+    "NOC Ring 0 Asymmetry Max (%)",
+    "NOC Ring 0 Asymmetry Avg (%)",
+    "L1 Contention Index Min (%)",
+    "L1 Contention Index Median (%)",
+    "L1 Contention Index Max (%)",
+    "L1 Contention Index Avg (%)",
+    "Unpacker L1 Efficiency Min (%)",
+    "Unpacker L1 Efficiency Median (%)",
+    "Unpacker L1 Efficiency Max (%)",
+    "Unpacker L1 Efficiency Avg (%)",
+    "Packer L1 Efficiency Min (%)",
+    "Packer L1 Efficiency Median (%)",
+    "Packer L1 Efficiency Max (%)",
+    "Packer L1 Efficiency Avg (%)",
+    "NOC vs Compute Balance Min (%)",
+    "NOC vs Compute Balance Median (%)",
+    "NOC vs Compute Balance Max (%)",
+    "NOC vs Compute Balance Avg (%)",
+    "TDMA vs NOC L1 Share Min (%)",
+    "TDMA vs NOC L1 Share Median (%)",
+    "TDMA vs NOC L1 Share Max (%)",
+    "TDMA vs NOC L1 Share Avg (%)",
 ]
 
 _PERF_COUNTER_CSV_HEADERS_SET = set(PERF_COUNTER_CSV_HEADERS)
@@ -1648,6 +1681,95 @@ def _enrich_ops_from_device_logs(
             if has_counter("L1_1_RISC_CORE"):
                 risc_core_util = compute_util_metric("L1_1_RISC_CORE")
 
+            # === L1 composite metrics (multi-counter) ===
+            l1_total_bw = {}
+            l1_rw_ratio = {}
+            noc_asymmetry = {}
+            l1_contention = {}
+            unpacker_l1_eff = {}
+            packer_l1_eff = {}
+            noc_vs_compute = {}
+            tdma_vs_noc = {}
+
+            if has_counter("L1_0_UNPACKER_0") and has_counter("L1_0_NOC_RING0_OUTGOING_0"):
+                # L1 Total Bandwidth Util: sum of all 8 port reqs / (8 * ref_cnt)
+                packer_key = "L1_0_UNIFIED_PACKER" if has_counter("L1_0_UNIFIED_PACKER") else "L1_0_UNPACKER_1_ECC_PACK1"
+                port_keys = ["L1_0_UNPACKER_0", packer_key, "L1_0_TDMA_BUNDLE_0_RISC", "L1_0_TDMA_BUNDLE_1_TRISC",
+                             "L1_0_NOC_RING0_OUTGOING_0", "L1_0_NOC_RING0_OUTGOING_1",
+                             "L1_0_NOC_RING0_INCOMING_0", "L1_0_NOC_RING0_INCOMING_1"]
+                total_req = sum(get_counter_series(k) for k in port_keys if has_counter(k))
+                ref = get_counter_ref_cnt("L1_0_UNPACKER_0")
+                ratio = (total_req / (8 * ref) * 100).replace([float("inf"), -float("inf")], nan)
+                grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+                l1_total_bw = {"min": grouped.min().to_dict(), "median": grouped.median().to_dict(),
+                               "max": grouped.max().to_dict(), "avg": grouped.mean().to_dict()}
+
+                # L1 Read vs Write Ratio
+                reads = get_counter_series("L1_0_UNPACKER_0") + get_counter_series("L1_0_NOC_RING0_OUTGOING_0") + get_counter_series("L1_0_NOC_RING0_OUTGOING_1")
+                writes = get_counter_series(packer_key) + get_counter_series("L1_0_NOC_RING0_INCOMING_0") + get_counter_series("L1_0_NOC_RING0_INCOMING_1")
+                ratio = (reads / (reads + writes) * 100).replace([float("inf"), -float("inf")], nan)
+                grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+                l1_rw_ratio = {"min": grouped.min().to_dict(), "median": grouped.median().to_dict(),
+                               "max": grouped.max().to_dict(), "avg": grouped.mean().to_dict()}
+
+                # NOC Ring 0 Asymmetry
+                noc_out = get_counter_series("L1_0_NOC_RING0_OUTGOING_0") + get_counter_series("L1_0_NOC_RING0_OUTGOING_1")
+                noc_in = get_counter_series("L1_0_NOC_RING0_INCOMING_0") + get_counter_series("L1_0_NOC_RING0_INCOMING_1")
+                ratio = (noc_out / (noc_out + noc_in) * 100).replace([float("inf"), -float("inf")], nan)
+                grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+                noc_asymmetry = {"min": grouped.min().to_dict(), "median": grouped.median().to_dict(),
+                                 "max": grouped.max().to_dict(), "avg": grouped.mean().to_dict()}
+
+                # TDMA vs NOC L1 Share
+                tdma = get_counter_series("L1_0_TDMA_BUNDLE_0_RISC") + get_counter_series("L1_0_TDMA_BUNDLE_1_TRISC")
+                ratio = (tdma / (tdma + noc_out + noc_in) * 100).replace([float("inf"), -float("inf")], nan)
+                grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+                tdma_vs_noc = {"min": grouped.min().to_dict(), "median": grouped.median().to_dict(),
+                               "max": grouped.max().to_dict(), "avg": grouped.mean().to_dict()}
+
+            if has_counter("L1_0_UNPACKER_0_GRANT") and has_counter("L1_0_NOC_RING0_OUTGOING_0_GRANT"):
+                # L1 Contention Index
+                bp_pairs = [("L1_0_UNPACKER_0", "L1_0_UNPACKER_0_GRANT"),
+                            ("L1_0_NOC_RING0_OUTGOING_0", "L1_0_NOC_RING0_OUTGOING_0_GRANT"),
+                            ("L1_0_NOC_RING0_OUTGOING_1", "L1_0_NOC_RING0_OUTGOING_1_GRANT"),
+                            ("L1_0_NOC_RING0_INCOMING_0", "L1_0_NOC_RING0_INCOMING_0_GRANT"),
+                            ("L1_0_NOC_RING0_INCOMING_1", "L1_0_NOC_RING0_INCOMING_1_GRANT")]
+                bp_sum = None
+                bp_count = 0
+                for req_k, grant_k in bp_pairs:
+                    if has_counter(req_k) and has_counter(grant_k):
+                        req_s = get_counter_series(req_k)
+                        grant_s = get_counter_series(grant_k)
+                        bp = ((req_s - grant_s) / req_s * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
+                        bp_sum = bp if bp_sum is None else bp_sum + bp
+                        bp_count += 1
+                if bp_count > 0:
+                    avg_bp = bp_sum / bp_count
+                    grouped = avg_bp.groupby(level=["run_host_id", "trace_id_count"])
+                    l1_contention = {"min": grouped.min().to_dict(), "median": grouped.median().to_dict(),
+                                     "max": grouped.max().to_dict(), "avg": grouped.mean().to_dict()}
+
+            if has_counter("L1_0_UNPACKER_0_GRANT") and has_counter("UNPACK0_BUSY_THREAD0"):
+                unpacker_l1_eff = compute_ratio_metric("L1_0_UNPACKER_0_GRANT", "UNPACK0_BUSY_THREAD0")
+
+            if has_counter("L1_0_PORT1_GRANT") and has_counter("PACKER_BUSY"):
+                # Packer port is shared (other traffic uses it too), so cap at 100%
+                grant = get_counter_series("L1_0_PORT1_GRANT")
+                busy = get_counter_series("PACKER_BUSY")
+                ratio = (grant / busy * 100).clip(upper=100).replace([float("inf"), -float("inf")], nan)
+                grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+                packer_l1_eff = {"min": grouped.min().to_dict(), "median": grouped.median().to_dict(),
+                                 "max": grouped.max().to_dict(), "avg": grouped.mean().to_dict()}
+
+            if has_counter("FPU_COUNTER") and has_counter("L1_0_NOC_RING0_OUTGOING_0"):
+                noc_total = get_counter_series("L1_0_NOC_RING0_OUTGOING_0") + get_counter_series("L1_0_NOC_RING0_OUTGOING_1") + \
+                            get_counter_series("L1_0_NOC_RING0_INCOMING_0") + get_counter_series("L1_0_NOC_RING0_INCOMING_1")
+                fpu = get_counter_series("FPU_COUNTER")
+                ratio = (noc_total / (fpu + noc_total) * 100).replace([float("inf"), -float("inf")], nan)
+                grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+                noc_vs_compute = {"min": grouped.min().to_dict(), "median": grouped.median().to_dict(),
+                                  "max": grouped.max().to_dict(), "avg": grouped.mean().to_dict()}
+
         # Enrich ops with device data and perf counters
         for device_op, device_op_time in zip(host_ops_by_device[device], device_ops_time):
             # Verify match again (redundant but safe)
@@ -1843,6 +1965,16 @@ def _enrich_ops_from_device_logs(
                 assign_metric("THCON Idle Wait T0", thcon_wait)
                 assign_metric("MOVE Idle Wait T0", move_wait)
                 assign_metric("RISC Core L1 Util", risc_core_util)
+
+                # L1 composite metrics
+                assign_metric("L1 Total Bandwidth Util", l1_total_bw)
+                assign_metric("L1 Read vs Write Ratio", l1_rw_ratio)
+                assign_metric("NOC Ring 0 Asymmetry", noc_asymmetry)
+                assign_metric("L1 Contention Index", l1_contention)
+                assign_metric("Unpacker L1 Efficiency", unpacker_l1_eff)
+                assign_metric("Packer L1 Efficiency", packer_l1_eff)
+                assign_metric("NOC vs Compute Balance", noc_vs_compute)
+                assign_metric("TDMA vs NOC L1 Share", tdma_vs_noc)
 
         if perf_counter_df is not None and not perf_counter_df.empty:
             print_efficiency_metrics_summary(pd.DataFrame(host_ops_by_device[device]), device)
@@ -2360,6 +2492,96 @@ def get_device_data_generate_report(
                     eff_pivot["RISC Core L1 Util"] = eff_pivot.apply(
                         safe_util("value_L1_1_RISC_CORE", "ref_cnt_L1_1_RISC_CORE"), axis=1)
 
+                    # === L1 composite metrics (multi-counter) ===
+                    def l1_total_bw(x):
+                        """Sum of all 8 L1_0 port req counts / (8 * ref_cnt)."""
+                        ports = ["value_L1_0_UNPACKER_0",
+                                 "value_L1_0_UNIFIED_PACKER" if "value_L1_0_UNIFIED_PACKER" in eff_pivot.columns
+                                 else "value_L1_0_UNPACKER_1_ECC_PACK1",
+                                 "value_L1_0_TDMA_BUNDLE_0_RISC", "value_L1_0_TDMA_BUNDLE_1_TRISC",
+                                 "value_L1_0_NOC_RING0_OUTGOING_0", "value_L1_0_NOC_RING0_OUTGOING_1",
+                                 "value_L1_0_NOC_RING0_INCOMING_0", "value_L1_0_NOC_RING0_INCOMING_1"]
+                        total = sum(x.get(p, 0) for p in ports)
+                        ref = x.get("ref_cnt_L1_0_UNPACKER_0", 0)
+                        return (total / (8 * ref) * 100) if ref > 0 else nan
+                    eff_pivot["L1 Total Bandwidth Util"] = eff_pivot.apply(l1_total_bw, axis=1)
+
+                    def l1_rw_ratio(x):
+                        """(read ports) / (write ports). Read = Unpacker + NOC Out, Write = Packer + NOC In."""
+                        reads = (x.get("value_L1_0_UNPACKER_0", 0) +
+                                 x.get("value_L1_0_NOC_RING0_OUTGOING_0", 0) +
+                                 x.get("value_L1_0_NOC_RING0_OUTGOING_1", 0))
+                        writes = (x.get("value_L1_0_UNIFIED_PACKER",
+                                  x.get("value_L1_0_UNPACKER_1_ECC_PACK1", 0)) +
+                                  x.get("value_L1_0_NOC_RING0_INCOMING_0", 0) +
+                                  x.get("value_L1_0_NOC_RING0_INCOMING_1", 0))
+                        total = reads + writes
+                        return (reads / total * 100) if total > 0 else nan
+                    eff_pivot["L1 Read vs Write Ratio"] = eff_pivot.apply(l1_rw_ratio, axis=1)
+
+                    def noc_asymmetry(x):
+                        """NOC outgoing / (outgoing + incoming). 50% = balanced."""
+                        out0 = x.get("value_L1_0_NOC_RING0_OUTGOING_0", 0) + x.get("value_L1_0_NOC_RING0_OUTGOING_1", 0)
+                        in0 = x.get("value_L1_0_NOC_RING0_INCOMING_0", 0) + x.get("value_L1_0_NOC_RING0_INCOMING_1", 0)
+                        total = out0 + in0
+                        return (out0 / total * 100) if total > 0 else nan
+                    eff_pivot["NOC Ring 0 Asymmetry"] = eff_pivot.apply(noc_asymmetry, axis=1)
+
+                    def l1_contention_index(x):
+                        """Average backpressure across all active L1_0 ports."""
+                        ports = [
+                            ("value_L1_0_UNPACKER_0", "value_L1_0_UNPACKER_0_GRANT"),
+                            ("value_L1_0_NOC_RING0_OUTGOING_0", "value_L1_0_NOC_RING0_OUTGOING_0_GRANT"),
+                            ("value_L1_0_NOC_RING0_OUTGOING_1", "value_L1_0_NOC_RING0_OUTGOING_1_GRANT"),
+                            ("value_L1_0_NOC_RING0_INCOMING_0", "value_L1_0_NOC_RING0_INCOMING_0_GRANT"),
+                            ("value_L1_0_NOC_RING0_INCOMING_1", "value_L1_0_NOC_RING0_INCOMING_1_GRANT"),
+                        ]
+                        bp_values = []
+                        for req_key, grant_key in ports:
+                            req = x.get(req_key, 0)
+                            grant = x.get(grant_key, 0)
+                            if req > 0:
+                                bp_values.append(max(0.0, (req - grant) / req * 100))
+                        return sum(bp_values) / len(bp_values) if bp_values else nan
+                    eff_pivot["L1 Contention Index"] = eff_pivot.apply(l1_contention_index, axis=1)
+
+                    def unpacker_l1_eff(x):
+                        """L1 grant to unpacker / unpacker busy cycles. How well L1 serves the unpacker."""
+                        grant = x.get("value_L1_0_UNPACKER_0_GRANT", 0)
+                        busy = x.get("value_UNPACK0_BUSY_THREAD0", 0)
+                        return (grant / busy * 100) if busy > 0 else nan
+                    eff_pivot["Unpacker L1 Efficiency"] = eff_pivot.apply(unpacker_l1_eff, axis=1)
+
+                    def packer_l1_eff(x):
+                        """L1 grant to packer port / packer busy cycles. Capped at 100%."""
+                        grant = x.get("value_L1_0_PORT1_GRANT", 0)
+                        busy = x.get("value_PACKER_BUSY", 0)
+                        return min(100.0, grant / busy * 100) if busy > 0 else nan
+                    eff_pivot["Packer L1 Efficiency"] = eff_pivot.apply(packer_l1_eff, axis=1)
+
+                    def noc_vs_compute(x):
+                        """NOC cycles / (FPU + NOC cycles). >50% = NOC-bound, <50% = compute-bound."""
+                        noc = (x.get("value_L1_0_NOC_RING0_OUTGOING_0", 0) +
+                               x.get("value_L1_0_NOC_RING0_OUTGOING_1", 0) +
+                               x.get("value_L1_0_NOC_RING0_INCOMING_0", 0) +
+                               x.get("value_L1_0_NOC_RING0_INCOMING_1", 0))
+                        fpu = x.get("value_FPU_COUNTER", 0)
+                        total = fpu + noc
+                        return (noc / total * 100) if total > 0 else nan
+                    eff_pivot["NOC vs Compute Balance"] = eff_pivot.apply(noc_vs_compute, axis=1)
+
+                    def tdma_vs_noc_share(x):
+                        """TDMA L1 share = TDMA / (TDMA + NOC). Shows RISC vs NOC memory traffic split."""
+                        tdma = (x.get("value_L1_0_TDMA_BUNDLE_0_RISC", 0) +
+                                x.get("value_L1_0_TDMA_BUNDLE_1_TRISC", 0))
+                        noc = (x.get("value_L1_0_NOC_RING0_OUTGOING_0", 0) +
+                               x.get("value_L1_0_NOC_RING0_OUTGOING_1", 0) +
+                               x.get("value_L1_0_NOC_RING0_INCOMING_0", 0) +
+                               x.get("value_L1_0_NOC_RING0_INCOMING_1", 0))
+                        total = tdma + noc
+                        return (tdma / total * 100) if total > 0 else nan
+                    eff_pivot["TDMA vs NOC L1 Share"] = eff_pivot.apply(tdma_vs_noc_share, axis=1)
+
                     # Aggregate metrics per operation (min, median, max, avg)
                     grouped_eff = eff_pivot.groupby(["run_host_id", "trace_id_count"])
 
@@ -2439,6 +2661,15 @@ def get_device_data_generate_report(
                         "THCON Idle Wait T0",
                         "MOVE Idle Wait T0",
                         "RISC Core L1 Util",
+                        # L1 composite metrics
+                        "L1 Total Bandwidth Util",
+                        "L1 Read vs Write Ratio",
+                        "NOC Ring 0 Asymmetry",
+                        "L1 Contention Index",
+                        "Unpacker L1 Efficiency",
+                        "Packer L1 Efficiency",
+                        "NOC vs Compute Balance",
+                        "TDMA vs NOC L1 Share",
                     ]
                     # Non-percentage metrics (raw rates)
                     _ipc_metric_names = [

@@ -502,6 +502,15 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "THCON Idle Wait T0",
         "MOVE Idle Wait T0",
         "RISC Core L1 Util",
+        # L1 composite metrics
+        "L1 Total Bandwidth Util",
+        "L1 Read vs Write Ratio",
+        "NOC Ring 0 Asymmetry",
+        "L1 Contention Index",
+        "Unpacker L1 Efficiency",
+        "Packer L1 Efficiency",
+        "NOC vs Compute Balance",
+        "TDMA vs NOC L1 Share",
     ]
 
     # Non-percentage metrics (raw rates, not %)
