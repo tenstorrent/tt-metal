@@ -126,7 +126,8 @@ HostTensor from_vector(std::vector<T>&& buffer, const TensorSpec& spec, T pad_va
                            ? HostBuffer(std::move(buffer))
                            : HostBuffer(encode_tensor_data(ttsl::make_const_span(buffer), spec, pad_value));
 
-    return HostTensor(std::move(host_buffer), buffer_spec, TensorTopology{});
+    auto res = HostTensor(std::move(host_buffer), buffer_spec, TensorTopology{});
+    return to_dtype(res, spec.data_type());
 }
 
 template <typename T>
