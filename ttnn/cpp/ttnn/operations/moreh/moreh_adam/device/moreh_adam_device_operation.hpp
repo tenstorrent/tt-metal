@@ -7,7 +7,6 @@
 #include <variant>
 #include <vector>
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/types.hpp"

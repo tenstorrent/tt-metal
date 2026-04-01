@@ -9,7 +9,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/decorators.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

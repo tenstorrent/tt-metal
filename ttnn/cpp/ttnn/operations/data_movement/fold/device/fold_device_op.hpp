@@ -10,7 +10,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::data_movement {
 

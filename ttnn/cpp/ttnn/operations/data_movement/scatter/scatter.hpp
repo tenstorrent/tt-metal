@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
-#include "ttnn/decorators.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

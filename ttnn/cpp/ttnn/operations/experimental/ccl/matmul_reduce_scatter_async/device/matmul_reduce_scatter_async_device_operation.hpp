@@ -13,7 +13,6 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -26,6 +25,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation_types.hpp"
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::experimental::prim {
 

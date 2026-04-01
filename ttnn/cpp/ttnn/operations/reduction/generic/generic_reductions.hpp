@@ -8,9 +8,9 @@
 #include <optional>
 #include <variant>
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/core_coord.hpp>
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace operations::reduction {

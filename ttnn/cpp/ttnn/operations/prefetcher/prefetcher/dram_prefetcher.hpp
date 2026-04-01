@@ -8,9 +8,8 @@
 #include <optional>
 #include <vector>
 
-#include "ttnn/decorators.hpp"
-
 #include <tt-metalium/global_circular_buffer.hpp>
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

@@ -4,6 +4,8 @@
 
 #include "program_descriptors.hpp"
 
+#include "ttnn/types.hpp"
+
 #include <algorithm>
 #include <cstdint>
 #include <optional>

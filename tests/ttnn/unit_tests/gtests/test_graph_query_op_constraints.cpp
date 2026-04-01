@@ -21,7 +21,6 @@
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/shape_base.hpp>
 #include "impl/context/metal_context.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/graph/graph_query_op_constraints.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"

@@ -4,9 +4,10 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/split/device/split_device_operation_types.hpp"
 #include "ttnn/operations/data_movement/split/device/split_program_factory.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
 

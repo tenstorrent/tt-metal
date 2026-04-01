@@ -5,6 +5,7 @@
 #include "view.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
+#include "ttnn/core.hpp"
 
 namespace ttnn {
 

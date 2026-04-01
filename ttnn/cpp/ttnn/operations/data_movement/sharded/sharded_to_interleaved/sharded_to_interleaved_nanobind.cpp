@@ -10,6 +10,7 @@
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "sharded_to_interleaved.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/types.hpp"
 
 using namespace tt::tt_metal;

@@ -57,7 +57,7 @@ void bind_strided_reduce_scatter_async(nb::module_& mod) {
         Example:
 
         )doc",
-        &ttnn::operations::experimental::ccl::ExecuteStridedReduceScatterAsync::invoke,
+        &ttnn::experimental::strided_reduce_scatter_async,
         nb::arg("input_tensor"),
         nb::arg("persistent_output_buffers") = nb::none(),
         nb::arg("dim"),

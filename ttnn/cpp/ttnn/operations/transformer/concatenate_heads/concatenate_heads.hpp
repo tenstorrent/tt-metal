@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-
-#include "ttnn/decorators.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::transformer {
 
