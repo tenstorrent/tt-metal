@@ -7,7 +7,15 @@
 #if defined(__linux__) || defined(__APPLE__)
 #include <pthread.h>
 #endif
-#if __has_include(<sanitizer/lsan_interface.h>)
+// Include LSan interface only when a sanitizer that provides __lsan_ignore_object
+// is actually active.  __has_include is insufficient — the header ships with the
+// Clang toolchain and is present even in non-sanitizer builds, which causes
+// __lsan_ignore_object to be declared but not linked (undefined symbol at link time).
+// __has_feature(leak_sanitizer) / __has_feature(address_sanitizer) are Clang's
+// compile-time predicates; __SANITIZE_ADDRESS__ / __SANITIZE_LEAK__ cover GCC.
+#if (defined(__has_feature) && (__has_feature(leak_sanitizer) || __has_feature(address_sanitizer))) || \
+    defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_LEAK__)
+#define TT_LSAN_ACTIVE 1
 #include <sanitizer/lsan_interface.h>
 #endif
 #include <taskflow/taskflow.hpp>
@@ -78,7 +86,7 @@ inline Executor& GetExecutor() {
                 // internal state (mutexes, threads) is invalid post-fork and
                 // destroying it would deadlock or crash.  Suppress the leak in
                 // ASan/LSan builds so it is not reported as unintentional.
-#if __has_include(<sanitizer/lsan_interface.h>)
+#ifdef TT_LSAN_ACTIVE
                 __lsan_ignore_object(exec);
 #endif
                 exec = new Executor(EXECUTOR_NTHREADS);
