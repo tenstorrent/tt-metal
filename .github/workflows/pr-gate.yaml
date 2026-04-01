@@ -361,9 +361,13 @@ jobs:
       # Cache path must be under $GITHUB_WORKSPACE — that directory is a
       # bind-mount shared between the container and the host, so the host-side
       # tar step can see it. Paths outside the workspace are not accessible.
+      # data/ holds file(DOWNLOAD) assets (shakespeare.txt, tokenizer JSONs).
+      # EXPECTED_HASH on each download ensures cache hits are safe to trust.
       uses: actions/cache/restore@v4
       with:
-        path: ${{ github.workspace }}/.cpmcache
+        path: |
+          ${{ github.workspace }}/.cpmcache
+          ${{ github.workspace }}/data
         key: ${{ steps.cpm_key.outputs.key }}
         restore-keys: cpm-Linux-
     - name: CMake configure
@@ -391,7 +395,9 @@ jobs:
       if: always()
       uses: actions/cache/save@v4
       with:
-        path: ${{ github.workspace }}/.cpmcache
+        path: |
+          ${{ github.workspace }}/.cpmcache
+          ${{ github.workspace }}/data
         key: ${{ steps.cpm_key.outputs.key }}
     - name: 'Install jq'
       uses: dcarbone/install-jq-action@v2
