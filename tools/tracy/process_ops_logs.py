@@ -2191,12 +2191,14 @@ def get_device_data_generate_report(
                         else nan,
                         axis=1,
                     )
-                    eff_pivot["Unpacker0 Write Efficiency"] = eff_pivot.apply(
-                        lambda x: safe_div(x.get("value_SRCA_WRITE", 0), x.get("value_UNPACK0_BUSY_THREAD0", 0)), axis=1
-                    )
-                    eff_pivot["Unpacker1 Write Efficiency"] = eff_pivot.apply(
-                        lambda x: safe_div(x.get("value_SRCB_WRITE", 0), x.get("value_UNPACK1_BUSY_THREAD0", 0)), axis=1
-                    )
+                    # Unpacker Write Efficiency — WH only (SRCA_WRITE/SRCB_WRITE counters not on BH)
+                    if "value_SRCA_WRITE" in eff_pivot.columns:
+                        eff_pivot["Unpacker0 Write Efficiency"] = eff_pivot.apply(
+                            lambda x: safe_div(x.get("value_SRCA_WRITE", 0), x.get("value_UNPACK0_BUSY_THREAD0", 0)), axis=1
+                        )
+                        eff_pivot["Unpacker1 Write Efficiency"] = eff_pivot.apply(
+                            lambda x: safe_div(x.get("value_SRCB_WRITE", 0), x.get("value_UNPACK1_BUSY_THREAD0", 0)), axis=1
+                        )
                     eff_pivot["Packer Efficiency"] = eff_pivot.apply(
                         lambda x: safe_div(x.get("value_PACKER_DEST_READ_AVAILABLE", 0), x.get("value_PACKER_BUSY", 0)),
                         axis=1,
@@ -2218,9 +2220,10 @@ def get_device_data_generate_report(
                         ),
                         axis=1,
                     )
-                    eff_pivot["Unpacker Write Efficiency"] = eff_pivot[
-                        ["Unpacker0 Write Efficiency", "Unpacker1 Write Efficiency"]
-                    ].mean(axis=1, skipna=True)
+                    if "Unpacker0 Write Efficiency" in eff_pivot.columns:
+                        eff_pivot["Unpacker Write Efficiency"] = eff_pivot[
+                            ["Unpacker0 Write Efficiency", "Unpacker1 Write Efficiency"]
+                        ].mean(axis=1, skipna=True)
                     eff_pivot["FPU Execution Efficiency"] = eff_pivot.apply(
                         lambda x: (x.get("value_FPU_COUNTER", 0) / x.get("value_FPU_INSTRN_AVAILABLE_1", 1) * 100)
                         if x.get("value_FPU_INSTRN_AVAILABLE_1", 0) > 0
@@ -2456,8 +2459,9 @@ def get_device_data_generate_report(
                         safe_ratio("value_WAITING_FOR_SFPU_IDLE_1", "value_THREAD_STALLS_1"), axis=1)
 
                     # Write port blocking
-                    eff_pivot["SrcA Write Port Blocked Rate"] = eff_pivot.apply(
-                        safe_complement("value_SRCA_WRITE_NOT_BLOCKED_OVR", "value_SRCA_WRITE_AVAILABLE"), axis=1)
+                    if "value_SRCA_WRITE_NOT_BLOCKED_OVR" in eff_pivot.columns:
+                        eff_pivot["SrcA Write Port Blocked Rate"] = eff_pivot.apply(
+                            safe_complement("value_SRCA_WRITE_NOT_BLOCKED_OVR", "value_SRCA_WRITE_AVAILABLE"), axis=1)
                     eff_pivot["SrcB Write Port Blocked Rate"] = eff_pivot.apply(
                         safe_complement("value_SRCB_WRITE_NOT_BLOCKED_PORT", "value_SRCB_WRITE_AVAILABLE"), axis=1)
                     eff_pivot["SrcA Write Actual Efficiency"] = eff_pivot.apply(
@@ -2475,10 +2479,11 @@ def get_device_data_generate_report(
                         return fn
                     eff_pivot["Dest Read Backpressure"] = eff_pivot.apply(
                         safe_bp_single("value_PACKER_DEST_READ_AVAILABLE", "value_DEST_READ_GRANTED_0"), axis=1)
-                    eff_pivot["Math Dest Write Port Stall Rate"] = eff_pivot.apply(
-                        safe_complement("value_MATH_NOT_STALLED_DEST_WR_PORT", "value_MATH_INSTRN_AVAILABLE"), axis=1)
-                    eff_pivot["Math Scoreboard Stall Rate"] = eff_pivot.apply(
-                        safe_complement("value_AVAILABLE_MATH", "value_MATH_INSTRN_AVAILABLE"), axis=1)
+                    if "value_MATH_INSTRN_AVAILABLE" in eff_pivot.columns:
+                        eff_pivot["Math Dest Write Port Stall Rate"] = eff_pivot.apply(
+                            safe_complement("value_MATH_NOT_STALLED_DEST_WR_PORT", "value_MATH_INSTRN_AVAILABLE"), axis=1)
+                        eff_pivot["Math Scoreboard Stall Rate"] = eff_pivot.apply(
+                            safe_complement("value_AVAILABLE_MATH", "value_MATH_INSTRN_AVAILABLE"), axis=1)
 
                     # Instruction issue rates (per cycle, not %)
                     eff_pivot["Unpack Instrn Issue Rate T0"] = eff_pivot.apply(
