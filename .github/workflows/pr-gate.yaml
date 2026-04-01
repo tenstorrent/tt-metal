@@ -347,17 +347,25 @@ jobs:
           mv .clang-tidy-new .clang-tidy
         fi
         cat .clang-tidy
+    - name: Compute CPM cache key
+      # hashFiles() in `with:` params is evaluated by the host runner, not
+      # inside the container — so it fails at save time when the container
+      # workspace is no longer accessible from the host. Fix: compute the key
+      # inside the container via a shell step and pass it as a step output.
+      id: cpm_key
+      run: |
+        HASH=$(find . \( -name 'CMakeLists.txt' -o -name '*.cmake' \) -type f \
+          | sort | xargs sha256sum | sha256sum | awk '{print $1}')
+        echo "key=cpm-Linux-${HASH}" | tee -a "$GITHUB_OUTPUT"
     - name: Restore CPM cache
-      # actions/cache works in containerized jobs when the path is under
-      # $GITHUB_WORKSPACE — that directory is a bind-mount shared between the
-      # container and the host, so the host-side tar/restore step can see it.
-      # The previous attempt used a path outside the workspace; this is the fix.
+      # Cache path must be under $GITHUB_WORKSPACE — that directory is a
+      # bind-mount shared between the container and the host, so the host-side
+      # tar step can see it. Paths outside the workspace are not accessible.
       uses: actions/cache/restore@v4
       with:
         path: ${{ github.workspace }}/.cpmcache
-        key: cpm-${{ runner.os }}-${{ hashFiles('**/CMakeLists.txt', '**/*.cmake') }}
-        restore-keys: |
-          cpm-${{ runner.os }}-
+        key: ${{ steps.cpm_key.outputs.key }}
+        restore-keys: cpm-Linux-
     - name: CMake configure
       # CPM_SOURCE_CACHE directs CPM to store/read downloaded packages from
       # .cpmcache under the workspace — the same path restored above.
@@ -378,12 +386,13 @@ jobs:
       timeout-minutes: 10
       run: cmake --build build --target all_generated_files
     - name: Save CPM cache
-      # Save even if later steps fail, so partial downloads aren't wasted.
+      # Save even if later steps fail, so a slow cache-miss run isn't wasted.
+      # Uses the pre-computed key from cpm_key step (avoids host-side hashFiles).
       if: always()
       uses: actions/cache/save@v4
       with:
         path: ${{ github.workspace }}/.cpmcache
-        key: cpm-${{ runner.os }}-${{ hashFiles('**/CMakeLists.txt', '**/*.cmake') }}
+        key: ${{ steps.cpm_key.outputs.key }}
     - name: 'Install jq'
       uses: dcarbone/install-jq-action@v2
     - name: Create results directory
