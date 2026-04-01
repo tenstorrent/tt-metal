@@ -175,6 +175,32 @@ class TestFingerprint:
 
 
 class TestCasLayout:
+    def test_store_uses_local_dump_mode(self, tmp_path, monkeypatch):
+        """_store should call ttnn.dump_tensor with LOCAL mode."""
+        cache = TensorCache(tmp_path)
+        fingerprint = _make_fingerprint()
+        artifact_id = compute_artifact_id(fingerprint)
+        tensor_host = ttnn.from_torch(
+            torch.randn(4, 4, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=None,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            tile=ttnn.Tile((32, 32)),
+        )
+
+        called = {"mode": None}
+
+        def _dump_tensor_spy(file_name, tensor, *, mode):
+            called["mode"] = mode
+            # Write placeholder bytes so _store can hash/stat the file.
+            with open(file_name, "wb") as f:
+                f.write(b"tensorbin-placeholder")
+
+        monkeypatch.setattr(ttnn, "dump_tensor", _dump_tensor_spy)
+        cache._store(artifact_id, fingerprint, tensor_host)
+        assert called["mode"] == ttnn.DumpTensorMode.LOCAL
+
     def test_store_creates_expected_files(self, tmp_path):
         """After _store, the object dir contains data.tensorbin, manifest.json, metadata.json."""
         cache = TensorCache(tmp_path)

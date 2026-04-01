@@ -79,14 +79,14 @@ def create_parser() -> argparse.ArgumentParser:
         "--model-path",
         type=Path,
         default=None,
-        help="Local HuggingFace model dir with model.safetensors.index.json (required for --weights state_dict)",
+        help="Local HuggingFace model dir with model.safetensors.index.json (required for --weights real/state_dict)",
     )
     parser.add_argument(
         "--weights",
         type=str,
         choices=("synthetic", "real", "state_dict"),
         default="real",
-        help="synthetic: random prepare path; real: load tensorbin cache; state_dict: HF safetensors + prepare path",
+        help="synthetic: random prepare path; real: TensorCache + HF safetensors; state_dict: HF safetensors + prepare path (no cache)",
     )
     parser.add_argument(
         "--fp32",
@@ -187,11 +187,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = create_parser()
     args = parser.parse_args(argv)
 
-    if args.weights == "real" and args.cache_path is None:
-        parser.error("--cache-path is required when --weights real")
-    if args.weights == "state_dict":
+    if args.weights == "real":
+        if args.cache_path is None:
+            parser.error("--cache-path is required when --weights real")
         if args.model_path is None:
-            parser.error("--model-path is required when --weights state_dict")
+            parser.error("--model-path is required when --weights real")
+    if args.weights in ("real", "state_dict"):
+        if args.model_path is None:
+            parser.error(f"--model-path is required when --weights {args.weights}")
         index_path = args.model_path / "model.safetensors.index.json"
         if not index_path.is_file():
             parser.error(f"--model-path must contain model.safetensors.index.json (missing {index_path})")
