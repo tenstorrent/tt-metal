@@ -2716,6 +2716,25 @@ class AttentionBlock:
         gather3_receiver_data_addr = ttnn.get_cb_address(gather3_dst_cb_descriptor)
         allreduce_config.set_local_data_addr(gather3_receiver_data_addr)
 
+        # CB: CCL recv local data (overlapped with sdpa_kv_cache on mcast core)
+        # Sender NOC-copies gather3 output here; receiver NCRISC reads it for compute.
+        ccl_recv_local_data_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            ccl_recv_local_data_cb,
+            ref_sdpa_kv_cache_buffer,
+            address_offset=sdpa_kv_cache_running_offset_mcast_core,
+            total_size=num_tiles * tile_size,
+            core_ranges=full_device_grid,
+        )
+        ccl_recv_local_data_cb_descriptor.format_descriptors = [
+            ttnn.CBFormatDescriptor(
+                buffer_index=ccl_recv_local_data_cb,
+                data_format=data_format,
+                page_size=tile_size,
+                tile=tile_descriptor,
+            )
+        ]
+        sdpa_kv_cache_running_offset_mcast_core += ccl_recv_local_data_cb_descriptor.total_size
+
         # CB: CCL remote data (overlapped with sdpa_kv_cache on mcast core)
         # Fabric writes remote data here; TRISC reads it for reduction.
         ccl_remote_data_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -2752,6 +2771,7 @@ class AttentionBlock:
             matmul5_in0_cb_descriptor,
             matmul5_out_cb_descriptor,
             gather3_dst_cb_descriptor,
+            ccl_recv_local_data_cb_descriptor,
             ccl_remote_data_cb_descriptor,
             attention_block_output_cb_descriptor,
         ]
