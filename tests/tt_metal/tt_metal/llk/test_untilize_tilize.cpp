@@ -166,6 +166,7 @@ void run_single_core_tilize_program(
     // TODO: once we have tests for wider int formats, consider adding the check for them here.
     bool is_8bit_int =
         test_config.output_fmt == tt::DataFormat::Int8 || test_config.output_fmt == tt::DataFormat::UInt8;
+
     tt::DataFormat output_cb_format =
         (test_config.fp32_dest_acc_en && !is_8bit_int) ? tt::DataFormat::Float32 : test_config.output_fmt;
     tt_metal::CircularBufferConfig cb_output_config =
@@ -320,12 +321,9 @@ void run_single_core_tilize_program(
         },
         test_config.golden_function);
 
-    // For integer formats, skip Float32 conversion in golden model.
-    // Converting integers to Float32 in the golden model would cause mismatches with actual hardware behavior.
-    // Floating-point formats can be converted since packer can handle FP format conversions semantically.
-    // TODO: once we have tests for wider int formats, consider adding the check for them here.
-    bool is_8bit_int =
-        test_config.output_fmt == tt::DataFormat::Int8 || test_config.output_fmt == tt::DataFormat::UInt8;
+    // Golden model: skip Float32 conversion for integer formats (uses is_8bit_int defined earlier).
+    // When fp32_dest_acc_en is true with integer formats, hardware keeps integers as-is in dest/CB.
+    // Converting integers to Float32 in golden model would cause mismatches with actual hardware behavior.
     if (test_config.fp32_dest_acc_en && !is_8bit_int) {
         vector<bfloat16> golden_unpacked = unpack_vector<bfloat16, uint32_t>(golden);
         // Increasing the size since from BFP16 two times, since storing is in FP32
