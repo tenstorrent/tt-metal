@@ -7,7 +7,6 @@
 #include <memory>
 
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/experimental/per_core_allocation/allocator_mode.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
 #include <tt-metalium/hal_types.hpp>
@@ -45,8 +44,7 @@ public:
         bool minimal = false,
         uint32_t worker_thread_core = 0,
         uint32_t completion_queue_reader_core = 0,
-        std::size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
-        AllocatorMode allocator_mode = AllocatorMode::LOCKSTEP);
+        std::size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
     ~Device() override;
 
@@ -138,15 +136,6 @@ public:
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
-    // Internal overload with allocator mode (for experimental per-core allocation)
-    bool initialize(
-        uint8_t num_hw_cqs,
-        size_t l1_small_size,
-        size_t trace_region_size,
-        size_t worker_l1_size,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap,
-        bool minimal,
-        AllocatorMode allocator_mode);
     void init_command_queue_host();
     void init_command_queue_device();
 
@@ -211,8 +200,7 @@ private:
         size_t l1_small_size,
         size_t trace_region_size,
         size_t worker_l1_unreserved_start,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
-        AllocatorMode allocator_mode = AllocatorMode::LOCKSTEP);
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
 
     void configure_command_queue_programs(DispatchTopology* topology);
 

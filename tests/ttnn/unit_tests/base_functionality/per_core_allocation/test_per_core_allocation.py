@@ -7,13 +7,13 @@ Tests for per-core L1 allocation via MemoryConfig(per_core_allocation=True).
 
 Each test creates single-core HEIGHT_SHARDED tensors with per_core_allocation=True,
 which triggers the per-bank allocator (AllocatorID bank_id+1) instead of lockstep.
+
+The local conftest.py sets TT_METAL_ALLOCATOR_MODE_HYBRID=1 and creates the device.
 """
 
 import pytest
 import torch
 import ttnn
-
-pytestmark = pytest.mark.use_module_device({"allocator_mode": ttnn.per_core_allocation.AllocatorMode.HYBRID})
 
 
 class PerCoreMemMap:

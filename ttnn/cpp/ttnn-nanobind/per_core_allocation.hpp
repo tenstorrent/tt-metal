@@ -7,7 +7,5 @@
 #include <nanobind/nanobind.h>
 
 namespace ttnn::per_core_allocation {
-
-void py_module(nanobind::module_& mod);
-
+void py_module(nanobind::module_& m);
 }  // namespace ttnn::per_core_allocation
