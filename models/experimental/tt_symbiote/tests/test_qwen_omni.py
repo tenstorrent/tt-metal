@@ -12,6 +12,7 @@ from transformers import Qwen3OmniMoeConfig, Qwen3OmniMoeForConditionalGeneratio
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeAudioAttention,
     Qwen3OmniMoeCode2WavAttention,
+    Qwen3OmniMoeTalkerResizeMLP,
     Qwen3OmniMoeTalkerTextSparseMoeBlock,
     Qwen3OmniMoeThinkerTextAttention,
     Qwen3OmniMoeThinkerTextSparseMoeBlock,
@@ -30,7 +31,10 @@ from models.experimental.tt_symbiote.modules.attention import TTNNQwen3OmniMoeCo
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3Attention
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3OmniAttention
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3VLMoeVisionAttention
-from models.experimental.tt_symbiote.modules.linear import TTNNQwen3OmniVisionMLP
+from models.experimental.tt_symbiote.modules.linear import (
+    TTNNQwen3OmniTalkerResizeMLP,
+    TTNNQwen3OmniVisionMLP,
+)
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 
@@ -50,6 +54,7 @@ NN_TO_TTNN_CODE2WAV = {
 NN_TO_TTNN_TALKER = {
     Qwen3OmniMoeTalkerTextSparseMoeBlock: TTNNQwen3TalkerMoE,
     Qwen3OmniMoeThinkerTextAttention: TTNNQwen3Attention,
+    Qwen3OmniMoeTalkerResizeMLP: TTNNQwen3OmniTalkerResizeMLP,
 }
 
 MODEL_NAME = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
