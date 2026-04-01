@@ -58,6 +58,30 @@ grid_88_configs = {
     (128, 5120, 1280): (2, 8, 8),
     (9472, 5120, 3456): (8, 10, 8),
     (9472, 3456, 5120): (8, 12, 4),
+    (640, 3584, 1152): (8, 8, 4),
+    (640, 3584, 896): (8, 8, 4),
+    (640, 3584, 4736): (8, 8, 8),
+    (640, 4736, 3584): (8, 8, 8),
+    (32, 256, 3072): (2, 8, 8),
+    (1024, 64, 768): (4, 2, 4),
+    (512, 3584, 768): (8, 8, 4),
+    (32, 3072, 4608): (2, 8, 8),
+    (1024, 3072, 2304): (8, 8, 8),
+    (512, 3072, 2304): (8, 8, 4),
+    (1024, 3072, 768): (8, 8, 4),
+    (512, 3072, 768): (8, 8, 4),
+    (1024, 3072, 3072): (8, 8, 8),
+    (512, 3072, 3072): (8, 8, 4),
+    (1024, 3072, 64): (8, 8, 2),
+    (4096, 64, 768): (8, 2, 4),
+    (4096, 3072, 2304): (16, 8, 4),
+    (4096, 3072, 768): (16, 8, 4),
+    (4096, 3072, 3072): (16, 8, 4),
+    (4096, 3072, 64): (8, 8, 2),
+    (128, 32, 32): (2, 1, 1),
+    (16384, 384, 1152): (16, 12, 4),
+    (16384, 384, 384): (16, 12, 4),
+    (256, 192, 384): (4, 6, 4),
 }
 
 
@@ -121,6 +145,10 @@ grid_12_10_configs = {
 
 
 def get_matmul_config(M, K, N, core_grid, default_block_size=None):
+    M = int(M)
+    K = int(K)
+    N = int(N)
+
     # Default to 8x8x8 with subblock 2x2 when unknown
     subblock_h = 2
     subblock_w = 2
@@ -167,6 +195,11 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None):
             _warned_matmul_signatures.add(signature)
     else:
         M_block_size, K_block_size, N_block_size = config_tuple
+
+    if M_block_size % subblock_h != 0:
+        subblock_h = 1
+    if N_block_size % subblock_w != 0:
+        subblock_w = 1
 
     return ttnn.MinimalMatmulConfig(
         M_block_size=M_block_size,

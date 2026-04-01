@@ -467,9 +467,17 @@ class QwenImageEditPipeline:
         encoder_tp_factor, encoder_tp_axis = encoder_tp or default_config[tuple(mesh_device.shape)]["encoder_tp"]
         vae_tp_factor, vae_tp_axis = vae_tp or default_config[tuple(mesh_device.shape)]["vae_tp"]
         num_links = num_links or default_config[tuple(mesh_device.shape)]["num_links"]
-        is_fsdp = is_fsdp or default_config[tuple(mesh_device.shape)]["is_fsdp"]
-        dynamic_load_encoder = dynamic_load_encoder or default_config[tuple(mesh_device.shape)]["dynamic_load_encoder"]
-        dynamic_load_vae = dynamic_load_vae or default_config[tuple(mesh_device.shape)]["dynamic_load_vae"]
+        is_fsdp = is_fsdp if is_fsdp is not None else default_config[tuple(mesh_device.shape)]["is_fsdp"]
+        dynamic_load_encoder = (
+            dynamic_load_encoder
+            if dynamic_load_encoder is not None
+            else default_config[tuple(mesh_device.shape)]["dynamic_load_encoder"]
+        )
+        dynamic_load_vae = (
+            dynamic_load_vae
+            if dynamic_load_vae is not None
+            else default_config[tuple(mesh_device.shape)]["dynamic_load_vae"]
+        )
 
         dit_parallel_config = DiTParallelConfig(
             cfg_parallel=ParallelFactor(factor=cfg_factor, mesh_axis=cfg_axis),
@@ -822,6 +830,12 @@ class QwenImageEditPipeline:
             # Track the noise-only sequence length for slicing output
             noise_seq_len = latents.shape[1]
 
+            for submesh_nr in range(len(self._submesh_devices)):
+                ttnn.copy_host_to_device_tensor(
+                    tt_prompt_embeds_list[submesh_nr],
+                    tt_prompt_embeds_device_list[submesh_nr],
+                )
+
             with profiler("denoising", profiler_iteration) if profiler else nullcontext():
                 for i, t in enumerate(tqdm.tqdm(timesteps)):
                     with profiler(f"denoising_step_{i}", profiler_iteration) if profiler else nullcontext():
@@ -829,7 +843,7 @@ class QwenImageEditPipeline:
 
                         tt_timestep_list = []
                         tt_sigma_difference_list = []
-                        for submesh_nr, submesh_device in enumerate(self._submesh_devices):
+                        for submesh_device in self._submesh_devices:
                             tt_timestep = ttnn.full(
                                 [1, 1],
                                 fill_value=t,
@@ -847,11 +861,6 @@ class QwenImageEditPipeline:
                                 device=submesh_device if not traced else None,
                             )
                             tt_sigma_difference_list.append(tt_sigma_difference)
-
-                            ttnn.copy_host_to_device_tensor(
-                                tt_prompt_embeds_list[submesh_nr],
-                                tt_prompt_embeds_device_list[submesh_nr],
-                            )
 
                         total_spatial_seq = latent_model_input.shape[1]
 
@@ -1076,7 +1085,6 @@ class QwenImageEditPipeline:
                 )
 
         for submesh_id, submesh_device in enumerate(self._submesh_devices):
-            ttnn.synchronize_device(submesh_device)
             ttnn.multiply_(noise_pred_list[submesh_id], sigma_difference_device[submesh_id])
             ttnn.add_(latents[submesh_id], noise_pred_list[submesh_id])
 
