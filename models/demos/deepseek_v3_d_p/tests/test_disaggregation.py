@@ -7,6 +7,8 @@ This test verifies that the disaggregation APIs are accessible from Python
 and work correctly.
 """
 
+import socket
+
 import pytest
 import torch
 from loguru import logger
@@ -130,7 +132,7 @@ def test_kv_chunk_address_table(mesh_device):
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("seq_len", [32 * 8], ids=["seq32x8"])
+@pytest.mark.parametrize("seq_len", [2 * 1024, 100 * 1024], ids=["seq2k", "seq100k"])
 def test_kv_cache_address_table(mesh_device, seq_len):
     sp_axis = 0
     kvpe_cache_head_dim = 576
@@ -138,7 +140,6 @@ def test_kv_cache_address_table(mesh_device, seq_len):
     mesh_shape = list(mesh_device.shape)
     seq_len_local = seq_len // mesh_shape[sp_axis]
 
-    num_layers = 1
     torch_kvpe_cache = torch.zeros(1, 1, seq_len_local, kvpe_cache_head_dim)
 
     BH_NUM_DRAM_BANKS = 8
@@ -168,28 +169,29 @@ def test_kv_cache_address_table(mesh_device, seq_len):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
+    CHUNK_SIZE_BYTES = 19584  # [1, 1, 32, 576] bfp8
     config = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
     config.num_layers = 1
     config.max_sequence_length = seq_len
     config.num_slots = 1
-    config.chunk_n_tokens = 32
-    config.chunk_size_bytes = 19584
+    config.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    config.chunk_size_bytes = CHUNK_SIZE_BYTES
 
     lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable(config)
 
     # Create device groups that contain replicated data
     # Data is replicated on each column of the mesh
-
     device_group_idx_per_row = []
 
+    all_fabric_node_ids = []
     for row in range(mesh_shape[0]):
         fabric_node_ids = []
         for col in range(mesh_shape[1]):
             coord = ttnn.MeshCoordinate(row, col)
             fabric_node_id = mesh_device.get_fabric_node_id(coord)
-            # table.set_fabric_node_host(fabric_node_id, host_name="abc")
             fabric_node_ids.append(fabric_node_id)
 
+        all_fabric_node_ids.extend(fabric_node_ids)
         group_idx = lookup_table.add_device_group(fabric_node_ids)
         logger.info(f"Device group {int(group_idx)}: {len(fabric_node_ids)} nodes")
         for idx, fid in enumerate(fabric_node_ids):
@@ -199,22 +201,89 @@ def test_kv_cache_address_table(mesh_device, seq_len):
 
         device_group_idx_per_row.append(group_idx)
 
+    for fid in all_fabric_node_ids:
+        host_name = socket.gethostname()
+        lookup_table.set_fabric_node_host(fid, host_name=host_name)
+        logger.info(
+            f"Set host name for fabric node id: mesh_id={int(fid.mesh_id)}, chip_id={int(fid.chip_id)} to {host_name}"
+        )
+
+    num_tokens_in_strip = seq_len // (mesh_shape[sp_axis] * 2)
+    num_chunks_in_strip = num_tokens_in_strip // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    logger.info(f"Num tokens in strip is: {num_tokens_in_strip} num_chunks in strip is: {num_chunks_in_strip}")
+
+    device_position_indices_low_strip = []
+    device_position_indices_high_strip = []
+    low_strip_start_idx = 0
+    high_strip_end_idx = seq_len - 1
+    for row in range(len(device_group_idx_per_row)):
+        low_strip_end_idx = low_strip_start_idx + num_chunks_in_strip * NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK - 1
+        device_position_indices_low_strip.append((low_strip_start_idx, low_strip_end_idx))
+        high_strip_start_idx = high_strip_end_idx - (num_chunks_in_strip * NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK - 1)
+        device_position_indices_high_strip.append((high_strip_start_idx, high_strip_end_idx))
+
+        low_strip_start_idx = low_strip_end_idx + 1
+        high_strip_end_idx = high_strip_start_idx - 1
+        logger.info(
+            f"Token positions for device group index: {device_group_idx_per_row[row]} are {device_position_indices_low_strip[row]} and {device_position_indices_high_strip[row]}"
+        )
+
+    # this is a hypotetical representation of noc address diffs between same page on different dram banks
+    # eg. page 0 would be base + 0x0000000, page 1 would be base + 0x10000000, etc. Page 8 would wrap around to base + page_size_in_bytes +  0x0000000, etc
+    # would need something like tensor.get_page_noc_addr(page_idx) ?
+    hypothetical_bank_offsets = [
+        0x00000000,  # Bank 0
+        0x10000000,  # Bank 1
+        0x20000000,  # Bank 2
+        0x30000000,  # Bank 3
+        0x40000000,  # Bank 4
+        0x50000000,  # Bank 5
+        0x60000000,  # Bank 6
+        0x70000000,  # Bank 7
+    ]
+
     layer = 0
     slot = 0
-    position = 0  # Must be chunk-aligned
+    current_position = 0  # Must be chunk-aligned
+    chunks_per_device_group = num_chunks_in_strip * 2
+    logger.info("chunks_per_device_group = ", chunks_per_device_group)
 
+    dram_bank_0_addr = tt_kvpe_cache.buffer_address()
     for row in range(len(device_group_idx_per_row)):
         group_idx = device_group_idx_per_row[row]
-        location = ttnn.experimental.disaggregation.KvCacheLocation()
-        location.noc_addr = tt_kvpe_cache.buffer_address()
-        location.size_bytes = 19584
-        location.device_group_index = group_idx
-        lookup_table.set(layer, position, slot, location)
-        logger.info(f"Set location for (layer={layer}, pos={position}, slot={slot})")
-        position += 32
+        curr_bank_id = 0
+        curr_bank_offset = 0
+
+        logger.info(
+            f"Populating device_group_index: {group_idx} with positions: {device_position_indices_low_strip[row]} and {device_position_indices_high_strip[row]}"
+        )
+        (current_position, max_position) = device_position_indices_low_strip[row]
+        for chunk in range(chunks_per_device_group):
+            location = ttnn.experimental.disaggregation.KvCacheLocation()
+
+            noc_addr = dram_bank_0_addr + hypothetical_bank_offsets[curr_bank_id] + curr_bank_offset
+            location.noc_addr = noc_addr
+            location.size_bytes = CHUNK_SIZE_BYTES
+            location.device_group_index = group_idx
+            lookup_table.set(layer, current_position, slot, location)
+            logger.info(
+                f"Set location for (layer={layer}, pos={current_position}, slot={slot}, bank_id={curr_bank_id}, curr_bank_offset = {curr_bank_offset} noc_addr = 0x{noc_addr:X})"
+            )
+
+            curr_bank_id = (curr_bank_id + 1) % BH_NUM_DRAM_BANKS
+            # move to next chunk offset
+            if curr_bank_id == 0:
+                curr_bank_offset += CHUNK_SIZE_BYTES
+            current_position += NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+            if chunk == num_chunks_in_strip - 1:
+                # switch to high chunk
+                assert (
+                    current_position == max_position + 1
+                ), f"Missmatch in position calculation. Expected current_position to be {max_position + 1}, but it is: {current_position}"
+                (current_position, max_position) = device_position_indices_high_strip[row]
 
     # 5. Lookup the location
-    for position in range(0, seq_len, 32):
+    for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
         retrieved = lookup_table.lookup(layer, position, slot)
         logger.info(
             f"Retrieved: position={position}, noc_addr=0x{retrieved.noc_addr:X}, "
