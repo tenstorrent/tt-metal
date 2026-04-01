@@ -355,7 +355,8 @@ struct ReduceToOneB1 {
                         const uint32_t socket_page_size = (is_last_worker_metadata_forwarder && is_last_worker)
                                                               ? useful_per_shard + CTArgs::forward_metadata_size_bytes
                                                               : useful_per_shard;
-
+                        DPRINT << "shard_idx: " << args.shard_idx << " socket_page_size: " << socket_page_size
+                               << ENDL();
                         SocketSenderInterface sender_socket = create_sender_socket_interface(args.socket_config_addr);
                         set_sender_socket_page_size(sender_socket, socket_page_size);
                         socket_reserve_pages(sender_socket, 1);
@@ -369,6 +370,11 @@ struct ReduceToOneB1 {
 
                         if constexpr (is_last_worker_metadata_forwarder) {
                             if (is_last_worker) {
+                                DPRINT << "WRITE METADATA" << CTArgs::forward_metadata_size_bytes << ENDL();
+                                DPRINT << "FIFO DST: " << (uint32_t)fifo_dst
+                                       << " USEFUL PER SHARD: " << useful_per_shard << ENDL();
+                                DPRINT << "METADATA ADDR: " << args.metadata_addr
+                                       << " FORWARD METADATA SIZE: " << CTArgs::forward_metadata_size_bytes << ENDL();
                                 noc_async_write(
                                     args.metadata_addr,
                                     fifo_dst + useful_per_shard,
@@ -376,12 +382,14 @@ struct ReduceToOneB1 {
                             }
                         }
                         noc_async_writes_flushed();
+                        DPRINT << "PUSH" << ENDL();
 
                         socket_push_pages(sender_socket, 1);
                         socket_notify_receiver(sender_socket);
                         noc_async_write_barrier();
                         socket_barrier(sender_socket);
                         update_socket_config(sender_socket);
+                        DPRINT << "UPDATE SOCKET CONFIG" << ENDL();
                     }
                     if (args.persistent_enable != 0) {
                         volatile tt_l1_ptr uint32_t* agg_sem_ptr =

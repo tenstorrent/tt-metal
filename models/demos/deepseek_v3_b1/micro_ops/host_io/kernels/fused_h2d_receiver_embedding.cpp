@@ -196,11 +196,15 @@ void kernel_main() {
             sender_socket.downstream_fifo_addr);
     }
 
+    DPRINT << "TOKEN PAGE SIZE: " << token_page_size << ENDL();
+
     while (true) {
         // Wait for pages in H2D socket
+        DPRINT << "H2D RECEIVER WAIT FOR PAGES" << ENDL();
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
+        DPRINT << "H2D RECEIVER WAIT FOR PAGES DONE" << ENDL();
         if constexpr (pull_from_host) {
             // Pages available in H2D socket - read over PCIe
             noc_async_wide_read_any_len_with_state(
@@ -212,6 +216,7 @@ void kernel_main() {
                 token_page_size);
             noc_async_read_barrier();
         }
+        DPRINT << "H2D RECEIVER READ OVER PCIe DONE" << ENDL();
 
         // TODO: Add and assert that token id is within vocab size
         volatile tt_l1_ptr uint32_t* token_id_ptr =

@@ -144,12 +144,14 @@ def create_sp4_pipeline_configuration(
         return lambda d: DenseDecoderStage(
             weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d, forward_metadata=True),
             layer_idx=layer_id,
+            forward_metadata=True,
         )
 
     def _decoder_stage(layer_id: int):
         return lambda d: MoEDecoderStage(
             weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d, forward_metadata=True),
             layer_idx=layer_id,
+            forward_metadata=True,
         )
 
     dense_ids = (dense_layer_id_override,) * 3 if dense_layer_id_override is not None else (0, 1, 2)

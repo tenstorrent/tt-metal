@@ -490,6 +490,7 @@ class DeepseekMinimalBroadcast:
         *,
         fabric_config=None,
         broadcast_topology_override=None,
+        tensor_size_bytes=None,
     ):
         if bcast_cb_id is None:
             raise ValueError("Expected explicit `bcast_cb_id`")
@@ -515,6 +516,7 @@ class DeepseekMinimalBroadcast:
             num_links=num_links,
             fabric_config=fabric_config,
             broadcast_topology_override=broadcast_topology_override,
+            tensor_size_bytes=tensor_size_bytes,
         )
 
     @staticmethod

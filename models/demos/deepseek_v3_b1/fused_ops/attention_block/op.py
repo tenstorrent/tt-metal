@@ -20,6 +20,7 @@ from models.demos.deepseek_v3_b1.circular_buffer_utils import (
     record_cb_metadata,
 )
 from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import _extend_runtime_args, _get_element_size_bytes, _round_up
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.micro_ops.ccl_broadcast.op import DeepseekMinimalBroadcast
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import (
     FlashMLADecode,
@@ -936,6 +937,9 @@ class AttentionBlock:
 
         # CB indices for CCL broadcast (use separate CBs to avoid conflicts)
         bcast_pkt_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)  # Packet buffer for CCL broadcast
+        bcast_socket_tensor_size = (
+            (num_tiles * cb_page_size + DeepseekMetadata.aligned_size_bytes()) if forward_metadata else None
+        )
         bcast_config = DeepseekMinimalBroadcast.configure(
             mesh_device=mesh_device,
             input_tensor_mesh=input_tensor_mesh,
@@ -949,6 +953,7 @@ class AttentionBlock:
             num_links=num_links,
             fabric_config=fabric_config,
             broadcast_topology_override=broadcast_topology_override,
+            tensor_size_bytes=bcast_socket_tensor_size,
         )
 
         # SDPA CB indices
@@ -1999,7 +2004,6 @@ class AttentionBlock:
         # When forwarding metadata, the socket writes activation + metadata contiguously.
         # The metadata sits right after the activation data in the input CB's backing buffer.
         forwarded_metadata_l1_addr = input_cb_l1_addr + activation_size if forward_metadata else None
-        print(forward_metadata)
 
         # CB: Gamma (backed by fused overlapped tensor)
         gamma_cb_descriptor = cb_descriptor_from_overlapped_tensor(gamma_cb, gamma_tensor, ref_gamma_fused_tensor)
@@ -2017,7 +2021,6 @@ class AttentionBlock:
         # This op builds device-invariant descriptor templates from reference tensors;
         # use sender device metadata as the canonical broadcast descriptor reference.
         bcast_pkt_cb_descriptor = bcast_config.get_cb_descriptor(sender_mesh_coord)
-        bcast_pkt_cb_descriptor.total_size = activation_size
 
         # CB: RMSNorm output buffer
         rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(

@@ -13,8 +13,8 @@ import ttnn
 class DeepseekMetadata:
     FIELD_SIZE_BYTES = 4  # Each field is uint32_t
 
-    position_id: int = 0
     slot_id: int = 0
+    position_id: int = 0
 
     @classmethod
     def aligned_size_bytes(cls) -> int:
@@ -24,7 +24,7 @@ class DeepseekMetadata:
 
     def to_list(self) -> list[int]:
         # More advanced serialization could be added here for mixed types to align with data struct on device
-        return [self.position_id, self.slot_id]
+        return [getattr(self, f.name) for f in fields(self)]
 
 
 def create_metadata_tensor(
