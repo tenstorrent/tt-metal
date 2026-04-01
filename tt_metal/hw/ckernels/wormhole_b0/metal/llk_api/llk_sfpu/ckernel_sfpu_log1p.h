@@ -112,8 +112,7 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
             e_float = sfpi::int32_to_float(abs_e);
 
             s = m * m;
-            r = neg_quarter;
-            r = r * m + 0x1.744p-2f;
+            r = neg_quarter * m + 0x1.744p-2f;
             r = r * m + -0x1.008p-1f;
         }
         // int32_to_float returns |e| as a real number in exponent-bit units;
