@@ -12,7 +12,6 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/shape.hpp>
-#include "ttnn/decorators.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"

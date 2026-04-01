@@ -7,8 +7,7 @@
 #include <optional>
 #include <tuple>
 #include <string>
-#include <ttnn/decorators.hpp>
-
+#include "ttnn/types.hpp"
 namespace ttnn::operations::rotate {
 
 /**

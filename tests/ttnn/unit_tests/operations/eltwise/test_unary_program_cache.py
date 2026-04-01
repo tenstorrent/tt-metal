@@ -206,7 +206,9 @@ def test_unary_cache_miss_different_factories(device):
     assert_with_pcc(torch_ref1, tt_out1, 0.9999)
 
     torch_a2 = torch.rand(shape, dtype=torch.float32) + 0.5
-    torch_ref2 = torch.floor(torch_a2)
+    with device.cache_entries_counter.measure():
+        torch_ref2 = torch.floor(torch_a2)
+
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 5))])
     tt_a2 = ttnn.from_torch(torch_a2, layout=ttnn.TILE_LAYOUT, device=device)
     with device.cache_entries_counter.measure():
