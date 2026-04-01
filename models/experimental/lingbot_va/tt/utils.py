@@ -390,7 +390,7 @@ class WanVAEStreamingWrapper:
     def __enter__(self) -> WanVAEStreamingWrapper:
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(self, _exc_type, _exc_val, _exc_tb) -> None:
         self.cleanup_all()
 
     def encode_chunk(self, x_chunk):
@@ -507,7 +507,7 @@ class WanVAEDecoderWrapper:
     def __enter__(self) -> WanVAEDecoderWrapper:
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(self, _exc_type, _exc_val, _exc_tb) -> None:
         self.cleanup_all()
 
     def decode(self, latents: torch.Tensor) -> torch.Tensor:

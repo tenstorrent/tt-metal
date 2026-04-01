@@ -103,11 +103,6 @@ def vae_bthwc_to_torch(
     return ttnn.to_torch(ttnn.get_device_tensors(x)[0])
 
 
-def encoder_parallel_config_for_mesh(mesh_device: ttnn.MeshDevice) -> EncoderParallelConfig:
-    cols = tuple(mesh_device.shape)[1]
-    return EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=cols, mesh_axis=1))
-
-
 def _umt5_dp_axis_and_count(
     mesh_device: ttnn.MeshDevice, encoder_parallel_config: EncoderParallelConfig
 ) -> tuple[int, int]:

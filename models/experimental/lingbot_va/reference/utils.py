@@ -3,12 +3,10 @@
 
 """Reference-side helpers used by Lingbot-VA demo scripts."""
 
-import concurrent.futures
 import logging
 import math
 import os
 
-import numpy as np
 import torch
 from diffusers import AutoencoderKLWan
 from easydict import EasyDict
@@ -88,7 +86,7 @@ class FlowMatchScheduler:
         self.timesteps = self.sigmas * self.num_train_timesteps
         self.training = bool(training)
 
-    def step(self, model_output, timestep, sample, to_final=False, return_dict=True, **kwargs):
+    def step(self, model_output, timestep, sample, to_final=False, **kwargs):
         if isinstance(timestep, torch.Tensor):
             timestep = timestep.cpu()
         timestep_id = torch.argmin((self.timesteps - timestep).abs())
@@ -153,42 +151,6 @@ def data_seq_to_patch(
     data_patch = data_patch.permute(0, 7, 1, 4, 2, 5, 3, 6)
     data_patch = data_patch.flatten(6, 7).flatten(4, 5).flatten(2, 3)
     return data_patch
-
-
-_save_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-
-
-def save_async(obj, file_path):
-    # Save work runs in a single background thread to avoid blocking inference loops.
-    if torch.is_tensor(obj) or (isinstance(obj, dict) and any(torch.is_tensor(v) for v in obj.values())):
-        if torch.is_tensor(obj):
-            obj = obj.cpu()
-        elif isinstance(obj, dict):
-            obj = {k: v.cpu() if torch.is_tensor(v) else v for k, v in obj.items()}
-        _save_executor.submit(torch.save, obj, file_path)
-    elif isinstance(obj, np.ndarray):
-        obj_copy = obj.copy()
-        _save_executor.submit(np.save, file_path, obj_copy)
-    else:
-        _save_executor.submit(torch.save, obj, file_path)
-
-
-def _configure_model(model, shard_fn, param_dtype, device, eval_mode=True):
-    if eval_mode:
-        model.eval().requires_grad_(False)
-    if torch.distributed.is_initialized():
-        torch.distributed.barrier()
-        model = shard_fn(model)
-    else:
-        model.to(param_dtype)
-        model.to(device)
-    return model
-
-
-def shard_model(model, param_dtype=torch.bfloat16, reduce_dtype=torch.float32):
-    """No-op when not distributed; avoids dependency on torch.distributed.fsdp."""
-    _ = (param_dtype, reduce_dtype)
-    return model
 
 
 va_shared_cfg = EasyDict()

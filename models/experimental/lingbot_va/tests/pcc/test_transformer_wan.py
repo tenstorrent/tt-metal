@@ -186,6 +186,7 @@ def _make_action_grid_id(
     return grid_id
 
 
+@pytest.mark.usefixtures("reset_seeds")
 @pytest.mark.parametrize(
     ("mesh_device", "num_links", "device_params", "topology", "is_fsdp"),
     [
@@ -205,7 +206,6 @@ def test_wan_transformer_model_video_and_action(
     num_links: int,
     topology: ttnn.Topology,
     is_fsdp: bool,
-    reset_seeds,
 ) -> None:
     """Single checkpoint load: reference video + action forwards, then one TT model (avoids OOM from loading ~10GB twice)."""
     MIN_PCC = 0.992_000
