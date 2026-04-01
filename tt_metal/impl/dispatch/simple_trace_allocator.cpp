@@ -15,7 +15,7 @@
 namespace tt::tt_metal {
 
 std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator::RegionAllocator::allocate_region(
-    uint32_t size, uint32_t trace_idx, uint32_t data_type) {
+    uint32_t size, uint32_t trace_idx, uint32_t data_type, uint64_t program_id) {
     std::optional<uint32_t> best_addr;
     float best_cost = std::numeric_limits<float>::infinity();
     std::optional<uint32_t> best_region_sync_idx;
@@ -111,7 +111,7 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
 
     for (auto& addr : marked_for_deletion) {
         auto it = regions_.find(addr);
-        program_ids_memory_map_[it->second.data_type].erase((*trace_nodes_)[it->second.trace_idx]->program->get_id());
+        program_ids_memory_map_[it->second.data_type].erase(it->second.program_id);
         regions_.erase(it);
     }
 
@@ -123,20 +123,17 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
     auto it = regions_.begin();
     while (it != regions_.end()) {
         if (intersects(*best_addr, size, it->first, it->second.size)) {
-            program_ids_memory_map_[it->second.data_type].erase(
-                (*trace_nodes_)[it->second.trace_idx]->program->get_id());
+            program_ids_memory_map_[it->second.data_type].erase(it->second.program_id);
             it = regions_.erase(it);
         } else {
             ++it;
         }
     }
-    regions_[*best_addr] = {trace_idx, data_type, size};
+    regions_[*best_addr] = {trace_idx, data_type, size, program_id};
     return {best_region_sync_idx, best_addr};
 }
 
 void SimpleTraceAllocator::allocate_trace_programs(std::vector<TraceNode*>& trace_nodes) {
-    worker_region_allocator_.set_trace_nodes(&trace_nodes);
-    active_eth_region_allocator_.set_trace_nodes(&trace_nodes);
     std::map<uint64_t, uint32_t> program_ids_use_map;
     extra_data_.resize(trace_nodes.size());
 
@@ -194,7 +191,8 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
             auto& allocator =
                 core_type == HalProgrammableCoreType::TENSIX ? worker_region_allocator_ : active_eth_region_allocator_;
 
-            auto [rta_sync_idx, rta_addr] = allocator.allocate_region(non_binary_size, i, ExtraData::kNonBinary);
+            uint64_t pid = node.program->get_id();
+            auto [rta_sync_idx, rta_addr] = allocator.allocate_region(non_binary_size, i, ExtraData::kNonBinary, pid);
 
             nonbinary_sync_idx = merge_syncs(nonbinary_sync_idx, rta_sync_idx);
 
@@ -203,19 +201,19 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
             // Only tensix binaries are stored in the kernel config buffer. Active ethernet binaries have a fixed
             // address.
             if (core_type == HalProgrammableCoreType::TENSIX) {
-                if (auto mem_addr = allocator.get_region(ExtraData::kBinary, node.program->get_id())) {
+                if (auto mem_addr = allocator.get_region(ExtraData::kBinary, pid)) {
                     binary_addr = *mem_addr;
                     node.dispatch_metadata.send_binary = false;
                     allocator.update_region_trace_idx(*mem_addr, i);
                 } else {
-                    auto res = allocator.allocate_region(binary_size, i, ExtraData::kBinary);
+                    auto res = allocator.allocate_region(binary_size, i, ExtraData::kBinary, pid);
                     if (!res.second.has_value()) {
                         // Clear the allocator and try again. Should succeed unless the total size of the program is
                         // larger than the config buffer.
                         allocator.reset_allocator();
                         std::tie(rta_sync_idx, rta_addr) =
-                            allocator.allocate_region(non_binary_size, i, ExtraData::kNonBinary);
-                        res = allocator.allocate_region(binary_size, i, ExtraData::kBinary);
+                            allocator.allocate_region(non_binary_size, i, ExtraData::kNonBinary, pid);
+                        res = allocator.allocate_region(binary_size, i, ExtraData::kBinary, pid);
                         TT_ASSERT(res.second.has_value(), "Failed to allocate binary region");
                         TT_ASSERT(i > 0, "Failed to allocate binary region on first program");
                         binary_sync_idx = merge_syncs(binary_sync_idx, i - 1);
@@ -223,7 +221,7 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
                         binary_sync_idx = merge_syncs(res.first, binary_sync_idx);
                     }
                     binary_addr = *res.second;
-                    allocator.add_region(ExtraData::kBinary, node.program->get_id(), binary_addr);
+                    allocator.add_region(ExtraData::kBinary, pid, binary_addr);
                 }
             }
             TT_ASSERT(rta_addr.has_value(), "Failed to allocate non-binary region");

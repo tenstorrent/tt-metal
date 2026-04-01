@@ -17,6 +17,8 @@
 
 namespace tt::tt_metal {
 class SimpleTraceAllocator {
+    friend class SimpleTraceAllocatorFixture;
+
 public:
     SimpleTraceAllocator(
         uint32_t worker_ringbuffer_start,
@@ -45,6 +47,7 @@ private:
         // The type of data in this region.
         uint32_t data_type;
         uint32_t size;
+        uint64_t program_id;
     };
     static bool intersects(uint32_t begin_1, uint32_t size_1, uint32_t begin_2, uint32_t size_2) {
         return (begin_1 < begin_2 + size_2) && (begin_2 < begin_1 + size_1);
@@ -61,15 +64,15 @@ private:
     }
 
     class RegionAllocator {
+        friend class SimpleTraceAllocatorFixture;
+
     public:
         RegionAllocator(uint32_t ringbuffer_size, std::vector<ExtraData>& extra_data) :
             ringbuffer_size_(ringbuffer_size), extra_data_(extra_data) {}
 
-        void set_trace_nodes(std::vector<TraceNode*>* trace_nodes) { trace_nodes_ = trace_nodes; }
-
         // Returns sync_idx and address.
         std::pair<std::optional<uint32_t>, std::optional<uint32_t>> allocate_region(
-            uint32_t size, uint32_t trace_idx, uint32_t data_type);
+            uint32_t size, uint32_t trace_idx, uint32_t data_type, uint64_t program_id);
 
         void add_region(uint32_t data_type, uint64_t program_id, uint32_t addr) {
             program_ids_memory_map_[data_type][program_id] = addr;
@@ -102,7 +105,6 @@ private:
         std::array<std::map<uint64_t, uint32_t>, ExtraData::kNumTypes> program_ids_memory_map_;
         std::map<uint32_t, MemoryUsage> regions_;
         std::vector<ExtraData>& extra_data_;
-        std::vector<TraceNode*>* trace_nodes_ = nullptr;
     };
 
     void allocate_trace_programs_on_subdevice(std::vector<TraceNode*>& trace_nodes, SubDeviceId sub_device_id);
