@@ -73,6 +73,30 @@ def validate_network_interface(interface: str, verbose: bool = False) -> None:
         logger.info(f"{TT_RUN_PREFIX} Network interface '{interface}' found on local host")
 
 
+def validate_mpi_args(mpi_args: List[str]) -> None:
+    """Validate parsed MPI arguments for common misconfigurations.
+
+    Catches cases like --host with an empty or flag-like value, which typically
+    indicates an unexpanded shell variable (e.g., --host $HOSTS where HOSTS is unset).
+    """
+    HOST_FLAGS = {"--host", "-H"}
+    for i, arg in enumerate(mpi_args):
+        if arg in HOST_FLAGS:
+            if i + 1 >= len(mpi_args):
+                raise click.ClickException(
+                    f"MPI argument '{arg}' requires a value but none was provided.\n"
+                    f"Hint: If using a shell variable (e.g., --host $HOSTS), "
+                    f"make sure it is defined in your environment."
+                )
+            next_arg = mpi_args[i + 1]
+            if next_arg.startswith("-"):
+                raise click.ClickException(
+                    f"MPI argument '{arg}' has a suspicious value '{next_arg}' (looks like a flag, not a hostname).\n"
+                    f"Hint: If using a shell variable (e.g., --host $HOSTS), "
+                    f"make sure it is defined in your environment."
+                )
+
+
 class RankBinding(BaseModel):
     """Binding between MPI rank to target MeshId and MeshHostRankId as defined in the mesh graph descriptor."""
 
@@ -796,6 +820,9 @@ def main(
         validate_network_interface(tcp_interface, verbose=verbose)
 
     effective_mpi_args = list(mpi_args) if mpi_args else []
+
+    if effective_mpi_args:
+        validate_mpi_args(effective_mpi_args)
 
     if not bare:
         # Recommended MPI settings for multi-host clusters:
