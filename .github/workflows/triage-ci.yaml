@@ -347,6 +347,18 @@ jobs:
             --summary-md "build_ci/ci_ticketing/create_tickets/m5_lifecycle_summary.md" \
             --channel-id "C0APK6215B5"
 
+      - name: M6 bug-escape enrichment (test scope)
+        if: ${{ !inputs['data-gathering-mode'] }}
+        env:
+          ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+        run: |
+          set -euo pipefail
+          python tools/ci/m6_bug_escape_enrichment.py \
+            --state-json "build_ci/triage_state/ci_triage_state.json" \
+            --issue-repo "ebanerjeeTT/issue_dump" \
+            --output-json "build_ci/ci_ticketing/create_tickets/m6_bug_escape_events.json" \
+            --summary-md "build_ci/ci_ticketing/create_tickets/m6_bug_escape_summary.md"
+
       - name: Upload auto-disable artifacts
         if: ${{ !inputs['data-gathering-mode'] }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
@@ -365,6 +377,8 @@ jobs:
             build_ci/ci_ticketing/create_tickets/m4_review_cache.json
             build_ci/ci_ticketing/create_tickets/m5_lifecycle_result.json
             build_ci/ci_ticketing/create_tickets/m5_lifecycle_summary.md
+            build_ci/ci_ticketing/create_tickets/m6_bug_escape_events.json
+            build_ci/ci_ticketing/create_tickets/m6_bug_escape_summary.md
             build_ci/raw_data/slack_C0APK6215B5_last_14_days.json
           retention-days: 7
 
@@ -402,6 +416,11 @@ jobs:
           if [ -s "$m5_md" ]; then
             echo >> "$GITHUB_STEP_SUMMARY"
             cat "$m5_md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          m6_md="build_ci/ci_ticketing/create_tickets/m6_bug_escape_summary.md"
+          if [ -s "$m6_md" ]; then
+            echo >> "$GITHUB_STEP_SUMMARY"
+            cat "$m6_md" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload data gathering report artifact
