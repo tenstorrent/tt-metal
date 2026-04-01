@@ -38,12 +38,12 @@ inline void calculate_addcmul(
         TTI_SFPNOP;
         if constexpr (!is_fp32_dest_acc_en) {
             TTI_SFP_STOCH_RND(
-                sfpi::SFPSTOCHRND_RND_EVEN,
-                sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16A,
-                0,
-                p_sfpu::LREG5,
-                p_sfpu::LREG5,
-                InstrModLoadStore::FP16A);
+                /*rnd_mode*/ sfpi::SFPSTOCHRND_RND_EVEN,
+                /* imm8_math*/ 0,
+                /*lreg_src_b*/ 0,
+                /*lreg_src_c*/ p_sfpu::LREG5,
+                /*lreg_dest*/ p_sfpu::LREG5,
+                /*instr_mod1*/ sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
         }
         TT_SFPSTORE(p_sfpu::LREG5, mod0, ADDR_MOD_7, dst_index_out * dst_tile_size);
         sfpi::dst_reg++;

@@ -951,31 +951,27 @@ void kernel_main() {
                 get_named_compile_time_arg_val("bcast_pkt_cb"),
                 get_named_compile_time_arg_val("bcast_num_pages_to_read"),
                 get_named_compile_time_arg_val("bcast_tensor0_page_size"),
-                get_named_compile_time_arg_val("bcast_num_targets_forward_direction"),
-                get_named_compile_time_arg_val("bcast_num_targets_backward_direction"),
+                get_named_compile_time_arg_val("bcast_num_neighbors"),
+                get_named_compile_time_arg_val("bcast_num_links"),
                 get_named_compile_time_arg_val("bcast_is_sender"),
-                get_named_compile_time_arg_val("bcast_core_noc_x"),
-                get_named_compile_time_arg_val("bcast_core_noc_y"),
-                get_named_compile_time_arg_val("bcast_is_secondary_sender"),
-                get_named_compile_time_arg_val("bcast_has_secondary_target"),
-                get_named_compile_time_arg_val("bcast_start_distance_in_hops_forward"),
-                get_named_compile_time_arg_val("bcast_range_hops_forward"),
-                get_named_compile_time_arg_val("bcast_start_distance_in_hops_backward"),
-                get_named_compile_time_arg_val("bcast_range_hops_backward")>;
+                get_named_compile_time_arg_val("bcast_chunk_size_bytes"),
+                get_named_compile_time_arg_val("bcast_last_chunk_size_bytes"),
+                get_named_compile_time_arg_val("bcast_num_chunks")>;
+            constexpr uint32_t bcast_ncrisc_base = get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base");
+            uint32_t bcast_rta_offset = 0;
+            uint32_t bcast_rta_num_args = 0;
+            if constexpr (BcastCTArgs::num_neighbors > 0) {
+                bcast_rta_num_args = get_arg_val<uint32_t>(0);
+                bcast_rta_offset = 1;
+            }
             deepseek_b1_ops::Broadcast::WriterArgs bcast_args{
-                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 0),
-                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 1),
-                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 2),
-                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 3),
-                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 4),
-                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 5),
-                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 6),
-                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 7),
-                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 8),
-                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 9),
-                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 10),
-                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 11),
-                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 12),
+                get_common_arg_val<uint32_t>(bcast_ncrisc_base + 0),
+                get_common_arg_val<uint32_t>(bcast_ncrisc_base + 1),
+                get_common_arg_val<uint32_t>(bcast_ncrisc_base + 2),
+                {get_common_arg_val<uint32_t>(bcast_ncrisc_base + 3),
+                 get_common_arg_val<uint32_t>(bcast_ncrisc_base + 4)},
+                bcast_rta_offset,
+                bcast_rta_num_args,
             };
 
             deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_sender_core> bcast_op;
