@@ -242,6 +242,40 @@ def owners_for_paths(paths: list[str], rules: list[tuple[str, list[str]]]) -> se
     return owners
 
 
+def _tokenize_owner_hint(value: str) -> list[str]:
+    tokens = re.split(r"[^a-z0-9]+", value.lower())
+    return [t for t in tokens if len(t) >= 3]
+
+
+def owners_from_workflow_name(
+    workflow_name: str, *, rules: list[tuple[str, list[str]]], workflow_root: Path
+) -> set[str]:
+    if not workflow_name.strip():
+        return set()
+    hint_tokens = set(_tokenize_owner_hint(workflow_name))
+    if not hint_tokens:
+        return set()
+    matched_paths: list[str] = []
+    for ext in ("*.yaml", "*.yml"):
+        for wf in workflow_root.glob(ext):
+            rel = wf.as_posix()
+            canonical_rel = f".github/workflows/{wf.name}"
+            file_tokens = set(_tokenize_owner_hint(wf.stem))
+            overlap = len(hint_tokens.intersection(file_tokens))
+            # Require at least 2 shared tokens (or 1 when workflow name itself
+            # has only one meaningful token), to avoid broad false matches.
+            required = 1 if len(hint_tokens) == 1 else 2
+            if overlap >= required:
+                matched_paths.append(rel)
+                matched_paths.append(canonical_rel)
+    if not matched_paths:
+        return set()
+    owners: set[str] = set()
+    for rel_path in matched_paths:
+        owners.update(owners_for_paths([rel_path], rules))
+    return owners
+
+
 def extract_repo_paths(text: str) -> list[str]:
     out: list[str] = []
     for m in PATH_PATTERN.finditer(text):
@@ -417,6 +451,12 @@ def render_owner_mentions(
     paths = extract_repo_paths(combined)
     codeowners = parse_codeowners(Path(".github/CODEOWNERS"))
     gh_usernames = owners_for_paths(paths, codeowners)
+    if not gh_usernames:
+        gh_usernames = owners_from_workflow_name(
+            workflow_name,
+            rules=codeowners,
+            workflow_root=Path(".github/workflows"),
+        )
     resolved_ids: set[str] = set()
     unresolved_handles: list[str] = []
 

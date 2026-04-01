@@ -96,3 +96,17 @@ def test_slack_lookup_by_username_accepts_tt_suffix_variants():
         }
     ]
     assert mod.slack_lookup_by_username("", "aliuTT", members) == "U1"
+
+
+def test_owners_from_workflow_name_matches_codeowners_workflow_rules(tmp_path):
+    mod = _load_m4_module()
+    wf_root = tmp_path / ".github" / "workflows"
+    wf_root.mkdir(parents=True)
+    (wf_root / "t3000-unit-tests-impl.yaml").write_text("name: test\n", encoding="utf-8")
+    rules = [(".github/workflows/t3000-unit-tests-impl.yaml", ["aliuTT", "cfjchu"])]
+    owners = mod.owners_from_workflow_name(
+        "T3K T3000 unit tests",
+        rules=rules,
+        workflow_root=wf_root,
+    )
+    assert owners == {"aliuTT", "cfjchu"}
