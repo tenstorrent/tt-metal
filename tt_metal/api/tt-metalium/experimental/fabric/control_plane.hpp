@@ -11,6 +11,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -47,8 +48,6 @@ class Cluster;
 }  // namespace tt::umd
 
 namespace tt::tt_fabric {
-
-class TopologyMapper;
 
 // TODO: remove this once UMD provides API for UBB ID and bus ID
 struct UbbId {
@@ -277,6 +276,9 @@ public:
 
     tt::tt_metal::AsicID get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
     const tt::tt_metal::PhysicalSystemDescriptor& get_physical_system_descriptor() const;
+
+    /// Topology mapper for fabric node ↔ physical ASIC / host bindings (used by routing and pipeline layout).
+    const TopologyMapper& get_topology_mapper() const;
 
     // Getters
     FabricConfig get_fabric_config() const { return fabric_config_; }

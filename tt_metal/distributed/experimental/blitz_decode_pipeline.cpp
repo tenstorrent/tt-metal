@@ -4,14 +4,17 @@
 
 #include "tt-metalium/experimental/blitz_decode_pipeline.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt_stl/span.hpp>
 
@@ -602,19 +605,55 @@ std::vector<PhysicalPipelineStageConfig> generate_physical_pipeline_config(bool 
     }
 }
 
+// Resolves the stage hostname via TopologyMapper: mesh id follows stage_index % num_procs (one mesh per MPI rank),
+// one mesh host rank per mesh (first entry from topology mapper), then PSD hostname for that MPI rank.
+std::string get_stage_hostname_for_blitz(
+    const tt::tt_fabric::TopologyMapper& topology_mapper,
+    const tt::tt_fabric::ControlPlane& control_plane,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    std::size_t stage_index,
+    std::size_t num_procs) {
+    // TODO: Will simplify this interface for topology mapper so that it is easier to pull the information you need
+    auto mesh_ids = control_plane.get_user_physical_mesh_ids();
+    std::sort(mesh_ids.begin(), mesh_ids.end(), [](tt::tt_fabric::MeshId a, tt::tt_fabric::MeshId b) {
+        return a.get() < b.get();
+    });
+    TT_FATAL(!mesh_ids.empty(), "blitz_decode_pipeline: no user mesh ids from control plane");
+    TT_FATAL(
+        mesh_ids.size() == num_procs,
+        "blitz_decode_pipeline: mesh count ({}) must match MPI world size ({})",
+        mesh_ids.size(),
+        num_procs);
+
+    const tt::tt_fabric::MeshId mesh_id = mesh_ids[stage_index % num_procs];
+
+    const auto& host_ranks = topology_mapper.get_host_ranks(mesh_id);
+    TT_FATAL(host_ranks.size() != 0, "blitz_decode_pipeline: no mesh host ranks for mesh {}", mesh_id.get());
+    const tt::tt_fabric::MeshHostRankId mesh_host_rank = host_ranks.values().front();
+
+    const int mpi_rank = topology_mapper.get_mpi_rank_for_mesh_host_rank(mesh_id, mesh_host_rank);
+    TT_FATAL(mpi_rank >= 0, "blitz_decode_pipeline: invalid MPI rank for mesh {}", mesh_id.get());
+    return physical_system_descriptor.get_hostname_for_rank(static_cast<uint32_t>(mpi_rank));
+}
+
 std::vector<BlitzDecodePipelineStage> build_pipeline(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate>& asic_id_to_mesh_coord) {
     bool rev_c = physical_system_descriptor.is_bh_galaxy_rev_c();
     std::vector<PhysicalPipelineStageConfig> physical_pipeline_stage_configs = generate_physical_pipeline_config(rev_c);
 
-    const auto num_procs = *(tt::tt_metal::MetalContext::instance().get_distributed_context_ptr()->size());
+    auto& metal_context = tt::tt_metal::MetalContext::instance();
+    const auto& control_plane = metal_context.get_control_plane();
+    const auto& topology_mapper = control_plane.get_topology_mapper();
+    const std::size_t num_procs = static_cast<std::size_t>(*metal_context.get_distributed_context_ptr()->size());
+
     std::vector<BlitzDecodePipelineStage> logical_pipeline_stage_configs;
     logical_pipeline_stage_configs.reserve(physical_pipeline_stage_configs.size());
 
     for (std::size_t stage_index = 0; stage_index < physical_pipeline_stage_configs.size(); stage_index++) {
         const auto& stage_config = physical_pipeline_stage_configs[stage_index];
-        auto stage_hostname = physical_system_descriptor.get_hostname_for_rank(stage_index % num_procs);
+        const std::string stage_hostname = get_stage_hostname_for_blitz(
+            topology_mapper, control_plane, physical_system_descriptor, stage_index, num_procs);
         auto entry_node_asic_id = physical_system_descriptor.get_asic_id(
             stage_hostname,
             tt::tt_metal::TrayID(stage_config.entry_node_tray_id),

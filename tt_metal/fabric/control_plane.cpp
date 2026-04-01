@@ -2275,6 +2275,11 @@ const tt::tt_metal::PhysicalSystemDescriptor& ControlPlane::get_physical_system_
     return *physical_system_descriptor_;
 }
 
+const TopologyMapper& ControlPlane::get_topology_mapper() const {
+    TT_FATAL(this->topology_mapper_ != nullptr, "ControlPlane: topology mapper not initialized");
+    return *this->topology_mapper_;
+}
+
 std::vector<MeshId> ControlPlane::get_local_mesh_id_bindings() const {
     const auto& mesh_id_bindings = this->local_mesh_binding_.mesh_ids;
     const auto& user_mesh_ids = this->get_user_physical_mesh_ids();
