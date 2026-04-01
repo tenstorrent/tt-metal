@@ -393,7 +393,7 @@ jobs:
       matrix:
         platform: [
           "N150-viommu",
-          #"P150b-viommu-prio",   # p150b triage has been failing since latest p150b runner update; disable for now until we can investigate and stabilize
+          "P150b-viommu-prio",
         ]
     uses: ./.github/workflows/triage.yaml
     with:

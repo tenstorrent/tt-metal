@@ -8,7 +8,7 @@
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/rotary_embedding_llama_fused_qk_program_factory.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::experimental::prim {
 
