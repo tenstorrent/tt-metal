@@ -56,7 +56,7 @@ FORCE_INLINE void generate_partial_reduce_scaler(
             self,
             experimental::CoreLocalMem<uint32_t>(write_addr),
             MEM_ZEROS_SIZE,
-            {.noc_x = 0, .noc_y = 0, .addr = MEM_ZEROS_BASE},
+            {.noc_x = my_x[0], .noc_y = my_y[0], .addr = MEM_ZEROS_BASE},
             {});
         write_addr += MEM_ZEROS_SIZE;
     }
