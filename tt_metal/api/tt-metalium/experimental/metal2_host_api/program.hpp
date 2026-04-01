@@ -34,7 +34,7 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params);
 // ProgramRunParamsView is a non-owning view into the Program's command buffers,
 // enabling in-place modification of mutable Program parameters.
 // (Sketch only; not yet implemented)
-ProgramRunParamsView GetProgramRunParamsView(Program& program);
+ProgramRunParamsView& GetProgramRunParamsView(Program& program);
 
 // Useful? Might want to expose a const view for debug/test use?
 // ProgramRunParamsConstView GetProgramRunParamsConstView(const Program& program);

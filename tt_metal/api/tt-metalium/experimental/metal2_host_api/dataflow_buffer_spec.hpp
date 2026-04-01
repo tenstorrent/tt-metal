@@ -44,9 +44,11 @@ struct DataflowBufferSpec {
     // sharing common L1 memory.
     // A "remote DFB" has its producer and consumer kernels on different nodes.
     // For a remote DFB, you must specify the producer-consumer map.
-    bool is_remote_dfb = false;
-    using ProducerConsumerMap = std::vector<std::pair<NodeCoord, NodeCoord>>;
-    std::optional<ProducerConsumerMap> producer_consumer_map = std::nullopt;
+    struct RemoteDFBInfo {
+        using ProducerConsumerMap = std::vector<std::pair<NodeCoord, NodeCoord>>;
+        ProducerConsumerMap producer_consumer_map;
+    };
+    std::optional<RemoteDFBInfo> remote_dfb_info = std::nullopt;
 
     ////////////////////////////////////
     // Entry format metadata
@@ -74,7 +76,7 @@ struct DataflowBufferSpec {
     // All aliased DFBs must have size and target nodes, and must mutually declare each other as aliases.
     // (Aliased DFBs offer NO guarantees against data clobbering; the kernel author must ensure safety.)
     using DFBIdentifiers = std::vector<DFBSpecName>;
-    std::optional<DFBIdentifiers> alias_with = std::nullopt;
+    DFBIdentifiers alias_with;  // empty vector means no aliasing
 
     // Disable implicit sync
     // Implicit sync is handled via ISR (available on Gen2 only)

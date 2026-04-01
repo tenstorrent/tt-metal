@@ -380,8 +380,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
 
     // Remote DFBs are not supported yet
     for (const auto& dfb : spec.dataflow_buffers) {
-        TT_FATAL(!dfb.is_remote_dfb, "Remote DFBs are not supported yet");
-        TT_FATAL(!dfb.producer_consumer_map || dfb.producer_consumer_map->empty(), "Remote DFBs are not supported yet");
+        TT_FATAL(!dfb.remote_dfb_info.has_value(), "Remote DFBs are not supported yet");
     }
 
     // Borrowed memory is not supported yet
@@ -395,8 +394,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // DFB aliasing is not supported yet
     for (const auto& dfb : spec.dataflow_buffers) {
         TT_FATAL(
-            !dfb.alias_with.has_value() || dfb.alias_with->empty(),
-            "DFB '{}' specifies alias_with, but DFB aliasing is not yet implemented",
+            dfb.alias_with.empty(),
+            "DFB '{}' has a non-empty alias_with, but DFB aliasing is not yet implemented",
             dfb.unique_id);
     }
 

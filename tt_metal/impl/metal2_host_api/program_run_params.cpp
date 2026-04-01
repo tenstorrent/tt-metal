@@ -70,9 +70,15 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
     // (Not yet supported)
 }
 
-ProgramRunParamsView GetProgramRunParamsView(Program& program) {
+ProgramRunParamsView& GetProgramRunParamsView(Program& program) {
     (void)program;
     TT_FATAL(false, "GetProgramRunParamsView is not yet implemented.");
+
+    // This is the fast path, power user API.
+    // Return type was changed to a reference to avoid copying the view.
+    // With this API, we will need to either:
+    //   - Create the view object on the first call and stash it in the Program object.
+    //   - Or, create the view object upon Program construction.
 }
 
 // ============================================================================

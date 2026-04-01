@@ -10,8 +10,10 @@
 //   3. WorkerSpec validation
 //   4. DFB validation
 //   5. Program creation (using Quasar mock device)
+//   6. Aggregate type enforcement (designated initializers)
 
 #include <gtest/gtest.h>
+#include <type_traits>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
@@ -371,7 +373,7 @@ TEST_F(ProgramSpecTestQuasar, RemoteDFBFails) {
     auto producer = MakeMinimalDMKernel("producer", node);
     auto consumer = MakeMinimalDMKernel("consumer", node);
     auto dfb = MakeMinimalDFB("dfb", node);
-    dfb.is_remote_dfb = true;  // Not supported!
+    dfb.remote_dfb_info = DataflowBufferSpec::RemoteDFBInfo{.producer_consumer_map = {{node, node}}};  // Not supported!
 
     BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
@@ -417,7 +419,7 @@ TEST_F(ProgramSpecTestQuasar, DFBAliasingFails) {
     auto producer = MakeMinimalDMKernel("producer", node);
     auto consumer = MakeMinimalDMKernel("consumer", node);
     auto dfb = MakeMinimalDFB("dfb", node);
-    dfb.alias_with = std::vector<DFBSpecName>{"other_dfb"};  // Not supported!
+    dfb.alias_with = std::vector<DFBSpecName>{"other_dfb"};  // Not supported yet!
 
     BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
@@ -1143,6 +1145,271 @@ TEST_F(ProgramSpecTestQuasar, SimplifyingAssumptionViolation_OverlappingMultiNod
 
     // EXPECTED BEHAVIOR: FAILS due to simplifying assumption violation.
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+}
+
+// ============================================================================
+// SECTION 7: Aggregate Type Enforcement Tests
+// ============================================================================
+//
+// DESIGN DECISION: All *Spec types must remain aggregates (POD-like structs).
+//
+// Rationale:
+//   - Aggregates support designated initializers, making code self-documenting
+//   - Prevents "constructor creep" where types accumulate convenience constructors
+//
+// What breaks aggregate status:
+//   - User-declared constructors (including default/copy/move)
+//   - Private/protected non-static data members
+//   - Virtual functions
+//   - Virtual/private/protected base classes
+//
+// By convention, I would strongly prefer to avoid adding member functions to Spec types.
+// Extensions should be added via free functions rather than member methods, to prevent
+// cruft accumulation. This will have to be enforced via code review, however.
+
+// Compile-time enforcement: all Spec types must be aggregates
+static_assert(
+    std::is_aggregate_v<ProgramSpec>, "ProgramSpec must remain an aggregate to support designated initializers");
+static_assert(
+    std::is_aggregate_v<WorkerSpec>, "WorkerSpec must remain an aggregate to support designated initializers");
+static_assert(
+    std::is_aggregate_v<KernelSpec>, "KernelSpec must remain an aggregate to support designated initializers");
+static_assert(
+    std::is_aggregate_v<DataflowBufferSpec>,
+    "DataflowBufferSpec must remain an aggregate to support designated initializers");
+static_assert(
+    std::is_aggregate_v<SemaphoreSpec>, "SemaphoreSpec must remain an aggregate to support designated initializers");
+static_assert(
+    std::is_aggregate_v<ComputeConfiguration>,
+    "ComputeConfiguration must remain an aggregate to support designated initializers");
+static_assert(
+    std::is_aggregate_v<DataMovementConfiguration>,
+    "DataMovementConfiguration must remain an aggregate to support designated initializers");
+static_assert(
+    std::is_aggregate_v<DataMovementConfiguration::Gen1DataMovementConfig>,
+    "Gen1DataMovementConfig must remain an aggregate");
+static_assert(
+    std::is_aggregate_v<DataMovementConfiguration::Gen2DataMovementConfig>,
+    "Gen2DataMovementConfig must remain an aggregate");
+static_assert(
+    std::is_aggregate_v<KernelSpec::CompilerOptions>,
+    "CompilerOptions must remain an aggregate to support designated initializers");
+static_assert(
+    std::is_aggregate_v<KernelSpec::DFBBinding>,
+    "DFBBinding must remain an aggregate to support designated initializers");
+static_assert(
+    std::is_aggregate_v<KernelSpec::SemaphoreBinding>,
+    "SemaphoreBinding must remain an aggregate to support designated initializers");
+static_assert(
+    std::is_aggregate_v<KernelSpec::RuntimeArgSchema>,
+    "RuntimeArgSchema must remain an aggregate to support designated initializers");
+static_assert(
+    std::is_aggregate_v<DataflowBufferSpec::RemoteDFBInfo>,
+    "RemoteDFBInfo must remain an aggregate to support designated initializers");
+
+// These tests document the intended construction pattern using designated initializers.
+// They serve as living documentation and will fail to compile if aggregate status is broken.
+
+TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
+    // Demonstrates constructing KernelSpec with designated initializers
+    KernelSpec dm_kernel{
+        .unique_id = "my_dm_kernel",
+        .source = "void kernel_main() {}",
+        .source_type = KernelSpec::SourceType::SOURCE_CODE,
+        .target_nodes = NodeCoord{0, 0},
+        .num_threads = 2,
+        .config_spec =
+            DataMovementConfiguration{
+                .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
+            },
+    };
+
+    EXPECT_EQ(dm_kernel.unique_id, "my_dm_kernel");
+    EXPECT_EQ(dm_kernel.num_threads, 2);
+    EXPECT_TRUE(dm_kernel.is_dm_kernel());
+
+    KernelSpec compute_kernel{
+        .unique_id = "my_compute_kernel",
+        .source = "void kernel_main() {}",
+        .source_type = KernelSpec::SourceType::SOURCE_CODE,
+        .target_nodes = NodeRange{{0, 0}, {1, 1}},
+        .num_threads = 4,
+        .compiler_options =
+            KernelSpec::CompilerOptions{
+                .defines = {{"MY_DEFINE", "42"}},
+                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3,
+            },
+        .config_spec =
+            ComputeConfiguration{
+                .math_fidelity = MathFidelity::LoFi,
+                .fp32_dest_acc_en = true,
+            },
+    };
+
+    EXPECT_EQ(compute_kernel.unique_id, "my_compute_kernel");
+    EXPECT_TRUE(compute_kernel.is_compute_kernel());
+}
+
+TEST(AggregateSpecTypes, DataflowBufferSpecDesignatedInitializers) {
+    // Demonstrates constructing DataflowBufferSpec with designated initializers
+    DataflowBufferSpec dfb{
+        .unique_id = "my_dfb",
+        .target_nodes = NodeCoord{0, 0},
+        .entry_size = 2048,
+        .num_entries = 4,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+
+    EXPECT_EQ(dfb.unique_id, "my_dfb");
+    EXPECT_EQ(dfb.entry_size, 2048u);
+    EXPECT_EQ(dfb.num_entries, 4u);
+
+    // DFB with advanced options
+    DataflowBufferSpec borrowed_dfb{
+        .unique_id = "borrowed_dfb",
+        .target_nodes = NodeRange{{0, 0}, {1, 1}},
+        .entry_size = 1024,
+        .num_entries = 8,
+        .uses_borrowed_memory = true,
+        .disable_implicit_sync = true,
+    };
+
+    EXPECT_TRUE(borrowed_dfb.uses_borrowed_memory);
+    EXPECT_TRUE(borrowed_dfb.disable_implicit_sync);
+}
+
+TEST(AggregateSpecTypes, WorkerSpecDesignatedInitializers) {
+    // Demonstrates constructing WorkerSpec with designated initializers
+    WorkerSpec worker{
+        .unique_id = "my_worker",
+        .kernels = {"kernel1", "kernel2"},
+        .dataflow_buffers = {"dfb1", "dfb2"},
+        .semaphores = {"sem1"},
+        .target_nodes = NodeCoord{0, 0},
+    };
+
+    EXPECT_EQ(worker.unique_id, "my_worker");
+    EXPECT_EQ(worker.kernels.size(), 2u);
+    EXPECT_EQ(worker.dataflow_buffers.size(), 2u);
+}
+
+TEST(AggregateSpecTypes, SemaphoreSpecDesignatedInitializers) {
+    // Demonstrates constructing SemaphoreSpec with designated initializers
+    SemaphoreSpec sem{
+        .unique_id = "my_semaphore",
+        .target_nodes = NodeCoord{0, 0},
+        .initial_value = 0,
+        .memory_type = SemaphoreSpec::SemaphoreMemoryType::Register,
+    };
+
+    EXPECT_EQ(sem.unique_id, "my_semaphore");
+    EXPECT_EQ(sem.memory_type, SemaphoreSpec::SemaphoreMemoryType::Register);
+}
+
+TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
+    // Demonstrates constructing a complete ProgramSpec with designated initializers
+    ProgramSpec spec{
+        .program_id = "my_program",
+        .kernels =
+            {
+                KernelSpec{
+                    .unique_id = "producer",
+                    .source = "void kernel_main() {}",
+                    .source_type = KernelSpec::SourceType::SOURCE_CODE,
+                    .target_nodes = NodeCoord{0, 0},
+                    .dfb_bindings =
+                        {
+                            KernelSpec::DFBBinding{
+                                .dfb_spec_name = "dfb",
+                                .local_accessor_name = "out",
+                                .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
+                                .access_pattern = DFBAccessPattern::STRIDED,
+                            },
+                        },
+                    .config_spec =
+                        DataMovementConfiguration{
+                            .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
+                        },
+                },
+                KernelSpec{
+                    .unique_id = "consumer",
+                    .source = "void kernel_main() {}",
+                    .source_type = KernelSpec::SourceType::SOURCE_CODE,
+                    .target_nodes = NodeCoord{0, 0},
+                    .dfb_bindings =
+                        {
+                            KernelSpec::DFBBinding{
+                                .dfb_spec_name = "dfb",
+                                .local_accessor_name = "in",
+                                .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
+                                .access_pattern = DFBAccessPattern::STRIDED,
+                            },
+                        },
+                    .config_spec = ComputeConfiguration{},
+                },
+            },
+        .dataflow_buffers =
+            {
+                DataflowBufferSpec{
+                    .unique_id = "dfb",
+                    .target_nodes = NodeCoord{0, 0},
+                    .entry_size = 1024,
+                    .num_entries = 2,
+                    .data_format_metadata = tt::DataFormat::Float16_b,
+                },
+            },
+        .workers =
+            std::vector<WorkerSpec>{
+                WorkerSpec{
+                    .unique_id = "worker",
+                    .kernels = {"producer", "consumer"},
+                    .dataflow_buffers = {"dfb"},
+                    .target_nodes = NodeCoord{0, 0},
+                },
+            },
+    };
+
+    EXPECT_EQ(spec.program_id, "my_program");
+    EXPECT_EQ(spec.kernels.size(), 2u);
+    EXPECT_EQ(spec.dataflow_buffers.size(), 1u);
+    EXPECT_TRUE(spec.workers.has_value());
+    EXPECT_EQ(spec.workers->size(), 1u);
+}
+
+TEST(AggregateSpecTypes, NestedStructsDesignatedInitializers) {
+    // Demonstrates constructing nested configuration structs with designated initializers
+    KernelSpec::DFBBinding binding{
+        .dfb_spec_name = "my_dfb",
+        .local_accessor_name = "accessor",
+        .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
+        .access_pattern = DFBAccessPattern::BLOCKED,
+    };
+    EXPECT_EQ(binding.dfb_spec_name, "my_dfb");
+
+    KernelSpec::SemaphoreBinding sem_binding{
+        .semaphore_spec_name = "my_sem",
+        .accessor_name = "sem_accessor",
+    };
+    EXPECT_EQ(sem_binding.semaphore_spec_name, "my_sem");
+
+    KernelSpec::CompilerOptions opts{
+        .include_paths = {"/path/to/include"},
+        .defines = {{"DEBUG", "1"}, {"VERSION", "2"}},
+        .opt_level = tt::tt_metal::KernelBuildOptLevel::O0,
+    };
+    EXPECT_EQ(opts.defines.size(), 2u);
+
+    DataMovementConfiguration::Gen1DataMovementConfig gen1{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+        .noc = tt::tt_metal::NOC::RISCV_1_default,
+        .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
+    };
+    EXPECT_EQ(gen1.processor, tt::tt_metal::DataMovementProcessor::RISCV_1);
+
+    DataflowBufferSpec::RemoteDFBInfo remote_info{
+        .producer_consumer_map = {{NodeCoord{0, 0}, NodeCoord{1, 0}}},
+    };
+    EXPECT_EQ(remote_info.producer_consumer_map.size(), 1u);
 }
 
 }  // namespace

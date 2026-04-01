@@ -71,7 +71,7 @@ struct KernelSpec {
     SourceType source_type = SourceType::FILE_PATH;
 
     // Target nodes
-    // The set of device nodes on which the kernel will run
+    // The logical coordinates for the set of device nodes on which the kernel will run
     using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
     Nodes target_nodes;
 
