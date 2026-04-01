@@ -1200,7 +1200,7 @@ void FDMeshCommandQueue::record_end() {
                 hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG)),
             static_cast<uint32_t>(
                 hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG))};
-        allocator.allocate_trace_programs(trace_nodes);
+        allocator.allocate_trace_programs(hal, trace_nodes);
 
         // Each device range produces an independent trace byte stream, so reset the prefetcher
         // cache manager to give each range a clean slate.
