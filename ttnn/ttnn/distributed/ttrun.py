@@ -519,20 +519,51 @@ def build_mpi_command(
     return cmd
 
 
-def _strip_python_interpreter(program: List[str]) -> List[str]:
-    """Strip a leading python interpreter from a command list.
+def _is_python_entry_point(path: str) -> bool:
+    """Check if an executable is a Python console_scripts entry point by examining its shebang."""
+    try:
+        with open(path, "r") as f:
+            shebang = f.readline(256)
+        return shebang.startswith("#!") and "python" in shebang
+    except (OSError, UnicodeDecodeError):
+        return False
 
-    `python -m tracy` already runs inside Python, so an explicit interpreter
-    prefix (e.g. ``python3 script.py``) is redundant and causes tracy to try
-    to open the interpreter name as a script file.
+
+def _normalize_program_for_tracy(program: List[str]) -> List[str]:
+    """Normalize a program command for use under ``python -m tracy``.
+
+    Handles three invocation styles:
+      1. ``python3 script.py …``  — strip the interpreter (tracy provides its own)
+      2. ``python3 -m module …``  — strip the interpreter, keep ``-m module``
+      3. ``pytest …`` (bare entry point) — convert to ``-m pytest …``
+
+    Case 3 detects Python console_scripts entry points (installed via pip) by
+    resolving the executable on PATH and checking for a Python shebang.  The
+    entry point name is assumed to match the importable module name, which holds
+    for the vast majority of tools (pytest, coverage, mypy, black, etc.).
     """
     if not program:
         return program
-    first = Path(program[0]).name
-    if first in ("python", "python3") or first.startswith("python3."):
+
+    first = program[0]
+    name = Path(first).name
+
+    # Cases 1 & 2: explicit Python interpreter — strip it
+    if name in ("python", "python3") or name.startswith("python3."):
         return program[1:]
-    if Path(program[0]).resolve() == Path(sys.executable).resolve():
+    if Path(first).resolve() == Path(sys.executable).resolve():
         return program[1:]
+
+    # Case 3: bare command that may be a Python entry point (e.g. pytest)
+    if not first.endswith(".py"):
+        resolved = shutil.which(first)
+        if resolved and _is_python_entry_point(resolved):
+            logger.debug(
+                f"{TT_RUN_PREFIX} Detected Python entry point '{first}', "
+                f"converting to '-m {name}' for tracy compatibility"
+            )
+            return ["-m", name] + program[1:]
+
     return program
 
 
@@ -561,7 +592,7 @@ def wrap_program_with_tracy(
     if tracy_config.passthrough_args:
         tracy_cmd.extend(tracy_config.passthrough_args)
 
-    tracy_cmd.extend(_strip_python_interpreter(program))
+    tracy_cmd.extend(_normalize_program_for_tracy(program))
 
     extra_env = {
         "TT_METAL_PROFILER_DIR": str(rank_output_dir),
