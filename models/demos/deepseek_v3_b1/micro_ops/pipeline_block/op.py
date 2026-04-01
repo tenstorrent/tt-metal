@@ -162,6 +162,7 @@ class PipelineBlock:
         assert downstream_d2d_socket_page_size == embedding_size_bytes
         assert upstream_d2d_socket_page_size == d2h_socket_page_size
 
+        # Socket connection here
         self.h2d_socket = ttnn.H2DSocket(
             mesh_device,
             ttnn.MeshCoreCoord(h2d_device_coord, pipeline_core_coord),

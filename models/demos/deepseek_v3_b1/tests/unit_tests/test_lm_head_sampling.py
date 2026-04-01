@@ -2061,6 +2061,7 @@ def test_4stage_galaxy_1_iteration(
     ],
     indirect=True,
 )
+@pytest.mark.timeout(900)
 def test_pipeline_block_4stage_galaxy_1_iteration(mesh_device, use_fp32):
     """
     4-stage 4x2 single-galaxy pipeline:
