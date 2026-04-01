@@ -187,6 +187,8 @@ def _collect_aggregated(
 
     def per_core(location: OnChipCoordinate, risc_name: str) -> CallstacksData | None:
         try:
+            if not callstack_provider.dispatcher_data.risc_enabled(risc_name):
+                return None
             # Filter DONE cores, like dump_callstacks.py does
             if not show_all_cores:
                 d = callstack_provider.dispatcher_data.get_cached_core_data(location, risc_name)
