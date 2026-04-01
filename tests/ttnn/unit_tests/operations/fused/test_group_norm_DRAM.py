@@ -15,6 +15,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from models.common.utility_functions import is_blackhole, is_watcher_enabled, run_for_blackhole
 
+TEST_PADDING_VALUE = -42
+
 
 # perf_test_mode is used to skip the torch execution and pcc comparison, and always runs the operation once
 def run_group_norm_DRAM(
@@ -51,6 +53,7 @@ def run_group_norm_DRAM(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     input_tensor_tilized = ttnn.tilize_with_zero_padding(input_tensor_row_major, use_multicore=True)
+    input_tensor_tilized = ttnn.fill_implicit_tile_padding(input_tensor_tilized, TEST_PADDING_VALUE)
 
     # Create dram group norm params
     [gamma_t, beta_t], input_mask_tensor = ttnn.dram_group_norm_params_from_torch(
@@ -262,6 +265,7 @@ def test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits):
         dtype=ttnn.DataType.BFLOAT16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
+    tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, TEST_PADDING_VALUE)
 
     # Generate input mask
     num_groups_per_split = num_groups // num_splits  # 16
@@ -275,6 +279,7 @@ def test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits):
     input_negative_mask_tensor = ttnn.to_device(input_negative_mask_tensor, device)
 
     tt_input_tensor = ttnn.to_device(tt_input_tensor, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, TEST_PADDING_VALUE)
 
     # Generate shard config
     grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
@@ -360,6 +365,7 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
     input_tensor_tilized = ttnn.tilize_with_val_padding(
         input_tensor_row_major, output_tensor_shape=out_shape, pad_value=0, use_multicore=True
     )
+    input_tensor_tilized = ttnn.fill_implicit_tile_padding(input_tensor_tilized, TEST_PADDING_VALUE)
 
     input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y, ttnn.DataType.BFLOAT16)
     input_mask_tensor = ttnn.to_device(input_mask_tensor, device)

@@ -36,6 +36,8 @@ import torch.nn.functional as F
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+TEST_PADDING_VALUE = -42
+
 
 @pytest.fixture
 def isolate_program_cache(device):
@@ -53,6 +55,7 @@ def run_softmax_5d(device, shape, dim, dtype=ttnn.bfloat16, memory_config=ttnn.D
     torch_result = F.softmax(torch_a, dim=dim)
 
     tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+    tt_a = ttnn.fill_implicit_tile_padding(tt_a, TEST_PADDING_VALUE)
     with device.cache_entries_counter.measure():
         tt_result = ttnn.softmax(tt_a, dim=dim, memory_config=memory_config)
     tt_result = ttnn.to_torch(tt_result)
@@ -67,6 +70,7 @@ def run_softmax_4d(device, shape, dim, dtype=ttnn.bfloat16, memory_config=ttnn.D
     torch_result = F.softmax(torch_a, dim=dim)
 
     tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+    tt_a = ttnn.fill_implicit_tile_padding(tt_a, TEST_PADDING_VALUE)
     with device.cache_entries_counter.measure():
         tt_result = ttnn.softmax(tt_a, dim=dim, memory_config=memory_config)
     tt_result = ttnn.to_torch(tt_result)
@@ -211,7 +215,9 @@ def test_scale_mask_softmax_cache_miss_different_mask_dtypes(device, isolate_pro
     # First call: mask in bfloat16
     torch_mask_bf16 = torch.zeros(mask_shape, dtype=torch.bfloat16)
     tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_a = ttnn.fill_implicit_tile_padding(tt_a, TEST_PADDING_VALUE)
     tt_mask_bf16 = ttnn.from_torch(torch_mask_bf16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_mask_bf16 = ttnn.fill_implicit_tile_padding(tt_mask_bf16, TEST_PADDING_VALUE)
     with device.cache_entries_counter.measure():
         tt_out1 = ttnn.scale_mask_softmax(tt_a, scale=None, mask=tt_mask_bf16)
     assert_with_pcc(F.softmax(torch_a, dim=-1), ttnn.to_torch(tt_out1), 0.99)
@@ -219,7 +225,9 @@ def test_scale_mask_softmax_cache_miss_different_mask_dtypes(device, isolate_pro
     # Second call: mask in float32 (different dtype)
     torch_mask_fp32 = torch.zeros(mask_shape, dtype=torch.float32)
     tt_a2 = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_a2 = ttnn.fill_implicit_tile_padding(tt_a2, TEST_PADDING_VALUE)
     tt_mask_fp32 = ttnn.from_torch(torch_mask_fp32, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
+    tt_mask_fp32 = ttnn.fill_implicit_tile_padding(tt_mask_fp32, TEST_PADDING_VALUE)
     with device.cache_entries_counter.measure():
         tt_out2 = ttnn.scale_mask_softmax(tt_a2, scale=None, mask=tt_mask_fp32)
     assert_with_pcc(F.softmax(torch_a, dim=-1), ttnn.to_torch(tt_out2), 0.99)
@@ -246,18 +254,22 @@ def test_scale_mask_softmax_cache_miss_different_mask_memory_configs(device, iso
 
     # First call: mask in DRAM
     tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_a = ttnn.fill_implicit_tile_padding(tt_a, TEST_PADDING_VALUE)
     tt_mask_dram = ttnn.from_torch(
         torch_mask, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
+    tt_mask_dram = ttnn.fill_implicit_tile_padding(tt_mask_dram, TEST_PADDING_VALUE)
     with device.cache_entries_counter.measure():
         tt_out1 = ttnn.scale_mask_softmax(tt_a, scale=None, mask=tt_mask_dram)
     assert_with_pcc(F.softmax(torch_a, dim=-1), ttnn.to_torch(tt_out1), 0.99)
 
     # Second call: mask in L1 (different memory config)
     tt_a2 = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_a2 = ttnn.fill_implicit_tile_padding(tt_a2, TEST_PADDING_VALUE)
     tt_mask_l1 = ttnn.from_torch(
         torch_mask, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
+    tt_mask_l1 = ttnn.fill_implicit_tile_padding(tt_mask_l1, TEST_PADDING_VALUE)
     with device.cache_entries_counter.measure():
         tt_out2 = ttnn.scale_mask_softmax(tt_a2, scale=None, mask=tt_mask_l1)
     assert_with_pcc(F.softmax(torch_a, dim=-1), ttnn.to_torch(tt_out2), 0.99)
@@ -277,7 +289,9 @@ def test_scale_mask_softmax_cache_reuse_same_mask_config(device, isolate_program
     torch_a1 = torch.rand(input_shape, dtype=torch.bfloat16)
     torch_mask1 = torch.zeros(mask_shape, dtype=torch.bfloat16)
     tt_a1 = ttnn.from_torch(torch_a1, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_a1 = ttnn.fill_implicit_tile_padding(tt_a1, TEST_PADDING_VALUE)
     tt_mask1 = ttnn.from_torch(torch_mask1, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_mask1 = ttnn.fill_implicit_tile_padding(tt_mask1, TEST_PADDING_VALUE)
     with device.cache_entries_counter.measure():
         tt_out1 = ttnn.scale_mask_softmax(tt_a1, scale=None, mask=tt_mask1)
     torch_ref1 = ttnn.to_torch(tt_out1)
@@ -286,7 +300,9 @@ def test_scale_mask_softmax_cache_reuse_same_mask_config(device, isolate_program
     torch_a2 = torch.rand(input_shape, dtype=torch.bfloat16)
     torch_mask2 = torch.zeros(mask_shape, dtype=torch.bfloat16)
     tt_a2 = ttnn.from_torch(torch_a2, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_a2 = ttnn.fill_implicit_tile_padding(tt_a2, TEST_PADDING_VALUE)
     tt_mask2 = ttnn.from_torch(torch_mask2, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_mask2 = ttnn.fill_implicit_tile_padding(tt_mask2, TEST_PADDING_VALUE)
     with device.cache_entries_counter.measure():
         tt_out2 = ttnn.scale_mask_softmax(tt_a2, scale=None, mask=tt_mask2)
 

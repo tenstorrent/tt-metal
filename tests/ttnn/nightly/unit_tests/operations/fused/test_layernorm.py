@@ -12,6 +12,8 @@ import ttnn
 
 from models.common.utility_functions import pad_by_zero, torch2tt_tensor, comp_pcc
 
+TEST_PADDING_VALUE = -42
+
 
 def ref_layernorm(x, gamma, beta, eps):
     return torch.nn.functional.layer_norm(x, x.shape[-1:], gamma, beta, eps)
@@ -24,14 +26,16 @@ def ref_rmsnorm(x, gamma, beta, eps):
 def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_config, out_mem_config, device):
     epsf = 1e-2
 
-    test_dims = ((1, 9, 384, 1024),)
+    test_dims = ((1, 9, 384, 1024),)  # (1, 9, 384, 1025),) Implicit padding case - passes, padding handled correctly
     for test_shape in test_dims:
         in0 = torch.rand(test_shape) * 2 - 0.95
         in0_t = torch2tt_tensor(in0, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
+        in0_t = ttnn.fill_implicit_tile_padding(in0_t, TEST_PADDING_VALUE)
 
         if test_id <= 5:
             in1 = torch.rand(test_shape) * 2 - 0.8
             in1_t = torch2tt_tensor(in1, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
+            in1_t = ttnn.fill_implicit_tile_padding(in1_t, TEST_PADDING_VALUE)
 
         if test_id % 3 == 0:
             gamma = torch.ones(test_shape[3])
@@ -233,6 +237,7 @@ def test_layer_norm_4D_llama(device, h, w, num_chunks):
     )
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 

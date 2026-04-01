@@ -17,6 +17,8 @@ from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import s
 
 welford_flavors, welford_ids = (True, False), ("welford", "legacy")
 
+TEST_PADDING_VALUE = -42
+
 
 # for debug purpose
 def manual_group_norm(input_tensor, num_groups, eps=1e-2):
@@ -66,6 +68,7 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups, use_welf
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     # input mask
     input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y, ttnn.DataType.BFLOAT8_B)
@@ -152,6 +155,7 @@ def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_group
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     # input mask
     input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y, ttnn.DataType.BFLOAT8_B)
@@ -252,6 +256,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     # input mask
     input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y, ttnn.DataType.BFLOAT8_B)
@@ -341,6 +346,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(device, N, C, H, 
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     # input mask
     input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y, ttnn.DataType.BFLOAT8_B)
@@ -648,6 +654,7 @@ def test_sdxl_base_group_norm_negative_mask(device, input_shape, perf_test_mode=
         dtype=ttnn.DataType.BFLOAT16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
+    tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, TEST_PADDING_VALUE)
 
     # Generate input mask
     input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.x, ttnn.DataType.BFLOAT8_B)
@@ -834,6 +841,7 @@ def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps, use_negative
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     # Generate input mask
     if shard == "HS":
         grid_x = grid_size.x * grid_size.y
@@ -1045,6 +1053,7 @@ def test_group_norm_dram_grid_size(device, N, C, H, W, num_groups, specify_grid)
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    tt_input = ttnn.fill_implicit_tile_padding(tt_input, TEST_PADDING_VALUE)
 
     tt_output = ttnn.group_norm(
         tt_input,
@@ -1142,6 +1151,7 @@ def test_group_norm_optional_weight_bias(device, N, C, H, W, num_groups, use_wel
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    tt_input = ttnn.fill_implicit_tile_padding(tt_input, TEST_PADDING_VALUE)
 
     tt_output = ttnn.group_norm(
         tt_input,

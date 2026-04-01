@@ -12,6 +12,8 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
 from itertools import product
 from models.common.utility_functions import comp_pcc
 
+TEST_PADDING_VALUE = -42
+
 pytestmark = pytest.mark.use_module_device
 
 
@@ -45,6 +47,7 @@ def test_batch_norm_tests(
     in_data, input_tensor = data_gen_with_range_batch_norm(
         input_shapes, 5, 10, device, is_input=True, testing_dtype=testing_dtype
     )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     mean_data, mean_tensor = (
         data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=testing_dtype)
         if (check_mean)
@@ -65,7 +68,6 @@ def test_batch_norm_tests(
         if bias
         else (None, None)
     )
-
     if (not training) and ((not check_mean) or (not check_var)):
         pytest.xfail("running_mean and running_var must be defined in evaluation mode")
 
@@ -149,6 +151,7 @@ def test_BN_fp32_full_value(device, channel_size, eps, weight, bias):
     bias_torch = bias_torch.view(1, channel_size, 1, 1) if bias else None
 
     input_tensor_tt = ttnn.from_torch(input_tensor_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_tt = ttnn.fill_implicit_tile_padding(input_tensor_tt, TEST_PADDING_VALUE)
     batch_mean_tt = ttnn.from_torch(batch_mean_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     batch_var_tt = ttnn.from_torch(batch_var_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     weight_tt = (
@@ -192,6 +195,7 @@ def test_batch_norm_fp32(
     in_data, input_tensor = data_gen_with_range_batch_norm(
         input_shapes, 5, 10, device, is_input=True, testing_dtype=testing_dtype
     )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     mean_data, mean_tensor = (
         data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=testing_dtype)
         if (check_mean)
@@ -268,6 +272,7 @@ def test_batch_norm_fp32(
 @pytest.mark.parametrize("momentum", [0.0, 0.5])
 def test_batch_norm(input_shapes, training, check_mean, check_var, weight, bias, eps, momentum, device):
     in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     mean_data, mean_tensor = (
         data_gen_with_range_batch_norm(input_shapes, 4, 10, device) if (check_mean) else (None, None)
     )
@@ -341,6 +346,7 @@ def test_batch_norm(input_shapes, training, check_mean, check_var, weight, bias,
         torch.Size([4, 2, 64, 32]),
         torch.Size([1, 128, 14, 14]),
         torch.Size([2, 16, 64, 120]),
+        torch.Size([7, 3, 23, 23]),  # changed shape to non-multiple of 32 (tile-size)
     ],
 )
 @pytest.mark.parametrize("mem_layout", [ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.TensorMemoryLayout.HEIGHT_SHARDED])
@@ -348,6 +354,7 @@ def test_batch_norm(input_shapes, training, check_mean, check_var, weight, bias,
 def test_batch_norm_program_cache_and_default(input_shapes, mem_layout, prealloc_out_mem_config, device):
     N, H, W, C = input_shapes
     in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     mean_data, mean_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device)
     var_data, var_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 20, device)
     output_tensor = None
@@ -387,11 +394,13 @@ def test_batch_norm_program_cache_and_default(input_shapes, mem_layout, prealloc
     "input_shapes",
     [
         torch.Size([3, 2, 32, 32]),
+        torch.Size([7, 3, 23, 23]),  # changed shape to non-multiple of 32 (tile-size)
     ],
 )
 def test_batch_norm_qid_Default(input_shapes, device):
     N, H, W, C = input_shapes
     in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     mean_data, mean_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device)
     var_data, var_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 20, device)
 
@@ -408,11 +417,13 @@ def test_batch_norm_qid_Default(input_shapes, device):
     "input_shapes",
     [
         torch.Size([3, 2, 32, 32]),
+        torch.Size([7, 3, 23, 23]),  # changed shape to non-multiple of 32 (tile-size)
     ],
 )
 def test_batch_norm_qid(input_shapes, device):
     N, H, W, C = input_shapes
     in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 2, 10, device, is_input=True)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     mean_data, mean_tensor = data_gen_with_range_batch_norm(input_shapes, 2, 10, device)
     var_data, var_tensor = data_gen_with_range_batch_norm(input_shapes, 2, 20, device)
 
@@ -433,6 +444,7 @@ def test_batch_norm_output_Default(input_shapes, device):
     N, H, W, C = input_shapes
     _, tt_output_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
     in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     mean_data, mean_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device)
     var_data, var_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 20, device)
 
@@ -470,6 +482,7 @@ def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_d
     torch_input_tensor, tt_input_tensor = data_gen_with_range_batch_norm(
         input_shapes, 5, 10, device, is_input=True, testing_dtype=input_dtype
     )
+    tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, TEST_PADDING_VALUE)
     torch_mean_tensor, tt_mean_tensor = data_gen_with_range_batch_norm(
         input_shapes, 4, 10, device, testing_dtype=param_dtype
     )
@@ -604,6 +617,7 @@ def test_batch_norm_mixed_precision(
     in_data, input_tensor = data_gen_with_range_batch_norm(
         input_shapes, 5, 10, device, is_input=True, testing_dtype=testing_dtype
     )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     mean_data, mean_tensor = (
         data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=testing_dtype2)
         if (check_mean)

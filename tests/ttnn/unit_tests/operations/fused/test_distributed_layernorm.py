@@ -15,6 +15,8 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
+TEST_PADDING_VALUE = -42
+
 
 def reference_layernorm(x, gamma, beta, epsilon, is_rmsnorm):
     if gamma is None:
@@ -91,6 +93,7 @@ def run_distributed_layernorm(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ShardTensorToMesh(mesh_device, dim=-1),
     )
+    tt_inp = ttnn.fill_implicit_tile_padding(tt_inp, TEST_PADDING_VALUE)
     tt_gamma = ttnn.as_tensor(
         gamma.reshape(n_devices, 1, -1, 32),
         dtype=ttnn.bfloat16,
@@ -133,8 +136,9 @@ inp_shapes = [
     (1, 1, 2048, 8192),
     (1, 1, 128, 8192),
     (2, 1, 128, 8192),
+    (1, 1, 2047, 8191),  # Non-tile-aligned shape for implicit padding testing
 ]
-inp_shape_ids = ["inp_shape0", "inp_shape1", "inp_shape2"]
+inp_shape_ids = ["inp_shape0", "inp_shape1", "inp_shape2", "inp_shape3"]  # 4th id is for non-tile-aligned shape
 
 stats_dtypes = [ttnn.bfloat16, ttnn.bfloat8_b]
 stats_dtypes_ids = ["BFLOAT16_stats", "BFLOAT8_B_stats"]
