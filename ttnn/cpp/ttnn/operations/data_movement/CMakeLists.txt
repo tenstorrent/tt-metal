@@ -56,7 +56,7 @@ target_sources(
             concat/concat.hpp
             copy/copy.hpp
             copy/device/copy_device_operation.hpp
-            copy/device/copy_program_factory.hpp
+            copy/device/copy_same_memory_config_program_factory.hpp
             copy/device/copy_default_row_major_program_factory.hpp
             copy/device/copy_default_tilized_program_factory.hpp
             copy/device/copy_device_operation_types.hpp
@@ -370,7 +370,7 @@ target_sources(
         concat/device/concat_s2i_program_factory.cpp
         copy/copy.cpp
         copy/device/copy_device_operation.cpp
-        copy/device/copy_program_factory.cpp
+        copy/device/copy_same_memory_config_program_factory.cpp
         copy/device/copy_default_row_major_program_factory.cpp
         copy/device/copy_default_tilized_program_factory.cpp
         expand/expand.cpp

@@ -4,7 +4,7 @@
 
 #include "copy_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
-#include "copy_program_factory.hpp"
+#include "copy_same_memory_config_program_factory.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"  // common_tm_bw_model
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -66,7 +66,7 @@ bool can_use_specialized_factory(const CopyParams& operation_attributes, const C
 CopyDeviceOperation::program_factory_t CopyDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (CMAKE_UNIQUE_NAMESPACE::can_use_specialized_factory(operation_attributes, tensor_args)) {
-        return CopyProgramFactory{};
+        return CopySameMemoryConfigProgramFactory{};
     }
     if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
         return CopyDefaultRowMajorProgramFactory{};
