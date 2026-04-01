@@ -566,6 +566,21 @@ def git_head_sha() -> str:
     return run(["git", "rev-parse", "HEAD"], capture=True).stdout.strip()
 
 
+def has_issue_reference_in_working_diff(*, issue_number: int, issue_url: str) -> bool:
+    diff = run(["git", "diff", "--unified=0"], capture=True).stdout
+    needles = {
+        issue_url.strip(),
+        f"/issues/{issue_number}",
+        f"#{issue_number}",
+    }
+    for line in diff.splitlines():
+        if not line.startswith("+") or line.startswith("+++"):
+            continue
+        if any(needle and needle in line for needle in needles):
+            return True
+    return False
+
+
 def now_utc() -> str:
     return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -649,6 +664,49 @@ def detect_new_failure_signal(dispatch_records: list[WorkflowDispatchRecord]) ->
                 "target": target,
             }
     return None
+
+
+def build_failure_signature(failure_signal: dict[str, Any]) -> str:
+    workflow = str(failure_signal.get("workflow", "")).strip().lower()
+    target = str(failure_signal.get("target", "")).strip().lower()
+    error = str(failure_signal.get("error", "")).strip().lower()
+    details = failure_signal.get("details", {})
+    detail_tokens: list[str] = []
+    if isinstance(details, dict):
+        for key in ("new_failure_target", "test_target", "target", "failing_test", "job_name"):
+            value = details.get(key)
+            if value:
+                detail_tokens.append(f"{key}={str(value).strip().lower()}")
+    material = " | ".join([workflow, target, error, " ; ".join(sorted(detail_tokens))]).strip()
+    return material
+
+
+def evaluate_resume_failure_confirmation(
+    *,
+    item: dict[str, Any],
+    failure_signal: dict[str, Any],
+) -> dict[str, str]:
+    signature = build_failure_signature(failure_signal)
+    pending_signature = str(item.get("pending_new_failure_signature", "")).strip()
+    pending_count = int(item.get("pending_new_failure_count", 0) or 0)
+    if not signature:
+        return {"decision": "escalate", "reason": "empty_failure_signature", "signature": ""}
+
+    if not pending_signature:
+        item["pending_new_failure_signature"] = signature
+        item["pending_new_failure_count"] = 1
+        return {"decision": "wait", "reason": "first_new_failure_signature_observed", "signature": signature}
+
+    if pending_signature == signature:
+        item["pending_new_failure_count"] = pending_count + 1
+        if int(item["pending_new_failure_count"]) >= 2:
+            return {"decision": "proceed", "reason": "confirmed_new_failure_signature_twice", "signature": signature}
+        return {"decision": "wait", "reason": "awaiting_second_matching_failure", "signature": signature}
+
+    # Signature changed between confirmation attempts -> treat as non-deterministic.
+    item["pending_new_failure_signature"] = signature
+    item["pending_new_failure_count"] = 1
+    return {"decision": "escalate", "reason": "new_failure_signature_mismatch", "signature": signature}
 
 
 def resolve_existing_pr_branch(item: dict[str, Any], pr_url: str, pr_repo: str) -> str:
@@ -741,6 +799,53 @@ def post_triggered_workflows_comment(pr_url: str, runs: dict[str, str], pr_repo:
             "--repo",
             pr_repo,
             str(pr_number),
+            "--body",
+            body,
+        ]
+    )
+
+
+def post_issue_justification_comment(
+    *,
+    issue_number: int,
+    issue_repo: str,
+    pr_url: str,
+    failure_signature: str,
+    failure_signal: dict[str, Any],
+    workflow_runs: dict[str, str],
+) -> None:
+    lines = [
+        "CI auto triage updated an existing disable PR after deterministic confirmation of a new failing target.",
+        "",
+        f"- Linked disable PR: {pr_url}",
+        f"- Confirmation rule: same new-failure signature observed twice on PR-branch workflow dispatches",
+        f"- New failure signature: `{failure_signature}`",
+    ]
+    workflow = str(failure_signal.get("workflow", "")).strip()
+    target = str(failure_signal.get("target", "")).strip()
+    error = str(failure_signal.get("error", "")).strip()
+    if workflow:
+        lines.append(f"- Workflow: `{workflow}`")
+    if target:
+        lines.append(f"- New target: `{target}`")
+    if error:
+        lines.append(f"- Error: `{error}`")
+    if workflow_runs:
+        lines.append("- Confirmation run URLs:")
+        for wf_name, run_url in sorted(workflow_runs.items()):
+            if run_url:
+                lines.append(f"  - `{wf_name}`: {run_url}")
+            else:
+                lines.append(f"  - `{wf_name}`: dispatched (run URL unavailable)")
+    body = "\n".join(lines).strip()
+    run_guarded_gh(
+        [
+            "gh",
+            "issue",
+            "comment",
+            "--repo",
+            issue_repo,
+            str(issue_number),
             "--body",
             body,
         ]
@@ -1137,6 +1242,8 @@ def main() -> int:
                 post_triggered_workflows_comment(active_pr_url, required_check_runs, target_pr_repo)
                 failure_signal = detect_new_failure_signal(dispatch_records)
                 if not failure_signal:
+                    item["pending_new_failure_signature"] = ""
+                    item["pending_new_failure_count"] = 0
                     set_status(
                         item,
                         "kickoff_running",
@@ -1150,6 +1257,43 @@ def main() -> int:
                             "issue_number": issue_number,
                             "reason": f"active_tracked_pr_no_new_failure:{active_pr_url}",
                             "required_check_runs": required_check_runs,
+                        }
+                    )
+                    continue
+
+                confirm = evaluate_resume_failure_confirmation(item=item, failure_signal=failure_signal)
+                failure_signature = confirm.get("signature", "")
+                if confirm["decision"] == "wait":
+                    set_status(
+                        item,
+                        "kickoff_failed_new_failure",
+                        event="existing_pr_new_failure_first_signal",
+                        details=f"{confirm['reason']} signature={failure_signature}",
+                    )
+                    result["state_updates"] += 1
+                    result["skipped"].append(
+                        {
+                            "source_slack_ts": source_ts,
+                            "issue_number": issue_number,
+                            "reason": f"new_failure_needs_second_confirmation:{confirm['reason']}",
+                            "failure_signature": failure_signature,
+                        }
+                    )
+                    continue
+                if confirm["decision"] == "escalate":
+                    set_status(
+                        item,
+                        "needs_human",
+                        event="existing_pr_new_failure_non_deterministic",
+                        details=f"{confirm['reason']} signature={failure_signature}",
+                    )
+                    result["state_updates"] += 1
+                    result["skipped"].append(
+                        {
+                            "source_slack_ts": source_ts,
+                            "issue_number": issue_number,
+                            "reason": f"new_failure_non_deterministic:{confirm['reason']}",
+                            "failure_signature": failure_signature,
                         }
                     )
                     continue
@@ -1251,6 +1395,28 @@ def main() -> int:
                     )
                     continue
 
+                if not has_issue_reference_in_working_diff(issue_number=issue_number, issue_url=issue_url):
+                    log(
+                        f"action: resume edits for issue #{issue_number} missing explicit issue reference in code diff; "
+                        "escalating to needs_human"
+                    )
+                    set_status(
+                        item,
+                        "needs_human",
+                        event="resume_missing_issue_reference_comment",
+                        details=f"Attempt {item['attempts']} did not add issue reference for #{issue_number}",
+                    )
+                    result["state_updates"] += 1
+                    result["skipped"].append(
+                        {
+                            "source_slack_ts": source_ts,
+                            "issue_number": issue_number,
+                            "reason": "resume_missing_issue_reference_comment",
+                            "disable_edit_summary": edit_summary,
+                        }
+                    )
+                    continue
+
                 run(["git", "add", "."], capture=True)
                 commit_msg = f"ci: extend disable for #{issue_number} (existing PR)"
                 ensure_git_identity()
@@ -1299,6 +1465,17 @@ def main() -> int:
                     details=active_pr_url,
                 )
                 result["state_updates"] += 1
+                item["pending_new_failure_signature"] = ""
+                item["pending_new_failure_count"] = 0
+                issue_repo = str(action.get("issue_repo", ISSUE_REPO_TEST)).strip() or ISSUE_REPO_TEST
+                post_issue_justification_comment(
+                    issue_number=issue_number,
+                    issue_repo=issue_repo,
+                    pr_url=active_pr_url,
+                    failure_signature=failure_signature,
+                    failure_signal=failure_signal,
+                    workflow_runs={**required_check_runs, **rerun_check_runs},
+                )
                 result["executed"].append(
                     {
                         "source_slack_ts": source_ts,
@@ -1462,6 +1639,28 @@ def main() -> int:
                         "source_slack_ts": source_ts,
                         "issue_number": issue_number,
                         "reason": f"protected_paths_modified:{','.join(protected)}",
+                        "disable_edit_summary": edit_summary,
+                    }
+                )
+                continue
+
+            if not has_issue_reference_in_working_diff(issue_number=issue_number, issue_url=issue_url):
+                log(
+                    f"action: disable edits for issue #{issue_number} missing explicit issue reference in code diff; "
+                    "escalating to needs_human"
+                )
+                set_status(
+                    item,
+                    "needs_human",
+                    event="missing_issue_reference_comment",
+                    details=f"Attempt {item['attempts']} did not add issue reference for #{issue_number}",
+                )
+                result["state_updates"] += 1
+                result["skipped"].append(
+                    {
+                        "source_slack_ts": source_ts,
+                        "issue_number": issue_number,
+                        "reason": "missing_issue_reference_comment",
                         "disable_edit_summary": edit_summary,
                     }
                 )

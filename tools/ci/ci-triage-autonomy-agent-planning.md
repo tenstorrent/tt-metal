@@ -126,6 +126,7 @@ These invariants must always hold:
 7. During testing, all automated issue writes must target `{{ISSUE_TRACKING_REPO_TEST}}` only.
 8. During bootstrap testing, both `{{SLACK_READ_CHANNEL_ID}}` and `{{SLACK_NOTIFY_CHANNEL_ID_TEST}}` must resolve to `C0APK6215B5`.
 9. Automated GitHub commands must be executed via `tools/ci/guarded_gh.py` only.
+10. Any new disable added to code must include a nearby non-closing issue reference comment linking the incident ticket.
 
 Violation of any invariant is a release blocker.
 
@@ -199,7 +200,9 @@ Schema rules:
 |---|---|---|
 | all required workflows pass | send terminal notify | `pr_open/kickoff_running -> completed` |
 | fail with known already-disabled target | bounded retry kickoff | `kickoff_running -> kickoff_running` |
-| fail with new target | branch resume and incremental disable | `pr_open/kickoff_running -> kickoff_failed_new_failure -> pr_open` |
+| first fail with new target | record candidate signature and rerun same PR workflows once | `pr_open/kickoff_running -> kickoff_failed_new_failure` |
+| second consecutive fail with same new-target signature | branch resume and incremental disable + issue justification update | `kickoff_failed_new_failure -> pr_open` |
+| second fail but signature mismatch/non-deterministic | do not extend disable PR; escalate for human review | `kickoff_failed_new_failure -> needs_human` |
 | dispatch/log fetch failure after retries | escalate | `* -> needs_human` |
 
 ## 7.3 Notification Logic
@@ -301,17 +304,21 @@ Inputs:
 Actions:
 
 1. checkout existing PR branch
-2. identify new failing target
-3. apply incremental disable
-4. push to same PR
-5. rerun kickoff workflows
-6. append attempt history
+2. identify new failing target and compute deterministic failure signature
+3. run required PR-branch workflows again for confirmation
+4. only if same new failure signature repeats twice, apply incremental disable
+5. push to same PR
+6. update linked issue with explicit disable justification (new target + signatures + run URLs)
+7. rerun kickoff workflows
+8. append attempt history
 
 Evidence:
 
 - no second PR
 - same PR updated with new commit
+- issue comment/body updated with clear "why this additional disable was added" justification
 - kickoff reruns linked in summary/state
+- no incremental disable edit occurs when second failure is non-deterministic/mismatched
 
 Go/No-Go:
 
@@ -468,11 +475,13 @@ Rollback:
 | A19 | thread persona simulation (fixed signal) | live test | "fixed" + PR link updates state to verify/resolve path |
 | A20 | thread persona simulation (conflict/noise) | live test | conflicting/vague replies fail safe (observe or escalate), no unsafe disable |
 | A21 | thread persona anti-spam gate | live test | no duplicate phase messages unless state materially changes |
+| A22 | existing PR new-target failure determinism gate | live test | second matching failure required before incremental disable edit |
+| A23 | existing PR new-target issue justification update | live test | when incremental disable happens, linked issue is updated with clear justification and run links |
 
 Minimum promotion threshold:
 
 - A1-A16 pass
-- A1-A21 pass
+- A1-A23 pass
 - A6 passes 3 consecutive runs
 - no invariant violations
 
