@@ -36,8 +36,8 @@ Three content types that must not be conflated:
 - **Skills** (`skills/`) — how to accomplish a task. Procedural instructions.
 - **Knowledge** (`knowledge/`) — stable hardware invariants (silicon facts) + curated
   references (pointers to canonical code examples). Never volatile APIs.
-- **Notes** (`notes/`) — shared blackboard. Findings written by agents and humans,
-  shared across sessions and team members.
+- **Notes** (configured via `notes_path` in `tt-agent.yaml`) — shared blackboard.
+  Findings written by agents and humans, shared across sessions and team members.
 
 **Why the split:** The TT software stack evolves rapidly. Inlining API signatures or
 implementation patterns into static files creates lies. Volatile knowledge is always
@@ -51,15 +51,22 @@ API signatures, op implementations, sharding patterns, CCL usage — never writt
 
 **Why:** These change with every PR. The `tt-learn` skill researches the live codebase
 via deepwiki-mcp on demand, using `knowledge/references/` as starting points. Findings
-are written to `notes/` with a commit hash, so readers can judge freshness.
+are written to the notes directory with a commit hash, so readers can judge freshness.
 
 ---
 
-## 2026-03-26: notes/ as shared blackboard
+## 2026-04-01: Notes live outside tt-metal
 
-The `notes/` directory at the repo root is the team's shared, evolving knowledge cache.
-Not session memory — notes persist across sessions and are shared between developers
-and multiple agent sessions. Named "notes" (not "workspace", "memory", or "context").
+Notes are stored at `~/.tt-agent/notes`, outside the tt-metal repo.
+
+**Why:** tt-metal is a large open-source repo with many contributors. Notes are scoped
+to small teams working on shared problems — not a repo-wide resource. Putting notes in
+the repo root would pollute the working tree for everyone, and committing them would
+pollute history.
+
+**What didn't change:** Notes are still the shared blackboard. They persist across
+sessions and follow the same naming conventions (`context-<topic>.md`,
+`experiments-<task>.md`, etc.). Always dated with tt-metal commit hash.
 
 ---
 
@@ -118,6 +125,33 @@ procedures for a C++ kernel hang vs a Python model producing wrong outputs. A sk
 like `tt-tester` writes C++ unit tests for operators and Python pytests for models.
 Skills should state their target level explicitly, and `tt-orchestrator` should route
 based on which level the request targets.
+
+---
+
+## 2026-04-01: Shared persona, overridable per skill
+
+A default persona is defined in `tt-agent/persona.md`. The adapter entrypoint
+references it; skills can load it from their progressive load tables.
+
+**Why:** The developer using tt-agent is experienced. Every skill benefits from the
+same baseline: precise, critical, no filler. A shared file avoids duplication and
+makes the persona easy to evolve in one place.
+
+**Override path:** If a specific skill needs a different voice (e.g., a teaching-oriented
+onboarding skill), it overrides the persona in its own SKILL.md.
+
+---
+
+## 2026-04-01: tt-skill-creator design-first process
+
+tt-skill-creator's primary value is the design alignment phase, not the writing phase.
+Before any skill content is written, the agent interrogates the developer with structured
+questions — one at a time — to establish scope, boundaries, failure modes, and dependencies.
+The goal is to expose flaws in the spec before writing begins.
+
+**Why:** Skills that skip the design phase end up over-scoped, overlapping with other skills,
+or encoding assumptions that break. The interrogation protocol (propose worst interpretation,
+summarize understanding, ask what's wrong) catches these issues early.
 
 ---
 

@@ -70,7 +70,7 @@ For volatile details on op structure and canonical examples, invoke
 When dispatching `tt-iterator`, always set it up with:
 
 1. **Profile first** (`tt-profiler`): identify the hot kernel or op. Do not optimize
-   without data. Write findings to `notes/profile-<workload>.md`.
+   without data. Write findings to `~/.tt-agent/notes/profile-<workload>.md`.
 
 2. **Extract** the isolated kernel or op into a standalone test. This makes iteration
    fast and prevents regressions elsewhere.
@@ -79,7 +79,7 @@ When dispatching `tt-iterator`, always set it up with:
    CB-stall-bound? The profiler output (op cycles, NOC utilization) tells you which.
 
 4. **Iterate** with `tt-iterator`: apply one change at a time, measure, keep if better.
-   Log each attempt to `notes/experiments-<task>.md`.
+   Log each attempt to `~/.tt-agent/notes/experiments-<task>.md`.
 
 For hardware invariants that constrain optimization (L1 capacity, NOC bandwidth,
 tile granularity), see `tt-agent/knowledge/hardware/`.
