@@ -1,18 +1,14 @@
 import yaml
+import argparse
 import sys
-import os
 from collections import defaultdict
 
 
-def verify_timeouts(tests_file, time_budget_file, workflow_name):
+def verify_timeouts(tests_file, time_budget_file, workflow_name, *, skip_budget_check=False):
     """
     Verifies that the SUM of all test timeouts for each (Team, SKU) pair in tests_file
     is within the total time budget defined in time_budget_file for the given workflow.
     """
-    print(f"Loading time budgets from: {time_budget_file}")
-    with open(time_budget_file, "r") as f:
-        budgets = yaml.safe_load(f)
-
     print(f"Loading tests from: {tests_file}")
     with open(tests_file, "r") as f:
         tests = yaml.safe_load(f)
@@ -67,6 +63,14 @@ def verify_timeouts(tests_file, time_budget_file, workflow_name):
         print(f"\nMissing keys in {tests_file}. Please fix the entries above.")
         sys.exit(1)
 
+    if skip_budget_check:
+        print(f"\n--skip-budget-check: skipping total time budget checks against {time_budget_file}.")
+        sys.exit(0)
+
+    print(f"Loading time budgets from: {time_budget_file}")
+    with open(time_budget_file, "r") as f:
+        budgets = yaml.safe_load(f)
+
     # --- Part 2: Verify Total Time Budget for each (Team, SKU) pair ---
     print("\n--- Verifying Total Time Budgets ---")
 
@@ -104,9 +108,26 @@ def verify_timeouts(tests_file, time_budget_file, workflow_name):
         sys.exit(0)
 
 
-if __name__ == "__main__":
-    if len(sys.argv) != 4:
-        print("Usage: python verify_time_budget.py <path_to_tests.yaml> <path_to_time_budget.yaml> <workflow_name>")
-        sys.exit(1)
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Verify summed test timeouts per (team, SKU) against time_budget.yaml."
+    )
+    parser.add_argument("tests_file", help="Path to tests YAML (e.g. tests/pipeline_reorg/.../*.yaml)")
+    parser.add_argument("time_budget_file", help="Path to time budget YAML (e.g. .github/time_budget.yaml)")
+    parser.add_argument("workflow_name", help="Workflow key inside time budget config (e.g. integration)")
+    parser.add_argument(
+        "--skip-budget-check",
+        action="store_true",
+        help="Validate tests YAML and sum timeouts only; do not compare to time_budget_file.",
+    )
+    args = parser.parse_args()
+    verify_timeouts(
+        args.tests_file,
+        args.time_budget_file,
+        args.workflow_name,
+        skip_budget_check=args.skip_budget_check,
+    )
 
-    verify_timeouts(sys.argv[1], sys.argv[2], sys.argv[3])
+
+if __name__ == "__main__":
+    main()
