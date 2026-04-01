@@ -127,6 +127,150 @@ The headers of the columns with their descriptions is below:
         - host
 
 
+Hardware Performance Counters
+-----------------------------
+
+Tenstorrent devices contain hardware performance counters that measure cycle-level events inside each Tensix core. These counters provide visibility into compute utilization, memory traffic, instruction pipeline stalls, and NOC bandwidth that is not available from kernel-level timestamps alone.
+
+**Quick Start**
+
+To capture performance counters alongside profiling data:
+
+..  code-block:: sh
+
+    # Using environment variables directly
+    TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILE_PERF_COUNTERS=47 \
+        pytest your_test.py -x -v
+
+    # Process the results
+    python tools/tracy/process_ops_logs.py --device-only
+
+The ``TT_METAL_PROFILE_PERF_COUNTERS`` value is a bitfield selecting which counter groups to capture:
+
+- ``1`` = FPU (compute utilization)
+- ``2`` = PACK (packer activity)
+- ``4`` = UNPACK (unpacker activity, math pipeline)
+- ``8`` = L1_0 (L1 memory ports 0-7: unpacker, packer, TDMA, NOC Ring 0)
+- ``16`` = L1_1 (L1 memory ports 8-15: extended unpacker, NOC Ring 1)
+- ``32`` = INSTRN (instruction availability, stalls, issue counts per thread)
+- ``47`` = all of the above (recommended starting point)
+
+**Note**: L1_0 and L1_1 share hardware mux state and cannot be captured simultaneously in a single run. Use separate runs if both are needed.
+
+Blackhole-only groups:
+
+- ``64`` = L1_2 (NOC Ring 2 ports)
+- ``128`` = L1_3 (NOC Ring 3 ports)
+- ``256`` = L1_4 (misc L1 ports)
+
+**Output**
+
+The profiler produces two types of output:
+
+1. **Console**: Raw counter values per counter type, followed by derived efficiency metrics with Min/Median/Max/Avg statistics across cores.
+2. **CSV** (``generated/profiler/reports/ops_perf_results.csv``): Derived metrics only, with Min/Median/Max/Avg columns per operation.
+
+**Derived Metrics Reference**
+
+The following metrics are automatically computed from raw counters. Each metric appears in the CSV and console output with Min, Median, Max, and Avg aggregations across all cores for each operation.
+
+*Compute Utilization*
+
+- **SFPU Util (%)**: Fraction of cycles the SFPU was executing a valid operation. Higher is better for SFPU-heavy ops (e.g. sqrt, gelu).
+- **FPU Util (%)**: Fraction of cycles the FPU was executing. Higher is better for FPU-heavy ops (e.g. matmul).
+- **MATH Util (%)**: Fraction of cycles either FPU or SFPU was active (combined). Measures total math unit utilization.
+
+*Pipeline Efficiency*
+
+- **Packer Efficiency (%)**: Fraction of packer busy cycles where the destination register read was available. 100% means the packer never waited for data from the math unit.
+- **Math-to-Pack Handoff Efficiency (%)**: How quickly math results reach the packer. Values >100% indicate math completes faster than the packer consumes.
+- **Unpacker-to-Math Data Flow (%)**: Ratio of source register write availability to unpacker busy time. Higher means data flows smoothly from unpack to math.
+
+*Thread Analysis*
+
+- **Thread 0/1/2 Stall Rate (%)**: Fraction of cycles each thread was stalled. Thread 0 = unpack, Thread 1 = math, Thread 2 = pack. High values indicate the thread is waiting for a resource.
+- **Thread 0/1/2 IPC**: Instructions per cycle for each thread. Higher means more instructions issued per clock.
+
+*Pipeline Wait Metrics*
+
+- **SrcA/SrcB Valid Wait (%)**: Cycles waiting for source register data to become valid (data from unpacker not yet ready).
+- **SrcA/SrcB Clear Wait (%)**: Cycles waiting for source register to be cleared (previous math operation still using it).
+- **Math Idle Wait T1 (%)**: Cycles math thread waited for the math unit to become idle.
+- **Pack Idle Wait T2 (%)**: Cycles pack thread waited for pack hardware.
+- **Unpack Idle Wait T0 (%)**: Cycles unpack thread waited for unpack hardware.
+
+*Semaphore Waits*
+
+- **Semaphore Zero Wait T0/T1/T2 (%)**: Cycles each thread waited for a semaphore to become non-zero (waiting for producer).
+- **Semaphore Full Wait T0/T1/T2 (%)**: Cycles each thread waited for a semaphore to become non-full (waiting for consumer).
+
+*TDMA Stall Metrics*
+
+- **Data Hazard Stall Rate (%)**: Cycles stalled by dest-to-src data hazards (MOVD2A/MOVD2B). High values in matmul are expected.
+- **Fidelity Phase Overhead (%)**: Cycles spent on HiFi fidelity phases. Higher fidelity = higher accuracy but more overhead.
+- **SrcA Write Port Blocked Rate (%)**: Cycles where DMA to srcA was blocked by overwrite protection.
+- **Dest Read Backpressure (%)**: Cycles where destination register read was requested but not granted.
+- **Math Dest Write Port Stall Rate (%)**: Cycles where math was stalled by destination register write port contention.
+- **Math Scoreboard Stall Rate (%)**: Cycles where math was stalled by FPU data hazard scoreboard.
+
+*Instruction Availability*
+
+- **CFG/SYNC/THCON/MOVE Instrn Avail Rate T0 (%)**: Fraction of cycles each instruction type was available in thread 0's instruction buffer. Shows which instruction types occupy the most scheduling time.
+- **MATH Instrn Avail Rate T1 (%)**: Math instruction availability on the math thread.
+- **UNPACK/PACK Instrn Avail Rate T0/T2 (%)**: Unpack and pack instruction availability on their primary threads.
+
+*Stall Breakdown*
+
+- **THCON/MOVE Idle Stall Pct T0 (%)**: What percentage of thread 0's total stalls are caused by THCON or MOVE waits. Helps identify the dominant stall reason.
+- **MMIO/SFPU Idle Stall Pct T1 (%)**: What percentage of thread 1's stalls are MMIO or SFPU waits.
+
+*Write Port Analysis*
+
+- **SrcB Write Port Blocked Rate (%)**: Cycles where srcB DMA write was blocked by write port unavailability.
+- **SrcA/SrcB Write Actual Efficiency (%)**: Fraction of write attempts that succeeded. 100% = no blocking. (SrcB Write Actual Efficiency is Wormhole-only.)
+
+*L1 Memory Utilization*
+
+- **L1 Unpacker/Packer Port Util (%)**: Fraction of cycles the unpacker or packer L1 port had a transaction.
+- **L1 TDMA Bundle Util (%)**: Average utilization of the two TDMA/RISC L1 ports.
+- **NOC Ring 0/1 Outgoing/Incoming Util (%)**: Average utilization of NOC channels on each ring.
+- **RISC Core L1 Util (%)**: RISC core L1 access utilization (Blackhole only, requires L1_1 group).
+
+*L1 Backpressure*
+
+- **NOC Ring 0/1 Outgoing/Incoming Backpressure (%)**: Fraction of NOC transaction cycles where L1 was not ready. Higher = more contention.
+- **L1 Unpacker/Packer Port Backpressure (%)**: L1 port contention for unpacker and packer.
+
+*L1 Composite Metrics*
+
+- **L1 Total Bandwidth Util (%)**: Sum of all 8 L1 port request cycles divided by theoretical maximum (8 ports x ref_cnt). Shows overall L1 saturation.
+- **L1 Read vs Write Ratio (%)**: Read port traffic as a fraction of total traffic. 50% = balanced, >50% = read-heavy.
+- **NOC Ring 0 Asymmetry (%)**: Outgoing traffic as a fraction of total NOC Ring 0 traffic. 50% = balanced send/receive.
+- **L1 Contention Index (%)**: Average backpressure across all active L1 ports. Single number summarizing L1 memory stress.
+- **Unpacker L1 Efficiency (%)**: When the unpacker is busy, how often does L1 actually serve it.
+- **Packer L1 Efficiency (%)**: When the packer is busy, how often does L1 serve it.
+- **NOC vs Compute Balance (%)**: NOC cycles as a fraction of NOC + FPU cycles. >50% = NOC-bound, <50% = compute-bound.
+- **TDMA vs NOC L1 Share (%)**: RISC/TDMA traffic as a fraction of all L1 traffic. Shows how much bandwidth goes to firmware vs NOC.
+
+*Wormhole-Only Metrics*
+
+- **HiFi2/LoFi/HiFi4 Instrn Rate (%)**: Fraction of math instructions at each fidelity level.
+- **Math Src Data Ready Rate (%)**: Cycles where math was not blocked by source data.
+- **Packer Engine 0/1/2 Util (%)**: Per-engine packer utilization (Wormhole has 4 packer engines).
+- **Unpacker0/1 Write Efficiency (%)**: Source register write throughput per unpacker.
+- **FPU Execution Efficiency (%)**: FPU active cycles as fraction of math instruction availability.
+
+*Additional Idle Waits*
+
+- **MMIO/SFPU/THCON/MOVE Idle Wait T0/T1 (%)**: Fraction of total cycles each thread spent waiting for specific hardware units.
+
+**Architecture Differences**
+
+Wormhole collects 172 raw counters and computes 86 derived metrics. Blackhole collects 190 raw counters (126 Tensix + 64 ERISC) and computes 74 derived metrics. The difference is due to 6 TDMA signals that are inactive on Blackhole (PACK_COUNT=1, ``o_math_instrnbuf_rden`` tied off). Blackhole has additional L1 mux positions (3 extra for Tensix, 3 for Ethernet) providing deeper memory visibility.
+
+For detailed hardware counter documentation including register maps and signal definitions, see ``tech_reports/PerfCounters/perf-counters.md``.
+
+
 profile_this description
 ------------------------
 
