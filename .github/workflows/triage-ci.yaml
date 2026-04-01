@@ -109,8 +109,33 @@ on:
           - draft-prs-only
           - create-issues-only
           - thread-lifecycle-only
+          - issue-lifecycle-only
           - bug-escape-only
         default: "full"
+      issue-lifecycle-processed-hours:
+        description: "Minimum hours between processing the same issue again"
+        required: false
+        default: "24"
+      issue-lifecycle-max-issues:
+        description: "Maximum number of issues to process per issue lifecycle run"
+        required: false
+        default: "3"
+      issue-lifecycle-model:
+        description: "Cursor model for issue lifecycle analysis"
+        required: false
+        type: choice
+        options:
+          - auto
+          - claude-4-sonnet
+          - claude-4-opus
+          - claude-3.7-sonnet
+          - gpt-5
+          - gpt-5-mini
+          - gpt-4.1
+          - o3
+          - gemini-2.5-pro
+          - gemini-2.5-flash
+        default: "claude-4-sonnet"
 
 permissions:
   actions: write
@@ -598,10 +623,93 @@ jobs:
             echo "No M6 summary produced." >> "$GITHUB_STEP_SUMMARY"
           fi
 
+  run-issue-lifecycle:
+    name: "Run issue lifecycle stage"
+    if: ${{ always() && !inputs['fork-push-check-only'] && !inputs['testing-mode'] && !inputs['data-gathering-mode'] && (inputs['run-scope'] == 'full' || inputs['run-scope'] == 'issue-lifecycle-only') && (needs.run-create-issues.result == 'success' || needs.run-create-issues.result == 'skipped') }}
+    needs: [prep-triage-data, run-create-issues]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download triage state if present
+        uses: actions/download-artifact@v4
+        with:
+          name: triage-state
+          path: build_ci/triage_state
+        continue-on-error: true
+
+      - name: Ensure triage state file exists
+        run: |
+          set -euo pipefail
+          mkdir -p build_ci/triage_state
+          if [ ! -f "build_ci/triage_state/ci_triage_state.json" ]; then
+            cat > build_ci/triage_state/ci_triage_state.json <<'EOF'
+          {"version":1,"updated_at_utc":"","items":[]}
+          EOF
+          fi
+
+      - name: Ensure CURSOR_API_KEY is configured for issue lifecycle analysis
+        env:
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+        run: |
+          if [ -z "$CURSOR_API_KEY" ]; then
+            echo "Missing secret EVAN_CURSOR_API_KEY"
+            exit 1
+          fi
+
+      - name: Install Cursor CLI for issue lifecycle analysis
+        run: |
+          set -euo pipefail
+          install_script="$(mktemp)"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --tlsv1.2 \
+            https://cursor.com/install \
+            -o "$install_script"
+          bash "$install_script"
+          rm -f "$install_script"
+          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
+
+      - name: Run issue lifecycle analysis and actions
+        env:
+          ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+          MAIN_REPO_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+        run: |
+          set -euo pipefail
+          python tools/ci/issue_lifecycle_stage.py \
+            --state-json "build_ci/triage_state/ci_triage_state.json" \
+            --output-json "build_ci/ci_ticketing/create_tickets/issue_lifecycle_result.json" \
+            --summary-md "build_ci/ci_ticketing/create_tickets/issue_lifecycle_summary.md" \
+            --issue-repo "ebanerjeeTT/issue_dump" \
+            --source-repo "tenstorrent/tt-metal" \
+            --processed-hours "${{ github.event.inputs['issue-lifecycle-processed-hours'] || '24' }}" \
+            --max-issues "${{ github.event.inputs['issue-lifecycle-max-issues'] || '3' }}" \
+            --model "${{ github.event.inputs['issue-lifecycle-model'] || 'claude-4-sonnet' }}"
+
+      - name: Upload issue lifecycle artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: issue-lifecycle-stage-artifacts
+          path: |
+            build_ci/ci_ticketing/create_tickets/issue_lifecycle_result.json
+            build_ci/ci_ticketing/create_tickets/issue_lifecycle_summary.md
+          retention-days: 7
+
+      - name: Upload triage state artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: triage-state
+          path: build_ci/triage_state/ci_triage_state.json
+          retention-days: 7
+
   finalize-autonomy-artifacts:
     name: "Finalize autonomy artifacts + summary"
     if: ${{ always() && !inputs['fork-push-check-only'] && !inputs['testing-mode'] && !inputs['data-gathering-mode'] && inputs['run-scope'] == 'full' }}
-    needs: [run-draft-prs, run-create-issues, run-thread-lifecycle, run-bug-escape]
+    needs: [run-draft-prs, run-create-issues, run-thread-lifecycle, run-bug-escape, run-issue-lifecycle]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -638,6 +746,13 @@ jobs:
           path: build_ci
         continue-on-error: true
 
+      - name: Download issue lifecycle artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: issue-lifecycle-stage-artifacts
+          path: build_ci
+        continue-on-error: true
+
       - name: Download raw-data bundle
         uses: actions/download-artifact@v4
         with:
@@ -664,6 +779,8 @@ jobs:
             build_ci/ci_ticketing/create_tickets/m5_lifecycle_summary.md
             build_ci/ci_ticketing/create_tickets/m6_bug_escape_events.json
             build_ci/ci_ticketing/create_tickets/m6_bug_escape_summary.md
+            build_ci/ci_ticketing/create_tickets/issue_lifecycle_result.json
+            build_ci/ci_ticketing/create_tickets/issue_lifecycle_summary.md
             build_ci/raw_data/slack_C0APK6215B5_last_14_days.json
           retention-days: 7
 
@@ -697,6 +814,11 @@ jobs:
           if [ -s "$m6_md" ]; then
             echo >> "$GITHUB_STEP_SUMMARY"
             cat "$m6_md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          issue_lifecycle_md="build_ci/ci_ticketing/create_tickets/issue_lifecycle_summary.md"
+          if [ -s "$issue_lifecycle_md" ]; then
+            echo >> "$GITHUB_STEP_SUMMARY"
+            cat "$issue_lifecycle_md" >> "$GITHUB_STEP_SUMMARY"
           fi
 
   triage-ci-testing-session:
