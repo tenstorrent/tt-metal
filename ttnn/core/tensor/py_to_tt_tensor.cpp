@@ -136,6 +136,38 @@ bool has_sufficient_device_memory(
     return peak_per_bank <= bank_size;
 }
 
+// Estimates the largest per-device shard shape from the mesh mapper configuration.
+// For Shard placements the tensor dimension is ceiling-divided by the mesh dimension size;
+// Replicate placements leave the dimension unchanged. Returns an upper bound suitable for memory checks.
+ttnn::Shape estimate_per_device_shard_shape(
+    const ttnn::Shape& global_shape,
+    const ttnn::distributed::MeshMapperConfig& config,
+    ttnn::distributed::MeshDevice* device) {
+    if (device == nullptr) {
+        return global_shape;
+    }
+
+    const auto distribution_shape = config.mesh_shape_override.value_or(device->shape());
+
+    auto rank = global_shape.rank();
+    std::vector<uint32_t> dims;
+    dims.reserve(rank);
+    for (size_t i = 0; i < rank; ++i) {
+        dims.push_back(global_shape[i]);
+    }
+
+    for (size_t mesh_dim = 0; mesh_dim < distribution_shape.dims(); ++mesh_dim) {
+        using Shard = ttnn::distributed::MeshMapperConfig::Shard;
+        if (const auto* shard = std::get_if<Shard>(&config.placements[mesh_dim])) {
+            auto tensor_dim = shard->dim < 0 ? shard->dim + static_cast<int>(rank) : shard->dim;
+            auto num_chunks = distribution_shape[mesh_dim];
+            dims[tensor_dim] = (dims[tensor_dim] + num_chunks - 1) / num_chunks;
+        }
+    }
+
+    return ttnn::Shape(ttsl::Span<const uint32_t>(dims.data(), dims.size()));
+}
+
 Tensor create_tt_tensor_from_host_data(
     HostBuffer& host_buffer,
     DataType src_dtype,
@@ -165,11 +197,16 @@ Tensor create_tt_tensor_from_host_data(
             device, tensor_shape, src_dtype, dst_dtype, optional_tile, enable_device_typecast, preserve_nan_values);
 
         if (mesh_mapper != nullptr) {
+            const auto shard_shape = estimate_per_device_shard_shape(tensor_shape, mesh_mapper->config(), device);
+            const bool construct_on_mesh_device =
+                construct_on_device &&
+                has_sufficient_device_memory(
+                    device, shard_shape, src_dtype, dst_dtype, layout, memory_config, optional_tile);
             return ttnn::distributed::create_distributed_tensor(
                 host_buffer.view_as<T>(),
                 tensor_shape,
                 host_buffer.pin(),
-                construct_on_device ? src_tensor_layout : dst_tensor_layout,
+                construct_on_mesh_device ? src_tensor_layout : dst_tensor_layout,
                 *mesh_mapper,
                 device != nullptr ? std::make_optional(std::ref(*device)) : std::nullopt,
                 cq_id,
