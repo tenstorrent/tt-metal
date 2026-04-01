@@ -15,6 +15,8 @@ Primary outcomes:
 - Ticket lifecycle is fully automated (create/update/close with recurrence creating a new issue)
 - Assignment/follow-up/escalation loops continue even after temporary disables
 - Small-scope fix PR drafting is attempted when confidence is high
+- Thread progress is continuously read and used to defer/allow disable actions
+- Bug-escape categorization correlates where failure manifested vs where fix landed
 
 Non-goals for initial delivery:
 
@@ -368,7 +370,13 @@ Actions:
 4. create a new issue when a previously closed fingerprint recurs
 5. post/update Slack thread lifecycle messages for existing incidents
 6. consume thread replies as control signals; if owner confirms imminent fix, prefer `observe_only`/defer and suppress disable PR creation
-7. on completion, mark state `completed`, send one terminal Slack message, set `terminal_notified=true`
+7. send follow-up lifecycle messages with anti-spam gates:
+   - warning at +24h: "disable will be proposed if unresolved by SLA"
+   - optional final warning near disable threshold
+   - post-disable follow-up ping to the assigned owner with re-enable expectations
+8. if disable PR merges, ensure issue assignee is set/updated and persist assignment rationale in state history
+9. when developer thread/issue request indicates "agent can attempt fix", allow `draft_fix_pr` path under small-fix gates
+10. on completion, mark state `completed`, send one terminal Slack message, set `terminal_notified=true`
 
 Evidence:
 
@@ -377,6 +385,9 @@ Evidence:
 - controlled scenario shows `draft_fix_pr` chosen for high-confidence small fix
 - controlled scenario shows `draft_disable_pr` chosen after SLA breach
 - controlled scenario shows owner-confirmed thread reply switches action to defer/`observe_only` with no new disable PR
+- warning lifecycle messages appear exactly once per phase unless state materially changes
+- post-disable follow-up message includes owner ping and issue/PR linkage
+- assignment is present (or explicitly pending with reason) after disable merge
 - one terminal Slack message per completed key
 
 Go/No-Go:
@@ -396,14 +407,17 @@ Inputs:
 Actions:
 
 1. map issue -> fix commit/PR
-2. infer failure layer and fix layer
-3. classify escape type
-4. append bug escape event
+2. infer problem surface (where failure manifested) from failing test/job metadata
+3. infer fix surface (where fix landed) from fix PR files/labels/paths
+4. correlate problem surface vs fix surface with explicit method + confidence
+5. classify escape type and shift-left recommendation target
+6. append bug escape event
 
 Evidence:
 
 - `bug_escape_events.json` updated
-- rollup summary includes counts and examples
+- rollup summary includes counts, examples, and confidence bands
+- sample events include explicit problem-surface/fix-surface rationale
 
 Go/No-Go:
 
@@ -449,10 +463,16 @@ Rollback:
 | A14 | successful terminal run | live test | completed + one Slack notify |
 | A15 | bug escape attribution | live test | issue->fix mapping recorded |
 | A16 | data-gathering regression check | live test | report behavior unchanged |
+| A17 | thread persona simulation (progress) | live test | "working on it"/"PR soon" style replies defer disable path |
+| A18 | thread persona simulation (blocked/stale) | live test | blocked then stale replies still progress to warning/disable policy |
+| A19 | thread persona simulation (fixed signal) | live test | "fixed" + PR link updates state to verify/resolve path |
+| A20 | thread persona simulation (conflict/noise) | live test | conflicting/vague replies fail safe (observe or escalate), no unsafe disable |
+| A21 | thread persona anti-spam gate | live test | no duplicate phase messages unless state materially changes |
 
 Minimum promotion threshold:
 
 - A1-A16 pass
+- A1-A21 pass
 - A6 passes 3 consecutive runs
 - no invariant violations
 
@@ -856,8 +876,16 @@ Use observe-only when:
 Assignment sources (in priority order):
 
 1. existing ticket owner
-2. CODEOWNERS/service ownership map
-3. fallback on-call rotation
+2. relevant-file commit history (recent commits on failure-linked paths)
+3. CODEOWNERS/service ownership map
+4. workflow/job owner hints (including `owners.json` reference signals)
+5. fallback on-call rotation
+
+Assignment rules:
+
+- max 3 owner mentions in any single Slack message
+- prefer owners with strongest multi-signal overlap (commit history + CODEOWNERS + job owner + thread participation)
+- ignore team/group handles for direct mention unless policy explicitly allows
 
 ### 22.2 Follow-Up
 
@@ -870,8 +898,9 @@ Even after disable:
 Follow-up schedule (example):
 
 - initial assignment ping
-- reminder at +24h
-- reminder at +48h
+- reminder at +24h with disable warning
+- optional pre-disable warning near threshold (e.g., +40h for +48h disable SLA)
+- post-disable reminder ping to assigned owner until root-cause fix lands
 
 ### 22.3 Escalation
 
@@ -890,6 +919,20 @@ Escalation safeguards:
 - require at least one prior reminder
 - include concise evidence packet
 - limit escalation frequency per fingerprint
+
+### 22.4 Disable Delay / Proceed Decision Contract
+
+Delay disable when any high-confidence progress signal is present:
+
+- linked fix PR is open and actively updated
+- owner replied recently with concrete ETA/plan
+- recent commits on relevant files indicate active fix work
+
+Proceed with disable when:
+
+- SLA threshold exceeded and no high-confidence progress
+- thread activity is stale/non-substantive
+- no active fix PR or equivalent owner-confirmed trajectory
 
 ---
 
@@ -924,9 +967,22 @@ Required record fields:
   "disable_pr_number": 0,
   "fix_pr_number": 0,
   "fix_commit_sha": "string",
+  "problem_surface": {
+    "layer": "llk|metalium|ttnn|models|infra|unknown",
+    "component": "string",
+    "source": "failing_job|stack_trace|test_path|agent_inference"
+  },
+  "fix_surface": {
+    "layer": "llk|metalium|ttnn|models|infra|unknown",
+    "component": "string",
+    "source": "changed_files|pr_labels|commit_message|agent_inference"
+  },
   "failure_layer": "llk|metalium|ttnn|models|unknown",
   "fix_layer": "llk|metalium|ttnn|models|unknown",
+  "correlation_method": "path_overlap|ownership_overlap|semantic_match|mixed",
+  "correlation_confidence": "low|medium|high",
   "escape_type": "gate_coverage_gap|layer_escape_lower_to_higher|unknown",
+  "shift_left_target": "pr_gate|merge_gate|lower_layer_suite|owner_alerting|unknown",
   "explanation": "string",
   "captured_at_utc": "string"
 }
@@ -936,6 +992,11 @@ Interpretation requirements:
 
 - include "why classified this way" text
 - include shift-left recommendation candidate
+- include explicit evidence for both problem surface and fix surface
+- include confidence rule:
+  - high: deterministic path/component match or repeated historical correlation
+  - medium: partial overlap with supporting context
+  - low: weak/ambiguous signals (must be called out explicitly)
 - never block ticket close if enrichment temporarily unavailable; mark pending and retry
 
 ---
@@ -957,6 +1018,10 @@ Create fixture packs for:
 - disable PR exists + new failure appears
 - fix PR appears and resolves failure
 - false positive/noisy transient
+- thread shows active progress and disable should be deferred
+- thread stale with no owner response and disable should proceed
+- post-disable state where owner follow-up continues until fix merge
+- developer explicitly requests agent-authored small fix PR
 
 ### 25.2 Mock/Replay Sources
 
@@ -974,6 +1039,8 @@ Must cover at least these cross products:
 - issue state (`none/open/closed`) x failure persistence (`new/stable/flaky`)
 - owner state (`unassigned/assigned/unresponsive/responding`)
 - action state (`none/disable/fix`) x verification state (`pending/pass/fail`)
+- thread progress (`none/investigating/fix_in_progress/blocked`) x disable decision (`defer/proceed`)
+- bug-escape mapping confidence (`low/medium/high`) x classification correctness (`expected/unexpected`)
 
 ### 25.4 Test Gates
 
@@ -982,6 +1049,55 @@ Before production rollout:
 - all fixture packs pass deterministically in dry-run
 - at least one controlled live run per major lifecycle branch
 - escalation and notification suppression rules verified
+
+### 25.5 Thread Persona Simulation Tests (Required)
+
+Goal:
+
+- verify the triage loop can correctly interpret realistic developer responses in Slack threads, not just static fixture labels
+
+Execution mode:
+
+- run only in testing mode and only in `C0APK6215B5`
+- use bot-authored synthetic replies that emulate developer language patterns
+- never impersonate real users; messages must be clearly marked as simulation
+
+Required simulated persona reply types:
+
+1. active owner with concrete plan
+   - example: "Looking now, I will post PR in 2 hours."
+2. active owner with linked WIP PR
+   - example: "Fix in progress: <PR link>."
+3. blocked owner
+   - example: "Blocked on infra/hardware dependency."
+4. resolved claim with evidence
+   - example: "Should be fixed by <PR link>; please verify."
+5. vague/noise reply
+   - example: "Taking a look."
+6. conflicting replies from multiple participants
+   - one says "fixed", another says "still failing"
+
+Expected control-loop behavior:
+
+- active plan / WIP PR -> defer disable and schedule follow-up verification
+- blocked + stale -> continue reminder cadence, then proceed per SLA disable policy
+- resolved claim + PR link -> transition to verification path before closure
+- vague/noise only -> remain observe/escalate, do not falsely treat as progress
+- conflicting signals -> fail safe (observe/escalate) until objective evidence resolves conflict
+
+Timing variants that must be tested:
+
+- fresh progress reply within hold window
+- stale progress reply older than hold window
+- no new reply across 24h and 48h thresholds
+
+Assertions:
+
+- decision rationale records which thread message(s) influenced action
+- no duplicate warning/follow-up message for same phase without state change
+- no disable PR created while a high-confidence progress hold is active
+- assignment can be updated if thread evidence indicates a different active owner
+- all simulation artifacts are persisted for replay/debug
 
 ---
 
@@ -1029,6 +1145,10 @@ A fresh agent must explicitly confirm all "yes" before claiming completion:
 - Assignment/follow-up/escalation loops implemented and tested
 - Post-disable continuity behavior implemented and tested
 - Bug-escape enrichment (issue->fix commit mapping) implemented and tested
+- Thread-progress-aware disable delay/proceed logic implemented and tested
+- Follow-up warning and post-disable owner ping lifecycle implemented and tested
+- Issue assignment after disable merge implemented and tested
+- Bug-escape problem-surface vs fix-surface correlation with confidence implemented and tested
 - Synthetic fixture/permutation suite implemented and passing
 
 Any "no" means not done.
