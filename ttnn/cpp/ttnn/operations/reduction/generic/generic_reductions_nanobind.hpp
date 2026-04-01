@@ -71,97 +71,91 @@ inline void bind_generic_reductions(nb::module_& mod) {
     ttnn::bind_function<"sum">(
         mod,
         sum_doc.c_str(),
-        ttnn::overload_t(
-            &ttnn::sum,
-            nb::arg("input_tensor"),
-            nb::arg("dim") = nb::none(),
-            nb::arg("keepdim") = false,
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("scalar") = 1.0f,
-            nb::arg("correction") = true,
-            nb::arg("sub_core_grids") = nb::none()));
+        &ttnn::sum,
+        nb::arg("input_tensor"),
+        nb::arg("dim") = nb::none(),
+        nb::arg("keepdim") = false,
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("scalar") = 1.0f,
+        nb::arg("correction") = true,
+        nb::arg("sub_core_grids") = nb::none());
 
     const auto mean_doc = get_generic_reduction_doc("mean", "ttnn.mean");
     ttnn::bind_function<"mean">(
         mod,
         mean_doc.c_str(),
-        ttnn::overload_t(
-            &ttnn::mean,
-            nb::arg("input_tensor"),
-            nb::arg("dim") = nb::none(),
-            nb::arg("keepdim") = false,
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("scalar") = 1.0f,
-            nb::arg("correction") = true,
-            nb::arg("sub_core_grids") = nb::none()));
+        &ttnn::mean,
+        nb::arg("input_tensor"),
+        nb::arg("dim") = nb::none(),
+        nb::arg("keepdim") = false,
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("scalar") = 1.0f,
+        nb::arg("correction") = true,
+        nb::arg("sub_core_grids") = nb::none());
 
     const auto max_doc = get_generic_reduction_doc("max", "ttnn.max");
     ttnn::bind_function<"max">(
         mod,
         max_doc.c_str(),
-        ttnn::overload_t(
-            &ttnn::max,
-            nb::arg("input_tensor"),
-            nb::arg("dim") = nb::none(),
-            nb::arg("keepdim") = false,
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("scalar") = 1.0f,
-            nb::arg("correction") = true,
-            nb::arg("sub_core_grids") = nb::none()));
+        &ttnn::max,
+        nb::arg("input_tensor"),
+        nb::arg("dim") = nb::none(),
+        nb::arg("keepdim") = false,
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("scalar") = 1.0f,
+        nb::arg("correction") = true,
+        nb::arg("sub_core_grids") = nb::none());
 
     const auto min_doc = get_generic_reduction_doc("min", "ttnn.min");
     ttnn::bind_function<"min">(
         mod,
         min_doc.c_str(),
-        ttnn::overload_t(
-            &ttnn::min,
-            nb::arg("input_tensor"),
-            nb::arg("dim") = nb::none(),
-            nb::arg("keepdim") = false,
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("scalar") = 1.0f,
-            nb::arg("correction") = true,
-            nb::arg("sub_core_grids") = nb::none()));
+        &ttnn::min,
+        nb::arg("input_tensor"),
+        nb::arg("dim") = nb::none(),
+        nb::arg("keepdim") = false,
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("scalar") = 1.0f,
+        nb::arg("correction") = true,
+        nb::arg("sub_core_grids") = nb::none());
 
     const auto std_doc = get_generic_reduction_doc("std", "ttnn.std");
     ttnn::bind_function<"std">(
         mod,
         std_doc.c_str(),
-        ttnn::overload_t(
-            &ttnn::std,
-            nb::arg("input_tensor"),
-            nb::arg("dim") = nb::none(),
-            nb::arg("keepdim") = false,
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("scalar") = 1.0f,
-            nb::arg("correction") = true,
-            nb::arg("sub_core_grids") = nb::none()));
+        &ttnn::std,
+        nb::arg("input_tensor"),
+        nb::arg("dim") = nb::none(),
+        nb::arg("keepdim") = false,
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("scalar") = 1.0f,
+        nb::arg("correction") = true,
+        nb::arg("sub_core_grids") = nb::none());
 
     const auto var_doc = get_generic_reduction_doc("var", "ttnn.var");
     ttnn::bind_function<"var">(
         mod,
         var_doc.c_str(),
-        ttnn::overload_t(
-            &ttnn::var,
-            nb::arg("input_tensor"),
-            nb::arg("dim") = nb::none(),
-            nb::arg("keepdim") = false,
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("scalar") = 1.0f,
-            nb::arg("correction") = true,
-            nb::arg("sub_core_grids") = nb::none()));
+        &ttnn::var,
+        nb::arg("input_tensor"),
+        nb::arg("dim") = nb::none(),
+        nb::arg("keepdim") = false,
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("scalar") = 1.0f,
+        nb::arg("correction") = true,
+        nb::arg("sub_core_grids") = nb::none());
 }
 
 }  // namespace ttnn::operations::reduction::detail

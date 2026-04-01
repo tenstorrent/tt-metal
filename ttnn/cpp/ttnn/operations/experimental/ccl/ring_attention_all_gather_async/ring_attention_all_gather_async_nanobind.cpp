@@ -85,19 +85,18 @@ void bind_ring_attention_all_gather_async(nb::module_& mod) {
             >>> output = ttnn.all_gather(ttnn_tensor, dim=0, topology=ttnn.Topology.Ring)
 
         )doc",
-        ttnn::overload_t(
-            ring_attention_all_gather_async_wrapper,
-            nb::arg("input_tensor"),
-            nb::arg("persistent_output_buffer"),
-            nb::arg("dim"),
-            nb::kw_only(),
-            nb::arg("multi_device_global_semaphore"),
-            nb::arg("num_links") = nb::none(),
-            nb::arg("cluster_axis"),
-            nb::arg("mesh_device"),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("topology"),
-            nb::arg("subdevice_id") = nb::none()));
+        ring_attention_all_gather_async_wrapper,
+        nb::arg("input_tensor"),
+        nb::arg("persistent_output_buffer"),
+        nb::arg("dim"),
+        nb::kw_only(),
+        nb::arg("multi_device_global_semaphore"),
+        nb::arg("num_links") = nb::none(),
+        nb::arg("cluster_axis"),
+        nb::arg("mesh_device"),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("topology"),
+        nb::arg("subdevice_id") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl
