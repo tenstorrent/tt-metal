@@ -14,14 +14,14 @@
 namespace ttnn::prim {
 
 namespace CMAKE_UNIQUE_NAMESPACE {
-bool use_default_factories(const CopyParams& operation_attributes, const CopyInputs& tensor_args) {
+bool can_use_specialized_factory(const CopyParams& operation_attributes, const CopyInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED ||
         operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::ND_SHARDED) {
-        return true;
+        return false;
     }
     if (input_tensor.memory_config() != operation_attributes.output_mem_config) {
-        return true;
+        return false;
     }
 
     const bool tilized = input_tensor.layout() == Layout::TILE;
@@ -58,20 +58,20 @@ bool use_default_factories(const CopyParams& operation_attributes, const CopyInp
     const uint32_t max_l1_size =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
-    return total_cb_size > max_l1_size;  // Check that the CB does not cause OOM error. Otherwise, use the default
+    return total_cb_size < max_l1_size;  // Check that the CB does not cause OOM error. Otherwise, use the default
                                          // factories which can avoid this.
 }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
 CopyDeviceOperation::program_factory_t CopyDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (CMAKE_UNIQUE_NAMESPACE::use_default_factories(operation_attributes, tensor_args)) {
-        if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
-            return CopyDefaultRowMajorProgramFactory{};
-        }
-        return CopyDefaultTilizedProgramFactory{};
+    if (CMAKE_UNIQUE_NAMESPACE::can_use_specialized_factory(operation_attributes, tensor_args)) {
+        return CopyProgramFactory{};
     }
-    return CopyProgramFactory{};
+    if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
+        return CopyDefaultRowMajorProgramFactory{};
+    }
+    return CopyDefaultTilizedProgramFactory{};
 }
 
 void CopyDeviceOperation::validate_on_program_cache_miss(
