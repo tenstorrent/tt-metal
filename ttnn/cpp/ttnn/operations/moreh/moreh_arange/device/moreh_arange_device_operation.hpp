@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-
-#include "ttnn/decorators.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_arange {
 
