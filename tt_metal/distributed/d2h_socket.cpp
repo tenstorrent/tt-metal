@@ -7,6 +7,7 @@
 #include "tt_metal/distributed/named_shm.hpp"
 #include "tt_metal/distributed/hd_socket_descriptor.hpp"
 #include "tt_metal/distributed/pcie_core_writer.hpp"
+#include "tt_metal/distributed/shm_resource_tracker.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -191,7 +192,9 @@ D2HSocket::~D2HSocket() noexcept {
             shm_->unlink();
         }
         if (!descriptor_path_.empty()) {
-            std::remove(descriptor_path_.c_str());
+            if (std::remove(descriptor_path_.c_str()) == 0 || errno == ENOENT) {
+                ShmResourceTracker::instance().untrack_file(descriptor_path_);
+            }
         }
     }
 }
@@ -318,6 +321,7 @@ std::string D2HSocket::export_descriptor(const std::string& socket_id) {
 
     descriptor_path_ = descriptor_path_for_socket("d2h", socket_id);
     desc.write_to_file(descriptor_path_);
+    ShmResourceTracker::instance().track_file(descriptor_path_);
     exported_ = true;
     return descriptor_path_;
 }
