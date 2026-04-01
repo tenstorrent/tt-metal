@@ -176,8 +176,11 @@ def _torch_sampling_reference(values, indices, k, p, temp, seed):
 
 
 # Test a 0D, 1D, 5D, and a 0-volume tensor
-@pytest.mark.parametrize("tensor_shape", [(), (2,), (3, 6, 40, 63, 20), (6, 0, 32)])
-@pytest.mark.parametrize("dim", [None, 0, -1])
+@pytest.mark.parametrize(
+    "tensor_shape",
+    [(), (2,), (1, 1), (32, 1), (6, 0, 32), (3, 6, 40, 63, 20)],
+)
+@pytest.mark.parametrize("dim", [None, 0, -1, (-2, -1), (0, 2), (0, 2, 4)])
 @pytest.mark.parametrize("keepdim", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
@@ -192,12 +195,15 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, op):
     Note: We do not enforce the same exception type or message.
     """
     torch.manual_seed(0)
-
     torch_tensor = torch.randn(tensor_shape, dtype=dtype)
     pad_value = 1.0 if op == "prod" else None
     ttnn_tensor = ttnn.from_torch(torch_tensor, layout=layout, device=device, pad_value=pad_value)
 
-    torch_op, ttnn_op = getattr(torch, op), getattr(ttnn, op)
+    # torch.max/min don't accept a tuple for dim; use amax/amin which do.
+    torch_op_name = {"max": "amax", "min": "amin"}.get(op, op)
+    torch_op = getattr(torch, torch_op_name)
+
+    ttnn_op = getattr(ttnn, op)
 
     # Run on both and flag exceptions
     torch_errored = False
@@ -224,7 +230,7 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, op):
     except (IndexError, TypeError, RuntimeError) as e:
         ttnn_errored = True
         if not torch_errored:
-            logger.error(f"torch passed, but ttnn raised exception: {e}")
+            logger.error(f"torch passed and produced result: {torch_result}, but ttnn raised exception: {e}")
 
     assert torch_errored == ttnn_errored, f"torch_errored: {torch_errored}, ttnn_errored: {ttnn_errored}"
 
@@ -242,7 +248,16 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, op):
 
     ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
 
-    atol = rtol = 0.1
+    if op == "sum" and tensor_shape == (3, 6, 40, 63, 20):
+        # Summing large number of bfloat16 values accumulates rounding errors,
+        # and results also vary from near 0 to relatively large values (in hundreds)
+        # Near-zero results inflate relative error, while absolute error grows for large values.
+        # PCC should catch any significant errors.
+        atol = 1.5
+        rtol = 2.5
+    else:
+        atol = 0.1
+        rtol = 0.1
     pcc = 0.999
     passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result, pcc=pcc, rtol=rtol, atol=atol)
     assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result}"
