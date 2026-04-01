@@ -11,14 +11,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import torch
 
-# TTNN import - will fail without TT hardware/SDK, but we can still develop
-try:
-    import ttnn
-
-    TTNN_AVAILABLE = True
-except ImportError:
-    TTNN_AVAILABLE = False
-    print("Warning: TTNN not available. Running in development mode.")
+import ttnn
 
 
 def fuse_weight_norm(weight: torch.Tensor, weight_g: torch.Tensor, weight_v: torch.Tensor) -> torch.Tensor:
@@ -156,7 +149,7 @@ def convert_to_ttnn_tensor(
     Returns:
         TTNN tensor or PyTorch tensor
     """
-    if not TTNN_AVAILABLE or keep_pytorch:
+    if keep_pytorch:
         # Return PyTorch tensor in development/CPU mode
         return tensor
 

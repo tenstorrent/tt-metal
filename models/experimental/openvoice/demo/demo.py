@@ -21,13 +21,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-try:
-    import ttnn
-
-    TTNN_AVAILABLE = True
-except ImportError:
-    TTNN_AVAILABLE = False
-    print("Warning: TTNN not available, using PyTorch fallback")
+import ttnn
 
 
 # Try to import MeloTTS
@@ -41,17 +35,16 @@ except ImportError:
 
 def get_device():
     """Get TTNN device or None for CPU fallback."""
-    if TTNN_AVAILABLE:
-        try:
-            return ttnn.open_device(device_id=0)
-        except Exception as e:
-            print(f"Could not open TTNN device: {e}")
+    try:
+        return ttnn.open_device(device_id=0)
+    except Exception as e:
+        print(f"Could not open TTNN device: {e}")
     return None
 
 
 def close_device(device):
     """Close TTNN device if open."""
-    if device is not None and TTNN_AVAILABLE:
+    if device is not None:
         ttnn.close_device(device)
 
 

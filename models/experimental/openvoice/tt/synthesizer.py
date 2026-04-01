@@ -11,12 +11,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import torch
 
-try:
-    import ttnn
-
-    TTNN_AVAILABLE = True
-except ImportError:
-    TTNN_AVAILABLE = False
+import ttnn
 
 from models.experimental.openvoice.tt.generator import TTNNGenerator
 from models.experimental.openvoice.tt.posterior_encoder import TTNNPosteriorEncoder
@@ -100,7 +95,7 @@ class TTNNSynthesizerTrn:
         is_torch = isinstance(y, torch.Tensor)
 
         if self.zero_g:
-            if not TTNN_AVAILABLE or is_torch:
+            if is_torch:
                 g_src_enc = torch.zeros_like(g_src)
                 g_tgt_dec = torch.zeros_like(g_tgt)
             else:
@@ -120,7 +115,7 @@ class TTNNSynthesizerTrn:
         z_hat = self.flow(z_p, y_mask, g=g_tgt, reverse=True)
 
         # Decode to audio
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             o_hat = self.dec(z_hat * y_mask, g=g_tgt_dec)
         else:
             masked_z = ttnn.multiply(z_hat, y_mask)

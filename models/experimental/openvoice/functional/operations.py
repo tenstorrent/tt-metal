@@ -14,12 +14,7 @@ from typing import Any, Optional, Tuple
 import torch
 import torch.nn.functional as F
 
-try:
-    import ttnn
-
-    TTNN_AVAILABLE = True
-except ImportError:
-    TTNN_AVAILABLE = False
+import ttnn
 
 
 def ttnn_conv1d_functional(
@@ -57,7 +52,7 @@ def ttnn_conv1d_functional(
     """
     is_torch = isinstance(x, torch.Tensor)
 
-    if not TTNN_AVAILABLE or is_torch or not use_ttnn:
+    if is_torch or not use_ttnn:
         # PyTorch path
         if weight is None:
             return x
@@ -133,7 +128,7 @@ def ttnn_layer_norm_functional(
     """
     is_torch = isinstance(x, torch.Tensor)
 
-    if not TTNN_AVAILABLE or is_torch or not use_ttnn:
+    if is_torch or not use_ttnn:
         # PyTorch path
         if normalized_shape is None:
             normalized_shape = (x.shape[-1],)
@@ -179,7 +174,7 @@ def ttnn_attention_functional(
         head_dim = query.shape[-1] if hasattr(query, "shape") else query.size(-1)
         scale = 1.0 / math.sqrt(head_dim)
 
-    if not TTNN_AVAILABLE or is_torch or not use_ttnn:
+    if is_torch or not use_ttnn:
         # PyTorch path
         scores = torch.matmul(query, key.transpose(-2, -1)) * scale
         if mask is not None:
@@ -237,7 +232,7 @@ def ttnn_gated_activation_functional(
     """
     is_torch = isinstance(x, torch.Tensor)
 
-    if not TTNN_AVAILABLE or is_torch or not use_ttnn:
+    if is_torch or not use_ttnn:
         # PyTorch path
         t_act = torch.tanh(x[:, :n_channels, :])
         s_act = torch.sigmoid(x[:, n_channels:, :])
@@ -271,7 +266,7 @@ def ttnn_leaky_relu_functional(
     """
     is_torch = isinstance(x, torch.Tensor)
 
-    if not TTNN_AVAILABLE or is_torch or not use_ttnn:
+    if is_torch or not use_ttnn:
         return F.leaky_relu(x, negative_slope)
 
     return ttnn.leaky_relu(x, negative_slope=negative_slope)
@@ -297,7 +292,7 @@ def ttnn_upsample_functional(
     """
     is_torch = isinstance(x, torch.Tensor)
 
-    if not TTNN_AVAILABLE or is_torch or not use_ttnn:
+    if is_torch or not use_ttnn:
         return F.interpolate(x, scale_factor=scale_factor, mode=mode)
 
     # TTNN upsampling via repeat_interleave
@@ -336,7 +331,7 @@ def ttnn_residual_block_functional(
     """
     is_torch = isinstance(x, torch.Tensor)
 
-    if not TTNN_AVAILABLE or is_torch or not use_ttnn:
+    if is_torch or not use_ttnn:
         # PyTorch path
         kernel_size = conv1_weight.shape[-1] if conv1_weight is not None else 3
         padding = (kernel_size * dilation - dilation) // 2

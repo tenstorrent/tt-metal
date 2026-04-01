@@ -17,12 +17,7 @@ from typing import Any, List, Optional, Tuple
 import torch
 import torch.nn.functional as F
 
-try:
-    import ttnn
-
-    TTNN_AVAILABLE = True
-except ImportError:
-    TTNN_AVAILABLE = False
+import ttnn
 
 from models.experimental.openvoice.tt.generator import TTNNGenerator
 from models.experimental.openvoice.tt.modules.conv1d import ttnn_conv1d
@@ -55,7 +50,7 @@ class LayerNorm1d:
 
     def __call__(self, x: Any) -> Any:
         is_torch = isinstance(x, torch.Tensor)
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             x = x.transpose(1, -1)
             x = F.layer_norm(x, (self.channels,), self.weight, self.bias, self.eps)
             return x.transpose(1, -1)
@@ -101,7 +96,7 @@ class MultiHeadAttention:
 
     def __call__(self, x: Any, c: Any, attn_mask: Optional[Any] = None) -> Any:
         is_torch = isinstance(x, torch.Tensor)
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             return self._forward_pytorch(x, c, attn_mask)
         return self._forward_ttnn(x, c, attn_mask)
 
@@ -220,7 +215,7 @@ class FFN:
 
     def __call__(self, x: Any, x_mask: Any) -> Any:
         is_torch = isinstance(x, torch.Tensor)
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             return self._forward_pytorch(x, x_mask)
         return self._forward_ttnn(x, x_mask)
 
@@ -339,7 +334,7 @@ class MeloTextEncoder:
         # Check if inputs are PyTorch tensors
         is_torch = isinstance(x, torch.Tensor)
 
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             return self._forward_pytorch(x, x_lengths, tone, language, bert, ja_bert, g)
         return self._forward_ttnn(x, x_lengths, tone, language, bert, ja_bert, g)
 
@@ -542,7 +537,7 @@ class TTNNMeloTTS:
         # Check if inputs are PyTorch tensors - use PyTorch path
         is_torch = isinstance(x, torch.Tensor)
 
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             return self._infer_pytorch(
                 x,
                 x_lengths,
@@ -649,8 +644,6 @@ class TTNNMeloTTS:
         # Fall back to PyTorch for now (complex control flow)
         # Transfer to CPU, run, transfer back
         def to_pytorch(t):
-            if not TTNN_AVAILABLE:
-                return t
             t = ttnn.to_torch(ttnn.from_device(t))
             # Convert bfloat16 to float32 for PyTorch ops
             if t.dtype == torch.bfloat16:
@@ -680,7 +673,7 @@ class TTNNMeloTTS:
             max_len,
         )
 
-        if TTNN_AVAILABLE and self.device:
+        if self.device:
             o = ttnn.from_torch(o.float(), dtype=ttnn.bfloat16, device=self.device)
 
         return o, attn, y_mask

@@ -18,20 +18,12 @@ import numpy as np
 import pytest
 import torch
 
-try:
-    import ttnn
-
-    TTNN_AVAILABLE = True
-except ImportError:
-    TTNN_AVAILABLE = False
+import ttnn
 
 
 @pytest.fixture(scope="module")
 def device():
     """Get TTNN device."""
-    if not TTNN_AVAILABLE:
-        pytest.skip("TTNN not available")
-
     try:
         dev = ttnn.open_device(device_id=0)
         yield dev

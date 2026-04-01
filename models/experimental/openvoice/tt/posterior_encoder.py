@@ -13,12 +13,7 @@ from typing import Any, Optional
 import torch
 import torch.nn.functional as F
 
-try:
-    import ttnn
-
-    TTNN_AVAILABLE = True
-except ImportError:
-    TTNN_AVAILABLE = False
+import ttnn
 
 from models.experimental.openvoice.tt.modules.conv1d import ttnn_conv1d
 from models.experimental.openvoice.tt.modules.wavenet import WaveNetModule
@@ -55,7 +50,7 @@ def sequence_mask(length: Any, max_length: Optional[int] = None, device: Any = N
     # Check if input is PyTorch tensor - use isinstance for reliability
     is_torch = isinstance(length, torch.Tensor)
 
-    if not TTNN_AVAILABLE or is_torch:
+    if is_torch:
         if max_length is None:
             max_length = int(length.max().item())
         tensor_device = length.device if hasattr(length, "device") else "cpu"
@@ -157,7 +152,7 @@ class TTNNPosteriorEncoder:
         # Check if input is PyTorch tensor - use isinstance for reliability
         is_torch = isinstance(x, torch.Tensor)
 
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             return self._forward_pytorch(x, x_lengths, g, tau)
         return self._forward_ttnn(x, x_lengths, g, tau)
 
@@ -169,8 +164,7 @@ class TTNNPosteriorEncoder:
             if isinstance(t, torch.Tensor):
                 return t.to(dtype) if t.dtype != dtype else t
             # TTNN tensor - convert to PyTorch
-            if TTNN_AVAILABLE:
-                return ttnn.to_torch(t).to(dtype)
+            return ttnn.to_torch(t).to(dtype)
             return t
 
         # Create mask [B, 1, T]

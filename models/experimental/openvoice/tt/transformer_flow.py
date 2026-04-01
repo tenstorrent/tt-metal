@@ -13,12 +13,7 @@ from typing import Any, List, Optional
 import torch
 import torch.nn.functional as F
 
-try:
-    import ttnn
-
-    TTNN_AVAILABLE = True
-except ImportError:
-    TTNN_AVAILABLE = False
+import ttnn
 
 from models.experimental.openvoice.tt.modules.conv1d import ttnn_conv1d
 
@@ -43,7 +38,7 @@ class LayerNorm1d:
 
     def __call__(self, x: Any) -> Any:
         is_torch = isinstance(x, torch.Tensor)
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             x = x.transpose(1, -1)
             x = F.layer_norm(x, (self.channels,), self.weight, self.bias, self.eps)
             return x.transpose(1, -1)
@@ -89,7 +84,7 @@ class MultiHeadAttentionFlow:
 
     def __call__(self, x: Any, c: Any, attn_mask: Optional[Any] = None) -> Any:
         is_torch = isinstance(x, torch.Tensor)
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             return self._forward_pytorch(x, c, attn_mask)
         return self._forward_ttnn(x, c, attn_mask)
 
@@ -227,7 +222,7 @@ class FFTBlock:
 
     def __call__(self, x: Any, x_mask: Any, g: Optional[Any] = None) -> Any:
         is_torch = isinstance(x, torch.Tensor)
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             return self._forward_pytorch(x, x_mask, g)
         return self._forward_ttnn(x, x_mask, g)
 
@@ -314,7 +309,7 @@ class TransformerCouplingLayer:
 
     def __call__(self, x: Any, x_mask: Any, g: Optional[Any] = None, reverse: bool = False):
         is_torch = isinstance(x, torch.Tensor)
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             return self._forward_pytorch(x, x_mask, g, reverse)
         return self._forward_ttnn(x, x_mask, g, reverse)
 
@@ -378,7 +373,7 @@ class Flip:
 
     def __call__(self, x: Any, *args, reverse: bool = False, **kwargs):
         is_torch = isinstance(x, torch.Tensor)
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             x = torch.flip(x, [1])
             if not reverse:
                 return x, torch.zeros(x.size(0), dtype=x.dtype, device=x.device)

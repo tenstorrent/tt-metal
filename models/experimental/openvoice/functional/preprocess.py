@@ -14,12 +14,7 @@ from typing import Any, Callable, Dict, Optional
 
 import torch
 
-try:
-    import ttnn
-
-    TTNN_AVAILABLE = True
-except ImportError:
-    TTNN_AVAILABLE = False
+import ttnn
 
 
 def fuse_weight_normalization(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
@@ -91,9 +86,6 @@ def custom_preprocessor(
     Returns:
         Dict of preprocessed parameters ready for TTNN inference
     """
-    if not TTNN_AVAILABLE:
-        return model_state_dict
-
     if dtype is None:
         dtype = ttnn.bfloat16
 
@@ -236,7 +228,7 @@ class PreprocessedParameters:
             if isinstance(param, torch.Tensor):
                 total_params += param.numel()
                 total_bytes += param.numel() * param.element_size()
-            elif TTNN_AVAILABLE and hasattr(param, "shape"):
+            elif hasattr(param, "shape"):
                 # TTNN tensor
                 numel = 1
                 for dim in param.shape:
@@ -275,9 +267,6 @@ class PreprocessedParameters:
 
     def to_device(self, device: Any) -> "PreprocessedParameters":
         """Move parameters to device."""
-        if not TTNN_AVAILABLE:
-            return self
-
         new_params = {}
         for name, param in self._parameters.items():
             if param is None:

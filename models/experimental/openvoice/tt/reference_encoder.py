@@ -13,12 +13,7 @@ from typing import Any, List, Optional
 import torch
 import torch.nn.functional as F
 
-try:
-    import ttnn
-
-    TTNN_AVAILABLE = True
-except ImportError:
-    TTNN_AVAILABLE = False
+import ttnn
 
 from models.experimental.openvoice.tt.modules.gru import GRULayer
 
@@ -131,7 +126,7 @@ class TTNNReferenceEncoder:
         # Note: Reference encoder uses PyTorch path due to L1 memory constraints
         # on TT hardware for large mel spectrograms. This is acceptable since
         # speaker embedding extraction is not in the real-time inference path.
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             return self._forward_pytorch(inputs)
 
         # Convert TTNN tensor to PyTorch for reference encoder
@@ -148,8 +143,7 @@ class TTNNReferenceEncoder:
                 return None
             if isinstance(t, torch.Tensor):
                 return t.to(dtype)
-            if TTNN_AVAILABLE:
-                return ttnn.to_torch(t).to(dtype)
+            return ttnn.to_torch(t).to(dtype)
             return t
 
         # Ensure input is float32

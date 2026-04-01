@@ -14,12 +14,7 @@ from typing import Any, List, Optional, Tuple
 import torch
 import torch.nn.functional as F
 
-try:
-    import ttnn
-
-    TTNN_AVAILABLE = True
-except ImportError:
-    TTNN_AVAILABLE = False
+import ttnn
 
 from models.experimental.openvoice.tt.modules.conv1d import ttnn_conv1d
 
@@ -92,7 +87,7 @@ class MultiHeadAttention:
             Output [B, C, T]
         """
         is_torch = isinstance(x, torch.Tensor)
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             return self._forward_pytorch(x, c, attn_mask)
         return self._forward_ttnn(x, c, attn_mask)
 
@@ -247,7 +242,7 @@ class FFN:
 
     def __call__(self, x: Any, x_mask: Any) -> Any:
         is_torch = isinstance(x, torch.Tensor)
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             return self._forward_pytorch(x, x_mask)
         return self._forward_ttnn(x, x_mask)
 
@@ -300,7 +295,7 @@ class LayerNorm1d:
 
     def __call__(self, x: Any) -> Any:
         is_torch = isinstance(x, torch.Tensor)
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             # Transpose, apply layer norm, transpose back
             x = x.transpose(1, -1)
             x = F.layer_norm(x, (self.channels,), self.weight, self.bias, self.eps)
@@ -376,7 +371,7 @@ class TTNNTextEncoder:
             Tuple of (hidden, mean, log_variance, mask)
         """
         is_torch = isinstance(x, torch.Tensor)
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             return self._forward_pytorch(x, x_lengths)
         return self._forward_ttnn(x, x_lengths)
 

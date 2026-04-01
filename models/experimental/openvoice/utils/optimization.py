@@ -10,12 +10,7 @@ for optimal performance on Tenstorrent hardware.
 
 from typing import Any, Optional, Tuple
 
-try:
-    import ttnn
-
-    TTNN_AVAILABLE = True
-except ImportError:
-    TTNN_AVAILABLE = False
+import ttnn
 
 
 def get_l1_memory_config(
@@ -35,9 +30,6 @@ def get_l1_memory_config(
     Returns:
         Memory configuration for L1
     """
-    if not TTNN_AVAILABLE:
-        return None
-
     if shard_strategy is None:
         return ttnn.L1_MEMORY_CONFIG
 
@@ -68,8 +60,6 @@ def get_dram_memory_config() -> Any:
     Returns:
         Memory configuration for DRAM
     """
-    if not TTNN_AVAILABLE:
-        return None
     return ttnn.DRAM_MEMORY_CONFIG
 
 
@@ -89,7 +79,7 @@ def get_compute_config(
     Returns:
         Compute kernel configuration
     """
-    if not TTNN_AVAILABLE or device is None:
+    if device is None:
         return None
 
     fidelity_map = {
@@ -121,9 +111,6 @@ def get_sdpa_program_config(
     Returns:
         SDPA program configuration
     """
-    if not TTNN_AVAILABLE:
-        return None
-
     return ttnn.transformer.SDPAProgramConfig(
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
@@ -160,19 +147,6 @@ def fused_attention(
     Returns:
         Attention output [B, num_heads, seq_len, head_dim]
     """
-    if not TTNN_AVAILABLE:
-        import torch.nn.functional as F
-
-        # PyTorch fallback
-        return F.scaled_dot_product_attention(
-            query,
-            key,
-            value,
-            attn_mask=attn_mask,
-            scale=scale,
-            is_causal=is_causal,
-        )
-
     # Get default configs
     if memory_config is None:
         memory_config = ttnn.L1_MEMORY_CONFIG
@@ -204,7 +178,7 @@ def apply_memory_config(tensor: Any, memory_config: Any, device: Any) -> Any:
     Returns:
         Tensor with new memory configuration
     """
-    if not TTNN_AVAILABLE or device is None:
+    if device is None:
         return tensor
 
     return ttnn.to_memory_config(tensor, memory_config)
@@ -223,7 +197,7 @@ def optimize_for_inference(model_components: dict, device: Any) -> dict:
     Returns:
         Optimized model components
     """
-    if not TTNN_AVAILABLE or device is None:
+    if device is None:
         return model_components
 
     # Get optimal compute config

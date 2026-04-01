@@ -27,12 +27,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-try:
-    import ttnn
-
-    TTNN_AVAILABLE = True
-except ImportError:
-    TTNN_AVAILABLE = False
+import ttnn
 
 
 def compute_pcc(tensor1: torch.Tensor, tensor2: torch.Tensor) -> float:
@@ -60,7 +55,7 @@ def compute_pcc(tensor1: torch.Tensor, tensor2: torch.Tensor) -> float:
 
 def assert_with_pcc(torch_output: torch.Tensor, ttnn_output, pcc_threshold: float, name: str):
     """Assert PCC meets threshold and report results."""
-    if TTNN_AVAILABLE and not isinstance(ttnn_output, torch.Tensor):
+    if not isinstance(ttnn_output, torch.Tensor):
         ttnn_output = ttnn.to_torch(ttnn_output)
 
     pcc = compute_pcc(torch_output, ttnn_output)
@@ -79,8 +74,6 @@ def assert_with_pcc(torch_output: torch.Tensor, ttnn_output, pcc_threshold: floa
 @pytest.fixture(scope="module")
 def device():
     """Get TTNN device."""
-    if not TTNN_AVAILABLE:
-        pytest.skip("TTNN not available")
     try:
         dev = ttnn.open_device(device_id=0)
         yield dev
@@ -103,7 +96,6 @@ def model_weights():
 # ============================================================================
 
 
-@pytest.mark.skipif(not TTNN_AVAILABLE, reason="TTNN not available")
 class TestPosteriorEncoderModule:
     """
     Test PosteriorEncoder module PCC.
@@ -194,7 +186,6 @@ class TestPosteriorEncoderModule:
         assert z_shape == (B, 192, T), f"Expected shape (1, 192, {T}), got {z_shape}"
 
 
-@pytest.mark.skipif(not TTNN_AVAILABLE, reason="TTNN not available")
 class TestResidualCouplingModule:
     """
     Test ResidualCouplingBlock module PCC.
@@ -282,7 +273,6 @@ class TestResidualCouplingModule:
         assert_with_pcc(x_pt, x_tt, pcc_threshold=0.90, name="ResidualCoupling reverse")
 
 
-@pytest.mark.skipif(not TTNN_AVAILABLE, reason="TTNN not available")
 class TestGeneratorModule:
     """
     Test Generator (HiFi-GAN) module PCC.
@@ -337,7 +327,6 @@ class TestGeneratorModule:
         assert_with_pcc(audio_pt, audio_tt, pcc_threshold=0.85, name="Generator (HiFi-GAN)")
 
 
-@pytest.mark.skipif(not TTNN_AVAILABLE, reason="TTNN not available")
 class TestTransformerFlowModule:
     """
     Test TransformerFlow module PCC.
@@ -391,7 +380,6 @@ class TestTransformerFlowModule:
 # ============================================================================
 
 
-@pytest.mark.skipif(not TTNN_AVAILABLE, reason="TTNN not available")
 class TestEndToEndPCC:
     """
     End-to-end PCC validation.

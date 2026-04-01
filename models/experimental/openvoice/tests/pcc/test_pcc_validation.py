@@ -19,14 +19,8 @@ import numpy as np
 import pytest
 import torch
 
-try:
-    import ttnn
+import ttnn
 
-    TTNN_AVAILABLE = True
-except ImportError:
-    TTNN_AVAILABLE = False
-
-pytestmark = pytest.mark.skipif(not TTNN_AVAILABLE, reason="TTNN not available")
 
 
 def pearson_correlation(a: np.ndarray, b: np.ndarray) -> float:
@@ -251,7 +245,4 @@ def main():
 
 
 if __name__ == "__main__":
-    if not TTNN_AVAILABLE:
-        print("TTNN not available, cannot run validation")
-        sys.exit(1)
     sys.exit(main())

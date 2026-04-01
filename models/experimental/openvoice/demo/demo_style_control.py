@@ -116,12 +116,7 @@ def demo_tau_control(output_dir: Path):
     print("Demo 3: Voice Transfer Control (tau)")
     print("=" * 60)
 
-    try:
-        import ttnn
-
-        TTNN_AVAILABLE = True
-    except ImportError:
-        TTNN_AVAILABLE = False
+    import ttnn
 
     # Check for checkpoint
     checkpoint_dir = Path("checkpoints/openvoice/converter")
@@ -138,11 +133,10 @@ def demo_tau_control(output_dir: Path):
 
     # Setup
     device = None
-    if TTNN_AVAILABLE:
-        try:
-            device = ttnn.open_device(device_id=0)
-        except:
-            pass
+    try:
+        device = ttnn.open_device(device_id=0)
+    except:
+        pass
 
     try:
         converter = TTNNToneColorConverter(checkpoint_dir / "config.json", device=device)
@@ -186,7 +180,7 @@ def demo_tau_control(output_dir: Path):
         os.unlink(ref_path)
 
     finally:
-        if device is not None and TTNN_AVAILABLE:
+        if device is not None:
             ttnn.close_device(device)
 
 

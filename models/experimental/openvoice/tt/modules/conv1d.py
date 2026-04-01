@@ -13,12 +13,7 @@ from typing import Any, Optional
 import torch
 import torch.nn.functional as F
 
-try:
-    import ttnn
-
-    TTNN_AVAILABLE = True
-except ImportError:
-    TTNN_AVAILABLE = False
+import ttnn
 
 
 def ttnn_conv1d(
@@ -67,13 +62,13 @@ def ttnn_conv1d(
     # Use stride >= 2 as the trigger - large upsampling operations cause L1 issues
     large_stride_op = stride >= 2
 
-    if not TTNN_AVAILABLE or is_torch or large_stride_op:
+    if is_torch or large_stride_op:
         # Convert TTNN tensors to PyTorch if needed
-        if not is_torch_x and TTNN_AVAILABLE:
+        if not is_torch_x:
             x = ttnn.to_torch(x)
-        if not is_torch_weight and TTNN_AVAILABLE:
+        if not is_torch_weight:
             weight = ttnn.to_torch(weight)
-        if bias is not None and not isinstance(bias, torch.Tensor) and TTNN_AVAILABLE:
+        if bias is not None and not isinstance(bias, torch.Tensor):
             bias = ttnn.to_torch(bias)
 
         # Ensure float32 for PyTorch operations
@@ -92,7 +87,7 @@ def ttnn_conv1d(
         elif activation == "leaky_relu":
             out = F.leaky_relu(out, 0.1)
         # Convert back to TTNN if input was originally TTNN
-        if (not is_torch_x or not is_torch_weight) and TTNN_AVAILABLE and device is not None:
+        if (not is_torch_x or not is_torch_weight) and device is not None:
             out = ttnn.from_torch(out, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         return out
 
@@ -275,13 +270,13 @@ def ttnn_conv_transpose1d(
     # Use stride >= 2 as the trigger - large upsampling operations cause L1 issues
     large_stride_op = stride >= 2
 
-    if not TTNN_AVAILABLE or is_torch or large_stride_op:
+    if is_torch or large_stride_op:
         # Convert TTNN tensors to PyTorch if needed
-        if not is_torch_x and TTNN_AVAILABLE:
+        if not is_torch_x:
             x = ttnn.to_torch(x)
-        if not is_torch_weight and TTNN_AVAILABLE:
+        if not is_torch_weight:
             weight = ttnn.to_torch(weight)
-        if bias is not None and not isinstance(bias, torch.Tensor) and TTNN_AVAILABLE:
+        if bias is not None and not isinstance(bias, torch.Tensor):
             bias = ttnn.to_torch(bias)
 
         # Ensure float32 for PyTorch operations
@@ -298,7 +293,7 @@ def ttnn_conv_transpose1d(
         weight_3d = weight.squeeze(2) if weight.dim() == 4 else weight  # [C_in, C_out, 1, K] -> [C_in, C_out, K]
         out = F.conv_transpose1d(x, weight_3d, bias, stride, padding, output_padding, groups)
         # Convert back to TTNN if input was TTNN
-        if large_stride_op and (not is_torch_x or not is_torch_weight) and TTNN_AVAILABLE and device is not None:
+        if large_stride_op and (not is_torch_x or not is_torch_weight) and device is not None:
             # Use TILE_LAYOUT for compatibility with TTNN operations like leaky_relu
             out = ttnn.from_torch(out, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         return out

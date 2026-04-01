@@ -13,12 +13,7 @@ from typing import Any, List, Optional
 import torch
 import torch.nn.functional as F
 
-try:
-    import ttnn
-
-    TTNN_AVAILABLE = True
-except ImportError:
-    TTNN_AVAILABLE = False
+import ttnn
 
 from models.experimental.openvoice.tt.modules.conv1d import ttnn_conv1d
 from models.experimental.openvoice.tt.modules.wavenet import WaveNetModule
@@ -39,7 +34,7 @@ class Flip:
     def __call__(self, x: Any, *args, reverse: bool = False, **kwargs):
         is_torch = isinstance(x, torch.Tensor)
 
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             x = torch.flip(x, [1])
             if not reverse:
                 logdet = torch.zeros(x.size(0), device=x.device, dtype=x.dtype)
@@ -115,7 +110,7 @@ class ResidualCouplingLayer:
         # Check if input is PyTorch tensor
         is_torch = isinstance(x, torch.Tensor)
 
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             return self._forward_pytorch(x, x_mask, g, reverse)
         return self._forward_ttnn(x, x_mask, g, reverse)
 
@@ -126,8 +121,7 @@ class ResidualCouplingLayer:
                 return None
             if isinstance(t, torch.Tensor):
                 return t.to(dtype) if t.dtype != dtype else t
-            if TTNN_AVAILABLE:
-                return ttnn.to_torch(t).to(dtype)
+            return ttnn.to_torch(t).to(dtype)
             return t
 
         # Split channels

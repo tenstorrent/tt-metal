@@ -20,12 +20,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-try:
-    import ttnn
-
-    TTNN_AVAILABLE = True
-except ImportError:
-    TTNN_AVAILABLE = False
+import ttnn
 
 try:
     from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
@@ -46,9 +41,6 @@ EXPECTED_PERF = {
 @pytest.fixture(scope="module")
 def device():
     """Get TTNN device."""
-    if not TTNN_AVAILABLE:
-        pytest.skip("TTNN not available")
-
     try:
         dev = ttnn.open_device(device_id=0)
         yield dev

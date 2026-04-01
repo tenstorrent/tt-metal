@@ -13,12 +13,7 @@ from typing import Any, List, Optional
 import torch
 import torch.nn.functional as F
 
-try:
-    import ttnn
-
-    TTNN_AVAILABLE = True
-except ImportError:
-    TTNN_AVAILABLE = False
+import ttnn
 
 from models.experimental.openvoice.tt.modules.conv1d import ttnn_conv1d
 
@@ -44,7 +39,7 @@ def fused_add_tanh_sigmoid_multiply(
     # Check if inputs are PyTorch tensors
     is_torch = isinstance(input_a, torch.Tensor)
 
-    if not TTNN_AVAILABLE or is_torch:
+    if is_torch:
         in_act = input_a + input_b
         t_act = torch.tanh(in_act[:, :n_channels, :])
         s_act = torch.sigmoid(in_act[:, n_channels:, :])
@@ -150,7 +145,7 @@ class WaveNetModule:
         # Check if input is PyTorch tensor
         is_torch = isinstance(x, torch.Tensor)
 
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             return self._forward_pytorch(x, x_mask, g)
         return self._forward_ttnn(x, x_mask, g)
 
@@ -163,8 +158,7 @@ class WaveNetModule:
                 return None
             if isinstance(t, torch.Tensor):
                 return t.to(dtype) if t.dtype != dtype else t
-            if TTNN_AVAILABLE:
-                return ttnn.to_torch(t).to(dtype)
+            return ttnn.to_torch(t).to(dtype)
             return t
 
         output = torch.zeros_like(x)

@@ -13,12 +13,7 @@ from typing import Any, List, Optional
 import torch
 import torch.nn.functional as F
 
-try:
-    import ttnn
-
-    TTNN_AVAILABLE = True
-except ImportError:
-    TTNN_AVAILABLE = False
+import ttnn
 
 from models.experimental.openvoice.tt.modules.conv1d import ttnn_conv1d
 
@@ -43,7 +38,7 @@ class LayerNorm1d:
 
     def __call__(self, x: Any) -> Any:
         is_torch = isinstance(x, torch.Tensor)
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             x = x.transpose(1, -1)
             x = F.layer_norm(x, (self.channels,), self.weight, self.bias, self.eps)
             return x.transpose(1, -1)
@@ -115,7 +110,7 @@ class TTNNDurationPredictor:
             Predicted log durations [B, 1, T]
         """
         is_torch = isinstance(x, torch.Tensor)
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             return self._forward_pytorch(x, x_mask, g)
         return self._forward_ttnn(x, x_mask, g)
 
@@ -238,7 +233,7 @@ class DDSConv:
 
     def __call__(self, x: Any, x_mask: Any, g: Optional[Any] = None) -> Any:
         is_torch = isinstance(x, torch.Tensor)
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             return self._forward_pytorch(x, x_mask, g)
         return self._forward_ttnn(x, x_mask, g)
 
@@ -307,7 +302,7 @@ class Log:
 
     def __call__(self, x: Any, x_mask: Any, reverse: bool = False) -> Any:
         is_torch = isinstance(x, torch.Tensor)
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             return self._forward_pytorch(x, x_mask, reverse)
         return self._forward_ttnn(x, x_mask, reverse)
 
@@ -339,7 +334,7 @@ class Flip:
 
     def __call__(self, x: Any, x_mask: Any = None, reverse: bool = False) -> Any:
         is_torch = isinstance(x, torch.Tensor)
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             x = torch.flip(x, [1])
             if not reverse:
                 logdet = torch.zeros(x.size(0), dtype=x.dtype, device=x.device)
@@ -373,7 +368,7 @@ class ElementwiseAffine:
 
     def __call__(self, x: Any, x_mask: Any, reverse: bool = False, **kwargs) -> Any:
         is_torch = isinstance(x, torch.Tensor)
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             return self._forward_pytorch(x, x_mask, reverse)
         return self._forward_ttnn(x, x_mask, reverse)
 
@@ -437,7 +432,7 @@ class ConvFlow:
 
     def __call__(self, x: Any, x_mask: Any, g: Optional[Any] = None, reverse: bool = False) -> Any:
         is_torch = isinstance(x, torch.Tensor)
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             return self._forward_pytorch(x, x_mask, g, reverse)
         return self._forward_ttnn(x, x_mask, g, reverse)
 
@@ -686,7 +681,7 @@ class TTNNStochasticDurationPredictor:
             If not reverse: negative log likelihood [B]
         """
         is_torch = isinstance(x, torch.Tensor)
-        if not TTNN_AVAILABLE or is_torch:
+        if is_torch:
             return self._forward_pytorch(x, x_mask, w, g, reverse, noise_scale)
         return self._forward_ttnn(x, x_mask, w, g, reverse, noise_scale)
 

@@ -216,12 +216,7 @@ class VoiceEmbeddingCache:
                     pass  # Skip failed extractions
 
 
-try:
-    import ttnn
-
-    TTNN_AVAILABLE = True
-except ImportError:
-    TTNN_AVAILABLE = False
+import ttnn
 
 from models.experimental.openvoice.tt.synthesizer import TTNNSynthesizerTrn
 from models.experimental.openvoice.utils.audio import AudioProcessor, save_audio
@@ -427,7 +422,7 @@ class TTNNToneColorConverter:
             spec_input = spec.squeeze(0).T.unsqueeze(0)  # [1, T, n_freqs]
 
             # Move to device if needed
-            if TTNN_AVAILABLE and self.device:
+            if self.device:
                 spec_input = ttnn.from_torch(
                     spec_input.float(),
                     dtype=ttnn.bfloat16,
@@ -439,7 +434,7 @@ class TTNNToneColorConverter:
                 g = self.model.ref_enc(spec_input)
 
             # Back to CPU if needed
-            if TTNN_AVAILABLE and self.device and not isinstance(g, torch.Tensor):
+            if self.device and not isinstance(g, torch.Tensor):
                 g = ttnn.to_torch(ttnn.from_device(g))
 
             # Add channel dimension [B, gin_channels] -> [B, gin_channels, 1]
@@ -533,7 +528,7 @@ class TTNNToneColorConverter:
         spec_lengths = torch.LongTensor([spec.size(-1)])
 
         # Move to device if needed
-        if TTNN_AVAILABLE and self.device:
+        if self.device:
             spec = ttnn.from_torch(spec.float(), dtype=ttnn.bfloat16, device=self.device)
             spec_lengths = ttnn.from_torch(spec_lengths, dtype=ttnn.int32, device=self.device)
             src_se = ttnn.from_torch(src_se.float(), dtype=ttnn.bfloat16, device=self.device)
@@ -544,7 +539,7 @@ class TTNNToneColorConverter:
             audio, _, _ = self.model.voice_conversion(spec, spec_lengths, src_se, tgt_se, tau=tau)
 
         # Back to CPU
-        if TTNN_AVAILABLE and self.device and not isinstance(audio, torch.Tensor):
+        if self.device and not isinstance(audio, torch.Tensor):
             audio = ttnn.to_torch(ttnn.from_device(audio))
 
         # Convert to numpy
@@ -649,7 +644,7 @@ class TTNNToneColorConverter:
         with torch.no_grad():
             for path, spec_input in preprocessed:
                 try:
-                    if TTNN_AVAILABLE and self.device:
+                    if self.device:
                         spec_ttnn = ttnn.from_torch(
                             spec_input.float(),
                             dtype=ttnn.bfloat16,
@@ -813,7 +808,7 @@ class TTNNToneColorConverter:
                     src_se = item.source_se
                 else:
                     with torch.no_grad():
-                        if TTNN_AVAILABLE and self.device:
+                        if self.device:
                             spec_ttnn = ttnn.from_torch(
                                 spec_input.float(),
                                 dtype=ttnn.bfloat16,
@@ -838,7 +833,7 @@ class TTNNToneColorConverter:
                     ref_spec = self.audio_processor.load_and_process(ref_path)
                     ref_input = ref_spec.squeeze(0).T.unsqueeze(0)
                     with torch.no_grad():
-                        if TTNN_AVAILABLE and self.device:
+                        if self.device:
                             ref_ttnn = ttnn.from_torch(
                                 ref_input.float(),
                                 dtype=ttnn.bfloat16,
@@ -902,7 +897,7 @@ class TTNNToneColorConverter:
                     # Move tensors to device
                     spec_lengths = torch.LongTensor([spec.size(-1)])
 
-                    if TTNN_AVAILABLE and self.device:
+                    if self.device:
                         spec = ttnn.from_torch(spec.float(), dtype=ttnn.bfloat16, device=self.device)
                         spec_lengths = ttnn.from_torch(spec_lengths, dtype=ttnn.int32, device=self.device)
                         src_se = ttnn.from_torch(src_se.float(), dtype=ttnn.bfloat16, device=self.device)
@@ -915,7 +910,7 @@ class TTNNToneColorConverter:
                         )
 
                     # Back to CPU
-                    if TTNN_AVAILABLE and self.device and not isinstance(audio, torch.Tensor):
+                    if self.device and not isinstance(audio, torch.Tensor):
                         audio = ttnn.to_torch(ttnn.from_device(audio))
 
                     audio_np = audio[0, 0].cpu().float().numpy()

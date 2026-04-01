@@ -13,12 +13,7 @@ from typing import Any, Optional, Tuple
 import torch
 import torch.nn as nn
 
-try:
-    import ttnn
-
-    TTNN_AVAILABLE = True
-except ImportError:
-    TTNN_AVAILABLE = False
+import ttnn
 
 
 def ttnn_gru_cell(
@@ -52,7 +47,7 @@ def ttnn_gru_cell(
     # Check if inputs are PyTorch tensors - use PyTorch path
     is_torch = isinstance(x, torch.Tensor)
 
-    if not TTNN_AVAILABLE or is_torch:
+    if is_torch:
         # PyTorch fallback for development or when given torch tensors
         hidden_size = h.shape[-1]
 
@@ -144,15 +139,14 @@ def ttnn_gru(
     # Check if input is PyTorch tensor
     is_torch = isinstance(x, torch.Tensor)
 
-    if not TTNN_AVAILABLE or is_torch:
+    if is_torch:
         # Helper to convert TTNN tensors to PyTorch (float32 for CPU compatibility)
         def to_torch(t, dtype=torch.float32):
             if t is None:
                 return None
             if isinstance(t, torch.Tensor):
                 return t.to(dtype)
-            if TTNN_AVAILABLE:
-                return ttnn.to_torch(t).to(dtype)
+            return ttnn.to_torch(t).to(dtype)
             return t
 
         # Convert input to float32 if needed
@@ -191,10 +185,7 @@ def ttnn_gru(
 
     # Initialize hidden state if not provided
     if h0 is None:
-        if TTNN_AVAILABLE:
-            h = ttnn.zeros((batch_size, hidden_size), dtype=x.dtype, device=x.device())
-        else:
-            h = torch.zeros(batch_size, hidden_size, device=x.device, dtype=x.dtype)
+        h = ttnn.zeros((batch_size, hidden_size), dtype=x.dtype, device=x.device())
     else:
         h = h0
 
@@ -210,21 +201,13 @@ def ttnn_gru(
         outputs.append(h)
 
     # Stack outputs
-    if TTNN_AVAILABLE:
         # Stack along time dimension
-        output = ttnn.stack(outputs, dim=1)  # [B, T, hidden_size]
-    else:
-        output = torch.stack(outputs, dim=1)
-
+    output = ttnn.stack(outputs, dim=1)  # [B, T, hidden_size]
     if not batch_first:
-        output = ttnn.permute(output, (1, 0, 2)) if TTNN_AVAILABLE else output.permute(1, 0, 2)
+        output = ttnn.permute(output, (1, 0, 2))
 
     # h_n has shape [1, B, hidden_size] for compatibility
-    if TTNN_AVAILABLE:
-        h_n = ttnn.unsqueeze(h, 0)
-    else:
-        h_n = h.unsqueeze(0)
-
+    h_n = ttnn.unsqueeze(h, 0)
     return output, h_n
 
 

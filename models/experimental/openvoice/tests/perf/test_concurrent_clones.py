@@ -18,13 +18,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-try:
-    import ttnn
-
-    TTNN_AVAILABLE = True
-except ImportError:
-    TTNN_AVAILABLE = False
-    print("Warning: TTNN not available, using PyTorch fallback")
+import ttnn
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
@@ -40,18 +34,13 @@ def create_test_audio(duration: float = 2.0, freq: float = 440.0, sample_rate: i
 @pytest.fixture(scope="module")
 def device():
     """Get TTNN device."""
-    if TTNN_AVAILABLE:
-        try:
-            dev = ttnn.open_device(device_id=0)
-            yield dev
-            ttnn.close_device(dev)
-        except Exception as e:
-            print(f"Could not open TTNN device: {e}")
-            yield None
-    else:
+    try:
+        dev = ttnn.open_device(device_id=0)
+        yield dev
+        ttnn.close_device(dev)
+    except Exception as e:
+        print(f"Could not open TTNN device: {e}")
         yield None
-
-
 @pytest.fixture(scope="module")
 def voice_converter(device):
     """Load voice converter model."""

@@ -21,12 +21,7 @@ import torch.nn.functional as F
 # Add project paths
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-try:
-    import ttnn
-
-    TTNN_AVAILABLE = True
-except ImportError:
-    TTNN_AVAILABLE = False
+import ttnn
 
 
 def compute_pcc(tensor1: torch.Tensor, tensor2: torch.Tensor) -> float:
@@ -65,7 +60,7 @@ def assert_with_pcc(torch_output: torch.Tensor, ttnn_output: torch.Tensor, pcc_t
     Following official TTNN pattern from tests/ttnn/utils_for_testing.py
     """
     # Convert TTNN to PyTorch if needed
-    if TTNN_AVAILABLE and not isinstance(ttnn_output, torch.Tensor):
+    if not isinstance(ttnn_output, torch.Tensor):
         ttnn_output = ttnn.to_torch(ttnn_output)
 
     # Compute PCC
@@ -84,7 +79,6 @@ def assert_with_pcc(torch_output: torch.Tensor, ttnn_output: torch.Tensor, pcc_t
 # ============================================================================
 
 
-@pytest.mark.skipif(not TTNN_AVAILABLE, reason="TTNN not available")
 class TestConv1DOperation:
     """Test Conv1D operation PCC."""
 
@@ -148,7 +142,6 @@ class TestConv1DOperation:
             ttnn.close_device(device)
 
 
-@pytest.mark.skipif(not TTNN_AVAILABLE, reason="TTNN not available")
 class TestLayerNormOperation:
     """Test Layer Normalization PCC."""
 
@@ -185,7 +178,6 @@ class TestLayerNormOperation:
             ttnn.close_device(device)
 
 
-@pytest.mark.skipif(not TTNN_AVAILABLE, reason="TTNN not available")
 class TestActivationOperations:
     """Test activation function PCC."""
 
@@ -273,7 +265,6 @@ class TestActivationOperations:
             ttnn.close_device(device)
 
 
-@pytest.mark.skipif(not TTNN_AVAILABLE, reason="TTNN not available")
 class TestMatMulOperations:
     """Test matrix multiplication PCC."""
 
@@ -312,7 +303,6 @@ class TestMatMulOperations:
             ttnn.close_device(device)
 
 
-@pytest.mark.skipif(not TTNN_AVAILABLE, reason="TTNN not available")
 class TestAttentionOperation:
     """Test attention operation PCC."""
 
@@ -361,7 +351,6 @@ class TestAttentionOperation:
             ttnn.close_device(device)
 
 
-@pytest.mark.skipif(not TTNN_AVAILABLE, reason="TTNN not available")
 class TestEmbeddingOperation:
     """Test embedding lookup PCC."""
 
@@ -395,7 +384,6 @@ class TestEmbeddingOperation:
 # ============================================================================
 
 
-@pytest.mark.skipif(not TTNN_AVAILABLE, reason="TTNN not available")
 class TestWaveNetBlock:
     """Test WaveNet gated convolution block."""
 
@@ -459,10 +447,6 @@ def run_all_tests():
     print("Per-Operation PCC Validation Report")
     print("=" * 60)
     print()
-
-    if not TTNN_AVAILABLE:
-        print("TTNN not available - skipping hardware tests")
-        return
 
     results = {}
 
