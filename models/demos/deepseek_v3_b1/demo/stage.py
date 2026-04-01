@@ -1072,7 +1072,6 @@ class _CombinedPipelineBlock:
             core_to_core_socket_buffer_size=ACTIVATION_W_TOKEN_META_FIFO_SIZE,
             h2d_downstream_core=ttnn.MeshCoreCoord(exit_node_coord, PIPELINE_CORE_COORD),
             embedding_tensor=embedding_tensor,
-            downstream_socket_page_size=ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
             metadata_size_bytes=TOKEN_META_PAGE_SIZE_BYTES,
         )
 

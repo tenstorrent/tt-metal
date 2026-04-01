@@ -51,7 +51,6 @@ class HostInterface:
         embedding_cb_index=None,
         fabric_packet_header_cb_index=None,
         metadata_size_bytes=0,
-        downstream_socket_page_size=0,
     ):
         assert h2d_socket is not None or d2h_socket is not None, "Either h2d_socket or d2h_socket must be provided"
 
@@ -162,9 +161,6 @@ class HostInterface:
             ), f"Expected embedding tensor to be DRAM interleaved with page size {self.embedding_page_size} bytes for shape {self.embedding_tensor.shape}"
             # Tensor is DRAM interleaved, and row major. Page size is inner dim (2D: shape[1], 4D: shape[3]).
             self.embedding_page_size = self.embedding_tensor.shape[-1] * dtype_size(self.embedding_tensor.dtype)
-            self.downstream_socket_page_size = (
-                downstream_socket_page_size if downstream_socket_page_size is not None else self.embedding_page_size
-            )
             self.embedding_cb_index = 2 if embedding_cb_index is None else embedding_cb_index
 
         self.fabric_packet_header_cb_index = (
@@ -216,7 +212,6 @@ class HostInterface:
                     self.embedding_cb_index,
                     self.embedding_page_size,
                     self.embedding_tensor.buffer_address(),
-                    self.downstream_socket_page_size,
                 ]
             )
             h2d_socket_kernel_ct_args.extend(get_interleaved_tensor_accessor_args(self.embedding_tensor))

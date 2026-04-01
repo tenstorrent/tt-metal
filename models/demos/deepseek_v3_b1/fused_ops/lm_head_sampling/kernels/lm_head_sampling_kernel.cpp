@@ -839,7 +839,6 @@ void kernel_main() {
             cb_wait_front(argmax_socket_cb, 1);
             uint32_t base_token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
 
-            DPRINT << "BASE TOKEN ID: " << base_token_id << ENDL();
             write_token_metadata_to_socket_cb(eh_gather_dst_cb, base_token_id, base_token_type, base_token_pos);
             cb_pop_front(argmax_socket_cb, 1);
             DPRINT << ">argmax pop token done" << ENDL();
@@ -888,8 +887,8 @@ void kernel_main() {
             uint32_t spec_token_pos = metadata_ptr->tok0_pos + 2;
             cb_pop_front(argmax_socket_cb, 1);
 
-            DPRINT << "BASE TOKEN ID: " << base_token_id << ENDL();
-            DPRINT << "SPEC TOKEN ID: " << spec_token_id << ENDL();
+            DPRINT << "SPEC STAGE BASE TOKEN ID: " << base_token_id << ENDL();
+            DPRINT << "SPEC STAGE SPEC TOKEN ID: " << spec_token_id << ENDL();
             // Push the base and speculative tokens to the argmax socket CB that will be written to the socket later
             write_token_metadata_to_socket_cb(
                 argmax_socket_cb,
