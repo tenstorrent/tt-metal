@@ -16,14 +16,14 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <hostdevcommon/fabric_common.h>
-#include <yaml-cpp/yaml.h>
 #include <tt-logger/tt-logger.hpp>
 #include "tests/tt_metal/tt_fabric/common/utils.hpp"
 using tt::tt_fabric::fabric_router_tests::check_asic_mapping_against_golden;
+using tt::tt_fabric::fabric_router_tests::expect_galaxy_corner_folding_check;
 
 namespace tt::tt_fabric::multi_host_tests {
 
@@ -99,6 +99,8 @@ TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 
+    expect_galaxy_corner_folding_check(*control_plane);
+
     check_asic_mapping_against_golden("TestDualGalaxyControlPlaneInit");
 }
 
@@ -115,6 +117,8 @@ TEST(MultiHost, TestDualGalaxyControlPlaneInitFlipped) {
         tt::tt_fabric::FabricConfig::FABRIC_2D,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+
+    expect_galaxy_corner_folding_check(*control_plane);
 
     check_asic_mapping_against_golden("TestDualGalaxyControlPlaneInitFlipped");
 }
@@ -352,12 +356,6 @@ TEST(MultiHost, TestDual2x4Fabric1DSanity) {
 }
 
 TEST(MultiHost, TestSplit2x2ControlPlaneInit) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
-        tt::tt_metal::ClusterType::N300_2x2) {
-        log_info(tt::LogTest, "This test is only for N300 2x2");
-        GTEST_SKIP();
-    }
-
     const std::filesystem::path split_2x2_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto";
@@ -417,12 +415,6 @@ TEST(MultiHost, TestSplit2x2Fabric1DSanity) {
 }
 
 TEST(MultiHost, TestBigMesh2x4ControlPlaneInit) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
-        tt::tt_metal::ClusterType::N300_2x2) {
-        log_info(tt::LogTest, "This test is only for N300 2x2");
-        GTEST_SKIP();
-    }
-
     const std::filesystem::path big_mesh_2x4_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.textproto";
@@ -437,12 +429,6 @@ TEST(MultiHost, TestBigMesh2x4ControlPlaneInit) {
 }
 
 TEST(MultiHost, TestBigMesh2x4Fabric2DSanity) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
-        tt::tt_metal::ClusterType::N300_2x2) {
-        log_info(tt::LogTest, "This test is only for N300 2x2");
-        GTEST_SKIP();
-    }
-
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
@@ -465,12 +451,6 @@ TEST(MultiHost, TestBigMesh2x4Fabric2DSanity) {
 }
 
 TEST(MultiHost, TestBigMesh2x4Fabric1DSanity) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
-        tt::tt_metal::ClusterType::N300_2x2) {
-        log_info(tt::LogTest, "This test is only for N300 2x2");
-        GTEST_SKIP();
-    }
-
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
@@ -509,6 +489,9 @@ TEST(MultiHost, Test32x4QuadGalaxyControlPlaneInit) {
         quad_galaxy_mesh_graph_desc_path.string(),
         tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+    expect_galaxy_corner_folding_check(*control_plane);
 
     check_asic_mapping_against_golden("Test32x4QuadGalaxyControlPlaneInit");
 }
@@ -673,6 +656,8 @@ TEST(MultiHost, TestQuadGalaxyControlPlaneInit) {
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+
+    expect_galaxy_corner_folding_check(*control_plane);
 
     check_asic_mapping_against_golden("TestQuadGalaxyControlPlaneInit");
 }
@@ -1155,6 +1140,42 @@ TEST(MultiHost, T3K2x2AssignZDirectionFabric2DSanity) {
     EXPECT_GT(z_channel_count, 0) << "Expected Z channels for intermesh connections with assign_z_direction";
 }
 
+TEST(MultiHost, TestDual4x8ZDirectionFallbackControlPlaneInit) {
+    // Dual 4x8 galaxies (c02u08, c03u02) - Z-only connections between them.
+    // MGD has no assign_z_direction; fallback to Z when NESW runs out.
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "Requires UBB galaxy (dual 4x8 cluster)";
+    }
+    if (*tt::tt_metal::MetalContext::instance().full_world_distributed_context().size() != 2) {
+        GTEST_SKIP() << "Requires 2 ranks (dual 4x8)";
+    }
+
+    const std::filesystem::path dual_4x8_z_fallback_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_4x8_z_fallback_mesh_graph_descriptor.textproto";
+    auto control_plane = make_control_plane(
+        dual_4x8_z_fallback_mesh_graph_desc_path.string(),
+        tt::tt_fabric::FabricConfig::FABRIC_2D,
+        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+
+    EXPECT_FALSE(control_plane->get_mesh_graph().should_assign_z_direction(MeshId{0}, MeshId{1}));
+
+    const auto& intermesh_connections = get_all_intermesh_connections(*control_plane);
+    EXPECT_GT(intermesh_connections.size(), 0);
+
+    size_t z_count = 0;
+    for (const auto& [src, dst] : intermesh_connections) {
+        auto dir = control_plane->get_forwarding_direction(src, dst);
+        EXPECT_TRUE(dir.has_value());
+        if (dir == RoutingDirection::Z) {
+            z_count++;
+        }
+    }
+    EXPECT_GT(z_count, 0) << "Expected Z-direction fallback (physical links are Z-only)";
+}
+
 TEST(MultiHost, TestBHBlitzPipelineControlPlaneInit) {
     const std::filesystem::path bh_blitz_pipeline_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
@@ -1219,6 +1240,9 @@ TEST(MultiHost, TestTriplePod16x8QuadBHGalaxyControlPlaneInit) {
         tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+
+    expect_galaxy_corner_folding_check(*control_plane);
+
     check_asic_mapping_against_golden("TestTriplePod16x8QuadBHGalaxyControlPlaneInit");
 }
 

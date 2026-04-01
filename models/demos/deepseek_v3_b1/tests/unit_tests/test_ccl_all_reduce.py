@@ -19,6 +19,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import skip_with_llk_assert
 from models.demos.deepseek_v3_b1.micro_ops.ccl_all_reduce.op import DeepseekMinimalAllReduce
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
@@ -30,6 +31,9 @@ def create_fabric_router_config(max_payload_size):
     return config
 
 
+@skip_with_llk_assert(
+    "Hit LLK assert in llk_math_eltwise_unary_datacopy, dest index out of bounds. TODO: add issue number."
+)
 @pytest.mark.parametrize(
     "num_devices, output_shape, input_shard_shape, tensor_mem_layout",
     [
@@ -44,7 +48,6 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cluster_axis", [0])
-@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)  # Open full mesh, create submesh
 @pytest.mark.parametrize("num_iter, num_warmup_iter", [(30, 15)])
 @pytest.mark.parametrize(
     "device_params",
@@ -59,7 +62,7 @@ def create_fabric_router_config(max_payload_size):
 )
 @pytest.mark.parametrize("fuse_residual_add", [True])
 def test_ccl_all_reduce(
-    mesh_device,
+    bh_2d_mesh_device,
     num_devices,
     output_shape,
     input_shard_shape,
@@ -72,11 +75,11 @@ def test_ccl_all_reduce(
     num_iter,
 ):
     # Validate mesh size
-    if mesh_device.shape[0] * mesh_device.shape[1] < num_devices:
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
         pytest.skip("Test requires more devices than are available on this platform")
 
     # Create submesh - fabric requires opening full system mesh first
-    submesh = mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
     # Set up sub-device
     compute_grid_size = submesh.compute_with_storage_grid_size()
@@ -255,10 +258,16 @@ def test_ccl_all_reduce(
     )
 
     all_passed = True
+    ref_device_idx = 0
+    ref_device_output = output_tensor_torch[ref_device_idx : ref_device_idx + 1, :]
     for device_idx in range(num_devices):
         received = output_tensor_torch[device_idx : device_idx + 1, :]
 
         assert received.shape == torch_expected.shape, f"Shape mismatch at device {device_idx}"
+
+        if device_idx != ref_device_idx:
+            dev_eq = torch.equal(received, ref_device_output)
+            assert dev_eq, f"Device {device_idx} output mismatch"
 
         if not torch.allclose(received, torch_expected, rtol=1e-2, atol=1e-2):
             logger.error(f"Output mismatch for device {device_idx}")

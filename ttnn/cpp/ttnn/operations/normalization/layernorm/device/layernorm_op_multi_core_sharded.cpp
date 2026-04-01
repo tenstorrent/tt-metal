@@ -249,7 +249,9 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         },
         operation_attributes.program_config);
 
-    uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / TILE_WIDTH;
+    const uint32_t tile_width = a.tensor_spec().tile().get_width();
+
+    uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / tile_width;
     bool skip_write_back = output.shard_spec().value() == a.shard_spec().value();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -285,8 +287,8 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     // tensor shape
     const auto& shape = a.padded_shape();
     uint32_t K = shape[-1];
-    uint32_t Kt = K / TILE_WIDTH;
-    uint32_t block_w = block_wt * TILE_WIDTH;
+    uint32_t Kt = K / tile_width;
+    uint32_t block_w = block_wt * tile_width;
 
     // Compute grid and worker distribution using helper structs
     auto grid = GridParams::compute(a, block_ht, device->compute_with_storage_grid_size());
@@ -319,7 +321,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     uint32_t post_all_gather_stats_block_tiles = 1;
     uint32_t num_distributed_devices = 1;
     if (is_post_all_gather && stats.has_value()) {
-        post_all_gather_stats_block_tiles = stats.value().padded_shape()[-1] / TILE_WIDTH;
+        post_all_gather_stats_block_tiles = stats.value().padded_shape()[-1] / tile_width;
         num_distributed_devices = post_all_gather_stats_block_tiles / pre_all_gather_stats_block_tiles;
     }
 
@@ -441,15 +443,12 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
                                ? beta.value().padded_shape()[-1] * beta.value().element_size()
                                : 0,
         .eps = eps,
-        .per_core_recip_lut_size = block_w};
+        .per_core_recip_lut_size = block_w,
+        .tile_width = tile_width};
     auto compile_time_args = CompileTimeArgs::build(ct_ctx);
 
     // Pack eps for later use
-    union {
-        float f;
-        uint32_t u;
-    } e{};
-    e.f = eps;
+    uint32_t eps_u = std::bit_cast<uint32_t>(eps);
 
     // Build runtime args using helper
     const auto& cores = corerange_to_cores(core_ranges.all_cores, core_ranges.all_cores.num_cores(), grid.row_wise);
@@ -485,7 +484,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .packed_cinv_value = pack_two_bfloat16_into_uint32({bfloat_cinv, bfloat_cinv}),
         .packed_cinv_value_one = pack_two_bfloat16_into_uint32({bfloat_cinv_one, bfloat_cinv_one}),
         .packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv, bfloat_winv}),
-        .eps_u = e.u,
+        .eps_u = eps_u,
         .gamma_dram_addr = gamma_dram_addr,
         .beta_dram_addr = beta_dram_addr,
         .single_tile_size = single_tile_size,

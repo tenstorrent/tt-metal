@@ -2,10 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <core/ttnn_all_includes.hpp>
 #include <iostream>
 
+#include "tt-metalium/bfloat16.hpp"
+#include "tt-metalium/host_api.hpp"
 #include "ttml.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device;
 

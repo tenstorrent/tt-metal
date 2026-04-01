@@ -6,6 +6,7 @@
 // See: https://docs.github.com/en/rest/actions/workflow-runs?apiVersion=2022-11-28
 
 // These are all node.js modules needed for the action to work
+// dummy comment to trigger a github change
 const core = require('@actions/core'); // Core utilities for I/O
 const github = require('@actions/github'); // GitHub API client
 const fs = require('fs'); // File system operations
@@ -206,11 +207,23 @@ async function run() {
     // This identifies NEW failing jobs in pipelines that were already failing
     await detectJobLevelRegressions(stayedFailingDetails, regressedDetails, errorSnippetsCache, github.context);
 
-    // upload the changes json to the artifact space
+    // Persist generated payloads to files so downstream jobs can consume them
+    // without pushing large JSON strings through workflow outputs/env vars.
     const outputDir = process.env.GITHUB_WORKSPACE || process.cwd();
     const statusChangesPath = path.join(outputDir, 'workflow-status-changes.json');
+    const failedWorkflowsPath = path.join(outputDir, 'failed-workflows.json');
+    const regressedWorkflowsPath = path.join(outputDir, 'regressed-workflows.json');
+    const alertAllMessagePath = path.join(outputDir, 'alert-all-message.txt');
+
     fs.writeFileSync(statusChangesPath, JSON.stringify(changes));
+    fs.writeFileSync(failedWorkflowsPath, JSON.stringify(failedWorkflows));
+    fs.writeFileSync(regressedWorkflowsPath, JSON.stringify(regressedDetails));
+    fs.writeFileSync(alertAllMessagePath, alertAllMessage || '');
+
     core.setOutput('status_changes_path', statusChangesPath);
+    core.setOutput('failed_workflows_path', failedWorkflowsPath);
+    core.setOutput('regressed_workflows_path', regressedWorkflowsPath);
+    core.setOutput('alert_all_message_path', alertAllMessagePath);
 
     // Build report sections
     let regressionsSection = '';
@@ -229,10 +242,9 @@ async function run() {
       .join('\n');
 
     // Set outputs
-    core.setOutput('failed_workflows', JSON.stringify(failedWorkflows));
     core.setOutput('report', finalReport);
-    core.setOutput('alert_all_message', alertAllMessage || '');
-    core.setOutput('regressed_workflows', JSON.stringify(regressedDetails));
+    core.setOutput('has_failed_workflows', failedWorkflows.length > 0 ? 'true' : 'false');
+    core.setOutput('has_regressions', regressedDetails.length > 0 ? 'true' : 'false');
 
     await core.summary.addRaw(finalReport).write();
 

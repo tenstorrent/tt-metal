@@ -4,7 +4,6 @@
 
 #include "layernorm_op.hpp"
 
-#include <core/ttnn_all_includes.hpp>
 #include <cstdint>
 #include <optional>
 
@@ -15,6 +14,13 @@
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/moreh/moreh_layer_norm/moreh_layer_norm.hpp"
+#include "ttnn/operations/moreh/moreh_layer_norm_backward/moreh_layer_norm_backward.hpp"
+#include "ttnn/operations/moreh/moreh_mean/moreh_mean.hpp"
+#include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 
 namespace ttml::ops {
 
@@ -70,8 +76,7 @@ autograd::TensorPtr layernorm_moreh(
         beta->add_grad(res[2].value());
     };
 
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
 
     return out;
 }
@@ -102,8 +107,11 @@ autograd::TensorPtr layernorm(
         }
     };
 
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    if (beta_opt.has_value()) {
+        out->set_node(autograd::add_backward_node(std::move(grad), out, tensor, gamma, beta_opt.value()));
+    } else {
+        out->set_node(autograd::add_backward_node(std::move(grad), out, tensor, gamma));
+    }
 
     return out;
 }
@@ -210,8 +218,11 @@ autograd::TensorPtr composite_layernorm(
         }
     };
 
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    if (beta_opt.has_value()) {
+        out->set_node(autograd::add_backward_node(std::move(grad), out, tensor, gamma, beta_opt.value()));
+    } else {
+        out->set_node(autograd::add_backward_node(std::move(grad), out, tensor, gamma));
+    }
 
     return out;
 }

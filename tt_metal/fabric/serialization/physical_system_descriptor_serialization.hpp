@@ -17,6 +17,10 @@ namespace tt::tt_metal::distributed::multihost {
 class DistributedContext;
 }
 
+namespace tt::fabric::proto {
+class PhysicalSystemDescriptor;
+}  // namespace tt::fabric::proto
+
 namespace tt::tt_metal {
 
 class PhysicalSystemDescriptor;
@@ -26,6 +30,10 @@ void emit_physical_system_descriptor_to_text_proto(
 
 // Serialize PhysicalSystemDescriptor to protobuf binary format (byte vector)
 std::vector<uint8_t> serialize_physical_system_descriptor_to_bytes(const PhysicalSystemDescriptor& descriptor);
+
+// Deserialize from protobuf object to PhysicalSystemDescriptor (protobuf)
+PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_proto(
+    const tt::fabric::proto::PhysicalSystemDescriptor& psd_proto);
 
 // Deserialize from protobuf binary format to PhysicalSystemDescriptor (byte vector)
 PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_bytes(const std::vector<uint8_t>& data);

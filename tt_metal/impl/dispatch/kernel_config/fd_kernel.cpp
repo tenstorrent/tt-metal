@@ -8,8 +8,8 @@
 #include <host_api.hpp>
 #include <utility>
 #include <variant>
+#include "impl/buffers/semaphore.hpp"
 
-#include "data_types.hpp"
 #include "device.hpp"
 #include "dispatch.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"

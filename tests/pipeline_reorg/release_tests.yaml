@@ -673,16 +673,6 @@
   team: models
   model-name: whisper
 
-- name: whisper P150 nightly
-  cmd: |
-    pytest models/demos/audio/whisper/demo/demo.py -k "nightly"
-  skus:
-    bh_p150_perf:
-      timeout: 84
-  owner_id: U05RWH3QUPM # Salar Hosseini
-  team: models
-  model-name: whisper
-
 - name: unet-shallow P150 performance
   cmd: |
     pytest -sv models/experimental/functional_unet/tests/test_unet_perf.py -k "test_unet_trace_perf and not test_unet_trace_perf_multi_device"
@@ -707,7 +697,7 @@
   cmd: |
     HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "stress" --max_seq_len 131072
   skus:
-    bh_p150_perf:
+    bh_p150:
       timeout: 84
   owner_id: U03PUAKE719 # Miguel Tairum
   team: models

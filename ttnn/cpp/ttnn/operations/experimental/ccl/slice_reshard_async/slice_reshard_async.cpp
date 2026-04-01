@@ -13,9 +13,9 @@
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/experimental/ccl/slice_reshard_async/device/slice_reshard_async_device_operation.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteSliceReshardAsync::invoke(
+ttnn::Tensor slice_reshard_async(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
     uint32_t output_dim_offset,
@@ -40,4 +40,4 @@ ttnn::Tensor ExecuteSliceReshardAsync::invoke(
         usable_topology);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

@@ -5,13 +5,14 @@
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
 #include "bcast_device_operation_types.hpp"
 #include "bcast_multi_core_h_program_factory.hpp"
 #include "bcast_sharded_h_program_factory.hpp"
 #include "bcast_sharded_h_optimised_program_factory.hpp"
 #include "bcast_multi_core_w_program_factory.hpp"
 #include "bcast_multi_core_hw_program_factory.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
 
@@ -39,7 +40,7 @@ struct BcastDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-    static tt::stl::hash::hash_t compute_program_hash(
+    static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(

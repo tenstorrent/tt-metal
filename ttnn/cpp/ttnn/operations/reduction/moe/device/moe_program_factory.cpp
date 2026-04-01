@@ -5,7 +5,6 @@
 #include "ttnn/operations/reduction/moe/device/moe_program_factory.hpp"
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -47,12 +46,15 @@ MoeProgramFactory::cached_program_t MoeProgramFactory::create(
     auto* expert_mask_buffer = expert_mask_tensor.buffer();
     auto* out_buffer = output_tensor.buffer();
 
-    uint32_t num_out_tiles = output_tensor.physical_volume() / tt::constants::TILE_HW;
+    const uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
+    const uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
+    const uint32_t tile_hw = input_tensor.tensor_spec().tile().get_tile_hw();
+    uint32_t num_out_tiles = output_tensor.physical_volume() / tile_hw;
     uint32_t scale_tiles = 1;
 
     auto input_shape = input_tensor.padded_shape();
-    uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tt::constants::TILE_HEIGHT;
-    uint32_t Wt = input_shape[3] / tt::constants::TILE_WIDTH;
+    uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tile_height;
+    uint32_t Wt = input_shape[3] / tile_width;
     // for streaming in input
     uint32_t num_cb_unit = 2;
     uint32_t cb_in_units = 2 * num_cb_unit;
@@ -200,7 +202,8 @@ MoeProgramFactory::cached_program_t MoeProgramFactory::create(
         (std::uint32_t)std::log2(k),
         (std::uint32_t)std::log2(Wt),
         cb_cur_max_index,
-        cb_cur_sum_index};
+        cb_cur_sum_index,
+        tile_width};
 
     tt::tt_metal::CreateKernel(
         program,

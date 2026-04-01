@@ -17,6 +17,7 @@
 
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
 // clang-format on
 
@@ -158,6 +159,7 @@ int main() {
         record_stack_usage(stack_free);
 #endif
         WAYPOINT("D");
+        DEVICE_PRINT_KERNEL_FINISHED();
 
         signal_subordinate_erisc_completion();
     }

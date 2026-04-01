@@ -17,6 +17,8 @@
 void kernel_main() {
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_dim = get_compile_time_arg_val(1);
+    const uint32_t approx_arg = get_arg_val<uint32_t>(0);
+    const bool use_approx = (approx_arg != 0u);
 
     constexpr auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_output = tt::CBIndex::c_2;
@@ -32,12 +34,19 @@ void kernel_main() {
             copy_tile_to_dst_init_short(cb_input);
             copy_tile(cb_input, 0, 0);
 
-            exp_tile_init<1u>();
-            exp_tile<1u>(0);
-            log1p_tile_init<true>();
-            log1p_tile<true>(0);
-            tanh_tile_init();
-            tanh_tile(0);
+            if (use_approx) {
+                exp_tile_init<true>();
+                exp_tile<true>(0);
+                log1p_tile_init<true>();
+                log1p_tile<true>(0);
+            } else {
+                exp_tile_init<false, true>();
+                exp_tile<false, true>(0);
+                log1p_tile_init<false>();
+                log1p_tile<false>(0);
+            }
+            tanh_tile_init<false>();
+            tanh_tile<false>(0);
 
 #ifdef INP_FLOAT32
             copy_tile(cb_input, 0, 1);

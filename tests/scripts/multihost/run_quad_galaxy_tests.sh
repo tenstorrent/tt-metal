@@ -82,7 +82,7 @@ setup_dual_galaxy_env() {
         exit 1
     fi
 
-    export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528"
+    export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized"
     _resolve_deepseekv3_cache
     export MESH_DEVICE="DUAL"
 }
@@ -105,9 +105,10 @@ setup_quad_galaxy_env() {
         exit 1
     fi
 
-    export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528"
+    export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized"
     _resolve_deepseekv3_cache
     export MESH_DEVICE="QUAD"
+    export USE_TORUS_MODE=1
 }
 
 # Compute pytest --timeout value.
@@ -228,27 +229,32 @@ run_quad_teacher_forced_test() {
 ###############################################################################
 
 run_dual_demo_test() {
-    fail=0
     setup_dual_galaxy_env
     local timeout=$(_demo_timeout 2400)
 
-    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[dual_full_demo]' 2>&1 | tee generated/artifacts/dual_demo_output.log" ; fail+=$?
+    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[dual_full_demo]' 2>&1 | tee generated/artifacts/dual_demo_output.log"
+}
 
-    if [[ $fail -ne 0 ]]; then
-        exit 1
-    fi
+run_dual_demo_mtp_test() {
+    setup_dual_galaxy_env
+    local timeout=$(_demo_timeout 2400)
+
+    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_mtp_demo.py 2>&1 | tee generated/artifacts/dual_demo_mtp_output.log"
+
 }
 
 run_quad_demo_test() {
-    fail=0
     setup_quad_galaxy_env
     local timeout=$(_demo_timeout 3600)
 
-    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[quad_full_demo]' 2>&1 | tee generated/artifacts/quad_demo_output.log" ; fail+=$?
+    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[quad_full_demo]' 2>&1 | tee generated/artifacts/quad_demo_output.log"
+}
 
-    if [[ $fail -ne 0 ]]; then
-        exit 1
-    fi
+run_quad_demo_mtp_test() {
+    setup_quad_galaxy_env
+    local timeout=$(_demo_timeout 3600)
+
+    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_mtp_demo.py 2>&1 | tee generated/artifacts/quad_demo_mtp_output.log"
 }
 
 ###############################################################################
@@ -256,27 +262,17 @@ run_quad_demo_test() {
 ###############################################################################
 
 run_dual_demo_stress_test() {
-    fail=0
     setup_dual_galaxy_env
     local timeout=$(_demo_timeout 5400)
 
-    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[dual_stress_demo]' 2>&1 | tee generated/artifacts/dual_demo_stress_output.log" ; fail+=$?
-
-    if [[ $fail -ne 0 ]]; then
-        exit 1
-    fi
+    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[dual_stress_demo]' 2>&1 | tee generated/artifacts/dual_demo_stress_output.log"
 }
 
 run_quad_demo_stress_test() {
-    fail=0
     setup_quad_galaxy_env
     local timeout=$(_demo_timeout 5400)
 
-    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[quad_stress_demo]' 2>&1 | tee generated/artifacts/quad_demo_stress_output.log" ; fail+=$?
-
-    if [[ $fail -ne 0 ]]; then
-        exit 1
-    fi
+    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[quad_stress_demo]' 2>&1 | tee generated/artifacts/quad_demo_stress_output.log"
 }
 
 ###############################################################################
@@ -288,6 +284,7 @@ run_dual_deepseekv3_integration_tests() {
     run_dual_deepseekv3_module_tests
     run_dual_teacher_forced_test
     run_dual_demo_test
+    run_dual_demo_mtp_test
     run_dual_demo_stress_test
 }
 
@@ -296,6 +293,7 @@ run_quad_deepseekv3_integration_tests() {
     run_quad_deepseekv3_module_tests
     run_quad_teacher_forced_test
     run_quad_demo_test
+    run_quad_demo_mtp_test
     run_quad_demo_stress_test
 }
 
@@ -361,8 +359,14 @@ main() {
         "dual_demo")
             run_dual_demo_test
             ;;
+        "dual_demo_mtp")
+            run_dual_demo_mtp_test
+            ;;
         "quad_demo")
             run_quad_demo_test
+            ;;
+        "quad_demo_mtp")
+            run_quad_demo_mtp_test
             ;;
         "dual_demo_stress")
             run_dual_demo_stress_test
@@ -381,7 +385,7 @@ main() {
             ;;
         *)
             echo "Unknown test function: $test_function" 1>&2
-            echo "Available options: unit_tests, dual_deepseekv3_unit_tests, quad_deepseekv3_unit_tests, dual_deepseekv3_module_tests, quad_deepseekv3_module_tests, dual_teacher_forced, quad_teacher_forced, dual_demo, quad_demo, dual_demo_stress, quad_demo_stress, dual_deepseekv3_integration_tests, quad_deepseekv3_integration_tests, all" 1>&2
+            echo "Available options: unit_tests, dual_deepseekv3_unit_tests, quad_deepseekv3_unit_tests, dual_deepseekv3_module_tests, quad_deepseekv3_module_tests, dual_teacher_forced, quad_teacher_forced, dual_demo, dual_demo_mtp, quad_demo, quad_demo_mtp, dual_demo_stress, quad_demo_stress, dual_deepseekv3_integration_tests, quad_deepseekv3_integration_tests, all" 1>&2
             exit 1
             ;;
     esac

@@ -5,9 +5,12 @@
 #pragma once
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
 
 namespace tt::tt_metal {
+
+// Forward declaration
+enum NOC : uint8_t;
+
 class IDevice;
 }  // namespace tt::tt_metal
 

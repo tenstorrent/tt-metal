@@ -59,6 +59,7 @@ from triage import (
     log_check_risc,
     triage_field,
     run_script,
+    ScriptPriority,
 )
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
@@ -67,6 +68,7 @@ from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "operation_runtime_map"],
+    priority=ScriptPriority.HIGH,
 )
 
 # Core filtering

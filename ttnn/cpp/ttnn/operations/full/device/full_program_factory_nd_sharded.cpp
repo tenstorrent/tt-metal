@@ -38,11 +38,22 @@ FullNDShardedProgramFactory::cached_program_t FullNDShardedProgramFactory::creat
                                     // with a shard to use as our compute cores.
         auto all_dram_workers =
             output.device()->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
-        ordered_cores_with_data.assign(all_dram_workers.begin(), all_dram_workers.begin() + num_compute_cores);
+        const auto& nd_shard_spec = output.nd_shard_spec().value();
+        bool is_row_major = (nd_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+        auto shard_grid_cores = corerange_to_cores(
+            nd_shard_spec.grid, num_compute_cores, is_row_major);  // Getting the DRAM banks with shards in order.
+        ordered_cores_with_data.reserve(shard_grid_cores.size());
+        for (const auto& dram_core : shard_grid_cores) {
+            uint32_t dram_channel =
+                output.device()->dram_channel_from_logical_core(dram_core);  // For each DRAM coord, get its bank ID.
+            ordered_cores_with_data.push_back(
+                all_dram_workers[dram_channel]);  // Get the worker core for the DRAM bank and add it to the vector of
+                                                  // worker cores.
+        }
     } else {
         ordered_cores_with_data = distribution_spec.cores_with_data();
     }
-    const auto& compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(ordered_cores_with_data));
+    const auto& compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
     const auto& aligned_page_size = output.buffer()->aligned_page_size();
     const auto& page_size = output.buffer()->page_size();
 

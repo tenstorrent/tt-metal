@@ -64,6 +64,23 @@ Tensor global_avg_pool2d(
     output = ttnn::experimental::view(output, output_shape);
 
     output = pool_2d<PoolType::AVG>(output, memory_config, output_dtype);
+
+    // Fix the output shape to preserve the logical (unpadded) channel dimension
+    // The pool operation may have padded the channel dimension to tile boundaries,
+    // but the output should maintain the original logical channel count
+    auto output_padded_shape = output.padded_shape();
+
+    // Get the original logical channel count from the input
+    uint32_t logical_channels = logical_shape[-1];
+
+    // Create the correct output shape: [N, 1, 1, C] where C is the logical channel count
+    // Keep the padded shape for tile alignment
+    ttnn::Shape correct_logical_shape({output_padded_shape[0], 1, 1, logical_channels});
+    ttnn::Shape correct_padded_shape({output_padded_shape[0], 1, 1, output_padded_shape[3]});
+
+    // Use view to set the correct logical shape while keeping the same padded shape
+    output = ttnn::experimental::view(output, correct_logical_shape, correct_padded_shape);
+
     return output;
 }
 

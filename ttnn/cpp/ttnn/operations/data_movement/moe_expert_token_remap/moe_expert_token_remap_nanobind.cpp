@@ -10,11 +10,12 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 #include "moe_expert_token_remap.hpp"
+#include "device/moe_expert_token_remap_device_operation.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -41,37 +42,19 @@ Returns:
 
     )doc";
 
-    using OperationType = decltype(ttnn::moe_expert_token_remap);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"moe_expert_token_remap">(
         mod,
-        ttnn::moe_expert_token_remap,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& topk_tensor,
-               const ttnn::Tensor& expert_mapping_tensor,
-               const ttnn::Tensor& expert_metadata_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& optional_output_mapping_tensor,
-               const std::optional<ttnn::Tensor>& optional_output_reduced_tensor,
-               const uint32_t reduction_size) {
-                return self(
-                    topk_tensor,
-                    expert_mapping_tensor,
-                    expert_metadata_tensor,
-                    memory_config,
-                    optional_output_mapping_tensor,
-                    optional_output_reduced_tensor,
-                    reduction_size);
-            },
+        ttnn::overload_t(
+            &ttnn::moe_expert_token_remap,
             nb::arg("topk_tensor").noconvert(),
-            nb::arg("expert_indices_tensor").noconvert(),
             nb::arg("expert_mapping_tensor").noconvert(),
+            nb::arg("expert_metadata_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("memory_config") = std::nullopt,
             nb::arg("optional_output_mapping_tensor") = std::nullopt,
             nb::arg("optional_output_reduced_tensor") = std::nullopt,
-            nb::arg("reduction_size") = ExecuteMoeExpertTokenRemap::REDUCTION_SIZE});
+            nb::arg("reduction_size") = MoeExpertTokenRemapDeviceOperation::REDUCTION_SIZE));
 }
 
 }  // namespace ttnn::operations::data_movement::detail

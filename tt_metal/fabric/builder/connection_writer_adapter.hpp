@@ -48,10 +48,6 @@ struct SenderWorkerAdapterSpec {
  *    - where to store our noc x/y on the consumer core
  *    - where to signal the consumer core to establish a connection
  *    - etc
- *
- * There is an abstract base class because depending on how the channels are instantiated
- * (static-sized vs elastic), the adapter will have different implementations and relevant
- * information. For example, credit schemes and addresses are different for each type of channel.
  */
 class ChannelConnectionWriterAdapter {
 public:

@@ -8,8 +8,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <utility>
+#include <string>
 #include <tuple>
 #include <ostream>
+
+#include <fmt/core.h>
 
 namespace tt::tt_metal {
 
@@ -55,6 +58,19 @@ private:
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Shape2D& size);
 
 }  // namespace tt::tt_metal
+
+// Out-of-line string conversion (defined in shape2d.cpp).
+namespace ttsl::fmt_detail {
+std::string to_string(const tt::tt_metal::Shape2D& size);
+}  // namespace ttsl::fmt_detail
+
+// Lightweight fmt::formatter – delegates to out-of-line to_string().
+template <>
+struct fmt::formatter<tt::tt_metal::Shape2D> : fmt::formatter<std::string_view> {
+    auto format(const tt::tt_metal::Shape2D& val, fmt::format_context& ctx) const {
+        return fmt::formatter<std::string_view>::format(ttsl::fmt_detail::to_string(val), ctx);
+    }
+};
 
 namespace std {
 template <>

@@ -7,7 +7,7 @@ from loguru import logger
 import torch
 import ttnn
 from models.common.utility_functions import skip_for_blackhole
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_rotary_embedding_llama import (
+from tests.ttnn.nightly.unit_tests.operations.experimental.test_rotary_embedding_llama import (
     run_test_rotary_embedding_llama,
 )
 
@@ -129,7 +129,7 @@ def test_rotary_embedding_llama_fused_qk_with_program_cache(
 
         cache_tensors.append(test_tensor)
 
-    num_ops = 5  # untilize cos/sin + embedding + fused_qk_rope + transpose + interleaved_to_sharded
+    num_ops = 4  # cos/sin + embedding + fused_qk_rope + transpose + interleaved_to_sharded
 
     if (batch * 2) % ttnn.TILE_SIZE != 0:
         num_ops += 1  # slice

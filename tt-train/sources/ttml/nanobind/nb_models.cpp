@@ -21,6 +21,7 @@
 #include "models/linear_regression.hpp"
 #include "models/llama.hpp"
 #include "models/mlp.hpp"
+#include "modules/linear_module.hpp"
 #include "modules/module_base.hpp"
 #include "modules/multi_layer_perceptron.hpp"
 #include "nb_export_enum.hpp"
@@ -109,7 +110,10 @@ void py_module_types(nb::module_& m, nb::module_& m_modules) {
         nb::class_<models::gpt2::Transformer, models::BaseTransformer>(py_gpt2_module, "GPT2Transformer");
     }
 
-    m.def_submodule("linear_regression");
+    {
+        auto py_linear_regression_module = m.def_submodule("linear_regression");
+        nb::class_<ttml::modules::LinearLayer, ttml::modules::ModuleBase>(py_linear_regression_module, "LinearLayer");
+    }
 
     // Distributed models: register classes so return types can be wrapped
     m.def_submodule("distributed");
@@ -155,9 +159,13 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
         "memory_efficient_runner",
         [](nb::callable fw_callable,
            const ttml::autograd::TensorPtr& input,
-           const std::optional<ttml::autograd::TensorPtr>& mask,
+           const ttml::autograd::TensorPtr& mask,
            nb::args args,
            nb::kwargs kwargs) {
+            std::optional<ttml::autograd::TensorPtr> mask_opt;
+            if (mask) {
+                mask_opt = mask;
+            }
             auto fw_impl = [fw_callable, args, kwargs](
                                const ttml::autograd::TensorPtr& model_input,
                                const std::optional<ttml::autograd::TensorPtr>& model_mask) {
@@ -165,11 +173,11 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
                 nb::object tensor_obj = fw_callable(model_input, model_mask, *args, **kwargs);
                 return nb::cast<autograd::TensorPtr>(tensor_obj);
             };
-            return models::common::transformer::memory_efficient_runner(fw_impl, input, mask);
+            return models::common::transformer::memory_efficient_runner(fw_impl, input, mask_opt);
         },
         nb::arg("forward_impl"),
         nb::arg("input"),
-        nb::arg("mask"),
+        nb::arg("mask").none(),
         nb::arg("args") = nb::tuple(),
         nb::arg("kwargs") = nb::dict(),
         "Memory-efficient forward/backward runner with gradient checkpointing.");
@@ -223,6 +231,19 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
         auto py_gpt2 = static_cast<nb::class_<models::gpt2::Transformer, models::BaseTransformer>>(
             py_gpt2_module.attr("GPT2Transformer"));
         py_gpt2.def(nb::init<const models::gpt2::TransformerConfig&>());
+
+        // Explicit __call__ binding: GPT-2 overrides operator()(TensorPtr, optional<TensorPtr>)
+        // which does not match the two-arg (TensorPtr, TensorPtr) binding on ModuleBase.
+        py_gpt2.def(
+            "__call__",
+            [](models::gpt2::Transformer& self,
+               const ttml::autograd::TensorPtr& tensor,
+               const ttml::autograd::TensorPtr& mask) {
+                return self(tensor, std::optional<ttml::autograd::TensorPtr>(mask));
+            },
+            nb::arg("tensor"),
+            nb::arg("mask"),
+            "Model forward pass with causal mask.");
     }
 
     {

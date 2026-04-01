@@ -6,17 +6,16 @@
 
 #include <optional>
 
-#include <fmt/format.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
 #include "indexed_fill.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
 void bind_indexed_fill(nb::module_& mod) {
-    auto doc = fmt::format(
+    const auto* doc =
         R"doc(
             Replaces batch of input in input_b denoted by batch_ids into input_a.
 
@@ -31,27 +30,19 @@ void bind_indexed_fill(nb::module_& mod) {
 
             Returns:
                 ttnn.Tensor: the output tensor.
-        )doc",
-        ttnn::indexed_fill.base_name());
+        )doc";
 
-    using OperationType = decltype(ttnn::indexed_fill);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"indexed_fill">(
         mod,
-        ttnn::indexed_fill,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& batch_id,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               int64_t dim) { return self(batch_id, input_tensor_a, input_tensor_b, memory_config, dim); },
+        ttnn::overload_t(
+            &ttnn::indexed_fill,
             nb::arg("batch_id").noconvert(),
             nb::arg("input_tensor_a").noconvert(),
             nb::arg("input_tensor_b").noconvert(),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("dim") = 0});
+            nb::arg("dim") = 0));
 }
 
 }  // namespace ttnn::operations::data_movement::detail

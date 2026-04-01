@@ -84,7 +84,8 @@ MassagedConcat build_unsqueeze_concat(int input_rank, const MemoryConfig& output
         .operation = [output_memory_config](
                          const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> ttnn::Tensor {
             const std::vector<ttnn::Tensor>& itensors(tensors);
-            return concat_impl(itensors, dim, groups, output_memory_config, std::nullopt);
+            return ttnn::operations::data_movement::concat_impl(
+                itensors, dim, groups, output_memory_config, std::nullopt);
         }});
 }
 
@@ -176,7 +177,8 @@ MassagedConcat build_prepost_transpose_concat(const MemoryConfig& output_memory_
         .operation = [output_memory_config](
                          const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> ttnn::Tensor {
             const std::vector<ttnn::Tensor>& itensors(tensors);
-            return concat_impl(itensors, dim, groups, output_memory_config, std::nullopt);
+            return ttnn::operations::data_movement::concat_impl(
+                itensors, dim, groups, output_memory_config, std::nullopt);
         }});
 }
 
@@ -248,12 +250,17 @@ MassagedConcat build_unsqueeze_squeeze_1D_rm_unaligned_concat(const MemoryConfig
         .operation = [output_memory_config](
                          const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> ttnn::Tensor {
             const std::vector<ttnn::Tensor>& itensors(tensors);
-            return concat_impl(itensors, dim, groups, output_memory_config, std::nullopt);
+            return ttnn::operations::data_movement::concat_impl(
+                itensors, dim, groups, output_memory_config, std::nullopt);
         }});
 }
 
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn {
+
 // Wrapper for TTDNN
-ttnn::Tensor ConcatOperation::invoke(
+ttnn::Tensor concat(
     const std::vector<ttnn::Tensor>& input_tensors,
     int dim,
     const std::optional<MemoryConfig>& memory_config,
@@ -326,12 +333,15 @@ ttnn::Tensor ConcatOperation::invoke(
     // which don't currently support sub_core_grids
     if (sub_core_grids.has_value() && !first_tensor.is_sharded() &&
         (mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED)) {
-        return concat_impl(input_tensors, dim, groups, mem_config, sub_core_grids);
+        return ttnn::operations::data_movement::concat_impl(input_tensors, dim, groups, mem_config, sub_core_grids);
     }
 
-    auto untilize_rm_retilize_concat = build_untilize_rm_retilize_concat(mem_config, logical_output_shape);
-    auto non_aligned_last_dim_concat = build_non_aligned_last_dim_concat(input_tensors, mem_config);
-    auto unsqueeze_squeeze_1D_concat = build_unsqueeze_squeeze_1D_rm_unaligned_concat(mem_config);
+    auto untilize_rm_retilize_concat =
+        ttnn::operations::data_movement::build_untilize_rm_retilize_concat(mem_config, logical_output_shape);
+    auto non_aligned_last_dim_concat =
+        ttnn::operations::data_movement::build_non_aligned_last_dim_concat(input_tensors, mem_config);
+    auto unsqueeze_squeeze_1D_concat =
+        ttnn::operations::data_movement::build_unsqueeze_squeeze_1D_rm_unaligned_concat(mem_config);
     auto massaged_concat =
         untilize_rm_retilize_concat.sequence(unsqueeze_squeeze_1D_concat.sequence(non_aligned_last_dim_concat));
 
@@ -340,4 +350,4 @@ ttnn::Tensor ConcatOperation::invoke(
     return res;
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

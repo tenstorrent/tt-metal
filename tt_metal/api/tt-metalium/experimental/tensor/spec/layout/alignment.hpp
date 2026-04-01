@@ -4,6 +4,10 @@
 
 #pragma once
 
+#include <string>
+
+#include <fmt/core.h>
+
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/shape_base.hpp>
 
@@ -38,3 +42,16 @@ public:
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Alignment& alignment);
 
 }  // namespace tt::tt_metal
+
+// Out-of-line string conversion (defined in alignment.cpp).
+namespace ttsl::fmt_detail {
+std::string to_string(const tt::tt_metal::Alignment& alignment);
+}  // namespace ttsl::fmt_detail
+
+// Lightweight fmt::formatter – delegates to out-of-line to_string().
+template <>
+struct fmt::formatter<tt::tt_metal::Alignment> : fmt::formatter<std::string_view> {
+    auto format(const tt::tt_metal::Alignment& val, fmt::format_context& ctx) const {
+        return fmt::formatter<std::string_view>::format(ttsl::fmt_detail::to_string(val), ctx);
+    }
+};

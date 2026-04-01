@@ -7,16 +7,16 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement {
+namespace ttnn {
 
-ttnn::Tensor IndexedFillOperation::invoke(
-    const ttnn::Tensor& batch_id,
-    const ttnn::Tensor& input_tensor_a,
-    const ttnn::Tensor& input_tensor_b,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
+Tensor indexed_fill(
+    const Tensor& batch_id,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<MemoryConfig>& memory_config,
     int64_t dim) {
     auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
     return ttnn::prim::indexed_fill(batch_id, input_tensor_a, input_tensor_b, output_memory_config, dim);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

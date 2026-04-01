@@ -250,8 +250,8 @@ static MemoryConfig resolve_mem_config_actual(
 
 DataType TernaryDeviceOperation::operation_attributes_t::get_dtype() const { return dtype.value_or(input_dtype); }
 
-tt::stl::hash::hash_t TernaryDeviceOperation::operation_attributes_t::to_hash() const {
-    return tt::stl::hash::hash_objects_with_default_seed(
+ttsl::hash::hash_t TernaryDeviceOperation::operation_attributes_t::to_hash() const {
+    return ttsl::hash::hash_objects_with_default_seed(
         ternary_op_type,
         ternary_variant,
         broadcast_type,
@@ -482,7 +482,7 @@ Tensor TernaryDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor_a.device());
 }
 
-tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_a = tensor_args.input_tensor_a;
     const auto& input_b = tensor_args.input_tensor_b;
@@ -491,7 +491,7 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
     TernaryVariant variant = args.ternary_variant;
 
     TT_FATAL(is_device_tensor(input_a), "Unexpected Tensor type {}", input_a.storage_type());
-    tt::stl::hash::hash_t hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
+    ttsl::hash::hash_t hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
         args, input_a.dtype(), input_a.memory_config(), a_shape.volume());
 
     if (variant == TernaryVariant::TTT) {

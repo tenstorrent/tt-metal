@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "sort_nanobind.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -13,7 +14,6 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
-#include "ttnn-nanobind/decorators.hpp"
 #include "sort.hpp"
 
 namespace ttnn::operations::data_movement::detail {
@@ -68,28 +68,17 @@ void bind_sort_operation(nb::module_& mod) {
             - Interleaved: DRAM and L1
     )doc";
 
-    using OperationType = decltype(ttnn::sort);
-    bind_registered_operation(
+    ttnn::bind_function<"sort">(
         mod,
-        ttnn::sort,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const int8_t dim,
-               const bool descending,
-               const bool stable,
-               std::optional<std::tuple<ttnn::Tensor&, ttnn::Tensor&>> optional_output_tensors,
-               const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
-                return self(input_tensor, dim, descending, stable, memory_config, optional_output_tensors);
-            },
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("dim") = -1,
-            nb::arg("descending") = false,
-            nb::arg("stable") = false,
-            nb::kw_only(),
-            nb::arg("out") = nb::none(),
-            nb::arg("memory_config") = nb::none()});
+        &ttnn::sort,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("dim") = -1,
+        nb::arg("descending") = false,
+        nb::arg("stable") = false,
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("out") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement::detail

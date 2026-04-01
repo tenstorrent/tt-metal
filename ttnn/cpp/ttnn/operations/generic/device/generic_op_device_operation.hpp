@@ -8,10 +8,10 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "generic_op_program_factory.hpp"
 #include "generic_op_device_operation_types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::generic {
 
@@ -29,7 +29,7 @@ struct GenericOpDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     // Note: will either compute a program hash, or simply return user provided custom program hash
-    static tt::stl::hash::hash_t compute_program_hash(
+    static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };  // struct GenericOpDeviceOperation
 

@@ -36,14 +36,20 @@ inputs:
     required: false
 
 outputs:
-  failed_workflows:
-    description: 'JSON array of workflow names that have failed their latest run on the main branch'
   report:
     description: 'The generated workflow report in markdown format, containing workflow statistics and failure details'
-  regressed_workflows:
-    description: 'JSON array of objects {name, run_id, run_url, created_at} for workflows that regressed (success -> fail)'
-  alert_all_message:
-    description: 'Slack-ready alert message listing all currently failing workflows with owner mentions (set when alert-all=true)'
+  has_failed_workflows:
+    description: 'True when at least one tracked workflow is currently failing'
+  has_regressions:
+    description: 'True when at least one workflow regressed from passing to failing'
+  failed_workflows_path:
+    description: 'Path to the JSON file containing failed workflow names'
+  regressed_workflows_path:
+    description: 'Path to the JSON file containing regressed workflow details'
+  alert_all_message_path:
+    description: 'Path to the text file containing the Slack-ready alert message'
+  status_changes_path:
+    description: 'Path to the JSON file containing workflow status changes'
 
 runs:
   using: 'node20'

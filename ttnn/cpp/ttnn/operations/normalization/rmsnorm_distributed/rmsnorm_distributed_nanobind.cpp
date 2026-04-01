@@ -9,7 +9,8 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
+#include "ttnn/types.hpp"
 
 #include "rmsnorm_pre_all_gather.hpp"
 #include "rmsnorm_post_all_gather.hpp"
@@ -17,9 +18,8 @@
 namespace ttnn::operations::normalization::detail {
 
 void bind_normalization_rmsnorm_pre_all_gather_operation(nb::module_& mod) {
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"rms_norm_pre_all_gather">(
         mod,
-        ttnn::rms_norm_pre_all_gather,
         R"doc(
               This operation is used in conjunction with :func:`ttnn.rms_norm_post_all_gather` to compute RMS norm on a distributed setup, where RMS norm is defined as:
 
@@ -75,21 +75,20 @@ void bind_normalization_rmsnorm_pre_all_gather_operation(nb::module_& mod) {
                 - Unsharded inputs must be interleaved
                 - Sharded inputs cannot be height-sharded, padded height must equal TILE_HEIGHT (32). If :attr:`residual_input_tensor` is provided, it must match input's padded shape and sharding.
               )doc",
-        ttnn::nanobind_arguments_t{
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("dtype") = nb::cast(DataType::BFLOAT16),
-            nb::arg("residual_input_tensor") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("program_config") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("use_2d_core_grid") = nb::none()});
+        &ttnn::rms_norm_pre_all_gather,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("dtype") = nb::cast(DataType::BFLOAT16),
+        nb::arg("residual_input_tensor") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("use_2d_core_grid") = nb::none());
 }
 
 void bind_normalization_rmsnorm_post_all_gather_operation(nb::module_& mod) {
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"rms_norm_post_all_gather">(
         mod,
-        ttnn::rms_norm_post_all_gather,
         R"doc(
                 This operation is used in conjunction with :func:`ttnn.rms_norm_pre_all_gather` to compute RMS norm on a distributed setup, where RMS norm is defined as:
 
@@ -157,18 +156,18 @@ void bind_normalization_rmsnorm_post_all_gather_operation(nb::module_& mod) {
                   - If :attr:`weight` (gamma) is provided, :attr:`bias` (beta) must also be provided. Gamma and beta must have the same layout. If this is ROW_MAJOR, last padded dim must be TILE_WIDTH.
                   - Sharded runs: inputs cannot be height-sharded; padded height must equal TILE_HEIGHT (32). When sharded, :attr:`stats` must be sharded across one core.
         )doc",
-        ttnn::nanobind_arguments_t{
-            nb::arg("input_tensor"),
-            nb::arg("stats"),
-            nb::kw_only(),
-            nb::arg("epsilon") = 1e-12,
-            nb::arg("weight") = nb::none(),
-            nb::arg("bias") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("program_config") = nb::none(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("use_2d_core_grid") = nb::none()});
+        &ttnn::rms_norm_post_all_gather,
+        nb::arg("input_tensor"),
+        nb::arg("stats"),
+        nb::kw_only(),
+        nb::arg("epsilon") = 1e-12,
+        nb::arg("weight") = nb::none(),
+        nb::arg("bias") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("use_2d_core_grid") = nb::none());
 }
 
 void bind_normalization_rms_norm_distributed(nb::module_& mod) {

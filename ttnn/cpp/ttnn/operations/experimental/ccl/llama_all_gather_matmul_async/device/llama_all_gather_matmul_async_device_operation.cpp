@@ -88,7 +88,7 @@ LlamaAllGatherMatmulAsyncDeviceOperation::create_output_tensors(
     return LlamaAllGatherMatmulAsyncResult{.mm = matmul_output_tensor, .aggregated = aggregated_tensor};
 }
 
-tt::stl::hash::hash_t LlamaAllGatherMatmulAsyncDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t LlamaAllGatherMatmulAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input0 = tensor_args.input0;
     const auto& input1 = tensor_args.input1;

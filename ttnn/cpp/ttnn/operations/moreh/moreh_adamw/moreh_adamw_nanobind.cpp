@@ -9,17 +9,14 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/moreh/moreh_adamw/moreh_adamw.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::moreh::moreh_adamw {
 
 void bind_moreh_adamw_operation(nb::module_& mod) {
-    bind_registered_operation(
-        mod,
-        ttnn::moreh_adamw,
-        R"doc(
+    const auto* doc = R"doc(
             moreh_adamw(
                 param_in: ttnn.Tensor,
                 grad: ttnn.Tensor,
@@ -41,8 +38,13 @@ void bind_moreh_adamw_operation(nb::module_& mod) {
                 compute_kernel_config: Optional[DeviceComputeKernelConfig]
             ) -> ttnn.Tensor
             Compute backward for nll_loss operation with reduction set to None
-        )doc",
-        ttnn::nanobind_arguments_t{
+        )doc";
+
+    ttnn::bind_function<"moreh_adamw">(
+        mod,
+        doc,
+        ttnn::overload_t(
+            &ttnn::moreh_adamw,
             nb::arg("param_in"),
             nb::arg("grad"),
             nb::arg("exp_avg_in"),
@@ -63,7 +65,7 @@ void bind_moreh_adamw_operation(nb::module_& mod) {
             nb::arg("max_exp_avg_sq_out") = nb::none(),
 
             nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+            nb::arg("compute_kernel_config") = nb::none()));
 }
 
 void py_module(nb::module_& mod) { bind_moreh_adamw_operation(mod); }

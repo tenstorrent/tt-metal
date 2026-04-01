@@ -20,16 +20,16 @@
 #include "worker_config_buffer.hpp"
 
 namespace tt::tt_metal {
-class IDevice;
 class SystemMemoryManager;
 enum NOC : uint8_t;
+class Device;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
 class HWCommandQueue {
 public:
-    HWCommandQueue(IDevice* device, uint32_t id, NOC noc_index);
+    HWCommandQueue(Device* device, uint32_t id, NOC noc_index);
 
     ~HWCommandQueue() = default;
 
@@ -42,7 +42,7 @@ public:
 
     SystemMemoryManager& sysmem_manager();
 
-    IDevice* device();
+    Device* device();
 
     // needed interface items
     void terminate();
@@ -51,7 +51,7 @@ private:
     uint32_t id_;
     SystemMemoryManager& manager_;
 
-    IDevice* device_;
+    Device* device_;
 
     CoreCoord virtual_enqueue_program_dispatch_core_;
 };

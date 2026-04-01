@@ -12,9 +12,7 @@
 
 #include "ttnn/operations/experimental/reshape/view.hpp"
 
-namespace ttnn::operations::transformer {
-
-namespace detail {
+namespace ttnn::operations::transformer::detail {
 std::tuple<Tensor, Tensor, Tensor> reshape_outputs_of_split_query_key_value_and_split_heads(
     const std::tuple<Tensor, Tensor, Tensor>& outputs,
     const uint32_t sequence_size,
@@ -52,15 +50,18 @@ std::tuple<Tensor, Tensor, Tensor> reshape_outputs_of_split_query_key_value_and_
         ttnn::Shape({batch_size, num_kv_heads, sequence_size_padded, head_size_padded}));
     return {query, key, value};
 }
-}  // namespace detail
+}  // namespace ttnn::operations::transformer::detail
 
-std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::invoke(
+namespace ttnn::transformer {
+
+std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
     const Tensor& input_tensor,
     const std::optional<Tensor>& input_tensor_kv,
     const uint32_t num_heads,
     const std::optional<uint32_t> num_kv_heads,
     const bool transpose_key,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    const bool use_falcon7b_backend) {
     const auto& input_shape = input_tensor.logical_shape();
     const auto& padded_input_shape = input_tensor.padded_shape();
     TT_FATAL(input_shape.rank() == 3, "Invalid input tensor: expected 3 dimensions, but found {}.", input_shape.rank());
@@ -78,7 +79,11 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
     const uint32_t sequence_size = input_shape[1];
     const uint32_t sequence_size_padded = padded_input_shape[1];
 
-    if (num_kv_heads.has_value() && !input_tensor_kv.has_value()) {
+    if (use_falcon7b_backend) {
+        TT_FATAL(
+            num_kv_heads.has_value() && !input_tensor_kv.has_value(),
+            "Invalid configuration: use_falcon7b_backend requires num_kv_heads to be set and no separate KV tensor.");
+
         TT_FATAL(
             !transpose_key,
             "Invalid configuration: Transpose is set to true, but this is not supported when separate num_kv_heads is "
@@ -107,7 +112,7 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
 
         auto outputs = ttnn::experimental::nlp_create_qkv_heads_falcon7b(
             input_4d, memory_config.value_or(input_tensor.memory_config()));
-        return detail::reshape_outputs_of_split_query_key_value_and_split_heads(
+        return ttnn::operations::transformer::detail::reshape_outputs_of_split_query_key_value_and_split_heads(
             {std::get<0>(outputs), std::get<1>(outputs), std::get<2>(outputs)},
             sequence_size,
             sequence_size_padded,
@@ -154,8 +159,12 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
         hidden_dim_padded = padded_input_shape[2];
     }
 
-    uint32_t head_size = hidden_dim / num_heads;
-    uint32_t padded_head_size = hidden_dim_padded / num_heads;
+    // For separate Q and KV tensors: hidden_dim is Q's dimension, so head_size = hidden_dim / num_heads
+    // For fused QKV tensor: hidden_dim contains Q+K+V, so head_size = hidden_dim / (num_heads + 2*num_kv_heads)
+    uint32_t head_size_divisor =
+        input_tensor_kv.has_value() ? num_heads : (num_heads + (2 * num_kv_heads.value_or(num_heads)));
+    uint32_t head_size = hidden_dim / head_size_divisor;
+    uint32_t padded_head_size = hidden_dim_padded / head_size_divisor;
     TT_FATAL(
         head_size % tt::constants::TILE_WIDTH == 0,
         "Invalid head size: {}. The head size must be a multiple of the tile width ({}). Please adjust the dimensions "
@@ -178,7 +187,7 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
 
         const auto input_tensor_4d = ttnn::experimental::view(
             input_tensor, ttnn::Shape{padded_input_shape[0], 1, padded_input_shape[1], padded_input_shape[2]});
-        return detail::reshape_outputs_of_split_query_key_value_and_split_heads(
+        return ttnn::operations::transformer::detail::reshape_outputs_of_split_query_key_value_and_split_heads(
             ttnn::experimental::create_qkv_heads(
                 input_tensor_4d,
                 num_heads,
@@ -205,8 +214,8 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
         num_kv_heads.value_or(num_heads),
         transpose_key,
         memory_config.value_or(input_tensor.memory_config()));
-    return detail::reshape_outputs_of_split_query_key_value_and_split_heads(
+    return ttnn::operations::transformer::detail::reshape_outputs_of_split_query_key_value_and_split_heads(
         outputs, sequence_size, sequence_size_padded, transpose_key);
 }
 
-}  // namespace ttnn::operations::transformer
+}  // namespace ttnn::transformer

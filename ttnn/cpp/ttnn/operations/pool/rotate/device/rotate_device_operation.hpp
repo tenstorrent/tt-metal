@@ -5,7 +5,9 @@
 #pragma once
 
 #include <string>
-#include <ttnn/decorators.hpp>
+#include <tuple>
+
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::rotate {
 
@@ -87,21 +89,30 @@ struct RotateDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        float angle,
-        const std::optional<std::tuple<float, float>>& center,
-        float fill,
-        bool expand,
-        const std::string& interpolation_mode,
-        const std::optional<MemoryConfig>& memory_config);
-
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
+
+std::tuple<RotateDeviceOperation::operation_attributes_t, RotateDeviceOperation::tensor_args_t>
+rotate_build_operation_args(
+    const Tensor& input,
+    float angle,
+    const std::optional<std::tuple<float, float>>& center,
+    float fill,
+    bool expand,
+    const std::string& interpolation_mode,
+    const std::optional<MemoryConfig>& memory_config);
 
 }  // namespace ttnn::operations::rotate
 
 namespace ttnn::prim {
-constexpr auto rotate =
-    ttnn::register_operation<"ttnn::prim::rotate", ttnn::operations::rotate::RotateDeviceOperation>();
+
+Tensor rotate(
+    const Tensor& input,
+    float angle,
+    const std::optional<std::tuple<float, float>>& center,
+    float fill,
+    bool expand,
+    const std::string& interpolation_mode,
+    const std::optional<MemoryConfig>& memory_config);
+
 }  // namespace ttnn::prim

@@ -4,6 +4,7 @@
 #pragma once
 
 #include "kernel_op_api.hpp"
+#include "kernel_utils.hpp"
 
 #if defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
@@ -81,6 +82,7 @@ struct RMSNorm {
     struct ComputeArgs {
         uint32_t epsilon;
         float scalar;
+        uint32_t gamma_address_override = 0;  // byte address; overrides gamma read ptr if > 0
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
@@ -103,8 +105,12 @@ struct RMSNorm {
             // ================================================================
             // TRISC (Compute)
             // ================================================================
-            // Init block done only once
-            cb_wait_front(CTArgs::gamma_cb, CTArgs::num_tiles);  // we don't pop, only wait once and reuse
+            // Init block done only once; we don't pop, only wait once and reuse
+            if (args.gamma_address_override > 0) {
+                UNPACK(({ unified_kernels::override_cb_rd_ptr(CTArgs::gamma_cb, args.gamma_address_override); }));
+            } else {
+                cb_wait_front(CTArgs::gamma_cb, CTArgs::num_tiles);
+            }
 
             compute_rmsnorm(args);
 #endif

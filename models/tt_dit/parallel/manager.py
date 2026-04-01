@@ -6,7 +6,7 @@ import torch
 
 import ttnn
 
-from ..utils.tensor import bf16_tensor
+from ..utils.tensor import bf16_tensor, local_device_to_torch
 
 
 class CCLManager:
@@ -38,6 +38,7 @@ class CCLManager:
         # Initialize semaphores for reduce scatter and all gather and neighbor pad
         self._init_semaphores()
         self.rs_ping_pong_idx = [0, 0]
+        self.rs_ping_pong_idx_fused = [0, 0]
         self.ag_ping_pong_idx = [0, 0]
         self.np_ping_pong_idx = [0, 0]
         self.sr_ping_pong_idx = [0, 0]
@@ -60,6 +61,12 @@ class CCLManager:
         # Initialize semaphores for reduce scatter ping pong - separate for each mesh axis
         rs_n_sems = 3 * 2  # 3 semaphores * 2 for ping pong
         self.rs_ping_pong_semaphores = {
+            0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(rs_n_sems)],
+            1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(rs_n_sems)],
+        }
+
+        # 3 * 2 for ping pong semaphores for fused reduce scatter
+        self.rs_ping_pong_semaphores_fused = {
             0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(rs_n_sems)],
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(rs_n_sems)],
         }
@@ -192,6 +199,21 @@ class CCLManager:
         n_sems = 3
         self.rs_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.rs_ping_pong_semaphores[mesh_axis][cur_idx * n_sems : (cur_idx + 1) * n_sems]
+
+    def get_rs_ping_pong_semaphore_fused(self, mesh_axis):
+        """
+        Get semaphores for reduce scatter ping pong operations.
+
+        Args:
+            mesh_axis: The mesh axis (0 or 1) to get semaphores for
+
+        Returns:
+            List of 3 semaphores for the current ping pong cycle
+        """
+        cur_idx = self.rs_ping_pong_idx_fused[mesh_axis]
+        n_sems = 3
+        self.rs_ping_pong_idx_fused[mesh_axis] = (cur_idx + 1) % 2
+        return self.rs_ping_pong_semaphores_fused[mesh_axis][cur_idx * n_sems : (cur_idx + 1) * n_sems]
 
     def get_ag_ping_pong_semaphore(self, mesh_axis):
         """
@@ -505,4 +527,4 @@ class CCLManager:
                     use_hyperparams=True,
                     use_persistent_buffer=use_persistent_buffer,
                 )
-        return ttnn.to_torch(ttnn.get_device_tensors(device_tensor)[0])
+        return local_device_to_torch(device_tensor)

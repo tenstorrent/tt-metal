@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/fmt.hpp>
 #include <stdexcept>
 #include <fstream>
 #include <sstream>
@@ -193,6 +193,25 @@ uint32_t MeshGraphDescriptor::get_chip_count(const InstanceData& mesh_instance) 
 
     uint32_t chip_count = 1;
     for (const auto& dim : mesh_desc->device_topology().dims()) {
+        chip_count *= dim;
+    }
+
+    return chip_count;
+}
+
+uint32_t MeshGraphDescriptor::get_switch_chip_count(GlobalNodeId switch_instance_id) const {
+    const auto& instance = get_instance(switch_instance_id);
+    return get_switch_chip_count(instance);
+}
+
+uint32_t MeshGraphDescriptor::get_switch_chip_count(const InstanceData& switch_instance) const {
+    TT_FATAL(is_switch(switch_instance), "get_switch_chip_count() can only be called on switch instances");
+
+    const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(switch_instance.desc);
+    TT_FATAL(switch_desc != nullptr, "Switch descriptor is null for instance {}", switch_instance.global_id);
+
+    uint32_t chip_count = 1;
+    for (const auto& dim : switch_desc->device_topology().dims()) {
         chip_count *= dim;
     }
 

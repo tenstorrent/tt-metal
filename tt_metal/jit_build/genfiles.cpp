@@ -6,6 +6,7 @@
 
 #include <circular_buffer_constants.h>
 #include "data_format.hpp"
+#include <algorithm>
 #include <cstdint>
 #include <tt_backend_api_types.hpp>
 #include <cstddef>
@@ -17,7 +18,6 @@
 #include <ostream>
 #include <fstream>
 #include <ranges>
-#include <regex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -56,82 +56,6 @@ string get_kernel_source_to_include(const KernelSource& kernel_src) {
     }
     ttsl::unreachable();
 }
-
-// Simple kernel syntax refers to declaring kernel entry point as just "void kernel_main()"
-// This is in contrast to legacy syntax: "namespace NAMESPACE { void MAIN() { ... } }"
-// Eventually we may want to deprecate legacy syntax, but for now we support both.
-// This namespace isolates the logic related to simple kernel syntax.
-namespace simple_kernel_syntax {
-
-const std::regex kernel_main_pattern(R"(\bvoid\s+kernel_main\s*\(\s*\)\s*\{)");
-
-size_t find_kernel_main_definition(const string& source) {
-    std::smatch match;
-    if (std::regex_search(source, match, kernel_main_pattern)) {
-        return static_cast<size_t>(match.position());
-    }
-    return string::npos;
-}
-
-bool has_legacy_syntax_markers(const string& source) {
-    // Check for legacy syntax markers: "namespace NAMESPACE" or "void MAIN"
-    // If found, the file uses legacy syntax (possibly mixed with kernel_main for data movement)
-    return source.find("namespace NAMESPACE") != string::npos || source.find("void MAIN") != string::npos;
-}
-
-size_t count_kernel_main_definitions(const string& source) {
-    auto begin = std::sregex_iterator(source.begin(), source.end(), kernel_main_pattern);
-    auto end = std::sregex_iterator();
-    return std::distance(begin, end);
-}
-
-bool is_used_in_source(const string& source) {
-    // Use simplified syntax only if kernel_main is found AND no legacy markers present.
-    // This handles kernels with multiple entrypoints that have kernel_main() for data movement
-    // but legacy syntax for compute - we must not transform those.
-    if (find_kernel_main_definition(source) == string::npos) {
-        return false;
-    }
-    if (has_legacy_syntax_markers(source)) {
-        return false;
-    }
-    // Multiple kernel_main() with simplified syntax for compute is not supported.
-    // We cannot determine which kernel_main belongs to compute. Use legacy syntax for compute.
-    if (count_kernel_main_definitions(source) > 1) {
-        throw std::runtime_error(
-            "Multiple kernel_main() definitions found. Kernels with multiple entrypoints must use "
-            "legacy syntax (namespace NAMESPACE { void MAIN { } }) for the compute path.");
-    }
-    return true;
-}
-
-// Transforms simplified kernel to legacy format:
-//   - Splits at "void kernel_main()"
-//   - Preamble (#includes) stays outside namespace
-//   - Function body wrapped in namespace, renamed to func_name
-string transform_to_legacy_syntax(const string& source, const char* ns_name, const char* func_name) {
-    size_t func_pos = find_kernel_main_definition(source);
-    if (func_pos == string::npos) {
-        throw std::runtime_error("Could not find 'void kernel_main() {' in source");
-    }
-
-    string preamble = source.substr(0, func_pos);
-    string function_part = source.substr(func_pos);
-
-    // Rename kernel_main -> func_name
-    size_t name_pos = function_part.find("kernel_main");
-    if (name_pos != string::npos) {
-        function_part.replace(name_pos, strlen("kernel_main"), func_name);
-    }
-
-    ostringstream result;
-    result << preamble;
-    result << "namespace " << ns_name << " {\n";
-    result << function_part;
-    result << "\n}  // namespace " << ns_name << "\n";
-    return result.str();
-}
-}  // namespace simple_kernel_syntax
 
 // Generates TRISC prolog: #define + #include for defines_generated.h
 string build_trisc_prolog(const char* trisc_define) {
@@ -178,57 +102,21 @@ void jit_build_genfiles_triscs_src(
     const string math_cpp = out_dir + "chlkc_math.cpp";
     const string pack_cpp = out_dir + "chlkc_pack.cpp";
     const string isolate_sfpu_cpp = out_dir + "chlkc_isolate_sfpu.cpp";
-    // Read content for syntax detection (needed for both paths)
-    const string kernel_content = kernel_src.get_content();
-    const bool simplified = simple_kernel_syntax::is_used_in_source(kernel_content);
 
-    if (simplified) {
-        log_trace(tt::LogBuildKernels, "Detected simplified compute kernel syntax (kernel_main)");
-    } else {
-        log_warning(
-            tt::LogBuildKernels,
-            "Compute kernel '{}' uses deprecated 'namespace NAMESPACE {{ void MAIN {{ }} }}' syntax. "
-            "Please migrate to simplified 'void kernel_main() {{ }}' syntax.",
-            settings.get_full_kernel_name());
-    }
-
-    // Build prologs (same for both syntaxes)
+    // Build prologs for each TRISC
     const string unpack_prolog = build_trisc_prolog("TRISC_UNPACK");
     const string math_prolog = build_trisc_prolog("TRISC_MATH");
     const string pack_prolog = build_trisc_prolog("TRISC_PACK");
     const string isolate_sfpu_prolog = build_trisc_prolog("TRISC_ISOLATE_SFPU");
-    // Determine kernel source for each TRISC.
-    //
-    // Why the if-else structure is necessary:
-    // - Simplified syntax: MUST transform source, so we inline the transformed content
-    // - Legacy syntax: use existing get_kernel_source_to_include() which returns:
-    //   - FILE_PATH: #include directive (preserves file refs in compiler errors)
-    //   - SOURCE_CODE: the source directly
-    string unpack_src, math_src, pack_src, isolate_sfpu_src;
-    if (simplified) {
-        // For FILE_PATH sources, add #line directive to preserve original file's line numbers
-        // in compiler diagnostics and __LINE__ macro. This ensures error messages reference
-        // the original kernel file, not the generated file.
-        string line_directive;
-        if (kernel_src.source_type_ == KernelSource::FILE_PATH) {
-            line_directive = "#line 1 \"" + kernel_src.path_.string() + "\"\n";
-        }
-        unpack_src = line_directive + simple_kernel_syntax::transform_to_legacy_syntax(kernel_content, "chlkc_unpack", "unpack_main");
-        math_src = line_directive + simple_kernel_syntax::transform_to_legacy_syntax(kernel_content, "chlkc_math", "math_main");
-        pack_src = line_directive + simple_kernel_syntax::transform_to_legacy_syntax(kernel_content, "chlkc_pack", "pack_main");
-        isolate_sfpu_src = line_directive + simple_kernel_syntax::transform_to_legacy_syntax(
-                                                kernel_content, "chlkc_isolate_sfpu", "isolate_sfpu_main");
-    } else {
-        // Legacy: use existing helper that handles FILE_PATH vs SOURCE_CODE appropriately
-        const string src = get_kernel_source_to_include(kernel_src);
-        unpack_src = math_src = pack_src = isolate_sfpu_src = src;
-    }
+
+    // All TRISCs get the same kernel source (differentiated by TRISC_* defines)
+    const string kernel_src_to_include = get_kernel_source_to_include(kernel_src);
 
     // Generate the four TRISC source files (fourth only used on Quasar)
-    write_file(unpack_cpp, unpack_prolog + unpack_src);
-    write_file(math_cpp, math_prolog + math_src);
-    write_file(pack_cpp, pack_prolog + pack_src);
-    write_file(isolate_sfpu_cpp, isolate_sfpu_prolog + isolate_sfpu_src);
+    write_file(unpack_cpp, unpack_prolog + kernel_src_to_include);
+    write_file(math_cpp, math_prolog + kernel_src_to_include);
+    write_file(pack_cpp, pack_prolog + kernel_src_to_include);
+    write_file(isolate_sfpu_cpp, isolate_sfpu_prolog + kernel_src_to_include);
     // Here we generate an auxiliary header with defines added via add_define() call
     // this header is then included from the kernel
     // We also append the include path to generated dir to hlkc cmldline.
@@ -314,6 +202,29 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
 
     vector<DataFormat> dst_formats = tt::get_pack_dst_formats(
         desc.buf_dataformat_arr);
+
+    // Fp8_e4m3 is always unpacked to Float16 (A-family) in source/dest registers.
+    // Without fp32_dest_acc, the dest register holds Float16 (A-family) data when
+    // the input is Fp8, so non-Fp8 output CBs need A-family pack_src to match.
+    // With fp32_dest_acc, dest holds Float32 and pack_src semantics differ, so skip.
+    // CBs that are themselves Fp8_e4m3 are already handled by get_single_pack_src_format.
+    if (!fp32_dest_acc_en &&
+        std::any_of(desc.buf_dataformat_arr.begin(), desc.buf_dataformat_arr.end(), [](DataFormat f) {
+            return f == DataFormat::Fp8_e4m3;
+        })) {
+        for (size_t i = 0; i < src_formats.size(); i++) {
+            if (desc.buf_dataformat_arr[i] == DataFormat::Fp8_e4m3) {
+                continue;
+            }
+            switch (src_formats[i]) {
+                case DataFormat::Float16_b: src_formats[i] = DataFormat::Float16; break;
+                case DataFormat::Bfp8_b: src_formats[i] = DataFormat::Bfp8; break;
+                case DataFormat::Bfp4_b: src_formats[i] = DataFormat::Bfp4; break;
+                case DataFormat::Bfp2_b: src_formats[i] = DataFormat::Bfp2; break;
+                default: break;
+            }
+        }
+    }
 
     TT_ASSERT(src_formats.size() == max_cbs);
     TT_ASSERT(dst_formats.size() == max_cbs);

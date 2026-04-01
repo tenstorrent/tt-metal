@@ -136,7 +136,7 @@ void Conv2dDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-tt::stl::hash::hash_t Conv2dDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t Conv2dDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     hashable_operation_attributes_t hashable_args = {
         .sliding_window_config = args.sliding_window_config,
@@ -156,7 +156,7 @@ tt::stl::hash::hash_t Conv2dDeviceOperation::compute_program_hash(
         .config_tensors_in_dram = args.config_tensors_in_dram,
         .force_split_reader = args.force_split_reader,
     };
-    return tt::stl::hash::hash_objects_with_default_seed(hashable_args, tensor_args);
+    return ttsl::hash::hash_objects_with_default_seed(hashable_args, tensor_args);
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> Conv2dDeviceOperation::create_op_performance_model(

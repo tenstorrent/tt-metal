@@ -12,14 +12,12 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import models.experimental.ops.descriptors as descriptors
-import models.experimental.ops.descriptors.composite as composite
 import ttnn
 from models.common.utility_functions import nearest_y
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
-    AllBroadcastAsyncConfig,
     AllGatherAsyncConfig,
     AllToAllAsyncGenericConfig,
     ConcatConfig,
@@ -34,7 +32,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     USERS_PER_ROW,
-    dequantize,
     even_int_div,
     get_mesh_coords,
     get_state_dicts,
@@ -69,7 +66,7 @@ def pad_batch_to_dram_banks(batch, num_banks=12):
     return ((batch + num_banks - 1) // num_banks) * num_banks
 
 
-def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_w=32):
+def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_w=32, *, mesh_device: ttnn.Device):
     """Build MatmulMultiCoreReuseMultiCastProgramConfig for prefill matmuls.
 
     Handles both unbatched (batch=1, fuse_batch=True) and batched (batch>1, fuse_batch=False)
@@ -82,6 +79,7 @@ def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_
         batch: Batch dimension (1 for unbatched, >1 for batched)
         tile_h: Tile height (default 32)
         tile_w: Tile width (default 32)
+        mesh_device: Device (or mesh) used for the tests - needed to retrieve the core grid
 
     Returns:
         MatmulMultiCoreReuseMultiCastProgramConfig
@@ -90,15 +88,17 @@ def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_
     K_tiles = even_int_div(k, tile_w)
     N_tiles = even_int_div(n, tile_w)
 
+    compute_grid = mesh_device.compute_with_storage_grid_size()
+
     # grid_x splits N dimension; grid_y splits M dimension
     grid_x = 1
-    for x in range(min(8, N_tiles), 0, -1):
+    for x in range(min(compute_grid.x, N_tiles), 0, -1):
         if N_tiles % x == 0:
             grid_x = x
             break
 
     grid_y = 1
-    for y in range(min(8, M_tiles), 0, -1):
+    for y in range(min(compute_grid.y, M_tiles), 0, -1):
         if M_tiles % y == 0:
             grid_y = y
             break
@@ -177,6 +177,25 @@ def _deepseek_kvdbg_enabled() -> bool:
     return os.getenv("DEEPSEEK_KVDBG", "").lower() in ("1", "true", "yes", "y")
 
 
+def _launch_merged_descriptors(op_descriptors):
+    # Temporary workaround for https://github.com/tenstorrent/tt-metal/issues/40275.
+    # Keep the DeepSeek decode Q/KV norm path on the old merged generic_op
+    # dispatch until the Parallel(...).build().launch() cache/rebind logic is fixed.
+    if not op_descriptors:
+        raise ValueError("op_descriptors cannot be empty")
+
+    merged_descriptor = op_descriptors[0].descriptor
+    if len(op_descriptors) > 1:
+        merged_descriptor = ttnn.merge_program_descriptors([op.descriptor for op in op_descriptors])
+
+    io_tensors = [tensor for op in op_descriptors for tensor in op.input_tensors] + [
+        tensor for op in op_descriptors for tensor in op.output_tensors
+    ]
+    ttnn.generic_op(io_tensors, merged_descriptor)
+
+    return [op.output_tensors for op in op_descriptors]
+
+
 class MLA1D(AbstractModule):
     """
     Multi-Latent Attention Module for 1D tensor parallelism.
@@ -191,7 +210,6 @@ class MLA1D(AbstractModule):
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
         num_shards = mesh_device.shape[0]
-        weight_block_height, weight_block_width = hf_config.quantization_config["weight_block_size"]
 
         dim = hf_config.hidden_size
         num_heads = hf_config.num_attention_heads
@@ -201,6 +219,12 @@ class MLA1D(AbstractModule):
         v_head_dim = hf_config.v_head_dim
         q_lora_rank = hf_config.q_lora_rank
         q_head_dim = qk_nope_head_dim + qk_rope_head_dim
+
+        def _load_weight(weight_name: str, shape: tuple[int, ...]) -> torch.Tensor:
+            """
+            Load an already-dequantized weight tensor (bfloat16) from the HF state dict.
+            """
+            return get_state_dicts(state_dicts, weight_name, shape=shape, dtype=torch.bfloat16)
 
         # Norm weights
         norm_weight_configs = {
@@ -247,19 +271,10 @@ class MLA1D(AbstractModule):
         )
 
         # Regular non-split weights with DRAM sharded configs
-        wq_b_weight = dequantize(
-            get_state_dicts(
-                state_dicts, "q_b_proj.weight", (num_heads * q_head_dim, q_lora_rank), dtype=torch.float8_e4m3fn
-            ),
-            get_state_dicts(state_dicts, "q_b_proj.weight_scale_inv", dtype=torch.float32),
-            (1, weight_block_height, weight_block_width),
-        )
-        wo_weight = dequantize(
-            get_state_dicts(state_dicts, "o_proj.weight", (dim, num_heads * v_head_dim), dtype=torch.float8_e4m3fn),
-            get_state_dicts(state_dicts, "o_proj.weight_scale_inv", dtype=torch.float32),
-            (1, weight_block_height, weight_block_width),
-        )
+        wq_b_weight = _load_weight("q_b_proj.weight", (num_heads * q_head_dim, q_lora_rank))
+        wo_weight = _load_weight("o_proj.weight", (dim, num_heads * v_head_dim))
 
+        # Regular non-split weights
         linear_weight_configs = {
             "wq_b": {
                 "input_tensor_b": cls._convert_weight(
@@ -285,21 +300,8 @@ class MLA1D(AbstractModule):
 
         # Fused wq_a and wkv_a weights: concatenated along output dimension
         # Output order: [q_lora_rank | kv_lora_rank | qk_rope_head_dim]
-        wq_a_weight = dequantize(
-            get_state_dicts(state_dicts, "q_a_proj.weight", (q_lora_rank, dim), dtype=torch.float8_e4m3fn),
-            get_state_dicts(state_dicts, "q_a_proj.weight_scale_inv", dtype=torch.float32),
-            (1, weight_block_height, weight_block_width),
-        )
-        wkv_a_weight = dequantize(
-            get_state_dicts(
-                state_dicts,
-                "kv_a_proj_with_mqa.weight",
-                (kv_lora_rank + qk_rope_head_dim, dim),
-                dtype=torch.float8_e4m3fn,
-            ),
-            get_state_dicts(state_dicts, "kv_a_proj_with_mqa.weight_scale_inv", dtype=torch.float32),
-            (1, weight_block_height, weight_block_width),
-        )
+        wq_a_weight = _load_weight("q_a_proj.weight", (q_lora_rank, dim))
+        wkv_a_weight = _load_weight("kv_a_proj_with_mqa.weight", (kv_lora_rank + qk_rope_head_dim, dim))
         # Concatenate: [num_shards, q_lora_rank + kv_lora_rank + qk_rope_head_dim, dim]
         wq_kv_a_weight = torch.cat([wq_a_weight, wkv_a_weight], dim=-2)
 
@@ -333,15 +335,9 @@ class MLA1D(AbstractModule):
         }
 
         # wkv_b (Needs Special handling!!)
-        torch_weights = dequantize(
-            get_state_dicts(
-                state_dicts,
-                f"kv_b_proj.weight",
-                shape=(num_heads * (qk_nope_head_dim + v_head_dim), kv_lora_rank),
-                dtype=torch.float8_e4m3fn,
-            ),
-            get_state_dicts(state_dicts, f"kv_b_proj.weight_scale_inv", dtype=torch.float32),
-            (1, weight_block_height, weight_block_width),
+        torch_weights = _load_weight(
+            "kv_b_proj.weight",
+            shape=(num_heads * (qk_nope_head_dim + v_head_dim), kv_lora_rank),
         ).reshape(num_shards, num_heads, qk_nope_head_dim + v_head_dim, kv_lora_rank)
 
         torch_weights_k = torch_weights[..., :qk_nope_head_dim, :].transpose(
@@ -673,7 +669,7 @@ class MLA1D(AbstractModule):
         qkv_a_n = q_lora_rank + kv_lora_rank + qk_rope_head_dim  # 2112
         qkv_a_n_padded = pad_n_to_dram_banks(qkv_a_n, tile_size=32, num_dram_banks=num_dram_banks)  # 2304
         qkv_a_in0_core_grid = ttnn.CoreGrid(y=1, x=7)
-        qkv_a_out_core_grid = ttnn.CoreGrid(y=1, x=8)
+        qkv_a_out_core_grid = ttnn.CoreGrid(y=8, x=1)
 
         # Program config for qkv_a
         qkv_a_num_in0_cores = qkv_a_in0_core_grid.x * qkv_a_in0_core_grid.y
@@ -696,13 +692,8 @@ class MLA1D(AbstractModule):
             "orientation": ttnn.ShardOrientation.ROW_MAJOR,
         }
 
-        # Output L1 WIDTH sharded memory config for qkv_a (using padded n)
-        qkv_a_out_memory_config = ttnn.create_sharded_memory_config(
-            [1, 1, ttnn.core.roundup(USERS_PER_ROW, tile_size), qkv_a_n_padded],
-            core_grid=qkv_a_out_core_grid,
-            strategy=ttnn.ShardStrategy.WIDTH,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        )
+        # Output L1 WIDTH sharded memory config for qkv_a (shard spec computed by the op)
+        qkv_a_out_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
 
         wq_kv_a_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
@@ -719,8 +710,8 @@ class MLA1D(AbstractModule):
         wq_b_n_padded = pad_n_to_dram_banks(
             wq_b_n, tile_size=32, num_dram_banks=num_dram_banks
         )  # 3072 (already aligned)
-        wq_b_in0_core_grid = ttnn.CoreGrid(y=2, x=8)
-        wq_b_out_core_grid = ttnn.CoreGrid(y=2, x=8)
+        wq_b_in0_core_grid = ttnn.CoreGrid(y=8, x=2)
+        wq_b_out_core_grid = ttnn.CoreGrid(y=8, x=2)
 
         # Program config for wq_b
         wq_b_num_in0_cores = wq_b_in0_core_grid.x * wq_b_in0_core_grid.y
@@ -743,13 +734,8 @@ class MLA1D(AbstractModule):
             "orientation": ttnn.ShardOrientation.ROW_MAJOR,
         }
 
-        # Output L1 WIDTH sharded memory config for wq_b (using padded n)
-        wq_b_out_memory_config = ttnn.create_sharded_memory_config(
-            [1, 1, ttnn.core.roundup(USERS_PER_ROW, tile_size), wq_b_n_padded],
-            core_grid=wq_b_out_core_grid,
-            strategy=ttnn.ShardStrategy.WIDTH,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        )
+        # Output L1 WIDTH sharded memory config for wq_b (shard spec computed by the op)
+        wq_b_out_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
 
         wq_b_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
@@ -881,12 +867,12 @@ class MLA1D(AbstractModule):
 
         # =====================================================================
         # wo: m=32, k=16384, n=896 (pads to 1152)
-        # in0_core_grid=(8,1), out_core_grid=(6,1), WIDTH sharding
+        # in0_core_grid=(8,2), out_core_grid=(6,2), WIDTH sharding
         # =====================================================================
         wo_k = num_heads * v_head_dim  # 16384
         wo_n = dim // mesh_device.shape[1]  # 896
         wo_n_padded = pad_n_to_dram_banks(wo_n, tile_size=32, num_dram_banks=num_dram_banks)  # 1152
-        wo_in0_core_grid = ttnn.CoreGrid(y=2, x=8)
+        wo_in0_core_grid = ttnn.CoreGrid(y=8, x=2)
         wo_out_core_grid = ttnn.CoreGrid(y=2, x=6)
 
         # Program config for wo
@@ -910,13 +896,8 @@ class MLA1D(AbstractModule):
             "orientation": ttnn.ShardOrientation.ROW_MAJOR,
         }
 
-        # Output L1 WIDTH sharded memory config for wo (using padded n)
-        wo_out_memory_config = ttnn.create_sharded_memory_config(
-            [1, 1, ttnn.core.roundup(USERS_PER_ROW, tile_size), wo_n_padded],
-            core_grid=wo_out_core_grid,
-            strategy=ttnn.ShardStrategy.WIDTH,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        )
+        # Output L1 WIDTH sharded memory config for wo (shard spec computed by the op)
+        wo_out_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
 
         wo_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
@@ -963,9 +944,7 @@ class MLA1D(AbstractModule):
             strategy=ttnn.ShardStrategy.HEIGHT,
             use_height_and_width_as_shard_shape=True,
         )
-        kv_rope_reshard_config = ReshardConfig(
-            memory_config=kv_rope_mem_cfg,
-        )
+        kv_rope_reshard_config = kv_rope_mem_cfg
         kv_rope_permute_config = PermuteConfig(
             dims=(0, 2, 1, 3),
             memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -1093,18 +1072,9 @@ class MLA1D(AbstractModule):
             out_dim=1,
         )
 
-        wq_a2a_reshard_out_mem_config = ttnn.create_sharded_memory_config(
-            shape=(USERS_PER_ROW, num_heads, kv_lora_rank + qk_rope_head_dim),
-            core_grid=ttnn.CoreGrid(y=8, x=8),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-        )
-        wq_a2a_reshard_config = ReshardConfig(
-            memory_config=wq_a2a_reshard_out_mem_config,
-        )  # 1,4,128,576, height sharded 8x8 [32,576]
-
         # Slice configs for fused wq_kv_a output: [q_lora_rank | kv_lora_rank | qk_rope_head_dim]
-        # Q and KV nope use non-overlapping core grids so they can run parallel norms
-        # via composite.launch (which requires non-overlapping core ranges).
+        # Q and KV nope use non-overlapping core grids, but keep this decode path
+        # on the pre-40275 merged-descriptor dispatch as a temporary workaround.
         num_q_cores = 16
         num_kv_nope_cores = 16
         shard_height = ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE)
@@ -1147,9 +1117,12 @@ class MLA1D(AbstractModule):
         )
 
         # WO
-        wo_ag_config = AllBroadcastAsyncConfig(
+        wo_ag_config = AllGatherAsyncConfig(
+            mesh_device=MeshDeviceStub(mesh_shape),
             cluster_axis=1,
+            dim=2,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            use_broadcast=True,
         )
 
         return {
@@ -1186,7 +1159,6 @@ class MLA1D(AbstractModule):
             "kv_nope_slice_decode": kv_nope_slice_config,
             "kv_rope_slice_decode": kv_rope_slice_config,
             "wq_a2a_decode": wq_a2a_config,
-            "wq_a2a_reshard_decode": wq_a2a_reshard_config,
             "flash_mla_a2a_decode": flash_mla_a2a_config,
             "wo_ag_decode": wo_ag_config,
             "mesh_device": mesh_device,
@@ -1262,8 +1234,7 @@ class MLA1D(AbstractModule):
             page_table = torch.randperm(max_num_blocks, dtype=torch.int32)  # Randperm not necessary, but more rigorous
             page_table = page_table.reshape(batch_per_shard, even_int_div(max_num_blocks, batch_per_shard))
         assert page_table.numel() == paged_config.max_num_blocks
-
-        return ttnn.from_torch(
+        page_table_tt = ttnn.from_torch(
             page_table,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -1271,6 +1242,123 @@ class MLA1D(AbstractModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
+        return page_table_tt
+
+    @staticmethod
+    def _compute_alias_mask_from_host(page_table_host: torch.Tensor) -> torch.Tensor:
+        if page_table_host.dim() != 2:
+            raise RuntimeError(f"Unexpected page table rank for alias mask: {tuple(page_table_host.shape)}")
+        num_rows = int(page_table_host.shape[0])
+        alias_mask = torch.zeros((num_rows,), dtype=torch.bool)
+        seen: dict[tuple[int, ...], int] = {}
+        for i in range(num_rows):
+            row = tuple(int(v) for v in page_table_host[i].tolist())
+            if row in seen:
+                alias_mask[i] = True
+            else:
+                seen[row] = i
+        return alias_mask
+
+    @classmethod
+    def update_page_table_alias_mask(
+        cls,
+        cfg: RunDecodeConfig,
+        page_table_host: torch.Tensor | None,
+    ) -> None:
+        cfg["mtp_alias_mask"] = None if page_table_host is None else cls._compute_alias_mask_from_host(page_table_host)
+
+    @classmethod
+    def release_page_table_alias_runtime_cache(cls, cfg: RunDecodeConfig | None) -> None:
+        if cfg is None:
+            return
+
+        runtime_cache = cfg.get("mtp_alias_runtime_cache")
+        if not runtime_cache:
+            return
+        for state in runtime_cache.values():
+            for tensor in state.values():
+                ttnn.deallocate(tensor)
+        runtime_cache.clear()
+
+    @classmethod
+    def _get_or_create_alias_split_state(
+        cls,
+        cfg: RunDecodeConfig,
+        position_idxs: ttnn.Tensor,
+        logical_shape: tuple[int, ...],
+        is_sharded: bool,
+        num_devices_eff: int,
+        per_shard: int,
+        prompt_row: torch.Tensor,
+        spec_row: torch.Tensor,
+    ) -> dict[str, ttnn.Tensor]:
+        mesh_device = position_idxs.device()
+        if mesh_device is None:
+            raise RuntimeError("Position tensor is missing mesh device for alias split state.")
+
+        state_key = (
+            tuple(int(dim) for dim in logical_shape),
+            bool(is_sharded),
+            int(num_devices_eff),
+            int(per_shard),
+            tuple(int(v) for v in spec_row.tolist()),
+        )
+        runtime_cache = cfg.setdefault("mtp_alias_runtime_cache", {})
+        state = runtime_cache.get(state_key)
+        if state is not None:
+            return state
+
+        total_elems = 1
+        for dim in logical_shape:
+            total_elems *= int(dim)
+        per_shard_padded = total_elems // num_devices_eff
+
+        prompt_mask_host = torch.zeros((total_elems,), dtype=torch.int32)
+        spec_mask_host = torch.zeros((total_elems,), dtype=torch.int32)
+        for d in range(num_devices_eff):
+            start = d * per_shard_padded
+            prompt_mask_host[start : start + per_shard] = prompt_row
+            spec_mask_host[start : start + per_shard] = spec_row
+
+        mask_shape = tuple(int(dim) for dim in logical_shape)
+        prompt_mask_host = prompt_mask_host.reshape(mask_shape)
+        spec_mask_host = spec_mask_host.reshape(mask_shape)
+        inv_prompt_mask_host = torch.ones(mask_shape, dtype=torch.int32) - prompt_mask_host
+        inv_spec_mask_host = torch.ones(mask_shape, dtype=torch.int32) - spec_mask_host
+
+        mask_mesh_mapper = (
+            ttnn.ShardTensorToMesh(mesh_device, dim=0) if is_sharded else ttnn.ReplicateTensorToMesh(mesh_device)
+        )
+
+        state = {
+            "prompt_mask": ttnn.from_torch(
+                prompt_mask_host,
+                device=mesh_device,
+                mesh_mapper=mask_mesh_mapper,
+                dtype=ttnn.int32,
+            ),
+            "spec_mask": ttnn.from_torch(
+                spec_mask_host,
+                device=mesh_device,
+                mesh_mapper=mask_mesh_mapper,
+                dtype=ttnn.int32,
+            ),
+            "inv_prompt_mask": ttnn.from_torch(
+                inv_prompt_mask_host,
+                device=mesh_device,
+                mesh_mapper=mask_mesh_mapper,
+                dtype=ttnn.int32,
+            ),
+            "inv_spec_mask": ttnn.from_torch(
+                inv_spec_mask_host,
+                device=mesh_device,
+                mesh_mapper=mask_mesh_mapper,
+                dtype=ttnn.int32,
+            ),
+            "neg_one": ttnn.full_like(position_idxs, fill_value=-1),
+        }
+        runtime_cache[state_key] = state
+        return state
 
     @classmethod
     def create_state(
@@ -1300,6 +1388,8 @@ class MLA1D(AbstractModule):
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "mesh_shape": mesh_device.shape,
             "kvpe_cache": cls._convert_cache(caches, cache_shape, mesh_device),
+            "mtp_alias_mask": None,
+            "mtp_alias_runtime_cache": {},
             "ccl": ccl,
         }
 
@@ -1386,7 +1476,7 @@ class MLA1D(AbstractModule):
 
         # Paged Update Cache
 
-        cls._fwd_decode_paged_update_cache(kvpe_cache, tt_kvpe, position_idxs, page_table, mesh_shape, row_idx)
+        cls._fwd_decode_paged_update_cache(kvpe_cache, tt_kvpe, position_idxs, page_table, mesh_shape, row_idx, cfg)
 
         # Q Rope + Nope
 
@@ -1569,7 +1659,7 @@ class MLA1D(AbstractModule):
         # Q path: norm + wq_b (interleaved in0 + DRAM WIDTH sharded in1)
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
         wq_b_program_config = build_prefill_matmul_program_config(
-            seq_len, k=q_lora_rank, n=num_heads_local * qk_head_dim
+            seq_len, k=q_lora_rank, n=num_heads_local * qk_head_dim, mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY]
         )
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"], program_config=wq_b_program_config)
 
@@ -1585,7 +1675,11 @@ class MLA1D(AbstractModule):
         num_heads_local_padded = pad_batch_to_dram_banks(num_heads_local)
 
         wkv_b1_program_config = build_prefill_matmul_program_config(
-            seq_len, k=qk_nope_head_dim, n=kv_lora_rank, batch=num_heads_local_padded
+            seq_len,
+            k=qk_nope_head_dim,
+            n=kv_lora_rank,
+            batch=num_heads_local_padded,
+            mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
         )
         tt_q_nope = ttnn.linear(
             tt_q_nope, **cfg["wkv_b1"], program_config=wkv_b1_program_config
@@ -1667,7 +1761,11 @@ class MLA1D(AbstractModule):
         num_heads_padded = pad_batch_to_dram_banks(num_heads)
 
         wkv_b2_program_config = build_prefill_matmul_program_config(
-            seq_len, k=kv_lora_rank, n=v_head_dim, batch=num_heads_padded
+            seq_len,
+            k=kv_lora_rank,
+            n=v_head_dim,
+            batch=num_heads_padded,
+            mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
         )
         v_out = ttnn.linear(
             v_out, **cfg["wkv_b2"], program_config=wkv_b2_program_config
@@ -1698,7 +1796,9 @@ class MLA1D(AbstractModule):
                 # Pad the sequence dimension (dim=1)
                 v_out = ttnn.pad(v_out, padding=((0, 0), (0, padded_seq_len - seq_len), (0, 0), (0, 0)), value=0.0)
 
-            wo_chunk_program_config = build_prefill_matmul_program_config(SEQ_LEN_CHUNK_SIZE, k=wo_k, n=dim)
+            wo_chunk_program_config = build_prefill_matmul_program_config(
+                SEQ_LEN_CHUNK_SIZE, k=wo_k, n=dim, mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY]
+            )
 
             output_chunks = []
             hidden_dim = num_heads * v_head_dim
@@ -1726,7 +1826,9 @@ class MLA1D(AbstractModule):
         else:
             # For non-chunked case: [1, seq_len, num_heads, v_head_dim] -> [1, 1, seq_len, hidden_dim]
             v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads * v_head_dim))
-            wo_program_config = build_prefill_matmul_program_config(seq_len, k=wo_k, n=dim)
+            wo_program_config = build_prefill_matmul_program_config(
+                seq_len, k=wo_k, n=dim, mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY]
+            )
             out = ttnn.linear(v_out, **cfg["wo"], program_config=wo_program_config)  # [1, 1, seq_len, dim]
             ttnn.deallocate(v_out)
 
@@ -1744,16 +1846,11 @@ class MLA1D(AbstractModule):
         qk_rope_head_dim: int,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         # Shard in0 to L1 WIDTH sharded for qkv_a matmul
-        in0_memory_config = ttnn.create_sharded_memory_config(
-            x.shape,
-            **cfg["wq_kv_a_in0_memory_config"],
-        )
-        x = ttnn.to_memory_config(x, memory_config=in0_memory_config)
 
         # Fused wq_kv_a matmul
         # 1,1,32,896, width sharded 7x4 [32,32]
         tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"])
-        # 1,1,32,2112 (q_lora_rank + kv_lora_rank + qk_rope_head_dim = 1536 + 512 + 64)
+        # 1,1,32,2112 WIDTH sharded 1x8 [32,288]
 
         # AR using AG + local reduce (since sub-tile RS not supported for new shapes)
         tt_q_kv = ttnn.experimental.all_gather_async(
@@ -1794,22 +1891,19 @@ class MLA1D(AbstractModule):
         kv_norm_desc = descriptors.rms_norm(
             tt_kv_nope, program_config=RMSNorm._get_pc(tt_kv_nope.memory_config()), **cfg["kv_norm"]
         )
-        results = composite.launch([q_norm_desc, kv_norm_desc])
+        # Temporary workaround for https://github.com/tenstorrent/tt-metal/issues/40275:
+        # avoid the fusion cache/rebind path here until
+        # Parallel(...).build().launch() is fixed for this decode flow.
+        results = _launch_merged_descriptors([q_norm_desc, kv_norm_desc])
         tt_q = results[0][0]
         tt_kv_nope = results[1][0]
         # Q: 1,1,32,1536, width sharded 8x2 [32,96]
-        # KV: 1,1,32,512 8x2 [32,32]
-
-        tt_kv_nope = ttnn.to_memory_config(tt_kv_nope, memory_config=ttnn.L1_MEMORY_CONFIG)
-        # 1,1,32,512 L1 interleaved
 
         # KV RoPE
         # 1,1,32,64 1x2 [32,32]
-        # TODO: merge the following two once illia has his pr
         tt_kv_rope = ttnn.transpose(
-            tt_kv_rope, 1, 2
+            tt_kv_rope, 1, 2, memory_config=cfg["kv_rope_reshard"]
         )  # [1, bsz, 1, qk_rope_head_dim]        # 1,32,1,64 interleaved | should be: 4x8 [32,64]
-        tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, **cfg["kv_rope_reshard"])
         tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
             tt_kv_rope,
             rope_tensors["cos_matrix"],
@@ -1817,13 +1911,12 @@ class MLA1D(AbstractModule):
             rope_tensors["trans_matrix"],
             is_decode_mode=True,
         )
-        # TODO: remove the to memory config after illia's pr is merged
-        tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, memory_config=ttnn.L1_MEMORY_CONFIG)
         # 1,32,1,64 4x8 [32,64]
         tt_kv_rope = ttnn.transpose(
             tt_kv_rope, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG
         )  # [1, 1, bsz, qk_rope_head_dim]
         # 1,1,32,64 L1 interleaved
+        tt_kv_nope = ttnn.to_memory_config(tt_kv_nope, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], **cfg["kv_concat"])
         # 1,1,32,576 L1 interleaved
@@ -1844,16 +1937,97 @@ class MLA1D(AbstractModule):
         page_table: ttnn.Tensor,
         mesh_shape: tuple[int, int],
         row_idx: int | None,
+        cfg: RunDecodeConfig,
     ) -> None:
-        # Update KVPE Cache
-        # 1,4,1(32),576 height sharded 1x4 [32,576]
-        ttnn.experimental.paged_update_cache(
-            kvpe_cache,
-            tt_kvpe,
-            update_idxs_tensor=position_idxs,
-            page_table=page_table,
-            mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+        mesh_device = kvpe_cache.device()
+        if mesh_device is None:
+            raise RuntimeError("Paged update cache requires a valid mesh device.")
+
+        # Split KVPE cache updates into prompt and speculation lanes to avoid aliasing races.
+        alias_mask = cfg.get("mtp_alias_mask")
+        alias_mask_any = alias_mask is not None and bool(alias_mask.any().item())
+        per_shard = int(alias_mask.numel()) if alias_mask is not None else 0
+        num_devices = mesh_shape[1] if row_idx is not None else (mesh_shape[0] * mesh_shape[1])
+        logical_shape = (
+            position_idxs.logical_shape() if hasattr(position_idxs, "logical_shape") else position_idxs.shape
         )
+        total_elems = 1
+        for dim in logical_shape:
+            total_elems *= int(dim)
+        is_sharded = position_idxs.is_sharded() if hasattr(position_idxs, "is_sharded") else False
+        num_devices_eff = num_devices
+        if not is_sharded and per_shard > 0 and total_elems % per_shard == 0:
+            candidate = total_elems // per_shard
+            if candidate > 0 and candidate <= num_devices:
+                num_devices_eff = candidate
+
+        if not alias_mask_any:
+            ttnn.experimental.paged_update_cache(
+                kvpe_cache,
+                tt_kvpe,
+                update_idxs_tensor=position_idxs,
+                page_table=page_table,
+                mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+            )
+        elif per_shard <= 0 or num_devices_eff <= 0 or total_elems % num_devices_eff != 0:
+            ttnn.experimental.paged_update_cache(
+                kvpe_cache,
+                tt_kvpe,
+                update_idxs_tensor=position_idxs,
+                page_table=page_table,
+                mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+            )
+        else:
+            per_shard_padded = total_elems // num_devices_eff
+            if per_shard_padded < per_shard:
+                ttnn.experimental.paged_update_cache(
+                    kvpe_cache,
+                    tt_kvpe,
+                    update_idxs_tensor=position_idxs,
+                    page_table=page_table,
+                    mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+                )
+            else:
+                prompt_row = (~alias_mask).to(torch.int32)
+                spec_row = alias_mask.to(torch.int32)
+                split_state = cls._get_or_create_alias_split_state(
+                    cfg=cfg,
+                    position_idxs=position_idxs,
+                    logical_shape=tuple(int(dim) for dim in logical_shape),
+                    is_sharded=is_sharded,
+                    num_devices_eff=num_devices_eff,
+                    per_shard=per_shard,
+                    prompt_row=prompt_row,
+                    spec_row=spec_row,
+                )
+
+                tt_prompt_pos = ttnn.add(
+                    ttnn.multiply(position_idxs, split_state["prompt_mask"]),
+                    ttnn.multiply(split_state["neg_one"], split_state["inv_prompt_mask"]),
+                )
+                tt_spec_pos = ttnn.add(
+                    ttnn.multiply(position_idxs, split_state["spec_mask"]),
+                    ttnn.multiply(split_state["neg_one"], split_state["inv_spec_mask"]),
+                )
+
+                # Update KVPE Cache (prompt lanes first, spec lanes second)
+                ttnn.experimental.paged_update_cache(
+                    kvpe_cache,
+                    tt_kvpe,
+                    update_idxs_tensor=tt_prompt_pos,
+                    page_table=page_table,
+                    mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+                )
+                ttnn.experimental.paged_update_cache(
+                    kvpe_cache,
+                    tt_kvpe,
+                    update_idxs_tensor=tt_spec_pos,
+                    page_table=page_table,
+                    mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+                )
+
+                ttnn.deallocate(tt_prompt_pos)
+                ttnn.deallocate(tt_spec_pos)
 
     @classmethod
     def _fwd_decode_q_rope_nope(
@@ -1874,7 +2048,7 @@ class MLA1D(AbstractModule):
         tt_q = ttnn.to_memory_config(tt_q, memory_config=wq_b_in0_memory_config)
         # 1,1,32,1536, width sharded 8x2 [32,96]
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
-        # 1,1,32,3072, L1 interleaved
+        # 1,1,32,3072, WIDTH sharded 8x2 [32,192]
         # Reshape
         tt_q = ttnn.untilize(
             tt_q,
@@ -1898,21 +2072,17 @@ class MLA1D(AbstractModule):
         tt_q_rope = ttnn.slice(
             tt_q, [0, 0, 0, qk_nope_head_dim], [1, bsz, num_heads_local, qk_head_dim], **cfg["q_rope_slice"]
         )
-        # 1,32,16,128 L1 interleaved
 
-        # Q Rope: wkv_b1
+        # Q Nope: wkv_b1
         # 1,32,16,192 L1 interleaved
-        tt_q_nope = ttnn.transpose(tt_q_nope, 1, 2)  # [1, num_heads_local, bsz, qk_nope_head_dim]
-        # 1,16,32,128 L1 interleaved
-
-        # Shard activations on optimal DRAM bank-to-worker cores for batched matmul
-        tt_q_nope = ttnn.to_memory_config(tt_q_nope, memory_config=cfg["wkv_b1_in0_memory_config"])
+        tt_q_nope = ttnn.transpose(
+            tt_q_nope, 1, 2, memory_config=cfg["wkv_b1_in0_memory_config"]
+        )  # [1, num_heads_local, bsz, qk_nope_head_dim]
 
         tt_q_nope = ttnn.linear(tt_q_nope, **cfg["wkv_b1"])  # [1, num_heads_local_padded, bsz, kv_lora_rank]
-        tt_q_nope = ttnn.to_memory_config(tt_q_nope, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        # 1,16,32,512 L1 interleaved
-        tt_q_nope = ttnn.transpose(tt_q_nope, 1, 2)  # [1, bsz, num_heads_local, kv_lora_rank]
+        tt_q_nope = ttnn.transpose(
+            tt_q_nope, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG
+        )  # [1, bsz, num_heads_local, kv_lora_rank]
         # 1,32,16,512 L1 interleaved
 
         # Q RoPE
@@ -1965,24 +2135,18 @@ class MLA1D(AbstractModule):
     @classmethod
     def _fwd_decode_wkv_b2(cls, attn_out: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         # 1,4,128,512 height sharded 8x9 [32,512]
-        attn_out = ttnn.to_memory_config(attn_out, **cfg["flash_mla_out_reshard"])
-        # 1,4,128,512 L1 interleaved
-        # wkv_b2: DP
-        attn_out = ttnn.transpose(attn_out, 1, 2)  # [1, num_heads, bsz, kv_lora_rank]
-        # 1,128,4,512 L1 interleaved
-
-        # Shard activations on optimal DRAM bank-to-worker cores for batched matmul
-        attn_out = ttnn.to_memory_config(attn_out, memory_config=cfg["wkv_b2_in0_memory_config"])
+        attn_out = ttnn.transpose(
+            attn_out, 1, 2, memory_config=cfg["wkv_b2_in0_memory_config"]
+        )  # [1, num_heads, bsz, kv_lora_rank]
         v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_padded, bsz, v_head_dim]
-        v_out = ttnn.to_memory_config(v_out, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Slice off padding from wkv_b2 output
 
-        # 1,128,4,128 L1 interleaved = [1, num_heads, bsz, v_head_dim]
-        v_out = ttnn.transpose(v_out, 1, 2)
-        # 1,4,128,128 L1 interleaved = [1, bsz, num_heads, v_head_dim]
-        v_out = ttnn.to_memory_config(
+        # 1,128,4,128 HEIGHT sharded 12 cores [352,128] = [1, num_heads (padded to 132), bsz_local, v_head_dim]
+        v_out = ttnn.transpose(
             v_out,
+            1,
+            2,
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
@@ -2006,31 +2170,26 @@ class MLA1D(AbstractModule):
         v_head_dim: int,
     ) -> ttnn.Tensor:
         mesh_shape = cfg["mesh_shape"]
-        # 1,4,128,128 L1 interleaved
+        # 1,4,128,128 HEIGHT sharded 2x2 [128,128] (batch padded to 132)
         # Reshape
         v_out = ttnn.untilize(v_out)
         v_out = ttnn.experimental.view(v_out, (1, 1, bsz // mesh_shape[1], num_heads * v_head_dim))
         # All_gather
-        v_out = ttnn.to_memory_config(v_out, memory_config=ttnn.L1_MEMORY_CONFIG)
-        v_out = ttnn.all_broadcast(v_out, **cfg["wo_ag_decode"])
-        v_out = ttnn.concat(v_out, dim=2)
+        wo_in0_memory_config = ttnn.create_sharded_memory_config(
+            (1, 1, bsz, num_heads * v_head_dim),
+            **cfg["wo_in0_memory_config"],
+        )
+        v_out = ttnn.experimental.all_gather_async(v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"]))
         v_out = ttnn.tilize(v_out)
-        # 1,1,32,16384 L1 interleaved
+        v_out = ttnn.to_memory_config(v_out, memory_config=wo_in0_memory_config)
+        # 1,1,32,16384 WIDTH sharded 2x8 [32,1024]
+
         return v_out
 
     @classmethod
     def _fwd_decode_wo(cls, v_out: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        # 1,1,32,16384 L1 interleaved
-        # Shard in0 to L1 WIDTH sharded for wo matmul
-        wo_in0_memory_config = ttnn.create_sharded_memory_config(
-            v_out.shape,
-            **cfg["wo_in0_memory_config"],
-        )
-        v_out = ttnn.to_memory_config(v_out, memory_config=wo_in0_memory_config)
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
-        out = ttnn.to_memory_config(out, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        # 1,1,32,896 width sharded 7x4 [32,32]
+        # 1,1,32,896 WIDTH sharded 2x6 [32,96]
         return out
 
     @classmethod
@@ -2047,7 +2206,9 @@ class MLA1D(AbstractModule):
         # Fused wq_kv_a matmul (interleaved in0 + DRAM WIDTH sharded in1)
         dim = x.shape[3]
         qkv_a_n = q_lora_rank + kv_lora_rank + qk_rope_head_dim
-        wq_kv_a_program_config = build_prefill_matmul_program_config(seq_len, k=dim, n=qkv_a_n)
+        wq_kv_a_program_config = build_prefill_matmul_program_config(
+            seq_len, k=dim, n=qkv_a_n, mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY]
+        )
         tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"], program_config=wq_kv_a_program_config)
 
         # AR using AG + local reduce (since sub-tile RS not supported for new shapes)

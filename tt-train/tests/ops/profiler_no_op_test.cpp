@@ -6,7 +6,6 @@
 #include <sys/types.h>
 
 #include <cassert>
-#include <core/ttnn_all_includes.hpp>
 #include <cstdint>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 #include <ttnn/tensor/shape/shape.hpp>

@@ -239,7 +239,7 @@ def test_addcmul_with_bcast_bf8b(device, torch_dtype, ttnn_dtype, a_shape, b_sha
         (torch.float32, ttnn.float32),
     ],
 )
-@pytest.mark.parametrize("value", [1.0, 0.5])
+@pytest.mark.parametrize("value", [0.5, 3])
 @pytest.mark.parametrize(
     "in_data1_shape, in_data2_shape, in_data3_shape",
     [

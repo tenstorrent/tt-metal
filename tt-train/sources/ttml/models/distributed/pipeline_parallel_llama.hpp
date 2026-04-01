@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <yaml-cpp/yaml.h>
+
 #include "autograd/tensor.hpp"
 #include "llama.hpp"
 #include "models/common/transformer_common.hpp"

@@ -4,9 +4,9 @@
 
 #include "nlp_create_qkv_heads_vit.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::experimental {
 
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsVitOperation::invoke(
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> nlp_create_qkv_heads_vit(
     const Tensor& input_tensor_q,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors) {
@@ -16,4 +16,4 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsVitOperation:
     return {outputs[0], outputs[1], outputs[2]};
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental

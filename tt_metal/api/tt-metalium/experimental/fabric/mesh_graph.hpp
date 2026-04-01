@@ -8,8 +8,8 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_stl/indestructible.hpp>
-#include <umd/device/types/arch.hpp>                      // tt::ARCH
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <umd/device/types/arch.hpp>  // tt::ARCH
+#include <tt-metalium/device_types.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <functional>

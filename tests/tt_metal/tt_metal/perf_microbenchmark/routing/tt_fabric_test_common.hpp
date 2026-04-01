@@ -219,7 +219,7 @@ public:
         if (new_fabric_config != current_fabric_config_ || fabric_tensix_config != current_fabric_tensix_config_ ||
             reliability_mode != current_fabric_reliability_mode_ ||
             fabric_setup.max_packet_size != current_max_packet_size_ ||
-            channel_trimming_mode != current_channel_trimming_mode_) {
+            channel_trimming_mode != current_channel_trimming_mode_ || fabric_setup.use_vc2 != current_use_vc2_) {
             if (are_devices_open_) {
                 log_info(tt::LogTest, "Closing devices and switching to new fabric config: {}", new_fabric_config);
                 close_devices();
@@ -277,6 +277,7 @@ public:
         current_fabric_reliability_mode_ = tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
         current_max_packet_size_ = std::nullopt;
         current_channel_trimming_mode_ = ChannelTrimmingMode::NONE;
+        current_use_vc2_ = false;
         are_devices_open_ = false;
     }
 
@@ -1779,6 +1780,7 @@ private:
         tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE};
     std::optional<uint32_t> current_max_packet_size_{std::nullopt};
     ChannelTrimmingMode current_channel_trimming_mode_{ChannelTrimmingMode::NONE};
+    bool current_use_vc2_{false};
     std::shared_ptr<MeshDevice> mesh_device_;
     std::shared_ptr<MeshWorkload> mesh_workload_;
     MeshId local_mesh_id_;
@@ -1888,6 +1890,7 @@ private:
         current_fabric_tensix_config_ = fabric_tensix_config;
         current_fabric_reliability_mode_ = reliability_mode;
         current_max_packet_size_ = fabric_setup.max_packet_size;
+        current_use_vc2_ = fabric_setup.use_vc2;
         are_devices_open_ = true;
     }
 

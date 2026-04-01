@@ -377,7 +377,7 @@ class QwenImagePipeline:
                 "num_links": 1,
                 "is_fsdp": False,
                 "dynamic_load_encoder": True,
-                "dynamic_load_vae": False,
+                "dynamic_load_vae": not ttnn.device.is_blackhole(),
             },
             (4, 8): {
                 "cfg_config": (2, 1),

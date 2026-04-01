@@ -147,6 +147,10 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
         MEM_SYSENG_ETH_MSG_LINK_STATUS_CHECK;
     fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_RELEASE_CORE)] =
         MEM_SYSENG_ETH_MSG_RELEASE_CORE;
+    fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_PORT_REINIT_MACPCS)] =
+        MEM_SYSENG_ETH_MSG_PORT_REINIT_MACPCS;
+    fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_PORT_ACTION)] =
+        MEM_SYSENG_ETH_MSG_PORT_ACTION;
     fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::HEARTBEAT)] = MEM_SYSENG_ETH_HEARTBEAT;
     fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::RETRAIN_COUNT)] =
         (uint64_t)&((eth_live_status_t*)MEM_SYSENG_ETH_LIVE_STATUS)->retrain_count;

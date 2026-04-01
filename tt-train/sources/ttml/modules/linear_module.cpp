@@ -5,7 +5,6 @@
 #include "linear_module.hpp"
 
 #include <cmath>
-#include <core/ttnn_all_includes.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"

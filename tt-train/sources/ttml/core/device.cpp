@@ -4,7 +4,7 @@
 
 #include "device.hpp"
 
-#include <core/ttnn_all_includes.hpp>
+#include "tt-metalium/device.hpp"
 
 namespace ttml::core {
 

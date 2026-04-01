@@ -6,9 +6,9 @@
 
 #include "ttnn/operations/moreh/moreh_dot/device/moreh_dot_device_operation.hpp"
 
-namespace ttnn::operations::moreh::moreh_dot {
+namespace ttnn {
 
-Tensor MorehDot::invoke(
+Tensor moreh_dot(
     const Tensor& input_a,
     const Tensor& input_b,
     const std::optional<Tensor>& output,
@@ -17,4 +17,5 @@ Tensor MorehDot::invoke(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return ttnn::prim::moreh_dot(input_a, input_b, output, dtype, memory_config, compute_kernel_config);
 }
-}  // namespace ttnn::operations::moreh::moreh_dot
+
+}  // namespace ttnn

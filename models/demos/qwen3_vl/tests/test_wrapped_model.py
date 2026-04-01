@@ -73,7 +73,14 @@ def test_wrapped_vision_model_inference(
 
     # Run reference model
     reference_output, deepstack_visual_embeds = reference_model(pt_pixel_values, image_grid_thw)
-    tt_output_torch, tt_deepstack_visual_embeds = torch_model(pt_pixel_values, image_grid_thw)
+    tt_output, tt_deepstack_visual_embeds = torch_model(pt_pixel_values, image_grid_thw)
+
+    # Reassemble the hidden dimension that was mesh-partitioned by the wrapper.
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1),
+    )
+    assert tt_output_torch.shape == reference_output.shape
 
     # Compare outputs
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)

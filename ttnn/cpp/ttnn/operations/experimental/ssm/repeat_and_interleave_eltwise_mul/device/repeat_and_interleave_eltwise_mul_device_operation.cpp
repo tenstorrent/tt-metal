@@ -110,7 +110,7 @@ Tensor RepeatAndInterleaveEltwiseMulDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.a.device());
 }
 
-tt::stl::hash::hash_t RepeatAndInterleaveEltwiseMulDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RepeatAndInterleaveEltwiseMulDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.a;
     const auto& input_tensor_b = tensor_args.b;

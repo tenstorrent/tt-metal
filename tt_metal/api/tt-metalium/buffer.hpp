@@ -28,8 +28,8 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/buffer_page_mapping.hpp>
+// UMD: re-exports CoreType (used in Buffer::core_type return type).
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
 
 namespace tt::stl::json {
 template <typename T>

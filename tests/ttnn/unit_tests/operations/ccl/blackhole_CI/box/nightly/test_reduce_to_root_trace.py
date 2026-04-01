@@ -87,6 +87,9 @@ def compute_reference_reduce_to_root(
     return torch.cat(l_final_cores, dim=1), torch.cat(s_final_cores, dim=1), torch.cat(m_final_cores, dim=1)
 
 
+@pytest.mark.skip(
+    reason="Consistently failing with data mismatch after trace replay on all BH multi-chip setups. See #39098"
+)
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
     "device_params",

@@ -3,7 +3,6 @@
 
 #include "prod_all_program_factory.hpp"
 
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -13,7 +12,6 @@ ProdAllProgramFactory::cached_program_t ProdAllProgramFactory::create(
     const ProdAllParams& /*operation_attributes*/, const ProdAllInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::constants;
 
     const auto& input = tensor_args.input;
     auto& output = tensor_return_value;
@@ -25,7 +23,7 @@ ProdAllProgramFactory::cached_program_t ProdAllProgramFactory::create(
     DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
     uint32_t single_tile_size = tile_size(cb_data_format);
 
-    uint32_t num_tiles = input.physical_volume() / TILE_HW;
+    uint32_t num_tiles = input.physical_volume() / input.tensor_spec().tile().get_tile_hw();
 
     uint32_t num_input_tiles = 2;
     CircularBufferConfig cb_src0_config =

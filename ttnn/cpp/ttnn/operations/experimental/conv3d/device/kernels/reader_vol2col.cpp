@@ -5,6 +5,26 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
+// Pre-zero CB pages via NOC DMA from MEM_ZEROS so tile-alignment padding is zero.
+// Uses MEM_ZEROS_SIZE-aligned transactions (same pattern as zero_out_tiles in conv_reader_common.hpp).
+// padded_page_bytes must be a multiple of 16 to guarantee remainder alignment.
+template <uint32_t padded_page_bytes>
+FORCE_INLINE void pre_zero_pages(uint32_t write_addr, uint32_t num_pages) {
+    static_assert(padded_page_bytes % 16 == 0, "CB page size must be 16-byte aligned for NOC transactions");
+    const uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+    uint32_t total = num_pages * padded_page_bytes;
+    noc_async_read_one_packet_set_state(zeros_noc_addr, MEM_ZEROS_SIZE);
+    while (total >= MEM_ZEROS_SIZE) {
+        noc_async_read_one_packet_with_state<true>(zeros_noc_addr, write_addr);
+        write_addr += MEM_ZEROS_SIZE;
+        total -= MEM_ZEROS_SIZE;
+    }
+    if (total > 0) {
+        noc_async_read(zeros_noc_addr, write_addr, total);
+    }
+    noc_async_read_barrier();
+}
+
 inline int32_t clampIndex(int32_t idx, int32_t lower_bound, int32_t upper_bound) {
     // If we're doing replicate padding, clamp idx into [lower_bound, upper_bound].
     if (idx < lower_bound) {
@@ -30,6 +50,26 @@ inline void zeroPad(uint32_t cb_write_addr) {
     if (partial_read_size > 0) {
         noc_async_read(zeros_noc_addr, cb_write_addr, partial_read_size);
     }
+}
+
+template <typename Reader>
+FORCE_INLINE uint64_t
+get_input_noc_addr(const Reader& reader, uint32_t in_page_idx, uint32_t c_in_offset_bytes, uint32_t in_row_size_bytes) {
+    if constexpr (Reader::DSpec::tensor_shape_static) {
+        if constexpr ((reader.dspec().rank() > 1) && (reader.dspec().tensor_shape()[1] > 1)) {
+            // Width/block sharded RowMajor tensors may split a logical row across multiple pages.
+            // Height-sharded inputs keep a single page per row and should use the direct path below.
+            constexpr uint32_t width_in_pages = reader.dspec().tensor_shape()[1];
+            const uint32_t col_page_idx = c_in_offset_bytes / in_row_size_bytes;
+            const uint32_t in_offset_bytes = c_in_offset_bytes - (col_page_idx * in_row_size_bytes);
+            ASSERT(col_page_idx < width_in_pages);
+
+            const uint32_t in_page_id = in_page_idx * width_in_pages + col_page_idx;
+            return reader.get_noc_addr(in_page_id, in_offset_bytes);
+        }
+    }
+
+    return reader.get_noc_addr(in_page_idx, c_in_offset_bytes);
 }
 
 void kernel_main() {
@@ -64,12 +104,15 @@ void kernel_main() {
     constexpr uint32_t dilation_t = get_compile_time_arg_val(28);
     constexpr uint32_t dilation_h = get_compile_time_arg_val(29);
     constexpr uint32_t dilation_w = get_compile_time_arg_val(30);
-
     // L1 prefetch buffer parameters
     constexpr uint32_t cb_input_shard = get_compile_time_arg_val(31);
     constexpr uint32_t T_shard_max = get_compile_time_arg_val(32);
     constexpr uint32_t H_shard_max = get_compile_time_arg_val(33);
     constexpr uint32_t W_shard_max = get_compile_time_arg_val(34);
+
+    // Padding bytes to append after each patch row to reach tile-aligned CB page width
+    constexpr uint32_t patch_pad_bytes = get_compile_time_arg_val(35);
+    constexpr uint32_t padded_page_bytes = kT * kH * kW * C_in_block_bytes + patch_pad_bytes;
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -86,7 +129,7 @@ void kernel_main() {
     const uint32_t w_out_end = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
-    constexpr auto in_args = TensorAccessorArgs<35>();
+    constexpr auto in_args = TensorAccessorArgs<36>();
     const auto in_reader = TensorAccessor(in_args, in_addr, in_row_size_bytes);
 
     constexpr uint32_t num_patches = T_block_size * H_block_size * W_block_size;
@@ -124,7 +167,6 @@ void kernel_main() {
 
                         for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
                             const uint32_t w_block_end = std::min(w_block + W_block_size, w_out_end);
-
                             if constexpr (use_l1_prefetch) {
                                 // ============================================================
                                 // TWO-PHASE READER (L1 prefetch for kernels > 1x1x1)
@@ -163,8 +205,8 @@ void kernel_main() {
                                                 (t_local * H_shard_max_W_shard_max + h_local * W_shard_max) *
                                                 C_in_block_bytes;
                                             for (uint32_t w_local = 0; w_local < W_shard_cur; w_local++) {
-                                                const uint64_t noc_addr =
-                                                    in_reader.get_noc_addr(page_idx, c_in_offset_bytes);
+                                                const uint64_t noc_addr = get_input_noc_addr(
+                                                    in_reader, page_idx, c_in_offset_bytes, in_row_size_bytes);
                                                 noc_async_read(
                                                     noc_addr, shard_l1_base + shard_offset, C_in_block_bytes);
                                                 page_idx++;
@@ -208,8 +250,8 @@ void kernel_main() {
                                                             static_cast<uint32_t>(t_clamped) * H_in_W_in +
                                                             static_cast<uint32_t>(h_clamped) * W_in +
                                                             static_cast<uint32_t>(w_clamped);
-                                                        const uint64_t noc_addr =
-                                                            in_reader.get_noc_addr(page_idx, c_in_offset_bytes);
+                                                        const uint64_t noc_addr = get_input_noc_addr(
+                                                            in_reader, page_idx, c_in_offset_bytes, in_row_size_bytes);
                                                         noc_async_read(noc_addr, shard_addr, C_in_block_bytes);
                                                     }
                                                 } else {
@@ -217,8 +259,8 @@ void kernel_main() {
                                                                               static_cast<uint32_t>(t_in) * H_in_W_in +
                                                                               static_cast<uint32_t>(h_in) * W_in +
                                                                               static_cast<uint32_t>(w_in);
-                                                    const uint64_t noc_addr =
-                                                        in_reader.get_noc_addr(page_idx, c_in_offset_bytes);
+                                                    const uint64_t noc_addr = get_input_noc_addr(
+                                                        in_reader, page_idx, c_in_offset_bytes, in_row_size_bytes);
                                                     noc_async_read(noc_addr, shard_addr, C_in_block_bytes);
                                                 }
 
@@ -234,13 +276,15 @@ void kernel_main() {
                                 // Use stateful NOC read: L1->L1 with constexpr transfer size.
                                 constexpr uint32_t kW_bytes = kW * C_in_block_bytes;
                                 static_assert(kW_bytes <= NOC_MAX_BURST_SIZE, "kW_bytes exceeds NOC_MAX_BURST_SIZE");
-                                noc_async_read_one_packet_set_state(shard_noc_base, kW_bytes);
-
                                 constexpr uint32_t chunk_max = 32;  // TILE_HEIGHT
                                 uint32_t patches_remaining = num_patches;
                                 uint32_t chunk_size = patches_remaining < chunk_max ? patches_remaining : chunk_max;
                                 cb_reserve_back(cb_vol2col, chunk_size);
                                 uint32_t cb_write_addr = get_write_ptr(cb_vol2col);
+                                if constexpr (patch_pad_bytes > 0) {
+                                    pre_zero_pages<padded_page_bytes>(cb_write_addr, chunk_size);
+                                }
+                                noc_async_read_one_packet_set_state(shard_noc_base, kW_bytes);
                                 uint32_t patches_in_chunk = 0;
 
                                 for (uint32_t t = t_block; t < t_block_end; t++) {
@@ -263,6 +307,10 @@ void kernel_main() {
                                                 }
                                             }
 
+                                            if constexpr (patch_pad_bytes > 0) {
+                                                cb_write_addr += patch_pad_bytes;
+                                            }
+
                                             patches_in_chunk++;
                                             if (patches_in_chunk == chunk_size) {
                                                 noc_async_read_barrier();
@@ -274,6 +322,10 @@ void kernel_main() {
                                                         patches_remaining < chunk_max ? patches_remaining : chunk_max;
                                                     cb_reserve_back(cb_vol2col, chunk_size);
                                                     cb_write_addr = get_write_ptr(cb_vol2col);
+                                                    if constexpr (patch_pad_bytes > 0) {
+                                                        pre_zero_pages<padded_page_bytes>(cb_write_addr, chunk_size);
+                                                    }
+                                                    noc_async_read_one_packet_set_state(shard_noc_base, kW_bytes);
                                                 }
                                             }
                                         }
@@ -313,6 +365,9 @@ void kernel_main() {
                                 uint32_t chunk_size = patches_remaining < chunk_max ? patches_remaining : chunk_max;
                                 cb_reserve_back(cb_vol2col, chunk_size);
                                 uint32_t cb_write_addr = get_write_ptr(cb_vol2col);
+                                if constexpr (patch_pad_bytes > 0) {
+                                    pre_zero_pages<padded_page_bytes>(cb_write_addr, chunk_size);
+                                }
                                 uint32_t patches_in_chunk = 0;
 
                                 for (uint32_t t = t_block_s_start; t < t_block_s_end; t += stride_t) {
@@ -352,12 +407,16 @@ void kernel_main() {
                                                             batch_page_base + static_cast<uint32_t>(t_idx) * H_in_W_in +
                                                             static_cast<uint32_t>(h_idx) * W_in +
                                                             static_cast<uint32_t>(w_idx);
-                                                        const uint64_t noc_addr =
-                                                            in_reader.get_noc_addr(page_idx, c_in_offset_bytes);
+                                                        const uint64_t noc_addr = get_input_noc_addr(
+                                                            in_reader, page_idx, c_in_offset_bytes, in_row_size_bytes);
                                                         noc_async_read(noc_addr, cb_write_addr, C_in_block_bytes);
                                                         cb_write_addr += C_in_block_bytes;
                                                     }
                                                 }
+                                            }
+
+                                            if constexpr (patch_pad_bytes > 0) {
+                                                cb_write_addr += patch_pad_bytes;
                                             }
 
                                             patches_in_chunk++;
@@ -371,6 +430,9 @@ void kernel_main() {
                                                         patches_remaining < chunk_max ? patches_remaining : chunk_max;
                                                     cb_reserve_back(cb_vol2col, chunk_size);
                                                     cb_write_addr = get_write_ptr(cb_vol2col);
+                                                    if constexpr (patch_pad_bytes > 0) {
+                                                        pre_zero_pages<padded_page_bytes>(cb_write_addr, chunk_size);
+                                                    }
                                                 }
                                             }
                                         }

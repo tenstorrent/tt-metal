@@ -6,6 +6,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);        // batch_mean
@@ -36,6 +39,8 @@ void kernel_main() {
     constexpr auto batch_var_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
     constexpr auto weight_args = TensorAccessorArgs<batch_var_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
+    constexpr bool batch_stat_is_fp32 = get_compile_time_arg_val(bias_args.next_compile_time_args_offset()) == 1;
+    constexpr bool param_is_fp32 = get_compile_time_arg_val(bias_args.next_compile_time_args_offset() + 1) == 1;
 
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
     const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
@@ -56,6 +61,13 @@ void kernel_main() {
     const uint32_t bias_tile_bytes = get_tile_size(cb_id_bias);
     const auto bias = TensorAccessor(bias_args, bias_addr, bias_tile_bytes);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_id_src_obj(cb_id_src);
+    experimental::CircularBuffer cb_id_dst_obj(cb_id_dst);
+    experimental::CircularBuffer cb_id_batch_var_obj(cb_id_batch_var);
+    experimental::CircularBuffer cb_id_weight_obj(cb_id_weight);
+    experimental::CircularBuffer cb_id_bias_obj(cb_id_bias);
+
     uint32_t tiles_per_batch = HtWt * C;
     uint32_t start_n = start_tile_id / tiles_per_batch;
     uint32_t start_remaining = start_tile_id % tiles_per_batch;
@@ -70,46 +82,64 @@ void kernel_main() {
     for (uint32_t n = start_n; n < N && num_tiles_written < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_written < num_tiles; ++c, start_t = 0) {
             // read a tile from src
-            cb_reserve_back(cb_id_src, onetile);
-            uint32_t l1_write_addr = get_write_ptr(cb_id_src);
-            noc_async_read_tile(tile_offset, src, l1_write_addr);
-            noc_async_read_barrier();
-            FILL_TILE_WITH_FIRST_ELEMENT(cb_id_src);
-            cb_push_back(cb_id_src, onetile);
+            cb_id_src_obj.reserve_back(onetile);
+            noc.async_read(src, cb_id_src_obj, src_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            if constexpr (batch_stat_is_fp32) {
+                fill_tile_with_first_element<float>(cb_id_src);
+            } else {
+                fill_tile_with_first_element_bfloat16(cb_id_src);
+            }
+            cb_id_src_obj.push_back(onetile);
 
             // read a tile from batch variance
-            cb_reserve_back(cb_id_batch_var, onetile);
-            uint32_t l1_batch_var_write_addr = get_write_ptr(cb_id_batch_var);
-            noc_async_read_tile(tile_offset, batch_var, l1_batch_var_write_addr);
-            noc_async_read_barrier();
-            FILL_TILE_WITH_FIRST_ELEMENT(cb_id_batch_var);
-            cb_push_back(cb_id_batch_var, onetile);
+            cb_id_batch_var_obj.reserve_back(onetile);
+            noc.async_read(
+                batch_var, cb_id_batch_var_obj, batch_var_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            if constexpr (batch_stat_is_fp32) {
+                fill_tile_with_first_element<float>(cb_id_batch_var);
+            } else {
+                fill_tile_with_first_element_bfloat16(cb_id_batch_var);
+            }
+            cb_id_batch_var_obj.push_back(onetile);
 
             if constexpr (weight_has_value) {  // read a tile from weight tensor
-                cb_reserve_back(cb_id_weight, onetile);
-                uint32_t l1_weight_write_addr = get_write_ptr(cb_id_weight);
-                noc_async_read_tile(tile_offset, weight, l1_weight_write_addr);
-                noc_async_read_barrier();
-                FILL_TILE_WITH_FIRST_ELEMENT(cb_id_weight);
-                cb_push_back(cb_id_weight, onetile);
+                cb_id_weight_obj.reserve_back(onetile);
+                noc.async_read(
+                    weight, cb_id_weight_obj, weight_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+                if constexpr (param_is_fp32) {
+                    fill_tile_with_first_element<float>(cb_id_weight);
+                } else {
+                    fill_tile_with_first_element_bfloat16(cb_id_weight);
+                }
+                cb_id_weight_obj.push_back(onetile);
             }
 
             if constexpr (bias_has_value) {  // read a tile from bias tensor
-                cb_reserve_back(cb_id_bias, onetile);
-                uint32_t l1_bias_write_addr = get_write_ptr(cb_id_bias);
-                noc_async_read_tile(tile_offset, bias, l1_bias_write_addr);
-                noc_async_read_barrier();
-                FILL_TILE_WITH_FIRST_ELEMENT(cb_id_bias);
-                cb_push_back(cb_id_bias, onetile);
+                cb_id_bias_obj.reserve_back(onetile);
+                noc.async_read(bias, cb_id_bias_obj, bias_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+                if constexpr (param_is_fp32) {
+                    fill_tile_with_first_element<float>(cb_id_bias);
+                } else {
+                    fill_tile_with_first_element_bfloat16(cb_id_bias);
+                }
+                cb_id_bias_obj.push_back(onetile);
             }
 
             for (uint32_t t = start_t; t < HtWt && num_tiles_written < num_tiles; ++t, ++num_tiles_written) {
                 // write a tile to dst
-                cb_wait_front(cb_id_dst, onetile);
-                uint32_t l1_read_addr = get_read_ptr(cb_id_dst);
-                noc_async_write_tile(start_tile_id + num_tiles_written, dst, l1_read_addr);
-                noc_async_write_barrier();
-                cb_pop_front(cb_id_dst, onetile);
+                cb_id_dst_obj.wait_front(onetile);
+                noc.async_write(
+                    cb_id_dst_obj,
+                    dst,
+                    dst_tile_bytes,
+                    {.offset_bytes = 0},
+                    {.page_id = start_tile_id + num_tiles_written});
+                noc.async_write_barrier();
+                cb_id_dst_obj.pop_front(onetile);
             }
             tile_offset += c_stride;
         }

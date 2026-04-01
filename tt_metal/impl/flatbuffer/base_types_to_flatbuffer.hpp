@@ -7,7 +7,6 @@
 #include "base_types_generated.h"
 #include <buffer_types.hpp>
 #include <kernel_types.hpp>
-#include <data_types.hpp>
 #include <tt_backend_api_types.hpp>
 #include <tile.hpp>
 #include <circular_buffer_constants.h>

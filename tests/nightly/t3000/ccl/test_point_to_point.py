@@ -179,54 +179,57 @@ def test_point_to_point_with_device_delay(mesh_device, shape_coords_layout, dtyp
         delays.append(delay_at_i)
     delays[coord1[0]][coord1[1]] = 800000
 
-    # Compile programs
-    sent_tensor = ttnn.point_to_point(
-        input_tensor,
-        coord0,
-        coord1,
-        topology=ttnn.Topology.Linear,
-    )
-    ttnn.apply_device_delay(
-        mesh_device, delays
-    )  # tests for a potential race by having receive attempt to increment the semaphore before the send is done
+    with mesh_device.cache_entries_counter.measure():
+        # Compile programs
+        sent_tensor = ttnn.point_to_point(
+            input_tensor,
+            coord0,
+            coord1,
+            topology=ttnn.Topology.Linear,
+        )
+        ttnn.apply_device_delay(
+            mesh_device, delays
+        )  # tests for a potential race by having receive attempt to increment the semaphore before the send is done
 
-    # Capture trace
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    sent_tensor = ttnn.point_to_point(
-        input_tensor,
-        coord0,
-        coord1,
-        topology=ttnn.Topology.Linear,
-    )
-    ttnn.apply_device_delay(
-        mesh_device, delays
-    )  # tests for a potential race by having receive attempt to increment the semaphore before the send is done
-    sent_tensor2 = ttnn.point_to_point(
-        input_tensor2,
-        coord0,
-        coord1,
-        topology=ttnn.Topology.Linear,
-    )
-    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-    ttnn.synchronize_device(mesh_device)
+        # Capture trace
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        sent_tensor = ttnn.point_to_point(
+            input_tensor,
+            coord0,
+            coord1,
+            topology=ttnn.Topology.Linear,
+        )
+        ttnn.apply_device_delay(
+            mesh_device, delays
+        )  # tests for a potential race by having receive attempt to increment the semaphore before the send is done
+        sent_tensor2 = ttnn.point_to_point(
+            input_tensor2,
+            coord0,
+            coord1,
+            topology=ttnn.Topology.Linear,
+        )
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
 
-    # Execute trace
-    for i in range(10):
-        ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+        # Execute trace
+        for i in range(10):
+            ttnn.execute_trace(mesh_device, trace_id, blocking=False)
 
-    ttnn.release_trace(mesh_device, trace_id)
-    ttnn.synchronize_device(mesh_device)
+        ttnn.release_trace(mesh_device, trace_id)
+        ttnn.synchronize_device(mesh_device)
 
-    # Verify results
-    sent_tensor_torch = ttnn.to_torch(sent_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-    assert_equal(input_tensor_torch[idx_start0:idx_end0, :, :, :], sent_tensor_torch[idx_start1:idx_end1, :, :, :])
-    sent_tensor2_torch = ttnn.to_torch(sent_tensor2, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-    assert_equal(input_tensor_torch[idx_start0:idx_end0, :, :, :] * 2, sent_tensor2_torch[idx_start1:idx_end1, :, :, :])
+        # Verify results
+        sent_tensor_torch = ttnn.to_torch(sent_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        assert_equal(input_tensor_torch[idx_start0:idx_end0, :, :, :], sent_tensor_torch[idx_start1:idx_end1, :, :, :])
+        sent_tensor2_torch = ttnn.to_torch(sent_tensor2, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        assert_equal(
+            input_tensor_torch[idx_start0:idx_end0, :, :, :] * 2, sent_tensor2_torch[idx_start1:idx_end1, :, :, :]
+        )
 
     # 1 for send/receive and 1 for device delay
     assert (
-        mesh_device.num_program_cache_entries() == 2
-    ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
+        mesh_device.cache_entries_counter.total == 2
+    ), f"Device has {mesh_device.cache_entries_counter.total} program cache entries"
 
 
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)

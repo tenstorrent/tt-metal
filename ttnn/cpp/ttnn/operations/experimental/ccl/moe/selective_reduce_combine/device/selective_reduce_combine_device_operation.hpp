@@ -9,9 +9,7 @@
 
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/core.hpp"
-#include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/decorators.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "ttnn/tensor/tensor.hpp"
@@ -46,7 +44,7 @@ struct SelectiveReduceCombineDeviceOperation {
 namespace ttnn::prim {
 ttnn::Tensor selective_reduce_combine(
     const ttnn::Tensor& dense_input_tensor,
-    const ttnn::Tensor& dense_metadata_tensor,
+    const ttnn::Tensor& dense_activations_tensor,
     const ttnn::Tensor& dense_token_maps_tensor,
     const ttnn::Tensor& dense_token_counts_tensor,
     uint32_t hidden_size,

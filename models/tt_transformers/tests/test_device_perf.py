@@ -17,6 +17,7 @@ from models.tt_transformers.tests.test_utils import (
     split_compile_and_trace,
     verify_value_within_margin,
 )
+from tools.tracy.common import PROFILER_DEFAULT_OP_SUPPORT_COUNT
 from tools.tracy.process_model_log import get_latest_ops_log_filename
 
 
@@ -63,6 +64,14 @@ def test_device_perf_one_iter(
             f"Perf targets file not found, device perf test will proceed without performance target comparison"
         )
 
+    # Large sequence lengths dispatch many more programs than the default profiler buffer
+    # (1333 slots) can hold, causing buffer overflow and missing device perf data.
+    # Scale op_support_count proportionally with max_seq_len (empirically, seq=131072 needs ~10000).
+    op_support_count = max(
+        int(PROFILER_DEFAULT_OP_SUPPORT_COUNT * 1.333),  # preserve previous minimum
+        int(max_seq_len / 10),
+    )
+
     _ = run_device_perf(
         cmd,
         subdir,
@@ -70,6 +79,7 @@ def test_device_perf_one_iter(
         cols=cols,
         batch_size=batch_size,
         device_analysis_types=device_analysis_types,
+        op_support_count=op_support_count,
     )
 
     profiler.end("decoder-perf-op-metrics")

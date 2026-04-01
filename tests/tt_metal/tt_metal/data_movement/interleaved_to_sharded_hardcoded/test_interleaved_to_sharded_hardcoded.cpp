@@ -483,7 +483,8 @@ TEST_F(MeshDeviceFixture, TensixDataMovementI2SDRAMInterleavedReaderTile) {
 
     compile_args.push_back(0);        // cb_id_in0
     compile_args.push_back(1);        // num_readers
-    compile_args.push_back(2);        // isDram = true
+    compile_args.push_back(2);        // isDram = true (args_config)
+    compile_args.push_back(tt::tile_size(tt::DataFormat::Float16_b));  // aligned_page_size
     compile_args.push_back(test_id);  // test_id
 
     runtime_args.push_back(1024 * 1024);  // src_addr
@@ -524,7 +525,8 @@ TEST_F(MeshDeviceFixture, TensixDataMovementI2SL1InterleavedReaderTile) {
 
     compile_args.push_back(0);        // cb_id_in0
     compile_args.push_back(1);        // num_readers
-    compile_args.push_back(0);        // isDram = false
+    compile_args.push_back(0);        // isDram = false (args_config)
+    compile_args.push_back(tt::tile_size(tt::DataFormat::Float16_b));  // aligned_page_size
     compile_args.push_back(test_id);  // test_id
 
     runtime_args.push_back(1024);  // src_addr
@@ -566,8 +568,9 @@ TEST_F(MeshDeviceFixture, TensixDataMovementI2SDRAMInterleavedReaderRowMajor) {
 
     compile_args.push_back(0);        // input_cb_index
     compile_args.push_back(1);        // scratch_cb_index
-    compile_args.push_back(2048);     // num_units_per_row
-    compile_args.push_back(2);        // isDram = true
+    compile_args.push_back(2048);     // num_units_per_row (stick_size)
+    compile_args.push_back(2);        // isDram = true (args_config)
+    compile_args.push_back(2048);     // aligned_page_size (matches stick_size)
     compile_args.push_back(test_id);  // test_id
     compile_args.push_back(num_trids);  // num_trids
 
@@ -611,8 +614,9 @@ TEST_F(MeshDeviceFixture, TensixDataMovementI2SL1InterleavedReaderRowMajor) {
 
     compile_args.push_back(0);        // input_cb_index
     compile_args.push_back(1);        // scratch_cb_index
-    compile_args.push_back(2048);     // num_units_per_row
-    compile_args.push_back(0);        // isDram = false
+    compile_args.push_back(2048);     // num_units_per_row (stick_size)
+    compile_args.push_back(0);        // isDram = false (args_config)
+    compile_args.push_back(2048);     // aligned_page_size (matches stick_size)
     compile_args.push_back(test_id);  // test_id
     compile_args.push_back(num_trids);  // num_trids
 

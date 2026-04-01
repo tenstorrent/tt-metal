@@ -5,10 +5,11 @@
 #include "layernorm_fw_program_factory.hpp"
 
 #include <cstdint>
-#include <metal/ttnn_all_includes.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
+#include "tt-metalium/device.hpp"
+#include "tt-metalium/host_api.hpp"
 
 namespace {
 

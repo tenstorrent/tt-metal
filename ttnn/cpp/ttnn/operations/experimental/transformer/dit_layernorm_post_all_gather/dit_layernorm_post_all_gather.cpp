@@ -6,9 +6,9 @@
 
 #include "device/dit_layernorm_post_all_gather_device_operation.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteDitLayerNormPostAllGather::invoke(
+ttnn::Tensor dit_layernorm_post_allgather(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& stats,
     float epsilon,
@@ -32,4 +32,4 @@ ttnn::Tensor ExecuteDitLayerNormPostAllGather::invoke(
         dtype);
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental

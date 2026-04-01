@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/reflection.hpp>
-
 #include "hal_1xx_common.hpp"
 #include "hal_types.hpp"
 #include "rtoptions.hpp"
@@ -33,18 +31,9 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
                     break;
                 case HalProcessorClassType::COMPUTE: {
                     switch (params.processor_id) {
-                        case 0:
-                            defines.push_back("UCK_CHLKC_UNPACK");
-                            defines.push_back("NAMESPACE=chlkc_unpack");
-                            break;
-                        case 1:
-                            defines.push_back("UCK_CHLKC_MATH");
-                            defines.push_back("NAMESPACE=chlkc_math");
-                            break;
-                        case 2:
-                            defines.push_back("UCK_CHLKC_PACK");
-                            defines.push_back("NAMESPACE=chlkc_pack");
-                            break;
+                        case 0: defines.push_back("UCK_CHLKC_UNPACK"); break;
+                        case 1: defines.push_back("UCK_CHLKC_MATH"); break;
+                        case 2: defines.push_back("UCK_CHLKC_PACK"); break;
                         default: TT_THROW("Invalid processor id {}", params.processor_id);
                     }
                     defines.push_back(fmt::format("COMPILE_FOR_TRISC={}", params.processor_id));

@@ -267,7 +267,8 @@ void kernel_main() {
     constexpr uint32_t gather_config_page_size = get_compile_time_arg_val(21);
 
     constexpr auto padding_config_tensor_args = TensorAccessorArgs<22>();
-    constexpr auto gather_config_tensor_args = TensorAccessorArgs<23>();
+    constexpr auto gather_config_tensor_args =
+        TensorAccessorArgs<padding_config_tensor_args.next_compile_time_args_offset()>();
 
     const auto padding_config_accessor =
         TensorAccessor(padding_config_tensor_args, padding_config_dram_addr, padding_config_page_size);

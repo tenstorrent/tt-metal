@@ -1,6 +1,6 @@
 {
   "contains": [
-    { "job-name-component": "All post-commit tests / fabric-unit-tests", "owner": { "id": "U03FJB5TM5Y", "name": "Ridvan Song" } },
+    { "job-name-component": "Sanity tests / fabric-unit-tests", "owner": { "id": "U03FJB5TM5Y", "name": "Ridvan Song" } },
     { "job-name-component": "vllm-tests / vllm-tests ([WH-T3K] Llama-3.1-8B-Instruct", "owner": [
       { "id": "U08E1JCDVNX", "name": "Pavle Petrovic" },
       { "id": "U08CEGF78ET", "name": "Salar Hosseini Khorasgani" }
@@ -600,6 +600,7 @@
     { "job-name-component": "t3000-unit-tests / t3k deepseek tests", "owner": { "id": "U03HY7MK4BT", "name": "Mark O'Connor" } },
     { "job-name-component": "t3k deepseek tests", "owner": { "id": "U03HY7MK4BT", "name": "Mark O'Connor" } },
     { "job-name-component": "t3000-unit-tests / t3k tttv2 modules tests", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } },
-    { "job-name-component": "t3k tttv2 modules tests", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } }
+    { "job-name-component": "t3k tttv2 modules tests", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } },
+    { "job-name-component": "TTSim", "owner": { "id": "U08PR765YJ1", "name": "Matt Craighead" } }
   ]
 }

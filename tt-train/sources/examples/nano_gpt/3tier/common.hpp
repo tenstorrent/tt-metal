@@ -1,6 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+
+#pragma once
 
 #include <ttnn/distributed/create_socket.hpp>
 
@@ -23,11 +25,6 @@ struct TrainingConfig {
     uint32_t batch_size = 64;
     uint32_t num_epochs = 1;
     uint32_t max_steps = 5000;
-    float learning_rate = 3e-4F;
-    float weight_decay = 1e-2F;
-    bool use_moreh_adamw = false;
-    // works only for AdamW
-    bool use_kahan_summation = false;
     // accumulate batches for gradient update
     uint32_t gradient_accumulation_steps = 1;
     std::string model_path;

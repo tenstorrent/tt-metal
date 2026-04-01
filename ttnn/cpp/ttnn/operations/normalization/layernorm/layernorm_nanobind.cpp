@@ -97,6 +97,8 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
         "create_layernorm_program_config",
         &ttnn::prim::create_layernorm_program_config,
         nb::arg("shard_spec") = nb::none(),
+        nb::arg("tile_height") = 32,
+        nb::arg("tile_width") = 32,
         R"doc(
         Creates a program config from shard spec.
 
@@ -105,6 +107,8 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
 
         Args:
             shard_spec (Optional[tt.ShardSpec]): The shard specification. Defaults to None.
+            tile_height (int): The tile height. Defaults to 32.
+            tile_width (int): The tile width. Defaults to 32.
 
         Returns:
             ttnn.LayerNormProgramConfig: The program configuration (either LayerNormDefaultProgramConfig or LayerNormShardedMultiCoreProgramConfig).

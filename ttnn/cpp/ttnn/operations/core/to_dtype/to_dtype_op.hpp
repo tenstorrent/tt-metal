@@ -7,10 +7,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations::core {
+namespace ttnn {
 
-struct ToDtype {
-    static Tensor invoke(const ttnn::Tensor& input_tensor, const ttnn::DataType& dtype);
-};
+Tensor to_dtype(const Tensor& input_tensor, const DataType& dtype);
 
-}  // namespace ttnn::operations::core
+}  // namespace ttnn

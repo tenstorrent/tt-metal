@@ -10,7 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "all_broadcast.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -48,29 +48,18 @@ void bind_all_broadcast(nb::module_& mod) {
             >>> # output is a list of 8 tensors, each with shape [1, 1, 32, 256]
     )doc";
 
-    using OperationType = decltype(ttnn::all_broadcast);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"all_broadcast">(
         mod,
-        ttnn::all_broadcast,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<uint32_t> cluster_axis,
-               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<uint32_t> num_links,
-               const std::optional<ttnn::ccl::Topology> topology) {
-                return self(input_tensor, cluster_axis, subdevice_id, memory_config, num_links, topology);
-            },
+        ttnn::overload_t(
+            &ttnn::all_broadcast,
             nb::arg("input_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("cluster_axis") = nb::none(),
             nb::arg("subdevice_id") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("num_links") = 1,
-            nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Linear),
-        });
+            nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Linear)));
 }
 
 }  // namespace ttnn::operations::ccl

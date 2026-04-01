@@ -5,6 +5,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
@@ -46,8 +49,14 @@ void kernel_main() {
     constexpr auto src1_args =
         TensorAccessorArgs<src0_args.next_compile_time_args_offset(), src0_args.next_common_runtime_args_offset()>();
 
-    const auto s0 = TensorAccessor(src0_args, src0_addr, get_tile_size(predicate_cb));
-    const auto s1 = TensorAccessor(src1_args, src1_addr, get_tile_size(true_cb));
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_pred(predicate_cb);
+    experimental::CircularBuffer cb_true(true_cb);
+
+    const uint32_t src0_tile_bytes = get_tile_size(predicate_cb);
+    const auto s0 = TensorAccessor(src0_args, src0_addr, src0_tile_bytes);
+    const uint32_t src1_tile_bytes = get_tile_size(true_cb);
+    const auto s1 = TensorAccessor(src1_args, src1_addr, src1_tile_bytes);
 
     constexpr uint32_t onetile = 1;
     const uint32_t HtWt = Ht * Wt;
@@ -98,45 +107,45 @@ void kernel_main() {
                 for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_th = 0) {
                     for (uint32_t th = start_th; th < Ht && num_tiles_read < num_tiles; ++th) {
 #if SRC_BCAST_A
-                        cb_reserve_back(predicate_cb, onetile);
+                        cb_pred.reserve_back(onetile);
 #if !SRC_SHARDED_A
-                        uint32_t l1_write_addr_predicate = get_write_ptr(predicate_cb);
-                        noc_async_read_page(tile_offset + th, s0, l1_write_addr_predicate);
-                        noc_async_read_barrier();
+                        noc.async_read(
+                            s0, cb_pred, src0_tile_bytes, {.page_id = tile_offset + th}, {.offset_bytes = 0});
+                        noc.async_read_barrier();
 #endif
                         FILL_TILE_WITH_FIRST_COLUMN(predicate_cb);
-                        cb_push_back(predicate_cb, onetile);
+                        cb_pred.push_back(onetile);
 #endif
 #if SRC_BCAST_CB1
-                        cb_reserve_back(true_cb, onetile);
+                        cb_true.reserve_back(onetile);
 #if !SRC_SHARDED_B
-                        uint32_t l1_write_addr_true = get_write_ptr(true_cb);
-                        noc_async_read_page(true_tile_offset + th, s1, l1_write_addr_true);
-                        noc_async_read_barrier();
+                        noc.async_read(
+                            s1, cb_true, src1_tile_bytes, {.page_id = true_tile_offset + th}, {.offset_bytes = 0});
+                        noc.async_read_barrier();
 #endif
                         FILL_TILE_WITH_FIRST_COLUMN_B(true_cb);
-                        cb_push_back(true_cb, onetile);
+                        cb_true.push_back(onetile);
 #endif
 
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < num_tiles;
                              ++tw, ++num_tiles_read) {
 #if !SRC_BCAST_A
-                            cb_reserve_back(predicate_cb, onetile);
+                            cb_pred.reserve_back(onetile);
 #if !SRC_SHARDED_A
-                            uint32_t l1_write_addr_predicate = get_write_ptr(predicate_cb);
-                            noc_async_read_page(tile_offset + tw, s0, l1_write_addr_predicate);
-                            noc_async_read_barrier();
+                            noc.async_read(
+                                s0, cb_pred, src0_tile_bytes, {.page_id = tile_offset + tw}, {.offset_bytes = 0});
+                            noc.async_read_barrier();
 #endif
-                            cb_push_back(predicate_cb, onetile);
+                            cb_pred.push_back(onetile);
 #endif
 #if !SRC_BCAST_CB1
-                            cb_reserve_back(true_cb, onetile);
+                            cb_true.reserve_back(onetile);
 #if !SRC_SHARDED_B
-                            uint32_t l1_write_addr_true = get_write_ptr(true_cb);
-                            noc_async_read_page(true_tile_offset + tw, s1, l1_write_addr_true);
-                            noc_async_read_barrier();
+                            noc.async_read(
+                                s1, cb_true, src1_tile_bytes, {.page_id = true_tile_offset + tw}, {.offset_bytes = 0});
+                            noc.async_read_barrier();
 #endif
-                            cb_push_back(true_cb, onetile);
+                            cb_true.push_back(onetile);
 #endif
                         }
                         // next row of tiles should start at the first column for non-sharded case

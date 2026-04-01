@@ -60,6 +60,55 @@ void kernel_main() {
     const uint32_t num_of_groups = q_heads / heads_per_group;
     const uint32_t num_of_interm_tiles = 2U;
 
+#ifdef BALANCED_PARALLELISM
+    constexpr uint32_t pairs_per_seq = Ht / 2;
+
+    auto read_row = [&](const uint32_t global_row_idx) {
+        const uint32_t q_start_idx = global_row_idx * qWt;
+        read_tiles_by_row(cb_attn_output, attn_output_addr_generator, q_start_idx, qWt, tile_bytes, qWt);
+        read_tiles_by_row(cb_grad_output, grad_output_addr_generator, q_start_idx, qWt, tile_bytes, qWt);
+        read_tiles_by_row(cb_query, query_addr_generator, q_start_idx, qWt, tile_bytes, qWt);
+
+        const uint32_t q_head_idx = (global_row_idx / Ht) % q_heads;
+        const uint32_t batch_idx = global_row_idx / (Ht * q_heads);
+        const uint32_t kv_group_idx = q_head_idx / heads_per_group;
+        const uint32_t kv_offset = (batch_idx * num_of_groups + kv_group_idx) * Ht * qWt;
+        const uint32_t q_row_tile = global_row_idx % Ht;
+        const uint32_t num_kv_tiles_to_read = q_row_tile + 1;
+
+        const uint32_t intermediates_idx = global_row_idx * num_of_interm_tiles;
+        read_tiles_by_row(
+            cb_intermediates,
+            intermediates_addr_generator,
+            intermediates_idx,
+            num_of_interm_tiles,
+            tile_bytes,
+            num_of_interm_tiles);
+
+        for (uint32_t h = 0; h < num_kv_tiles_to_read; ++h) {
+            const uint32_t kv_start_idx = kv_offset + h * qWt;
+            read_tiles_by_row(cb_key, key_addr_generator, kv_start_idx, qWt, tile_bytes, qWt);
+            read_tiles_by_row(cb_value, value_addr_generator, kv_start_idx, qWt, tile_bytes, qWt);
+        }
+    };
+
+    // Runtime args reuse: num_rows_to_process = num_pairs, start_row = start_pair_idx
+    for (uint32_t p = 0; p < num_rows_to_process; ++p) {
+        const uint32_t global_pair_idx = start_row + p;
+
+        const uint32_t seq_idx = global_pair_idx / pairs_per_seq;
+        const uint32_t pair_in_seq = global_pair_idx % pairs_per_seq;
+
+        const uint32_t light_row_in_seq = pair_in_seq;
+        const uint32_t heavy_row_in_seq = Ht - 1 - pair_in_seq;
+
+        const uint32_t light_global_row = seq_idx * Ht + light_row_in_seq;
+        const uint32_t heavy_global_row = seq_idx * Ht + heavy_row_in_seq;
+
+        read_row(light_global_row);
+        read_row(heavy_global_row);
+    }
+#else
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         const uint32_t global_row_idx = start_row + i;
         const uint32_t q_start_idx = global_row_idx * qWt;
@@ -97,8 +146,6 @@ void kernel_main() {
 
         // read intermediates for current row of Q
         // intermediates shape: (B, qNH, S, 64) -> (batch, heads, seq_len, 2 tiles)
-        // TODO[improve](vmelnykov): Now we share two intermediates values per head row: row-wise max value and
-        // 1/sum_exp In future we can think about optimizing this by sharing logsumexp only
         const uint32_t intermediates_idx = global_row_idx * num_of_interm_tiles;
         read_tiles_by_row(
             cb_intermediates,
@@ -125,4 +172,5 @@ void kernel_main() {
             read_tiles_by_row(cb_value, value_addr_generator, kv_start_idx, qWt, tile_bytes, qWt);
         }
     }
+#endif
 }

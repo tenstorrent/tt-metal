@@ -4,14 +4,13 @@
 
 #include "grouped_query_attention.hpp"
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "dropout_module.hpp"
 #include "linear_module.hpp"
 #include "ops/multi_head_utils.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
 
 namespace ttml::modules {
 

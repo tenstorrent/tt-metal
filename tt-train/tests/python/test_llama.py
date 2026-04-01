@@ -157,7 +157,7 @@ class TestLlama:
 
         # With weight tying, tok_emb.weight should be the same as fc weight
         emb_weight = model.tok_emb.weight
-        fc_weight = model.fc.get_weight()
+        fc_weight = model.fc.weight.tensor
         assert (
             emb_weight is fc_weight
         ), "Weight tying should share embedding and output weights"

@@ -37,5 +37,5 @@ def test_tensor_accessor_args(device):
 
     dram_accessor_cta = dram_accessor.get_compile_time_args()
     dram_accessor_crta = dram_accessor.get_common_runtime_args()
-    assert len(dram_accessor_cta) == 1
+    assert len(dram_accessor_cta) == 2
     assert len(dram_accessor_crta) == 0

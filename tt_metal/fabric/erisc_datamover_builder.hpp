@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
@@ -34,8 +35,6 @@ namespace tt::tt_fabric {
 struct FabricRiscConfig;
 class FabricRouterBuilder;
 class ComputeMeshRouterBuilder;
-class MultiPoolChannelAllocator;
-class ChannelToPoolMapping;
 class FabricRemoteChannelsAllocator;
 
 class FabricEriscDatamoverBuilder;
@@ -108,100 +107,119 @@ Receiver channel side registers are defined here to receive free-slot credits fr
                                    South Router
 */
 struct StreamRegAssignments {
-    // Packet send/ack/complete stream IDs
-    static constexpr uint32_t to_receiver_0_pkts_sent_id = 0;      // VC0 Ethernet Rx
-    static constexpr uint32_t to_receiver_1_pkts_sent_id = 1;      // VC1 Ethernet Rx
-    static constexpr uint32_t to_sender_0_pkts_acked_id = 2;       // VC0 Ethernet Sender Channel 0
-    static constexpr uint32_t to_sender_1_pkts_acked_id = 3;       // VC0 Ethernet Sender Channel 1
-    static constexpr uint32_t to_sender_2_pkts_acked_id = 4;       // VC0 Ethernet Sender Channel 2
-    static constexpr uint32_t to_sender_3_pkts_acked_id = 5;       // VC0 Ethernet Sender Channel 3
-    static constexpr uint32_t to_sender_0_pkts_completed_id = 6;   // VC0 Tensix Worker on upstream device
-    static constexpr uint32_t to_sender_1_pkts_completed_id = 7;   // VC0 Passthrough from upstream device X/Y edge
-    static constexpr uint32_t to_sender_2_pkts_completed_id = 8;   // VC0 Passthrough from upstream device X/Y edge
-    static constexpr uint32_t to_sender_3_pkts_completed_id = 9;   // VC0 Passthrough from upstream device X/Y edge
-    static constexpr uint32_t to_sender_4_pkts_completed_id = 10;  // VC1 Passthrough from upstream device Z edge
-    static constexpr uint32_t to_sender_5_pkts_completed_id = 11;  // VC1 Passthrough from upstream device X/Y edge
-    static constexpr uint32_t to_sender_6_pkts_completed_id = 12;  // VC1 Passthrough from upstream device X/Y edge
-    static constexpr uint32_t to_sender_7_pkts_completed_id = 13;  // VC1 Passthrough from upstream device X/Y edge
-    // Receiver channel free slots stream IDs
-    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_1 =
-        14;  // for downstream E/W/N/S edge on: 2D X/Y Router->VC0, E edge on: 2D Z Router->VC0
-    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_2 =
-        15;  // for downstream E/W/N/S edge on: 2D X/Y Router->VC0, W edge on: 2D Z Router->VC0
-    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_3 =
-        16;  // for downstream E/W/N/S edge on: 2D X/Y Router->VC0, N edge on: 2D Z Router->VC0
-    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_4 =
-        17;  // for downstream Z edge on: 2D+Z X/Y Router->VC0, S edge on: 2D Z Router->VC0
-    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_1 =
-        18;  // for downstream E/W/N/S edge on: 2D X/Y Router->VC1
-    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_2 =
-        19;  // for downstream E/W/N/S edge on: 2D X/Y Router->VC1
-    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_3 =
-        20;  // for downstream E/W/N/S edge on: 2D X/Y Router->VC1
-    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_4 =
-        21;  // for downstream Z edge on: 2D+Z X/Y Router->VC1, S edge on: 2D Z Router->VC1
-    // Sender channel free slots stream IDs.
-    // Decremented by respective upstream senders.
-    static constexpr uint32_t sender_channel_0_free_slots_stream_id = 22;  // for upstream tensix worker
-    static constexpr uint32_t sender_channel_1_free_slots_stream_id =
-        23;  // for upstream edge on: 1D->VC0, E/W/N/S edge on: 2D X/Y Router->VC0, E edge on: 2D Z Router->VC0
-    static constexpr uint32_t sender_channel_2_free_slots_stream_id =
-        24;  // for upstream E/W/N/S edge on: 2D X/Y Router->VC0, W edge on: 2D Z Router->VC0
-    static constexpr uint32_t sender_channel_3_free_slots_stream_id =
-        25;  // for upstream E/W/N/S edge on: 2D X/Y Router->VC0, N edge on: 2D Z Router->VC0
-    static constexpr uint32_t sender_channel_4_free_slots_stream_id =
-        26;  // for upstream E/W/N/S edge on: 2D X/Y Router->VC1, S edge on: 2D Z Router->VC0
-    static constexpr uint32_t sender_channel_5_free_slots_stream_id =
-        27;  // for upstream E/W/N/S edge on: 2D X/Y Router->VC1
-    static constexpr uint32_t sender_channel_6_free_slots_stream_id =
-        28;  // for upstream E/W/N/S edge on: 2D X/Y Router->VC1
-    static constexpr uint32_t sender_channel_7_free_slots_stream_id = 29;  // for upstream Z edge on: 2D+Z->VC1
+    // Stream registers used as auto-increment counters. Writing to these increments the register value.
+    struct IncrementOnWrite {
+        // Packet send/ack/complete stream IDs
+        static constexpr uint32_t to_receiver_0_pkts_sent_id = 0;      // VC0 Ethernet Rx
+        static constexpr uint32_t to_receiver_1_pkts_sent_id = 1;      // VC1 Ethernet Rx
+        static constexpr uint32_t to_sender_0_pkts_acked_id = 2;       // VC0 Ethernet Sender Channel 0
+        static constexpr uint32_t to_sender_1_pkts_acked_id = 3;       // VC0 Ethernet Sender Channel 1
+        static constexpr uint32_t to_sender_2_pkts_acked_id = 4;       // VC0 Ethernet Sender Channel 2
+        static constexpr uint32_t to_sender_3_pkts_acked_id = 5;       // VC0 Ethernet Sender Channel 3
+        static constexpr uint32_t to_sender_0_pkts_completed_id = 6;   // VC0 Tensix Worker on upstream device
+        static constexpr uint32_t to_sender_1_pkts_completed_id = 7;   // VC0 Passthrough from upstream device X/Y edge
+        static constexpr uint32_t to_sender_2_pkts_completed_id = 8;   // VC0 Passthrough from upstream device X/Y edge
+        static constexpr uint32_t to_sender_3_pkts_completed_id = 9;   // VC0 Passthrough from upstream device X/Y edge
+        static constexpr uint32_t to_sender_4_pkts_completed_id = 10;  // VC1 Passthrough from upstream device Z edge
+        static constexpr uint32_t to_sender_5_pkts_completed_id = 11;  // VC1 Passthrough from upstream device X/Y edge
+        static constexpr uint32_t to_sender_6_pkts_completed_id = 12;  // VC1 Passthrough from upstream device X/Y edge
+        static constexpr uint32_t to_sender_7_pkts_completed_id = 13;  // VC1 Passthrough from upstream device X/Y edge
+        // Receiver channel free slots stream IDs
+        static constexpr uint32_t vc_0_free_slots_from_downstream_edge_1 =
+            14;  // for downstream E/W/N/S edge on: 2D X/Y Router->VC0, E edge on: 2D Z Router->VC0
+        static constexpr uint32_t vc_0_free_slots_from_downstream_edge_2 =
+            15;  // for downstream E/W/N/S edge on: 2D X/Y Router->VC0, W edge on: 2D Z Router->VC0
+        static constexpr uint32_t vc_0_free_slots_from_downstream_edge_3 =
+            16;  // for downstream E/W/N/S edge on: 2D X/Y Router->VC0, N edge on: 2D Z Router->VC0
+        static constexpr uint32_t vc_0_free_slots_from_downstream_edge_4 =
+            17;  // for downstream Z edge on: 2D+Z X/Y Router->VC0, S edge on: 2D Z Router->VC0
+        static constexpr uint32_t vc_1_free_slots_from_downstream_edge_1 =
+            18;  // for downstream E/W/N/S edge on: 2D X/Y Router->VC1
+        static constexpr uint32_t vc_1_free_slots_from_downstream_edge_2 =
+            19;  // for downstream E/W/N/S edge on: 2D X/Y Router->VC1
+        static constexpr uint32_t vc_1_free_slots_from_downstream_edge_3 =
+            20;  // for downstream E/W/N/S edge on: 2D X/Y Router->VC1
+        static constexpr uint32_t vc_1_free_slots_from_downstream_edge_4 =
+            21;  // for downstream Z edge on: 2D+Z X/Y Router->VC1, S edge on: 2D Z Router->VC1
+        // Sender channel free slots stream IDs.
+        // Decremented by respective upstream senders.
+        static constexpr uint32_t sender_channel_0_free_slots_stream_id = 22;  // for upstream tensix worker
+        static constexpr uint32_t sender_channel_1_free_slots_stream_id =
+            23;  // for upstream edge on: 1D->VC0, E/W/N/S edge on: 2D X/Y Router->VC0, E edge on: 2D Z Router->VC0
+        static constexpr uint32_t sender_channel_2_free_slots_stream_id =
+            24;  // for upstream E/W/N/S edge on: 2D X/Y Router->VC0, W edge on: 2D Z Router->VC0
+        static constexpr uint32_t sender_channel_3_free_slots_stream_id =
+            25;  // for upstream E/W/N/S edge on: 2D X/Y Router->VC0, N edge on: 2D Z Router->VC0
+        static constexpr uint32_t sender_channel_4_free_slots_stream_id =
+            26;  // for upstream E/W/N/S edge on: 2D X/Y Router->VC1, S edge on: 2D Z Router->VC0
+        static constexpr uint32_t sender_channel_5_free_slots_stream_id =
+            27;  // for upstream E/W/N/S edge on: 2D X/Y Router->VC1
+        static constexpr uint32_t sender_channel_6_free_slots_stream_id =
+            28;  // for upstream E/W/N/S edge on: 2D X/Y Router->VC1
+        static constexpr uint32_t sender_channel_7_free_slots_stream_id = 29;  // for upstream Z edge on: 2D+Z->VC1
+        // Local tensix relay free slots stream ID (UDM mode only)
+        // Dual-use: also used as scratch for eth_retrain (see Scratch::eth_retrain_link_sync_stream_id)
+        static constexpr uint32_t tensix_relay_local_free_slots_stream_id = 30;
+        // VC2 sender flow control: free-slots from worker (dual-use with tensix_relay at ID 30; VC2 and UDM/mux
+        // mutually exclusive)
+        static constexpr uint32_t vc2_sender_free_slots_stream_id = 30;
+        // VC2 receiver flow control: free-slots from sender (non-Z routers only; dual-use with scratch
+        // multi_risc_teardown at ID 31)
+        static constexpr uint32_t vc2_receiver_free_slots_stream_id = 31;
+    };
 
-    // Local tensix relay free slots stream ID (UDM mode only)
-    static constexpr uint32_t tensix_relay_local_free_slots_stream_id = 30;
-    // Multi-RISC teardown synchronization stream ID
-    // overlay scratch register
-    static constexpr uint32_t multi_risc_teardown_sync_stream_id = 31;
-    // Eth retrain synchronization stream ID
-    // overlay scratch register
-    static constexpr uint32_t eth_retrain_link_sync_stream_id = 30;
+    // Stream registers used as scratch/overlay storage. Writing overwrites the register value.
+    struct Scratch {
+        // Eth retrain synchronization stream ID
+        // Dual-use: also used as inc-on-write for tensix_relay (see
+        // IncrementOnWrite::tensix_relay_local_free_slots_stream_id)
+        static constexpr uint32_t eth_retrain_link_sync_stream_id = 30;
+        // Multi-RISC teardown synchronization stream ID
+        static constexpr uint32_t multi_risc_teardown_sync_stream_id = 31;
+    };
 
-    static const auto& get_all_stream_ids() {
-        static constexpr std::array stream_ids = {
-            to_receiver_0_pkts_sent_id,
-            to_receiver_1_pkts_sent_id,
-            to_sender_0_pkts_acked_id,
-            to_sender_1_pkts_acked_id,
-            to_sender_2_pkts_acked_id,
-            to_sender_3_pkts_acked_id,
-            to_sender_0_pkts_completed_id,
-            to_sender_1_pkts_completed_id,
-            to_sender_2_pkts_completed_id,
-            to_sender_3_pkts_completed_id,
-            to_sender_4_pkts_completed_id,
-            to_sender_5_pkts_completed_id,
-            to_sender_6_pkts_completed_id,
-            to_sender_7_pkts_completed_id,
-            vc_0_free_slots_from_downstream_edge_1,
-            vc_0_free_slots_from_downstream_edge_2,
-            vc_0_free_slots_from_downstream_edge_3,
-            vc_0_free_slots_from_downstream_edge_4,
-            vc_1_free_slots_from_downstream_edge_1,
-            vc_1_free_slots_from_downstream_edge_2,
-            vc_1_free_slots_from_downstream_edge_3,
-            vc_1_free_slots_from_downstream_edge_4,
-            sender_channel_0_free_slots_stream_id,
-            sender_channel_1_free_slots_stream_id,
-            sender_channel_2_free_slots_stream_id,
-            sender_channel_3_free_slots_stream_id,
-            sender_channel_4_free_slots_stream_id,
-            sender_channel_5_free_slots_stream_id,
-            sender_channel_6_free_slots_stream_id,
-            sender_channel_7_free_slots_stream_id,
-            tensix_relay_local_free_slots_stream_id,
-            multi_risc_teardown_sync_stream_id,
-            eth_retrain_link_sync_stream_id};
-        return stream_ids;
+    static const auto& get_inc_on_write_ids() {
+        static constexpr std::array inc_on_write_ids = {
+            IncrementOnWrite::to_receiver_0_pkts_sent_id,
+            IncrementOnWrite::to_receiver_1_pkts_sent_id,
+            IncrementOnWrite::to_sender_0_pkts_acked_id,
+            IncrementOnWrite::to_sender_1_pkts_acked_id,
+            IncrementOnWrite::to_sender_2_pkts_acked_id,
+            IncrementOnWrite::to_sender_3_pkts_acked_id,
+            IncrementOnWrite::to_sender_0_pkts_completed_id,
+            IncrementOnWrite::to_sender_1_pkts_completed_id,
+            IncrementOnWrite::to_sender_2_pkts_completed_id,
+            IncrementOnWrite::to_sender_3_pkts_completed_id,
+            IncrementOnWrite::to_sender_4_pkts_completed_id,
+            IncrementOnWrite::to_sender_5_pkts_completed_id,
+            IncrementOnWrite::to_sender_6_pkts_completed_id,
+            IncrementOnWrite::to_sender_7_pkts_completed_id,
+            IncrementOnWrite::vc_0_free_slots_from_downstream_edge_1,
+            IncrementOnWrite::vc_0_free_slots_from_downstream_edge_2,
+            IncrementOnWrite::vc_0_free_slots_from_downstream_edge_3,
+            IncrementOnWrite::vc_0_free_slots_from_downstream_edge_4,
+            IncrementOnWrite::vc_1_free_slots_from_downstream_edge_1,
+            IncrementOnWrite::vc_1_free_slots_from_downstream_edge_2,
+            IncrementOnWrite::vc_1_free_slots_from_downstream_edge_3,
+            IncrementOnWrite::vc_1_free_slots_from_downstream_edge_4,
+            IncrementOnWrite::sender_channel_0_free_slots_stream_id,
+            IncrementOnWrite::sender_channel_1_free_slots_stream_id,
+            IncrementOnWrite::sender_channel_2_free_slots_stream_id,
+            IncrementOnWrite::sender_channel_3_free_slots_stream_id,
+            IncrementOnWrite::sender_channel_4_free_slots_stream_id,
+            IncrementOnWrite::sender_channel_5_free_slots_stream_id,
+            IncrementOnWrite::sender_channel_6_free_slots_stream_id,
+            IncrementOnWrite::sender_channel_7_free_slots_stream_id,
+            IncrementOnWrite::tensix_relay_local_free_slots_stream_id,
+            IncrementOnWrite::vc2_sender_free_slots_stream_id,
+            IncrementOnWrite::vc2_receiver_free_slots_stream_id};
+        return inc_on_write_ids;
+    }
+
+    static const auto& get_scratch_ids() {
+        static constexpr std::array scratch_ids = {
+            Scratch::eth_retrain_link_sync_stream_id, Scratch::multi_risc_teardown_sync_stream_id};
+        return scratch_ids;
     }
 };
 
@@ -283,8 +301,6 @@ struct FabricEriscDatamoverConfig {
     // ----------- Receiver Channels
     // persistent mode field
     std::array<std::size_t, builder_config::max_downstream_edms>
-        receiver_channels_downstream_flow_control_semaphore_address = {};
-    std::array<std::size_t, builder_config::max_downstream_edms>
         receiver_channels_downstream_teardown_semaphore_address = {};
 
     // Conditionally used fields. BlackHole with 2-erisc uses these fields for sending credits back to sender.
@@ -321,8 +337,10 @@ struct FabricEriscDatamoverConfig {
 
     std::size_t num_used_sender_channels = 0;    // Total across all VCs (duplicate in allocator... don't modify)
     std::size_t num_used_receiver_channels = 0;  // Total across all VCs (duplicate in allocator... don't modify)
-    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc = {0, 0};    // Per-VC sender channel counts
-    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc = {0, 0};  // Per-VC receiver channel counts
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc =
+        {};  // Per-VC sender channel counts
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc =
+        {};  // Per-VC receiver channel counts
     std::size_t num_fwd_paths = 0;
     std::size_t sender_txq_id = 0;
     std::size_t receiver_txq_id = 0;
@@ -348,15 +366,6 @@ struct FabricEriscDatamoverConfig {
     // Fabric channel allocator for L1 memory management
     // Points to the primary allocator (typically static allocator for single-pool configs)
     std::shared_ptr<FabricChannelAllocator> channel_allocator;
-
-    // Multi-pool allocator coordinator - manages all pool allocators
-    // Emits pool metadata and delegates to individual pools for CT args
-    std::shared_ptr<MultiPoolChannelAllocator> multi_pool_allocator;
-
-    // Channel-to-pool mapping for multi-pool support
-    std::shared_ptr<ChannelToPoolMapping> channel_to_pool_mapping;
-    // Channel-to-pool mapping for remote (over eth) channels multi-pool support
-    std::shared_ptr<ChannelToPoolMapping> remote_channel_to_pool_mapping;
 
     // Remote channels allocator - tracks remote receiver channel info for the remote ethernet core
     std::shared_ptr<FabricRemoteChannelsAllocator> remote_channels_allocator;
@@ -548,6 +557,10 @@ public:
     void connect_to_downstream_edm(FabricDatamoverBuilderBase* downstream_builder);
 
     size_t get_configured_risc_count() const;
+
+    // Returns the resolved kernel build optimization level for this router.
+    // This opt-level is per-builder/router, and should not be shared across builders.
+    [[nodiscard]] tt::tt_metal::KernelBuildOptLevel get_kernel_opt_level() const;
 
     void dump_to_log() const {
         // TODO

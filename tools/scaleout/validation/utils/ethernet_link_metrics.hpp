@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 #include <cstdint>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt_stl/reflection.hpp>
 
 struct TrafficParams {
@@ -19,11 +19,6 @@ struct LinkStatus {
     tt::tt_metal::EthernetMetrics metrics;
     TrafficParams traffic_params;
     uint32_t num_mismatched_words = 0;
-};
-
-struct ResetPair {
-    uint32_t src_rank = 0;
-    uint32_t dst_rank = 0;
 };
 
 struct EthChannelIdentifier {

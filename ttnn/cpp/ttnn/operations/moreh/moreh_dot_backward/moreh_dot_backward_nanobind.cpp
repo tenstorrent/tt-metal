@@ -11,22 +11,22 @@
 
 #include "moreh_dot_backward.hpp"
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/moreh/moreh_dot_backward/device/moreh_dot_backward_device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_dot_backward {
 void bind_moreh_dot_backward_operation(nb::module_& mod) {
-    bind_registered_operation(
+    ttnn::bind_function<"moreh_dot_backward">(
         mod,
-        ttnn::moreh_dot_backward,
         "Moreh Dot Backward Operation",
-        ttnn::nanobind_arguments_t{
+        ttnn::overload_t(
+            &ttnn::moreh_dot_backward,
             nb::arg("output_grad"),
             nb::arg("input"),
             nb::arg("other"),
             nb::kw_only(),
             nb::arg("input_grad") = nb::none(),
             nb::arg("other_grad") = nb::none(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none()));
 }
 }  // namespace ttnn::operations::moreh::moreh_dot_backward

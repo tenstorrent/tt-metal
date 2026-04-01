@@ -9,8 +9,9 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::moreh::moreh_group_norm_backward {
-std::vector<std::optional<Tensor>> MorehGroupNormBackward::invoke(
+namespace ttnn {
+
+std::vector<std::optional<Tensor>> moreh_group_norm_backward(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& mean,
@@ -65,4 +66,4 @@ std::vector<std::optional<Tensor>> MorehGroupNormBackward::invoke(
     return outputs;
 }
 
-}  // namespace ttnn::operations::moreh::moreh_group_norm_backward
+}  // namespace ttnn

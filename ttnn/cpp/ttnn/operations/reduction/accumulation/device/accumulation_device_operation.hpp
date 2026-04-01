@@ -14,14 +14,12 @@
 
 #include "hostdevcommon/kernel_structs.h"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/decorators.hpp"
 
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
-using namespace tt::stl;
+using namespace ttsl;
 
 struct AccumulationDeviceOperation {
     using operation_attributes_t = AccumulationParams;

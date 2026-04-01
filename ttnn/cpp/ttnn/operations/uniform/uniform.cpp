@@ -7,8 +7,9 @@
 
 #include "device/uniform_device_operation.hpp"
 
-namespace ttnn::operations::uniform {
-Tensor Uniform::invoke(
+namespace ttnn {
+
+Tensor uniform(
     const Tensor& input,
     const float from,
     const float to,
@@ -17,4 +18,5 @@ Tensor Uniform::invoke(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return ttnn::prim::uniform(input, from, to, seed, memory_config, compute_kernel_config);
 }
-}  // namespace ttnn::operations::uniform
+
+}  // namespace ttnn

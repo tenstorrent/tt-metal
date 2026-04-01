@@ -7,8 +7,9 @@
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/moreh/moreh_mean_backward/device/moreh_mean_backward_device_operation.hpp"
 
-namespace ttnn::operations::moreh::moreh_mean_backward {
-Tensor MorehMeanBackward::invoke(
+namespace ttnn {
+
+Tensor moreh_mean_backward(
     const Tensor& output_grad,
     std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>> dim,
     const bool keepdim,
@@ -28,8 +29,9 @@ Tensor MorehMeanBackward::invoke(
             input_grad_rank += dims.size();
         }
     }
-    ttnn::SmallVector<int64_t> dims = get_dim(dim, input_grad_rank);
+    ttnn::SmallVector<int64_t> dims = ttnn::operations::get_dim(dim, input_grad_rank);
     return ttnn::prim::moreh_mean_backward(
         output_grad, dims, keepdim, input_grad_shape, input_grad, memory_config, compute_kernel_config);
 }
-}  // namespace ttnn::operations::moreh::moreh_mean_backward
+
+}  // namespace ttnn

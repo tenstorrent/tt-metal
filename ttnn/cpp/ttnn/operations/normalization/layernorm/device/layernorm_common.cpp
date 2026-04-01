@@ -5,11 +5,11 @@
 #include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_types.hpp"
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 
 namespace ttnn::prim {
 
-LayerNormProgramConfig create_layernorm_program_config(const std::optional<tt::tt_metal::ShardSpec>& shard_spec) {
+LayerNormProgramConfig create_layernorm_program_config(
+    const std::optional<tt::tt_metal::ShardSpec>& shard_spec, uint32_t tile_height, uint32_t tile_width) {
     if (!shard_spec.has_value()) {
         return LayerNormDefaultProgramConfig{};
     }
@@ -19,8 +19,8 @@ LayerNormProgramConfig create_layernorm_program_config(const std::optional<tt::t
         .compute_with_storage_grid_size =
             {bbox.end_coord.x - bbox.start_coord.x + 1, bbox.end_coord.y - bbox.start_coord.y + 1},
         .subblock_w = 1,
-        .block_h = spec.shape[0] / tt::constants::TILE_HEIGHT,
-        .block_w = spec.shape[1] / tt::constants::TILE_WIDTH,
+        .block_h = spec.shape[0] / tile_height,
+        .block_w = spec.shape[1] / tile_width,
         .inplace = false,
     };
 }

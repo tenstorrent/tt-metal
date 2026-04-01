@@ -204,7 +204,7 @@ GroupAttnMatmulDeviceOperation::tensor_return_value_t GroupAttnMatmulDeviceOpera
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor_a.device());
 }
 
-tt::stl::hash::hash_t GroupAttnMatmulDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t GroupAttnMatmulDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;

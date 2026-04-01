@@ -7,18 +7,17 @@
 #include <cstdint>
 #include <optional>
 
-#include <fmt/format.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
 #include "fill_rm.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::data_movement {
 namespace {
 
 void bind_fill_rm_op(nb::module_& mod) {
-    auto doc = fmt::format(
+    const auto* doc =
         R"doc(
             Generates an NCHW row-major tensor and fill it with high values up to
             hOnes, wOnes in each HW tile with the rest padded with high values. So
@@ -78,28 +77,13 @@ void bind_fill_rm_op(nb::module_& mod) {
             Returns:
                 ttnn.Tensor: the output tensor.
 
-        )doc",
-        ttnn::fill_rm.base_name());
+        )doc";
 
-    using OperationType = decltype(ttnn::fill_rm);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"fill_rm">(
         mod,
-        ttnn::fill_rm,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               uint32_t N,
-               uint32_t C,
-               uint32_t H,
-               uint32_t W,
-               uint32_t hOnes,
-               uint32_t wOnes,
-               const Tensor& any,
-               const float val_hi,
-               const float val_lo,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(N, C, H, W, hOnes, wOnes, any, val_hi, val_lo, memory_config);
-            },
+        ttnn::overload_t(
+            &ttnn::fill_rm,
             nb::arg("N"),
             nb::arg("C"),
             nb::arg("H"),
@@ -110,11 +94,11 @@ void bind_fill_rm_op(nb::module_& mod) {
             nb::arg("val_hi"),
             nb::arg("val_lo"),
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none()));
 }
 
 void bind_fill_ones_rm_op(nb::module_& mod) {
-    auto doc = fmt::format(
+    const auto* doc =
         R"doc(
             Same as ``fill_rm``, but ``val_hi`` is set to ``1`` and ``val_lo`` is
             ``0``.
@@ -151,26 +135,13 @@ void bind_fill_ones_rm_op(nb::module_& mod) {
 
             Returns:
                 ttnn.Tensor: the output tensor.
-        )doc",
-        ttnn::fill_ones_rm.base_name());
+        )doc";
 
-    using OperationType = decltype(ttnn::fill_ones_rm);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"fill_ones_rm">(
         mod,
-        ttnn::fill_ones_rm,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               uint32_t N,
-               uint32_t C,
-               uint32_t H,
-               uint32_t W,
-               uint32_t hOnes,
-               uint32_t wOnes,
-               const Tensor& any,
-               const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(N, C, H, W, hOnes, wOnes, any, memory_config);
-            },
+        ttnn::overload_t(
+            &ttnn::fill_ones_rm,
             nb::arg("N"),
             nb::arg("C"),
             nb::arg("H"),
@@ -179,7 +150,7 @@ void bind_fill_ones_rm_op(nb::module_& mod) {
             nb::arg("wOnes"),
             nb::arg("any"),
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none()));
 }
 
 }  // namespace

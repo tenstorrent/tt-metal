@@ -1,1 +1,1 @@
-../../../../../models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_attention.py
+../../../../../models/demos/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_attention.py

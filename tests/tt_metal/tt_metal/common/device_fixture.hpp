@@ -160,4 +160,19 @@ protected:
     }
 };
 
+class QuasarMeshDeviceSingleCardFixture : public MeshDeviceSingleCardFixture {
+protected:
+    void SetUp() override {
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        if (this->arch_ != tt::ARCH::QUASAR) {
+            GTEST_SKIP() << "Not a Quasar device";
+        }
+        this->create_devices();
+        init_max_cbs();
+    }
+};
+
 }  // namespace tt::tt_metal

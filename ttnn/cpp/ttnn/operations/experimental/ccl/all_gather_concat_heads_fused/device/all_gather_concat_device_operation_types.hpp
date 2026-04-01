@@ -48,7 +48,7 @@ struct AllGatherConcatParams {
         cluster_axis(cluster_axis) {}
     // Add attributes method for reflection
     auto attributes() const {
-        using tt::stl::reflection::Attribute;
+        using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
 
         attrs.emplace_back("dim", dim);

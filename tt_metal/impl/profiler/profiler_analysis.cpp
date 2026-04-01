@@ -14,8 +14,10 @@
 #include <tt-metalium/experimental/profiler.hpp>
 #include <fstream>
 
+#include "context/metal_env_accessor.hpp"
 #include "core_coord.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/device/device_manager.hpp"
 #include "profiler_analysis.hpp"
 #include "profiler_state_manager.hpp"
 #include <impl/dispatch/dispatch_core_manager.hpp>
@@ -289,6 +291,9 @@ getMetaDataForPrograms(const std::vector<std::reference_wrapper<const tracy::TTD
     std::map<experimental::ProgramExecutionUID, ProgramsPerfResults::SingleProgramPerfResults::ProgramMetaData>
         program_execution_uid_to_meta_data;
 
+    // Use the default MetalEnv
+    MetalEnv& env = MetalContext::instance().get_env();
+
     std::unordered_map<experimental::ProgramExecutionUID, std::unordered_set<CoreCoord>>
         fw_cores_per_program_execution_uid;
     for (const auto& marker_ref : markers) {
@@ -304,8 +309,8 @@ getMetaDataForPrograms(const std::vector<std::reference_wrapper<const tracy::TTD
                 tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_num_hw_cqs();
             const DispatchCoreConfig& dispatch_core_config =
                 tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-            const CoreCoord compute_grid_size =
-                tt::get_compute_grid_size(marker.chip_id, num_hw_cqs, dispatch_core_config);
+            const CoreCoord compute_grid_size = tt::get_compute_grid_size(
+                MetalEnvAccessor(env).impl(), marker.chip_id, num_hw_cqs, dispatch_core_config);
             const uint32_t num_available_worker_cores = compute_grid_size.x * compute_grid_size.y;
 
             program_execution_uid_to_meta_data[program_execution_uid] = {
@@ -695,8 +700,11 @@ void writeProgramsPerfResultsToCSV(
         }
     };
 
-    for (const auto& [device_id, samples] : kernel_durations_ns_by_device) {
-        print_summary(device_id, samples);
+    const auto& dev_mgr = tt::tt_metal::MetalContext::instance().device_manager();
+    if (dev_mgr && dev_mgr->get_all_active_device_ids().size() == 1) {
+        for (const auto& [device_id, samples] : kernel_durations_ns_by_device) {
+            print_summary(device_id, samples);
+        }
     }
 }
 

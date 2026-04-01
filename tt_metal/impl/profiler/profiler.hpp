@@ -18,6 +18,7 @@
 
 #include "buffer.hpp"
 #include "common/TracyTTDeviceData.hpp"
+#include "context/context_types.hpp"
 #include "core_coord.hpp"
 #include "mesh_device.hpp"
 #include "profiler_optional_metadata.hpp"
@@ -70,6 +71,9 @@ private:
 
     // Device ID
     ChipId device_id{};
+
+    // ContextID extracted from the device
+    ContextId context_id;
 
     // Device frequency
     int device_core_frequency{};
@@ -355,13 +359,14 @@ public:
     void pollDebugDumpResults(IDevice* device, const std::vector<CoreCoord>& virtual_cores, bool is_final_poll);
 };
 
-bool useFastDispatch(distributed::MeshDevice* mesh_device, IDevice* device);
+bool useFastDispatch(distributed::MeshDevice* mesh_device, IDevice* device, ContextId context_id);
 
 void writeToCoreControlBuffer(
     distributed::MeshDevice* mesh_device,
     IDevice* device,
     const CoreCoord& virtual_core,
     const std::vector<uint32_t>& data,
-    bool force_slow_dispatch);
+    bool force_slow_dispatch,
+    ContextId context_id);
 
 }  // namespace tt::tt_metal

@@ -34,6 +34,12 @@ from tests.ttnn.unit_tests.operations.sdpa.mla_test_utils import (
     ],
 )
 @pytest.mark.parametrize(
+    "q_mem_config",
+    [
+        None,  # default memory config (no replication)
+    ],
+)
+@pytest.mark.parametrize(
     "use_paged_attention",
     [
         # False,
@@ -64,6 +70,7 @@ def test_flash_mla_decode(
     d_rope,
     q_num_cores,
     q_dtype,
+    q_mem_config,
     dtype,
     use_paged_attention,
     block_size,
@@ -81,6 +88,7 @@ def test_flash_mla_decode(
         d_rope,
         q_num_cores,
         q_dtype,
+        q_mem_config,
         dtype,
         use_paged_attention,
         block_size,

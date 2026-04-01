@@ -7,7 +7,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <core/ttnn_all_includes.hpp>
 #include <random>
 
 #include "autograd/auto_context.hpp"

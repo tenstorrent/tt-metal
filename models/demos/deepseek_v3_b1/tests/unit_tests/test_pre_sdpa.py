@@ -20,12 +20,27 @@ from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
+    build_broadcast_test_inputs,
+    create_fabric_router_config,
+)
+from models.demos.deepseek_v3_b1.utils import generate_mm_weights
 
 
-def create_fabric_router_config(max_payload_size):
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
+def deinterleave_kv_cache(kv: torch.Tensor, device_chunk_size: int, num_devices: int) -> torch.Tensor:
+    """Reorder a round-robin interleaved KV cache for ShardTensor2dMesh.
+
+    The global KV cache is written in round-robin device_chunk_size blocks:
+      [dev0_chunk0 | dev1_chunk0 | ... | devN_chunk0 | dev0_chunk1 | ...]
+    ShardTensor2dMesh splits dim-2 contiguously, so each device would
+    receive the wrong data.  This function reorders to:
+      [dev0_chunk0 | dev0_chunk1 | ... | dev1_chunk0 | dev1_chunk1 | ...]
+    so that after the contiguous split each device gets its own chunks.
+    """
+    b, h, seq, d = kv.shape
+    num_chunks = seq // device_chunk_size
+    chunks_per_device = num_chunks // num_devices
+    return kv.reshape(b, h, chunks_per_device, num_devices, device_chunk_size, d).transpose(2, 3).reshape(b, h, seq, d)
 
 
 def test_get_device_mla_work_assignment():
@@ -125,9 +140,7 @@ def test_get_device_mla_work_assignment():
     ],
 )
 @pytest.mark.parametrize("epsilon", [1e-6])
-@pytest.mark.parametrize("use_fp32", [True])
-@pytest.mark.parametrize("cluster_axis", [0])
-@pytest.mark.parametrize("secondary_cluster_axis", [1])
+@pytest.mark.parametrize("use_fp32", [False])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (1, 1)])
 @pytest.mark.parametrize("num_iters", [(1)])
 @pytest.mark.parametrize("max_seq_len", [32 * 1024])
@@ -169,12 +182,11 @@ def test_pre_sdpa(
     sender_col,
     epsilon,
     use_fp32,
-    cluster_axis,
-    secondary_cluster_axis,
     num_iters,
     max_seq_len,
     position_id,
     noc_mode,
+    device_params,
 ):
     """Test TTNN pre-SDPA fused operation with CCL broadcast and full Qnope/Qrope pipeline"""
     num_devices = mesh_rows * mesh_cols
@@ -364,7 +376,7 @@ def test_pre_sdpa(
     torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_gamma = torch.randn(shape, dtype=torch.bfloat16)
-    torch_matmul_weights = torch.randn(matmul_weights_shape, dtype=torch.bfloat16)
+    torch_matmul_weights = generate_mm_weights(matmul_weights_shape, dtype=torch.bfloat16)
     torch_rmsnorm2_gamma = torch.randn((1, rmsnorm2_width), dtype=torch.bfloat16)
 
     # Matmul2 weights - full tensor with layout [all_qnope | all_qrope] for num_tp * 64 heads.
@@ -373,13 +385,15 @@ def test_pre_sdpa(
     total_qrope_heads = num_tp * NUM_QROPE_HEADS
     total_qnope_dim = total_qnope_heads * QNOPE_HEAD_DIM
     total_qrope_dim = total_qrope_heads * QROPE_HEAD_DIM
-    torch_matmul2_weights_full_unshuffled = torch.randn(
+    torch_matmul2_weights_full_unshuffled = generate_mm_weights(
         (matmul2_weights_shape[0], total_qnope_dim + total_qrope_dim), dtype=torch.bfloat16
     )
 
     # Matmul3 weights - [num_tp * num_qnope_heads, qnope_head_dim, qnope_out_dim] for golden
     # Each TP slice of 64 heads is height-sharded on 64 cores per device.
-    torch_matmul3_weights = torch.randn((num_tp * NUM_QNOPE_HEADS, QNOPE_HEAD_DIM, QNOPE_OUT_DIM), dtype=torch.bfloat16)
+    torch_matmul3_weights = generate_mm_weights(
+        (num_tp * NUM_QNOPE_HEADS, QNOPE_HEAD_DIM, QNOPE_OUT_DIM), dtype=torch.bfloat16
+    )
 
     # kv_b2_proj weights (placeholder — not consumed by pre-SDPA but required by the fused buffer)
     torch_kv_b2_proj_weights = torch.zeros(
@@ -387,7 +401,7 @@ def test_pre_sdpa(
     )
 
     # DKV matmul weights (raw, unshuffled — BlitzDecodeWeights handles shard reordering)
-    torch_dkv_matmul_weights = torch.randn(dkv_matmul_weights_shape, dtype=torch.bfloat16)
+    torch_dkv_matmul_weights = generate_mm_weights(dkv_matmul_weights_shape, dtype=torch.bfloat16)
 
     # Placeholder tensors for get_tt_o_proj_and_gate_mm_weights (not consumed by pre-SDPA)
     torch_o_proj_weights = torch.zeros((num_tp * 8192, 7168), dtype=torch.bfloat16)
@@ -416,54 +430,29 @@ def test_pre_sdpa(
     # Create TTNN tensors
     # ========================================================================
 
-    # Shard spec: single core for input, gamma (on mcast/gather core)
-    mcast_core = ttnn.CoreCoord(mcast_core_x, mcast_core_y)
-    shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(mcast_core, mcast_core)}),
-        shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
-
-    # Create mesh tensors for input and intermediate (CCL broadcast destination)
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
-    device_tensors = []
-    intermediate_tensors = []
-    for row in range(mesh_rows):
-        for col in range(mesh_cols):
-            if skip_ccl:
-                # Single-device mode: all devices have the input
-                device_tensors.append(torch_input)  # (1, 7168)
-            elif row == sender_row and col == sender_col:
-                # Only sender device has actual input data
-                device_tensors.append(torch_input)  # (1, 7168)
-            else:
-                # All other devices start with zeros
-                device_tensors.append(torch.zeros_like(torch_input))  # (1, 7168)
-            intermediate_tensors.append(torch.zeros_like(torch_input))
-
-    mesh_tensor_torch = torch.cat(device_tensors, dim=0)
-    intermediate_mesh_tensor_torch = torch.cat(intermediate_tensors, dim=0)
-
-    input_tensor_mesh = ttnn.from_torch(
-        mesh_tensor_torch,
-        device=submesh,
+    mcast_core = ttnn.CoreCoord(mcast_core_x, mcast_core_y)
+    bcast_inputs = build_broadcast_test_inputs(
+        mesh_device=submesh,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_coord=sender_coord,
+        output_shape=shape,
+        input_shard_shape=shape,
+        tensor_mem_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         layout=ttnn.TILE_LAYOUT,
+        input_dtype=ttnn.bfloat16,
+        bcast_core=mcast_core,
+        num_links=1,
+        input_tensor_torch=torch_input,
+        create_output_tensor_mesh=True,
+        create_semaphores=False,
+        skip_ccl=skip_ccl,
         tile=tile,
-        dtype=ttnn.bfloat16,
-        memory_config=mem_config,
-        mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=0),
+        output_mesh_mapper="shard_dim0",
     )
-
-    intermediate_tensor_mesh = ttnn.from_torch(
-        intermediate_mesh_tensor_torch,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=tile,
-        dtype=ttnn.bfloat16,
-        memory_config=mem_config,
-        mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=0),
-    )
+    input_tensor_mesh = bcast_inputs.input_tensor_mesh
+    intermediate_tensor_mesh = bcast_inputs.output_tensor_mesh
 
     # Fused matmul1 (q_a_proj packed), matmul2 (q_b_proj shuffled), and DKV matmul (kv_a_proj)
     # weights as overlapped tensors sharing a single L1 buffer via BlitzDecodeWeights.
@@ -653,23 +642,6 @@ def test_pre_sdpa(
     kvpe_dim = KNOPE_DIM + KROPE_DIM
     cache_shape = (1, 1, max_seq_len, kvpe_dim)
 
-    def deinterleave_kv_cache(kv: torch.Tensor, device_chunk_size: int, num_devices: int) -> torch.Tensor:
-        """Reorder a round-robin interleaved KV cache for ShardTensor2dMesh.
-
-        The global KV cache is written in round-robin device_chunk_size blocks:
-          [dev0_chunk0 | dev1_chunk0 | ... | devN_chunk0 | dev0_chunk1 | ...]
-        ShardTensor2dMesh splits dim-2 contiguously, so each device would
-        receive the wrong data.  This function reorders to:
-          [dev0_chunk0 | dev0_chunk1 | ... | dev1_chunk0 | dev1_chunk1 | ...]
-        so that after the contiguous split each device gets its own chunks.
-        """
-        b, h, seq, d = kv.shape
-        num_chunks = seq // device_chunk_size
-        chunks_per_device = num_chunks // num_devices
-        return (
-            kv.reshape(b, h, chunks_per_device, num_devices, device_chunk_size, d).transpose(2, 3).reshape(b, h, seq, d)
-        )
-
     dcs = program_config.device_chunk_size
     num_sp = mesh_rows
     torch_kv_cache = torch.zeros(cache_shape, dtype=torch.bfloat16)
@@ -736,12 +708,11 @@ def test_pre_sdpa(
             sdpa_out_interm_buffer,
             sender_coord,
             semaphores=semaphores,
-            cluster_axis=cluster_axis,
-            secondary_cluster_axis=secondary_cluster_axis,
             epsilon=epsilon,
             fp32_dest_acc_en=use_fp32,
             skip_ccl=skip_ccl,
             noc_mode=noc_mode,
+            fabric_config=device_params["fabric_config"],
         )
     ttnn.synchronize_device(submesh)
 
@@ -871,11 +842,11 @@ def test_pre_sdpa(
             compare_nope = compare_kv_cache[..., :KNOPE_DIM]
             compare_rope = compare_kv_cache[..., KNOPE_DIM:]
 
-            nope_passing, nope_pcc = comp_pcc(compare_nope, expected_nope, 0.98)
+            nope_passing, nope_pcc = comp_pcc(compare_nope, expected_nope, 0.99)
             logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache NOPE PCC: {nope_pcc}")
             assert nope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache NOPE PCC check failed: {nope_pcc}"
 
-            rope_passing, rope_pcc = comp_pcc(compare_rope, expected_rope, 0.98)
+            rope_passing, rope_pcc = comp_pcc(compare_rope, expected_rope, 0.99)
             logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC: {rope_pcc}")
             assert rope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC check failed: {rope_pcc}"
 
@@ -895,7 +866,7 @@ def test_pre_sdpa(
             )
             continue
 
-        passing, sdpa_pcc = comp_pcc(torch_output_expected_flat, received, 0.84)
+        passing, sdpa_pcc = comp_pcc(torch_output_expected_flat, received, 0.939)
         logger.info(f"Device {device_idx} (TP={tp_group}, SP={sp_group}) PreSDPA Output PCC: {sdpa_pcc}")
         assert (
             passing

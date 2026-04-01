@@ -4,6 +4,7 @@
 #pragma once
 
 #include "kernel_op_api.hpp"
+#include "kernel_utils.hpp"
 
 #if defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
@@ -46,19 +47,6 @@ namespace deepseek_b1_ops {
 //     - add_tiles on 32x32 view
 //     - Reserves/Pushes: cb_out
 // ============================================================================
-
-#if defined(COMPILE_FOR_TRISC)
-// Helper functions to manipulate CB read pointer (from bmm_large_block_zm_fused_bias_activation_gathered.cpp)
-FORCE_INLINE uint32_t get_local_cb_rd_ptr(uint32_t cb_id) {
-    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
-    return local_cb.fifo_rd_ptr;
-}
-
-FORCE_INLINE void update_local_cb_rd_ptr(uint32_t cb_id, uint32_t val) {
-    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
-    local_cb.fifo_rd_ptr = val;
-}
-#endif
 
 struct EltwiseAdd {
     // ========================================================================
@@ -150,8 +138,8 @@ struct EltwiseAdd {
             constexpr uint32_t offset_aligned = CTArgs::sender_index * CTArgs::slice_size_bytes / L1_ALIGNMENT;
             uint32_t cb_in1_base_rd_ptr = 0;
             UNPACK(({
-                cb_in1_base_rd_ptr = get_local_cb_rd_ptr(CTArgs::cb_in1);
-                update_local_cb_rd_ptr(CTArgs::cb_in1, cb_in1_base_rd_ptr + offset_aligned);
+                cb_in1_base_rd_ptr = unified_kernels::get_local_cb_rd_ptr(CTArgs::cb_in1);
+                unified_kernels::update_local_cb_rd_ptr(CTArgs::cb_in1, cb_in1_base_rd_ptr + offset_aligned);
             }));
 
             // Reserve output space
@@ -171,7 +159,7 @@ struct EltwiseAdd {
             cb_push_back(CTArgs::cb_out, num_tiles);
 
             // Restore cb_in1 read pointer (tensor-backed CB, no pop needed)
-            UNPACK(({ update_local_cb_rd_ptr(CTArgs::cb_in1, cb_in1_base_rd_ptr); }));
+            UNPACK(({ unified_kernels::update_local_cb_rd_ptr(CTArgs::cb_in1, cb_in1_base_rd_ptr); }));
 
             if constexpr (PopInputs) {
                 cb_pop_front(CTArgs::cb_in0_wait, CTArgs::cb_in0_wait_tiles);

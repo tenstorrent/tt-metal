@@ -11,6 +11,7 @@
 #include "device/all_reduce_async_device_operation.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp"
+#include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_device_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
@@ -23,6 +24,7 @@
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -149,22 +151,30 @@ Tensor local_sum_float32(
     return sum_tensor;
 }
 
-ttnn::Tensor ExecuteAllReduceAsync::invoke(
+}  // namespace ttnn::operations::experimental::ccl
+
+namespace ttnn::experimental {
+
+ttnn::Tensor all_reduce_async(
     const ttnn::Tensor& input_tensor,
     const uint32_t num_devices,
     const std::vector<GlobalSemaphore>& barrier_semaphores,
     const std::vector<GlobalSemaphore>& rs_global_semaphores,
     const std::vector<GlobalSemaphore>& ag_global_semaphores,
-    ttnn::operations::reduction::ReduceType /*math_op*/,
+    reduction_common::ReduceType /*math_op*/,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
     topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
-    MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
+    auto* mesh_device_ptr = input_tensor.device();
+    TT_FATAL(mesh_device_ptr != nullptr, "Mesh device is required for all_reduce_async operation");
+    uint32_t resolved_num_links =
+        num_preferred_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device_ptr, std::nullopt));
+    ttnn::MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
     bool input_is_sharded = input_tensor.memory_config().is_sharded();
-    uint32_t dim =
-        detail::finding_scatter_dim(input_tensor, ttnn::ccl::get_active_physical_devices(input_tensor).size());
+    uint32_t dim = ttnn::operations::experimental::ccl::detail::finding_scatter_dim(
+        input_tensor, ttnn::ccl::get_active_physical_devices(input_tensor).size());
 
     auto padded_tensor = input_tensor;
     auto initial_shape = input_tensor.logical_shape();
@@ -179,12 +189,14 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     auto interleaved_tensor = padded_tensor;
     bool change_mem_config = input_is_sharded;
     if (change_mem_config) {
-        MemoryConfig working_memory_config{TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
+        ttnn::MemoryConfig working_memory_config{
+            ttnn::TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
         interleaved_tensor = ttnn::sharded_to_interleaved(padded_tensor, working_memory_config, std::nullopt);
     }
 
-    const bool composite_for_2d_mesh = tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D &&
-                                       detail::is_true_2d_mesh(input_tensor, topology);
+    const bool composite_for_2d_mesh =
+        tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D &&
+        ttnn::operations::experimental::ccl::detail::is_true_2d_mesh(input_tensor, topology);
 
     if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) || composite_for_2d_mesh) {
         log_debug(tt::LogOp, "Using composite all gather + local reduce");
@@ -198,17 +210,18 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         auto gather_tensor = composite_common::composite_all_gather(
             reshaped_tensor,
             composite_dim,
-            num_preferred_links.value_or(1),
+            resolved_num_links,
             out_memory_config,
             worker_subdevice_id_opt,
             std::nullopt);
         reshaped_tensor.deallocate();
 
-        bool is_float32 = (input_tensor.dtype() == DataType::FLOAT32);
-        auto sum_tensor =
-            is_float32
-                ? local_sum_float32(gather_tensor, static_cast<int>(composite_dim), num_devices, out_memory_config)
-                : local_sum(gather_tensor, static_cast<int>(composite_dim), out_memory_config);
+        bool is_float32 = (input_tensor.dtype() == ttnn::DataType::FLOAT32);
+        auto sum_tensor = is_float32
+                              ? ttnn::operations::experimental::ccl::local_sum_float32(
+                                    gather_tensor, static_cast<int>(composite_dim), num_devices, out_memory_config)
+                              : ttnn::operations::experimental::ccl::local_sum(
+                                    gather_tensor, static_cast<int>(composite_dim), out_memory_config);
         gather_tensor.deallocate();
 
         return ttnn::reshape(sum_tensor, initial_shape);
@@ -223,8 +236,8 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         dim,
         rs_global_semaphores,
         barrier_semaphores[0],
-        num_preferred_links.value_or(1),
-        change_mem_config ? std::nullopt : std::optional<MemoryConfig>(out_memory_config),
+        resolved_num_links,
+        change_mem_config ? std::nullopt : std::optional<ttnn::MemoryConfig>(out_memory_config),
         std::nullopt,
         topology,
         worker_subdevice_id_opt);
@@ -234,8 +247,8 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         /*persistent_output_buffer*/ std::nullopt,
         dim,
         ag_global_semaphores,
-        num_preferred_links.value_or(1),
-        change_mem_config ? std::nullopt : std::optional<MemoryConfig>(out_memory_config),
+        resolved_num_links,
+        change_mem_config ? std::nullopt : std::optional<ttnn::MemoryConfig>(out_memory_config),
         topology,
         worker_subdevice_id_opt,
         /*cluster_axis*/ std::nullopt,
@@ -256,23 +269,25 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     return gathered;
 }
 
-ttnn::Tensor ExecuteAllReduceAsync::invoke(
+ttnn::Tensor all_reduce_async(
     const ttnn::Tensor& input_tensor,
     std::optional<uint32_t> cluster_axis,
     MeshDevice& mesh_device,
     const std::optional<std::vector<GlobalSemaphore>>& barrier_semaphores,
     const std::optional<std::vector<GlobalSemaphore>>& rs_global_semaphores,
     const std::optional<std::vector<GlobalSemaphore>>& ag_global_semaphores,
-    ttnn::operations::reduction::ReduceType /*math_op*/,
+    reduction_common::ReduceType /*math_op*/,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<ttnn::ccl::Topology> topology,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
-    MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
+    uint32_t resolved_num_links =
+        num_preferred_links.value_or(ttnn::operations::ccl::common::get_num_links(mesh_device, cluster_axis));
+    ttnn::MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
     bool input_is_sharded = input_tensor.memory_config().is_sharded();
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
-    uint32_t dim = detail::finding_scatter_dim(input_tensor, num_devices);
+    uint32_t dim = ttnn::operations::experimental::ccl::detail::finding_scatter_dim(input_tensor, num_devices);
     auto padded_tensor = input_tensor;
     auto initial_shape = input_tensor.logical_shape();
 
@@ -280,7 +295,8 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     bool change_mem_config = input_is_sharded;
     auto interleaved_tensor = padded_tensor;
     if (change_mem_config) {
-        MemoryConfig working_memory_config{TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
+        ttnn::MemoryConfig working_memory_config{
+            ttnn::TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
         interleaved_tensor = ttnn::sharded_to_interleaved(padded_tensor, working_memory_config, std::nullopt);
     }
 
@@ -290,8 +306,9 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         composite_common::use_composite_all_gather(padded_tensor, composite_dim, out_memory_config);
     bool composite_reduce_scatter =
         composite_common::use_composite_reduce_scatter(padded_tensor, composite_dim, cluster_axis);
-    const bool composite_for_2d_mesh = tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D &&
-                                       detail::is_true_2d_mesh(input_tensor, topology_);
+    const bool composite_for_2d_mesh =
+        tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D &&
+        ttnn::operations::experimental::ccl::detail::is_true_2d_mesh(input_tensor, topology_);
 
     if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) || composite_for_2d_mesh) {
         log_debug(tt::LogOp, "Using composite all gather + local reduce");
@@ -308,17 +325,18 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         auto gather_tensor = composite_common::composite_all_gather(
             reshaped_tensor,
             composite_dim,
-            num_preferred_links.value_or(1),
-            change_mem_config ? std::nullopt : std::optional<MemoryConfig>(out_memory_config),
+            resolved_num_links,
+            change_mem_config ? std::nullopt : std::optional<ttnn::MemoryConfig>(out_memory_config),
             worker_subdevice_id_opt,
             cluster_axis);
         reshaped_tensor.deallocate();
 
-        bool is_float32 = (input_tensor.dtype() == DataType::FLOAT32);
-        auto sum_tensor =
-            is_float32
-                ? local_sum_float32(gather_tensor, static_cast<int>(composite_dim), num_devices, out_memory_config)
-                : local_sum(gather_tensor, static_cast<int>(composite_dim), out_memory_config);
+        bool is_float32 = (input_tensor.dtype() == ttnn::DataType::FLOAT32);
+        auto sum_tensor = is_float32
+                              ? ttnn::operations::experimental::ccl::local_sum_float32(
+                                    gather_tensor, static_cast<int>(composite_dim), num_devices, out_memory_config)
+                              : ttnn::operations::experimental::ccl::local_sum(
+                                    gather_tensor, static_cast<int>(composite_dim), out_memory_config);
         gather_tensor.deallocate();
 
         return ttnn::reshape(sum_tensor, initial_shape);
@@ -336,8 +354,8 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             dim,
             rs_global_semaphores.value(),
             barrier_semaphores.value()[0],
-            num_preferred_links.value_or(1),
-            change_mem_config ? std::nullopt : std::optional<MemoryConfig>(out_memory_config),
+            resolved_num_links,
+            change_mem_config ? std::nullopt : std::optional<ttnn::MemoryConfig>(out_memory_config),
             std::nullopt,
             topology_,
             worker_subdevice_id_opt,
@@ -367,11 +385,11 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             /*persistent_output_buffer*/ std::nullopt,
             dim,
             ag_global_semaphores.value(),
-            num_preferred_links.value_or(1),
-            change_mem_config ? std::nullopt : std::optional<MemoryConfig>(out_memory_config),
+            resolved_num_links,
+            change_mem_config ? std::nullopt : std::optional<ttnn::MemoryConfig>(out_memory_config),
             topology_,
             worker_subdevice_id_opt,
-            cluster_axis.value(),
+            cluster_axis,
             /*use_optimal_ccl_for_llama*/ false,
             use_llama_sharded,
             /*use_all_gather_async_via_broadcast*/ false,
@@ -400,10 +418,10 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     return gathered;
 }
 
-ttnn::Tensor ExecuteAllReduceAsync::invoke(
+ttnn::Tensor all_reduce_async(
     const ttnn::Tensor& input_tensor,
     uint32_t cluster_axis,
-    ttnn::operations::reduction::ReduceType math_op,
+    reduction_common::ReduceType math_op,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const std::optional<ttnn::MemoryConfig>& /*memory_config*/,
     std::optional<size_t> num_preferred_links,
@@ -411,7 +429,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     auto topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required");
-    return ExecuteAllReduceAsync::invoke(
+    return ttnn::experimental::all_reduce_async(
         input_tensor,
         cluster_axis,
         *mesh_device,
@@ -425,7 +443,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         subdevice_id);
 }
 
-ttnn::Tensor ExecuteAllReduceAsync::invoke(
+ttnn::Tensor all_reduce_async(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& buffer_tensor,
     const uint32_t cluster_axis,
@@ -439,7 +457,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama) {
     topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
-    MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
+    ttnn::MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
 
     log_debug(tt::LogOp, "Using minimal all_reduce_async");
     return ttnn::prim::all_reduce_async(
@@ -457,7 +475,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         use_optimal_ccl_for_llama);
 }
 
-std::vector<ttnn::Tensor> ExecuteAllReduceAsync::invoke(
+std::vector<ttnn::Tensor> all_reduce_async(
     const std::vector<ttnn::Tensor>& input_tensors,
     ttnn::Tensor& buffer_tensor,
     const uint32_t cluster_axis,
@@ -471,7 +489,7 @@ std::vector<ttnn::Tensor> ExecuteAllReduceAsync::invoke(
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama) {
     topology = ::ttnn::ccl::get_usable_topology(input_tensors.at(0), topology, cluster_axis);
-    MemoryConfig out_memory_config = memory_config.value_or(input_tensors.at(0).memory_config());
+    ttnn::MemoryConfig out_memory_config = memory_config.value_or(input_tensors.at(0).memory_config());
 
     log_debug(tt::LogOp, "Using minimal all_reduce_async with multiple tensors");
     std::vector<ttnn::Tensor> output_tensors;
@@ -494,4 +512,4 @@ std::vector<ttnn::Tensor> ExecuteAllReduceAsync::invoke(
     return output_tensors;
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

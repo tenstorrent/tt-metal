@@ -15,45 +15,28 @@
 #include <nanobind/stl/variant.h>
 
 #include "ttnn/operations/data_movement/fold/fold.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::data_movement {
 
 void bind_fold_operation(nb::module_& mod) {
-    bind_registered_operation(
-        mod,
-        ttnn::fold,
-        R"doc(
-            Fold TT Tensor.
-            Input tensor must be on TT accelerator device, in ROW_MAJOR.
-            Output tensor will be on TT accelerator device, in ROW_MAJOR.
+    const auto* doc = R"doc(
+        Fold TT Tensor.
+        Input tensor must be on TT accelerator device, in ROW_MAJOR.
+        Output tensor will be on TT accelerator device, in ROW_MAJOR.
 
-            Args:
-                input (ttnn.Tensor): Input tensor to be folded. Tensor of shape [N, H, W, C].
-                stride_h (int): Stride along the H-dimension.
-                stride_w (int): Stride along the W-dimension.
-        )doc",
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::fold)& op,
-               const ttnn::Tensor& input,
-               uint32_t stride_h,
-               uint32_t stride_w,
-               bool use_transpose_as_fold,
-               const std::optional<ttnn::Shape>& output_shape,
-               std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>, std::array<uint32_t, 6>> padding,
-               const std::optional<CoreRangeSet>& grid_size,
-               const std::optional<MemoryConfig>& override_memory_config) -> ttnn::Tensor {
-                return op(
-                    input,
-                    stride_h,
-                    stride_w,
-                    use_transpose_as_fold,
-                    output_shape,
-                    padding,
-                    grid_size,
-                    override_memory_config);
-            },
+        Args:
+            input (ttnn.Tensor): Input tensor to be folded. Tensor of shape [N, H, W, C].
+            stride_h (int): Stride along the H-dimension.
+            stride_w (int): Stride along the W-dimension.
+    )doc";
+
+    ttnn::bind_function<"fold">(
+        mod,
+        doc,
+        ttnn::overload_t(
+            &ttnn::fold,
             nb::arg("input"),
             nb::arg("stride_h"),
             nb::arg("stride_w"),
@@ -61,7 +44,7 @@ void bind_fold_operation(nb::module_& mod) {
             nb::arg("output_shape") = nb::none(),
             nb::arg("padding") = std::array<uint32_t, 2>{0, 0},
             nb::arg("grid_size") = nb::none(),
-            nb::arg("override_memory_config") = nb::none()});
+            nb::arg("override_memory_config") = nb::none()));
 }
 
 }  // namespace ttnn::operations::data_movement

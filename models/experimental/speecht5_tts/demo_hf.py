@@ -107,6 +107,21 @@ def main():
         model = SpeechT5ForTextToSpeech.from_pretrained("microsoft/speecht5_tts")
         vocoder = SpeechT5HifiGan.from_pretrained("microsoft/speecht5_hifigan")
 
+        # Disable dropout for inference to prevent noise accumulation
+        # This matches the TTNN implementation which uses static masks
+        model.speecht5.decoder.prenet.config.speech_decoder_prenet_dropout = 0.0
+        model.speecht5.decoder.prenet.encode_positions.dropout.p = 0.0
+        # Monkey-patch _consistent_dropout to skip dropout entirely when p=0.0
+        original_consistent_dropout = model.speecht5.decoder.prenet._consistent_dropout
+
+        def patched_consistent_dropout(inputs_embeds, p):
+            if p == 0.0:
+                return inputs_embeds  # Skip dropout entirely
+            return original_consistent_dropout(inputs_embeds, p)
+
+        model.speecht5.decoder.prenet._consistent_dropout = patched_consistent_dropout
+        print("   Dropout disabled for HF model (matching TTNN implementation)")
+
         # Load speaker embeddings
         embeddings_dataset = load_dataset("Matthijs/cmu-arctic-xvectors", split="validation")
         speaker_embeddings = torch.tensor(embeddings_dataset[7306]["xvector"]).unsqueeze(0)

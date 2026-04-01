@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_device_operation_types.hpp"
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_row_major_program_factory.hpp"
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_tiled_program_factory.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 
@@ -30,7 +30,7 @@ struct ReshapeViewDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-    static tt::stl::hash::hash_t compute_program_hash(
+    static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 

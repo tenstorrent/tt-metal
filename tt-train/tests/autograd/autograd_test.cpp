@@ -5,7 +5,6 @@
 #include <gtest/gtest.h>
 
 #include <array>
-#include <core/ttnn_all_includes.hpp>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -38,8 +37,8 @@ TEST_F(AutogradTest, TestSum) {
     auto tensor1 = ttml::core::from_vector(test_data1, shape, device);
     auto tensor2 = ttml::core::from_vector(test_data2, shape, device);
 
-    auto t1 = ttml::autograd::create_tensor(tensor1);
-    auto t2 = ttml::autograd::create_tensor(tensor2);
+    auto t1 = ttml::autograd::create_tensor(tensor1, /* requires_grad */ true);
+    auto t2 = ttml::autograd::create_tensor(tensor2, /* requires_grad */ true);
 
     auto res = t1 + t2;
     res->backward();
@@ -67,8 +66,8 @@ TEST_F(AutogradTest, TestMul) {
     auto tensor1 = ttml::core::from_vector(test_data1, shape, device);
     auto tensor2 = ttml::core::from_vector(test_data2, shape, device);
 
-    auto t1 = ttml::autograd::create_tensor(tensor1);
-    auto t2 = ttml::autograd::create_tensor(tensor2);
+    auto t1 = ttml::autograd::create_tensor(tensor1, /* requires_grad */ true);
+    auto t2 = ttml::autograd::create_tensor(tensor2, /* requires_grad */ true);
 
     auto res = t1 * t2;
     res->backward();
@@ -89,7 +88,7 @@ TEST_F(AutogradTest, BroadCastBatchTest) {
     std::vector<float> test_data1 = {1.F, 2.F, 3.F, 4.F};
     auto shape = ttnn::Shape({1, 1, 1, 4});
     auto tensor1 = ttml::core::from_vector(test_data1, shape, device);
-    auto t1 = ttml::autograd::create_tensor(tensor1);
+    auto t1 = ttml::autograd::create_tensor(tensor1, /* requires_grad */ true);
     uint32_t new_batch = 4;
     auto res = ttml::ops::broadcast_batch(t1, new_batch);
     res->backward();

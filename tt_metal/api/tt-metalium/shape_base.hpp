@@ -36,7 +36,7 @@ inline int32_t normalized_index(int32_t index, size_t original_size, size_t cont
 class ShapeBase {
 public:
     using coord_type = uint32_t;
-    using Container = tt::stl::SmallVector<uint32_t>;
+    using Container = ttsl::SmallVector<uint32_t>;
 
     ShapeBase() { init(); };
     explicit ShapeBase(const Container& shape) : value_(shape) { init(); }
@@ -46,7 +46,7 @@ public:
     explicit ShapeBase(const std::array<uint32_t, N>& arr) : value_(arr.begin(), arr.end()) {
         init();
     }
-    explicit ShapeBase(tt::stl::Span<const uint32_t> span) : value_(span.begin(), span.end()) { init(); }
+    explicit ShapeBase(ttsl::Span<const uint32_t> span) : value_(span.begin(), span.end()) { init(); }
 
     template <std::size_t N>
     bool operator==(const std::array<uint32_t, N>& other) const {
@@ -74,7 +74,7 @@ public:
     Container::const_iterator begin() const;
     Container::const_iterator end() const;
 
-    tt::stl::Span<const uint32_t> view() const;
+    ttsl::Span<const uint32_t> view() const;
 
     bool empty() const;
 

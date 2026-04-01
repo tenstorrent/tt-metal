@@ -184,6 +184,10 @@
 #include "api/compute/eltwise_unary/hardmish.h"
 #endif
 
+#if SFPU_OP_LGAMMA_INCLUDE
+#include "api/compute/eltwise_unary/lgamma.h"
+#endif
+
 #if SFPU_OP_COMPUTE_KERNEL_API_INCLUDE
 #include "api/compute/compute_kernel_api.h"
 #endif

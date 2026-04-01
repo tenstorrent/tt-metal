@@ -1,0 +1,68 @@
+name: "[tt-train] Build and Test"
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Docker image to use for build and test"
+      build-artifact-name:
+        required: false
+        type: string
+        default: ""
+        description: "Build artifact name to use (skips build if provided)"
+  workflow_dispatch:
+  merge_group:
+
+permissions:
+  packages: write
+
+concurrency:
+  group: >-
+    ${{ github.workflow }}-
+    ${{ (github.ref_protected && github.run_id)
+        || github.event.pull_request.number
+        || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-artifact:
+    if: ${{ !inputs.build-artifact-name }}
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      build-type: Release
+      skip-tt-train: false
+      platform: "Ubuntu 22.04"
+
+  run-tt-train-tests:
+    needs: [build-artifact]
+    if: ${{ always() && (needs.build-artifact.result == 'success' || needs.build-artifact.result == 'skipped') }}
+    uses: ./.github/workflows/tt-train-post-commit.yaml
+    secrets: inherit
+    with:
+      arch: wormhole_b0
+      runner-label: N150
+      docker-image: >-
+        ${{ inputs.docker-image
+            || needs.build-artifact.outputs.dev-docker-image
+            || 'docker-image-unresolved!' }}
+      build-artifact-name: >-
+        ${{ inputs.build-artifact-name
+            || needs.build-artifact.outputs.build-artifact-name
+            || 'build-artifact-unresolved!' }}
+
+  validate-pr:
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    needs: [run-tt-train-tests]
+    steps:
+      - run: |
+          test_result="${{ needs.run-tt-train-tests.result }}"
+          if [[ $test_result == "success" ]] ; then
+            exit 0
+          else
+            exit 1
+          fi

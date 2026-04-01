@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import pytest
 import torch
 import torch.nn.functional as F
@@ -59,6 +61,249 @@ def create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_
     submesh_shape[up_axis] = up_factor
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape[0], submesh_shape[1]))
     return submesh_device
+
+
+def run_ring_joint_sdpa_model_config(
+    mesh_device,
+    *,
+    b,
+    nh,
+    base_seq_len,
+    joint_seq_len,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    rp_axis,
+    rp_factor,
+    up_axis,
+    up_factor,
+    num_links,
+    ccl_reserve_last_column,
+    use_column_major_ccl,
+    use_wormhole_compute_kernel_config,
+    pcc_threshold=0.999,
+):
+    """
+    Run ring_joint_scaled_dot_product_attention matching all model-specific
+    details: grid layout, CCL placement, compute kernel config, dtype, etc.
+    """
+    # Pad heads to be divisible by up_factor (tensor-parallel factor)
+    if nh % up_factor != 0:
+        nh = math.ceil(nh / up_factor) * up_factor
+
+    submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
+    padded_seq_len = get_padded_vision_seq_len(base_seq_len, rp_factor)
+
+    full_grid = submesh.compute_with_storage_grid_size()
+
+    # --- Grid layout: match model's CCL core placement exactly ---
+    if ccl_reserve_last_column:
+        # Wan: reserve last column for CCL
+        sdpa_compute_grid = (full_grid.x - 1, full_grid.y)
+        ccl_core_grid_offset = (full_grid.x - 1, 0)
+    else:
+        # SD3.5 / Mochi: reserve last row for CCL
+        sdpa_compute_grid = (full_grid.x, full_grid.y - 1)
+        ccl_core_grid_offset = (0, full_grid.y - 1)
+
+    # --- Sub-device setup ---
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))}
+    )
+    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    sub_device_stall_group = [worker_sub_device_id]
+
+    sub_device_manager = submesh.create_sub_device_manager([worker_sub_device], 0)
+    submesh.load_sub_device_manager(sub_device_manager)
+    submesh.set_sub_device_stall_group(sub_device_stall_group)
+
+    # --- Global semaphores ---
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(submesh, ccl_sub_device_crs, 0) for _ in range(2)]
+
+    # --- Persistent output buffers for all-gather K/V ---
+    kv_shard_dims = [None, None]
+    kv_shard_dims[up_axis] = 1  # Sharded on heads (dim 1)
+
+    ag_output_shape = (b, nh, padded_seq_len, d)
+    persistent_output_buffers = [
+        ttnn.from_torch(
+            torch.zeros(ag_output_shape),
+            device=submesh,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=kv_shard_dims),
+        )
+        for _ in range(2)  # K, V
+    ]
+
+    # --- Program config: exact grid from model ---
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=sdpa_compute_grid,
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+    )
+
+    # --- Compute kernel config: match model exactly ---
+    if use_wormhole_compute_kernel_config:
+        # SD3.5 uses WormholeComputeKernelConfig directly
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+        )
+    else:
+        # Wan / Mochi use init_device_compute_kernel_config
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            submesh.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
+    # --- Create input tensors ---
+    Q = fa_rand(b, nh, base_seq_len, d)
+    K = fa_rand(b, nh, base_seq_len, d)
+    V = fa_rand(b, nh, base_seq_len, d)
+
+    padded_Q = torch.cat([Q, torch.zeros(b, nh, padded_seq_len - base_seq_len, d)], dim=2)
+    padded_K = torch.cat([K, torch.zeros(b, nh, padded_seq_len - base_seq_len, d)], dim=2)
+    padded_V = torch.cat([V, torch.zeros(b, nh, padded_seq_len - base_seq_len, d)], dim=2)
+
+    joint_Q = fa_rand(b, nh, joint_seq_len, d)
+    joint_K = fa_rand(b, nh, joint_seq_len, d)
+    joint_V = fa_rand(b, nh, joint_seq_len, d)
+
+    logger.debug(f"Q: {Q.shape}, padded_Q: {padded_Q.shape}, joint_Q: {joint_Q.shape}")
+
+    # Shard dims: RP on sequence (dim 2), UP on heads (dim 1)
+    sdpa_input_shard_dims = [None, None]
+    sdpa_input_shard_dims[rp_axis] = 2
+    sdpa_input_shard_dims[up_axis] = 1
+
+    # Joint only sharded on heads (replicated across RP axis)
+    sdpa_joint_shard_dims = [None, None]
+    sdpa_joint_shard_dims[up_axis] = 1
+
+    dtype = ttnn.bfloat16
+
+    tt_Q = ttnn.from_torch(
+        padded_Q,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
+    )
+    tt_K = ttnn.from_torch(
+        padded_K,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
+    )
+    tt_V = ttnn.from_torch(
+        padded_V,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
+    )
+    tt_joint_Q = ttnn.from_torch(
+        joint_Q,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_joint_shard_dims),
+    )
+    tt_joint_K = ttnn.from_torch(
+        joint_K,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_joint_shard_dims),
+    )
+    tt_joint_V = ttnn.from_torch(
+        joint_V,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_joint_shard_dims),
+    )
+
+    logger.debug(f"tt_Q: {tt_Q.shape}, tt_joint_Q: {tt_joint_Q.shape}")
+    logger.debug(f"sdpa_compute_grid: {sdpa_compute_grid}, ccl_core_grid_offset: {ccl_core_grid_offset}")
+    logger.debug(f"use_column_major_ccl: {use_column_major_ccl}")
+
+    # --- Run the op ---
+    sdpa_kwargs = dict(
+        persistent_output_buffer_k=persistent_output_buffers[0],
+        persistent_output_buffer_v=persistent_output_buffers[1],
+        joint_strategy="rear",
+        logical_n=base_seq_len,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        dim=2,
+        multi_device_global_semaphore=ccl_semaphore_handles,
+        num_links=num_links,
+        cluster_axis=rp_axis,
+        mesh_device=submesh,
+        topology=ttnn.Topology.Linear,
+        subdevice_id=worker_sub_device_id,
+        ccl_core_grid_offset=ccl_core_grid_offset,
+    )
+    if use_column_major_ccl:
+        sdpa_kwargs["use_column_major_ccl"] = True
+
+    tt_out, tt_joint_out, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+        tt_Q,
+        tt_K,
+        tt_V,
+        tt_joint_Q,
+        tt_joint_K,
+        tt_joint_V,
+        **sdpa_kwargs,
+    )
+
+    # --- Verify correctness ---
+    pt_Q = torch.cat([Q, joint_Q], dim=2)
+    pt_K = torch.cat([K, joint_K], dim=2)
+    pt_V = torch.cat([V, joint_V], dim=2)
+    gt = torch.nn.functional.scaled_dot_product_attention(pt_Q, pt_K, pt_V, is_causal=False)
+    gt_out = gt[:, :, :base_seq_len, :]
+    gt_joint_out = gt[:, :, base_seq_len:, :]
+
+    tt_out = ttnn.to_torch(
+        tt_out,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
+    )
+    tt_out = tt_out[:, :, :base_seq_len, :]
+
+    passing = True
+    out_pass, out_pcc = comp_pcc(tt_out, gt_out, pcc_threshold)
+    mse = ((gt_out - tt_out) ** 2).mean()
+    logger.info(f"spatial PCC: {out_pcc}, MSE: {mse}")
+    passing = passing and out_pass
+
+    if joint_seq_len > 0:
+        joint_shard_dims = [None, None]
+        joint_shard_dims[up_axis] = 1
+        joint_shard_dims[rp_axis] = 0  # Concat replicas into batch
+        tt_joint_out = ttnn.to_torch(
+            tt_joint_out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(submesh, mesh_shape=tuple(submesh.shape), dims=joint_shard_dims),
+        )
+        tt_joint_out = tt_joint_out[:, :, :joint_seq_len, :]
+        for replica_id in range(tt_joint_out.shape[0]):
+            replica_out = tt_joint_out[replica_id, :, :, :]
+            jout_pass, jout_pcc = comp_pcc(replica_out, gt_joint_out, pcc_threshold)
+            jmse = ((gt_joint_out - replica_out) ** 2).mean()
+            logger.info(f"joint replica {replica_id} PCC: {jout_pcc}, MSE: {jmse}")
+            passing = passing and jout_pass
+
+    assert passing
 
 
 def run_ring_joint_sdpa(
@@ -134,7 +379,8 @@ def run_ring_joint_sdpa(
         exp_approx_mode=False,
     )
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        submesh.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
         fp32_dest_acc_en=False,

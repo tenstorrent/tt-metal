@@ -137,7 +137,6 @@ class TtTemporalSelfAttention:
             offset_normalizer_xy = ttnn.reshape(
                 offset_normalizer, (1, 1, 1, offset_normalizer.shape[0], 1, offset_normalizer.shape[1])
             )
-            ttnn.deallocate(offset_normalizer)
             sampling_offsets = ttnn.to_layout(sampling_offsets, ttnn.TILE_LAYOUT)
             offset_normalizer_xy = ttnn.to_layout(offset_normalizer_xy, ttnn.TILE_LAYOUT)
 
@@ -158,6 +157,7 @@ class TtTemporalSelfAttention:
             sampling_locations = ttnn.reshape(sampling_locations, sampling_offsets_shape)
             sampling_locations = reference_points + sampling_locations
             ttnn.deallocate(offset_normalizer_xy)
+            ttnn.deallocate(offset_normalizer)
             reference_points = ttnn.reshape(reference_points, reference_points_shape)
         elif reference_points.shape[-1] == 4:
             reference_points_reshape = ttnn.reshape(

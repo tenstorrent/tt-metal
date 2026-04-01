@@ -6,7 +6,6 @@
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_utils.hpp>
 #include <umd/device/cluster.hpp>
 
@@ -14,6 +13,7 @@
 #include "core/random.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
 namespace {
@@ -55,7 +55,7 @@ TEST_F(N300CommOpsTest, TestAllReduceNotFullyTiled) {
     auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
     auto tt_tensor =
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, ttnn::Layout::TILE, mapper.get());
-    auto tensor = ttml::autograd::create_tensor(tt_tensor);
+    auto tensor = ttml::autograd::create_tensor(tt_tensor, /* requires_grad */ true);
     auto all_reduce_tensor = ttml::ops::distributed::all_reduce(tensor);
 
     auto all_reduce_xtensor =
@@ -122,7 +122,7 @@ TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
     auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
     auto tt_tensor =
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, ttnn::Layout::TILE, mapper.get());
-    auto tensor = ttml::autograd::create_tensor(tt_tensor);
+    auto tensor = ttml::autograd::create_tensor(tt_tensor, /* requires_grad */ true);
     auto all_reduce_tensor = ttml::ops::distributed::all_reduce(tensor);
 
     auto all_reduce_xtensor =
@@ -186,7 +186,7 @@ TEST_F(N300CommOpsTest, TestAllReduceFullyTiled) {
     auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
     auto tt_tensor =
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, ttnn::Layout::TILE, mapper.get());
-    auto tensor = ttml::autograd::create_tensor(tt_tensor);
+    auto tensor = ttml::autograd::create_tensor(tt_tensor, /* requires_grad */ true);
     auto all_reduce_tensor = ttml::ops::distributed::all_reduce(tensor);
 
     auto all_reduce_xtensor =
@@ -244,7 +244,7 @@ TEST_F(N300CommOpsTest, TestAllGatherNotFullyTiled) {
     auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
     auto tt_tensor =
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, ttnn::Layout::TILE, mapper.get());
-    auto tensor = ttml::autograd::create_tensor(tt_tensor);
+    auto tensor = ttml::autograd::create_tensor(tt_tensor, /* requires_grad */ true);
     auto gathered_tensor = ttml::ops::distributed::all_gather(tensor, 3);
 
     auto gathered_xtensor = ttml::core::to_xtensor<float>(gathered_tensor->get_value(), ttml::core::IdentityComposer{});
@@ -301,7 +301,7 @@ TEST_F(N300CommOpsTest, TestAllGatherFullyTiled) {
     auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
     auto tt_tensor =
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, ttnn::Layout::TILE, mapper.get());
-    auto tensor = ttml::autograd::create_tensor(tt_tensor);
+    auto tensor = ttml::autograd::create_tensor(tt_tensor, /* requires_grad */ true);
     auto gathered_tensor = ttml::ops::distributed::all_gather(tensor, 3);
 
     auto gathered_xtensor = ttml::core::to_xtensor<float>(gathered_tensor->get_value(), ttml::core::IdentityComposer{});
@@ -353,7 +353,7 @@ TEST_F(N300CommOpsTest, TestScatterNotFullyTiled) {
     auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tt_tensor =
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, ttnn::Layout::TILE, mapper.get());
-    auto tensor = ttml::autograd::create_tensor(tt_tensor);
+    auto tensor = ttml::autograd::create_tensor(tt_tensor, /* requires_grad */ true);
     auto scattered_tensor = ttml::ops::distributed::reduce_scatter(tensor, 3);
 
     // check forward
@@ -417,7 +417,7 @@ TEST_F(N300CommOpsTest, TestScatterFullyTiled) {
     EXPECT_TRUE(xt::allclose(xtensor, xtensor_after_replication[0], /* rtol */ 1e-3, /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(xtensor, xtensor_after_replication[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 
-    auto tensor = ttml::autograd::create_tensor(tt_tensor);
+    auto tensor = ttml::autograd::create_tensor(tt_tensor, /* requires_grad */ true);
     auto scattered_tensor = ttml::ops::distributed::reduce_scatter(tensor, 3);
 
     // check forward

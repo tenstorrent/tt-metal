@@ -57,14 +57,12 @@ Op2DSliceConfig determine_slice_config(
     const ttnn::Shape& output_shape,
     std::optional<Op2DSliceConfig> slice_config_,
     tt::tt_metal::Layout output_layout,
-    tt::tt_metal::distributed::MeshDevice* device,
-    bool conv_bypass = true);
+    tt::tt_metal::distributed::MeshDevice* device);
 
 void run_sliced_op(
     const ttnn::Tensor& input_tensor,
     std::vector<OpSliceAttr::RefTensor>& output_tensor,
     OpSliceAttr* op_slice_attr,
-    std::optional<Op2DSliceConfig> dram_slice_config_,
-    bool conv_bypass = true);
+    std::optional<Op2DSliceConfig> dram_slice_config_);
 
 }  // namespace ttnn::operations::op_slicing

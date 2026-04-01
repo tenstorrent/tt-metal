@@ -9,7 +9,6 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
-#include "core/ttnn_all_includes.hpp"
 #include "serialization/serializable.hpp"
 
 // Make NamedParameters opaque so we can bind it explicitly

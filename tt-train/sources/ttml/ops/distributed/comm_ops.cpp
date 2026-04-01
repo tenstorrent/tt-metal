@@ -4,11 +4,10 @@
 
 #include "comm_ops.hpp"
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 namespace ttml::ops::distributed {
@@ -22,8 +21,7 @@ autograd::TensorPtr reduce_scatter(
             tensor->add_grad(ttnn_fixed::distributed::all_gather(out->get_grad(), dim, cluster_axis));
         }
     };
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
 }
 
@@ -44,8 +42,7 @@ autograd::TensorPtr scatter(
             tensor->add_grad(ttnn_fixed::distributed::all_gather(out->get_grad(), dim, cluster_axis));
         }
     };
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
 }
 
@@ -70,8 +67,7 @@ autograd::TensorPtr all_gather(
             }
         }
     };
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
 }
 
@@ -87,8 +83,7 @@ autograd::TensorPtr all_reduce(
             }
         }
     };
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
 }
 
@@ -99,8 +94,7 @@ autograd::TensorPtr broadcast(const autograd::TensorPtr& tensor, const std::opti
             tensor->add_grad(ttnn_fixed::distributed::all_reduce(out->get_grad(), cluster_axis));
         }
     };
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
 }
 
@@ -122,8 +116,7 @@ autograd::TensorPtr ring_shift(
         }
     };
 
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
 }
 

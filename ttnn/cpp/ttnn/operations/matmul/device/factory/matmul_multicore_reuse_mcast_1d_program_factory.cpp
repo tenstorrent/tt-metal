@@ -293,8 +293,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         in0_last_ktile_w,
         in0_last_ktile_h);
 
-    const auto in0_tensor_stride_w = transpose_a ? M : 1;
-    const auto in0_tensor_stride_h = transpose_a ? 1 : K;
+    const auto& a_padded_shape = operations::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
+    const uint32_t M_per_batch = a_padded_shape[-2] / in0_tile.get_height();
+    const auto [in0_tensor_stride_w, in0_tensor_stride_h] =
+        operations::matmul::utilities::get_in0_transpose_strides(M, M_per_batch, transpose_a, K);
     const auto in0_tensor_next_block_stride = in0_block_w * in0_tensor_stride_w;
     const auto in0_tensor_next_h_dim_block_stride = in0_block_h * in0_tensor_stride_h;
     const auto in0_tensor_start_tile_id_stride = per_core_M * in0_tensor_stride_h;
@@ -364,6 +366,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             // batch args
             (std::uint32_t)M * K,  // MtKt
             (std::uint32_t)B,      // batch
+            (std::uint32_t)B,      // batch
+            (std::uint32_t)false,  // reuse_in0_in_CB
             // sparsity args
             (std::uint32_t)0,     // batchB
             (std::uint32_t)0,     // sparsity_pagesize (placeholder since sparsity not used in this case)
@@ -1061,7 +1065,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     bool packer_l1_acc,
     CoreCoord compute_with_storage_grid_size,
     ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
-    uint32_t B,
+    uint32_t in0_B,
+    uint32_t in1_B,
     uint32_t M,
     uint32_t N,
     uint32_t K,
@@ -1127,9 +1132,16 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
     uint32_t in0_block_tiles = in0_block_h * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
-    if (in0_is_sharded) {
-        in0_CB_tiles = num_blocks * per_core_M * in0_block_w * B;
-    } else if (B * num_blocks > 1) {
+
+    bool reuse_in0_in_CB =
+        ((in0_B == 1 && in1_B > 1) && !in0_is_sharded && !output_is_sharded && !bcast_batch &&
+         !fused_activation.has_value());
+
+    if (reuse_in0_in_CB) {
+        in0_CB_tiles = per_core_M * num_blocks * in0_block_w;
+    } else if (in0_is_sharded) {
+        in0_CB_tiles = num_blocks * per_core_M * in0_block_w * in0_B;
+    } else if (in0_B * num_blocks > 1) {
         in0_CB_tiles = in0_CB_tiles * 2;  // double buffer
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
@@ -1167,9 +1179,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
-    if (B * num_blocks > 1) {
+    if (in1_B * num_blocks > 1) {
         in1_CB_tiles = in1_CB_tiles * 2;  // double buffer
     }
+
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
     uint32_t out_block_tiles = out_block_h * out_block_w;
@@ -1218,8 +1231,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
-    const auto in0_tensor_stride_w = transpose_a ? M : 1;
-    const auto in0_tensor_stride_h = transpose_a ? 1 : K;
+    const auto& a_padded_shape = operations::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
+    const uint32_t M_per_batch = a_padded_shape[-2] / in0_tile.get_height();
+    const auto [in0_tensor_stride_w, in0_tensor_stride_h] =
+        operations::matmul::utilities::get_in0_transpose_strides(M, M_per_batch, transpose_a, K);
     const auto in0_tensor_next_block_stride = in0_block_w * in0_tensor_stride_w;
     const auto in0_tensor_next_h_dim_block_stride = in0_block_h * in0_tensor_stride_h;
     const auto in0_tensor_start_tile_id_stride = per_core_M * in0_tensor_stride_h;
@@ -1256,9 +1271,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         (std::uint32_t)0,  // in0_mcast_num_dests
         (std::uint32_t)0,  // in0_mcast_num_cores
         // batch args
-        (std::uint32_t)M * K,  // MtKt
-        (std::uint32_t)B,      // batch
-
+        (std::uint32_t)M * K,            // MtKt
+        (std::uint32_t)in0_B,            // batch
+        (std::uint32_t)in1_B,            // batch
+        (std::uint32_t)reuse_in0_in_CB,  // reuse_in0_in_CB
         // sparsity args
         (std::uint32_t)0,     // batchB
         (std::uint32_t)0,     // sparsity_pagesize (placeholder since sparsity not used in this case)
@@ -1290,9 +1306,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         (std::uint32_t)num_cores - 1,                     // in1_mcast_num_dests
         (std::uint32_t)in1_mcast_receiver_num_cores - 1,  // in1_mcast_num_cores
         // batch args
-        (std::uint32_t)K * N,        // KtNt
-        (std::uint32_t)B,            // batch
-        (std::uint32_t)bcast_batch,  // bcast_B
+        (std::uint32_t)K * N,                              // KtNt
+        (std::uint32_t)(reuse_in0_in_CB ? in1_B : in0_B),  // batch
+        (std::uint32_t)bcast_batch,                        // bcast_B
         // sparsity args
         (std::uint32_t)0,  // batchB
         (std::uint32_t)0,  // sparsity_pagesize (placeholder since sparsity not used in this case)
@@ -1312,6 +1328,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         // batch args
         (std::uint32_t)M * N  // MtNt
     };
+
     if (bias_buffer != nullptr) {
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)1);  // in3_tensor_stride_w
     } else {
@@ -1341,7 +1358,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         (std::uint32_t)in1_mcast_sender_semaphore_id,
         (std::uint32_t)in1_mcast_receiver_semaphore_id,
         // batch args
-        (std::uint32_t)B,  // batch
+        (std::uint32_t)(reuse_in0_in_CB ? in1_B : in0_B),  // batch
 
         // WRITER
         // out tensor args
@@ -1531,11 +1548,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         out_num_blocks_x,  // out_num_blocks_x
         out_num_blocks_y,  // out_num_blocks_y
 
-        out_subblock_h,          // out_subblock_h
-        out_subblock_w,          // out_subblock_w
-        out_subblock_num_tiles,  // out_subblock_num_tiles
-        B,                       // batch
-        out_block_tiles,         // out_block_num_tiles
+        out_subblock_h,                     // out_subblock_h
+        out_subblock_w,                     // out_subblock_w
+        out_subblock_num_tiles,             // out_subblock_num_tiles
+        (reuse_in0_in_CB ? in1_B : in0_B),  // batch
+        out_block_tiles,                    // out_block_num_tiles
 
         untilize_out,  // untilize_out
         false,         // get_batch_from_reader
@@ -1931,8 +1948,16 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     }
     for (const auto& cr : subdevice_cores.ranges()) {
         auto intersection = non_idle_cores.intersection(cr);
-        for (const auto& ir : intersection.ranges()) {
-            non_idle_cores_vec.push_back(ir);
+        if (intersection.empty()) {
+            continue;
+        }
+        bool is_rectangular = cr.end_coord.x > cr.start_coord.x && cr.end_coord.y > cr.start_coord.y;
+        if (is_rectangular) {
+            non_idle_cores_vec.push_back(intersection.bounding_box());
+        } else {
+            for (const auto& ir : intersection.ranges()) {
+                non_idle_cores_vec.push_back(ir);
+            }
         }
     }
     all_cores = CoreRangeSet(non_idle_cores_vec);
@@ -2925,7 +2950,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     ////////////////////////////////////////////////////////////////////////////
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    const auto B = fuse_batch ? 1 : get_batch_size(ashape);
+    const auto in0_B = fuse_batch ? 1 : get_batch_size(ashape);
+    const auto in1_B = fuse_batch ? 1 : get_batch_size(bshape);
     const auto Mt = operations::matmul::utilities::get_M_dim(ashape, in0_tile, fuse_batch);
     const auto Kt = operations::matmul::utilities::get_K_dim(ashape, in0_tile);
     const auto Nt = operations::matmul::utilities::get_N_dim(bshape, in1_tile);
@@ -2991,7 +3017,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
             compute_with_storage_grid_size,
             throttle_level,
             start_cb_index,
-            B,
+            in0_B,
             Mt,
             Nt,
             Kt,
@@ -3043,7 +3069,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
             packer_l1_acc,
             compute_with_storage_grid_size,
             throttle_level,
-            B,
+            in0_B,
             Mt,
             Nt,
             Kt,
@@ -3088,7 +3114,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         packer_l1_acc,
         compute_with_storage_grid_size,
         throttle_level,
-        B,
+        in0_B,
+        in1_B,
         Mt,
         Nt,
         Kt,

@@ -9,7 +9,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 #include "move.hpp"
 
@@ -31,17 +31,11 @@ void bind_move(nb::module_& mod) {
             +----------+----------------------------+----------------------------+---------------------------------+----------+
         )doc";
 
-    bind_registered_operation(
+    ttnn::bind_function<"move">(
         mod,
-        ttnn::move,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::move)& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config) { return self(input_tensor, memory_config); },
-            nb::arg("input_tensor").noconvert(),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+        ttnn::overload_t(
+            &ttnn::move, nb::arg("input_tensor").noconvert(), nb::kw_only(), nb::arg("memory_config") = nb::none()));
 }
 
 }  // namespace ttnn::operations::data_movement::detail

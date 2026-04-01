@@ -18,11 +18,15 @@ ttnn::Tensor create_group_norm_input_mask(
     int64_t num_channel,
     int64_t num_groups,
     int64_t num_cores_across_channel,
-    tt::tt_metal::DataType data_type = tt::tt_metal::DataType::BFLOAT16);
+    tt::tt_metal::DataType data_type = tt::tt_metal::DataType::BFLOAT16,
+    int64_t tile_height = 32,
+    int64_t tile_width = 32);
 
 ttnn::Tensor create_group_norm_input_negative_mask(
     int64_t num_channel,
     int64_t num_groups,
     int64_t num_cores_across_channel,
-    tt::tt_metal::DataType data_type = tt::tt_metal::DataType::BFLOAT16);
+    tt::tt_metal::DataType data_type = tt::tt_metal::DataType::BFLOAT16,
+    int64_t tile_height = 32,
+    int64_t tile_width = 32);
 }  // namespace normalization

@@ -112,12 +112,13 @@ def test_mochi_diffusers_pipeline():
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, vae_mesh_shape, vae_sp_axis, vae_tp_axis, num_links",
     [
-        # VAE mesh shape = (1, 8) is more memory efficient.
+        [(2, 2), 0, 1, (1, 4), 0, 1, 2],  # VAE mesh shape = (1, 4) is more memory efficient.
         [(1, 8), 1, 0, (1, 8), 0, 1, 1],
-        [(2, 4), 0, 1, (1, 8), 0, 1, 1],
+        [(2, 4), 0, 1, (1, 8), 0, 1, 1],  # VAE mesh shape = (1, 8) is more memory efficient.
         [(4, 8), 1, 0, (4, 8), 0, 1, 4],  # note sp <-> tp switch for VAE for memory efficiency.
     ],
     ids=[
+        "dit_2x2sp0tp1_vae_1x4sp0tp1",
         "dit_1x8sp1tp0_vae_1x8sp0tp1",
         "dit_2x4sp0tp1_vae_1x8sp0tp1",
         "dit_4x8sp1tp0_vae_4x8sp0tp1",
@@ -133,11 +134,16 @@ def test_tt_mochi_pipeline(
     vae_sp_axis: int,
     vae_tp_axis: int,
     num_links: int,
+    is_ci_env: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """
     Test that creates the modified TT MochiPipeline and runs it on a prompt.
     This uses the TT transformer instead of the diffusers one.
     """
+    if is_ci_env:
+        monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
+
     try:
         from ....parallel.config import DiTParallelConfig, MochiVAEParallelConfig, ParallelFactor
         from ....pipelines.mochi.pipeline_mochi import MochiPipeline as TTMochiPipeline
@@ -182,6 +188,7 @@ def test_tt_mochi_pipeline(
         num_links=num_links,
         use_reference_vae=False,
         model_name="genmo/mochi-1-preview",
+        reload_dit_model=mesh_device.get_num_devices() <= 8,
     )
 
     # Define test prompt (same as the diffusers test)

@@ -11,7 +11,7 @@
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/kernel_types.hpp>
 
-#include "tt_metal/hw/inc/internal/dataflow_buffer_interface.h"
+#include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 
 namespace tt {
 enum class DataFormat : uint8_t;
@@ -22,8 +22,7 @@ class Program;
 
 namespace tt::tt_metal::experimental::dfb {
 
-// Alias to avoid ambiguous 'experimental' when used inside tt::tt_metal::experimental
-using AccessPattern = ::experimental::AccessPattern;
+using AccessPattern = ::dfb::AccessPattern;
 
 struct DataflowBufferConfig {
     uint32_t entry_size = 0;

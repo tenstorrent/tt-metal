@@ -5,12 +5,12 @@
 #pragma once
 
 #include <variant>
-#include "ttnn/decorators.hpp"
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "interleaved_to_sharded_op_types.hpp"
 #include "interleaved_to_sharded_program_factory.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 
@@ -30,7 +30,7 @@ struct InterleavedToShardedDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-    static tt::stl::hash::hash_t compute_program_hash(
+    static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 

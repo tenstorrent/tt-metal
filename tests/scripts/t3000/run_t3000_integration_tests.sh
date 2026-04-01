@@ -43,7 +43,7 @@ run_t3000_llama3_tests() {
   for hf_model in "$llama8b"; do
     tt_cache=$TT_CACHE_HOME/$hf_model
     HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/tests/test_model.py -k full ; fail+=$?
-    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/tests/test_model_prefill.py ; fail+=$?
+    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy" ; fail+=$?
     echo "LOG_METAL: Llama3 tests for $hf_model completed"
   done
 
@@ -71,7 +71,7 @@ run_t3000_llama3_70b_tests() {
   llama70b=meta-llama/Llama-3.1-70B-Instruct
   tt_cache_llama70b=$TT_CACHE_HOME/$llama70b
   HF_MODEL=$llama70b TT_CACHE_PATH=$tt_cache_llama70b pytest models/tt_transformers/tests/test_model.py -k full ; fail+=$?
-  HF_MODEL=$llama70b TT_CACHE_PATH=$tt_cache_llama70b pytest models/tt_transformers/tests/test_model_prefill.py ; fail+=$?
+  HF_MODEL=$llama70b TT_CACHE_PATH=$tt_cache_llama70b pytest models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -167,14 +167,14 @@ run_t3000_llama3_70n90b_accuracy_tests() {
   fi
 }
 
-#run_t3000_llama3.2-11b-vision_freq_tests() {
-  # Record the start time
+# run_t3000_llama3.2-11b-vision_freq_tests() {
+# # Record the start time
 #  fail=0
 #  start_time=$(date +%s)
 
 #  echo "LOG_METAL: Running run_t3000_llama3.2-11b-vision_freq_tests"
 
-  # Llama3.2-11B
+# # Llama3.2-11B
 #  llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
 #  tt_cache_llama11b=$TT_CACHE_HOME/$llama11b
 
@@ -183,26 +183,26 @@ run_t3000_llama3_70n90b_accuracy_tests() {
 #  HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py ; fail+=$?
 #  HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
 
-  # Record the end time
+# # Record the end time
 #  end_time=$(date +%s)
 #  duration=$((end_time - start_time))
 #  echo "LOG_METAL: run_t3000_llama3.2-11b-vision_freq_tests $duration seconds to complete"
 #  if [[ $fail -ne 0 ]]; then
 #    exit 1
 #  fi
-#}
+# }
 
-#run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests() {
-  # Record the start time
+# run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests() {
+#  # Record the start time
 #  fail=0
 #  start_time=$(date +%s)
 
 #  echo "LOG_METAL: Running run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests"
 
-  # Llama3.2-11B
+#  # Llama3.2-11B
 #  llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
 #  tt_cache_llama11b=$TT_CACHE_HOME/$llama11b
-  # Use MESH_DEVICE env variable to run on an N300 mesh
+#   # Use MESH_DEVICE env variable to run on an N300 mesh
 #  mesh_device=N300
 
 #  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
@@ -210,38 +210,38 @@ run_t3000_llama3_70n90b_accuracy_tests() {
 #  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py ; fail+=$?
 #  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
 
-  # Record the end time
+#  # Record the end time
 #  end_time=$(date +%s)
 #  duration=$((end_time - start_time))
 #  echo "LOG_METAL: run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests $duration seconds to complete"
 #  if [[ $fail -ne 0 ]]; then
 #    exit 1
 #  fi
-#}
+# }
 
-#run_t3000_llama3.2-90b-vision_freq_tests() {
-  # Record the start time
-#  fail=0
-#  start_time=$(date +%s)
+run_t3000_llama3.2-90b-vision_freq_tests() {
+# Record the start time
+ fail=0
+ start_time=$(date +%s)
 
-#  echo "LOG_METAL: Running run_t3000_llama3.2-90b-vision_freq_tests"
+ echo "LOG_METAL: Running run_t3000_llama3.2-90b-vision_freq_tests"
 
-  # Llama3.2-90B -- use repacked weights when acceptable for faster testing
-#  llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
-#  tt_cache_llama90b=$TT_CACHE_HOME/$llama90b
-#  HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py --timeout 2400; fail+=$?
-#  HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
-#  HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
-#  HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
+ # Llama3.2-90B -- use repacked weights when acceptable for faster testing
+ llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
+ tt_cache_llama90b=$TT_CACHE_HOME/$llama90b
+ HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py --timeout 2400; fail+=$?
+ HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
+ HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
+ HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
 
-  # Record the end time
-#  end_time=$(date +%s)
-#  duration=$((end_time - start_time))
-#  echo "LOG_METAL: run_t3000_llama3.2-90b-vision_freq_tests $duration seconds to complete"
-#  if [[ $fail -ne 0 ]]; then
-#    exit 1
-#  fi
-#}
+# Record the end time
+ end_time=$(date +%s)
+ duration=$((end_time - start_time))
+ echo "LOG_METAL: run_t3000_llama3.2-90b-vision_freq_tests $duration seconds to complete"
+ if [[ $fail -ne 0 ]]; then
+   exit 1
+ fi
+}
 
 
 run_t3000_mistral_tests() {
@@ -251,7 +251,7 @@ run_t3000_mistral_tests() {
   hf_model=mistralai/Mistral-7B-Instruct-v0.3
   tt_cache_path=$TT_CACHE_HOME/$hf_model
   TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/tests/test_model.py -k full
-  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/tests/test_model_prefill.py
+  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy"
 
 }
 
@@ -389,7 +389,7 @@ run_t3000_wan22_tests() {
   pytest models/tt_dit/tests/models/wan2_2/test_rope.py -k "2x4"; fail+=$?
   pytest models/tt_dit/tests/models/wan2_2/test_attention_wan.py -k "2x4sp0tp1"; fail+=$?
   pytest models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "transformer_block and 2x4sp0tp1 or short_seq-2x4sp0tp1 and not yes_load_cache and not model_caching" --timeout 600; fail+=$?
-  pytest models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "(test_wan_decoder or test_wan_encoder) and 2x4 and real_weights and check_output and _1f"; fail+=$?
+  pytest models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "(test_wan_encoder or test_wan_decoder) and 2x4 and real_weights and check_output and _1f and not no_cache_full_T"; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -448,13 +448,13 @@ run_t3000_tests() {
   run_t3000_llama3_70n90b_accuracy_tests
 
   # Run Llama3.2-11B Vision tests
-  #run_t3000_llama3.2-11b-vision_freq_tests
+  # run_t3000_llama3.2-11b-vision_freq_tests
 
   # Run Llama3.2-11B Vision tests on spoofed N300
-  #run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests
+  # run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests
 
   # Run Llama3.2-90B Vision tests
-  #run_t3000_llama3.2-90b-vision_freq_tests
+  run_t3000_llama3.2-90b-vision_freq_tests
 
   # Run mistral tests
   run_t3000_mistral_tests

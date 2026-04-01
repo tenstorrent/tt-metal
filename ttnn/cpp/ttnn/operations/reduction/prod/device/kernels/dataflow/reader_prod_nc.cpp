@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <cstring>
 
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/noc.h"
@@ -24,12 +25,10 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
 
-    union {
-        float f;
-        uint32_t u;
-    } scaler;
-    scaler.f = 1.0f;
-    fill_cb_with_value(cb_id_in1, scaler.u);
+    uint32_t scaler = 0;
+    const float one_f = 1.0f;
+    std::memcpy(&scaler, &one_f, sizeof(uint32_t));  // Alternative to std::bit_cast
+    fill_cb_with_value(cb_id_in1, scaler);
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_in0(tt::CBIndex::c_0);

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -144,13 +144,9 @@ class PythonLinearOp(Function):
         volume_without_features = ttnn_input.logical_volume() // in_features
 
         # Reshape input and grad_output to 2D
-        reshaped_input = ttnn.reshape(
-            ttnn_input, ttnn.Shape([volume_without_features, in_features])
-        )
+        reshaped_input = ttnn.reshape(ttnn_input, ttnn.Shape([volume_without_features, in_features]))
 
-        reshaped_grad_output = ttnn.reshape(
-            grad_output, ttnn.Shape([volume_without_features, out_features])
-        )
+        reshaped_grad_output = ttnn.reshape(grad_output, ttnn.Shape([volume_without_features, out_features]))
 
         # Compute weight gradient: grad_output.T @ input
         # Shape: [out_features, batch*seq] @ [batch*seq, in_features] = [out_features, in_features]
@@ -271,63 +267,6 @@ class PythonGroupedHeadsCreationOp(Function):
         return grad_qs, grad_kvs
 
 
-class PythonLinearLayer(ttml.modules.AbstractModuleBase):
-    """Python implementation of Linear layer using PythonLinearOp.
-
-    This is an experimental implementation to test Python operations
-    in tt-train's autograd system.
-    """
-
-    def __init__(
-        self, in_features: int, out_features: int, has_bias: bool = True
-    ) -> None:
-        """Initialize Python Linear layer.
-
-        Args:
-            in_features: Number of input features
-            out_features: Number of output features
-            has_bias: Whether to include bias term
-        """
-        super().__init__()
-
-        self.in_features = in_features
-        self.out_features = out_features
-        self.has_bias = has_bias
-
-        # Initialize weight with uniform distribution [-k, k] where k = sqrt(1/in_features)
-        # Weight shape: [1, 1, out_features, in_features]
-        init_k = math.sqrt(1.0 / in_features)
-        weight_data = np.random.uniform(
-            -init_k, init_k, (1, 1, out_features, in_features)
-        ).astype(np.float32)
-        self.weight = Tensor.from_numpy(weight_data)
-
-        # Initialize bias with same distribution
-        # Bias shape: [1, 1, 1, out_features]
-        if has_bias:
-            bias_data = np.random.uniform(
-                -init_k, init_k, (1, 1, 1, out_features)
-            ).astype(np.float32)
-            self.bias = Tensor.from_numpy(bias_data)
-        else:
-            self.bias = None
-
-    def forward(self, x: Tensor) -> Tensor:
-        """Forward pass of linear layer.
-
-        Args:
-            x: Input tensor of shape [*, in_features]
-
-        Returns:
-            Output tensor of shape [*, out_features]
-        """
-        return PythonLinearOp.apply(x, self.weight, self.bias)
-
-    def __call__(self, x: Tensor) -> Tensor:
-        """Make layer callable."""
-        return self.forward(x)
-
-
 class TestGetLinks:
     """Tests for the get_links() function."""
 
@@ -402,14 +341,6 @@ class TestCustomOperationsWithDevice:
 
     These tests require a Tenstorrent device to be available.
     """
-
-    @pytest.fixture(autouse=True)
-    def setup_device(self):
-        """Set up device for tests."""
-        auto_ctx = ttml.autograd.AutoContext.get_instance()
-        auto_ctx.open_device()
-        yield
-        auto_ctx.close_device()
 
     def test_simple_scale_operation_forward(self):
         """Test a simple scale operation forward pass."""
@@ -516,6 +447,7 @@ class TestCustomOperationsWithDevice:
         # Create input tensor with shape suitable for tile layout
         input_data = np.ones((1, 1, 32, 32), dtype=np.float32)
         input_tensor = ttml.autograd.Tensor.from_numpy(input_data)
+        input_tensor.set_requires_grad(True)
 
         # Forward pass
         output = DoubleOp.apply(input_tensor)
@@ -528,9 +460,7 @@ class TestCustomOperationsWithDevice:
         grad_tensor = input_tensor.get_grad_tensor()
         # Gradient should be 2.0 everywhere (since d/dx(2x) = 2)
         expected_grad = np.full_like(input_data, 2.0)
-        np.testing.assert_array_almost_equal(
-            grad_tensor.to_numpy(), expected_grad, decimal=5
-        )
+        np.testing.assert_array_almost_equal(grad_tensor.to_numpy(), expected_grad, decimal=5)
 
     def test_multiple_inputs(self):
         """Test custom operation with multiple inputs."""
@@ -646,6 +576,8 @@ class TestCustomOperationsWithDevice:
 
         x_tensor = ttml.autograd.Tensor.from_numpy(x_data)
         y_tensor = ttml.autograd.Tensor.from_numpy(y_data)
+        x_tensor.set_requires_grad(True)
+        y_tensor.set_requires_grad(True)
 
         # Forward pass: (x + y) * scale = (2 + 3) * 2 = 10
         output = AddAndScale.apply(x_tensor, y_tensor, 2.0)
@@ -656,9 +588,7 @@ class TestCustomOperationsWithDevice:
         np.testing.assert_array_almost_equal(output_data, expected, decimal=5)
 
         # Output should have node set (from autograd ops)
-        assert (
-            output.get_node() is not None
-        ), "Output should have node from autograd ops"
+        assert output.get_node() is not None, "Output should have node from autograd ops"
 
         # Backward should work automatically
         output.backward(retain_graph=False)
@@ -688,6 +618,7 @@ class TestCustomOperationsWithDevice:
         # Create input tensor
         input_data = np.ones((1, 1, 32, 32), dtype=np.float32) * 3.0
         input_tensor = ttml.autograd.Tensor.from_numpy(input_data)
+        input_tensor.set_requires_grad(True)
 
         # Forward pass: input * scale = 3.0 * 2.0 = 6.0
         output = ScaleOp.apply(input_tensor, 2.0)
@@ -705,9 +636,7 @@ class TestCustomOperationsWithDevice:
         assert input_tensor.is_grad_initialized(), "Input should have gradient"
         grad_tensor = input_tensor.get_grad_tensor()
         expected_grad = np.full_like(input_data, 2.0)
-        np.testing.assert_array_almost_equal(
-            grad_tensor.to_numpy(), expected_grad, decimal=5
-        )
+        np.testing.assert_array_almost_equal(grad_tensor.to_numpy(), expected_grad, decimal=5)
 
     def test_auto_wrap_ttnn_tensor(self):
         """Test that ttnn tensors returned from forward are auto-wrapped."""
@@ -739,14 +668,10 @@ class TestCustomOperationsWithDevice:
         batch, seq_len, in_features, out_features = 2, 4, 32, 64
 
         # Input: [batch, seq_len, in_features]
-        input_data = np.random.randn(1, 1, batch * seq_len, in_features).astype(
-            np.float32
-        )
+        input_data = np.random.randn(1, 1, batch * seq_len, in_features).astype(np.float32)
 
         # Weight: [1, 1, out_features, in_features]
-        weight_data = (
-            np.random.randn(1, 1, out_features, in_features).astype(np.float32) * 0.1
-        )
+        weight_data = np.random.randn(1, 1, out_features, in_features).astype(np.float32) * 0.1
 
         # Bias: [1, 1, 1, out_features]
         bias_data = np.random.randn(1, 1, 1, out_features).astype(np.float32) * 0.1
@@ -785,14 +710,10 @@ class TestCustomOperationsWithDevice:
         batch, seq_len, in_features, out_features = 2, 4, 32, 64
 
         # Input: [batch, seq_len, in_features]
-        input_data = np.random.randn(1, 1, batch * seq_len, in_features).astype(
-            np.float32
-        )
+        input_data = np.random.randn(1, 1, batch * seq_len, in_features).astype(np.float32)
 
         # Weight: [1, 1, out_features, in_features]
-        weight_data = (
-            np.random.randn(1, 1, out_features, in_features).astype(np.float32) * 0.1
-        )
+        weight_data = np.random.randn(1, 1, out_features, in_features).astype(np.float32) * 0.1
 
         # Bias: [1, 1, 1, out_features]
         bias_data = np.random.randn(1, 1, 1, out_features).astype(np.float32) * 0.1
@@ -801,11 +722,17 @@ class TestCustomOperationsWithDevice:
         input_py = ttml.autograd.Tensor.from_numpy(input_data)
         weight_py = ttml.autograd.Tensor.from_numpy(weight_data)
         bias_py = ttml.autograd.Tensor.from_numpy(bias_data)
+        input_py.set_requires_grad(True)
+        weight_py.set_requires_grad(True)
+        bias_py.set_requires_grad(True)
 
         # Create ttml tensors for C++ implementation (same data)
         input_cpp = ttml.autograd.Tensor.from_numpy(input_data)
         weight_cpp = ttml.autograd.Tensor.from_numpy(weight_data)
         bias_cpp = ttml.autograd.Tensor.from_numpy(bias_data)
+        input_cpp.set_requires_grad(True)
+        weight_cpp.set_requires_grad(True)
+        bias_cpp.set_requires_grad(True)
 
         # Python implementation forward + backward
         output_py = PythonLinearOp.apply(input_py, weight_py, bias_py)
@@ -848,134 +775,6 @@ class TestCustomOperationsWithDevice:
             err_msg="Python and C++ linear op bias gradients differ",
         )
 
-    def test_python_linear_layer_vs_cpp_forward(self):
-        """Compare Python LinearLayer forward pass against C++ implementation."""
-        in_features, out_features = 32, 64
-        batch, seq_len = 2, 4
-
-        # Create shared weight and bias tensors (create once to ensure same data)
-        np.random.seed(42)
-        weight_data = (
-            np.random.randn(1, 1, out_features, in_features).astype(np.float32) * 0.1
-        )
-        bias_data = np.random.randn(1, 1, 1, out_features).astype(np.float32) * 0.1
-
-        # Create shared ttml tensors
-        weight_tensor = ttml.autograd.Tensor.from_numpy(weight_data)
-        bias_tensor = ttml.autograd.Tensor.from_numpy(bias_data)
-
-        # Create Python layer and set weights
-        python_layer = PythonLinearLayer(in_features, out_features, has_bias=True)
-        python_layer.weight = weight_tensor
-        python_layer.bias = bias_tensor
-
-        # Create C++ layer using constructor that takes weight and bias
-        cpp_layer = ttml.modules.LinearLayer(weight_tensor, bias_tensor)
-
-        # Create input
-        input_data = np.random.randn(1, 1, batch * seq_len, in_features).astype(
-            np.float32
-        )
-
-        # Python forward
-        input_py = ttml.autograd.Tensor.from_numpy(input_data)
-        output_py = python_layer(input_py)
-
-        # C++ forward
-        input_cpp = ttml.autograd.Tensor.from_numpy(input_data)
-        output_cpp = cpp_layer(input_cpp)
-
-        # Compare outputs (convert to float32 to handle dtype differences)
-        output_py_np = output_py.to_numpy().astype(np.float32)
-        output_cpp_np = output_cpp.to_numpy().astype(np.float32)
-
-        np.testing.assert_allclose(
-            output_py_np,
-            output_cpp_np,
-            rtol=1e-2,
-            atol=1e-2,
-            err_msg="Python and C++ LinearLayer forward outputs differ",
-        )
-
-    def test_python_linear_layer_vs_cpp_backward(self):
-        """Compare Python LinearLayer backward pass against C++ implementation."""
-        in_features, out_features = 32, 64
-        batch, seq_len = 2, 4
-
-        # Create shared weight and bias tensors (create once to ensure same data)
-        np.random.seed(42)
-        weight_data = (
-            np.random.randn(1, 1, out_features, in_features).astype(np.float32) * 0.1
-        )
-        bias_data = np.random.randn(1, 1, 1, out_features).astype(np.float32) * 0.1
-
-        # Create shared ttml tensors for Python layer
-        weight_py = ttml.autograd.Tensor.from_numpy(weight_data)
-        bias_py = ttml.autograd.Tensor.from_numpy(bias_data)
-
-        # Create shared ttml tensors for C++ layer (separate instances to avoid shared gradients)
-        weight_cpp = ttml.autograd.Tensor.from_numpy(weight_data)
-        bias_cpp = ttml.autograd.Tensor.from_numpy(bias_data)
-
-        # Create Python layer and set weights
-        python_layer = PythonLinearLayer(in_features, out_features, has_bias=True)
-        python_layer.weight = weight_py
-        python_layer.bias = bias_py
-
-        # Create C++ layer using constructor that takes weight and bias
-        cpp_layer = ttml.modules.LinearLayer(weight_cpp, bias_cpp)
-
-        # Create input
-        input_data = np.random.randn(1, 1, batch * seq_len, in_features).astype(
-            np.float32
-        )
-
-        # Python forward + backward
-        input_py = ttml.autograd.Tensor.from_numpy(input_data)
-        output_py = python_layer(input_py)
-        output_py.backward(retain_graph=False)
-
-        # C++ forward + backward
-        input_cpp = ttml.autograd.Tensor.from_numpy(input_data)
-        output_cpp = cpp_layer(input_cpp)
-        output_cpp.backward(retain_graph=False)
-
-        # Compare input gradients (convert to float32 to handle dtype differences)
-        input_grad_py = input_py.get_grad_tensor().to_numpy().astype(np.float32)
-        input_grad_cpp = input_cpp.get_grad_tensor().to_numpy().astype(np.float32)
-        np.testing.assert_allclose(
-            input_grad_py,
-            input_grad_cpp,
-            rtol=1e-2,
-            atol=1e-2,
-            err_msg="Python and C++ LinearLayer input gradients differ",
-        )
-
-        # Compare weight gradients (convert to float32 to handle dtype differences)
-        weight_grad_py = (
-            python_layer.weight.get_grad_tensor().to_numpy().astype(np.float32)
-        )
-        weight_grad_cpp = (
-            cpp_layer.get_weight().get_grad_tensor().to_numpy().astype(np.float32)
-        )
-        np.testing.assert_allclose(
-            weight_grad_py,
-            weight_grad_cpp,
-            rtol=1e-2,
-            atol=1e-2,
-            err_msg="Python and C++ LinearLayer weight gradients differ",
-        )
-
-        bias_grad_py = python_layer.bias.get_grad_tensor().to_numpy().astype(np.float32)
-        bias_grad_cpp = bias_cpp.get_grad_tensor().to_numpy().astype(np.float32)
-        np.testing.assert_allclose(
-            bias_grad_py,
-            bias_grad_cpp,
-            rtol=1e-2,
-            atol=1e-2,
-            err_msg="Python and C++ LinearLayer bias gradients differ",
-        )
-
     def test_python_grouped_heads_creation_forward(self):
         """Test Python grouped_heads_creation forward pass against C++ implementation."""
         # nanollama config
@@ -989,40 +788,24 @@ class TestCustomOperationsWithDevice:
         kv_embedding_dim = head_dim * num_groups  # 64
 
         # qs shape: (B, 1, S, E)
-        qs_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(
-            np.float32
-        )
+        qs_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(np.float32)
 
         # kvs shape: (B, 1, S, E_kv * 2)
-        kvs_data = np.random.randn(batch_size, 1, seq_len, kv_embedding_dim * 2).astype(
-            np.float32
-        )
+        kvs_data = np.random.randn(batch_size, 1, seq_len, kv_embedding_dim * 2).astype(np.float32)
 
         # Create tensors for Python implementation
-        qs_py = ttml.autograd.Tensor.from_numpy(
-            qs_data, new_type=ttnn.DataType.BFLOAT16
-        )
-        kvs_py = ttml.autograd.Tensor.from_numpy(
-            kvs_data, new_type=ttnn.DataType.BFLOAT16
-        )
+        qs_py = ttml.autograd.Tensor.from_numpy(qs_data, new_type=ttnn.DataType.BFLOAT16)
+        kvs_py = ttml.autograd.Tensor.from_numpy(kvs_data, new_type=ttnn.DataType.BFLOAT16)
 
         # Create tensors for C++ implementation
-        qs_cpp = ttml.autograd.Tensor.from_numpy(
-            qs_data, new_type=ttnn.DataType.BFLOAT16
-        )
-        kvs_cpp = ttml.autograd.Tensor.from_numpy(
-            kvs_data, new_type=ttnn.DataType.BFLOAT16
-        )
+        qs_cpp = ttml.autograd.Tensor.from_numpy(qs_data, new_type=ttnn.DataType.BFLOAT16)
+        kvs_cpp = ttml.autograd.Tensor.from_numpy(kvs_data, new_type=ttnn.DataType.BFLOAT16)
 
         # Python implementation forward
-        q_py, k_py, v_py = PythonGroupedHeadsCreationOp.apply(
-            qs_py, kvs_py, num_heads, num_groups
-        )
+        q_py, k_py, v_py = PythonGroupedHeadsCreationOp.apply(qs_py, kvs_py, num_heads, num_groups)
 
         # C++ implementation forward
-        q_cpp, k_cpp, v_cpp = ttml.ops.multi_head_utils.grouped_heads_creation(
-            qs_cpp, kvs_cpp, num_heads, num_groups
-        )
+        q_cpp, k_cpp, v_cpp = ttml.ops.multi_head_utils.grouped_heads_creation(qs_cpp, kvs_cpp, num_heads, num_groups)
 
         # Compare outputs
         q_py_np = q_py.to_numpy().astype(np.float32)
@@ -1087,35 +870,25 @@ class TestCustomOperationsWithDevice:
         kv_embedding_dim = head_dim * num_groups
 
         # qs shape: (B, 1, S, E)
-        qs_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(
-            np.float32
-        )
+        qs_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(np.float32)
 
         # kvs shape: (B, 1, S, E_kv * 2)
-        kvs_data = np.random.randn(batch_size, 1, seq_len, kv_embedding_dim * 2).astype(
-            np.float32
-        )
+        kvs_data = np.random.randn(batch_size, 1, seq_len, kv_embedding_dim * 2).astype(np.float32)
 
         # Create tensors for Python implementation
-        qs_py = ttml.autograd.Tensor.from_numpy(
-            qs_data, new_type=ttnn.DataType.BFLOAT16
-        )
-        kvs_py = ttml.autograd.Tensor.from_numpy(
-            kvs_data, new_type=ttnn.DataType.BFLOAT16
-        )
+        qs_py = ttml.autograd.Tensor.from_numpy(qs_data, new_type=ttnn.DataType.BFLOAT16)
+        kvs_py = ttml.autograd.Tensor.from_numpy(kvs_data, new_type=ttnn.DataType.BFLOAT16)
+        qs_py.set_requires_grad(True)
+        kvs_py.set_requires_grad(True)
 
         # Create tensors for C++ implementation
-        qs_cpp = ttml.autograd.Tensor.from_numpy(
-            qs_data, new_type=ttnn.DataType.BFLOAT16
-        )
-        kvs_cpp = ttml.autograd.Tensor.from_numpy(
-            kvs_data, new_type=ttnn.DataType.BFLOAT16
-        )
+        qs_cpp = ttml.autograd.Tensor.from_numpy(qs_data, new_type=ttnn.DataType.BFLOAT16)
+        kvs_cpp = ttml.autograd.Tensor.from_numpy(kvs_data, new_type=ttnn.DataType.BFLOAT16)
+        qs_cpp.set_requires_grad(True)
+        kvs_cpp.set_requires_grad(True)
 
         # Python implementation forward + create loss for backward
-        q_py, k_py, v_py = PythonGroupedHeadsCreationOp.apply(
-            qs_py, kvs_py, num_heads, num_groups
-        )
+        q_py, k_py, v_py = PythonGroupedHeadsCreationOp.apply(qs_py, kvs_py, num_heads, num_groups)
 
         # Create a simple loss: mean of each output, then combine
         # (q, k, v may have different shapes when num_heads != num_groups)
@@ -1126,9 +899,7 @@ class TestCustomOperationsWithDevice:
         loss_py.backward(retain_graph=False)
 
         # C++ implementation forward + backward
-        q_cpp, k_cpp, v_cpp = ttml.ops.multi_head_utils.grouped_heads_creation(
-            qs_cpp, kvs_cpp, num_heads, num_groups
-        )
+        q_cpp, k_cpp, v_cpp = ttml.ops.multi_head_utils.grouped_heads_creation(qs_cpp, kvs_cpp, num_heads, num_groups)
 
         loss_q_cpp = ttml.ops.unary.mean(q_cpp)
         loss_k_cpp = ttml.ops.unary.mean(k_cpp)
@@ -1169,15 +940,12 @@ class TestCustomOperationsWithDevice:
         head_dim = embedding_dim // num_heads
         kv_embedding_dim = head_dim * num_groups
 
-        qs_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(
-            np.float32
-        )
-        kvs_data = np.random.randn(batch_size, 1, seq_len, kv_embedding_dim * 2).astype(
-            np.float32
-        )
+        qs_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(np.float32)
+        kvs_data = np.random.randn(batch_size, 1, seq_len, kv_embedding_dim * 2).astype(np.float32)
 
         qs = ttml.autograd.Tensor.from_numpy(qs_data)
         kvs = ttml.autograd.Tensor.from_numpy(kvs_data)
+        qs.set_requires_grad(True)
 
         # Forward pass
         q, k, v = PythonGroupedHeadsCreationOp.apply(qs, kvs, num_heads, num_groups)

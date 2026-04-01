@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+// UMD: re-exports tt_xy_pair, aliased as CoreCoord in this header.
 #include <umd/device/types/xy_pair.hpp>
 
 namespace ttsl::json {
@@ -103,13 +104,13 @@ constexpr bool operator<(const CoreRange& left, const CoreRange& right) {
 
 class CoreRangeSet {
 public:
-    CoreRangeSet(tt::stl::Span<const CoreRange> core_ranges);
+    CoreRangeSet(ttsl::Span<const CoreRange> core_ranges);
 
     CoreRangeSet(const std::set<CoreRange>& core_ranges);
 
     CoreRangeSet(const CoreRange& core_range);
 
-    CoreRangeSet(tt::stl::Span<const CoreCoord> core_coords);
+    CoreRangeSet(ttsl::Span<const CoreCoord> core_coords);
 
     CoreRangeSet() = default;
 

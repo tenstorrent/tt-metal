@@ -1,18 +1,6 @@
 # Provide unique architecture specific translation units and include paths for each ARCH
 
-set(LLRT_SRC
-    llrt.cpp
-    core_descriptor.cpp
-    firmware_capability.cpp
-    rtoptions.cpp
-    tlb_config.cpp
-    tt_cluster.cpp
-    tt_elffile.cpp
-    tt_memory.cpp
-    hal.cpp
-    tunnels_from_mmio_device.cpp
-    metal_soc_descriptor.cpp
-)
+include(sources.cmake)
 
 add_library(llrt OBJECT ${LLRT_SRC})
 add_library(Metalium::Metal::LLRT ALIAS llrt)
@@ -39,8 +27,9 @@ target_link_libraries(
         enchantum::enchantum
         TT::Metalium::Common
         tt-logger::tt-logger
+        Metalium::Metal::Hardware
 )
-target_include_directories(llrt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(llrt PUBLIC .)
 target_compile_options(llrt PRIVATE -Wno-int-to-pointer-cast)
 
 include(GNUInstallDirs)

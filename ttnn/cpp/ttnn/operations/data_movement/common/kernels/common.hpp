@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 // This file contains common kernel functions used in data movement device kernels
 // It's best to copy and paste the functions in rather than include the header as code size will likely explode
 // Best to separate in to cpp/hpp at some point to avoid the code size explosion but need to figure out the linking
@@ -228,7 +230,7 @@ FORCE_INLINE void noc_async_write_sharded(
     if constexpr (AddrGenType::DSpec::tensor_shape_static) {
         if constexpr ((tensor.dspec().rank() > 1) && (tensor.dspec().tensor_shape()[1] > 1)) {
             constexpr uint32_t pages_per_shard_width = tensor.dspec().tensor_shape()[1];
-            const uint32_t page_size = tensor.page_size;
+            const uint32_t page_size = tensor.get_aligned_page_size();
             uint32_t sharded_dest_id = dest_id * pages_per_shard_width + offset / page_size;
             uint32_t sharded_offset = offset % page_size;
             uint32_t num_pages = div_up(size + sharded_offset, page_size);
@@ -256,7 +258,7 @@ FORCE_INLINE void noc_async_read_sharded(
     if constexpr (AddrGenType::DSpec::tensor_shape_static) {
         if constexpr ((tensor.dspec().rank() > 1) && (tensor.dspec().tensor_shape()[1] > 1)) {
             constexpr uint32_t pages_per_shard_width = tensor.dspec().tensor_shape()[1];
-            const uint32_t page_size = tensor.page_size;
+            const uint32_t page_size = tensor.get_aligned_page_size();
             uint32_t sharded_src_id = src_id * pages_per_shard_width + offset / page_size;
             uint32_t sharded_offset = offset % page_size;
             uint32_t num_pages = div_up(size + sharded_offset, page_size);

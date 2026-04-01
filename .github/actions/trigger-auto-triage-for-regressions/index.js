@@ -1,6 +1,9 @@
 const core = require('@actions/core');
 const github = require('@actions/github');
 const https = require('https');
+const fs = require('fs');
+
+const MAX_JOBS_PER_WORKFLOW = 5;
 
 /**
  * Send a Slack message to a thread
@@ -66,7 +69,7 @@ async function sendSlackMessage(channelId, botToken, message, threadTs) {
 
 async function run() {
   try {
-    const regressedWorkflowsJson = core.getInput('regressed_workflows', { required: true });
+    const regressedWorkflowsPath = core.getInput('regressed_workflows_path', { required: true });
     const githubToken = core.getInput('github_token', { required: true });
     const slackTs = core.getInput('slack_ts') || '';
     const slackChannelId = core.getInput('slack_channel_id') || '';
@@ -82,6 +85,11 @@ async function run() {
     // while still defaulting to main when invoked from main.
     const dispatchRef = github.context.ref || 'refs/heads/main';
 
+    if (!fs.existsSync(regressedWorkflowsPath)) {
+      throw new Error(`Regressed workflows file not found: ${regressedWorkflowsPath}`);
+    }
+
+    const regressedWorkflowsJson = fs.readFileSync(regressedWorkflowsPath, 'utf8');
     const regressedWorkflows = JSON.parse(regressedWorkflowsJson);
     const octokit = github.getOctokit(githubToken);
 
@@ -98,11 +106,11 @@ async function run() {
         .replace(/^\.github\/workflows\//, '')
         .replace(/\.ya?ml$/i, '');
 
-      const failingJobs = workflow.failing_jobs || [];
+      const allFailingJobs = workflow.failing_jobs || [];
 
-      core.info(`Processing workflow: ${workflowFileName} with ${failingJobs.length} failing job(s)`);
+      core.info(`Processing workflow: ${workflowFileName} with ${allFailingJobs.length} failing job(s)`);
 
-      if (failingJobs.length === 0) {
+      if (allFailingJobs.length === 0) {
         core.warning(`No failing jobs found for workflow: ${workflowFileName}`);
 
         // Send Slack notification if credentials are available
@@ -116,6 +124,20 @@ async function run() {
           }
         }
         continue;
+      }
+
+      const failingJobs = allFailingJobs.slice(0, MAX_JOBS_PER_WORKFLOW);
+      if (allFailingJobs.length > MAX_JOBS_PER_WORKFLOW) {
+        core.warning(`Workflow ${workflowFileName} has ${allFailingJobs.length} failing jobs, capping auto-triage to first ${MAX_JOBS_PER_WORKFLOW} to control cost`);
+        if (slackTs && slackChannelId && slackBotToken) {
+          try {
+            const skipped = allFailingJobs.length - MAX_JOBS_PER_WORKFLOW;
+            const message = `⚠️ \`${workflowFileName}\` has ${allFailingJobs.length} failing jobs. Auto-triage capped to ${MAX_JOBS_PER_WORKFLOW} jobs (${skipped} skipped). This usually indicates a systemic issue or shared root cause.`;
+            await sendSlackMessage(slackChannelId, slackBotToken, message, slackTs);
+          } catch (error) {
+            core.warning(`Failed to send Slack cap notification: ${error.message}`);
+          }
+        }
       }
 
       for (const job of failingJobs) {

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 
 namespace ckernel::sfpu {
@@ -16,7 +16,7 @@ namespace ckernel::sfpu {
  * Implementation strategy:
  * - For |x| < 0.4: Uses a 3rd-order Taylor series expansion
  *   expm1(x) ≈ x + x²/2 + x³/6, evaluated in Horner form
- * - For |x| >= 0.4: Calls _sfpu_exp_21f_ (based on the exp_21f algorithm from
+ * - For |x| >= 0.4: Calls _sfpu_exp_21f_bf16_ (based on the exp_21f algorithm from
  *   Moroz et al. 2022) and subtracts 1
  *
  * The Taylor series avoids the loss of precision that would occur when subtracting
@@ -39,7 +39,7 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat val) {
         y = val * (sfpi::vConst1 + val * (sfpi::vFloat(0.5f) + val * sfpi::vFloat(0.166f)));
     }
     v_else {
-        sfpi::vFloat exp_result = _sfpu_exp_21f_<true>(val);
+        sfpi::vFloat exp_result = _sfpu_exp_21f_bf16_<true>(val);
         y = exp_result - sfpi::vConst1;
     }
     v_endif;
@@ -59,7 +59,7 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat val) {
  *
  * Uses hybrid approach optimized for maximum ULP error:
  * - Taylor series (order 8) for |x| < 0.5 to avoid catastrophic cancellation
- * - exp(x) - 1 for |x| >= 0.5 (calls _sfpu_exp_f32_accurate_)
+ * - exp(x) - 1 for |x| >= 0.5 (calls _sfpu_exp_fp32_accurate_)
  *
  * This avoids catastrophic cancellation when x is near 0.
  *
@@ -90,7 +90,7 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_f32_accurate_(sfpi::vFloat val) {
         // For moderate values: use exp(x) - 1
         // This is accurate because exp(x) is not close to 1
         // Call the accurate exp implementation and subtract 1
-        sfpi::vFloat exp_result = _sfpu_exp_f32_accurate_(val);
+        sfpi::vFloat exp_result = _sfpu_exp_fp32_accurate_(val);
         result = exp_result - sfpi::vConst1;
     }
     v_endif;

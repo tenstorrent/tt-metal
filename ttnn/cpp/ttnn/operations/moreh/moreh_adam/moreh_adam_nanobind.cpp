@@ -11,16 +11,18 @@
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/variant.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/moreh/moreh_adam/moreh_adam.hpp"
 
 namespace ttnn::operations::moreh::moreh_adam {
 void bind_moreh_adam_operation(nb::module_& mod) {
-    bind_registered_operation(
+    const auto* doc = "Moreh Adam Operation";
+
+    ttnn::bind_function<"moreh_adam">(
         mod,
-        ttnn::moreh_adam,
-        "Moreh Adam Operation",
-        ttnn::nanobind_arguments_t{
+        doc,
+        ttnn::overload_t(
+            &ttnn::moreh_adam,
             nb::arg("param_in"),
             nb::arg("grad"),
             nb::arg("exp_avg_in"),
@@ -42,6 +44,6 @@ void bind_moreh_adam_operation(nb::module_& mod) {
             nb::arg("max_exp_avg_sq_out") = nb::none(),
 
             nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+            nb::arg("compute_kernel_config") = nb::none()));
 }
 }  // namespace ttnn::operations::moreh::moreh_adam

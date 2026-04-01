@@ -9,7 +9,7 @@ Run cluster validation commands for multiple iterations.
 
 Required Options:
     --hosts <host-list>                     Comma-separated list of hosts
-    --image <docker-image>                  Docker image to use
+    --image <docker-image>                  Docker image to use ("none" to use local build)
 
 Optional:
     --cabling-descriptor-path <path>        Path to cabling descriptor file
@@ -22,6 +22,7 @@ Optional:
     --factory-descriptor-path <path>        Path to pregenerated factory system descriptor (FSD) file (.textproto)
                                             (if provided, cabling and deployment descriptors are ignored)
     --output <directory>                    Output directory for log files (default: validation_output)
+    --rerun-on-retrain                      Rerun validation when Ethernet links are retrained
     --help                                  Display this help message and exit
 
 Example:
@@ -40,6 +41,7 @@ ITERATIONS=50
 
 FACTORY_DESCRIPTOR_PATH=""
 OUTPUT_DIR="validation_output"
+RERUN_ON_RETRAIN=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -103,6 +105,14 @@ while [[ $# -gt 0 ]]; do
             OUTPUT_DIR="$2"
             shift 2
             ;;
+        --rerun-on-retrain)
+            if [[ -n "$2" ]] && [[ "$2" != --* ]]; then
+                echo "Error: --rerun-on-retrain does not accept a value"
+                exit 1
+            fi
+            RERUN_ON_RETRAIN=true
+            shift
+            ;;
         --help)
             show_help
             exit 0
@@ -130,6 +140,87 @@ if [[ -z "$DOCKER_IMAGE" ]]; then
     show_help
     exit 1
 fi
+
+run_cluster_validation() {
+    if [[ -n "$FACTORY_DESCRIPTOR_PATH" ]]; then
+        local descriptor_args=(--factory-descriptor-path "$FACTORY_DESCRIPTOR_PATH")
+    else
+        local descriptor_args=(--cabling-descriptor-path "$CABLING_DESCRIPTOR_PATH" --deployment-descriptor-path "$DEPLOYMENT_DESCRIPTOR_PATH")
+    fi
+
+    if [[ $DOCKER_IMAGE == "none" ]]; then
+        mpirun --host "$HOSTS" \
+            --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
+            --tag-output \
+            ./build/tools/scaleout/run_cluster_validation \
+            "${descriptor_args[@]}" \
+            --send-traffic \
+            --num-iterations 10
+    else
+        ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
+            --empty-entrypoint \
+            --host "$HOSTS" \
+            ./build/tools/scaleout/run_cluster_validation \
+            "${descriptor_args[@]}" \
+            --send-traffic \
+            --num-iterations 10
+    fi
+}
+
+# Function to run reset on hosts and return hosts that failed reset
+# Args: host_list (comma-separated), output_file, message_prefix
+run_board_reset() {
+    local host_list="$1"
+    local output_file="$2"
+    local msg_prefix="$3"
+
+    # Convert host list to array
+    IFS=',' read -ra host_array <<< "$host_list"
+
+    # Run reset
+    mpirun --host "$host_list" \
+        --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
+        --tag-output \
+        bash -c 'tt-smi -glx_reset > /dev/null 2>&1; echo "RESET_EXIT_CODE=$?"' > "$output_file"
+    mpirun_exit_code=$?
+
+   # Check if mpirun failed
+    if [[ $mpirun_exit_code -ne 0 ]]; then
+        echo "ERROR: mpirun failed with exit code $mpirun_exit_code" >&2
+        rm -f "$output_file"
+        return 1  # Signal mpirun infrastructure failure
+    fi
+
+    # Parse and display results, collect failures
+    local failed_hosts=()
+    while IFS= read -r line; do
+        if [[ $line =~ ^\[([0-9]+),([0-9]+)\]\<stdout\>:RESET_EXIT_CODE=([0-9]+)$ ]]; then
+            local job_id="${BASH_REMATCH[1]}"
+            local mpi_rank="${BASH_REMATCH[2]}"
+            local exit_code="${BASH_REMATCH[3]}"
+
+            # Use mpi_rank to index host_array
+            if [[ $mpi_rank -lt ${#host_array[@]} ]]; then
+                local hostname="${host_array[$mpi_rank]}"
+                if [[ $exit_code -eq 0 ]]; then
+                    echo "[$job_id,$mpi_rank]$hostname: ${msg_prefix}Reset completed successfully" >&2
+                else
+                    echo "[$job_id,$mpi_rank]$hostname: ${msg_prefix}Reset failed | Exit code: $exit_code" >&2
+                    failed_hosts+=("$hostname")
+                fi
+            else
+                echo "Warning: MPI rank $mpi_rank exceeds host array size ${#host_array[@]}" >&2
+            fi
+        fi
+    done < "$output_file"
+    rm -f "$output_file"
+
+    # Return comma-separated list of failed hosts (to stdout only)
+    local IFS=','
+    echo "${failed_hosts[*]}"
+    return 0  # Success
+}
+
 
 echo "Using hosts: $HOSTS"
 echo "Using docker image: $DOCKER_IMAGE"
@@ -159,34 +250,60 @@ for ((i=1; i<=ITERATIONS; i++)); do
         echo "=========================================="
         echo ""
 
-        echo "Running tt-smi -glx_reset..."
-        mpirun --host "$HOSTS" --mca btl_tcp_if_exclude docker0,lo,tailscale0 tt-smi -glx_reset
+        echo "Running tt-smi -glx_reset (this may take a few minutes)..."
 
-        sleep 5
+        # Run initial reset and capture failures
+        RESET_OUTPUT_FILE="$OUTPUT_DIR/reset_output_iter_${i}_$$"
+        FAILED_HOSTS_STR=$(run_board_reset "$HOSTS" "$RESET_OUTPUT_FILE" "")
+        MPI_EXIT_CODE=$?
 
-        echo ""
-        echo "Running cluster validation..."
-        if [[ -n "$FACTORY_DESCRIPTOR_PATH" ]]; then
-            ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
-                --empty-entrypoint \
-                --host "$HOSTS" \
-                ./build/tools/scaleout/run_cluster_validation \
-                --factory-descriptor-path "$FACTORY_DESCRIPTOR_PATH" \
-                --send-traffic \
-                --num-iterations 10
-        else
-            ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
-                --empty-entrypoint \
-                --host "$HOSTS" \
-                ./build/tools/scaleout/run_cluster_validation \
-                --cabling-descriptor-path "$CABLING_DESCRIPTOR_PATH" \
-                --deployment-descriptor-path "$DEPLOYMENT_DESCRIPTOR_PATH" \
-                --send-traffic \
-                --num-iterations 10
+        # Retry only failed hosts if any
+        if [[ -n "$FAILED_HOSTS_STR" ]]; then
+            echo ""
+            echo "Retrying reset for failed hosts: $FAILED_HOSTS_STR"
+
+            RESET_RETRY_OUTPUT_FILE="$OUTPUT_DIR/reset_retry_output_iter_${i}_$$"
+
+            # Run retry and capture exit code (discard stdout)
+            run_board_reset "$FAILED_HOSTS_STR" "$RESET_RETRY_OUTPUT_FILE" "Retry: " > /dev/null
+            MPI_EXIT_CODE=$?
         fi
+
+        # Only run validation if retry was successful (or no retry needed)
+        if [[ $MPI_EXIT_CODE -eq 0 ]]; then
+            sleep 5
+
+            echo ""
+            echo "Running cluster validation..."
+            run_cluster_validation
+        else
+            echo "Skipping validation due to mpirun failure"
+        fi
+
         echo "Iteration $i completed at $(date)"
         echo "=========================================="
     } 2>&1 | tee "$LOG_FILE"
+
+    if [[ "$RERUN_ON_RETRAIN" == true ]] && grep -q "Ethernet Links were Retrained" "$LOG_FILE"; then
+        OUTPUT_DIR_RETRY="${OUTPUT_DIR}_retry"
+
+        mkdir -p "$OUTPUT_DIR_RETRY"
+
+        LOG_FILE_RETRY="$OUTPUT_DIR_RETRY/cluster_validation_iteration_${i}_retry.log"
+
+        {
+            echo "=========================================="
+            echo "Iteration: $i - retry due to retrained links"
+            echo "Timestamp: $(date)"
+            echo "=========================================="
+            echo ""
+
+            echo "Re-running cluster validation..."
+            run_cluster_validation
+            echo "Iteration $i retry completed at $(date)"
+            echo "=========================================="
+        } 2>&1 | tee "$LOG_FILE_RETRY"
+    fi
 
     echo "Iteration $i logged to $LOG_FILE"
     echo ""

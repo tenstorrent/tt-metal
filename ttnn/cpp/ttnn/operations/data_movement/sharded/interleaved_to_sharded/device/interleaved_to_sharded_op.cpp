@@ -79,7 +79,7 @@ InterleavedToShardedDeviceOperation::tensor_return_value_t InterleavedToShardedD
     return create_device_tensor(spec, input_tensor.device());
 }
 
-tt::stl::hash::hash_t InterleavedToShardedDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t InterleavedToShardedDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     return tt::tt_metal::operation::hash_operation<InterleavedToShardedDeviceOperation>(

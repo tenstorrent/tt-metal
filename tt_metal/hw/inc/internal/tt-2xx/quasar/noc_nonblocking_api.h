@@ -17,7 +17,7 @@
 // V1 (noc_nonblocking_api_v1.h) - Legacy Path
 //   Uses memory-mapped NOC register writes (NOC_CMD_BUF_WRITE_REG / NOC_CMD_BUF_READ_REG),
 //   same mechanism as Wormhole and Blackhole.
-//   Kept for compatibility and bringup; not recommended for production as it is super slow.
+//   Kept for compatibility and bringup; not recommended for production as it is slow and prone to race conditions.
 //
 // V2 (noc_nonblocking_api_v2.h) - Custom Instruction Path (Default)
 //   Uses RISC-V custom instructions (RoCC) to program the Quasar overlay's command buffers
