@@ -8,10 +8,11 @@
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
 
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation_types.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
 

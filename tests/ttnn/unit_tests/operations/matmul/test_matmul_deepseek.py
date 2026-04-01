@@ -12,7 +12,7 @@ import ttnn
 
 from tests.ttnn.unit_tests.operations.matmul.test_matmul import pad_to_dram_banks
 from models.common.utility_functions import comp_pcc, skip_for_blackhole
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 def pad_batch_to_dram_banks(batch, num_dram_banks=12):
@@ -326,7 +326,15 @@ def _run_matmul_2d_interleaved_in0_sharded_in1(
         output_tensor = output_tensor[:, :batch, :seq_len, :n]
         pt_out = torch.matmul(in0_orig, in1_orig)
 
-    assert_with_pcc(pt_out, output_tensor, expected_pcc)
+    assert_numeric_metrics(
+        pt_out,
+        output_tensor,
+        atol=0.01 * k,
+        rtol=20.75 * k,
+        frobenius_threshold=0.001 * k,
+        pcc_threshold=expected_pcc,
+        check_ulp=False,
+    )
 
 
 @skip_for_blackhole("Deepseek tests target Wormhole")
@@ -692,7 +700,28 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
 
     pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
     logger.info(pcc_message)
-    assert_with_pcc(pt_out, output_tensor, expected_pcc)
+    if in1_dtype == ttnn.bfloat4_b or out_dtype == ttnn.bfloat4_b:
+        assert_numeric_metrics(
+            pt_out,
+            output_tensor,
+            atol=0.0347 * k,
+            rtol=24.625 * k,
+            frobenius_threshold=0.0005 * k,
+            pcc_threshold=0.99,
+            check_ulp=False,
+        )
+    elif in1_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat8_b:
+        assert_numeric_metrics(
+            pt_out,
+            output_tensor,
+            atol=0.0028 * k,
+            rtol=1.5 * k,
+            frobenius_threshold=0.0001 * k,
+            pcc_threshold=0.99,
+            check_ulp=False,
+        )
+    else:
+        assert_numeric_metrics(pt_out, output_tensor, pcc_threshold=0.99, check_ulp=False)
 
 
 @pytest.mark.parametrize(
@@ -912,8 +941,15 @@ def test_matmul_batched_dram_sharded(device, test_case):
     pt_out = torch.matmul(in0_orig, in1_orig)
 
     # Lower PCC threshold due to bfloat8_b weights (lower precision than bfloat16)
-    pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
-    assert pcc_passed
+    assert_numeric_metrics(
+        pt_out,
+        output_tensor,
+        atol=0.0235 * k,
+        rtol=27.875 * k,
+        frobenius_threshold=0.0007 * k,
+        pcc_threshold=expected_pcc,
+        check_ulp=False,
+    )
 
 
 @pytest.mark.parametrize(
@@ -1026,21 +1062,30 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
         )
 
         # Run batched matmul
-        output_t = ttnn.matmul(
-            in0_t,
-            in1_t,
-            program_config=program_config,
-            memory_config=out_memory_config,
-            dtype=ttnn.bfloat16,
-            output_tile=ttnn.Tile((tile_h, tile_w)),
-        )
+        with device.cache_entries_counter.measure():
+            output_t = ttnn.matmul(
+                in0_t,
+                in1_t,
+                program_config=program_config,
+                memory_config=out_memory_config,
+                dtype=ttnn.bfloat16,
+                output_tile=ttnn.Tile((tile_h, tile_w)),
+            )
 
         # Validate correctness
         output_tensor = ttnn.to_torch(output_t)
         # Slice off padding from output to get original dimensions [1, batch, m, n]
         output_tensor = output_tensor[:, :batch, :m, :n]
         pt_out = torch.matmul(in0_orig, in1_orig)
-        assert_with_pcc(pt_out, output_tensor, expected_pcc)
+        assert_numeric_metrics(
+            pt_out,
+            output_tensor,
+            atol=0.012 * k,
+            rtol=6.032 * k,
+            frobenius_threshold=0.0004 * k,
+            pcc_threshold=expected_pcc,
+            check_ulp=False,
+        )
 
         # Dummy tensor to change tensor allocation (tests program cache robustness)
         dummy_shape = [1, 1, 32, 32]
@@ -1053,7 +1098,7 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
 
 
 @pytest.mark.parametrize(

@@ -18,16 +18,15 @@ void bind_moreh_matmul_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_matmul">(
         mod,
         "Moreh Matmul Operation",
-        ttnn::overload_t(
-            &ttnn::moreh_matmul,
-            nb::arg("input").noconvert(),
-            nb::arg("other").noconvert(),
-            nb::kw_only(),
-            nb::arg("transpose_input") = false,
-            nb::arg("transpose_other") = false,
-            nb::arg("output") = nb::none(),
-            nb::arg("bias") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::moreh_matmul,
+        nb::arg("input").noconvert(),
+        nb::arg("other").noconvert(),
+        nb::kw_only(),
+        nb::arg("transpose_input") = false,
+        nb::arg("transpose_other") = false,
+        nb::arg("output") = nb::none(),
+        nb::arg("bias") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 }  // namespace ttnn::operations::moreh::moreh_matmul

@@ -10,12 +10,12 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::operations::pool {
 // Generic pool uop -- called from the macro-ops

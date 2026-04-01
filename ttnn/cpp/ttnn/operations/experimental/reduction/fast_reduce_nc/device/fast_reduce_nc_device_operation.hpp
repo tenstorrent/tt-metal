@@ -7,9 +7,9 @@
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
 #include "fast_reduce_nc_device_operation_types.hpp"
 #include "fast_reduce_nc_program_factory.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::experimental::prim {
 

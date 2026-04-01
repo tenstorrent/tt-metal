@@ -68,7 +68,7 @@ static void RunTest(
     // Depending on riscv type, choose one core to run the test on (since the test hangs the board).
     CoreCoord logical_core, virtual_core;
     // Set up the kernel on the correct risc
-    KernelHandle assert_kernel;
+    KernelHandle assert_kernel = 0;
     auto processor_idx =
         hal.get_processor_index(processor.core_type, processor.processor_class, processor.processor_type);
     std::string risc = hal.get_processor_class_name(processor.core_type, processor_idx, false);
@@ -134,6 +134,9 @@ static void RunTest(
             risc = is_active ? "erisc" : "ierisc";
             break;
         }
+        case HalProgrammableCoreType::DRAM:
+            log_info(LogTest, "Skipping: DRAM cores do not support watcher assert tests.");
+            GTEST_SKIP();
         case HalProgrammableCoreType::COUNT: TT_THROW("Unsupported programmable core type");
     }
     log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, virtual_core);
