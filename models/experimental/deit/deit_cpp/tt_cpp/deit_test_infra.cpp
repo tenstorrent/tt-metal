@@ -3,8 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "deit_test_infra.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -65,7 +67,8 @@ ttnn::Tensor DeitTestInfra::create_tensor_from_vector(
     const bool block_float = dtype == ttnn::DataType::BFLOAT4_B || dtype == ttnn::DataType::BFLOAT8_B;
     const auto host_layout = block_float ? ttnn::TILE_LAYOUT : ttnn::ROW_MAJOR_LAYOUT;
     const ttnn::TensorSpec spec(
-        ttnn::Shape(shape), ttnn::TensorLayout(dtype, ttnn::PageConfig(host_layout), ttnn::MemoryConfig{}));
+        ttnn::Shape(shape),
+        tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(host_layout), ttnn::MemoryConfig{}));
 
     auto tensor = ttnn::Tensor::from_vector(data, spec);
 
