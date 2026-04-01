@@ -61,6 +61,7 @@ analyze → scope → decompose → dispatch → verify → iterate
 | Debug wrong outputs or crashes | `tt-debugger` |
 | Design a new op or kernel | `tt-designer` |
 | Review code before merging | `tt-code-review` |
+| Need codebase context before proceeding | `tt-learn` |
 
 ## Document Protocol
 
