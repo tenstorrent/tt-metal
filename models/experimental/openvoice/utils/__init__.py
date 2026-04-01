@@ -21,7 +21,6 @@ from models.experimental.openvoice.utils.bert_features import (
     get_bert_extractor,
 )
 from models.experimental.openvoice.utils.weight_loader import (
-    TTNNParameterDict,
     convert_to_ttnn_tensor,
     load_openvoice_checkpoint,
     remove_weight_norm_from_state_dict,
@@ -34,7 +33,6 @@ __all__ = [
     "remove_weight_norm_from_state_dict",
     "reshape_conv1d_to_conv2d_weight",
     "convert_to_ttnn_tensor",
-    "TTNNParameterDict",
     # Audio processing
     "load_audio",
     "save_audio",
