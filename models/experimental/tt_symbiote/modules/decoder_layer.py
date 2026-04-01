@@ -139,3 +139,114 @@ class TTNNBailingMoEDecoderLayer(TTNNModule):
             outputs += (router_logits,)
 
         return outputs
+
+
+def _next_power_of_2(n: int, minimum=256) -> int:
+    """Return the smallest power of 2 >= n."""
+    if n <= 1:
+        return 1
+    if n <= minimum:
+        return minimum
+    result = 1 << ((n - 1).bit_length() + 1)  # Shift by one more than the bit length to get the next power of 2
+    if result == n * 4:  # If n is already a power of 2, we want to return n, not the next power of 2
+        result = n
+    return result
+
+
+class TTNNBailingMoEDecoderLayerPadded(TTNNModule):
+    """Decoder layer that pads the input sequence length to the next power of 2.
+
+    Padding to a power-of-2 sequence length reduces the number of unique trace
+    cache keys during prefill, since many different prompt lengths map to the
+    same padded length. This improves trace reuse across turns.
+
+    The pad is applied before the forward pass and the output is sliced back
+    to the original sequence length afterward.
+    """
+
+    @classmethod
+    def from_torch(cls, torch_layer):
+        """Create from BailingMoeV2DecoderLayer.
+
+        Args:
+            torch_layer: HuggingFace BailingMoeV2DecoderLayer instance
+        """
+        new_layer = cls()
+        new_layer.layer = TTNNBailingMoEDecoderLayer.from_torch(torch_layer)
+        return new_layer
+
+    @staticmethod
+    def _pad_dim(tensor, dim, pad_amount, value=0.0):
+        """Pad a single dimension of a tensor by ``pad_amount``."""
+        rank = len(tensor.shape)
+        padding = tuple((0, pad_amount if i == dim else 0) for i in range(rank))
+        return ttnn.pad(tensor, padding=padding, value=value)
+
+    @staticmethod
+    def _slice_dim(tensor, dim, length):
+        """Slice a tensor along ``dim`` to ``length``."""
+        starts = [0] * len(tensor.shape)
+        ends = list(tensor.shape)
+        ends[dim] = length
+        return ttnn.slice(tensor, starts, ends)
+
+    def forward(
+        self,
+        hidden_states,
+        attention_mask=None,
+        position_ids=None,
+        past_key_value=None,
+        output_attentions=False,
+        output_router_logits=False,
+        use_cache=False,
+        position_embeddings=None,
+        **kwargs,
+    ):
+        rank = len(hidden_states.shape)
+        seq_dim = rank - 2  # sequence length is always second-to-last
+        seq_len = hidden_states.shape[seq_dim]
+        padded_seq_len = _next_power_of_2(seq_len)
+        pad_amount = padded_seq_len - seq_len
+
+        if pad_amount > 0:
+            hidden_states = self._pad_dim(hidden_states, seq_dim, pad_amount, value=0.0)
+
+            # attention_mask: [..., seq_len, seq_len] — pad last two dims
+            if attention_mask is not None:
+                mask_rank = len(attention_mask.shape)
+                attention_mask = self._pad_dim(attention_mask, mask_rank - 2, pad_amount, value=float("-inf"))
+                attention_mask = self._pad_dim(attention_mask, mask_rank - 1, pad_amount, value=float("-inf"))
+
+            # position_ids: [batch, seq_len] — pad seq dim with 0
+            if position_ids is not None:
+                pid_seq_dim = len(position_ids.shape) - 1
+                position_ids = self._pad_dim(position_ids, pid_seq_dim, pad_amount, value=0)
+
+            # position_embeddings (cos, sin): [batch, seq_len, head_dim]
+            if position_embeddings is not None:
+                cos, sin = position_embeddings
+                cos_seq_dim = len(cos.shape) - 2
+                cos = self._pad_dim(cos, cos_seq_dim, pad_amount, value=0.0)
+                sin = self._pad_dim(sin, cos_seq_dim, pad_amount, value=0.0)
+                position_embeddings = (cos, sin)
+
+        outputs = self.layer(
+            hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_value=past_key_value,
+            output_attentions=output_attentions,
+            output_router_logits=output_router_logits,
+            use_cache=use_cache,
+            position_embeddings=position_embeddings,
+            **kwargs,
+        )
+
+        if pad_amount > 0:
+            hs = self._slice_dim(outputs[0], seq_dim, seq_len)
+            if isinstance(outputs, tuple):
+                outputs = (hs,) + outputs[1:]
+            else:
+                outputs = [hs] + list(outputs[1:])
+
+        return outputs

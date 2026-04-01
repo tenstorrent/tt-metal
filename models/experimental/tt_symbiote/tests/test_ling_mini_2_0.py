@@ -25,7 +25,7 @@ from models.experimental.tt_symbiote.modules.attention import (
     PagedAttentionConfig,
     TTNNPagedAttentionKVCache,
 )
-from models.experimental.tt_symbiote.modules.decoder_layer import TTNNBailingMoEDecoderLayer
+from models.experimental.tt_symbiote.modules.decoder_layer import TTNNBailingMoEDecoderLayerPadded
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 
 
@@ -83,7 +83,7 @@ def test_ling_mini_2_0(mesh_device):
     tokenizer = AutoTokenizer.from_pretrained("inclusionAI/Ling-mini-2.0", trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained("inclusionAI/Ling-mini-2.0", trust_remote_code=True)
     nn_to_ttnn = {
-        model.model.layers[0].__class__: TTNNBailingMoEDecoderLayer,
+        model.model.layers[0].__class__: TTNNBailingMoEDecoderLayerPadded,
         model.model.norm.__class__: TTNNDistributedRMSNorm,
     }
     nn_to_ttnn2 = {

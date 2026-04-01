@@ -37,7 +37,7 @@ from models.experimental.tt_symbiote.modules.attention import (
     PagedAttentionConfig,
     TTNNPagedAttentionKVCache,
 )
-from models.experimental.tt_symbiote.modules.decoder_layer import TTNNBailingMoEDecoderLayer
+from models.experimental.tt_symbiote.modules.decoder_layer import TTNNBailingMoEDecoderLayerPadded
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 
 
@@ -108,7 +108,7 @@ def load_model(mesh_device, model_name="inclusionAI/Ling-mini-2.0"):
     model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True)
 
     nn_to_ttnn = {
-        model.model.layers[0].__class__: TTNNBailingMoEDecoderLayer,
+        model.model.layers[0].__class__: TTNNBailingMoEDecoderLayerPadded,
         model.model.norm.__class__: TTNNDistributedRMSNorm,
     }
     nn_to_ttnn2 = {
@@ -133,21 +133,21 @@ def load_model(mesh_device, model_name="inclusionAI/Ling-mini-2.0"):
 
 
 def warmup(model, tokenizer, mesh_device, paged_cache):
-    print("Warming up...")
-    "That's awesoome. Let me test out functionality"
-    messages = [{"role": "user", "content": "Hello there. What is your name. Tell me about yourself."}]
-    inputs = tokenizer.apply_chat_template(
-        messages,
-        add_generation_prompt=True,
-        tokenize=True,
-        return_dict=True,
-        return_tensors="pt",
-    ).to(model.device)
-    if "token_type_ids" in inputs:
-        del inputs["token_type_ids"]
-
-    model.generate(**inputs, max_new_tokens=2, use_cache=True, past_key_values=paged_cache)
-    paged_cache.reset()
+    print("Warming up with zero inputs at seq_len = 256 ...")
+    vocab_size = model.config.vocab_size
+    for seq_len in [256, 1024]:
+        input_ids = torch.zeros((1, seq_len), dtype=torch.long, device=model.device)
+        attention_mask = torch.ones((1, seq_len), dtype=torch.long, device=model.device)
+        model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_new_tokens=2,
+            use_cache=True,
+            past_key_values=paged_cache,
+        )
+        paged_cache.reset()
+        print(f"  seq_len={seq_len} done")
+    TracedRun.release_all()
     print("Warmup complete.")
 
 
