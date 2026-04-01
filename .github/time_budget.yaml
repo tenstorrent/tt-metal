@@ -113,7 +113,7 @@ models:
     wh_n300: 30
     wh_galaxy: 30
   integration:
-    wh_llmbox: 422
+    wh_llmbox: 450
   perf:
     wh_llmbox_perf: 685
     wh_galaxy: 280
