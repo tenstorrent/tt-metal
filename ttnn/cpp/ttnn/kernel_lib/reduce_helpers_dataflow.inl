@@ -92,11 +92,14 @@ FORCE_INLINE void fill_row0(volatile tt_l1_ptr uint32_t* ptr, uint32_t scaler) {
 // Format-aware fill_row0_partial — fills only first valid_reduce_dim_elements_in_tile columns of row 0
 // =============================================================================
 
-template <DataFormat data_format, bool half_tile, uint32_t valid_reduce_dim_elements_in_tile>
+template <DataFormat data_format, ReduceDim reduce_dim, bool half_tile, uint32_t valid_reduce_dim_elements_in_tile>
 FORCE_INLINE void fill_row0_partial(volatile tt_l1_ptr uint32_t* ptr, uint32_t scaler) {
     static_assert(
         data_format == DataFormat::Float16_b || data_format == DataFormat::Float32,
         "fill_row0_partial only supports Float16_b (bfloat16) and Float32 formats");
+    static_assert(
+        reduce_dim != ReduceDim::REDUCE_SCALAR,
+        "fill_row0_partial only supports partial valid elements for REDUCE_ROW and REDUCE_COL");
     static_assert(
         valid_reduce_dim_elements_in_tile > 0 && valid_reduce_dim_elements_in_tile < tt::constants::TILE_WIDTH,
         "valid_reduce_dim_elements_in_tile must be in range [1, TILE_WIDTH-1]");
@@ -105,12 +108,21 @@ FORCE_INLINE void fill_row0_partial(volatile tt_l1_ptr uint32_t* ptr, uint32_t s
     constexpr uint32_t face_size_u32 =
         (data_format == DataFormat::Float32) ? FACE_SIZE_U32_FP32 : FACE_SIZE_U32;
     constexpr uint32_t COLS_PER_FACE = 16;
-    constexpr uint32_t left_cols = valid_reduce_dim_elements_in_tile < COLS_PER_FACE ? valid_reduce_dim_elements_in_tile : COLS_PER_FACE;
-    constexpr uint32_t right_cols = valid_reduce_dim_elements_in_tile > COLS_PER_FACE ? valid_reduce_dim_elements_in_tile - COLS_PER_FACE : 0;
+    constexpr uint32_t left_cols =
+        valid_reduce_dim_elements_in_tile < COLS_PER_FACE ? valid_reduce_dim_elements_in_tile : COLS_PER_FACE;
+    constexpr uint32_t right_cols =
+        valid_reduce_dim_elements_in_tile > COLS_PER_FACE ? valid_reduce_dim_elements_in_tile - COLS_PER_FACE : 0;
 
     for (uint32_t face = 0; face < num_faces; ++face) {
         uint32_t face_offset = face * face_size_u32;
-        uint32_t cols = (face & 1) ? right_cols : left_cols;
+        uint32_t cols;
+        if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
+            // Reduce-column partial tiles split valid elements across top and bottom face pairs.
+            cols = (face < 2) ? left_cols : right_cols;
+        } else {
+            // Reduce-row keeps the existing left and right face pairing.
+            cols = (face & 1) ? right_cols : left_cols;
+        }
 
         if constexpr (data_format == DataFormat::Float32) {
             for (uint32_t col = 0; col < cols; ++col) {
@@ -205,6 +217,9 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f) {
     static_assert(
         valid_reduce_dim_elements_in_tile > 0 && valid_reduce_dim_elements_in_tile <= tt::constants::TILE_WIDTH,
         "valid_reduce_dim_elements_in_tile must be in range [1, TILE_WIDTH]");
+    static_assert(
+        valid_reduce_dim_elements_in_tile == tt::constants::TILE_WIDTH || reduce_dim != ReduceDim::REDUCE_SCALAR,
+        "partial valid_reduce_dim_elements_in_tile is only supported for REDUCE_ROW and REDUCE_COL");
 
     constexpr DataFormat data_format = get_dataformat(cb_id);
     constexpr bool half_tile = get_tile_num_faces(cb_id) == 2;
@@ -239,7 +254,7 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f) {
             if constexpr (valid_reduce_dim_elements_in_tile == tt::constants::TILE_WIDTH) {
                 fill_row0<data_format, half_tile>(addr_to_l1_ptr(write_addr), scaler);
             } else {
-                fill_row0_partial<data_format, half_tile, valid_reduce_dim_elements_in_tile>(
+                fill_row0_partial<data_format, reduce_dim, half_tile, valid_reduce_dim_elements_in_tile>(
                     addr_to_l1_ptr(write_addr), scaler);
             }
         }
@@ -260,6 +275,9 @@ template <
     uint32_t reduce_factor,
     bool force_reduce_llk>
 FORCE_INLINE void calculate_and_prepare_reduce_scaler() {
+    static_assert(
+        valid_reduce_dim_elements_in_tile == tt::constants::TILE_WIDTH || reduce_dim != ReduceDim::REDUCE_SCALAR,
+        "partial valid_reduce_dim_elements_in_tile is only supported for REDUCE_ROW and REDUCE_COL");
 
     // -------------------------------------------------------------------------
     // 1. Compute scaler value
