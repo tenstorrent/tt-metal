@@ -18,7 +18,13 @@
 namespace tt::tt_fabric::fabric_tests {
 
 TestProgressMonitor::TestProgressMonitor(::TestContext* ctx, const ProgressMonitorConfig& config) :
-    ctx_(ctx), config_(config), hung_threshold_(config.hung_threshold_seconds) {}
+    ctx_(ctx), config_(config), hung_threshold_(config.hung_threshold_seconds) {
+    for (const auto& [coord, test_device] : ctx_->get_test_devices()) {
+        if (!test_device.get_senders().empty()) {
+            total_active_devices_++;
+        }
+    }
+}
 
 TestProgressMonitor::~TestProgressMonitor() = default;
 
@@ -33,14 +39,6 @@ void TestProgressMonitor::poll_until_complete() {
         auto elapsed = std::chrono::duration_cast<std::chrono::duration<double>>(now - last_poll_time_);
 
         auto progress = poll_devices();
-
-        if (total_active_devices_ == 0) {
-            for (const auto& [_, prog] : progress) {
-                if (prog.num_senders > 0) {
-                    total_active_devices_++;
-                }
-            }
-        }
 
         check_for_hung_devices(progress);
 
