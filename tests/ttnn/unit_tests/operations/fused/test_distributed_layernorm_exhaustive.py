@@ -33,6 +33,7 @@ def test_my_custom_config(mesh_device):
         use_legacy=False,       # Use legacy reduction/rsqrt
         use_high_precision=True,# Use high precision compute
         verbose=False,          # Minimal output
+        implicit_tile_padding_value=-42,  # Optional; see TEST_PADDING_VALUE
     )
     assert passes, (
         f"TEST FAILED: Average relative difference {mean_rel_diff*100:.2f}% exceeds 5% threshold | "
@@ -47,6 +48,9 @@ import pytest
 import ttnn
 
 from tests.ttnn.unit_tests.operations.fused.distributed_norm_test_utils import run_distributed_norm_test
+
+# Non-zero implicit tile padding on activations; exposes pad-as-data bugs (#31982).
+TEST_PADDING_VALUE = -42
 
 
 @pytest.mark.parametrize("batch_size", [1, 2])
@@ -125,6 +129,7 @@ def test_distributed_norm_allclose(
         use_high_precision=True,
         verbose=False,
         use_welford=use_welford,
+        implicit_tile_padding_value=TEST_PADDING_VALUE,
     )
 
     # Assert - test passes only if average relative diff < 5%
@@ -176,6 +181,7 @@ def test_smoke(mesh_device, batch_size, seq_len, hidden_dim, eps, norm_type, use
         use_high_precision=True,
         verbose=False,
         use_welford=use_welford,
+        implicit_tile_padding_value=TEST_PADDING_VALUE,
     )
 
     assert passes, (
@@ -237,6 +243,7 @@ def test_distributed_layernorm_memory_layouts(mesh_device, norm_type, weight_lay
         weight_layout=weight_layout,
         bias_layout=bias_layout,
         use_welford=use_welford,
+        implicit_tile_padding_value=TEST_PADDING_VALUE,
     )
 
     assert passes, (
@@ -296,6 +303,7 @@ def test_distributed_rmsnorm_memory_layouts(mesh_device, norm_type, weight_layou
         verbose=False,
         weight_layout=weight_layout,
         use_welford=use_welford,
+        implicit_tile_padding_value=TEST_PADDING_VALUE,
     )
 
     assert passes, (
@@ -348,6 +356,7 @@ def test_distributed_norm_large_batch(mesh_device, norm_type, use_welford):
         use_high_precision=True,
         verbose=False,
         use_welford=use_welford,
+        implicit_tile_padding_value=TEST_PADDING_VALUE,
     )
 
     assert passes, (
@@ -385,6 +394,7 @@ def test_distributed_layernorm_sweep_hidden_dim(mesh_device, hidden_dim):
         use_legacy=False,
         use_high_precision=True,
         verbose=False,
+        implicit_tile_padding_value=TEST_PADDING_VALUE,
     )
 
     assert passes, (
@@ -452,6 +462,7 @@ def test_distributed_rmsnorm_2d_core_grid(mesh_device, batch_size, seq_len, hidd
         verbose=False,
         use_welford=False,  # RMS norm does not support Welford
         use_2d_core_grid=True,
+        implicit_tile_padding_value=TEST_PADDING_VALUE,
     )
 
     assert passes, (

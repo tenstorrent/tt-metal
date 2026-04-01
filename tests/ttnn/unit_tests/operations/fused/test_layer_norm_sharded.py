@@ -16,6 +16,8 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+TEST_PADDING_VALUE = -42
+
 
 @pytest.mark.parametrize("h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt", single_stage_param_sets())
 @pytest.mark.parametrize("use_welford", [True, False])
@@ -195,7 +197,8 @@ def test_layer_norm_sharded_padded(device, use_welford):
     h, w = 32, 256
     num_cores_h, num_cores_w = 1, 8
     non_zero_columns = 3
-    torch_input_tensor = torch.zeros((h, w), dtype=torch.bfloat16)
+    # torch_input_tensor = torch.zeros((h, w), dtype=torch.bfloat16)
+    torch_input_tensor = torch.full((h, w), TEST_PADDING_VALUE, dtype=torch.bfloat16)
     torch_input_tensor[:, :non_zero_columns] = 1.0
 
     # Create sharded memory config for 2x8 core grid

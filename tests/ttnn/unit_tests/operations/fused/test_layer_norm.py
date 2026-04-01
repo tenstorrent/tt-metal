@@ -11,6 +11,8 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose, assert_relative_frobenius
 from dataclasses import dataclass
 
+TEST_PADDING_VALUE = -42
+
 pytestmark = pytest.mark.use_module_device
 
 
@@ -465,7 +467,8 @@ def test_layer_norm_with_padding(device, h, w, use_welford, dtype):
 
     # Fill a random number of columns with ones
     non_zero_columns = torch.randint(1, w + 1, (1,)).item()
-    torch_input_tensor = torch.zeros((h, w), dtype=dtype)
+    # torch_input_tensor = torch.zeros((h, w), dtype=dtype)
+    torch_input_tensor = torch.full((h, w), TEST_PADDING_VALUE, dtype=dtype)
     torch_input_tensor[:, :non_zero_columns] = torch.ones((h, non_zero_columns), dtype=dtype)
 
     # Convert to TTNN tensor
