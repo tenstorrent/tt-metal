@@ -63,9 +63,8 @@ std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(const Tensor&
     that have shards on them in order (based on shard orientation) so that the program and kernels will not be launched
     on cores with no data on them (this can cause failures).
     **/
-    TT_FATAL(
-        tensor.is_sharded(),
-        "Tensor must be on device and sharded to compute optimal worker cores.");  // Host tensors will fail this check.
+    TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Tensor must be on device to compute optimal worker cores.");
+    TT_FATAL(tensor.is_sharded(), "Tensor must be sharded to compute optimal worker cores.");
     if (!tensor.memory_config().is_dram()) {
         return tensor.buffer()->buffer_distribution_spec().value().cores_with_data();
     }

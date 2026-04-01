@@ -890,7 +890,7 @@ def test_get_optimal_worker_cores_for_sharded_tensor_rejects_host_tensor():
     torch_tensor = torch.randn([1, 1, 32, 64], dtype=torch.bfloat16)
     tt_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-    with pytest.raises(RuntimeError, match="Tensor must be on device and sharded to compute optimal worker cores"):
+    with pytest.raises(RuntimeError, match="Tensor must be on device to compute optimal worker cores"):
         ttnn.get_optimal_worker_cores_for_sharded_tensor(tt_tensor)
 
 
@@ -899,5 +899,5 @@ def test_get_optimal_worker_cores_for_sharded_tensor_rejects_interleaved_tensor(
     tt_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
     tt_tensor = ttnn.to_device(tt_tensor, device)
 
-    with pytest.raises(RuntimeError, match="Tensor must be on device and sharded to compute optimal worker cores"):
+    with pytest.raises(RuntimeError, match="Tensor must be sharded to compute optimal worker cores"):
         ttnn.get_optimal_worker_cores_for_sharded_tensor(tt_tensor)
