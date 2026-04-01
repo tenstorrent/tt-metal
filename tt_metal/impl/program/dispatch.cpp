@@ -1578,7 +1578,7 @@ public:
     LaunchMessageGenerator() {
         const auto& hal = tt::tt_metal::MetalContext::instance().hal();
         for (uint32_t programmable_core_type_index = 0;
-             programmable_core_type_index < tt::tt_metal::NumHalProgrammableCoreTypes;
+             programmable_core_type_index < hal.get_programmable_core_type_count();
              ++programmable_core_type_index) {
             auto factory = hal.get_dev_msgs_factory(hal.get_programmable_core_type(programmable_core_type_index));
             if (launch_msg_sizeB == 0) {
@@ -1601,7 +1601,7 @@ public:
         SubDeviceId sub_device_id) {
         const auto& hal = tt::tt_metal::MetalContext::instance().hal();
         for (uint32_t programmable_core_type_index = 0;
-             programmable_core_type_index < tt::tt_metal::NumHalProgrammableCoreTypes;
+             programmable_core_type_index < hal.get_programmable_core_type_count();
              ++programmable_core_type_index) {
             for (auto& kernel_group : program.get_kernel_groups(programmable_core_type_index)) {
                 auto kernel_config = kernel_group->launch_msg.view().kernel_config();

@@ -139,6 +139,7 @@ KernelHandle create_kernel(
                     .processor = static_cast<DataMovementProcessor>(processor_id),
                     .compile_args = compile_args,
                 });
+        case HalProgrammableCoreType::DRAM:
         case HalProgrammableCoreType::COUNT: TT_THROW("bad core type"); break;
     }
     TT_THROW("Unreachable");
@@ -866,6 +867,7 @@ std::pair<uint32_t, uint32_t> get_args_addr(const IDevice* device, HalProcessorI
             unique_args_addr = MetalContext::instance().hal().get_dev_addr(core_type, HalL1MemAddrType::UNRESERVED);
             common_args_addr = unique_args_addr + 1 * 256 * sizeof(uint32_t);
             break;
+        case HalProgrammableCoreType::DRAM:
         case HalProgrammableCoreType::COUNT: TT_THROW("bad core type");
     }
     return {unique_args_addr, common_args_addr};

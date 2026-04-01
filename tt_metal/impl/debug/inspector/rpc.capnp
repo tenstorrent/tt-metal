@@ -80,6 +80,8 @@ struct BuildEnvData {
     buildKey @0 :UInt64; # Unique identifier for the build configuration
     firmwarePath @1 :Text; # Absolute path to the firmware directory for this device
     fwCompileHash @2 :UInt64; # Hash of the firmware compilation settings
+    # Whether DRAM programmable RISC cores are enabled on this device (Blackhole only)
+    dramProgrammableCoresEnabled @3 :Bool;
 }
 
 struct BuildEnvPerDevice {
