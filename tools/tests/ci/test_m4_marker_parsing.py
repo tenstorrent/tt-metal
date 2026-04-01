@@ -130,7 +130,7 @@ def test_render_owner_mentions_caps_to_top_three(monkeypatch):
     monkeypatch.setattr(mod, "recent_author_emails_for_paths", lambda _paths: set())
     monkeypatch.setattr(mod, "slack_lookup_by_email", lambda *_args, **_kwargs: None)
 
-    mentions, unresolved = mod.render_owner_mentions(
+    mentions, unresolved, selection = mod.render_owner_mentions(
         issue_token="x",
         slack_token="y",
         workflow_name="wf",
@@ -141,3 +141,4 @@ def test_render_owner_mentions_caps_to_top_three(monkeypatch):
     tokens = [tok for tok in mentions.split(" ") if tok.strip()]
     assert len(tokens) == 3
     assert unresolved == []
+    assert selection["selected_owner_count"] == 3

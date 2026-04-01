@@ -202,6 +202,77 @@ def build_recent_slack_context(messages: list[dict[str, Any]], cap: int = 10) ->
     return "\n".join(lines) if lines else "(none)"
 
 
+def load_auto_triage_records(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    raw_messages = payload.get("messages", []) if isinstance(payload, dict) else []
+    if not isinstance(raw_messages, list):
+        return []
+    records: list[dict[str, Any]] = []
+    for entry in raw_messages:
+        if not isinstance(entry, dict):
+            continue
+        root_text = str(entry.get("text", ""))
+        replies = entry.get("replies", [])
+        reply_texts: list[str] = []
+        if isinstance(replies, list):
+            reply_texts = [str(r.get("text", "")) for r in replies if isinstance(r, dict)]
+        combined = "\n".join([root_text] + reply_texts)
+        text_for_tokens = combined.lower()
+        tokens = set(re.split(r"[^a-z0-9]+", text_for_tokens))
+        tokens = {t for t in tokens if len(t) >= 3}
+        mention_ids = set(re.findall(r"<@([A-Z0-9]+)>", combined))
+        is_high_conf = "HIGH CONFIDENCE" in combined.upper()
+        records.append(
+            {
+                "ts": str(entry.get("ts", "")).strip(),
+                "text": root_text,
+                "combined": combined,
+                "tokens": tokens,
+                "mention_ids": mention_ids,
+                "is_high_conf": is_high_conf,
+            }
+        )
+    return records
+
+
+def build_auto_triage_context_for_job(
+    records: list[dict[str, Any]], *, workflow_name: str, job_name: str, cap: int = 3
+) -> tuple[str, list[str]]:
+    hint_tokens = set(_tokenize_owner_hint(workflow_name) + _tokenize_owner_hint(job_name))
+    scored: list[tuple[int, dict[str, Any]]] = []
+    for rec in records:
+        rec_tokens = rec.get("tokens", set())
+        if not isinstance(rec_tokens, set):
+            continue
+        overlap = len(hint_tokens.intersection(rec_tokens))
+        if overlap <= 0:
+            continue
+        score = overlap * 2
+        if rec.get("is_high_conf"):
+            score += 5
+        scored.append((score, rec))
+    if not scored:
+        return "(none)", []
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    selected = [rec for _, rec in scored[:cap]]
+    lines: list[str] = []
+    mention_ids: set[str] = set()
+    for rec in selected:
+        ts = str(rec.get("ts", "")).strip()
+        text = str(rec.get("text", "")).replace("\n", " ").strip()
+        if len(text) > 220:
+            text = text[:220] + "..."
+        conf = "HIGH_CONFIDENCE" if rec.get("is_high_conf") else "context"
+        lines.append(f"- ts={ts} [{conf}] {text}")
+        mention_ids.update(rec.get("mention_ids", set()) if isinstance(rec.get("mention_ids"), set) else set())
+    return ("\n".join(lines) if lines else "(none)"), sorted(mention_ids)
+
+
 def parse_codeowners(path: Path) -> list[tuple[str, list[str]]]:
     if not path.exists():
         return []
@@ -447,7 +518,8 @@ def render_owner_mentions(
     job_name: str,
     text_sources: list[str],
     members_cache: list[dict[str, Any]] | None,
-) -> tuple[str, list[str]]:
+    auto_triage_user_ids: list[str] | None = None,
+) -> tuple[str, list[str], dict[str, Any]]:
     combined = "\n".join(text_sources + [workflow_name, job_name])
     paths = extract_repo_paths(combined)
     codeowners = parse_codeowners(Path(".github/CODEOWNERS"))
@@ -462,6 +534,7 @@ def render_owner_mentions(
         codeowners_weight = 1
     score_by_uid: dict[str, int] = {}
     unresolved_handles: list[str] = []
+    source_counts = {"codeowners": 0, "commit_history": 0, "auto_triage": 0}
 
     for username in sorted(gh_usernames):
         # CODEOWNERS teams (org/team) are not direct users and cannot map
@@ -480,6 +553,7 @@ def render_owner_mentions(
             user_id = slack_lookup_by_full_name(gh_name, members_cache)
         if user_id:
             score_by_uid[user_id] = score_by_uid.get(user_id, 0) + codeowners_weight
+            source_counts["codeowners"] += 1
         else:
             unresolved_handles.append(username)
 
@@ -489,11 +563,23 @@ def render_owner_mentions(
         if user_id:
             # Recent commit authors are usually stronger relevance signals.
             score_by_uid[user_id] = score_by_uid.get(user_id, 0) + 3
+            source_counts["commit_history"] += 1
+
+    for uid in auto_triage_user_ids or []:
+        if uid:
+            score_by_uid[uid] = score_by_uid.get(uid, 0) + 1
+            source_counts["auto_triage"] += 1
 
     ranked_uids = sorted(score_by_uid.items(), key=lambda kv: (-kv[1], kv[0]))
     top_uids = [uid for uid, _ in ranked_uids[:MAX_OWNER_MENTIONS]]
     mentions = " ".join(f"<@{uid}>" for uid in top_uids)
-    return mentions, unresolved_handles
+    selection_meta: dict[str, Any] = {
+        "selection_method": "weighted_top3",
+        "selected_owner_count": len(top_uids),
+        "candidate_owner_count": len(score_by_uid),
+        "source_counts": source_counts,
+    }
+    return mentions, unresolved_handles, selection_meta
 
 
 def normalize_slack_text(
@@ -648,14 +734,20 @@ def agent_review_batch_prepare_outputs(
         if not isinstance(job_urls, list) or not isinstance(log_paths, list):
             continue
         lines = [f"[JOB {idx}]", f"Workflow: {workflow_name}", f"Job: {job_name}"]
+        auto_triage_context = str(job.get("auto_triage_context", "")).strip()
         for run_idx, (url, path) in enumerate(zip(job_urls, log_paths, strict=False), start=1):
             lines.append(f"Run {run_idx} URL: {url}")
             lines.append(f"Run {run_idx} local log path: {path}")
+        if auto_triage_context and auto_triage_context != "(none)":
+            lines.append("Relevant auto-triage evidence (last 14 days):")
+            lines.append(auto_triage_context)
         sections.append("\n".join(lines))
     prompt = (
         "You are the M4 reviewer for deterministic CI failures.\n"
         "For EACH provided job, manually compare all three logs and determine if terminal failure signatures are the same.\n"
         "You MUST review existing open issues and recent Slack messages before drafting outputs.\n"
+        "Use relevant auto-triage evidence as supporting context (especially HIGH_CONFIDENCE snippets), "
+        "but do not treat it as stronger than direct log evidence.\n"
         "CRITICAL: logs are available as local files below; inspect those files directly.\n"
         "Use shell/read tools to inspect those paths and determine terminal failure signatures.\n"
         "Criteria: deterministic only if the same job failed 3 times in a row with semantically identical terminal failure.\n\n"
@@ -839,6 +931,10 @@ def main() -> int:
         help="Deprecated: review count is no longer capped; retained for compatibility.",
     )
     parser.add_argument("--model", default="auto")
+    parser.add_argument(
+        "--auto-triage-slack-json",
+        default="build_ci/raw_data/slack_C0APK6215B5_last_14_days.json",
+    )
     args = parser.parse_args()
 
     read_token = os.environ.get("AGGREGATE_READ_TOKEN", "").strip()
@@ -886,6 +982,7 @@ def main() -> int:
     recent_slack_messages = fetch_recent_slack_messages(
         slack_token=slack_token, channel_id=SLACK_CHANNEL_TEST, limit=20
     )
+    auto_triage_records = load_auto_triage_records(Path(args.auto_triage_slack_json))
     slack_members_cache = slack_list_members(slack_token)
     open_issue_context = build_open_issue_context(open_issues)
     recent_slack_context = build_recent_slack_context(recent_slack_messages)
@@ -959,12 +1056,19 @@ def main() -> int:
             log_path = logs_root / job_slug / f"run{idx}.log"
             write_job_log_file(job_url=url, read_token=read_token, out_path=log_path)
             log_paths.append(str(log_path))
+        auto_triage_context, auto_triage_user_ids = build_auto_triage_context_for_job(
+            auto_triage_records,
+            workflow_name=workflow_name,
+            job_name=job_name,
+        )
         to_review.append(
             {
                 "workflow_name": workflow_name,
                 "job_name": job_name,
                 "job_urls": job_urls,
                 "log_paths": log_paths,
+                "auto_triage_context": auto_triage_context,
+                "auto_triage_user_ids": auto_triage_user_ids,
             }
         )
 
@@ -1042,6 +1146,11 @@ def main() -> int:
         workflow_name = item["workflow_name"]
         job_name = item["job_name"]
         job_urls = item["job_urls"]
+        auto_triage_context, auto_triage_user_ids = build_auto_triage_context_for_job(
+            auto_triage_records,
+            workflow_name=workflow_name,
+            job_name=job_name,
+        )
         key = decision_key(workflow_name, job_name, job_urls)
         decision = decisions_by_key.get(key)
         if not decision:
@@ -1160,13 +1269,14 @@ def main() -> int:
                 f"Fingerprint: `{fp}`\n"
                 f"Latest run: {job_urls[0]}"
             )
-        owner_mentions, unresolved_handles = render_owner_mentions(
+        owner_mentions, unresolved_handles, owner_selection = render_owner_mentions(
             issue_token=issue_token,
             slack_token=slack_token,
             workflow_name=workflow_name,
             job_name=job_name,
             text_sources=[issue_body, excerpt, reason, signature],
             members_cache=slack_members_cache,
+            auto_triage_user_ids=auto_triage_user_ids,
         )
         slack_text = normalize_slack_text(
             slack_text=slack_text,
@@ -1195,6 +1305,8 @@ def main() -> int:
                 "agent_decision": decision,
                 "owner_mentions": owner_mentions,
                 "unresolved_owner_handles": unresolved_handles,
+                "owner_selection": owner_selection,
+                "auto_triage_context": auto_triage_context,
             }
         )
         log(f"Created issue and posted Slack bootstrap: {issue_url} (ts={slack_ts})")

@@ -219,6 +219,17 @@ jobs:
           path: build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_threads.json
           retention-days: 7
 
+      - name: Export last 14 days of triage channel activity
+        if: ${{ !inputs['data-gathering-mode'] }}
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: |
+          set -euo pipefail
+          python tools/ci/export_slack_channel.py \
+            --channel-id C0APK6215B5 \
+            --days 14 \
+            --output build_ci/raw_data/slack_C0APK6215B5_last_14_days.json
+
       - name: Ensure CURSOR_API_KEY is configured (data gathering mode)
         if: ${{ inputs['data-gathering-mode'] }}
         env:
@@ -317,6 +328,7 @@ jobs:
             --output-json "build_ci/ci_ticketing/create_tickets/m4_issue_and_slack_result.json" \
             --review-cache-json "build_ci/ci_ticketing/create_tickets/m4_review_cache.json" \
             --previous-artifact-dir "build_ci/m4_cache_prev" \
+            --auto-triage-slack-json "build_ci/raw_data/slack_C0APK6215B5_last_14_days.json" \
             --max-new-issues "${{ github.event.inputs['m4-max-new-issues'] || '1' }}" \
             --max-agent-reviews "${{ github.event.inputs['m4-max-agent-reviews'] || '0' }}" \
             --model "${{ github.event.inputs['auto-disable-model'] || 'claude-4-sonnet' }}"
@@ -337,6 +349,7 @@ jobs:
             build_ci/ci_ticketing/create_tickets/downloaded_logs
             build_ci/ci_ticketing/create_tickets/m4_issue_and_slack_result.json
             build_ci/ci_ticketing/create_tickets/m4_review_cache.json
+            build_ci/raw_data/slack_C0APK6215B5_last_14_days.json
           retention-days: 7
 
       - name: Upload triage state artifact

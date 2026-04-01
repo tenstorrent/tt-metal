@@ -32,6 +32,35 @@ def render_summary(data: dict[str, Any]) -> str:
             workflow_name = item.get("workflow_name", "")
             job_name = item.get("job_name", "")
             lines.append(f"- {issue_url} | {workflow_name} / {job_name}")
+            decision = item.get("agent_decision", {})
+            if isinstance(decision, dict):
+                signature = str(decision.get("signature", "")).strip()
+                reason = str(decision.get("reason", "")).strip()
+                if signature:
+                    if len(signature) > 160:
+                        signature = signature[:160] + "..."
+                    lines.append(f"  - Why issue was created: deterministic signature `{signature}`")
+                elif reason:
+                    if len(reason) > 220:
+                        reason = reason[:220] + "..."
+                    lines.append(f"  - Why issue was created: {reason}")
+            owner_selection = item.get("owner_selection", {})
+            if isinstance(owner_selection, dict):
+                selected = owner_selection.get("selected_owner_count", 0)
+                candidates = owner_selection.get("candidate_owner_count", 0)
+                source_counts = owner_selection.get("source_counts", {})
+                if isinstance(source_counts, dict):
+                    lines.append(
+                        "  - Why people were pinged: "
+                        f"selected {selected} of {candidates} candidates from "
+                        f"codeowners={source_counts.get('codeowners', 0)}, "
+                        f"commit_history={source_counts.get('commit_history', 0)}, "
+                        f"auto_triage={source_counts.get('auto_triage', 0)}"
+                    )
+            unresolved = item.get("unresolved_owner_handles", [])
+            if isinstance(unresolved, list) and unresolved:
+                redacted = ", ".join(f"@{h}" for h in unresolved[:8])
+                lines.append(f"  - Unresolved GitHub handles: {redacted}")
     if isinstance(skipped, list) and skipped:
         lines.append("")
         lines.append("## Top skip reasons")
