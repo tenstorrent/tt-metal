@@ -347,8 +347,17 @@ jobs:
           mv .clang-tidy-new .clang-tidy
         fi
         cat .clang-tidy
-    - name: Prepare compile_commands.json
-      timeout-minutes: 10
+    - name: Cache CPM packages
+      uses: actions/cache@v4
+      with:
+        path: .cpmcache
+        key: cpm-${{ runner.os }}-${{ hashFiles('**/CMakeLists.txt', '**/*.cmake') }}
+        restore-keys: |
+          cpm-${{ runner.os }}-
+    - name: CMake configure
+      # CPM downloads third-party packages from the internet on cache miss;
+      # give a generous timeout to accommodate slow network days.
+      timeout-minutes: 25
       run: |
         cmake -B build \
           -DCMAKE_BUILD_TYPE=Debug \
@@ -359,7 +368,9 @@ jobs:
           -DTTNN_BUILD_TESTS=ON \
           -DTT_UNITY_BUILDS=OFF \
           -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
-        cmake --build build --target all_generated_files
+    - name: Build generated files
+      timeout-minutes: 10
+      run: cmake --build build --target all_generated_files
     - name: 'Install jq'
       uses: dcarbone/install-jq-action@v2
     - name: Create results directory
