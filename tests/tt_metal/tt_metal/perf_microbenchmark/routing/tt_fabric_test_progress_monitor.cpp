@@ -18,7 +18,13 @@
 namespace tt::tt_fabric::fabric_tests {
 
 TestProgressMonitor::TestProgressMonitor(::TestContext* ctx, const ProgressMonitorConfig& config) :
-    ctx_(ctx), config_(config), hung_threshold_(config.hung_threshold_seconds) {}
+    ctx_(ctx), config_(config), hung_threshold_(config.hung_threshold_seconds) {
+    for (const auto& [coord, test_device] : ctx_->get_test_devices()) {
+        if (!test_device.get_senders().empty()) {
+            total_active_devices_++;
+        }
+    }
+}
 
 TestProgressMonitor::~TestProgressMonitor() = default;
 
@@ -33,17 +39,34 @@ void TestProgressMonitor::poll_until_complete() {
         auto elapsed = std::chrono::duration_cast<std::chrono::duration<double>>(now - last_poll_time_);
 
         auto progress = poll_devices();
+
         check_for_hung_devices(progress);
-        display_progress(progress, elapsed);
 
         programs_complete = true;
         for (const auto& [device_id, prog] : progress) {
-            if (prog.current_packets < prog.total_packets) {
+            if (prog.num_senders == 0) {
+                continue;
+            }
+            if (prog.current_packets >= prog.total_packets && prog.total_packets > 0) {
+                if (!completed_devices_.contains(device_id)) {
+                    completed_devices_.insert(device_id);
+                    if (config_.show_workers) {
+                        std::cout << std::endl;
+                        log_info(
+                            tt::LogTest,
+                            "Device {} completed ({} packets) [{}/{} done]",
+                            format_device_label(device_id),
+                            format_count(prog.total_packets),
+                            completed_devices_.size(),
+                            total_active_devices_);
+                    }
+                }
+            } else {
                 programs_complete = false;
-                break;
             }
         }
 
+        display_progress(progress, elapsed);
         last_poll_time_ = now;
 
         if (!programs_complete) {
@@ -149,7 +172,7 @@ void TestProgressMonitor::check_for_hung_devices(
                 log_warning(
                     tt::LogTest,
                     "⚠️  Device {} may be HUNG: no progress for {} seconds (packets: {}/{})",
-                    device_id,
+                    format_device_label(device_id),
                     elapsed.count(),
                     prog.current_packets,
                     prog.total_packets);
@@ -190,6 +213,10 @@ void TestProgressMonitor::display_progress(
     // Always update last_total_packets for next iteration
     if (total_current > 0) {
         last_total_packets_ = total_current;
+    }
+
+    if (total_active_devices_ > 0) {
+        ss << " | Devices: " << completed_devices_.size() << "/" << total_active_devices_ << " done";
     }
 
     // Pad with spaces to clear any leftover text from previous longer updates
