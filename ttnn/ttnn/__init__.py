@@ -224,6 +224,7 @@ from ttnn.types import (
     CoreRange,
     CoreCoord,
     corerange_to_cores,
+    get_optimal_worker_cores_for_sharded_tensor,
     Tile,
     Layout,
     ROW_MAJOR_LAYOUT,
