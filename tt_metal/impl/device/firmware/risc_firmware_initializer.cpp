@@ -385,17 +385,6 @@ void RiscFirmwareInitializer::terminate_active_ethernet_cores_on_all_chips() {
         }
         cluster_.l1_barrier(chip_id);
     }
-
-    // Now send the termination signal. All cores already have exit_erisc_kernel set.
-    for (tt::ChipId chip_id : cluster_.all_chip_ids()) {
-        for (const auto& logical_core : this->get_control_plane_().get_active_ethernet_cores(chip_id)) {
-            CoreCoord virtual_core =
-                cluster_.get_virtual_coordinate_from_logical_coordinates(chip_id, logical_core, CoreType::ETH);
-            cluster_.write_core(
-                term_val.data(), term_val.size() * sizeof(uint32_t), tt_cxy_pair(chip_id, virtual_core), term_addr);
-        }
-        cluster_.l1_barrier(chip_id);
-    }
 }
 
 void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
