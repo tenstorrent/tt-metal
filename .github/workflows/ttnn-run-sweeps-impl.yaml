@@ -79,8 +79,11 @@ on:
       p150b-matrix:
         description: "Module matrix for Blackhole P150b runners"
         value: ${{ jobs.ttnn-compute-module-matrix.outputs.p150b-matrix }}
+      t3k-matrix:
+        description: "Module matrix for T3K (T3000 8-chip) runners"
+        value: ${{ jobs.ttnn-compute-module-matrix.outputs.t3k-matrix }}
       galaxy-matrix:
-        description: "Module matrix for Galaxy/T3K runners"
+        description: "Module matrix for Galaxy (32-chip) runners"
         value: ${{ jobs.ttnn-compute-module-matrix.outputs.galaxy-matrix }}
 
 permissions:
@@ -225,6 +228,7 @@ jobs:
       n150-matrix: ${{ steps.set-matrix.outputs.n150-matrix }}
       n300-matrix: ${{ steps.set-matrix.outputs.n300-matrix }}
       p150b-matrix: ${{ steps.set-matrix.outputs.p150b-matrix }}
+      t3k-matrix: ${{ steps.set-matrix.outputs.t3k-matrix }}
       galaxy-matrix: ${{ steps.set-matrix.outputs.galaxy-matrix }}
     steps:
       - name: Show run identifiers
@@ -259,6 +263,7 @@ jobs:
           print('n150-matrix=' + hw_matrix(['wormhole-n150-sweeps', 'lead-models-single-chip']))
           print('n300-matrix=' + hw_matrix(['wormhole-n300-sweeps', 'wormhole-n300-llmbox-sweeps', 'n300-llmbox-ccl']))
           print('p150b-matrix=' + hw_matrix(['blackhole-p150b-sweeps']))
+          print('t3k-matrix=' + hw_matrix(['wormhole-t3k-sweeps']))
           print('galaxy-matrix=' + hw_matrix(['wormhole-galaxy-sweeps', 'lead-models-galaxy']))
           " >> "$GITHUB_OUTPUT"
 

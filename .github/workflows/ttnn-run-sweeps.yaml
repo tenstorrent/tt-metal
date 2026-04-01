@@ -833,8 +833,30 @@ jobs:
       measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
       mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
 
+  ttnn-sweeps-t3k:
+    name: ttnn sweeps T3K
+    needs: [resolve-inputs, build-artifact, call-sweeps-impl]
+    if: |
+      !cancelled() &&
+      needs.call-sweeps-impl.result == 'success' &&
+      needs.call-sweeps-impl.outputs.t3k-matrix != '' &&
+      needs.call-sweeps-impl.outputs.t3k-matrix != '{"include":[]}'
+    uses: ./.github/workflows/ttnn-run-sweeps-hw.yaml
+    secrets: inherit
+    with:
+      matrix: ${{ needs.call-sweeps-impl.outputs.t3k-matrix }}
+      sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
+      measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
+      measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
+      measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
+
   ttnn-sweeps-galaxy:
-    name: ttnn sweeps Galaxy/T3K
+    name: ttnn sweeps Galaxy
     needs: [resolve-inputs, build-artifact, call-sweeps-impl]
     if: |
       !cancelled() &&
@@ -863,14 +885,16 @@ jobs:
       - ttnn-sweeps-n150
       - ttnn-sweeps-n300
       - ttnn-sweeps-p150b
+      - ttnn-sweeps-t3k
       - ttnn-sweeps-galaxy
     if: |
       !cancelled() &&
       (needs.ttnn-sweeps-n150.result == 'success' || needs.ttnn-sweeps-n150.result == 'skipped') &&
       (needs.ttnn-sweeps-n300.result == 'success' || needs.ttnn-sweeps-n300.result == 'skipped') &&
       (needs.ttnn-sweeps-p150b.result == 'success' || needs.ttnn-sweeps-p150b.result == 'skipped') &&
+      (needs.ttnn-sweeps-t3k.result == 'success' || needs.ttnn-sweeps-t3k.result == 'skipped') &&
       (needs.ttnn-sweeps-galaxy.result == 'success' || needs.ttnn-sweeps-galaxy.result == 'skipped') &&
-      (needs.ttnn-sweeps-n150.result != 'skipped' || needs.ttnn-sweeps-n300.result != 'skipped' || needs.ttnn-sweeps-p150b.result != 'skipped' || needs.ttnn-sweeps-galaxy.result != 'skipped')
+      (needs.ttnn-sweeps-n150.result != 'skipped' || needs.ttnn-sweeps-n300.result != 'skipped' || needs.ttnn-sweeps-p150b.result != 'skipped' || needs.ttnn-sweeps-t3k.result != 'skipped' || needs.ttnn-sweeps-galaxy.result != 'skipped')
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:

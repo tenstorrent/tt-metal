@@ -81,6 +81,15 @@ def get_runner_config_for_hardware_group(hardware_group):
             "tt_smi_cmd": "tt-smi -glx_reset_auto",
         }
 
+    if device_series == "n300" and card_count == 8:
+        return {
+            "test_group_name": "wormhole-t3k-sweeps",
+            "arch": "wormhole_b0",
+            "runs_on": ["config-t3000", "arch-wormhole_b0", "in-service", "pipeline-functional"],
+            "runner_label": "config-t3000",
+            "tt_smi_cmd": "tt-smi -r",
+        }
+
     if device_series == "n300" and card_count == 4:
         return {
             "test_group_name": "wormhole-n300-llmbox-sweeps",
