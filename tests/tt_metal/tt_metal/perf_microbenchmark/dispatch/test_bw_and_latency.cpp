@@ -106,10 +106,10 @@ void init(int argc, char** argv) {
             0);
         log_info(LogTest, "  -tx: when issuing a multicast write, X of end core to write to (default {})", 0);
         log_info(LogTest, "  -ty: when issuing a multicast write, Y of end core to write to (default {})", 0);
-        log_info(LogTest, "  -rex: X of end core for worker range (default same as -rx)");
-        log_info(LogTest, "  -rey: Y of end core for worker range (default same as -ry)");
+        log_info(LogTest, "  -drx: when reading/writing dram, X of end core for worker range (default same as -rx)");
+        log_info(LogTest, "  -dry: when reading/writing dram, Y of end core for worker range (default same as -ry)");
         log_info(LogTest, "  -wr: issue unicast write instead of read (default false)");
-        log_info(LogTest, "  -c: when reading from dram, DRAM channel (default 0)");
+        log_info(LogTest, "  -c: when reading/writing dram, DRAM channel (default 0)");
         log_info(LogTest, "  -f: time just the finish call (default disabled)");
         log_info(LogTest, "  -o: use read_one_packet API.  restricts page size to 8K max (default {})", 0);
         log_info(LogTest, "-link: link mcast transactions");
@@ -124,8 +124,8 @@ void init(int argc, char** argv) {
 
     uint32_t core_x = test_args::get_command_option_uint32(input_args, "-rx", 1);
     uint32_t core_y = test_args::get_command_option_uint32(input_args, "-ry", 0);
-    uint32_t end_core_x = test_args::get_command_option_uint32(input_args, "-rex", core_x);
-    uint32_t end_core_y = test_args::get_command_option_uint32(input_args, "-rey", core_y);
+    uint32_t end_core_x = test_args::get_command_option_uint32(input_args, "-drx", core_x);
+    uint32_t end_core_y = test_args::get_command_option_uint32(input_args, "-dry", core_y);
     warmup_iterations_g = test_args::get_command_option_uint32(input_args, "-w", DEFAULT_WARMUP_ITERATIONS);
     iterations_g = test_args::get_command_option_uint32(input_args, "-i", DEFAULT_ITERATIONS);
     hammer_write_reg_g = test_args::has_command_option(input_args, "-hr");
@@ -162,10 +162,14 @@ void init(int argc, char** argv) {
     read_profiler_results = test_args::has_command_option(input_args, "-profread");
 
     if (end_core_x < core_x || end_core_y < core_y) {
-        log_info(LogTest, "-rex must be >= -rx and -rey must be >= -ry");
+        log_info(LogTest, "-drx must be >= -rx and -dry must be >= -ry");
         exit(-1);
     }
     worker_g = CoreRange({core_x, core_y}, {end_core_x, end_core_y});
+    if (worker_g.size() > 1 && source_mem_g != 1) {
+        log_info(LogTest, "Multi-core worker range only supported with DRAM");
+        exit(-1);
+    }
     src_worker_g = {src_core_x, src_core_y};
 
     if (source_mem_g == 6) {
@@ -343,7 +347,7 @@ int main(int argc, char** argv) {
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .defines = defines});
         if (page_size_as_runtime_arg_g) {
-            tt_metal::SetRuntimeArgs(program, dm0, worker_g.start_coord, {page_size_g});
+            tt_metal::SetRuntimeArgs(program, dm0, worker_g, {page_size_g});
         }
         mesh_workload.add_program(
             tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
