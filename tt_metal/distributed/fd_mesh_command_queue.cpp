@@ -389,6 +389,10 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         // Flattened dispatch: after the first dispatch, cache the serialized command bytes
         // and on subsequent dispatches, patch only the ~15 fields that change, then do a single cq_write.
         static bool enable_flattened_dispatch = tt::parse_env<bool>("TT_METAL_ENABLE_FLATTENED_DISPATCH", false);
+        static bool bench_dispatch = tt::parse_env<bool>("TT_METAL_BENCH_DISPATCH", false);
+        static uint64_t dispatch_count = 0;
+        static double total_update_ns = 0;
+        static double total_write_ns = 0;
 
         bool stall_first = dispatch_metadata.stall_first;
         bool stall_before_program = dispatch_metadata.stall_before_program;
@@ -397,6 +401,9 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
         bool use_flattened = enable_flattened_dispatch && !sysmem_manager.get_bypass_mode();
         uint8_t flat_variant_key = 0;
+
+        auto t_update_start = bench_dispatch ? std::chrono::high_resolution_clock::now()
+                                             : std::chrono::high_resolution_clock::time_point{};
 
         if (use_flattened) {
             FlatLayoutVariant variant{
@@ -451,6 +458,9 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                 std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores));
         }
 
+        auto t_update_end = bench_dispatch ? std::chrono::high_resolution_clock::now()
+                                           : std::chrono::high_resolution_clock::time_point{};
+
         if (sysmem_manager.get_bypass_mode()) {
             auto local_mesh_range = mesh_device_->get_view().get_local_mesh_coord_range();
             auto local_device_range = local_mesh_range.intersection(device_range);
@@ -468,7 +478,6 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             auto& flat = program_cmd_seq.flattened_cache.at(flat_variant_key);
             for_each_local(mesh_device_, device_range, [&](const auto& coord) {
                 auto device = mesh_device_->impl().get_device(coord);
-                // Per-device profiler patch (overwrites host_assigned_id with device-specific value)
                 if (tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
                         .rtoptions()
                         .get_profiler_enabled()) {
@@ -489,6 +498,27 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                 stall_before_program,
                 chip_ids_in_workload,
                 program.get_runtime_id());
+        }
+
+        if (bench_dispatch) {
+            auto t_write_end = std::chrono::high_resolution_clock::now();
+            double update_ns = std::chrono::duration<double, std::nano>(t_update_end - t_update_start).count();
+            double write_ns = std::chrono::duration<double, std::nano>(t_write_end - t_update_end).count();
+            dispatch_count++;
+            total_update_ns += update_ns;
+            total_write_ns += write_ns;
+            if (dispatch_count % 1000 == 0) {
+                double avg_update_us = (total_update_ns / dispatch_count) / 1000.0;
+                double avg_write_us = (total_write_ns / dispatch_count) / 1000.0;
+                log_info(
+                    tt::LogDispatch,
+                    "DISPATCH_BENCH [{}]: avg update={:.2f}us write={:.2f}us total={:.2f}us ({} dispatches)",
+                    use_flattened ? "FLAT" : "ORIG",
+                    avg_update_us,
+                    avg_write_us,
+                    avg_update_us + avg_write_us,
+                    dispatch_count);
+            }
         }
     }
     // Send go signals to devices not running a program to ensure consistent global state
