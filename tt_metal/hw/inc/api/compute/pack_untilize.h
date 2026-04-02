@@ -234,7 +234,7 @@ ALWI void pack_untilize_dest(
     uint32_t num_faces = 4,
     uint32_t tile_dst_rt_offset = 0) {
 #ifdef ARCH_QUASAR
-    PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(block_rt_dim, ocb, block_c_index, tile_dst_rt_offset)));
+    PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(block_rt_dim, ocb, block_c_index)));
 #else
     PACK((llk_pack_untilize<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset, dense>(
         block_rt_dim, ocb, face_r_dim, num_faces, block_c_index, tile_dst_rt_offset)));
