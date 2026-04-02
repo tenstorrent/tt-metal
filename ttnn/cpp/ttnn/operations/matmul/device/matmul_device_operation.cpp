@@ -582,7 +582,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
 
                 // No padding
                 TT_FATAL(M == per_core_M, "M ({}) must equal per_core_M ({})", M, per_core_M);
-                TT_FATAL(M == 1, "currently only support in0 tensor height of tile height");
+                // M == 1 restriction removed: kernel factory supports per_core_M > 1 when num_blocks_per_shard == 1
                 TT_FATAL(
                     per_core_M == (shard_shape[0] / in0_tile.get_height()),
                     "per_core_M ({}) must equal shard_shape[0] / in0_tile.get_height() ({})",

@@ -594,6 +594,10 @@ class ModelArgs:
         self.use_qk_fused = not self.is_multimodal
         if self.prefetcher is not None:
             self.use_qk_fused = False
+        # Fused QK places Q and K on separate core grids (2x batch cores).
+        # For batch>32 on BH (120 cores), 2*64=128 > 120, so disable fusion.
+        if self.max_batch_size > 32:
+            self.use_qk_fused = False
 
         if device is not None:  # Avoid issue with test_torch.py not having a device
             # ============================================================================
@@ -1636,7 +1640,7 @@ class ModelArgs:
                 if is_blackhole():
                     return ttnn.create_sharded_memory_config(
                         shape=(ttnn.TILE_SIZE, self.head_dim),
-                        core_grid=ttnn.CoreGrid(y=4, x=8),
+                        core_grid=num_to_coregrid(self.max_batch_size),
                         strategy=ttnn.ShardStrategy.HEIGHT,
                         orientation=ttnn.ShardOrientation.ROW_MAJOR,
                         use_height_and_width_as_shard_shape=True,
@@ -3148,14 +3152,6 @@ class ModelArgs:
         _per_core_M = math.ceil(m / self.tile_size)
         _in0_block_w = self.find_largest_divisor(k // (self.tile_size * num_cores))
         _per_core_N = math.ceil(n / (self.tile_size * num_cores))
-        if _per_core_M > 1:
-            # Use Batched DRAM-sharded config for batch > 32 (M > 1 tile)
-            return ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
-                in0_block_w=_in0_block_w,
-                per_core_M=_per_core_M,
-                per_core_N=_per_core_N,
-                fused_activation=fused_activation,
-            )
         return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=_in0_block_w,
             per_core_M=_per_core_M,

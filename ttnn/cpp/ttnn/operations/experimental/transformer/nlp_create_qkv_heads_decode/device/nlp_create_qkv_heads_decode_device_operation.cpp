@@ -42,7 +42,7 @@ void NLPCreateQKVHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor.layout() == Layout::TILE, "Only tile layout is supported for input tensor");
 
     // input
-    const uint32_t num_users_supported = 32;
+    const uint32_t num_users_supported = 128;
     uint32_t num_users = input_shape[2];
     TT_FATAL(
         input_shape[3] % TILE_WIDTH == 0,
