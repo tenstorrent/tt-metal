@@ -5,7 +5,7 @@
 """
 Compute the sweep test matrix for GitHub Actions CI.
 
-This script analyzes generated sweep vector files and produces a matrix
+This script reads the generated export manifest and produces a matrix
 configuration that maps test modules to appropriate hardware runners.
 
 Environment Variables (from GitHub Actions context):
@@ -13,34 +13,42 @@ Environment Variables (from GitHub Actions context):
 - GITHUB_EVENT_NAME: Event type (schedule, workflow_dispatch)
 - SWEEP_NAME: Selected sweep type from workflow_dispatch
 - MEASURE_DEVICE_PERF: Whether device performance measurement is enabled
-- VECTORS_DIR: Directory containing vector JSON files (default: /tmp/vectors)
+- VECTORS_DIR: Directory containing exported vectors and export_manifest.json
 
 Output:
 Prints GitHub Actions output lines to stdout (matrix + per-hw matrices).
 """
 
-import os
 import json
+import os
 import sys
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 if __package__ in (None, ""):
     REPO_ROOT = Path(__file__).resolve().parents[3]
     if str(REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(REPO_ROOT))
 
-from tests.sweep_framework.framework.constants import (
-    get_mesh_shape_string,
-    parse_hardware_suffix,
-    strip_grouping_suffix,
-)
-from tests.sweep_framework.framework.execution_capabilities import (
-    load_execution_capability_profiles,
-    load_vector_file_summaries,
-    resolve_active_profile,
-    select_eligible_vector_summaries,
-)
+from tests.sweep_framework.framework.constants import normalize_hardware_group
+
+HardwareGroup = tuple[str, str, int]
+MeshShape = tuple[int, int]
+EXPORT_MANIFEST_NAME = "export_manifest.json"
+
+
+@dataclass(frozen=True)
+class ManifestEntry:
+    module_name: str
+    base_module_name: str
+    grouping_kind: str
+    hardware_group: HardwareGroup | None
+    mesh_shapes: tuple[MeshShape, ...]
+    suite_names: tuple[str, ...]
+    trace_ids: tuple[int, ...]
+
 
 # ── Runner config registry ───────────────────────────────────────────────────
 # All runner configurations live here.  Every function that needs a runner
@@ -114,6 +122,18 @@ HW_GROUP_MATRIX_KEYS = {
     "galaxy": ["wormhole-galaxy-sweeps", "lead-models-galaxy"],
 }
 
+# Runner test group -> execution capability profile mapping.
+CAPABILITY_PROFILE_BY_TEST_GROUP = {
+    "wormhole-n150-sweeps": "wormhole_n150_host",
+    "lead-models-single-chip": "wormhole_n150_host",
+    "wormhole-n300-sweeps": "wormhole_n300_1c_host",
+    "n300-llmbox-ccl": "wormhole_n300_1c_host",
+    "blackhole-p150b-sweeps": "blackhole_p150b_host",
+    "wormhole-t3k-sweeps": "wormhole_t3k_host",
+    "wormhole-galaxy-sweeps": "wormhole_galaxy_host",
+    "lead-models-galaxy": "wormhole_galaxy_host",
+}
+
 # Lead models mesh shape → runner config mapping.
 LEAD_MODELS_RUNNERS = [
     {
@@ -152,13 +172,98 @@ def chunk_modules(items, size):
     return [",".join(items[i : i + size]) for i in range(0, len(items), size)] if items else []
 
 
+def _normalize_mesh_shape(value: Any) -> MeshShape | None:
+    """Convert manifest mesh metadata to a canonical (rows, cols) tuple."""
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        try:
+            return (int(value[0]), int(value[1]))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _normalize_trace_ids(values: Any) -> tuple[int, ...]:
+    """Convert manifest trace IDs to a sorted tuple of ints."""
+    if values is None:
+        return ()
+    if not isinstance(values, list):
+        values = [values]
+
+    trace_ids = set()
+    for value in values:
+        try:
+            trace_ids.add(int(value))
+        except (TypeError, ValueError):
+            continue
+    return tuple(sorted(trace_ids))
+
+
+def _manifest_entry_from_raw(raw_entry: dict[str, Any]) -> ManifestEntry:
+    """Parse a manifest file entry into a typed planning record."""
+    module_name = str(raw_entry.get("module_name") or "").strip()
+    base_module_name = str(raw_entry.get("base_module_name") or "").strip()
+    if not module_name or not base_module_name:
+        raise RuntimeError(f"Manifest entry is missing module naming fields: {raw_entry}")
+
+    raw_hardware = raw_entry.get("hardware_group")
+    hardware_group = None
+    if isinstance(raw_hardware, dict):
+        hardware_group = normalize_hardware_group(
+            raw_hardware.get("board_type"),
+            raw_hardware.get("device_series"),
+            raw_hardware.get("card_count"),
+        )
+
+    mesh_shapes = tuple(
+        sorted(
+            {
+                mesh_shape
+                for mesh_shape in (_normalize_mesh_shape(value) for value in raw_entry.get("mesh_shapes", []))
+                if mesh_shape is not None
+            }
+        )
+    )
+    suite_names = tuple(sorted(str(name) for name in raw_entry.get("suite_names", []) if str(name).strip()))
+    return ManifestEntry(
+        module_name=module_name,
+        base_module_name=base_module_name,
+        grouping_kind=str(raw_entry.get("grouping_kind") or "ungrouped"),
+        hardware_group=hardware_group,
+        mesh_shapes=mesh_shapes,
+        suite_names=suite_names,
+        trace_ids=_normalize_trace_ids(raw_entry.get("trace_ids")),
+    )
+
+
+def load_manifest_entries(vectors_path: Path) -> list[ManifestEntry]:
+    """Load planning entries from the generated export manifest."""
+    manifest_path = vectors_path / EXPORT_MANIFEST_NAME
+    if not manifest_path.exists():
+        raise RuntimeError(f"Export manifest not found: {manifest_path}")
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as handle:
+            manifest = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Failed to read export manifest {manifest_path}: {exc}") from exc
+
+    raw_files = manifest.get("files")
+    if not isinstance(raw_files, list):
+        raise RuntimeError(f"Export manifest {manifest_path} is missing a valid 'files' list.")
+
+    entries = [_manifest_entry_from_raw(raw_entry) for raw_entry in raw_files if isinstance(raw_entry, dict)]
+    if not entries:
+        raise RuntimeError(f"Export manifest {manifest_path} does not contain any planning entries.")
+    return entries
+
+
 def _get_runner(name):
     """Look up a runner config by test_group_name."""
     return dict(RUNNER_CONFIGS[name])
 
 
 def _runner_for_hardware_group(hardware_group):
-    """Map a hardware tuple (from parse_hardware_suffix) to a runner config."""
+    """Map normalized manifest hardware metadata to a runner config."""
     if hardware_group is None:
         return _get_runner("wormhole-n150-sweeps")
 
@@ -183,27 +288,37 @@ def _hw_label(hardware_group):
     return f"{board_type}/{device_series}/{card_count}c"
 
 
-def _log_module_groups(header, modules, groups):
+def _mesh_shape_string(mesh_shape: MeshShape) -> str:
+    return f"{mesh_shape[0]}x{mesh_shape[1]}"
+
+
+def _log_module_groups(header, entries, groups):
     """Print a summary of module grouping to stderr."""
-    total_base = len(set(strip_grouping_suffix(m) for m in modules))
+    total_base = len({entry.base_module_name for entry in entries})
     print(
-        f"{header}: {len(modules)} vector files ({total_base} unique modules), "
-        f"{sum(1 for g in groups for _ in g[1])} matrix entries",
+        f"{header}: {len(entries)} vector files ({total_base} unique modules), "
+        f"{sum(len(group_entries) for _, group_entries in groups)} routed entries",
         file=sys.stderr,
     )
     for label, entries in groups:
-        unique = len(set(strip_grouping_suffix(m) for m in entries))
+        unique = len({entry.base_module_name for entry in entries})
         print(f"  {label}: {len(entries)} vectors ({unique} unique modules)", file=sys.stderr)
 
 
 def _build_entries(runner_config, batches, batch_display_prefix, suite_name):
     """Create matrix include entries for a set of batches using a runner config."""
+    test_group_name = runner_config.get("test_group_name")
+    capability_profile = CAPABILITY_PROFILE_BY_TEST_GROUP.get(test_group_name)
+    if capability_profile is None:
+        raise RuntimeError(f"Missing capability profile mapping for test group '{test_group_name}'")
+
     return [
         {
             **runner_config,
             "module_selector": batch,
             "batch_display": f"{batch_display_prefix}:{batch}" if batch_display_prefix else batch,
             "suite_name": suite_name,
+            "capability_profile": capability_profile,
         }
         for batch in batches
     ]
@@ -212,113 +327,93 @@ def _build_entries(runner_config, batches, batch_display_prefix, suite_name):
 # ── Matrix computation per run type ─────────────────────────────────────────
 
 
-def compute_lead_models_matrix(modules, batch_size):
-    """Compute matrix for lead models with mesh-aware runner assignment."""
-    # Group modules by mesh shape, then by hardware suffix, then unmatched.
-    mesh_modules = defaultdict(list)
-    hw_modules = defaultdict(list)
-    unmatched = []
+def compute_lead_models_matrix(entries: list[ManifestEntry], batch_size: int):
+    """Compute matrix for lead models with manifest-declared mesh routing."""
+    configured_shapes = {shape for runner in LEAD_MODELS_RUNNERS for shape in runner["mesh_shapes"]}
+    runner_modules: dict[str, list[str]] = defaultdict(list)
+    log_groups: dict[str, list[ManifestEntry]] = defaultdict(list)
 
-    for module in modules:
-        mesh = get_mesh_shape_string(module)
-        if mesh:
-            mesh_modules[mesh].append(module)
+    for entry in entries:
+        mesh_labels = sorted({_mesh_shape_string(mesh_shape) for mesh_shape in entry.mesh_shapes})
+        matched_configs = []
+
+        if entry.grouping_kind == "mesh" and mesh_labels:
+            unknown_shapes = [mesh for mesh in mesh_labels if mesh not in configured_shapes]
+            for mesh in unknown_shapes:
+                print(f"Warning: Mesh shape '{mesh}' has no runner config, modules will be skipped", file=sys.stderr)
+            for runner_def in LEAD_MODELS_RUNNERS:
+                if set(mesh_labels).intersection(runner_def["mesh_shapes"]):
+                    matched_configs.append(runner_def["config"])
+            log_label = f"mesh {'+'.join(mesh_labels)}"
+        elif entry.hardware_group is not None:
+            _, device_series, card_count = entry.hardware_group
+            wants_galaxy = device_series == "tt_galaxy_wh" or card_count > 1
+            matched_configs.append("lead-models-galaxy" if wants_galaxy else "lead-models-single-chip")
+            log_label = f"hardware {_hw_label(entry.hardware_group)}"
         else:
-            hw = parse_hardware_suffix(module)
-            (hw_modules[hw] if hw else unmatched).append(module)
+            default_runner = next(runner_def for runner_def in LEAD_MODELS_RUNNERS if runner_def.get("is_default"))
+            matched_configs.append(default_runner["config"])
+            log_label = "no grouping metadata (default runner)"
 
-    configured_shapes = {s for r in LEAD_MODELS_RUNNERS for s in r["mesh_shapes"]}
-    for mesh in mesh_modules:
-        if mesh not in configured_shapes:
-            print(f"Warning: Mesh shape '{mesh}' has no runner config, modules will be skipped", file=sys.stderr)
+        if not matched_configs:
+            continue
+
+        for config_name in sorted(set(matched_configs)):
+            runner_modules[config_name].append(entry.base_module_name)
+        log_groups[log_label].append(entry)
 
     include_entries = []
     batches = []
-    log_groups = []
 
     for runner_def in LEAD_MODELS_RUNNERS:
         runner_config = _get_runner(runner_def["config"])
-        is_galaxy = "galaxy" in runner_def["config"]
-
-        # Collect modules for this runner's mesh shapes
-        runner_modules = []
-        for mesh in runner_def["mesh_shapes"]:
-            runner_modules.extend(mesh_modules.get(mesh, []))
-
-        # Route hardware-grouped modules
-        for hw_group, mods in hw_modules.items():
-            _, device_series, card_count = hw_group
-            wants_galaxy = device_series == "tt_galaxy_wh" or card_count > 1
-            if wants_galaxy == is_galaxy:
-                runner_modules.extend(mods)
-
-        # Unmatched modules go to the default runner
-        if runner_def.get("is_default"):
-            runner_modules.extend(unmatched)
-
-        if not runner_modules:
+        runner_bases = sorted(set(runner_modules.get(runner_def["config"], [])))
+        if not runner_bases:
             continue
 
-        base = sorted(set(strip_grouping_suffix(m) for m in runner_modules))
-
-        # Galaxy: split into N parallel jobs; standard: use batch_size
         galaxy_jobs = runner_def.get("galaxy_jobs")
         if galaxy_jobs:
-            size = max(1, -(-len(base) // galaxy_jobs))
-            runner_batches = chunk_modules(base, size)
+            size = max(1, -(-len(runner_bases) // galaxy_jobs))
+            runner_batches = chunk_modules(runner_bases, size)
         else:
-            runner_batches = chunk_modules(base, batch_size)
+            runner_batches = chunk_modules(runner_bases, batch_size)
 
         batches.extend(runner_batches)
         mesh_label = "+".join(runner_def["mesh_shapes"])
         include_entries.extend(_build_entries(runner_config, runner_batches, mesh_label, runner_def["suite_name"]))
-        log_groups.append((mesh_label, runner_modules))
-
-    # Log
-    for mesh, mods in sorted(mesh_modules.items()):
-        log_groups.append((f"mesh {mesh}", mods))
-    for hw, mods in sorted(hw_modules.items()):
-        log_groups.append((f"hardware {_hw_label(hw)}", mods))
-    if unmatched:
-        log_groups.append(("no grouping suffix (default runner)", unmatched))
-    _log_module_groups("Lead models run", modules, log_groups)
+    _log_module_groups("Lead models run", entries, sorted(log_groups.items()))
 
     return include_entries, batches
 
 
-def compute_model_traced_matrix(modules, batch_size, suite_name):
-    """Compute matrix for model_traced runs using hardware-grouped vector files."""
-    hw_modules = defaultdict(list)
-    unmatched = []
-
-    for module in modules:
-        hw = parse_hardware_suffix(module)
-        (hw_modules[hw] if hw else unmatched).append(module)
+def compute_model_traced_matrix(entries: list[ManifestEntry], batch_size: int, suite_name: str):
+    """Compute matrix for model_traced runs using manifest hardware routing."""
+    hw_modules: dict[HardwareGroup | None, list[ManifestEntry]] = defaultdict(list)
+    for entry in entries:
+        hw_modules[entry.hardware_group].append(entry)
 
     include_entries = []
     batches = []
     log_groups = []
 
-    grouped = sorted(hw_modules.items(), key=lambda x: x[0])
-    if unmatched:
-        grouped.append((None, unmatched))
+    grouped = sorted(hw_modules.items(), key=lambda item: (item[0] is None, item[0]))
 
-    for hw_group, mods in grouped:
-        base = sorted(set(strip_grouping_suffix(m) for m in mods))
+    for hw_group, grouped_entries in grouped:
+        base = sorted({entry.base_module_name for entry in grouped_entries})
         runner_config = _runner_for_hardware_group(hw_group)
         label = _hw_label(hw_group)
         runner_batches = chunk_modules(base, batch_size)
         batches.extend(runner_batches)
         include_entries.extend(_build_entries(runner_config, runner_batches, label, suite_name))
-        log_groups.append((f"hardware {label}", mods))
+        log_groups.append((f"hardware {label}", grouped_entries))
 
-    _log_module_groups("Model traced run", modules, log_groups)
+    _log_module_groups("Model traced run", entries, log_groups)
     return include_entries, batches
 
 
-def compute_standard_matrix(modules, batch_size, suite_name):
+def compute_standard_matrix(entries: list[ManifestEntry], batch_size: int, suite_name: str | None):
     """Compute matrix for nightly/comprehensive runs."""
-    base_modules = sorted(set(strip_grouping_suffix(m) for m in modules))
+    base_modules = sorted({entry.base_module_name for entry in entries})
     ccl_modules = [m for m in base_modules if m.startswith("ccl.")]
     regular_modules = [m for m in base_modules if not m.startswith("ccl.")]
 
@@ -352,26 +447,13 @@ def main():
         print(f"Error: Vectors directory not found: {vectors_dir}", file=sys.stderr)
         sys.exit(1)
 
-    vector_summaries = load_vector_file_summaries(vectors_path)
-    if not vector_summaries:
-        print(f"Error: No vector JSON files found in {vectors_dir}", file=sys.stderr)
+    try:
+        manifest_entries = load_manifest_entries(vectors_path)
+    except RuntimeError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    profiles = load_execution_capability_profiles()
-    try:
-        active_profile = resolve_active_profile(profiles=profiles)
-        print(f"Active execution capability profile: {active_profile.name}", file=sys.stderr)
-        vector_summaries = select_eligible_vector_summaries(vector_summaries, active_profile)
-        if not vector_summaries:
-            print(
-                f"Error: No vector JSON files are eligible for capability profile {active_profile.name}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-    except RuntimeError as exc:
-        print(f"Capability profile selection skipped: {exc}", file=sys.stderr)
-
-    modules = sorted(summary.module_name for summary in vector_summaries)
+    modules = sorted(entry.module_name for entry in manifest_entries)
 
     # Detect run type: explicit sweep name takes precedence, then schedule cron
     run_type = _SWEEP_TYPES.get(sweep_name) or _SCHEDULE_TYPES.get(schedule_expr, "nightly")
@@ -383,12 +465,12 @@ def main():
     # Compute matrix
     ccl_batches = []
     if run_type == "lead_models":
-        include_entries, batches = compute_lead_models_matrix(modules, batch_size)
+        include_entries, batches = compute_lead_models_matrix(manifest_entries, batch_size)
     elif run_type == "model_traced":
-        include_entries, batches = compute_model_traced_matrix(modules, batch_size, "model_traced")
+        include_entries, batches = compute_model_traced_matrix(manifest_entries, batch_size, "model_traced")
     else:
         suite_name = None if run_type == "comprehensive" else run_type  # "nightly" or None
-        include_entries, batches, ccl_batches = compute_standard_matrix(modules, batch_size, suite_name)
+        include_entries, batches, ccl_batches = compute_standard_matrix(manifest_entries, batch_size, suite_name)
 
     # Validate GitHub Actions limits
     for label, count in [("batch", len(batches)), ("matrix entry", len(include_entries))]:
