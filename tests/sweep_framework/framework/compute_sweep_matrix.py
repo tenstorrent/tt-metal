@@ -35,6 +35,7 @@ from tests.sweep_framework.framework.vector_routing import (
     EXPORT_MANIFEST_NAME,
     HW_GROUP_MATRIX_KEYS,
     ManifestRoutingEntry,
+    RUNNER_OVERRIDES_BY_RUN_TYPE,
     get_runner_config,
     load_manifest_routing_entries,
     runner_for_hardware_group,
@@ -119,13 +120,7 @@ def compute_lead_models_matrix(entries: list[ManifestRoutingEntry], batch_size: 
         "model_traced",
         galaxy_shards=3,
         run_label="Lead models run",
-        runner_overrides_by_group={
-            "wormhole-galaxy-sweeps": {
-                "runs_on": "g04glx03",
-                "runner_label": "g04glx03",
-                "tt_smi_cmd": "tt-smi -r",
-            }
-        },
+        runner_overrides_by_group=RUNNER_OVERRIDES_BY_RUN_TYPE["lead_models"],
     )
 
 

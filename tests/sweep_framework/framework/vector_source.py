@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import os
 import pathlib
 import sys
 from abc import ABC, abstractmethod
@@ -17,6 +18,7 @@ from tests.sweep_framework.framework.execution_capabilities import (
 )
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
 from tests.sweep_framework.framework.vector_routing import (
+    EXPORT_MANIFEST_NAME,
     ManifestFileEntry,
     is_manifest_entry_eligible,
     load_manifest_file_entries,
@@ -118,7 +120,7 @@ class VectorExportSource(VectorSource):
             self.export_dir = export_dir
         self._manifest_entries_by_base: dict[str, list[ManifestFileEntry]] | None = None
         self._manifest_entries_by_module: dict[str, list[ManifestFileEntry]] | None = None
-        self._manifest_path = self.export_dir / "export_manifest.json"
+        self._manifest_path = self.export_dir / EXPORT_MANIFEST_NAME
 
     def _load_manifest_index(self) -> None:
         if self._manifest_entries_by_base is not None and self._manifest_entries_by_module is not None:
@@ -127,10 +129,13 @@ class VectorExportSource(VectorSource):
         self._manifest_entries_by_base = {}
         self._manifest_entries_by_module = {}
 
+        strict_manifest = os.environ.get("GITHUB_ACTIONS", "").lower() == "true"
         try:
-            entries = load_manifest_file_entries(self._manifest_path, repo_root=REPO_ROOT, strict=False)
+            entries = load_manifest_file_entries(self._manifest_path, repo_root=REPO_ROOT, strict=strict_manifest)
         except RuntimeError as e:
             logger.warning(f"Failed to load export manifest at {self._manifest_path}: {e}")
+            if strict_manifest:
+                raise
             return
 
         for entry in entries:

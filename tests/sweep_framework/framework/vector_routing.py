@@ -107,6 +107,17 @@ CAPABILITY_PROFILE_BY_TEST_GROUP = {
     "wormhole-galaxy-sweeps": "wormhole_galaxy_host",
 }
 
+# Lead-model runs may pin specific runner groups differently from default routing.
+RUNNER_OVERRIDES_BY_RUN_TYPE = {
+    "lead_models": {
+        "wormhole-galaxy-sweeps": {
+            "runs_on": "g04glx03",
+            "runner_label": "g04glx03",
+            "tt_smi_cmd": "tt-smi -r",
+        }
+    }
+}
+
 
 def normalize_manifest_hardware_group(value: Any) -> HardwareGroup | None:
     if not isinstance(value, dict):
