@@ -3,6 +3,8 @@
 
 // layer_norm_rm — Reader Kernel (BRISC / NOC0)
 //
+// Multi-core: each core reads its assigned slice of input rows.
+//
 // 1. Prepare reduce scaler (1/W) into cb_scaler
 // 2. Prepare epsilon tile into cb_eps
 // 3. Read gamma sticks into cb_gamma_rm (if has_gamma) — ROW granularity
@@ -16,13 +18,12 @@
 void kernel_main() {
     // ── Compile-time args ──
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
-    constexpr uint32_t total_num_rows = get_compile_time_arg_val(1);
-    constexpr uint32_t row_bytes = get_compile_time_arg_val(2);
-    constexpr uint32_t has_gamma = get_compile_time_arg_val(3);
-    constexpr uint32_t has_beta = get_compile_time_arg_val(4);
+    constexpr uint32_t row_bytes = get_compile_time_arg_val(1);
+    constexpr uint32_t has_gamma = get_compile_time_arg_val(2);
+    constexpr uint32_t has_beta = get_compile_time_arg_val(3);
 
     // TensorAccessor compile-time args — always declared unconditionally, chained offsets
-    constexpr auto input_ta_args = TensorAccessorArgs<5>();
+    constexpr auto input_ta_args = TensorAccessorArgs<4>();
     [[maybe_unused]] constexpr auto gamma_ta_args = TensorAccessorArgs<input_ta_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto beta_ta_args = TensorAccessorArgs<gamma_ta_args.next_compile_time_args_offset()>();
 
@@ -32,6 +33,8 @@ void kernel_main() {
     const uint32_t beta_addr = get_arg_val<uint32_t>(2);
     const uint32_t scaler_bits = get_arg_val<uint32_t>(3);
     const uint32_t eps_bits = get_arg_val<uint32_t>(4);
+    const uint32_t num_rows = get_arg_val<uint32_t>(5);
+    const uint32_t start_row = get_arg_val<uint32_t>(6);
 
     // Reinterpret uint32 bits as float
     union {
@@ -70,7 +73,7 @@ void kernel_main() {
             beta_accessor, 1, row_bytes);
     }
 
-    // ── Step 5: Read input sticks (TILE granularity) ──
+    // ── Step 5: Read input sticks (TILE granularity, per-core slice) ──
     const auto input_accessor = TensorAccessor(input_ta_args, input_addr);
-    dataflow_kernel_lib::read_sticks_for_tilize<cb_rm_in>(input_accessor, total_num_rows, row_bytes);
+    dataflow_kernel_lib::read_sticks_for_tilize<cb_rm_in>(input_accessor, num_rows, row_bytes, start_row);
 }
