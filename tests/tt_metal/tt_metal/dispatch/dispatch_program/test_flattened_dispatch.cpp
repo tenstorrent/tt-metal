@@ -231,7 +231,9 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, FlattenedDispatch_RTAValueChange) {
     verify_add_results(mesh_device, core_range, l1_addr, 30);
 
     // Change RTA values (same size!) and dispatch again
-    set_add_args(workload.get_programs()[0].second, kid, core_range, 100, 200);
+    auto& programs = workload.get_programs();
+    auto& prog_ref = programs.begin()->second;
+    set_add_args(prog_ref, kid, core_range, 100, 200);
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
     distributed::Finish(mesh_device->mesh_command_queue());
 
