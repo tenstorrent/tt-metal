@@ -184,7 +184,6 @@ TEST_F(KSplitGramMatmulTest, NIGHTLY_StressTest8192x8192) {
         auto out = ttml::metal::gram_matmul(input);
         tt::tt_metal::distributed::Synchronize(device, std::nullopt);
         out.deallocate();
-        std::cout << "  dispatch " << (i + 1) << "/" << N << " OK\n" << std::flush;
     }
     SUCCEED();
 }
