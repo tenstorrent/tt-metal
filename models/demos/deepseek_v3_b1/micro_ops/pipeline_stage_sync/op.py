@@ -94,6 +94,7 @@ class PipelineStageSync:
                 fabric_arg_base = 0
 
                 reader_named_ct_args = [
+                    ("is_intermediate_signaller", False),  # TODO: (GR)
                     ("stalling_device_semaphore_noc_x_addr", stalling_device_semaphore_noc_x_addr),
                     ("stalling_device_semaphore_noc_y_addr", stalling_device_semaphore_noc_y_addr),
                     ("stalling_device_semaphore_l1_addr", stalling_device_semaphore_l1_addr),
