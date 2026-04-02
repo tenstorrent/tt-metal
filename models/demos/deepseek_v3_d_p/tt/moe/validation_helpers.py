@@ -461,30 +461,38 @@ def compare_recall(threshold: float = 0.999) -> ComposedComparator:
     ) -> Tuple[bool, Optional[str]]:
         r = calculate_average_recall(actual, expected)
         if r >= threshold:
-            return (True, None)
+            return (True, f"recall={r:.4f} >= {threshold}")
         else:
             from collections import Counter
 
             total_elements = len(actual)
             mismatches = []
 
-            for i, (a, e) in enumerate(zip(actual.long(), expected.long())):
+            # not very efficient
+            for i, (a, e) in enumerate(
+                zip(torch.sort(actual, dim=-1).values.long(), torch.sort(expected, dim=-1).values.long())
+            ):
                 match, error_detail = compare_exact(a, e, 0, 0)
                 if not match:
                     mismatches.append(error_detail)
+            detail = ""
+            if verbose_histogram:
+                if mismatches:
+                    num_errors = len(mismatches)
+                    total_percent = (num_errors / total_elements) * 100
 
-            if mismatches:
-                num_errors = len(mismatches)
-                total_percent = (num_errors / total_elements) * 100
+                    # Header showing (1329/4096 total) [32.4%]
+                    detail = (
+                        f"\n*** Mismatch Histogram ({num_errors}/{total_elements} total) [{total_percent:.1f}%] ***"
+                    )
 
-                # Header showing (1329/4096 total) [32.4%]
-                detail = f"\n*** Mismatch Histogram ({num_errors}/{total_elements} total) [{total_percent:.1f}%] ***"
-
-                if verbose_histogram:
                     print(detail)
 
                     counts = Counter(mismatches)
-                    # Sort by frequency (most common errors first)
+                    num_matches = total_elements - num_errors
+                    match_label = "0 errors; MATCH"
+                    counts[match_label] = num_matches
+                    # Sort by frequency (most common first)
                     sorted_counts = counts.most_common()
 
                     max_label_len = max(len(str(label)) for label in counts.keys())
@@ -505,10 +513,10 @@ def compare_recall(threshold: float = 0.999) -> ComposedComparator:
                         )
 
                     print("-" * (max_label_len + max_bar_width + 25) + "\n")
-            else:
-                detail = f"*** All {total_elements}/{total_elements} matched! [0.0% errors] ***"
+                else:
+                    detail = f"*** All {total_elements}/{total_elements} matched! [0.0% errors] ***"
 
-        return (False, f"recall={r:.4f} < {threshold}; *** {detail} ***")
+        return (False, f"recall={r:.4f} < {threshold};")
 
     return _compare
 
