@@ -94,21 +94,38 @@ def _run_ttnn_logsoftmax(
 
 
 # ---------------------------------------------------------------------------
-# Test parameters (shapes / dims / strategies aligned with callback tests)
+# Test parameters: strategy-consistent shape sweeps (multiples of 32 for tiles)
 # ---------------------------------------------------------------------------
 
-_STRATEGY_CASES = [
-    ((32, 32), 1, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.SMALL_W, "SMALL_W"),
-    ((64, 96), 1, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.SMALL_W, "SMALL_W-64x96"),
-    ((32, 32), 0, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.SMALL_H, "SMALL_H"),
-    ((96, 32), 0, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.SMALL_H, "SMALL_H-96x32"),
-    ((2, 3, 32 * 4, 32 * 5), 3, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_W, "LARGE_W"),
-    ((1, 2, 64, 320), 3, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_W, "LARGE_W-1x2x64x320"),
-    ((2, 3, 32 * 4, 32 * 5), 2, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_H, "LARGE_H"),
-    ((1, 2, 256, 160), 2, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_H, "LARGE_H-1x2x256x160"),
-    ((1, 15, 32, 32), 1, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_C, "LARGE_C"),
-    ((2, 7, 32, 32), 1, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_C, "LARGE_C-2x7"),
-]
+_SMALL_INNER = list(range(32, 385, 64))  # 32..352 step 64
+# LARGE_W: dim is last; penultimate matches 32*4 tile-style layouts from callback tests
+_LARGE_W_LAST = [160, 320, 480]  # (2,3,128,w), dim=3
+_LARGE_H_PENULT = [128, 256, 384]  # dim 2 on (2,3,h,160)
+_LARGE_C_DIMS = [7, 15, 23, 31]  # channel count for (1,c,32,32) dim 1
+
+
+def _build_moreh_logsoftmax_strategy_cases():
+    st = ttnn.operations.moreh.SoftmaxOpParallelizationStrategy
+    cases = []
+
+    for w in _SMALL_INNER:
+        cases.append(((32, w), 1, st.SMALL_W, f"SMALL_W-32x{w}"))
+    for h in _SMALL_INNER:
+        cases.append(((h, 32), 0, st.SMALL_H, f"SMALL_H-{h}x32"))
+
+    for w in _LARGE_W_LAST:
+        cases.append(((2, 3, 128, w), 3, st.LARGE_W, f"LARGE_W-2x3x128x{w}"))
+    cases.append(((1, 2, 64, 320), 3, st.LARGE_W, "LARGE_W-1x2x64x320"))
+    for h in _LARGE_H_PENULT:
+        cases.append(((2, 3, h, 160), 2, st.LARGE_H, f"LARGE_H-2x3x{h}x160"))
+
+    for c in _LARGE_C_DIMS:
+        cases.append(((1, c, 32, 32), 1, st.LARGE_C, f"LARGE_C-1x{c}x32x32"))
+
+    return cases
+
+
+_STRATEGY_CASES = _build_moreh_logsoftmax_strategy_cases()
 
 
 # ---------------------------------------------------------------------------
@@ -122,11 +139,7 @@ _BF16_ULP_THRESHOLD_BF16_DEST = 24
 _BF16_NEAR_ZERO_ATOL_FRACTION = 0.02
 
 
-@pytest.mark.parametrize(
-    "shape, dim, strategy, desc",
-    _STRATEGY_CASES,
-    ids=[c[3] for c in _STRATEGY_CASES],
-)
+@pytest.mark.parametrize("shape, dim, strategy, desc", _STRATEGY_CASES, ids=[c[3] for c in _STRATEGY_CASES])
 @pytest.mark.parametrize("distribution", ["uniform_01", "normal", "wide_uniform"])
 @pytest.mark.parametrize(
     "fp32_dest_acc_en",
@@ -177,11 +190,7 @@ _FP32_ULP_THRESHOLD = 400_000
 _FP32_NEAR_ZERO_ATOL_FRACTION = 0.005
 
 
-@pytest.mark.parametrize(
-    "shape, dim, strategy, desc",
-    _STRATEGY_CASES,
-    ids=[c[3] for c in _STRATEGY_CASES],
-)
+@pytest.mark.parametrize("shape, dim, strategy, desc", _STRATEGY_CASES, ids=[c[3] for c in _STRATEGY_CASES])
 @pytest.mark.parametrize("distribution", ["uniform_01", "normal", "wide_uniform"])
 def test_moreh_logsoftmax_ulp_fp32(device, shape, dim, strategy, desc, distribution):
     """Characterize FP32 moreh logsoftmax ULP vs Torch FP32 golden.

@@ -95,28 +95,43 @@ def _run_ttnn_softmax(
 
 
 # ---------------------------------------------------------------------------
-# Test parameters
+# Test parameters (sweeps; adjust ranges/steps for coverage vs runtime)
 # ---------------------------------------------------------------------------
 
-_SHAPES_AND_DIMS = [
-    ((1, 1, 32, 256), -1, "W-256"),
-    ((1, 1, 32, 512), -1, "W-512"),
-    ((1, 1, 32, 1024), -1, "W-1024"),
-    ((1, 1, 32, 2048), -1, "W-2048"),
-    ((1, 1, 64, 128), -1, "W-128"),
-    ((1, 1, 96, 160), -1, "W-160-mixed"),
-    ((1, 1, 128, 32), -2, "H-128-tall"),
-    ((1, 1, 1024, 32), -2, "H-1024"),
-    ((1, 1, 512, 32), -2, "H-512"),
-    ((1, 1, 128, 64), -2, "H-128"),
-    ((1, 1, 160, 96), -2, "H-160-mixed"),
-    ((1, 1, 37, 41), -1, "W-odd-41"),
-    ((1, 1, 37, 41), -2, "H-odd-37"),
-    ((1, 1, 32, 32768), -1, "W-32768-large-reduction"),
-    ((1, 1, 4096, 32), -2, "H-4096-large-reduction"),
-    ((1, 1, 2048, 64), -2, "H-2048-W64"),
-    ((2, 1, 64, 128), -1, "W-2batch"),
-]
+_SOFTMAX_W_SIZES = sorted(set(range(256, 8193, 1024)) | {128, 256, 512, 1024, 2048, 4096, 8192, 32768})
+_SOFTMAX_H_SIZES = sorted(set(range(128, 4097, 1024)) | {128, 512, 1024, 2048, 4096})
+_SOFTMAX_HW_SQUARES = list(range(64, 513, 64))
+_SOFTMAX_HW_MIXED = [(96, 160), (128, 192), (160, 96)]
+_SOFTMAX_W_FIXED = 64  # fixed non-softmax dim for H-reduction cases
+_SOFTMAX_H_FIXED = 32  # fixed non-softmax dim for W-reduction cases
+_SOFTMAX_BATCH_W = [2, 4, 8]
+
+
+def _build_softmax_shapes_and_dims():
+    out = []
+    for w in _SOFTMAX_W_SIZES:
+        out.append(((1, 1, _SOFTMAX_H_FIXED, w), -1, f"W-{w}"))
+    for h in _SOFTMAX_H_SIZES:
+        out.append(((1, 1, h, _SOFTMAX_W_FIXED), -2, f"H-{h}"))
+    for side in _SOFTMAX_HW_SQUARES:
+        out.append(((1, 1, side, side), -1, f"HWsq-W-{side}"))
+        out.append(((1, 1, side, side), -2, f"HWsq-H-{side}"))
+    for hh, ww in _SOFTMAX_HW_MIXED:
+        out.append(((1, 1, hh, ww), -1, f"W-{hh}x{ww}"))
+        out.append(((1, 1, hh, ww), -2, f"H-{hh}x{ww}"))
+    out.extend(
+        [
+            ((1, 1, 37, 41), -1, "W-odd-41"),
+            ((1, 1, 37, 41), -2, "H-odd-37"),
+            ((1, 1, 2048, 64), -2, "H-2048-W64"),
+        ]
+    )
+    for b in _SOFTMAX_BATCH_W:
+        out.append(((b, 1, 64, 128), -1, f"W-batch{b}"))
+    return out
+
+
+_SHAPES_AND_DIMS = _build_softmax_shapes_and_dims()
 
 # wide_uniform [-1e3,1e3] over softmax-W currently mis-matches fused softmax on BH
 # (zeros / bogus mass on long W); keep stress coverage only for softmax over H.

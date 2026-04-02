@@ -83,38 +83,57 @@ def _run_ttnn_mean(input_torch: torch.Tensor, ttnn_dtype, device, dim, keepdim: 
 
 
 # ---------------------------------------------------------------------------
-# Test parameters
+# Test parameters (generated sweeps; adjust steps to trade coverage vs runtime)
 # ---------------------------------------------------------------------------
 
-_SHAPES_AND_DIMS = [
-    # Tile-axis reductions: W (-1), H (-2), HW ([-2,-1]).
-    ((1, 1, 32, 256), -1, "W-256"),
-    ((1, 1, 32, 512), -1, "W-512"),
-    ((1, 1, 32, 1024), -1, "W-1024"),
-    ((1, 1, 32, 2048), -1, "W-2048"),
-    ((1, 1, 32, 4096), -1, "W-4096"),
-    ((1, 1, 32, 8192), -1, "W-8192"),
-    ((1, 1, 128, 32), -2, "H-128"),
-    ((1, 1, 512, 32), -2, "H-512"),
-    ((1, 1, 1024, 32), -2, "H-1024"),
-    ((1, 1, 2048, 32), -2, "H-2048"),
-    ((1, 1, 4096, 32), -2, "H-4096"),
-    ((1, 1, 64, 64), [-2, -1], "HW-64x64"),
-    ((1, 1, 96, 160), [-2, -1], "HW-96x160"),
-    ((1, 1, 128, 128), [-2, -1], "HW-128x128"),
-    ((1, 1, 256, 256), [-2, -1], "HW-256x256"),
-    ((1, 1, 32, 32768), -1, "W-32768"),
-    ((1, 1, 37, 41), -1, "W-odd-41"),
-    ((1, 1, 37, 41), -2, "H-odd-37"),
-    ((2, 1, 48, 64), -1, "W-2batch-48x64"),
-    # Non-HW-axis reductions: batch (0), channel (1), multi-dim ([0,1]).
-    # These go through transpose + sequential reduce (reduce_nd_loop).
-    ((4, 3, 32, 32), 0, "batch-4"),
-    ((8, 3, 32, 32), 0, "batch-8"),
-    ((4, 3, 32, 32), 1, "channel-3"),
-    ((2, 5, 64, 64), 1, "channel-5"),
-    ((4, 3, 32, 32), [0, 1], "batch+channel"),
-]
+# Reduction along W: shape (1,1,32,W); dim=-1
+_MEAN_W_SIZES = sorted(set(range(256, 8193, 1024)) | {1024, 2048, 4096, 8192, 32768})
+# Reduction along H: shape (1,1,H,32); dim=-2
+_MEAN_H_SIZES = sorted(set(range(128, 4097, 1024)) | {512, 1024, 2048, 4096})
+# 2D mean over HW: square and a few non-square tile-aligned pairs
+_MEAN_HW_SQUARES = list(range(64, 513, 64))
+_MEAN_HW_MIXED = [(96, 160), (128, 192), (192, 256)]
+# Batch / channel sweeps for (B, C, 32, 32)
+_MEAN_BATCH_SIZES = [2, 4, 8]
+_MEAN_CHANNEL_SIZES = [3, 5, 7]
+
+
+def _build_mean_shapes_and_dims():
+    """Build (shape, dim, id) cases from numeric sweeps plus odd / corner cases."""
+    out = []
+
+    for w in _MEAN_W_SIZES:
+        out.append(((1, 1, 32, w), -1, f"W-{w}"))
+
+    for h in _MEAN_H_SIZES:
+        out.append(((1, 1, h, 32), -2, f"H-{h}"))
+
+    for side in _MEAN_HW_SQUARES:
+        out.append(((1, 1, side, side), [-2, -1], f"HW-{side}x{side}"))
+    for hh, ww in _MEAN_HW_MIXED:
+        out.append(((1, 1, hh, ww), [-2, -1], f"HW-{hh}x{ww}"))
+
+    out.extend(
+        [
+            ((1, 1, 37, 41), -1, "W-odd-41"),
+            ((1, 1, 37, 41), -2, "H-odd-37"),
+        ]
+    )
+
+    for b in _MEAN_BATCH_SIZES:
+        out.append(((b, 1, 48, 64), -1, f"W-batch{b}-48x64"))
+
+    for B in _MEAN_BATCH_SIZES:
+        out.append(((B, 3, 32, 32), 0, f"batch-{B}"))
+
+    for C in _MEAN_CHANNEL_SIZES:
+        out.append(((2, C, 32, 32), 1, f"channel-{C}"))
+
+    out.append(((4, 3, 32, 32), [0, 1], "batch+channel"))
+    return out
+
+
+_SHAPES_AND_DIMS = _build_mean_shapes_and_dims()
 
 
 # ---------------------------------------------------------------------------

@@ -83,15 +83,39 @@ def _run_ttnn_layer_norm(
 _BF16_ULP_THRESHOLD = 24
 _BF16_NEAR_ZERO_ATOL_FRACTION = 0.02
 
-_SHAPES = [
-    (32, 64, "32x64"),
-    (37, 41, "37x41-odd"),
-    (17, 33, "17x33-odd"),
-    (128, 128, "128x128"),
-    (256, 64, "256x64-wide"),
-    (64, 256, "64x256-tall"),
-    (1, 512, "1x512-vector"),
-]
+_LN_W_SIZES = sorted(set(range(32, 513, 64)) | {33, 41, 512})
+_LN_H_SIZES = sorted(set(range(32, 257, 64)) | {17, 37, 128, 256})
+_LN_SQUARES = list(range(64, 257, 64))
+_LN_H_FIXED = 32
+_LN_W_FIXED = 64
+
+
+def _build_layer_norm_shapes():
+    seen = set()
+    rows = []
+
+    def add(h, w, tag):
+        key = (h, w)
+        if key in seen:
+            return
+        seen.add(key)
+        rows.append((h, w, f"{h}x{w}-{tag}"))
+
+    for w in _LN_W_SIZES:
+        add(_LN_H_FIXED, w, "Wsweep")
+    for h in _LN_H_SIZES:
+        add(h, _LN_W_FIXED, "Hsweep")
+    for s in _LN_SQUARES:
+        add(s, s, "square")
+    add(37, 41, "odd")
+    add(17, 33, "odd")
+    add(1, 512, "vector")
+    add(64, 256, "tall")
+    add(256, 64, "wide")
+    return rows
+
+
+_SHAPES = _build_layer_norm_shapes()
 
 
 @pytest.mark.parametrize("h, w, desc", _SHAPES, ids=[c[2] for c in _SHAPES])
