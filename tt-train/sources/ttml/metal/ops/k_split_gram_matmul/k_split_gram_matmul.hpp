@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <tt-metalium/base_types.hpp>
 #include <ttnn/tensor/tensor.hpp>
 
 #include "metal/common/const_utils.hpp"
