@@ -220,7 +220,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
  * recip_tile on only the columns 0:8 of a face
  */
 template <bool legacy_compat = true>
-void calculate_recip_first_column() {
+void calculate_recip_first_column([[maybe_unused]] uint32_t dst_index_in, [[maybe_unused]] uint32_t dst_index_out) {
     constexpr int ITERATIONS_HALF_FACE = 4;
     if constexpr (legacy_compat) {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
@@ -262,7 +262,7 @@ void calculate_recip_first_column() {
 template <bool legacy_compat = true>
 void recip_tile_first_column(uint32_t idst) {
     _llk_math_eltwise_unary_sfpu_params_<APPROX /*APPROXIMATE*/>(
-        calculate_recip_first_column<legacy_compat>, idst, (int)VectorMode::C);
+        calculate_recip_first_column<legacy_compat>, idst, idst, (int)VectorMode::C);
 }
 #endif
 
@@ -827,7 +827,8 @@ void calculate_exponential_polynomial() {
  * exp_tile on only the columns 0:8 of a face
  */
 template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16>
-void calculate_exponential_first_column() {
+void calculate_exponential_first_column(
+    [[maybe_unused]] uint32_t dst_index_in, [[maybe_unused]] uint32_t dst_index_out) {
     constexpr int ITERATIONS_HALF_FACE = 4;
     if constexpr (SDPA_EXP_APPROX_MODE) {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
@@ -855,7 +856,7 @@ void calculate_exponential_first_column() {
 template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16>
 void exp_tile_first_column(uint32_t idst) {
     _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
-        calculate_exponential_first_column<SDPA_EXP_APPROX_MODE, scale_bf16>, idst, (int)VectorMode::C);
+        calculate_exponential_first_column<SDPA_EXP_APPROX_MODE, scale_bf16>, idst, idst, (int)VectorMode::C);
 }
 #endif  // defined(TRISC_MATH) || defined(TRISC_PACK)
 
@@ -901,7 +902,8 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
  * fused_max_sub_exp_add_tile
  */
 template <bool SDPA_EXP_APPROX_MODE>
-void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
+void calculate_fused_max_sub_exp_add_tile(
+    [[maybe_unused]] uint32_t dst_index_in, [[maybe_unused]] uint32_t dst_index_out, int scale_bf16) {
     constexpr int ITERATIONS_HALF_FACE = 4;
     constexpr uint32_t prev_max_base_idx = 0;      // dst_reg_0 (Tile 0)
     constexpr uint32_t worker_max_base_idx = 32;   // dst_reg_1 (Tile 1)
@@ -950,7 +952,7 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
 template <bool SDPA_EXP_APPROX_MODE, int vector_mode = (int)VectorMode::C>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
     _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
-        calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE>, idst, vector_mode, scale_bf16);
+        calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE>, idst, idst, vector_mode, scale_bf16);
 }
 #endif
 
@@ -1105,20 +1107,25 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
  * softplus_tile on only the columns 0:8 of a face
  */
 template <bool SDPA_EXP_APPROX_MODE>
-void calculate_softplus_first_column(uint param0, uint param1, uint param2) {
+void calculate_softplus_first_column(
+    [[maybe_unused]] uint32_t dst_index_in,
+    [[maybe_unused]] uint32_t dst_index_out,
+    uint param0,
+    uint param1,
+    uint param2) {
     constexpr int ITERATIONS_HALF_FACE = 4;
     float beta = ckernel::sfpu::Converter::as_float(param0);
     float beta_reciprocal = ckernel::sfpu::Converter::as_float(param1);
     float threshold = ckernel::sfpu::Converter::as_float(param2);
     for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
-        ckernel::sfpu::calculate_softplus_body<APPROX>(beta, beta_reciprocal, threshold);
+        ckernel::sfpu::calculate_softplus_body<APPROX>(0, 0, beta, beta_reciprocal, threshold);
         sfpi::dst_reg += 2;
     }
 }
 
 void softplus_tile_first_column(uint32_t idst, uint beta, uint beta_reciprocal, uint threshold) {
     _llk_math_eltwise_unary_sfpu_params_<APPROX /*APPROXIMATE*/>(
-        calculate_softplus_first_column<APPROX>, idst, (int)VectorMode::C, beta, beta_reciprocal, threshold);
+        calculate_softplus_first_column<APPROX>, idst, idst, (int)VectorMode::C, beta, beta_reciprocal, threshold);
 }
 #endif
 

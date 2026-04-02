@@ -457,7 +457,8 @@ inline void _top8_merge_sorted_8_() {
     }
 }
 
-inline void _calculate_top8_tile_(uint32_t tile_index) {
+inline void _calculate_top8_tile_(
+    [[maybe_unused]] uint32_t dst_index_in, [[maybe_unused]] uint32_t dst_index_out, uint32_t tile_index) {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
     //-------------------------------------------------------------------------
@@ -615,7 +616,7 @@ inline void _llk_math_top8_tile_init_() {
 
 inline void _llk_math_top8_tile_(uint32_t tile_index, uint32_t dst_index) {
     _llk_math_eltwise_unary_sfpu_params_</*APPROXIMATE=*/true>(
-        ckernel::sfpu::_calculate_top8_tile_, dst_index, VectorMode::RC_custom, tile_index);
+        ckernel::sfpu::_calculate_top8_tile_, dst_index, dst_index, VectorMode::RC_custom, tile_index);
 }
 
 #endif

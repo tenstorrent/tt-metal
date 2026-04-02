@@ -20,7 +20,8 @@ inline void calculate_addcdiv(
     const uint value) {        // scalar value to multiply with input_b
     static_assert(
         data_format == DataFormat::Float32 || data_format == DataFormat::Float16_b,
-        "Unsupported data format for calculate_addcdiv(). Supported data formats are: Float32, Float16_b.");
+        "Unsupported data format for calculate_addcdiv(dst_index_in, dst_index_out). Supported data formats are: "
+        "Float32, Float16_b.");
 
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr uint dst_tile_size_sfpi = 32;

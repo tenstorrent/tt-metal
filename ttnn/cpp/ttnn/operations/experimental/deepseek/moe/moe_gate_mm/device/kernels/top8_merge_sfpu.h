@@ -268,7 +268,7 @@ inline void _top8_merge_two_sorted_8_() {
 
 // Main entry point for cross-core merge
 template <uint32_t column_idx>
-inline void _top8_merge_() {
+inline void _top8_merge_([[maybe_unused]] uint32_t dst_index_in, [[maybe_unused]] uint32_t dst_index_out) {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
     // Sequentially merge core 0 data with that in cores 1-7
@@ -438,7 +438,7 @@ inline void _llk_math_top8_merge_init_() {
 template <uint32_t column_idx>
 inline void _llk_math_top8_merge_() {
     _llk_math_eltwise_unary_sfpu_params_</*APPROXIMATE=*/true>(
-        ckernel::sfpu::_top8_merge_<column_idx>, 0, VectorMode::RC_custom);
+        ckernel::sfpu::_top8_merge_<column_idx>, 0, 0, VectorMode::RC_custom);
 }
 
 #endif

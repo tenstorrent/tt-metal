@@ -15,7 +15,7 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE>
-inline void calculate_sum_int_col() {
+inline void calculate_sum_int_col(uint32_t dst_index_in, uint32_t dst_index_out) {
     for (size_t i = 0; i < 2; ++i) {
         vInt a = dst_reg[i];
 
@@ -34,7 +34,7 @@ inline void calculate_sum_int_col() {
 }
 
 template <bool APPROXIMATION_MODE>
-inline void calculate_sum_int_row() {
+inline void calculate_sum_int_row(uint32_t dst_index_in, uint32_t dst_index_out) {
     for (size_t i = 0; i < 8; i += 2) {
         vInt a = dst_reg[i];
 

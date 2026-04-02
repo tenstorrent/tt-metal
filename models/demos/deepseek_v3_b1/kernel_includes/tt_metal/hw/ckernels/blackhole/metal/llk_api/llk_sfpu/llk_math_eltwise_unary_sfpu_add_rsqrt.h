@@ -21,6 +21,7 @@ inline void llk_math_eltwise_unary_sfpu_add_rsqrt(
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_add_rsqrt<APPROXIMATE, ITERATIONS, fp32_dest_acc_en, FAST_APPROX>,
         dst_index,
+        dst_index,
         vector_mode,
         param0);
 }

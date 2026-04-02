@@ -13,8 +13,9 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool fp32_dest_acc_en, bool FAST_APPROX>
-inline void calculate_sqrt() {
-    _calculate_sqrt_<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, FAST_APPROX>(ITERATIONS);
+inline void calculate_sqrt(uint32_t dst_index_in, uint32_t dst_index_out) {
+    _calculate_sqrt_<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, FAST_APPROX>(
+        dst_index_in, dst_index_out, ITERATIONS);
 }
 
 template <bool APPROXIMATION_MODE>

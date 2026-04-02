@@ -34,7 +34,7 @@ sfpi_inline vFloat calculate_erf_body(vFloat x) {
 
 // TODO: Fix assertion error for accurate mode
 template <bool APPROXIMATION_MODE>
-inline void calculate_erf() {
+inline void calculate_erf(uint32_t dst_index_in, uint32_t dst_index_out) {
     for (int d = 0; d < 8; d++) {
         // SFPU microcode:
         vFloat x = dst_reg[0];
@@ -51,7 +51,7 @@ inline void calculate_erf() {
 
 // TODO: Fix assertion error for accurate mode
 template <bool APPROXIMATION_MODE>
-inline void calculate_erfc() {
+inline void calculate_erfc(uint32_t dst_index_in, uint32_t dst_index_out) {
     // SFPU microcode:
     for (int d = 0; d < 8; d++) {
         vFloat x = dst_reg[0];

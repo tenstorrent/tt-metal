@@ -13,7 +13,7 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_abs() {
+inline void calculate_abs(uint32_t dst_index_in, uint32_t dst_index_out) {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
@@ -23,7 +23,7 @@ inline void calculate_abs() {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_abs_int32() {
+inline void calculate_abs_int32(uint32_t dst_index_in, uint32_t dst_index_out) {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         TT_SFPLOAD(1, 12, ADDR_MOD_7, 0);

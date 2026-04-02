@@ -12,8 +12,8 @@
 namespace ckernel::sfpu {
 
 template <PoolType pool_type, ReduceDim reduce_dim, DataFormat format>
-inline void calculate_reduce(uint32_t ct_dim, uint32_t rt_dim) {
-    _calculate_reduce_<pool_type, reduce_dim, format>(ct_dim, rt_dim);
+inline void calculate_reduce(uint32_t dst_index_in, uint32_t dst_index_out, uint32_t ct_dim, uint32_t rt_dim) {
+    _calculate_reduce_<pool_type, reduce_dim, format>(dst_index_in, dst_index_out, ct_dim, rt_dim);
 }
 
 template <PoolType pool_type, DataFormat format>

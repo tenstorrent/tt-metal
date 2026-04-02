@@ -19,7 +19,7 @@ template <bool APPROXIMATE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_hardtanh(
     uint dst_index, uint param0, uint param1, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_hardtanh<APPROXIMATE, ITERATIONS>, dst_index, vector_mode, param0, param1);
+        ckernel::sfpu::calculate_hardtanh<APPROXIMATE, ITERATIONS>, dst_index, dst_index, vector_mode, param0, param1);
 }
 
 }  // namespace ckernel

@@ -155,9 +155,9 @@ void gelu_derivative_init() {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_gelu() {
+inline void calculate_gelu(uint32_t dst_index_in, uint32_t dst_index_out) {
     if constexpr (APPROXIMATION_MODE) {
-        _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>();
+        _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>(dst_index_in, dst_index_out);
     } else {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -173,8 +173,8 @@ inline void calculate_gelu() {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_gelu_derivative() {
-    _calculate_gelu_derivative_<APPROXIMATION_MODE, ITERATIONS>();
+inline void calculate_gelu_derivative(uint32_t dst_index_in, uint32_t dst_index_out) {
+    _calculate_gelu_derivative_<APPROXIMATION_MODE, ITERATIONS>(dst_index_in, dst_index_out);
 }
 
 // =============================================================================
@@ -324,7 +324,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
-inline void calculate_gelu_derivative_polynomial() {
+inline void calculate_gelu_derivative_polynomial(uint32_t dst_index_in, uint32_t dst_index_out) {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];

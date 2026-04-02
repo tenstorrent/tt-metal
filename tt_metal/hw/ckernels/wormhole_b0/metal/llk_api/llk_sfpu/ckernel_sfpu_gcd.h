@@ -14,7 +14,7 @@ namespace ckernel {
 namespace sfpu {
 
 template <int max_input_bits = 31>
-inline void calculate_sfpu_gcd_body() {
+inline void calculate_sfpu_gcd_body(uint32_t dst_index_in, uint32_t dst_index_out) {
     TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0); // c = a
     TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG2, 0); // c |= b
 
@@ -60,7 +60,7 @@ inline void calculate_sfpu_gcd(const uint dst_index_in0, const uint dst_index_in
         TT_SFPLOAD(p_sfpu::LREG0, 4, 3, dst_index_in0 * dst_tile_size);  // a
         TT_SFPLOAD(p_sfpu::LREG1, 4, 3, dst_index_in1 * dst_tile_size);  // b
 
-        calculate_sfpu_gcd_body<31>();
+        calculate_sfpu_gcd_body<31>(0, 0);
 
         TT_SFPSTORE(p_sfpu::LREG1, 4, 3, dst_index_out * dst_tile_size);
         dst_reg++;

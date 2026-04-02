@@ -9,8 +9,8 @@
 namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
-inline void calculate_exp2() {
-    _calculate_exp2_<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
+inline void calculate_exp2(uint32_t dst_index_in, uint32_t dst_index_out) {
+    _calculate_exp2_<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>(dst_index_in, dst_index_out);
 }
 
 template <bool APPROXIMATION_MODE>

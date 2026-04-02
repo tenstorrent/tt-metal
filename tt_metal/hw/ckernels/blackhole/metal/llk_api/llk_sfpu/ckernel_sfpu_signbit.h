@@ -12,7 +12,7 @@ namespace ckernel::sfpu {
 
 // TODO: Implement using bitwise comparison
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_signbit() {
+inline void calculate_signbit(uint32_t dst_index_in, uint32_t dst_index_out) {
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat val = dst_reg[0];
         v_if(val < 0.0f) { val = 1.0f; }
@@ -25,7 +25,7 @@ inline void calculate_signbit() {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_signbit_int32() {
+inline void calculate_signbit_int32(uint32_t dst_index_in, uint32_t dst_index_out) {
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_7, 0);
         TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG0, p_sfpu::LREG0, 1);

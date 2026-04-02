@@ -18,7 +18,8 @@ inline void calculate_addcmul(
     const uint value) {        // scalar value to multiply with input_b
     static_assert(
         data_format == DataFormat::Float32 || data_format == DataFormat::Float16_b || data_format == DataFormat::Bfp8_b,
-        "Unsupported data format for calculate_addcmul(). Only Float32, Float16_b (BFloat16), and Bfp8_b (BFloat8B) "
+        "Unsupported data format for calculate_addcmul(dst_index_in, dst_index_out). Only Float32, Float16_b "
+        "(BFloat16), and Bfp8_b (BFloat8B) "
         "are allowed.");
 
     constexpr InstrModLoadStore mod0 =

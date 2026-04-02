@@ -21,7 +21,7 @@ inline void init_fmod(const uint value, const uint recip) {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_fmod(const uint value, const uint recip) {
+inline void calculate_fmod(uint32_t dst_index_in, uint32_t dst_index_out, const uint value, const uint recip) {
     // SFPU microcode
     vFloat s = vConstFloatPrgm0;
     vFloat recip_val = vConstFloatPrgm1;

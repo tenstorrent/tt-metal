@@ -42,7 +42,7 @@ inline void calculate_rsub_int(const uint dst_index_in0, const uint dst_index_in
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-void calculate_rsub_scalar_int32(uint32_t scalar) {
+void calculate_rsub_scalar_int32(uint32_t dst_index_in, uint32_t dst_index_out, uint32_t scalar) {
     int int_scalar = scalar;
     // Load scalar value param to lreg2
     _sfpu_load_imm32_(p_sfpu::LREG1, int_scalar);

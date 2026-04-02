@@ -19,7 +19,8 @@ template <
     int ITERATIONS = 8,
     bool SKIP_POSITIVE_CHECK = false,
     bool CLAMP_NEGATIVE = true>
-void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
+void calculate_exponential(
+    uint32_t dst_index_in, uint32_t dst_index_out, const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
     if constexpr (APPROXIMATION_MODE) {
         _calculate_exponential_<
             APPROXIMATION_MODE,
@@ -27,7 +28,7 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
             ITERATIONS,
             FAST_APPROX,
             SKIP_POSITIVE_CHECK,
-            CLAMP_NEGATIVE>(exp_base_scale_factor);
+            CLAMP_NEGATIVE>(dst_index_in, dst_index_out, exp_base_scale_factor);
     } else {
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];

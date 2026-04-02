@@ -10,7 +10,7 @@
 namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_softsign() {
+inline void calculate_softsign(uint32_t dst_index_in, uint32_t dst_index_out) {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];

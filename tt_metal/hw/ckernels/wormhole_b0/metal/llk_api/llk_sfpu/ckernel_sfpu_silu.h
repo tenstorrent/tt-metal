@@ -9,7 +9,7 @@
 namespace ckernel::sfpu {
 
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
-inline void calculate_silu() {
+inline void calculate_silu(uint32_t dst_index_in, uint32_t dst_index_out) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];

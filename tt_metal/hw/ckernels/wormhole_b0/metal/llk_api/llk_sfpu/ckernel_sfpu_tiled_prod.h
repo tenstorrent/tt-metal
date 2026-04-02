@@ -13,7 +13,7 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_tiled_prod() {
+inline void calculate_tiled_prod(uint32_t dst_index_in, uint32_t dst_index_out) {
     vFloat result = 1.0f;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {

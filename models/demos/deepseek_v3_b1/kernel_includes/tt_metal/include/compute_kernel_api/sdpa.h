@@ -360,7 +360,8 @@ void compute_sdpa_recip(uint32_t cb_q, uint32_t sum_dst_offset, uint32_t recip_d
  * fused_max_sub_exp_add_tile
  */
 template <bool SDPA_EXP_APPROX_MODE, bool final_norm = false>
-void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
+void calculate_fused_max_sub_exp_add_tile(
+    [[maybe_unused]] uint32_t dst_index_in, [[maybe_unused]] uint32_t dst_index_out, int scale_bf16) {
     // Non-Approx mode for exp initializes recip for final normalization
     static_assert(!(final_norm && SDPA_EXP_APPROX_MODE), "Approx mode must be disabled when final_norm is true");
 
@@ -420,7 +421,7 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
 template <bool SDPA_EXP_APPROX_MODE, int vector_mode = (int)VectorMode::C, bool final_norm = false>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
     _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
-        calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE, final_norm>, idst, vector_mode, scale_bf16);
+        calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE, final_norm>, idst, idst, vector_mode, scale_bf16);
 }
 #endif
 

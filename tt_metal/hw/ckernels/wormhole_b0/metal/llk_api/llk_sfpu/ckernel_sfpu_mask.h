@@ -14,7 +14,7 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_mask() {
+inline void calculate_mask(uint32_t dst_index_in, uint32_t dst_index_out) {
     const bool exponent_size_8 = true;
     const int mask_val_idx = 32;
 #pragma GCC unroll 8
@@ -27,7 +27,7 @@ inline void calculate_mask() {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_int_mask() {
+inline void calculate_int_mask(uint32_t dst_index_in, uint32_t dst_index_out) {
     const int mask_idx = 32;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -39,7 +39,7 @@ inline void calculate_int_mask() {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_mask_posinf() {
+inline void calculate_mask_posinf(uint32_t dst_index_in, uint32_t dst_index_out) {
     const bool exponent_size_8 = true;
     const int mask_val_idx = 32;
 #pragma GCC unroll 8

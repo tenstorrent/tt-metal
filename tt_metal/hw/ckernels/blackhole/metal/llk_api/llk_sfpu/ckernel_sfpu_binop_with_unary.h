@@ -22,7 +22,7 @@ enum {
 };  // BINOP_MODE
 
 template <bool APPROXIMATION_MODE, int BINOP_MODE, int ITERATIONS = 8>
-void calculate_binop_with_scalar(uint32_t param) {
+void calculate_binop_with_scalar(uint32_t dst_index_in, uint32_t dst_index_out, uint32_t param) {
     const sfpi::vFloat parameter = Converter::as_float(param);
 
     for (int d = 0; d < ITERATIONS; d++) {
@@ -48,33 +48,33 @@ void calculate_binop_with_scalar(uint32_t param) {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-void calculate_add(uint32_t param) {
-    calculate_binop_with_scalar<APPROXIMATION_MODE, ADD, ITERATIONS>(param);
+void calculate_add(uint32_t dst_index_in, uint32_t dst_index_out, uint32_t param) {
+    calculate_binop_with_scalar<APPROXIMATION_MODE, ADD, ITERATIONS>(dst_index_in, dst_index_out, param);
     return;
 }
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-void calculate_sub(uint32_t param) {
-    calculate_binop_with_scalar<APPROXIMATION_MODE, SUB, ITERATIONS>(param);
+void calculate_sub(uint32_t dst_index_in, uint32_t dst_index_out, uint32_t param) {
+    calculate_binop_with_scalar<APPROXIMATION_MODE, SUB, ITERATIONS>(dst_index_in, dst_index_out, param);
     return;
 }
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-void calculate_mul(uint32_t param) {
-    calculate_binop_with_scalar<APPROXIMATION_MODE, MUL, ITERATIONS>(param);
+void calculate_mul(uint32_t dst_index_in, uint32_t dst_index_out, uint32_t param) {
+    calculate_binop_with_scalar<APPROXIMATION_MODE, MUL, ITERATIONS>(dst_index_in, dst_index_out, param);
     return;
 }
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-void calculate_div(uint32_t param) {
-    calculate_binop_with_scalar<APPROXIMATION_MODE, DIV, ITERATIONS>(param);
+void calculate_div(uint32_t dst_index_in, uint32_t dst_index_out, uint32_t param) {
+    calculate_binop_with_scalar<APPROXIMATION_MODE, DIV, ITERATIONS>(dst_index_in, dst_index_out, param);
     return;
 }
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-void calculate_rsub(uint32_t param) {
-    calculate_binop_with_scalar<APPROXIMATION_MODE, RSUB, ITERATIONS>(param);
+void calculate_rsub(uint32_t dst_index_in, uint32_t dst_index_out, uint32_t param) {
+    calculate_binop_with_scalar<APPROXIMATION_MODE, RSUB, ITERATIONS>(dst_index_in, dst_index_out, param);
     return;
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-void calculate_add_int32(uint32_t scalar) {
+void calculate_add_int32(uint32_t dst_index_in, uint32_t dst_index_out, uint32_t scalar) {
     int int_scalar = scalar;
 
     // Load value scalar to lreg2
@@ -89,7 +89,7 @@ void calculate_add_int32(uint32_t scalar) {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-void calculate_sub_int32(uint32_t scalar) {
+void calculate_sub_int32(uint32_t dst_index_in, uint32_t dst_index_out, uint32_t scalar) {
     int int_scalar = scalar;
 
     // Load value scalar to lreg2

@@ -12,8 +12,8 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_dropout(uint probability, uint scale) {
-    _calculate_dropout_<APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, probability, scale);
+inline void calculate_dropout(uint32_t dst_index_in, uint32_t dst_index_out, uint probability, uint scale) {
+    _calculate_dropout_<APPROXIMATION_MODE, ITERATIONS>(dst_index_in, dst_index_out, ITERATIONS, probability, scale);
 }
 
 template <bool APPROXIMATION_MODE>

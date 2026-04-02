@@ -14,7 +14,7 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_prelu(const uint value) {
+inline void calculate_prelu(uint32_t dst_index_in, uint32_t dst_index_out, const uint value) {
     // SFPU microcode
     vFloat init = Converter::as_float(value);
 

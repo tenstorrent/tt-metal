@@ -18,7 +18,7 @@ inline void llk_math_eltwise_unary_sfpu_rsub_int32_init() {
 template <bool APPROXIMATE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_rsub_int32(uint dst_index, uint scalar, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        sfpu::calculate_rsub_scalar_int32<APPROXIMATE, ITERATIONS>, dst_index, vector_mode, scalar);
+        sfpu::calculate_rsub_scalar_int32<APPROXIMATE, ITERATIONS>, dst_index, dst_index, vector_mode, scalar);
 }
 
 }  // namespace ckernel

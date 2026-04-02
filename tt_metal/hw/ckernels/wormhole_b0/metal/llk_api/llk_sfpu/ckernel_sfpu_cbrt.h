@@ -14,7 +14,7 @@ namespace ckernel::sfpu {
 // Moroz et al. <https://doi.org/10.3390/en14041058>
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
-inline void calculate_cube_root() {
+inline void calculate_cube_root(uint32_t dst_index_in, uint32_t dst_index_out) {
     sfpi::vFloat negative_third_256 = -0x1.555556p-10f;
 
     // Magic constant 0x548c2b4b / 256 + 2^23

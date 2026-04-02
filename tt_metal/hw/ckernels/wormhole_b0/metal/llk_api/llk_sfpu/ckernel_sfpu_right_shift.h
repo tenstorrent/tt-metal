@@ -13,7 +13,7 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_right_shift(const uint shift_amt) {
+inline void calculate_right_shift(uint32_t dst_index_in, uint32_t dst_index_out, const uint shift_amt) {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         vInt input = dst_reg[0];

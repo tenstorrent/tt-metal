@@ -13,7 +13,7 @@ namespace ckernel {
 namespace sfpu {
 
 template <int ITERATIONS = 8>
-inline void calculate_sigmoid_appx() {
+inline void calculate_sigmoid_appx(uint32_t dst_index_in, uint32_t dst_index_out) {
     vUInt l0 = l_reg[LRegs::LReg0];
     vUInt l1 = l_reg[LRegs::LReg1];
     vUInt l2 = l_reg[LRegs::LReg2];

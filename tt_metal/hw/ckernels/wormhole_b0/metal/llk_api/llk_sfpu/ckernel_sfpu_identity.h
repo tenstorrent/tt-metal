@@ -17,7 +17,7 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_identity() {
+inline void calculate_identity(uint32_t dst_index_in, uint32_t dst_index_out) {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
@@ -27,7 +27,7 @@ inline void calculate_identity() {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_identity_uint() {
+inline void calculate_identity_uint(uint32_t dst_index_in, uint32_t dst_index_out) {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         vUInt v = dst_reg[0];

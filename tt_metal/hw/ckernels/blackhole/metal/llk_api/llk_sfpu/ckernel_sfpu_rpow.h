@@ -11,7 +11,7 @@
 namespace ckernel::sfpu {
 // ttnn.rpow(exponent, scalar_base) = pow(scalar_base, exponent)
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
-inline void calculate_rpow(const uint32_t base_val) {
+inline void calculate_rpow(uint32_t dst_index_in, uint32_t dst_index_out, const uint32_t base_val) {
     sfpi::vFloat base_val_v = Converter::as_float(base_val);
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
