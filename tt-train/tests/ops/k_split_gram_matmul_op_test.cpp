@@ -189,7 +189,7 @@ TEST_F(KSplitGramMatmulTest, SmokeAllShapes) {
     SUCCEED();
 }
 
-TEST_F(KSplitGramMatmulTest, StressTest8192x8192) {
+TEST_F(KSplitGramMatmulTest, NIGHTLY_StressTest8192x8192) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto input = make_random_tensor(8192, 8192);
     constexpr int N = 5;
