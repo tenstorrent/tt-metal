@@ -36,6 +36,8 @@ on:
   schedule:
     # Every 2 hours (UTC)
     - cron: "0 */2 * * *"
+  push:
+    branches: ["roseli/0-refactor-galaxy-quick2"]
 
 run-name: "(Galaxy) Sanity"
 
