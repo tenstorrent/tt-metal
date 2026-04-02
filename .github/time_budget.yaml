@@ -142,7 +142,7 @@ models:
     bh_deskbox: 250
     bh_llmbox: 1200
     bh_loudbox: 1200
-    bh_loudbox_civ2_viommu: 1200
+
     bh_p300: 800
     bh_quietbox_2: 250
   sweep:
