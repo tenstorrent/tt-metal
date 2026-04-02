@@ -88,7 +88,6 @@ inline void llk_pack_untilize_init(std::uint32_t output) {
  * @tparam block_ct_dim       Width of a single block in tiles.
  * @tparam full_ct_dim        Total width of the tensor row in tiles, used to compute the
  *                            L1 row stride (default = block_ct_dim).
- * @tparam tile_dst_ct_offset Compile-time CT offset into DEST for the starting tile (default 0).
  * @param block_rt_dim        Number of tile-rows to pack.
  * @param output              Output circular buffer identifier.
  * @param block_c_index       Column-block index within the full row, used to offset the L1
