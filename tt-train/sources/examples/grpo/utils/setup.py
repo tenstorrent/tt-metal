@@ -25,6 +25,7 @@ class InferenceCtx:
     sample_seed: int = 42
     dp_mapper: object = None
     dp_composer: object = None
+    total_devices: int = 1
     _kv_cache: object = None
     _B: int = None
     _N: int = None
@@ -126,12 +127,14 @@ def setup_inference(yaml_config_path, hf_model_id, load_pretrained, setup_optimi
     use_ddp = device_config.enable_ddp
     dp_mapper = None
     dp_composer = None
+    total_devices = 1
     if use_ddp:
         autograd_ctx = ttml.autograd.AutoContext.get_instance()
         autograd_ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=True, enable_tp=False))
         device = autograd_ctx.get_device()
         dp_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
         dp_composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
+        total_devices = device_config.total_devices()
 
     ctx = InferenceCtx(
         tt_model=tt_model,
@@ -145,6 +148,7 @@ def setup_inference(yaml_config_path, hf_model_id, load_pretrained, setup_optimi
         sample_seed=42,
         dp_mapper=dp_mapper,
         dp_composer=dp_composer,
+        total_devices=total_devices,
     )
 
     return ctx
