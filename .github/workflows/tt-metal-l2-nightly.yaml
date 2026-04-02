@@ -104,6 +104,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      enable-llk-asserts:
+        description: 'Enable LLK asserts'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-artifact:
@@ -346,6 +351,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       gtest_filter: "*NIGHTLY_*"
       nightly-run: true
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   # Metal IOMMU Unit Tests
   metal-iommu-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
@@ -382,6 +388,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
@@ -399,6 +406,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   # TTNN Tutorials
   test-ttnn-tutorials:
     needs: [build-artifact, generate-arch-matrix]
@@ -417,6 +425,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.basic-ttnn-runtime-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   run-profiler-regression:
     needs: [build-artifact, generate-arch-matrix]
     if: |
@@ -434,6 +443,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   tt-train-cpp-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: |
@@ -452,6 +462,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       timeout: 90
       gtest_filter: "*"
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   tt-train-cpp-models:
     needs: [build-artifact, generate-arch-matrix]
     if: |
@@ -469,6 +480,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       timeout: 90
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   tt-train-python-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: |
@@ -487,6 +499,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       timeout: 10
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   # FD Model Tests
   models-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
@@ -504,6 +517,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   # Triage tests (including hang report generation test)
   triage-tests:
     needs: [build-artifact, generate-arch-matrix]
@@ -520,6 +534,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       run-hang-report-test: true
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   # TT-CNN Unit tests
   tt-cnn-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
@@ -537,3 +552,4 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
