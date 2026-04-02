@@ -1072,6 +1072,7 @@ def run_decoder_layer_prefill_update_cache_tt(
                 topk_expert_weights=topk_weights,  # consumed
                 moe_w=w.moe,
                 hparams=hparams,
+                rt=moe_runtime,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=mlp_compute_kernel_config,
             )
@@ -1083,6 +1084,7 @@ def run_decoder_layer_prefill_update_cache_tt(
                 topk_expert_weights=topk_weights,  # consumed
                 moe_w=w.moe,
                 hparams=hparams,
+                rt=moe_runtime,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=mlp_compute_kernel_config,
             )
