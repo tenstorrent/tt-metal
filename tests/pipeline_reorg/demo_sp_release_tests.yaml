@@ -72,7 +72,7 @@
   team: models
 
 # ============================================================================
-# DeepSeek V3 B1 Decode Tests (Blitz) - Blackhole 2x2 mesh (BH-LLMBox)
+# DeepSeek V3 B1 Decode Tests (Blitz) - Blackhole P300
 # ============================================================================
 
 - name: bh_p300_DeepSeek_B1_HostIO
