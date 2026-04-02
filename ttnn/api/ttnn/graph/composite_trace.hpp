@@ -4,8 +4,10 @@
 
 #pragma once
 
-#include <tt-metalium/graph_tracking.hpp>
+#include <utility>
 #include <string_view>
+#include <tt-metalium/graph_tracking.hpp>
+#include "graph_serialization.hpp"
 
 namespace ttnn::graph {
 
