@@ -78,15 +78,30 @@ class CorruptCacheEntry:
 CacheEntry = Union[AbsentCacheEntry, PresentCacheEntry, CorruptCacheEntry]
 
 
+def build_mesh_mapper_for_target(target: TensorTarget, device):
+    """Reconstruct the runtime mesh_mapper from the declarative config + device."""
+    mapper_config = target.mesh_mapper_config
+    if isinstance(mapper_config, ReplicateMeshMapper):
+        return ttnn.ReplicateTensorToMesh(device)
+    if isinstance(mapper_config, ShardMeshMapper):
+        return ttnn.ShardTensorToMesh(device, dim=mapper_config.dim)
+    if isinstance(mapper_config, Shard2dMeshMapper):
+        mesh_shape = (device.shape[0], device.shape[1])
+        return ttnn.ShardTensor2dMesh(device, mesh_shape=mesh_shape, dims=mapper_config.dims)
+    raise TypeError(f"Unknown mesh mapper config type: {type(mapper_config)}")
+
+
 def _create_overlapped_tensor_fused(
     spec: FusionGroupSpec,
     preprocessed: dict[str, torch.Tensor],
     device,
+    *,
+    move_to_device: bool = False,
 ) -> tuple[ttnn.Tensor, dict[str, OverlappedTensor]]:
     """Lazy import of :mod:`fuse` to avoid circular import with ``blitz_decode_weights``."""
     from models.demos.deepseek_v3_b1.tensor_cache.fuse import create_overlapped_tensor
 
-    return create_overlapped_tensor(spec, preprocessed, device, move_to_device=False)
+    return create_overlapped_tensor(spec, preprocessed, device, move_to_device=move_to_device)
 
 
 def _logical_name_from_fingerprint(fingerprint: Fingerprint) -> str | None:
@@ -150,11 +165,8 @@ class TensorCache:
         dest.object_dir.mkdir(parents=True, exist_ok=True)
 
         data_path = dest.object_dir / "data.tensorbin"
-
-        logger.info("Dumping tensor to {}", data_path)
         ttnn.dump_tensor(data_path, tensor_host, mode=ttnn.DumpTensorMode.LOCAL)
 
-        logger.info("Computing content hash for {}", data_path)
         content_hash = _sha256_file(data_path)
         size_bytes = data_path.stat().st_size
 
@@ -226,19 +238,6 @@ class TensorCache:
             out[name] = overlapped_tensor_from_view_dict(fused, d)
         return out
 
-    @staticmethod
-    def _build_mesh_mapper(target: TensorTarget, device):
-        """Reconstruct the runtime mesh_mapper from the declarative config + device."""
-        mapper_config = target.mesh_mapper_config
-        if isinstance(mapper_config, ReplicateMeshMapper):
-            return ttnn.ReplicateTensorToMesh(device)
-        if isinstance(mapper_config, ShardMeshMapper):
-            return ttnn.ShardTensorToMesh(device, dim=mapper_config.dim)
-        if isinstance(mapper_config, Shard2dMeshMapper):
-            mesh_shape = (device.shape[0], device.shape[1])
-            return ttnn.ShardTensor2dMesh(device, mesh_shape=mesh_shape, dims=mapper_config.dims)
-        raise TypeError(f"Unknown mesh mapper config type: {type(mapper_config)}")
-
     def get_or_create(
         self,
         fingerprint: Fingerprint,
@@ -274,14 +273,14 @@ class TensorCache:
 
         if isinstance(entry, PresentCacheEntry):
             if isinstance(target, TensorTarget):
-                logger.debug("Cache hit for {} ({})", logical, artifact_id[:12])
+                # logger.debug("Cache hit for {} ({})", logical, artifact_id[:12])
                 return self._load(entry.paths, device)
             meta_path = entry.paths.object_dir / "metadata.json"
             if meta_path.is_file():
                 with open(meta_path) as f:
                     meta = json.load(f)
                 if meta.get("views"):
-                    logger.debug("Cache hit (fused) for {} ({})", logical, artifact_id[:12])
+                    # logger.debug("Cache hit (fused) for {} ({})", logical, artifact_id[:12])
                     return self._load_fused(entry.paths, device)
             logger.warning(
                 "Present cache entry for fused {} ({}) missing fusion metadata; rebuilding",
@@ -294,10 +293,7 @@ class TensorCache:
             logger.warning("Corrupt cache entry for {} ({}), rebuilding", logical, artifact_id[:12])
             shutil.rmtree(entry.paths.object_dir, ignore_errors=True)
 
-        kind = "fused" if isinstance(target, FusionGroupSpec) else "tensor"
-        logger.info("Cache miss ({}) for {} ({}), preprocessing...", kind, logical, artifact_id[:12])
         t0 = time.perf_counter()
-
         tensors = raw_tensors() if callable(raw_tensors) else raw_tensors
         preprocessed = preprocess(tensors)
 
@@ -308,7 +304,7 @@ class TensorCache:
                 "layout": target.layout,
                 "device": None,
                 "memory_config": target.memory_config,
-                "mesh_mapper": self._build_mesh_mapper(target, device),
+                "mesh_mapper": build_mesh_mapper_for_target(target, device),
             }
             if target.layout == ttnn.TILE_LAYOUT:
                 from_torch_kwargs["tile"] = ttnn.Tile(target.tile_shape)
@@ -323,6 +319,7 @@ class TensorCache:
             spec,
             preprocessed,
             device,
+            move_to_device=False,
         )
         paths = self._store_fused(artifact_id, fingerprint, fused_host, views)
         elapsed = time.perf_counter() - t0
@@ -333,3 +330,53 @@ class TensorCache:
             artifact_id[:12],
         )
         return self._load_fused(paths, device)
+
+
+class EphemeralTensorCache:
+    """In-memory passthrough implementing the same ``get_or_create`` API as :class:`TensorCache`.
+
+    Builds tensors directly without disk persistence. Used when ``cache_config`` is omitted
+    in prepare functions so there is a single code path.
+    """
+
+    def __init__(self, *, move_to_device: bool = True):
+        self._move_to_device = move_to_device
+
+    def get_or_create(
+        self,
+        fingerprint: Fingerprint,
+        device,
+        *,
+        preprocess: Callable[[dict[str, torch.Tensor]], dict[str, torch.Tensor]],
+        raw_tensors: Callable[[], dict[str, torch.Tensor]] | dict[str, torch.Tensor],
+    ) -> ttnn.Tensor | dict[str, OverlappedTensor]:
+        target = fingerprint.target
+        if not isinstance(target, (TensorTarget, FusionGroupSpec)):
+            raise TypeError(
+                f"EphemeralTensorCache.get_or_create requires TensorTarget or FusionGroupSpec target, "
+                f"got {type(target)}"
+            )
+
+        tensors = raw_tensors() if callable(raw_tensors) else raw_tensors
+        preprocessed = preprocess(tensors)
+
+        if isinstance(target, TensorTarget):
+            torch_tensor = preprocessed[target.name]
+            from_torch_kwargs: dict = {
+                "dtype": target.dtype,
+                "layout": target.layout,
+                "device": device if self._move_to_device else None,
+                "memory_config": target.memory_config,
+                "mesh_mapper": build_mesh_mapper_for_target(target, device),
+            }
+            if target.layout == ttnn.TILE_LAYOUT:
+                from_torch_kwargs["tile"] = ttnn.Tile(target.tile_shape)
+            return ttnn.from_torch(torch_tensor, **from_torch_kwargs)
+
+        _fused, views = _create_overlapped_tensor_fused(
+            target,
+            preprocessed,
+            device,
+            move_to_device=self._move_to_device,
+        )
+        return views

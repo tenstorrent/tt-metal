@@ -6,7 +6,7 @@
 
 from dataclasses import dataclass
 
-from models.demos.deepseek_v3_b1.tensor_cache.cache import TensorCache
+from models.demos.deepseek_v3_b1.tensor_cache.cache import EphemeralTensorCache, TensorCache
 from models.demos.deepseek_v3_b1.tensor_cache.types import (
     ArtifactTarget,
     CacheContext,
@@ -35,15 +35,30 @@ def __getattr__(name: str):
 
 @dataclass(frozen=True)
 class CacheConfig:
-    """Bundles a TensorCache and its CacheContext for passing to prepare functions."""
+    """Bundles a TensorCache (or EphemeralTensorCache) and its CacheContext for prepare functions."""
 
-    cache: TensorCache
+    cache: TensorCache | EphemeralTensorCache
     context: CacheContext
+
+    @classmethod
+    def ephemeral(cls, *, move_to_device: bool = True) -> CacheConfig:
+        """Config with in-memory cache only (no disk); used when callers omit ``cache_config``."""
+        return cls(
+            cache=EphemeralTensorCache(move_to_device=move_to_device),
+            context=CacheContext(
+                schema_version=0,
+                hf_model_id="ephemeral",
+                hf_revision="ephemeral",
+                transform_version=0,
+                mesh_shape=(1, 1),
+            ),
+        )
 
 
 __all__ = [
     "ArtifactTarget",
     "CacheConfig",
+    "EphemeralTensorCache",
     "CacheContext",
     "Fingerprint",
     "FusionGroupSpec",
