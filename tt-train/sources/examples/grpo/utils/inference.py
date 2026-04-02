@@ -131,9 +131,6 @@ def _completion_batched_impl(ctx: InferenceCtx, prompt_tokens_np, pad_lengths: L
     V = len(ctx.tokenizer)
     padded_V = round_up(ctx, V)
 
-    head_dim = getattr(ctx.transformer_config, "head_dim", None) or (
-        ctx.transformer_config.embedding_dim // ctx.transformer_config.num_heads
-    )
     kv_cache = _get_kv_cache(ctx, B)
 
     logits_mask_tensor = build_logits_mask(V, padded_V) if padded_V != V else None
@@ -143,9 +140,25 @@ def _completion_batched_impl(ctx: InferenceCtx, prompt_tokens_np, pad_lengths: L
         ctx.transformer_config.max_sequence_length - N,
     )
 
-    generated = []
+    # check every 32 steps if all completions are sampled. This reduces the host transfer overhead
+    chunk_size = 32
 
-    for token in range(tokens_to_complete):
+    stop_ids = get_stop_ids(ctx)
+    done_mask = np.full((B,), False)
+
+    generated_columns = []
+    chunk_columns = []
+
+    def to_np(column_list):
+        arr = np.empty((B, len(column_list)), dtype=np.int32)
+        for j, column in enumerate(column_list):
+            arr[:, j] = column.to_numpy().reshape(
+                B,
+            )
+
+        return arr
+
+    for i in range(tokens_to_complete):
         if kv_cache.get_cache_position() == 0:
             processed = 0
             new_tokens = prompt_tokens_np.shape[1]
@@ -174,18 +187,22 @@ def _completion_batched_impl(ctx: InferenceCtx, prompt_tokens_np, pad_lengths: L
             [B, 1, new_tokens, 1],
         )  # B 1 1 1
 
-        generated.append(last_token_column)
+        generated_columns.append(last_token_column)
+        chunk_columns.append(last_token_column)
 
         N += 1
 
         deallocate_tensors([token_tensor, mask, logits, next_token_tensor])
 
-    completions_np = np.empty((B, tokens_to_complete), dtype=np.int32)
-    for j, column in enumerate(generated):
-        completions_np[:, j] = column.to_numpy().reshape(
-            B,
-        )
-        deallocate_tensors([column])
+        if i != 0 and i % chunk_size == 0:
+            chunk_np = to_np(chunk_columns)
+
+            done_mask |= np.isin(chunk_np, list(stop_ids)).any(axis=1)
+            if done_mask.all():
+                break
+
+    completions_np = to_np(generated_columns)
+    deallocate_tensors(generated_columns)
 
     deallocate_tensors([logits_mask_tensor])
     kv_cache.reset()
