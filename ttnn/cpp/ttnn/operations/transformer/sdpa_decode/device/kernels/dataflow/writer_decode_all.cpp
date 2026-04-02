@@ -205,15 +205,13 @@ void kernel_main() {
         cb_identity_scale_in,
         ckernel::PoolType::SUM,
         ckernel::ReduceDim::REDUCE_ROW,
-        tt::constants::TILE_WIDTH,
-        1,
-        true>();
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
+        /*compute_uses_reduce_tile=*/true>();
     dataflow_kernel_lib::prepare_reduce_scaler<
         cb_zero_in,
         ckernel::PoolType::SUM,
         ckernel::ReduceDim::REDUCE_ROW,
-        tt::constants::TILE_WIDTH,
-        true>(0.0f);
+        /*compute_uses_reduce_tile=*/true>(0.0f);
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
     // Generate sliding window mask only if we have local data and need it

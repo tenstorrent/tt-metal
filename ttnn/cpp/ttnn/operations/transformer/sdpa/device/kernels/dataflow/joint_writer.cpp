@@ -62,9 +62,8 @@ void kernel_main() {
         cb_identity_scale_in,
         ckernel::PoolType::SUM,
         ckernel::ReduceDim::REDUCE_ROW,
-        tt::constants::TILE_WIDTH,
-        1,
-        true>();
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
+        /*compute_uses_reduce_tile=*/true>();
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {

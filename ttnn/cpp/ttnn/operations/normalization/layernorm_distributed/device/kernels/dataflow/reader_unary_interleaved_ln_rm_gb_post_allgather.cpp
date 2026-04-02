@@ -69,9 +69,8 @@ void kernel_main() {
         cb_reduce,
         ckernel::PoolType::AVG,
         ckernel::ReduceDim::REDUCE_ROW,
-        tt::constants::TILE_WIDTH,
         W_times_num_devices,
-        true>();
+        /*compute_uses_reduce_tile=*/true>();
     const uint32_t eps = get_arg_val<uint32_t>(5);
     generate_bcast_col_scalar(cb_eps, eps);
 

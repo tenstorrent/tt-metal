@@ -51,9 +51,8 @@ void kernel_main() {
         cb_reduce,
         ckernel::PoolType::SUM,
         ckernel::ReduceDim::REDUCE_ROW,
-        tt::constants::TILE_WIDTH,
-        1,
-        true>();
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
+        /*compute_uses_reduce_tile=*/true>();
     if (is_merge_core) {
         dataflow_kernel_lib::prepare_reduce_scaler<cb_zero, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
             0.0f);

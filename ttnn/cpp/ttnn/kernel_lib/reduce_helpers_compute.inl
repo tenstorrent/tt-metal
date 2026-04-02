@@ -10,9 +10,10 @@
 #include "api/debug/assert.h"
 #include "experimental/circular_buffer.h"
 #include "tt-metalium/circular_buffer_constants.h"
-#include "ttnn/cpp/ttnn/kernel_lib/cb_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/cb_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_common.hpp"
+
 
 namespace compute_kernel_lib {
 

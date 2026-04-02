@@ -423,8 +423,7 @@ void kernel_main() {
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         cb_reduce_ones_scalar,
         ckernel::PoolType::SUM,
-        ckernel::ReduceDim::REDUCE_ROW,
-        n_activated_experts>();
+        ckernel::ReduceDim::REDUCE_ROW>(n_activated_experts);
     write_single_scalar(cb_epsilon_scalar, packed_epsilon);
     write_single_scalar(cb_route_scale_scalar, packed_route_scale);
 

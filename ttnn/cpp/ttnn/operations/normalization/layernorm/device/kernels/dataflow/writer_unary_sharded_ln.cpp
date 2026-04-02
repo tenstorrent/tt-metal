@@ -71,8 +71,7 @@ void kernel_main() {
                 cb_in_4,
                 ckernel::PoolType::AVG,
                 ckernel::ReduceDim::REDUCE_ROW,
-                tt::constants::TILE_WIDTH,
-                true>(scalar_c_f);
+                /*compute_uses_reduce_tile=*/true>(scalar_c_f);
         }
     }
 

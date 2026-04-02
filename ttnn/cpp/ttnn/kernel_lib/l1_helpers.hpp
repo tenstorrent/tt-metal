@@ -25,17 +25,15 @@ FORCE_INLINE volatile tt_l1_ptr uint32_t* addr_to_l1_ptr(uint32_t addr) {
 }
 
 /**
- * @brief Format-aware zero out faces in a tile using NOC reads from the hardware zeros region
+ * @brief Zero out the exact tile size for a CB using NOC reads from the hardware zeros region
  *
- * @tparam data_format Data format (Float16_b or Float32) to determine face size
- * @tparam half_tile If true, zero faces 0-1 only. If false, zero all 4 faces.
- * @param write_addr L1 address where the zeroed data should be written
+ * @tparam cb_id Circular buffer ID whose tile byte size should be used
+ * @param write_addr L1 address where the zeroed tile should be written
  */
-template <DataFormat data_format, bool half_tile>
-FORCE_INLINE void zero_faces(uint32_t write_addr) {
-    constexpr uint32_t num_faces = half_tile ? 2 : 4;
-    constexpr uint32_t face_size_u32 = (data_format == DataFormat::Float32) ? FACE_SIZE_U32_FP32 : FACE_SIZE_U32;
-    constexpr uint32_t bytes_to_zero = num_faces * face_size_u32 * sizeof(uint32_t);
+template <uint32_t cb_id>
+FORCE_INLINE void zero_tile(uint32_t write_addr) {
+    constexpr uint32_t bytes_to_zero = get_tile_size(cb_id);
+    static_assert(bytes_to_zero % MEM_ZEROS_SIZE == 0, "CB tile size must be a multiple of MEM_ZEROS_SIZE");
     constexpr uint32_t num_zeros_reads = bytes_to_zero / MEM_ZEROS_SIZE;
 
     experimental::Noc noc;

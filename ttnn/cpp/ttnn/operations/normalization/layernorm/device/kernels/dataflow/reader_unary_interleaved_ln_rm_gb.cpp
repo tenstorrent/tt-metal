@@ -47,7 +47,8 @@ void kernel_main() {
 
     constexpr uint32_t blk = get_compile_time_arg_val(0);  // needed for correctness of softmax/LN kernels
     constexpr bool use_welford = get_compile_time_arg_val(1) == 1;
-    constexpr auto src0_args = TensorAccessorArgs<2>();
+    [[maybe_unused]] constexpr uint32_t W = get_compile_time_arg_val(2);
+    constexpr auto src0_args = TensorAccessorArgs<3>();
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
@@ -75,9 +76,8 @@ void kernel_main() {
             cb_in_2,
             ckernel::PoolType::SUM,
             ckernel::ReduceDim::REDUCE_ROW,
-            tt::constants::TILE_WIDTH,
-            1,
-            /*force_reduce_llk=*/true>();
+            dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
+            /*compute_uses_reduce_tile=*/true>();
     }
     constexpr uint32_t eps_cb_id = get_named_compile_time_arg_val("cb_eps");
     const uint32_t eps = get_arg_val<uint32_t>(5);

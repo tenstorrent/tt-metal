@@ -31,9 +31,8 @@ void kernel_main() {
         cb_reduce,
         ckernel::PoolType::SUM,
         ckernel::ReduceDim::REDUCE_ROW,
-        tt::constants::TILE_WIDTH,
-        1,
-        true>();
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
+        /*compute_uses_reduce_tile=*/true>();
 
     const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
 
