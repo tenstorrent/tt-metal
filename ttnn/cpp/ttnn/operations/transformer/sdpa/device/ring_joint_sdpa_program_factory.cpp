@@ -194,18 +194,20 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const uint32_t Sq_chunk_t = q_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / tt::constants::TILE_HEIGHT;
 
-    // Lightweight mask: only needed when any K/joint dimension has padding that doesn't fill a chunk.
+    // Lightweight mask: needed when any K/joint dimension has padding, or when causal masking is active.
     const bool local_n_has_padding = (local_padded_Nt % Sk_chunk_t) != 0;
     const bool global_n_has_padding = (args.logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
     const bool joint_has_padding = L > 0 && (L % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
-    const bool needs_lightweight_mask = (local_n_has_padding || global_n_has_padding || joint_has_padding) && !args.is_causal;
+    const bool needs_lightweight_mask =
+        (local_n_has_padding || global_n_has_padding || joint_has_padding) || args.is_causal;
 
     // Partial tile support when padding boundary falls inside a tile.
     const uint32_t global_n_partial_col = args.logical_n % tt::constants::TILE_HEIGHT;
     const uint32_t joint_l_partial_col = L % tt::constants::TILE_HEIGHT;
     const uint32_t partial_mask_tiles = (global_n_partial_col != 0 ? 1 : 0) + (joint_l_partial_col != 0 ? 1 : 0);
-    // Single CB holds: 1 neginf tile + up to 2 partial mask tiles
-    const uint32_t total_lightweight_mask_tiles = 1 + partial_mask_tiles;
+    const uint32_t causal_diag_tiles = args.is_causal ? 1 : 0;
+    // Single CB holds: 1 neginf tile + optional causal diagonal + up to 2 partial mask tiles
+    const uint32_t total_lightweight_mask_tiles = 1 + causal_diag_tiles + partial_mask_tiles;
 
     const uint32_t num_local_q_chunks = tt::div_up(local_padded_N, q_chunk_size);
     const uint32_t num_joint_q_chunks = tt::div_up(L, q_chunk_size);
@@ -481,7 +483,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const tt::DataFormat v_df_early = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
     const tt::DataFormat out_df_early = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     const tt::DataFormat im_df_early = tt::DataFormat::Float16_b;
-    const tt::DataFormat mask_df_early = (args.is_causal ? tt::DataFormat::Bfp4_b : tt::DataFormat::Float16_b);
+    const tt::DataFormat mask_df_early = tt::DataFormat::Float16_b;
     const bool uniform_dataformat =
         (q_df_early == k_df_early && q_df_early == v_df_early && q_df_early == out_df_early &&
          q_df_early == mask_df_early && q_df_early == im_df_early);
@@ -548,7 +550,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // This is done only in the non-causal case:
     // Lightweight mask: both streaming and non-streaming paths use Float16_b
     // to support L1-accumulation and avoid Bfp4_b precision loss.
-    tt::DataFormat mask_df = (args.is_causal ? tt::DataFormat::Bfp4_b : tt::DataFormat::Float16_b);
+    tt::DataFormat mask_df = tt::DataFormat::Float16_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
@@ -587,20 +589,13 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                             .set_page_size(tt::CBIndex::c_2, v_tile_size);
     CreateCircularBuffer(program, core_grid, c_in2_config);
 
-    if (args.is_causal) {
-        // attn_mask input
-        auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
-                                .set_page_size(tt::CB::c_in3, mask_tile_size);
+    // Lightweight mask CB: holds neginf + optional causal diagonal + optional partial tiles.
+    // Used for both causal (ring_iter 0) and padding (ring_iter > 0) masking.
+    if (needs_lightweight_mask) {
+        auto c_in3_config =
+            CircularBufferConfig(total_lightweight_mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
+                .set_page_size(tt::CB::c_in3, mask_tile_size);
         CreateCircularBuffer(program, core_grid, c_in3_config);
-    }
-    else {
-        // Lightweight mask: single CB holds 1 neginf tile + up to 2 partial mask tiles
-        if (needs_lightweight_mask) {
-            auto c_in3_config =
-                CircularBufferConfig(total_lightweight_mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
-                    .set_page_size(tt::CB::c_in3, mask_tile_size);
-            CreateCircularBuffer(program, core_grid, c_in3_config);
-        }
     }
 
     // scale input
