@@ -142,7 +142,7 @@ MoEComputeDeviceOperation::tensor_return_value_t MoEComputeDeviceOperation::crea
 
     const auto tilize_output_tensor = create_device_tensor(output_specs[3], tensor_args.tilize_input_tensor.device());
 
-    // re-percieve tilize output tensor as RM for output
+    // re-perceive tilize output tensor as RM for output
     const auto& original_mesh_buffer = tilize_output_tensor.mesh_buffer();
     auto view_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
         original_mesh_buffer.global_config(),
@@ -152,8 +152,8 @@ MoEComputeDeviceOperation::tensor_return_value_t MoEComputeDeviceOperation::crea
 
     tt::tt_metal::MeshTensor view_mesh_tensor(
         std::move(view_mesh_buffer), output_specs[4], tilize_output_tensor.tensor_topology());
-    tt::tt_metal::DeviceStorage view_storage(tilize_output_tensor.device_storage(), std::move(view_mesh_tensor));
-    const ttnn::Tensor output_tensor(view_storage);
+    const ttnn::Tensor output_tensor(
+        tt::tt_metal::DeviceStorage(tilize_output_tensor.device_storage(), std::move(view_mesh_tensor)));
 
     return {
         create_device_tensor(output_specs[0], tensor_args.tilize_input_tensor.device()),
