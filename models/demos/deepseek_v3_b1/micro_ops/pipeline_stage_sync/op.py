@@ -199,11 +199,12 @@ class PipelineStageSync:
 
                     signalling_fabric_node_id = mesh_device.get_fabric_node_id(signalling_device_mesh_coord)
                     link_index = 0
-                    fabric_args = ttnn.setup_fabric_connection(
+                    fabric_args = ttnn.setup_routing_plane_connection(
                         signalling_fabric_node_id,
-                        stalling_device_fabric_node_id,
-                        link_index,
+                        [stalling_device_fabric_node_id],
+                        [link_index],
                         program,
+                        kernel_idx,
                         signalling_core,
                     )
                     per_core_rt_args_ref.extend(fabric_args)

@@ -135,25 +135,24 @@ struct PipelineStageSync {
                 noc_semaphore_inc(stalling_device_semaphore_noc_addr, 1);
             } else {
                 // fabric + NoC
+                uint32_t num_connections = 1;  // TODO: (GR)
+                tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
+                open_connections(fabric_connection, num_connections, fabric_arg_base);
+
                 PacketHeaderPool::reset();
-                constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
-                auto route_id = PacketHeaderPool::allocate_header_n(1);
-                volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::header_table[route_id].first;
-                fabric_set_unicast_route(
-                    packet_header,
-                    static_cast<uint16_t>(stalling_device_chip_id),
-                    static_cast<uint16_t>(stalling_device_mesh_id));
-                packet_header->to_noc_unicast_atomic_inc(
+                auto* packet_header_ptr = PacketHeaderPool::allocate_header(1);
+                fabric_set_unicast_route(fabric_connection, packet_header_ptr, 0);
+
+                uint32_t num_hops = 1;  // TODO: (GR)
+                packet_header_ptr->to_chip_unicast(num_hops);
+                packet_header_ptr->to_noc_unicast_atomic_inc(
                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{stalling_device_semaphore_noc_addr, 1});
 
-                auto fabric_sender =
-                    tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
-                        fabric_arg_base);
-                fabric_sender.open();
-                fabric_sender.wait_for_empty_write_slot();
-                fabric_sender.send_payload_flush_blocking_from_address(
-                    reinterpret_cast<uint32_t>(packet_header), packet_header_size_bytes);
-                fabric_sender.close();
+                auto& connection = fabric_connection.get(0).sender;
+                connection.wait_for_empty_write_slot();
+                connection.send_payload_flush_blocking_from_address(
+                    (uint32_t)packet_header_ptr, sizeof(PACKET_HEADER_TYPE));
+                close_connections(fabric_connection);
             }
             noc_async_atomic_barrier();
         }
