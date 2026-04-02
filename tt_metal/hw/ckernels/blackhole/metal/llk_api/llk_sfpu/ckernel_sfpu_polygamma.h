@@ -121,7 +121,10 @@ inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void polygamma_init() {
-    _init_reciprocal_<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
+    // On BH, _init_reciprocal_ initializes the SFPLOADMACRO-based fast reciprocal path,
+    // but our kernel uses _sfpu_reciprocal_<2>() which is Newton-Raphson-based and requires
+    // vConstFloatPrgm0 = 2.0f. Use _init_sfpu_reciprocal_ which sets that correctly.
+    _init_sfpu_reciprocal_<false>();
 }
 
 }  // namespace ckernel::sfpu
