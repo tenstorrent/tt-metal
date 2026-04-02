@@ -90,11 +90,14 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
     const auto input_dataformat = datatype_to_dataformat_converter(input_tensor.dtype());
     const auto output_dataformat = datatype_to_dataformat_converter(output_tensor.dtype());
 
+    std::cout << "input_dataformat: " << input_dataformat << std::endl;
+    std::cout << "acc_dataformat: " << acc_dataformat << std::endl;
+    std::cout << "output_dataformat: " << output_dataformat << std::endl;
+
     create_cb(program, input_dataformat, AccumulationCB::SRC, all_cores, in_tiles);
     create_cb(program, acc_dataformat, AccumulationCB::ACC, all_cores, op_tiles);
     create_cb(program, output_dataformat, AccumulationCB::DST, all_cores, out_tiles);
 
-    // TODO: Unpack to Dst for all CBs
     std::vector<UnpackToDestMode> unpack_to_dst(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     unpack_to_dst[static_cast<unsigned>(AccumulationCB::ACC)] = UnpackToDestMode::UnpackToDestFp32;
 
@@ -107,19 +110,12 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
                                                ? "add_int_tile<DataFormat::Int32>"
                                                : "mul_int_tile<DataFormat::Int32>";
         unpack_to_dst[static_cast<unsigned>(AccumulationCB::SRC)] = UnpackToDestMode::UnpackToDestFp32;
-
-    } else if (dst_cb_data_format == DataFormat::Float32 || operation_attributes.op == AccumulationOp::CUMSUM) {
+    } else {
         defines_kernel_args["BINARY_OP_INIT"] =
             operation_attributes.op == AccumulationOp::CUMSUM ? "add_binary_tile_init" : "mul_binary_tile_init";
         defines_kernel_args["BINARY_OP"] =
             operation_attributes.op == AccumulationOp::CUMSUM ? "add_binary_tile" : "mul_binary_tile";
         unpack_to_dst[static_cast<unsigned>(AccumulationCB::SRC)] = UnpackToDestMode::UnpackToDestFp32;
-    } else {
-        defines_kernel_args["USE_FPU"] = "1";
-        defines_kernel_args["BINARY_OP_INIT"] =
-            operation_attributes.op == AccumulationOp::CUMSUM ? "add_tiles_init" : "mul_tiles_init";
-        defines_kernel_args["BINARY_OP"] =
-            operation_attributes.op == AccumulationOp::CUMSUM ? "add_tiles" : "mul_tiles";
     }
 
     float default_acc_value = 0.f;
@@ -129,7 +125,6 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
             default_acc_value = std::bit_cast<float>(1U);
         }
     }
-    defines_kernel_args["DEFAULT_ACC_VALUE"] = fmt::format("{}", default_acc_value);
 
     std::vector<uint32_t> reader_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
@@ -144,7 +139,7 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
         .fp32_dest_acc_en = true,
         .unpack_to_dest_mode = unpack_to_dst,
         .math_approx_mode = false,
-        .compile_args = {},
+        .compile_args = {std::bit_cast<uint32_t>(default_acc_value)},
         .defines = defines_kernel_args};
 
     std::vector<uint32_t> writer_compile_time_args;
