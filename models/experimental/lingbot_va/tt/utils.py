@@ -27,6 +27,10 @@ from models.tt_dit.parallel.config import (
 from models.tt_dit.parallel.manager import CCLManager
 from models.experimental.lingbot_va.tt.vae_encoder import WanVAEEncoder, patch_wan_causal_conv_wormhole_bf16_parity
 from models.experimental.lingbot_va.tt.vae_decoder import WanVAEDecoder
+from models.experimental.lingbot_va.tests.mesh_utils import (
+    vae_bcthw_to_torch,
+    vae_hw_parallel_config_for_mesh,
+)
 from models.tt_dit.models.vae.vae_wan2_1 import WanCausalConv3d
 from models.tt_dit.utils.conv3d import aligned_channels, conv_pad_in_channels, conv_pad_height, conv_unpad_height
 
@@ -506,10 +510,7 @@ def load_vae_decoder(
     state = {k: v.cpu() for k, v in vae_model.state_dict().items()}
     cfg = vae_model.config
     if parallel_config is None:
-        parallel_config = VaeHWParallelConfig(
-            height_parallel=ParallelFactor(factor=1, mesh_axis=0),
-            width_parallel=ParallelFactor(factor=1, mesh_axis=1),
-        )
+        parallel_config = vae_hw_parallel_config_for_mesh(mesh_device)
     if ccl_manager is None:
         ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
 
@@ -544,10 +545,7 @@ class WanVAEDecoderWrapper:
         parallel_config: "VaeHWParallelConfig | None" = None,
     ):
         self.vae = vae_model
-        self.parallel_config = parallel_config or VaeHWParallelConfig(
-            height_parallel=ParallelFactor(factor=1, mesh_axis=0),
-            width_parallel=ParallelFactor(factor=1, mesh_axis=1),
-        )
+        self.parallel_config = parallel_config or vae_hw_parallel_config_for_mesh(mesh_device)
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager or CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
         self.decoder = load_vae_decoder(
@@ -596,7 +594,7 @@ class WanVAEDecoderWrapper:
         try:
             tt_video_BCTHW, new_logical_h = self.decoder(tt_latents_BTHWC, logical_h)
             ttnn.synchronize_device(self.mesh_device)
-            video_torch = ttnn.to_torch(tt_video_BCTHW)
+            video_torch = vae_bcthw_to_torch(tt_video_BCTHW, self.mesh_device, self.parallel_config, self.ccl_manager)
             video_torch = video_torch[:, :, :, :new_logical_h, :]
             ps = getattr(self.vae.config, "patch_size", None)
             if ps and ps > 1:
