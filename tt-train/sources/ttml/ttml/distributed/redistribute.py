@@ -16,39 +16,27 @@ import ttml
 from .layout import DistributedLayout, Shard, Replicate, get_layout, set_layout
 
 
-def _redistribute_impl(
-    tensor, current_layout: DistributedLayout, target_layout: DistributedLayout
-):
+def _redistribute_impl(tensor, current_layout: DistributedLayout, target_layout: DistributedLayout):
     """Perform redistribution using ttml autograd-aware collectives.
 
     Uses regular all_gather / scatter. Gradient handling (e.g. GradOutputType.REPLICATED)
     is a post_collective concern and is passed as post_collective args in dispatch.
     """
     result = tensor
-    for mesh_axis, (cur, tgt) in enumerate(
-        zip(current_layout.placements, target_layout.placements)
-    ):
+    for mesh_axis, (cur, tgt) in enumerate(zip(current_layout.placements, target_layout.placements)):
         if cur == tgt:
             continue
 
         if isinstance(cur, Shard) and isinstance(tgt, Replicate):
             # Shard -> Replicate: all_gather
-            result = ttml.ops.distributed.all_gather(
-                result, dim=cur.dim, cluster_axis=mesh_axis
-            )
+            result = ttml.ops.distributed.all_gather(result, dim=cur.dim, cluster_axis=mesh_axis)
         elif isinstance(cur, Replicate) and isinstance(tgt, Shard):
             # Replicate -> Shard: scatter
-            result = ttml.ops.distributed.scatter(
-                result, dim=tgt.dim, cluster_axis=mesh_axis
-            )
+            result = ttml.ops.distributed.scatter(result, dim=tgt.dim, cluster_axis=mesh_axis)
         elif isinstance(cur, Shard) and isinstance(tgt, Shard):
             # Shard(dim_a) -> Shard(dim_b): all_gather then scatter
-            result = ttml.ops.distributed.all_gather(
-                result, dim=cur.dim, cluster_axis=mesh_axis
-            )
-            result = ttml.ops.distributed.scatter(
-                result, dim=tgt.dim, cluster_axis=mesh_axis
-            )
+            result = ttml.ops.distributed.all_gather(result, dim=cur.dim, cluster_axis=mesh_axis)
+            result = ttml.ops.distributed.scatter(result, dim=tgt.dim, cluster_axis=mesh_axis)
 
     set_layout(result, target_layout)
     return result

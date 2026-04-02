@@ -31,7 +31,6 @@ from .utils import is_distributed
 
 import ttml
 
-
 # ---------------------------------------------------------------------------
 # Raw-op registry: keeps original (unwrapped) callables
 # ---------------------------------------------------------------------------
@@ -51,9 +50,7 @@ def _get_raw(op_name: str) -> Callable:
 _COLLECTIVE_OPS_DIM_CLUSTER = frozenset({"scatter", "all_gather", "reduce_scatter"})
 
 
-def _rule_kwargs_for_op(
-    op_name: str, other_args: List[Any], kwargs: Dict[str, Any]
-) -> Dict[str, Any]:
+def _rule_kwargs_for_op(op_name: str, other_args: List[Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
     """Merge leading non-tensor args into kwargs for collectives that take ``dim`` / ``cluster_axis``.
 
     Non-tensor positionals are still forwarded to ``raw`` via ``*other_args``; this copy
@@ -77,11 +74,7 @@ def _rule_kwargs_for_op(
 def _fallback_replicated(op_name: str, tensor_args, other_args, kwargs):
     """Gather every distributed tensor to replicated, run the raw op, return replicated output."""
     runtime = get_runtime()
-    ndim = (
-        len(runtime.mesh_shape)
-        if runtime and hasattr(runtime.mesh_shape, "__len__")
-        else 2
-    )
+    ndim = len(runtime.mesh_shape) if runtime and hasattr(runtime.mesh_shape, "__len__") else 2
     rep = replicated_layout(ndim)
 
     gathered = []

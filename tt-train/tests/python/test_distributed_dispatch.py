@@ -294,9 +294,7 @@ class TestDistributedMesh:
         mesh = ttml.autograd.AutoContext.get_instance().get_device()
         layout = _layout_rep_shard(1, -1)
         np_data = np.ones((1, 1, 4, 16), dtype=np.float32)
-        t = ttml.autograd.Tensor.from_numpy(
-            np_data.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE
-        )
+        t = ttml.autograd.Tensor.from_numpy(np_data.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE)
         out = distribute_tensor(t, mesh, layout)
         assert get_layout(out) == layout
 
@@ -355,16 +353,12 @@ class TestDistributedMesh:
         np_x = self._nz(1, 1, 8, 64)
         np_w = self._nz(1, 1, 128, 64)
         x = distribute_tensor(
-            ttml.autograd.Tensor.from_numpy(
-                np_x.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE
-            ),
+            ttml.autograd.Tensor.from_numpy(np_x.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE),
             mesh,
             replicated_layout(2),
         )
         w_col = distribute_tensor(
-            ttml.autograd.Tensor.from_numpy(
-                np_w.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE
-            ),
+            ttml.autograd.Tensor.from_numpy(np_w.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE),
             mesh,
             _layout_col_parallel(1),
         )
@@ -375,16 +369,12 @@ class TestDistributedMesh:
         np_x2 = self._nz(1, 1, 8, 128)
         np_w2 = self._nz(1, 1, 64, 128)
         x2 = distribute_tensor(
-            ttml.autograd.Tensor.from_numpy(
-                np_x2.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE
-            ),
+            ttml.autograd.Tensor.from_numpy(np_x2.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE),
             mesh,
             _layout_rep_shard(1, -1),
         )
         w_row = distribute_tensor(
-            ttml.autograd.Tensor.from_numpy(
-                np_w2.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE
-            ),
+            ttml.autograd.Tensor.from_numpy(np_w2.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE),
             mesh,
             _layout_row_parallel(1),
         )
@@ -431,12 +421,8 @@ class TestDistributedMesh:
             return w1, w2
 
         def _load_weights(m: TwoLayerSiluMLP, w1_np, w2_np):
-            m.fc1.weight.tensor = ttml.autograd.Tensor.from_numpy(
-                np.asarray(w1_np), layout=ttnn.Layout.TILE
-            )
-            m.fc2.weight.tensor = ttml.autograd.Tensor.from_numpy(
-                np.asarray(w2_np), layout=ttnn.Layout.TILE
-            )
+            m.fc1.weight.tensor = ttml.autograd.Tensor.from_numpy(np.asarray(w1_np), layout=ttnn.Layout.TILE)
+            m.fc2.weight.tensor = ttml.autograd.Tensor.from_numpy(np.asarray(w2_np), layout=ttnn.Layout.TILE)
             # from_numpy defaults to no grad; need True for weight grads after backward
             m.fc1.weight.tensor.set_requires_grad(True)
             m.fc2.weight.tensor.set_requires_grad(True)
@@ -450,12 +436,8 @@ class TestDistributedMesh:
         set_runtime(None)
         m_ref = TwoLayerSiluMLP()
         _load_weights(m_ref, w1_np, w2_np)
-        m_ref.fc1.weight.tensor = distribute_tensor(
-            m_ref.fc1.weight.tensor, mesh, rep, requires_grad=True
-        )
-        m_ref.fc2.weight.tensor = distribute_tensor(
-            m_ref.fc2.weight.tensor, mesh, rep, requires_grad=True
-        )
+        m_ref.fc1.weight.tensor = distribute_tensor(m_ref.fc1.weight.tensor, mesh, rep, requires_grad=True)
+        m_ref.fc2.weight.tensor = distribute_tensor(m_ref.fc2.weight.tensor, mesh, rep, requires_grad=True)
         x_ref = distribute_tensor(
             ttml.autograd.Tensor.from_numpy(np_x, layout=ttnn.Layout.TILE),
             mesh,
@@ -484,9 +466,7 @@ class TestDistributedMesh:
         }
         parallelize_module(m_tp, mesh, tp_plan, tp_axis=tp_axis)
         x_tp = distribute_tensor(
-            ttml.autograd.Tensor.from_numpy(
-                np_x.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE
-            ),
+            ttml.autograd.Tensor.from_numpy(np_x.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE),
             mesh,
             rep,
             requires_grad=True,
@@ -500,14 +480,10 @@ class TestDistributedMesh:
         w1g_tp = m_tp.fc1.weight.tensor.get_grad_tensor()
         w2g_tp = m_tp.fc2.weight.tensor.get_grad_tensor()
         assert w1g_tp is not None and w2g_tp is not None, "TP weight grads missing"
-        w1g_tp_full = ttml.ops.distributed.all_gather(
-            w1g_tp, dim=2, cluster_axis=tp_axis
-        )
+        w1g_tp_full = ttml.ops.distributed.all_gather(w1g_tp, dim=2, cluster_axis=tp_axis)
         w1g_tp_np = np.asarray(w1g_tp_full.to_numpy(composer=composer)[:1])
 
-        w2g_tp_full = ttml.ops.distributed.all_gather(
-            w2g_tp, dim=3, cluster_axis=tp_axis
-        )
+        w2g_tp_full = ttml.ops.distributed.all_gather(w2g_tp, dim=3, cluster_axis=tp_axis)
         w2g_tp_np = np.asarray(w2g_tp_full.to_numpy(composer=composer)[:1])
 
         thr = 0.99
@@ -534,9 +510,7 @@ class TestDistributedMesh:
         )
         np_x = self._nz(1, 1, 16, 64)
         x = distribute_tensor(
-            ttml.autograd.Tensor.from_numpy(
-                np_x.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE
-            ),
+            ttml.autograd.Tensor.from_numpy(np_x.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE),
             mesh,
             replicated_layout(2),
             requires_grad=True,
@@ -586,9 +560,7 @@ class TestDistributedMesh:
         layout = _layout_rep_shard(1, -1)
         np_data = self._nz(1, 1, 8, 32)
         x = distribute_tensor(
-            ttml.autograd.Tensor.from_numpy(
-                np_data.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE
-            ),
+            ttml.autograd.Tensor.from_numpy(np_data.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE),
             mesh,
             layout,
         )
@@ -640,9 +612,7 @@ class TestDistributedMesh:
 
         np_x = self._nz(1, 1, 16, 64).astype(np.float32)
         x = distribute_tensor(
-            ttml.autograd.Tensor.from_numpy(
-                np_x.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE
-            ),
+            ttml.autograd.Tensor.from_numpy(np_x.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE),
             mesh,
             replicated_layout(2),
         )

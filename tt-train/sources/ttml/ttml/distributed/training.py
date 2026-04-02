@@ -23,7 +23,6 @@ from .rules.registry import get_module_rule
 from .style import ParallelStyle
 from ._register_ops import init_ops
 
-
 # ---------------------------------------------------------------------------
 # distribute_tensor
 # ---------------------------------------------------------------------------
@@ -50,9 +49,7 @@ def distribute_tensor(
     """
     # Preserve requires_grad and dtype from original tensor (ttml.autograd.Tensor: get_requires_grad, dtype)
     orig_requires_grad = tensor.get_requires_grad()
-    final_requires_grad = (
-        requires_grad if requires_grad is not None else orig_requires_grad
-    )
+    final_requires_grad = requires_grad if requires_grad is not None else orig_requires_grad
     orig_dtype = tensor.dtype()
 
     # Use composer to gather multi-device tensor back to single numpy array.
@@ -76,9 +73,7 @@ def distribute_tensor(
     if shard_dim is not None:
         rank = len(np_data.shape)
         dim = shard_dim if shard_dim >= 0 else rank + shard_dim
-        mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(
-            mesh_device, dim, shard_axis
-        )
+        mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(mesh_device, dim, shard_axis)
     else:
         # Use replicate mapper for fully replicated tensors to get correct 2D topology
         mapper = ttml.core.distributed.replicate_tensor_to_mesh_mapper(mesh_device)
@@ -133,9 +128,7 @@ def _apply_parallelize_plan(
         for name, child in module.named_children():
             if isinstance(child, AbstractModuleBase):
                 child_prefix = f"{prefix}.{name}" if prefix else name
-                _apply_parallelize_plan(
-                    child, mesh_device, plan, tp_axis, cp_axis, child_prefix
-                )
+                _apply_parallelize_plan(child, mesh_device, plan, tp_axis, cp_axis, child_prefix)
         return
 
     # Leaf / non-composite: match a style, or recurse to find children.
@@ -147,9 +140,7 @@ def _apply_parallelize_plan(
     for name, child in module.named_children():
         if isinstance(child, AbstractModuleBase):
             child_prefix = f"{prefix}.{name}" if prefix else name
-            _apply_parallelize_plan(
-                child, mesh_device, plan, tp_axis, cp_axis, child_prefix
-            )
+            _apply_parallelize_plan(child, mesh_device, plan, tp_axis, cp_axis, child_prefix)
 
 
 def parallelize_module(
@@ -180,8 +171,6 @@ def parallelize_module(
     init_ops()
     set_runtime(runtime)
 
-    _apply_parallelize_plan(
-        module, mesh_device, parallelize_plan, tp_axis, cp_axis, prefix=""
-    )
+    _apply_parallelize_plan(module, mesh_device, parallelize_plan, tp_axis, cp_axis, prefix="")
 
     return module

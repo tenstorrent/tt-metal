@@ -71,9 +71,7 @@ class ColwiseParallel(ParallelStyle):
         from ttml.modules import LinearLayer
 
         if not isinstance(module, LinearLayer):
-            raise NotImplementedError(
-                "ColwiseParallel currently only supports LinearLayer!"
-            )
+            raise NotImplementedError("ColwiseParallel currently only supports LinearLayer!")
 
         from .training import distribute_tensor
 
@@ -87,9 +85,7 @@ class ColwiseParallel(ParallelStyle):
         # Distribute bias (sharded on last dim for column-parallel)
         if module.bias is not None:
             ndim = _mesh_ndim(mesh_device)
-            bias_layout = DistributedLayout(
-                ndim=ndim, axis_placements={tp_axis: Shard(-1)}
-            )
+            bias_layout = DistributedLayout(ndim=ndim, axis_placements={tp_axis: Shard(-1)})
             new_b = distribute_tensor(module.bias.tensor, mesh_device, bias_layout)
             module.bias.tensor = new_b
             module.override_tensor(new_b, "bias")
@@ -146,9 +142,7 @@ class RowwiseParallel(ParallelStyle):
         from ttml.modules import LinearLayer
 
         if not isinstance(module, LinearLayer):
-            raise NotImplementedError(
-                "RowwiseParallel currently only supports LinearLayer!"
-            )
+            raise NotImplementedError("RowwiseParallel currently only supports LinearLayer!")
 
         from .training import distribute_tensor
 

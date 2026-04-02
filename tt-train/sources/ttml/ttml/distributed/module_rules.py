@@ -54,13 +54,9 @@ def _distribute_gqa(
         num_groups = module.num_groups
 
         if num_heads % tp_size != 0:
-            raise ValueError(
-                f"num_heads ({num_heads}) must be divisible by tp_size ({tp_size})"
-            )
+            raise ValueError(f"num_heads ({num_heads}) must be divisible by tp_size ({tp_size})")
         if num_groups % tp_size != 0:
-            raise ValueError(
-                f"num_groups ({num_groups}) must be divisible by tp_size ({tp_size})"
-            )
+            raise ValueError(f"num_groups ({num_groups}) must be divisible by tp_size ({tp_size})")
 
         module.num_heads = num_heads // tp_size
         module.num_groups = num_groups // tp_size
@@ -87,9 +83,7 @@ def _distribute_gqa(
             ), f"rope_params not updated: expected {old_seq_len // cp_size}, got {module.rope_params.sequence_length}"
 
             # Swap to ring_attention_sdpa with cp_axis bound
-            module.sdpa = partial(
-                ttml.ops.distributed.ring_attention_sdpa, cp_axis=cp_axis
-            )
+            module.sdpa = partial(ttml.ops.distributed.ring_attention_sdpa, cp_axis=cp_axis)
 
     return module
 

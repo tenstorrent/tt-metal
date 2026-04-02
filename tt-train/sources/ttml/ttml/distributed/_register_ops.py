@@ -78,9 +78,7 @@ def init_ops():
     # -- Attention ---------------------------------------------------------------
 
     _patch(ttml.ops.attention, "scaled_dot_product_attention", "sdpa")
-    _patch(
-        ttml.ops.distributed, "ring_attention_sdpa", "ring_sdpa"
-    )  # Same rule as sdpa, distinct name for trace
+    _patch(ttml.ops.distributed, "ring_attention_sdpa", "ring_sdpa")  # Same rule as sdpa, distinct name for trace
 
     # -- Embedding ---------------------------------------------------------------
 
@@ -88,9 +86,7 @@ def init_ops():
 
     # -- Multi-head utils --------------------------------------------------------
 
-    _patch(
-        ttml.ops.multi_head_utils, "grouped_heads_creation", "grouped_heads_creation"
-    )
+    _patch(ttml.ops.multi_head_utils, "grouped_heads_creation", "grouped_heads_creation")
     _patch(ttml.ops.multi_head_utils, "heads_fusion", "heads_fusion")
     _patch(ttml.ops.multi_head_utils, "heads_creation", "heads_creation")
 

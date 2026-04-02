@@ -14,7 +14,6 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 from ..layout import DistributedLayout
 
-
 # ---------------------------------------------------------------------------
 # Optional CCL types (per-input / per-output)
 # ---------------------------------------------------------------------------
@@ -28,9 +27,7 @@ class CCL(ABC):
         """Apply this collective to tensor and return the result."""
         ...
 
-    def log_dict(
-        self, *, arg_idx: Optional[int] = None, out_idx: Optional[int] = None
-    ) -> Dict[str, Any]:
+    def log_dict(self, *, arg_idx: Optional[int] = None, out_idx: Optional[int] = None) -> Dict[str, Any]:
         """Return a dict for dispatch trace logging."""
         d: Dict[str, Any] = {}
         if arg_idx is not None:
@@ -51,9 +48,7 @@ class Broadcast(CCL):
 
         return ttml.ops.distributed.broadcast(tensor, cluster_axis=self.mesh_axis)
 
-    def log_dict(
-        self, *, arg_idx: Optional[int] = None, out_idx: Optional[int] = None
-    ) -> Dict[str, Any]:
+    def log_dict(self, *, arg_idx: Optional[int] = None, out_idx: Optional[int] = None) -> Dict[str, Any]:
         d = super().log_dict(arg_idx=arg_idx, out_idx=out_idx)
         d["type"] = "broadcast"
         d["mesh_axis"] = self.mesh_axis
@@ -76,9 +71,7 @@ class AllReduce(CCL):
             cluster_axis=self.mesh_axis,
         )
 
-    def log_dict(
-        self, *, arg_idx: Optional[int] = None, out_idx: Optional[int] = None
-    ) -> Dict[str, Any]:
+    def log_dict(self, *, arg_idx: Optional[int] = None, out_idx: Optional[int] = None) -> Dict[str, Any]:
         d = super().log_dict(arg_idx=arg_idx, out_idx=out_idx)
         d["type"] = "all_reduce"
         d["mesh_axis"] = self.mesh_axis
@@ -109,9 +102,7 @@ class AllGather(CCL):
             grad_output_type=grad_type,
         )
 
-    def log_dict(
-        self, *, arg_idx: Optional[int] = None, out_idx: Optional[int] = None
-    ) -> Dict[str, Any]:
+    def log_dict(self, *, arg_idx: Optional[int] = None, out_idx: Optional[int] = None) -> Dict[str, Any]:
         d = super().log_dict(arg_idx=arg_idx, out_idx=out_idx)
         d["type"] = "all_gather"
         d["dim"] = self.dim

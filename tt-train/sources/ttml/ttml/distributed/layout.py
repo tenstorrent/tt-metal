@@ -16,7 +16,6 @@ from typing import List, Optional, Sequence, Tuple, Union
 from .mesh_runtime import get_runtime
 import ttnn
 
-
 # ---------------------------------------------------------------------------
 # Placement types
 # ---------------------------------------------------------------------------
@@ -104,9 +103,7 @@ class DistributedLayout:
             return p.dim
         return None
 
-    def with_placement(
-        self, mesh_axis: int, placement: Placement
-    ) -> "DistributedLayout":
+    def with_placement(self, mesh_axis: int, placement: Placement) -> "DistributedLayout":
         ndim = len(self.placements)
         axis_placements = {}
         for i in range(ndim):
@@ -144,11 +141,7 @@ def layout_from_topology(topology, mesh_ndim: int) -> DistributedLayout:
             placements.append(Shard(dim=p.dim))
         else:
             placements.append(Replicate())
-    axis_placements = {
-        i: placements[i]
-        for i in range(len(placements))
-        if isinstance(placements[i], Shard)
-    }
+    axis_placements = {i: placements[i] for i in range(len(placements)) if isinstance(placements[i], Shard)}
     return DistributedLayout(ndim=mesh_ndim, axis_placements=axis_placements)
 
 
