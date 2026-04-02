@@ -50,6 +50,7 @@ class DeepseekV3LMHead(nn.Module):
     "mode, batch_size_per_row",
     [
         ("decode", 32),
+        ("decode", 8),
         ("prefill", 1024),
     ],
 )
