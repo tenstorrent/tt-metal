@@ -178,6 +178,7 @@ def test_max_row_major(device, input_shape, dim, keepdim):
     ttnn.fill_implicit_tile_padding(
         input_tensor, TEST_PADDING_VALUE
     )  # garbage padding to test that the operation removes it
+
     assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT, "Input should be in ROW_MAJOR_LAYOUT"
 
     output_tensor = ttnn.max(input_tensor, dim=dim, keepdim=keepdim)

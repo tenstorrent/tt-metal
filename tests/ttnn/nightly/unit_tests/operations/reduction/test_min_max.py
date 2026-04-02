@@ -8,6 +8,8 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.utils_for_testing import assert_equal
 
+TEST_PADDING_VALUE = -42
+
 
 @pytest.mark.parametrize(
     "shape_dim",
@@ -61,6 +63,7 @@ def test_min_max_for_dim_hw(device, shape_dim, kind, layout):
         raise AttributeError()
 
     tt_input = ttnn.Tensor(torch_input, ttnn.bfloat16).to(layout).to(device)
+    ttnn.fill_implicit_tile_padding(tt_input, TEST_PADDING_VALUE)  # garbage padding to test that min/max/mean ignore it
     if kind == "max":
         tt_npu = ttnn.max(tt_input)
     elif kind == "min":

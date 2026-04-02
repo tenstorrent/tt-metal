@@ -10,6 +10,8 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
+TEST_PADDING_VALUE = -42
+
 
 def run_moe_test(N, C, H, W, k, E, e, dtype, device):
     torch.manual_seed(2005)
@@ -34,9 +36,15 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
         dim=-1,
         keepdim=True,
     )
-    ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
+    ttnn_input = ttnn.Tensor(input, dtype).pad_to_tile(float("nan")).to(ttnn.TILE_LAYOUT).to(device)
     ttnn_expert_mask = ttnn.from_torch(expert_mask, dtype, layout=ttnn.Layout.TILE, device=device)
+    ttnn.fill_implicit_tile_padding(
+        ttnn_expert_mask, TEST_PADDING_VALUE
+    )  # garbage padding to test that the operation removes it
     ttnn_topE_mask = ttnn.from_torch(topE_mask, dtype, layout=ttnn.Layout.TILE, device=device)
+    ttnn.fill_implicit_tile_padding(
+        ttnn_topE_mask, TEST_PADDING_VALUE
+    )  # garbage padding to test that the operation removes it
 
     for i in range(3):
         weights_1SB1 = ttnn.moe(ttnn_input, ttnn_expert_mask, ttnn_topE_mask, k)

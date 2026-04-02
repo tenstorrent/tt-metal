@@ -7,6 +7,8 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_allclose
 
+TEST_PADDING_VALUE = -42
+
 
 def test_manual_seed_different_argument_calls(device):
     """
