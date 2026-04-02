@@ -501,19 +501,25 @@ Tensor prelu(const Tensor& input_a, const Tensor& input_b, const std::optional<M
 Tensor remainder(
     const Tensor& input_a,
     const Tensor& input_b,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& output_tensor,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     return ttnn::detail::invoke_binary_ng(
         input_a,
         input_b,
         binary::BinaryOpType::REMAINDER,
-        std::nullopt,
+        output_dtype,
         output_mem_config,
-        std::nullopt,
-        {},
-        {},
-        {},
-        std::nullopt,
+        output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy,
         std::nullopt,
         sub_core_grids);
 }
@@ -521,9 +527,15 @@ Tensor remainder(
 Tensor remainder(
     const Tensor& input,
     float scalar,
+    const std::optional<const DataType>& /*output_dtype*/,
     const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& output_tensor,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
+    const std::optional<bool>& /*use_legacy*/,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return ttnn::unary_remainder(input, scalar, output_mem_config, std::nullopt, sub_core_grids);
+    return ttnn::unary_remainder(input, scalar, output_mem_config, output_tensor, sub_core_grids);
 }
 
 // FMOD result = input − (other * trunc(input/other))

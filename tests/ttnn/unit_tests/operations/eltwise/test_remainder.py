@@ -53,6 +53,34 @@ def test_broken_remainder1(input_shapes, device):
     assert torch.allclose(result, golden, atol=0.01, rtol=0)
 
 
+@pytest.mark.parametrize(
+    "input_shapes",
+    ((torch.Size([1, 1, 32, 32])),),
+)
+def test_optional_output_tensor_remainder(input_shapes, device):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.tensor([[5.0, 7.0, -5.0, -7.0, 3.5, 10.0, 1.5, -1.5, 9.0, 15.0]], dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.tensor([[2.0, 4.0, 2.0, 4.0, 2.0, 4.0, 0.5, 0.5, -2.0, -4.0]], dtype=torch.bfloat16)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    torch_golden = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+
+    optional_output_tensor = ttnn.from_torch(torch_golden, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn.remainder(
+        input_tensor_a,
+        input_tensor_b,
+        output_tensor=optional_output_tensor,
+    )
+    optional_output_tensor = ttnn.to_torch(optional_output_tensor)
+
+    assert torch.allclose(optional_output_tensor, torch_golden, atol=0.01, rtol=0)
+
+
 # This test was added for #17361
 # If input is a multiple of the scalar, the result should be 0, but both Torch and TT output either 0 or the scalar value itself depending on the operands.
 # This inconsistency is persistent due to some fp precision loss in both Torch and TT.

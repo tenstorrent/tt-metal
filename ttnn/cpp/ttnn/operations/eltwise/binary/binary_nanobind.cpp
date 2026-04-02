@@ -1666,6 +1666,14 @@ void bind_power(nb::module_& mod, const std::string& note = "") {
 
 void py_module(nb::module_& mod) {
     export_enum<BinaryOpType>(mod, "BinaryOpType");
+    detail::bind_binary_operation<"remainder">(
+        mod,
+        R"doc(Computes the remainder of :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i \mod \mathrm{{input\_tensor\_b}}_i)doc",
+        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::remainder),
+        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::remainder),
+        R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
+        R"doc(BFLOAT16, FLOAT32, INT32)doc");
 
     detail::bind_binary_operation<"add">(
         mod,
@@ -2115,14 +2123,6 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{output\_tensor}} = \verb|fmod|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         static_cast<detail::BinaryOverloadScalarFn>(&ttnn::fmod),
         static_cast<detail::BinaryOverloadTensorFn>(&ttnn::fmod),
-        R"doc(BFLOAT16, FLOAT32, INT32)doc");
-
-    detail::bind_binary_overload_operation<"remainder">(
-        mod,
-        R"doc(Performs an eltwise-modulus operation.)doc",
-        R"doc(\mathrm{{output\_tensor}} = \verb|remainder|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        static_cast<detail::BinaryOverloadScalarFn>(&ttnn::remainder),
-        static_cast<detail::BinaryOverloadTensorFn>(&ttnn::remainder),
         R"doc(BFLOAT16, FLOAT32, INT32)doc");
 
     detail::bind_inplace_operation<"gt_">(
