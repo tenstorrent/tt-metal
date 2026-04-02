@@ -134,7 +134,7 @@
       -m "not skip_post_commit" -vvv --tb=short --timeout 600
   model: deepseek_decode
   skus:
-    bh_loudbox:
+    bh_loudbox_civ2_viommu:
       timeout: 45
   owner_id: U03HY7MK4BT
   team: models
@@ -145,7 +145,7 @@
       -m "not skip_post_commit" -vvv --tb=short --timeout 600
   model: deepseek_decode
   skus:
-    bh_loudbox:
+    bh_loudbox_civ2_viommu:
       timeout: 45
   owner_id: U03HY7MK4BT
   team: models
@@ -156,7 +156,7 @@
       -m "not skip_post_commit" -vvv --tb=short --timeout 600
   model: deepseek_decode
   skus:
-    bh_loudbox:
+    bh_loudbox_civ2_viommu:
       timeout: 30
   owner_id: U03HY7MK4BT
   team: models
@@ -167,7 +167,7 @@
       -m "not skip_post_commit" -vvv --tb=short --timeout 600
   model: deepseek_decode
   skus:
-    bh_loudbox:
+    bh_loudbox_civ2_viommu:
       timeout: 30
   owner_id: U03HY7MK4BT
   team: models
@@ -178,7 +178,7 @@
       -m "not skip_post_commit" -vvv --tb=short --timeout 600
   model: deepseek_decode
   skus:
-    bh_loudbox:
+    bh_loudbox_civ2_viommu:
       timeout: 30
   owner_id: U03HY7MK4BT
   team: models
@@ -189,7 +189,7 @@
       -m "not skip_post_commit" -vvv --tb=short --timeout 600
   model: deepseek_decode
   skus:
-    bh_loudbox:
+    bh_loudbox_civ2_viommu:
       timeout: 30
   owner_id: U03HY7MK4BT
   team: models
@@ -200,7 +200,7 @@
       -m "not skip_post_commit" -vvv --tb=short --timeout 600
   model: deepseek_decode
   skus:
-    bh_loudbox:
+    bh_loudbox_civ2_viommu:
       timeout: 25
   owner_id: U03HY7MK4BT
   team: models
@@ -211,7 +211,7 @@
       -m "not skip_post_commit" -vvv --tb=short --timeout 600
   model: deepseek_decode
   skus:
-    bh_loudbox:
+    bh_loudbox_civ2_viommu:
       timeout: 25
   owner_id: U03HY7MK4BT
   team: models
@@ -222,7 +222,7 @@
       -m "not skip_post_commit" -vvv --tb=short --timeout 900
   model: deepseek_decode
   skus:
-    bh_loudbox:
+    bh_loudbox_civ2_viommu:
       timeout: 60
   owner_id: U03HY7MK4BT
   team: models
@@ -233,7 +233,7 @@
       -m "not skip_post_commit" -vvv --tb=short --timeout 900
   model: deepseek_decode
   skus:
-    bh_loudbox:
+    bh_loudbox_civ2_viommu:
       timeout: 60
   owner_id: U03HY7MK4BT
   team: models
@@ -245,7 +245,7 @@
       -vvv --tb=short --timeout 1200
   model: deepseek_decode
   skus:
-    bh_loudbox:
+    bh_loudbox_civ2_viommu:
       timeout: 90
   owner_id: U03HY7MK4BT
   team: models
@@ -257,7 +257,7 @@
       -vvv --tb=short --timeout 1200
   model: deepseek_decode
   skus:
-    bh_loudbox:
+    bh_loudbox_civ2_viommu:
       timeout: 90
   owner_id: U03HY7MK4BT
   team: models
