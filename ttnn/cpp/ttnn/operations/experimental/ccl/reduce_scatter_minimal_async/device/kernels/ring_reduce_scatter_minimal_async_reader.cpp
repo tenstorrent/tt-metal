@@ -186,6 +186,7 @@ void kernel_main() {
                 // reset addr counters
                 input_pages_read_in_row = interm_pages_read_in_row = start_pages_read_in_row;
                 input_row_offset = interm_row_offset = start_row_offset;
+                output_tiles_read = start_tiles_read;
                 uint32_t tiles_read = start_tiles_read;
                 uint32_t total_tiles_to_read = start_tiles_to_read;
 
