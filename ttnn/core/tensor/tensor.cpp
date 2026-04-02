@@ -114,10 +114,18 @@ Tensor::Tensor(HostTensor tensor) :
 
 Tensor::Tensor(MeshTensor tensor) :
     tensor_id(Tensor::next_tensor_id()),
-    tensor_attributes(std::make_shared<TensorAttributes>(DeviceStorage(std::move(tensor)))) {}
+    tensor_attributes(std::make_shared<TensorAttributes>(DeviceStorage(std::move(tensor)))) {
+    if (auto* device = device_storage().get_device_bypass_deallocate_check()) {
+        mesh_device_ = device;
+    }
+}
 
 Tensor::Tensor(DeviceStorage storage) :
-    tensor_id(Tensor::next_tensor_id()), tensor_attributes(std::make_shared<TensorAttributes>(std::move(storage))) {}
+    tensor_id(Tensor::next_tensor_id()), tensor_attributes(std::make_shared<TensorAttributes>(std::move(storage))) {
+    if (auto* device = device_storage().get_device_bypass_deallocate_check()) {
+        mesh_device_ = device;
+    }
+}
 
 Tensor::Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
     tensor_id(Tensor::next_tensor_id()),

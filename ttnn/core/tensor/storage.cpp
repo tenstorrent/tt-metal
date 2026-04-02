@@ -111,9 +111,10 @@ const distributed::MeshBuffer& DeviceStorage::get_mesh_buffer() const {
 }
 
 bool DeviceStorage::is_sole_owner_of_device_memory() const {
-    const auto& surface_mesh_buffer = mesh_tensor_->mesh_buffer_invariant_breaking();
-    const auto& root_mesh_buffer = get_root_mesh_tensor()->mesh_buffer_invariant_breaking();
-    return surface_mesh_buffer.use_count() == 1 && root_mesh_buffer.use_count() == 1;
+    if (!is_allocated()) {
+        return false;
+    }
+    return mesh_tensor_.use_count() == 1 && get_root_mesh_tensor().use_count() == 1;
 }
 
 const MeshTensor& DeviceStorage::get_mesh_tensor() const {
