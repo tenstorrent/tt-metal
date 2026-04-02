@@ -4,6 +4,7 @@
 
 #pragma once
 #include <ttnn/distributed/distributed_configs.hpp>
+#include <ttnn/types.hpp>
 #include <optional>
 
 namespace ttnn {
