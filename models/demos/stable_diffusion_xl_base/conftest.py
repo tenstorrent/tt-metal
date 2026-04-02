@@ -401,7 +401,7 @@ def _resolve_local_lora_file_path(path_input):
 
 
 @pytest.fixture(scope="function")
-def lora_path(request, is_ci_env, is_ci_v2_env):
+def lora_path(request, is_ci_env, is_ci_v2_env, model_location_generator):
     """
     Resolve LoRA weights path.
     1) --lora-weights: full path to a local .safetensors file.
@@ -429,6 +429,13 @@ def lora_path(request, is_ci_env, is_ci_v2_env):
         )
         hf_repo_id = TEST_LORA_REPO_ID
         hf_filename = TEST_LORA_FILENAME
+
+    if is_ci_v2_env:
+        return model_location_generator(
+            hf_repo_id,
+            download_if_ci_v2=True,
+            ci_v2_timeout_in_s=1800,
+        )
 
     try:
         from huggingface_hub import hf_hub_download

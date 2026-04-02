@@ -41,6 +41,8 @@ def run_demo_inference(
     guidance_scale,
     use_cfg_parallel,
     fixed_seed_for_batch,
+    sdxl_base_pipeline_location,
+    is_ci_v2_env,
     prompt_2=None,
     negative_prompt_2=None,
     crop_coords_top_left=(0, 0),
@@ -79,10 +81,10 @@ def run_demo_inference(
     # 1. Load components
     profiler.start("diffusion_pipeline_from_pretrained")
     pipeline = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        sdxl_base_pipeline_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_v2_env or is_ci_env,
     )
     profiler.end("diffusion_pipeline_from_pretrained")
 
@@ -318,6 +320,8 @@ def test_demo(
     guidance_scale,
     use_cfg_parallel,
     fixed_seed_for_batch,
+    sdxl_base_pipeline_location,
+    is_ci_v2_env,
     prompt_2,
     negative_prompt_2,
     crop_coords_top_left,
@@ -341,6 +345,8 @@ def test_demo(
         guidance_scale,
         use_cfg_parallel,
         fixed_seed_for_batch,
+        sdxl_base_pipeline_location,
+        is_ci_v2_env,
         prompt_2,
         negative_prompt_2,
         crop_coords_top_left,
