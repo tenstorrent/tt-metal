@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from loguru import logger
 
+import ttnn
 from conftest import is_galaxy
 from models.common.utility_functions import is_wormhole_b0
 from models.demos.stable_diffusion_xl_base.lora.config import TEST_LORA_FILENAME, TEST_LORA_REPO_ID
@@ -309,17 +310,15 @@ def reset_config(request):
 
 
 def get_device_name():
-    import ttnn
-
     num_devices = ttnn.GetNumAvailableDevices()
     if is_galaxy():
         return "galaxy"
     elif num_devices == 0:
         return "cpu"
     elif num_devices == 1:
-        return "n150"
+        return "n150" if is_wormhole_b0() else "p150"
     elif num_devices == 2:
-        return "n300"
+        return "n300" if is_wormhole_b0() else "p300"
     elif num_devices == 8:
         return "t3k"
 
@@ -341,8 +340,6 @@ def validate_fabric_compatibility(request):
     This fixture runs before mesh_device creation to catch incompatibilities early.
     It is needed to be able to gracefully fail if the configuration is not possible.
     """
-    import ttnn
-
     params = getattr(request.node, "callspec", {}).params
     use_cfg_parallel = params.get("use_cfg_parallel", None)
     mesh_device_param = params.get("mesh_device", None)
