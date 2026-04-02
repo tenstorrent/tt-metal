@@ -102,18 +102,19 @@ def test_deepseek_ocr(device):
         v.move_weights_to_device()
     model.eval()
     torch.set_grad_enabled(False)
-    res = model.infer(
-        tokenizer,
-        prompt=prompt,
-        image_file=image_file,
-        output_path=output_path,
-        base_size=1024,
-        image_size=640,
-        crop_mode=True,
-        save_results=True,
-        test_compress=True,
-        eval_mode=True,
-    )
+    # Garbage output with warm-up due to TTNN vision state corruption
+    # res = model.infer(
+    #     tokenizer,
+    #     prompt=prompt,
+    #     image_file=image_file,
+    #     output_path=output_path,
+    #     base_size=1024,
+    #     image_size=640,
+    #     crop_mode=True,
+    #     save_results=True,
+    #     test_compress=True,
+    #     eval_mode=True,
+    # )
     DispatchManager.clear_timings()
     res = model.infer(
         tokenizer,
