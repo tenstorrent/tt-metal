@@ -25,7 +25,7 @@ RUN apt-get update && apt-get install -y \
 RUN set -eux; \
     apt-get update && \
     apt-get install -y -f \
-    wget ca-certificates && \
+    wget ca-certificates curl && \
     TMP_DIR="$(mktemp -d)" && \
     DEB_URL="https://github.com/tenstorrent/ompi/releases/download/v5.0.7/openmpi-ulfm_5.0.7-1_amd64.deb" && \
     wget -qO "$TMP_DIR/ompi.deb" "$DEB_URL" && \
