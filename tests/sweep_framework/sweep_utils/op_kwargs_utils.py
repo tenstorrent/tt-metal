@@ -41,6 +41,10 @@ _INFRA_KEYS = frozenset(
         "sweep_name",
         "storage_type",
         "mesh_coords",
+        # Vector export / CI metadata (not op arguments)
+        "timestamp",
+        "input_hash",
+        "tag",
     }
 )
 
