@@ -61,7 +61,7 @@ InterleavedToShardedDeviceOperation::spec_return_value_t InterleavedToShardedDev
     const auto& input_tensor = tensor_args.input_tensor;
     return TensorSpec(
         input_tensor.logical_shape(),
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::TensorLayout::fromPaddedShape(
             operation_attributes.output_dtype,
             PageConfig(input_tensor.layout()),
             operation_attributes.output_mem_config,
