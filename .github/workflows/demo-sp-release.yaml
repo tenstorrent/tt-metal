@@ -90,7 +90,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: bh_p150,bh_p100,bh_llmbox
+      enabled-skus: bh_p150,bh_p100,bh_p300
       model: deepseek_decode
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       job-prefix: "[DeepSeek Decode] "

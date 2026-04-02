@@ -70,12 +70,12 @@
 # DeepSeek V3 B1 Decode Tests (Blitz) - Blackhole 2x2 mesh (BH-LLMBox)
 # ============================================================================
 
-- name: bh_llmbox_DeepSeek_B1_HostIO
+- name: bh_p300_DeepSeek_B1_HostIO
   cmd: |
     TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
   model: deepseek_decode
   skus:
-    bh_llmbox:
+    bh_p300:
       timeout: 10
   owner_id: U03HY7MK4BT
   team: models
