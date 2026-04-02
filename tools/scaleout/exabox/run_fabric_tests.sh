@@ -21,6 +21,8 @@ Optional:
                                         (default: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric)
     --test-config <path>                Path to test configuration file
                                         (default: tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml)
+    --no-show-progress                  Disable real-time progress monitoring (enabled by default)
+    --no-show-workers                   Disable per-device worker/location logging (enabled by default)
     --help                              Display this help message and exit
 
 Example:
@@ -40,6 +42,8 @@ MESH_GRAPH_DESC_PATH=""
 MESH_GRAPH_DESC_PATH_EXPLICIT=false
 TEST_BINARY="./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric"
 TEST_CONFIG="tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml"
+SHOW_PROGRESS=true
+SHOW_WORKERS=true
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -106,6 +110,14 @@ while [[ $# -gt 0 ]]; do
             TEST_CONFIG="$2"
             shift 2
             ;;
+        --no-show-progress)
+            SHOW_PROGRESS=false
+            shift
+            ;;
+        --no-show-workers)
+            SHOW_WORKERS=false
+            shift
+            ;;
         --help)
             show_help
             exit 0
@@ -148,6 +160,14 @@ mkdir -p "$OUTPUT_DIR"
 
 LOG_FILE="$OUTPUT_DIR/fabric_tests_$(date +%Y%m%d_%H%M%S).log"
 
+EXTRA_TEST_FLAGS=""
+if [[ "$SHOW_PROGRESS" == true ]]; then
+    EXTRA_TEST_FLAGS+=" --show-progress"
+fi
+if [[ "$SHOW_WORKERS" == true ]]; then
+    EXTRA_TEST_FLAGS+=" --show-workers"
+fi
+
 echo "=========================================="
 echo "Running fabric tests..."
 echo "Using hosts: $HOSTS"
@@ -169,22 +189,22 @@ echo ""
     -x TT_MESH_ID=0 \
     -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
     -x TT_MESH_HOST_RANK=0 "$TEST_BINARY" \
-    --test_config "$TEST_CONFIG" : \
+    --test_config "$TEST_CONFIG" $EXTRA_TEST_FLAGS : \
     -np 1 \
     -x TT_MESH_ID=0 \
     -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
     -x TT_MESH_HOST_RANK=1 "$TEST_BINARY" \
-    --test_config "$TEST_CONFIG" : \
+    --test_config "$TEST_CONFIG" $EXTRA_TEST_FLAGS : \
     -np 1 \
     -x TT_MESH_ID=0 \
     -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
     -x TT_MESH_HOST_RANK=2 "$TEST_BINARY" \
-    --test_config "$TEST_CONFIG" : \
+    --test_config "$TEST_CONFIG" $EXTRA_TEST_FLAGS : \
     -np 1 \
     -x TT_MESH_ID=0 \
     -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
     -x TT_MESH_HOST_RANK=3 "$TEST_BINARY" \
-    --test_config "$TEST_CONFIG" |& tee "$LOG_FILE"
+    --test_config "$TEST_CONFIG" $EXTRA_TEST_FLAGS |& tee "$LOG_FILE"
 
 echo ""
 echo "=========================================="
