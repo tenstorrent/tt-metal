@@ -652,7 +652,7 @@ def create_torch_expert_weights(
     """
     torch.manual_seed(seed)
     weights_list = []
-    for e in tqdm(range(num_experts), desc="Creating expert weights"):
+    for _ in tqdm(range(num_experts), desc="Creating expert weights"):
         weights = {
             "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
             "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
