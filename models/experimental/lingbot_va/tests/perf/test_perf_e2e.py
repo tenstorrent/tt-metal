@@ -121,13 +121,15 @@ def test_perf_lingbot_va_e2e_2cq_trace(
         frame_chunk_size=1,
     )
 
-    image_host, dram_input_memory_config, l1_input_memory_config = _host_input_tensor_for_pipeline(mesh_device)
+    # Must match models["mesh_device"] (e.g. (1,1) submesh when LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH=1).
+    work_mesh = tt_model.models["mesh_device"]
+    image_host, dram_input_memory_config, l1_input_memory_config = _host_input_tensor_for_pipeline(work_mesh)
 
     pipe_cfg = PipelineConfig(use_trace=True, num_command_queues=2, all_transfers_on_separate_command_queue=False)
     pipeline = create_pipeline_from_config(
         pipe_cfg,
         tt_model,
-        mesh_device,
+        work_mesh,
         dram_input_memory_config=dram_input_memory_config,
         l1_input_memory_config=l1_input_memory_config,
     )
