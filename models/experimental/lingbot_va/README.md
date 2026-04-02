@@ -125,10 +125,13 @@ Run pytest from the **tt-metal** repo root with `PYTHONPATH=$TT_METAL_HOME` (or 
 TTNN vs PyTorch reference; values are **PCC × 100** (%).
 
 
-| Path        | PCC (%) |
-| ----------- | ------- |
-| Action path | 99.9966 |
-| Video path  | 99.9684 |
+| Component / path        | PCC (%) |
+| ----------------------- | ------- |
+| WanTransformer (action) | 99.9937 |
+| WanTransformer (video)  | 99.7345 |
+| Text encoder (UMT5)     | 99.5643 |
+| VAE encoder             | 99.7292 |
+| VAE decoder             | 98.6633 |
 
 
 ```bash
@@ -154,6 +157,8 @@ pytest models/experimental/lingbot_va/tests/pcc/test_encoder_wan.py::test_umt5_e
 
 **Device perf (Tracy / bare-metal):**
 
+#### N150
+
 ```bash
 pytest models/experimental/lingbot_va/tests/perf/test_perf_ttnn_lingbot_va.py::test_perf_device_bare_metal_lingbot_va -v -s
 ```
@@ -161,6 +166,21 @@ pytest models/experimental/lingbot_va/tests/perf/test_perf_ttnn_lingbot_va.py::t
 **End-to-end perf (pipeline wall-clock, `prep_perf_report`):**
 
 ```bash
+pytest models/experimental/lingbot_va/tests/perf/test_perf_e2e.py::test_perf_lingbot_va_e2e_2cq_trace -v -s
+```
+
+#### N300 (Single-Mesh)
+
+```bash
+export LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH=1
+pytest models/experimental/lingbot_va/tests/perf/test_perf_ttnn_lingbot_va.py::test_perf_device_bare_metal_lingbot_va -v -s
+```
+
+**End-to-end perf (pipeline wall-clock, `prep_perf_report`):**
+
+
+```bash
+export LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH=1
 pytest models/experimental/lingbot_va/tests/perf/test_perf_e2e.py::test_perf_lingbot_va_e2e_2cq_trace -v -s
 ```
 
@@ -215,6 +235,7 @@ Ensure `--images-dir` contains the three `observation.images.*.png` files, or se
 2. **PCC and intermediate dumps:** For several checks, **TT outputs and PCC are validated against intermediate tensors** produced by the PyTorch reference on a **separate host** (saved dumps from that run), rather than from a freshly executed reference path collocated with every TT invocation.
 3. **TT-Perf-Report:** When generating reports from the device perf test, some versions of tt-perf-report crash in evaluate_fidelity with KeyError: 'FLOAT32' because the matmul advice path does not list FLOAT32 in its internal datatype → mantissa lookup.
 4. Multi-device support is not currently available.
+5. VAE Decoder pcc is ~0.98.
 
 ## Model Notes
 

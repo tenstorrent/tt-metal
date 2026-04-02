@@ -5,21 +5,22 @@
 
 Multi-device setup aligned with ``test_encoder_wan.py`` / ``models/tt_dit/tests/encoders/umt5/test_umt5.py``:
 
-- ``device_params`` with ``fabric_config=FABRIC_1D`` (indirect) for fabric-backed dispatch / CCL.
-- ``num_links`` (indirect) passed into ``CCLManager`` (default ``1``).
-- ``mesh_device`` from ``mesh_shape_request_param()`` (``MESH_DEVICE`` / device count), same as other Lingbot PCC tests.
+- ``device_params`` with ``fabric_config=FABRIC_1D`` (``line_params``) for fabric-backed dispatch / CCL.
+- ``num_links`` passed into ``CCLManager`` (default ``1``).
+- ``mesh_device`` from ``mesh_shape_request_param()`` (``MESH_DEVICE`` / device count).
 
 ``vae_hw_parallel_config_for_mesh`` supplies H/W mesh axes for ``WanVAEEncoder`` (rows×cols on multi-chip meshes).
 
 **Wall time:** ``pytestmark = pytest.mark.timeout(600)``.
 """
 
+import os
+
 import pytest
 import torch
 import ttnn
 from diffusers import AutoencoderKLWan
 
-from models.common.metrics import compute_pcc
 from models.experimental.lingbot_va.tests.mesh_utils import (
     mesh_shape_request_param,
     vae_bthwc_to_torch,
@@ -27,12 +28,17 @@ from models.experimental.lingbot_va.tests.mesh_utils import (
 )
 from models.experimental.lingbot_va.tt.vae_encoder import WanVAEEncoder
 from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.conv3d import conv_pad_height, conv_pad_in_channels, conv_unpad_height
+from models.tt_dit.utils.test import line_params
+
+os.environ.setdefault("TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT", "0")
 
 pytestmark = pytest.mark.timeout(600)
 
 CHECKPOINT_PATH = "models/experimental/lingbot_va/reference/checkpoints/vae"
-PCC_THRESHOLD = 0.99
+MIN_PCC = 0.99
+MAX_RELATIVE_RMSE = 0.2
 BATCH_SIZE = 1
 VIDEO_T = 1
 VIDEO_H = 256
@@ -40,24 +46,17 @@ VIDEO_W = 320
 
 
 @pytest.fixture
-def num_links(request):
-    """CCL link count; indirect param (aligned with ``test_encoder_wan`` / tt_dit UMT5 tests)."""
-    return request.param
-
-
-@pytest.fixture
-def vae_ccl_manager(mesh_device, num_links):
+def vae_ccl_manager(mesh_device, num_links, topology):
     """Fabric-backed CCL for VAE conv / halo paths on multi-device meshes."""
     return CCLManager(
         mesh_device=mesh_device,
         num_links=num_links,
-        topology=ttnn.Topology.Linear,
+        topology=topology,
     )
 
 
 @pytest.fixture(scope="module")
 def vae():
-    # bf16 conv on CPU is very slow; fp32 uses fast MKL paths (same idea as test_vae_decoder.py).
     model = AutoencoderKLWan.from_pretrained(
         CHECKPOINT_PATH,
         torch_dtype=torch.float32,
@@ -128,18 +127,23 @@ def encode_ttnn(vae, video, mesh_device, ccl_manager):
     return out.permute(0, 4, 1, 2, 3)
 
 
+@pytest.mark.usefixtures("reset_seeds")
 @pytest.mark.parametrize(
-    "mesh_device",
-    [mesh_shape_request_param()],
-    indirect=True,
+    ("mesh_device", "num_links", "device_params", "topology"),
+    [
+        pytest.param(
+            mesh_shape_request_param(),
+            1,
+            line_params,
+            ttnn.Topology.Linear,
+            id="lingbot_vae_encoder_pcc",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("num_links", [1], indirect=True)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
-)
-def test_encode_one_video_pcc(mesh_device, num_links, vae_ccl_manager, vae):
+def test_encode_one_video_pcc(mesh_device, num_links, topology, vae_ccl_manager, vae):
+    assert num_links >= 1
+    assert topology == ttnn.Topology.Linear
     mesh_device.enable_program_cache()
     torch.manual_seed(42)
     video = torch.randn(BATCH_SIZE, 3, VIDEO_T, VIDEO_H, VIDEO_W, dtype=torch.float32) * 2.0 - 1.0
@@ -159,8 +163,4 @@ def test_encode_one_video_pcc(mesh_device, num_links, vae_ccl_manager, vae):
     ttnn_trim = ttnn_out[:, :min_c, :min_t, :min_h, :min_w]
     assert torch_trim.shape == ttnn_trim.shape
 
-    pcc = compute_pcc(ttnn_trim, torch_trim)
-    max_err = (torch_trim - ttnn_trim).abs().max().item()
-    mean_err = (torch_trim - ttnn_trim).abs().mean().item()
-
-    assert pcc >= PCC_THRESHOLD, f"PCC {pcc:.6f} < {PCC_THRESHOLD} (max_err={max_err:.6f}, mean_err={mean_err:.6f})"
+    assert_quality(torch_trim, ttnn_trim, pcc=MIN_PCC, relative_rmse=MAX_RELATIVE_RMSE)
