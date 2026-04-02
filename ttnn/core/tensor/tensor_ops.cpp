@@ -276,7 +276,7 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
             input_buffer.address());
 
         MeshTensor view_mesh_tensor(std::move(view_mesh_buffer), new_spec, input_tensor.tensor_topology());
-        DeviceStorage view_storage(std::move(view_mesh_tensor));
+        DeviceStorage view_storage(input_tensor.device_storage(), std::move(view_mesh_tensor));
         return Tensor(std::move(view_storage));
     }
     if (!input_tensor.memory_config().is_sharded()) {
@@ -289,7 +289,7 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
             input_buffer.global_config(), new_device_config, input_buffer.device(), input_buffer.address());
 
         MeshTensor view_mesh_tensor(std::move(view_mesh_buffer), new_spec, input_tensor.tensor_topology());
-        DeviceStorage view_storage(std::move(view_mesh_tensor));
+        DeviceStorage view_storage(input_tensor.device_storage(), std::move(view_mesh_tensor));
         return Tensor(std::move(view_storage));
     }
 
