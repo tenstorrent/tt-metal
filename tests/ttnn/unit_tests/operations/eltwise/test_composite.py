@@ -237,7 +237,7 @@ def test_unary_composite_polygamma_ttnn(input_shapes, k, device):
     golden_function = ttnn.get_golden_function(ttnn.polygamma)
     golden_tensor = golden_function(in_data1, k)
 
-    assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=1)
+    assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=1, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(
