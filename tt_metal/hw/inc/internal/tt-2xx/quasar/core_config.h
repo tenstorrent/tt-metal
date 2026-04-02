@@ -10,7 +10,8 @@ enum ProgrammableCoreType {
     TENSIX = 0,
     ACTIVE_ETH = 1,
     IDLE_ETH = 2,
-    COUNT = 3,
+    DRAM = 3,
+    COUNT = 4,
 };
 
 enum class TensixProcessorTypes : uint8_t {

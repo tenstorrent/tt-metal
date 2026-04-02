@@ -80,6 +80,7 @@ CoreRangeSet = ttnn._ttnn.tensor.CoreRangeSet
 CoreRange = ttnn._ttnn.tensor.CoreRange
 CoreCoord = ttnn._ttnn.tensor.CoreCoord
 corerange_to_cores = ttnn._ttnn.tensor.corerange_to_cores
+get_optimal_worker_cores_for_sharded_tensor = ttnn._ttnn.tensor.get_optimal_worker_cores_for_sharded_tensor
 
 QueueId = ttnn._ttnn.types.QueueId
 

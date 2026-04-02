@@ -731,23 +731,22 @@ void py_module(nb::module_& mod) {
 
             When sharded output tensors are provided, they should match :attr:`input_tensor_a`'s buffer type and memory layout.
         )doc",
-        ttnn::overload_t(
-            &matmul,
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::kw_only(),
-            nb::arg("transpose_a") = false,
-            nb::arg("transpose_b") = false,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("program_config") = nb::none(),
-            nb::arg("activation") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("core_grid") = nb::none(),
-            nb::arg("output_tile") = nb::none(),
-            nb::arg("optional_output_tensor") = nb::none(),
-            nb::arg("global_cb") = nb::none(),
-            nb::arg("sub_device_id") = nb::none()));
+        &matmul,
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::kw_only(),
+        nb::arg("transpose_a") = false,
+        nb::arg("transpose_b") = false,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("activation") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("core_grid") = nb::none(),
+        nb::arg("output_tile") = nb::none(),
+        nb::arg("optional_output_tensor") = nb::none(),
+        nb::arg("global_cb") = nb::none(),
+        nb::arg("sub_device_id") = nb::none());
 
     ttnn::bind_function<"linear">(
         mod,
@@ -803,24 +802,23 @@ void py_module(nb::module_& mod) {
         Returns:
             ttnn.Tensor: the output tensor.
         )doc",
-        ttnn::overload_t(
-            &linear,
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::kw_only(),
-            nb::arg("bias") = nb::none(),
-            nb::arg("transpose_a") = false,
-            nb::arg("transpose_b") = false,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("program_config") = nb::none(),
-            nb::arg("activation") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("core_grid") = nb::none(),
-            nb::arg("output_tile") = nb::none(),
-            nb::arg("optional_output_tensor") = nb::none(),
-            nb::arg("global_cb") = nb::none(),
-            nb::arg("sub_device_id") = nb::none()));
+        &linear,
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::kw_only(),
+        nb::arg("bias") = nb::none(),
+        nb::arg("transpose_a") = false,
+        nb::arg("transpose_b") = false,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("activation") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("core_grid") = nb::none(),
+        nb::arg("output_tile") = nb::none(),
+        nb::arg("optional_output_tensor") = nb::none(),
+        nb::arg("global_cb") = nb::none(),
+        nb::arg("sub_device_id") = nb::none());
 
     ttnn::bind_function<"matmul_batched_weights">(
         mod,
@@ -870,23 +868,22 @@ void py_module(nb::module_& mod) {
         Returns:
             List of ttnn.Tensor: the output tensors.
         )doc",
-        ttnn::overload_t(
-            &matmul_batched_weights,
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensors_b"),
-            nb::kw_only(),
-            nb::arg("transpose_a") = false,
-            nb::arg("transpose_b") = false,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("program_config") = nb::none(),
-            nb::arg("activation") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("core_grid") = nb::none(),
-            nb::arg("output_tile") = nb::none(),
-            nb::arg("optional_output_tensor") = nb::none(),
-            nb::arg("global_cb") = nb::none(),
-            nb::arg("sub_device_id") = nb::none()));
+        &matmul_batched_weights,
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensors_b"),
+        nb::kw_only(),
+        nb::arg("transpose_a") = false,
+        nb::arg("transpose_b") = false,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("activation") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("core_grid") = nb::none(),
+        nb::arg("output_tile") = nb::none(),
+        nb::arg("optional_output_tensor") = nb::none(),
+        nb::arg("global_cb") = nb::none(),
+        nb::arg("sub_device_id") = nb::none());
 
     ttnn::bind_function<"addmm">(
         mod,
@@ -956,21 +953,20 @@ void py_module(nb::module_& mod) {
             ttnn.Tensor: output tensor of shape (n, p)
 
         )doc",
-        ttnn::overload_t(
-            &addmm,
-            nb::arg("input_tensor"),
-            nb::arg("mat1_tensor"),
-            nb::arg("mat2_tensor"),
-            nb::kw_only(),
-            nb::arg("alpha") = 1.0,
-            nb::arg("beta") = 1.0,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("core_grid") = nb::none(),
-            nb::arg("output_tile") = nb::none(),
-            nb::arg("optional_output_tensor") = nb::none()));
+        &addmm,
+        nb::arg("input_tensor"),
+        nb::arg("mat1_tensor"),
+        nb::arg("mat2_tensor"),
+        nb::kw_only(),
+        nb::arg("alpha") = 1.0,
+        nb::arg("beta") = 1.0,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("core_grid") = nb::none(),
+        nb::arg("output_tile") = nb::none(),
+        nb::arg("optional_output_tensor") = nb::none());
 
     ttnn::bind_function<"sparse_matmul">(
         mod,
@@ -1081,24 +1077,23 @@ void py_module(nb::module_& mod) {
                   - Interleaved (L1/DRAM)
                   - Interleaved (L1/DRAM)
         )doc",
-        ttnn::overload_t(
-            &sparse_matmul,
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::kw_only(),
-            nb::arg("sparsity"),
-            nb::arg("program_config"),
-            nb::arg("nnz") = nb::none(),
-            nb::arg("is_input_a_sparse") = false,
-            nb::arg("is_input_b_sparse") = true,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("core_grid") = nb::none(),
-            nb::arg("output_tile") = nb::none(),
-            nb::arg("optional_output_tensor") = nb::none(),
-            nb::arg("global_cb") = nb::none(),
-            nb::arg("sub_device_id") = nb::none()));
+        &sparse_matmul,
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::kw_only(),
+        nb::arg("sparsity"),
+        nb::arg("program_config"),
+        nb::arg("nnz") = nb::none(),
+        nb::arg("is_input_a_sparse") = false,
+        nb::arg("is_input_b_sparse") = true,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("core_grid") = nb::none(),
+        nb::arg("output_tile") = nb::none(),
+        nb::arg("optional_output_tensor") = nb::none(),
+        nb::arg("global_cb") = nb::none(),
+        nb::arg("sub_device_id") = nb::none());
 
     // Bind MatmulParams for descriptor-based operations
     nb::class_<ttnn::prim::MatmulParams>(mod, "MatmulParams")

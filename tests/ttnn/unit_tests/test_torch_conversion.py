@@ -530,6 +530,7 @@ def test_numpy_conversion_unsigned_edge_cases_fixed(
         (torch.float32, ttnn.bfloat16, [1, 7, 1, 128], [7 * 32, 32], 4, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
         (torch.bfloat16, ttnn.bfloat16, [1, 3, 1, 64], [3 * 32, 32], 2, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
         (torch.bfloat16, ttnn.bfloat16, [2, 7, 64, 128], [2 * 32 * 2, 128], 7, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (torch.bfloat16, ttnn.bfloat16, [1, 1, 1, 7 * 32], [32, 32], 7, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
     ],
 )
 def test_from_torch_sharded_tile_layout_non_tile_aligned_height(
@@ -906,3 +907,168 @@ def test_from_torch_zero_sized_dimension(mesh_device, shape, ttnn_dtype, ttnn_la
 
     assert ttnn_tensor.dtype == ttnn_dtype
     assert ttnn_tensor.layout == ttnn_layout
+
+
+@pytest.mark.parametrize(
+    "shard_height,shard_width,num_cores",
+    [
+        (1, 160, 4),
+        (1, 100, 8),
+        (7, 64, 4),
+    ],
+    ids=["deepseek_v3_lmhead_indices", "arbitrary_width", "non_tile_height"],
+)
+def test_from_torch_row_major_sharded_non_tile_aligned_shard_shape(mesh_device, shard_height, shard_width, num_cores):
+    """
+    Regression test: from_torch with ROW_MAJOR_LAYOUT and a WIDTH_SHARDED memory
+    config whose shard shape is not tile-aligned must not crash.
+
+    Reproduces TT_FATAL in tensor_layout.cpp:
+        Physical shard shape (1, 160) must be tile {32, 32} sized!
+
+    Derived from DeepSeek V3 LMHead stage (stage.py) which creates a uint32
+    indices tensor with per-core shard width of 160 in ROW_MAJOR_LAYOUT.
+    The ROW_MAJOR layout does not require tile-aligned shards, but from_torch
+    was internally constructing a TILE-layout TensorSpec that triggered the
+    tile-alignment assertion.
+    """
+    total_width = shard_width * num_cores
+
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_grid, (shard_height, shard_width), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    torch_tensor = torch.arange(shard_height * total_width, dtype=torch.int32).reshape(shard_height, total_width)
+
+    indices_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=1)
+
+    ttnn_tensor = ttnn.from_torch(
+        torch_tensor,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=memory_config,
+        mesh_mapper=indices_mesh_mapper,
+    )
+
+    assert ttnn_tensor.dtype == ttnn.uint32
+    assert ttnn_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert ttnn_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+
+    result = ttnn.to_torch(ttnn_tensor)
+    torch.testing.assert_close(torch_tensor, result.to(torch.int32))
+
+
+@pytest.mark.parametrize(
+    "ttnn_dtype,torch_dtype,ttnn_layout",
+    [
+        (ttnn.bfloat16, torch.bfloat16, ttnn.TILE_LAYOUT),
+        (ttnn.bfloat16, torch.float32, ttnn.TILE_LAYOUT),
+        (ttnn.float32, torch.float32, ttnn.TILE_LAYOUT),
+        (ttnn.bfloat16, torch.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.float32, torch.float32, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.bfloat8_b, torch.float32, ttnn.TILE_LAYOUT),
+        (ttnn.int32, torch.int32, ttnn.TILE_LAYOUT),
+        (ttnn.int32, torch.int32, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "memory_config",
+    [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+    ids=["DRAM", "L1"],
+)
+def test_from_torch_with_sub_devices(device, ttnn_dtype, torch_dtype, ttnn_layout, memory_config):
+    """
+    Verify that from_torch produces correct results when sub-devices are loaded
+    on the device.
+
+    When num_sub_devices() > 0, the on-device fast path in
+    can_construct_on_device (py_to_tt_tensor.cpp) is disabled and the tensor
+    must be constructed on the host before being sent to the device. This test
+    ensures that the fallback host-side path still yields correct data for
+    various dtype / layout / memory_config combinations.
+    """
+    grid = device.compute_with_storage_grid_size()
+    cols, rows = grid.x, grid.y
+
+    worker_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cols - 1, rows - 1))})
+    worker_sub_device = ttnn.SubDevice([worker_crs])
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+
+    sub_device_manager = device.create_sub_device_manager([worker_sub_device], 0)
+    device.load_sub_device_manager(sub_device_manager)
+    device.set_sub_device_stall_group([worker_sub_device_id])
+
+    try:
+        shape = (1, 1, 32, 64)
+        torch.manual_seed(42)
+
+        if torch_dtype in TORCH_FLOAT_TYPES:
+            torch_tensor = torch.rand(shape, dtype=torch_dtype)
+        else:
+            torch_tensor = torch.randint(0, 100, shape, dtype=torch_dtype)
+
+        ttnn_tensor = ttnn.from_torch(
+            torch_tensor,
+            dtype=ttnn_dtype,
+            layout=ttnn_layout,
+            device=device,
+            memory_config=memory_config,
+        )
+
+        assert ttnn_tensor.dtype == ttnn_dtype
+        assert ttnn_tensor.layout == ttnn_layout
+
+        result = ttnn.to_torch(ttnn_tensor)
+        assert_with_pcc(
+            expected_pytorch_result=torch_tensor,
+            actual_pytorch_result=result,
+            pcc=get_expected_conversion_pcc(ttnn_dtype, torch_dtype),
+        )
+    finally:
+        device.reset_sub_device_stall_group()
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(sub_device_manager)
+
+
+@pytest.mark.parametrize(
+    "torch_dtype,ttnn_dtype,shape",
+    [
+        (torch.float32, ttnn.bfloat16, (8, 32, 2, 7000)),
+    ],
+)
+def test_from_torch_large_tensor_type_conversion_row_major_l1(device, torch_dtype, ttnn_dtype, shape):
+    """
+    Regression test: from_torch with a type conversion (float32 → bfloat16),
+    ROW_MAJOR_LAYOUT, L1_MEMORY_CONFIG, and a mesh_mapper must not OOM.
+
+    Derived from test_all_to_all_combine_no_trace where a float32 [32, 32, 2, 7000]
+    tensor sharded across 4 devices (→ [8, 32, 2, 7000] per device) was converted
+    to bfloat16 in L1. The mesh_mapper path in create_tt_tensor_from_host_data keeps
+    the tensor as float32 on device when has_sufficient_device_memory returns true
+    for the ROW_MAJOR size. Then convert_python_tensor_to_tt_tensor does
+    set_layout(TILE) → typecast → set_layout(ROW_MAJOR), and the tilize step tries
+    to allocate a tile-padded float32 buffer ([8,32,32,7008]*4B ≈ 220 MB) that
+    exceeds L1 bank capacity.
+
+    """
+    torch.manual_seed(42)
+    torch_tensor = torch.rand(shape, dtype=torch_dtype) * 0.2 - 0.1
+
+    ttnn_tensor = ttnn.from_torch(
+        torch_tensor,
+        dtype=ttnn_dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=ReplicateTensorToMesh(device),
+    )
+
+    assert ttnn_tensor.dtype == ttnn_dtype
+    assert ttnn_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+
+    result = ttnn.to_torch(ttnn_tensor)
+    assert_with_pcc(torch_tensor, result, 0.999)
