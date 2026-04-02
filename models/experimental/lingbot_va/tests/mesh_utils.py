@@ -4,6 +4,9 @@
 """Lingbot-VA mesh shape, inference submesh, VAE/UMT5 parallel helpers.
 
 Matches tt-metal root ``conftest`` ``mesh_device`` / ``MESH_DEVICE`` and Lingbot PCC tests.
+
+Includes VAE ``[B,C,T,H,W]`` host readback (spatial all-gather when H/W are sharded on mesh),
+used by ``decode_ttnn`` / demos and by ``models.experimental.lingbot_va.tt.utils``.
 """
 
 from __future__ import annotations
@@ -14,6 +17,43 @@ import ttnn
 
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
+
+
+def vae_hw_parallel_config_for_mesh(mesh_device: ttnn.MeshDevice) -> VaeHWParallelConfig:
+    """Height/width parallel factors from mesh shape (rows×cols), matching Lingbot VAE conv sharding."""
+    if mesh_device.get_num_devices() <= 1:
+        return VaeHWParallelConfig(
+            height_parallel=ParallelFactor(factor=1, mesh_axis=0),
+            width_parallel=ParallelFactor(factor=1, mesh_axis=1),
+        )
+    rows, cols = tuple(mesh_device.shape)
+    return VaeHWParallelConfig(
+        height_parallel=ParallelFactor(factor=rows, mesh_axis=0),
+        width_parallel=ParallelFactor(factor=cols, mesh_axis=1),
+    )
+
+
+def vae_bcthw_to_torch(
+    tt_BCTHW: ttnn.Tensor,
+    mesh_device: ttnn.MeshDevice,
+    parallel_config: VaeHWParallelConfig,
+    ccl_manager: CCLManager,
+) -> torch.Tensor:
+    """Host readback for ``[B,C,T,H,W]`` decoder output; all-gathers H/W when spatially sharded on mesh."""
+    if mesh_device.get_num_devices() <= 1:
+        return ttnn.to_torch(tt_BCTHW)
+    x = ttnn.to_layout(tt_BCTHW, ttnn.TILE_LAYOUT)
+    if parallel_config.height_parallel.factor > 1:
+        x = ccl_manager.all_gather_persistent_buffer(
+            x, dim=3, mesh_axis=parallel_config.height_parallel.mesh_axis, use_hyperparams=True
+        )
+    if parallel_config.width_parallel.factor > 1:
+        x = ccl_manager.all_gather_persistent_buffer(
+            x, dim=4, mesh_axis=parallel_config.width_parallel.mesh_axis, use_hyperparams=True
+        )
+    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    return ttnn.to_torch(ttnn.get_device_tensors(x)[0])
+
 
 _MESH_DEVICE_SHAPES = {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}
 
@@ -66,19 +106,6 @@ def inference_work_mesh_from_opened(
 
 def mesh_num_devices(mesh_device: ttnn.MeshDevice) -> int:
     return mesh_device.get_num_devices()
-
-
-def vae_hw_parallel_config_for_mesh(mesh_device: ttnn.MeshDevice) -> VaeHWParallelConfig:
-    if mesh_num_devices(mesh_device) <= 1:
-        return VaeHWParallelConfig(
-            height_parallel=ParallelFactor(factor=1, mesh_axis=0),
-            width_parallel=ParallelFactor(factor=1, mesh_axis=1),
-        )
-    rows, cols = tuple(mesh_device.shape)
-    return VaeHWParallelConfig(
-        height_parallel=ParallelFactor(factor=rows, mesh_axis=0),
-        width_parallel=ParallelFactor(factor=cols, mesh_axis=1),
-    )
 
 
 def vae_bthwc_to_torch(

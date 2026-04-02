@@ -41,41 +41,24 @@ class TtDupUp3D(Module):
             [B, T*factor_t, H*factor_s, W*factor_s, out_channels]
             (with temporal trim if first_chunk).
         """
-        B, T, H, W, C = x.shape
+        B, T, H, W = (int(x.shape[i]) for i in range(4))
+        ft, fs = self.factor_t, self.factor_s
+        oc = self.out_channels
 
-        x_torch = ttnn.to_torch(x)
-        x_bcthw = x_torch.permute(0, 4, 1, 2, 3).contiguous()
+        x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        x_bcthw = ttnn.permute(x_rm, (0, 4, 1, 2, 3))
+        x_bcthw = ttnn.repeat_interleave(x_bcthw, self.repeats, dim=1)
 
-        x_bcthw = x_bcthw.repeat_interleave(self.repeats, dim=1)
-
-        x_bcthw = x_bcthw.view(
-            B,
-            self.out_channels,
-            self.factor_t,
-            self.factor_s,
-            self.factor_s,
-            T,
-            H,
-            W,
-        )
-        x_bcthw = x_bcthw.permute(0, 1, 5, 2, 6, 3, 7, 4).contiguous()
-
-        x_bcthw = x_bcthw.view(
-            B,
-            self.out_channels,
-            T * self.factor_t,
-            H * self.factor_s,
-            W * self.factor_s,
-        )
+        x_bcthw = ttnn.reshape(x_bcthw, (B, oc, ft, fs, fs, T, H, W))
+        x_bcthw = ttnn.permute(x_bcthw, (0, 1, 5, 2, 6, 3, 7, 4))
+        x_bcthw = ttnn.reshape(x_bcthw, (B, oc, T * ft, H * fs, W * fs))
 
         if first_chunk:
-            x_bcthw = x_bcthw[:, :, self.factor_t - 1 :, :, :]
+            _, _, t_long, h_long, w_long = (int(x_bcthw.shape[i]) for i in range(5))
+            x_bcthw = ttnn.slice(
+                x_bcthw,
+                [0, 0, ft - 1, 0, 0],
+                [B, oc, t_long, h_long, w_long],
+            )
 
-        x_bthwc = x_bcthw.permute(0, 2, 3, 4, 1).contiguous()
-
-        return ttnn.from_torch(
-            x_bthwc,
-            dtype=x.dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=x.device(),
-        )
+        return ttnn.permute(x_bcthw, (0, 2, 3, 4, 1))
