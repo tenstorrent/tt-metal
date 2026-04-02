@@ -10,6 +10,7 @@ import soundfile as sf
 import torch
 import ttnn
 from transformers import Qwen3OmniMoeConfig, Qwen3OmniMoeForConditionalGeneration, Qwen3OmniMoeProcessor
+from transformers.activations import GELUActivation, GELUTanh, SiLUActivation
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeAudioAttention,
     Qwen3OmniMoeCode2WavAttention,
@@ -41,6 +42,8 @@ from models.experimental.tt_symbiote.modules.attention import TTNNQwen3Attention
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3OmniAttention
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3VLMoeVisionAttention
 from models.experimental.tt_symbiote.modules.moe import TTNNGlm4MoeMLP
+from models.experimental.tt_symbiote.modules.activation import TTNNGelu, TTNNSilu
+from models.experimental.tt_symbiote.modules.conv import TTNNConv1d, TTNNConv2dNCHW
 
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNQwen3OmniTalkerResizeMLP,
@@ -53,6 +56,21 @@ from models.experimental.tt_symbiote.utils.module_replacement import register_mo
 _ALLOWED_SYMBIOTE_RUN_MODES = frozenset({"CPU", "NORMAL", "NORMAL_WITH_FALLBACK"})
 
 _QWEN_OMNI_AUDIO_SAMPLE_RATE_HZ = 24000
+
+# HF ``ACT2FN`` / ``nn.*`` activations → TTNN (``GELUTanh`` uses ``ttnn.gelu`` as a practical stand-in for vision).
+_QWEN_OMNI_ACTIVATION_NN_TO_TTNN = {
+    torch.nn.SiLU: TTNNSilu,
+    torch.nn.GELU: TTNNGelu,
+    SiLUActivation: TTNNSilu,
+    GELUActivation: TTNNGelu,
+    GELUTanh: TTNNGelu,
+}
+
+# Audio stem ``Conv2d`` (thinker) uses NCHW; causal / decoder ``Conv1d`` live under code2wav (and talker if present).
+_QWEN_OMNI_CONV_NN_TO_TTNN = {
+    torch.nn.Conv2d: TTNNConv2dNCHW,
+    torch.nn.Conv1d: TTNNConv1d,
+}
 
 
 def _qwen_omni_ttft_probe_s(model, inputs: dict, *, use_audio_in_video: bool, mesh_device) -> float:
@@ -152,11 +170,15 @@ NN_TO_TTNN_THINKER = {
     Qwen3OmniMoeVisionAttention: TTNNQwen3VLMoeVisionAttention,
     Qwen3OmniMoeVisionMLP: TTNNQwen3OmniVisionMLP,
     Qwen3OmniMoeAudioAttention: TTNNQwenAudioAttention,
+    **_QWEN_OMNI_ACTIVATION_NN_TO_TTNN,
+    **_QWEN_OMNI_CONV_NN_TO_TTNN,
 }
 NN_TO_TTNN_CODE2WAV = {
     Qwen3OmniMoeCode2WavAttention: TTNNQwen3OmniMoeCode2WavAttention,
     Qwen3OmniMoeCode2WavRMSNorm: TTNNDistributedRMSNorm,
     Qwen3OmniMoeCode2WavMlp: TTNNGlm4MoeMLP,
+    **_QWEN_OMNI_ACTIVATION_NN_TO_TTNN,
+    **_QWEN_OMNI_CONV_NN_TO_TTNN,
 }
 NN_TO_TTNN_TALKER = {
     Qwen3OmniMoeTalkerTextSparseMoeBlock: TTNNQwen3TalkerMoE,
@@ -164,6 +186,8 @@ NN_TO_TTNN_TALKER = {
     Qwen3OmniMoeTalkerCodePredictorAttention: TTNNQwen3Attention,
     Qwen3OmniMoeTalkerResizeMLP: TTNNQwen3OmniTalkerResizeMLP,
     Qwen3OmniMoeRMSNorm: TTNNDistributedRMSNorm,
+    **_QWEN_OMNI_ACTIVATION_NN_TO_TTNN,
+    **_QWEN_OMNI_CONV_NN_TO_TTNN,
 }
 
 MODEL_NAME = "Qwen/Qwen3-Omni-30B-A3B-Instruct"

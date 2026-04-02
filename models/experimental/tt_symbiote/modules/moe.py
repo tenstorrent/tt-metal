@@ -18,7 +18,10 @@ from models.experimental.tt_symbiote.core.module import (
 )
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from ttnn.model_preprocessing import preprocess_linear_weight
-from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig
+from models.experimental.tt_symbiote.core.run_config import (
+    DistributedTensorConfig,
+    replicated_tensor_mesh_composer,
+)
 from models.experimental.tt_symbiote.core.utils import tree_map
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinear,
@@ -1149,7 +1152,7 @@ class TTNNMoERouterDecode(TTNNModule):
             else:
                 config = DistributedTensorConfig(
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-                    mesh_composer=ttnn.create_mesh_composer(self.device, ttnn.MeshComposerConfig([0, len(shape)])),
+                    mesh_composer=replicated_tensor_mesh_composer(self.device),
                 )
             return set_distributed_tensor_config(config)(tensor)
 

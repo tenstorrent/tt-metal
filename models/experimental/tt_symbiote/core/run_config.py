@@ -52,6 +52,21 @@ class DistributedTensorConfig:
         return sharded_shape
 
 
+def replicated_tensor_mesh_composer(mesh_device):
+    """Composer for tensors placed with ``ReplicateTensorToMesh``.
+
+    Replicated tensors still have one host buffer per mesh device; ``ttnn.to_torch``
+    without a composer requires a single buffer (``buffers.size() == 1``) and
+    aborts otherwise. A mesh override of all ones selects one device's shard
+    without concatenating full replicas along a tensor dimension.
+    """
+    shape = mesh_device.shape
+    ndim = shape.dims()
+    override = ttnn.MeshShape([1] * ndim)
+    dims = list(range(ndim))
+    return ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(dims, override))
+
+
 def logical_shape_for_batch_channel_sharding(mesh_shape):
     def _logical_shape(shape):
         shape = list(shape)
@@ -91,9 +106,7 @@ class DistributedConfig:
                 )
                 return DistributedTensorConfig(
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                    mesh_composer=ttnn.create_mesh_composer(
-                        self.mesh_device, ttnn.MeshComposerConfig([0, len(tensor.shape)])
-                    ),
+                    mesh_composer=replicated_tensor_mesh_composer(self.mesh_device),
                 )
         return self.tensor_config
 
