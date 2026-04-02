@@ -7,11 +7,10 @@ set(FIRMWARE_JIT_API_FILES
     brisc.cc
     brisck.cc
     drisc.cc
+    drisck.cc
     erisc.cc
     erisc-crt0.cc
     erisck.cc
-    drisc.cc
-    drisck.cc
     idle_erisc.cc
     idle_erisck.cc
     ncrisc.cc
