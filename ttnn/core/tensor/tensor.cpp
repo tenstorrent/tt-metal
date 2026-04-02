@@ -494,7 +494,7 @@ bool Tensor::is_allocated() const {
             [](const DeviceStorage& storage) { return storage.is_allocated(); },
             [](const HostStorage&) { return true; },
         },
-        this->storage());
+        tensor_attributes->get_storage());
     return output;
 }
 
@@ -504,7 +504,7 @@ StorageType Tensor::storage_type() const {
             [](const HostStorage&) { return StorageType::HOST; },
             [](const DeviceStorage&) { return StorageType::DEVICE; },
         },
-        this->storage());
+        tensor_attributes->get_storage());
 }
 
 tt::tt_metal::Shape Tensor::strides() const {
@@ -603,8 +603,6 @@ Tensor set_tensor_id(const Tensor& tensor) {
     return output;
 };
 
-const Storage& Tensor::storage() const { return this->tensor_attributes->get_storage(); }
-
 const tt::tt_metal::Shape& Tensor::logical_shape() const {
     return this->tensor_attributes->get_tensor_spec().logical_shape();
 }
@@ -622,21 +620,39 @@ const TensorSpec& Tensor::tensor_spec() const { return this->tensor_attributes->
 Buffer* Tensor::buffer() const { return device_storage().get_buffer(); }
 
 const DeviceStorage& Tensor::device_storage() const& {
-    const auto* device_storage = std::get_if<DeviceStorage>(&this->storage());
+    const auto* device_storage = std::get_if<DeviceStorage>(&tensor_attributes->get_storage());
     TT_FATAL(device_storage != nullptr, "Expected Tensor with DeviceStorage, got {}", this->storage_type());
     return *device_storage;
 }
 
 const HostStorage& Tensor::host_storage() const& {
-    const auto* host_storage = std::get_if<HostStorage>(&this->storage());
+    const auto* host_storage = std::get_if<HostStorage>(&tensor_attributes->get_storage());
     TT_FATAL(host_storage != nullptr, "Expected Tensor with HostStorage, got {}", this->storage_type());
     return *host_storage;
 }
 
 const HostTensor& Tensor::host_tensor() const& {
-    const auto* host_storage = std::get_if<HostStorage>(&this->storage());
+    const auto* host_storage = std::get_if<HostStorage>(&tensor_attributes->get_storage());
     TT_FATAL(host_storage != nullptr, "Expected Tensor with HostStorage, got {}", this->storage_type());
     return host_storage->host_tensor();
+}
+
+HostTensor& Tensor::host_tensor() & {
+    auto* host_storage = std::get_if<HostStorage>(&tensor_attributes->get_storage());
+    TT_FATAL(host_storage != nullptr, "Expected Tensor with HostStorage, got {}", this->storage_type());
+    return host_storage->host_tensor();
+}
+
+const MeshTensor& Tensor::mesh_tensor() const& {
+    const auto* mesh_storage = std::get_if<DeviceStorage>(&tensor_attributes->get_storage());
+    TT_FATAL(mesh_storage != nullptr, "Expected Tensor with DeviceStorage, got {}", this->storage_type());
+    return mesh_storage->get_mesh_tensor();
+}
+
+MeshTensor& Tensor::mesh_tensor() & {
+    auto* mesh_storage = std::get_if<DeviceStorage>(&tensor_attributes->get_storage());
+    TT_FATAL(mesh_storage != nullptr, "Expected Tensor with HostStorage, got {}", this->storage_type());
+    return mesh_storage->get_mesh_tensor();
 }
 
 distributed::MeshDevice* Tensor::device() const {
