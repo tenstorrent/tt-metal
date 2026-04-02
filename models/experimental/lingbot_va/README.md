@@ -31,7 +31,7 @@ At a high level (no GPU path; reference and prep run on **CPU**, model math on *
 
 | Kind                                                   | Measured value |
 | ------------------------------------------------------ | -------------- |
-| **Device** (`tests/perf/test_perf_ttnn_lingbot_va.py`) | 0.49           |
+| **Device** (`tests/perf/test_perf_ttnn_lingbot_va.py`) | 0.39           |
 | **End-to-end** (`tests/perf/test_perf_e2e.py`)         | 5.68           |
 
 NOTE: Device perf profiles a single-pass demo.run_inference path with Tracy, whereas the E2E perf test measures pipeline wall-clock throughput of the TtLingbotVA forward path (currently driven by a single-pass WanTransformer3DModel execution).
