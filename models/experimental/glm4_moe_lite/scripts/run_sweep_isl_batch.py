@@ -57,7 +57,7 @@ def run_one(isl: int, batch_size: int, repo_root: Path, dry_run: bool, timeout_s
         "--mesh-cols",
         str(MESH_COLS),
         "--kv-cache-dtype",
-        "bf8",
+        "bf16",
         "--phase",
         "both",
         "--enable-trace",
