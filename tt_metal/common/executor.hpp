@@ -4,11 +4,27 @@
 
 #pragma once
 
+#if defined(__linux__) || defined(__APPLE__)
 #include <pthread.h>
+#include <unistd.h>
+#endif
+// Include LSan interface only when present
+// __has_feature(leak_sanitizer) / __has_feature(address_sanitizer) for clang
+// compile-time predicates; __SANITIZE_ADDRESS__ / __SANITIZE_LEAK__ for gcc.
+// __has_feature is a Clang built-in; GCC does not define it.  Provide a
+// fallback so the #if below is well-formed on both compilers.
+#ifndef __has_feature
+#  define __has_feature(x) 0
+#endif
+#if __has_feature(leak_sanitizer) || __has_feature(address_sanitizer) || \
+    defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_LEAK__)
+#define TT_LSAN_ACTIVE 1
+#include <sanitizer/lsan_interface.h>
+#endif
 #include <taskflow/taskflow.hpp>
 #include <cstdlib>
+#include <cstring>
 #include <thread>
-#include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal::detail {
 inline static const size_t EXECUTOR_NTHREADS = std::getenv("TT_METAL_THREADCOUNT")
@@ -19,10 +35,32 @@ using Executor = tf::Executor;
 using ExecTask = tf::Task;
 
 inline Executor& GetExecutor() {
-    // Child process needs to reinitialize the executor after fork()
-    // otherwise it will hang because it will try to reference stale thread state
-    // copied from the parent process.
-    // Also ensure that no work is in-flight on the main process before forking.
+#if defined(__linux__) || defined(__APPLE__)
+    // After fork(), the child process must reinitialize the Executor because
+    // the parent's worker threads do not survive across fork boundaries.
+    // Without this, the child hangs trying to dispatch work to dead threads.
+    //
+    // Only the *child* handler recreates the Executor.  The parent's Executor
+    // is left untouched -- destroying and recreating it in prepare/parent
+    // would needlessly tear down the thread pool on every fork() call.
+    // This matters because fork() is triggered in ways callers do not control:
+    //   - Python subprocess.Popen() may fall back from posix_spawn to fork()
+    //   - Python multiprocessing.Process() always uses fork() by default
+    //   - MPI launchers may fork internally
+    // In all these cases the parent's thread pool should remain undisturbed.
+    //
+    // In the child we intentionally leak the old Executor rather than delete
+    // it.  This is the canonical approach for fork-unsafe objects: the threads
+    // and synchronization primitives inherited from the parent are in an
+    // indeterminate state post-fork, and calling the destructor would deadlock
+    // or crash.  The same pattern is used by jemalloc and glibc malloc.
+    //
+    // The leak is bounded: it exists only in the child process for the
+    // child's lifetime.  The kernel reclaims all memory when the child
+    // exits.  The parent heap is unaffected -- the child's assignment to
+    // exec happens in the child's private copy-on-write address space.
+    // The Executor holds no OS resources (no FDs, no shared memory, no
+    // GPU handles), so no handles are stranded.
     static Executor* exec = [] {
         auto* e = new Executor(EXECUTOR_NTHREADS);
         std::atexit([] {
@@ -32,19 +70,45 @@ inline Executor& GetExecutor() {
         pthread_atfork(
             /*prepare=*/
             [] {
-                TT_FATAL(
-                    exec->num_topologies() == 0,
-                    "fork() called while executor has in-flight work "
-                    "(num_topologies={}). All tasks must complete before forking.",
-                    exec->num_topologies());
-                delete exec;
-                exec = nullptr;
+                // fork() with in-flight Taskflow work is unsafe: the child will
+                // inherit a half-initialized executor state and may hang when it
+                // tries to dispatch tasks to the dead parent threads.  We warn
+                // here rather than aborting because fork() is sometimes called
+                // from paths the application cannot control (e.g. Python's
+                // subprocess fallback from posix_spawn).
+                const auto num_topologies = exec ? exec->num_topologies() : 0;
+                if (num_topologies != 0) {
+                    // Use write because it is async-signal-safe,
+                    char buf[128];
+                    int n = std::snprintf(
+                        buf,
+                        sizeof(buf),
+                        "WARNING: fork() called while executor has in-flight work "
+                        "(num_topologies=%zu). This may cause hangs in the child process.\n",
+                        num_topologies);
+                    if (n > 0) {
+                        [[maybe_unused]] auto _ = ::write(STDERR_FILENO, buf, static_cast<size_t>(n));
+                    }
+                }
             },
-            /*parent=*/[] { exec = new Executor(EXECUTOR_NTHREADS); },
-            /*child=*/[] { exec = new Executor(EXECUTOR_NTHREADS); });
+            /*parent=*/nullptr,
+            /*child=*/
+            [] {
+                // Suppress the leak report in ASan/LSan builds so it is not
+                // flagged as unintentional.
+#ifdef TT_LSAN_ACTIVE
+                __lsan_ignore_object(exec);
+#undef TT_LSAN_ACTIVE
+#endif
+                exec = new Executor(EXECUTOR_NTHREADS);
+            });
         return e;
     }();
     return *exec;
+#else
+    static Executor exec(EXECUTOR_NTHREADS);
+    return exec;
+#endif
 }
 
 inline std::mutex& GetExecutorMutex() {
