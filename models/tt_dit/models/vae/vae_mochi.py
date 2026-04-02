@@ -411,6 +411,10 @@ class ResBlock(Module):
             ttnn.deallocate(x_rm)
             x_tiled = ttnn.tilize_with_zero_padding(x_flat, use_multicore=True)
             ttnn.deallocate(x_flat)
+            # Ensure bf16 for memory-efficient all-gather (GroupNorm may output
+            # f32 intermediates; casting here halves the gathered tensor size).
+            if x_tiled.dtype != ttnn.bfloat16:
+                x_tiled = ttnn.typecast(x_tiled, ttnn.bfloat16)
             H_pad = x_tiled.shape[2]  # ceil_32(H), may equal H
             x_tiled = vae_all_gather(
                 self.ccl_manager,
@@ -441,6 +445,8 @@ class ResBlock(Module):
             ttnn.deallocate(x_rm)
             x_tiled = ttnn.tilize_with_zero_padding(x_flat, use_multicore=True)
             ttnn.deallocate(x_flat)
+            if x_tiled.dtype != ttnn.bfloat16:
+                x_tiled = ttnn.typecast(x_tiled, ttnn.bfloat16)
             nt_h_pad = x_tiled.shape[2]  # ceil_32(nt_h), may equal nt_h
             x_tiled = vae_all_gather(
                 self.ccl_manager,
