@@ -2105,12 +2105,9 @@ class ModelArgs:
             668 * core_grid.num_cores
         )  # 668 columns per core is close to the L1 limit in LM head matmul.
         if is_blackhole():
-            if self.num_devices == 4:
-                max_columns_per_device = LLAMA_VOCAB_SIZE // self.num_devices // NUM_LM_HEAD_COLUMNS
-            elif self.num_devices == 8:
-                max_columns_per_device = LLAMA_VOCAB_SIZE // self.num_devices // (NUM_LM_HEAD_COLUMNS * 2)
-            else:
-                max_columns_per_device = LLAMA_VOCAB_SIZE // NUM_LM_HEAD_COLUMNS
+            # Use per-core limit directly: 668 columns per core fits in L1
+            # Previous BH override was overly conservative (19 splits for Qwen3-32B)
+            max_columns_per_device = 668 * core_grid.num_cores
         if prefetcher is not None:
             return math.ceil(max_columns_per_device / (self.tile_size * prefetcher.ring_size)) * (
                 self.tile_size * prefetcher.ring_size
