@@ -170,31 +170,31 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
             }
             break;
         case BinaryOpType::LT:
-            if (dtype != DataType::INT32) {
-                postprocess = unary::UnaryOpType::LTZ;
-            } else {
+            if (dtype == DataType::INT32 || dtype == DataType::UINT16) {
                 binary_op = SfpuBinaryOp::LT;
+            } else {
+                postprocess = unary::UnaryOpType::LTZ;
             }
             break;
         case BinaryOpType::GT:
-            if (dtype != DataType::INT32) {
-                postprocess = unary::UnaryOpType::GTZ;
-            } else {
+            if (dtype == DataType::INT32 || dtype == DataType::UINT16) {
                 binary_op = SfpuBinaryOp::GT;
+            } else {
+                postprocess = unary::UnaryOpType::GTZ;
             }
             break;
         case BinaryOpType::GE:
-            if (dtype != DataType::INT32) {
-                postprocess = unary::UnaryOpType::GEZ;
-            } else {
+            if (dtype == DataType::INT32 || dtype == DataType::UINT16) {
                 binary_op = SfpuBinaryOp::GE;
+            } else {
+                postprocess = unary::UnaryOpType::GEZ;
             }
             break;
         case BinaryOpType::LE:
-            if (dtype != DataType::INT32) {
-                postprocess = unary::UnaryOpType::LEZ;
-            } else {
+            if (dtype == DataType::INT32 || dtype == DataType::UINT16) {
                 binary_op = SfpuBinaryOp::LE;
+            } else {
+                postprocess = unary::UnaryOpType::LEZ;
             }
             break;
         case BinaryOpType::EQ:
@@ -472,10 +472,26 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case DEQUANT:
             return {"dequant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "dequant_tile"};
         case XLOGY: return {"xlogy_binary_tile_init();", "xlogy_binary_tile"};
-        case LT: return {"lt_int32_tile_init();", "lt_int32_tile"};
-        case GT: return {"gt_int32_tile_init();", "gt_int32_tile"};
-        case GE: return {"ge_int32_tile_init();", "ge_int32_tile"};
-        case LE: return {"le_int32_tile_init();", "le_int32_tile"};
+        case LT:
+            if (dtype == DataType::UINT16) {
+                return {"lt_uint16_tile_init();", "lt_uint16_tile"};
+            }
+            return {"lt_int32_tile_init();", "lt_int32_tile"};
+        case GT:
+            if (dtype == DataType::UINT16) {
+                return {"gt_uint16_tile_init();", "gt_uint16_tile"};
+            }
+            return {"gt_int32_tile_init();", "gt_int32_tile"};
+        case GE:
+            if (dtype == DataType::UINT16) {
+                return {"ge_uint16_tile_init();", "ge_uint16_tile"};
+            }
+            return {"ge_int32_tile_init();", "ge_int32_tile"};
+        case LE:
+            if (dtype == DataType::UINT16) {
+                return {"le_uint16_tile_init();", "le_uint16_tile"};
+            }
+            return {"le_int32_tile_init();", "le_int32_tile"};
         case EQ: return {"eq_binary_tile_init();", "eq_binary_tile"};
         case WHERE: {
             const char* data_format = (dtype == DataType::INT32)     ? "Int32"

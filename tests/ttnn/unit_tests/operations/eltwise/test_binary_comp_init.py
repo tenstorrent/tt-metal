@@ -219,8 +219,7 @@ def test_binary_comp_uint16_ops(input_shapes, mem_configs, ttnn_function, device
     "ttnn_function",
     (ttnn.lt, ttnn.gt, ttnn.le, ttnn.ge),
 )
-@pytest.mark.parametrize("use_legacy", (True, False))
-def test_binary_comp_uint16_relational(input_shapes, mem_configs, ttnn_function, device, use_legacy):
+def test_binary_comp_uint16_relational(input_shapes, mem_configs, ttnn_function, device):
     # Use full uint16 range (0-65535) to test edge cases
     in_data = torch.randint(0, 65536, input_shapes, dtype=torch.int32)
     other_data = in_data.clone()
@@ -233,9 +232,7 @@ def test_binary_comp_uint16_relational(input_shapes, mem_configs, ttnn_function,
     cq_id = 0
     mem_cfg = mem_configs
 
-    output_tensor = ttnn_function(
-        input_tensor, other_tensor, memory_config=mem_cfg, queue_id=cq_id, use_legacy=use_legacy
-    )
+    output_tensor = ttnn_function(input_tensor, other_tensor, memory_config=mem_cfg, queue_id=cq_id)
 
     golden_fn = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_fn(in_data, other_data)

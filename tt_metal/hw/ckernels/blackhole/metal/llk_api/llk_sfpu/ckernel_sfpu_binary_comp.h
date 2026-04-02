@@ -106,6 +106,53 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
     }
 }
 
+// uint16 binary comparison.
+// Since both operands are unsigned and fit in 16 bits (0-65535), their difference always fits in int32
+// without overflow, so we can simply subtract and check the sign bit.
+template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
+inline void calculate_binary_comp_uint16(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        constexpr uint dst_tile_size = 64;
+        // Load operand A as uint16 (zero-extended to 32 bits)
+        TT_SFPLOAD(p_sfpu::LREG0, LO16, ADDR_MOD_7, dst_index_in0 * dst_tile_size);
+        // Load operand B as uint16 (zero-extended to 32 bits)
+        TT_SFPLOAD(p_sfpu::LREG1, LO16, ADDR_MOD_7, dst_index_in1 * dst_tile_size);
+
+        if constexpr (RELATIONAL_OP == SfpuType::lt) {
+            // LREG1 = LREG0 - LREG1 = A - B (imod=6 does dst = src - dst)
+            TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, 6);
+            // Extract sign bit: logical right shift by 31 -> 1 if negative (A < B), 0 otherwise
+            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, 1);
+            TT_SFPSTORE(p_sfpu::LREG1, LO16, ADDR_MOD_7, dst_index_out * dst_tile_size);
+
+        } else if constexpr (RELATIONAL_OP == SfpuType::gt) {
+            // LREG0 = LREG1 - LREG0 = B - A
+            TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 6);
+            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+            TT_SFPSTORE(p_sfpu::LREG0, LO16, ADDR_MOD_7, dst_index_out * dst_tile_size);
+
+        } else if constexpr (RELATIONAL_OP == SfpuType::ge) {
+            // GE = !LT: compute A - B, extract sign, XOR with 1 to invert
+            TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, 6);
+            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, 1);
+            TTI_SFPLOADI(p_sfpu::LREG7, SFPLOADI_MOD0_USHORT, 0x01);
+            TTI_SFPXOR(0, p_sfpu::LREG7, p_sfpu::LREG1, 0);
+            TT_SFPSTORE(p_sfpu::LREG1, LO16, ADDR_MOD_7, dst_index_out * dst_tile_size);
+
+        } else if constexpr (RELATIONAL_OP == SfpuType::le) {
+            // LE = !GT: compute B - A, extract sign, XOR with 1 to invert
+            TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 6);
+            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+            TTI_SFPLOADI(p_sfpu::LREG7, SFPLOADI_MOD0_USHORT, 0x01);
+            TTI_SFPXOR(0, p_sfpu::LREG7, p_sfpu::LREG0, 0);
+            TT_SFPSTORE(p_sfpu::LREG0, LO16, ADDR_MOD_7, dst_index_out * dst_tile_size);
+        }
+
+        sfpi::dst_reg++;
+    }
+}
+
 // Float32 binary comparison
 // TODO: Add support for ne, gt, lt, ge, le operations
 template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
