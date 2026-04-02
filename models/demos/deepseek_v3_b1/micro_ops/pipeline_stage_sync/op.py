@@ -63,16 +63,9 @@ class PipelineStageSync:
         # kernel path
         kernel_path = "models/demos/deepseek_v3_b1/micro_ops/pipeline_stage_sync/kernels/pipeline_stage_sync_kernel.cpp"
 
-        is_stalling_device_equal_signalling_device = stalling_device_mesh_coord == signalling_device_mesh_coord
-        is_stalling_core_equal_signalling_core = stalling_core == signalling_core
-        is_stalling_kernel_and_signalling_kernel_on_same_risc = (
-            run_stalling_kernel_on_brisc == run_signalling_kernel_on_brisc
-        )
         assert not (
-            is_stalling_device_equal_signalling_device
-            and is_stalling_core_equal_signalling_core
-            and is_stalling_kernel_and_signalling_kernel_on_same_risc
-        ), f"If the stalling device is the same as the signalling device, and the stalling core is the same as the signalling core, then the stalling kernel must run on a different risc than the signalling kernel"
+            stalling_device_mesh_coord == signalling_device_mesh_coord
+        ), f"Stalling and signalling device cannot be the same"
 
         global_semaphore = ttnn.create_global_semaphore(
             mesh_device, ttnn.CoreRangeSet([ttnn.CoreRange(stalling_core, stalling_core)]), 0
@@ -90,13 +83,20 @@ class PipelineStageSync:
                 # === Compile-time args ===
 
                 # Reader (NCRISC) and Writer (BRISC) compile-time args
+                stalling_core_phys = mesh_device.worker_core_from_logical_core(stalling_core)
+                stalling_device_semaphore_noc_x_addr = stalling_core_phys.x
+                stalling_device_semaphore_noc_y_addr = stalling_core_phys.y
+                stalling_device_semaphore_l1_addr = global_semaphore_addr
+
                 stalling_device_fabric_node_id = mesh_device.get_fabric_node_id(stalling_device_mesh_coord)
                 stalling_device_chip_id = int(stalling_device_fabric_node_id.chip_id)
                 stalling_device_mesh_id = int(stalling_device_fabric_node_id.mesh_id)
                 fabric_arg_base = 0
 
                 reader_named_ct_args = [
-                    ("is_stalling_device_equal_signalling_device", is_stalling_device_equal_signalling_device),
+                    ("stalling_device_semaphore_noc_x_addr", stalling_device_semaphore_noc_x_addr),
+                    ("stalling_device_semaphore_noc_y_addr", stalling_device_semaphore_noc_y_addr),
+                    ("stalling_device_semaphore_l1_addr", stalling_device_semaphore_l1_addr),
                     ("stalling_device_chip_id", stalling_device_chip_id),
                     ("stalling_device_mesh_id", stalling_device_mesh_id),
                     ("fabric_arg_base", fabric_arg_base),
@@ -104,20 +104,6 @@ class PipelineStageSync:
                 ]
                 writer_named_ct_args = reader_named_ct_args
                 compute_name_ct_args = [("num_iterations", num_iterations)]
-
-                # === Common Runtime Args ===
-                stalling_core_phys = mesh_device.worker_core_from_logical_core(stalling_core)
-                stalling_device_semaphore_noc_x_addr = stalling_core_phys.x
-                stalling_device_semaphore_noc_y_addr = stalling_core_phys.y
-                stalling_device_semaphore_l1_addr = global_semaphore_addr
-
-                # Reader (NCRISC) and Writer (BRISC) common runtime args
-                reader_common_rt_args = [
-                    stalling_device_semaphore_noc_x_addr,
-                    stalling_device_semaphore_noc_y_addr,
-                    stalling_device_semaphore_l1_addr,
-                ]
-                writer_common_rt_args = reader_common_rt_args
 
                 # === Unified Kernel Descriptor ===
                 run_stalling_logic_on_ncrisc = (
@@ -146,8 +132,8 @@ class PipelineStageSync:
                     ncrisc_named_compile_time_args=reader_named_ct_args,
                     trisc_named_compile_time_args=compute_name_ct_args,
                     brisc_named_compile_time_args=writer_named_ct_args,
-                    ncrisc_common_runtime_args=reader_common_rt_args,
-                    brisc_common_runtime_args=writer_common_rt_args,
+                    ncrisc_common_runtime_args=[],
+                    brisc_common_runtime_args=[],
                     per_core_compile_time_descriptors=[
                         PerCoreCompileTimeDescriptor(
                             named_compile_time_arg="run_stalling_logic_on_ncrisc",
