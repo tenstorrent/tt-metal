@@ -39,10 +39,6 @@ on:
 
 run-name: "(Galaxy) Sanity"
 
-permissions:
-  packages: write
-  contents: write
-
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
