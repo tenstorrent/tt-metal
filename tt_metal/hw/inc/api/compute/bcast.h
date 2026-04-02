@@ -79,11 +79,10 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
         }
     } else {
         if (enable_unpack_to_dest_u) {
-            UNPACK((
-                llk_unpack_unary_broadcast_operands_init<p_unpacr::UNP_A, bcast_type, true, false>(icb, 1)));
+            UNPACK((llk_unpack_unary_broadcast_operands_init<p_unpacr::UNP_A, bcast_type, true, false>(icb, 1)));
         } else {
-            UNPACK((llk_unpack_unary_broadcast_operands_init<p_unpacr::UNP_B, bcast_type, false, DST_ACCUM_MODE>(
-                icb, 1)));
+            UNPACK(
+                (llk_unpack_unary_broadcast_operands_init<p_unpacr::UNP_B, bcast_type, false, DST_ACCUM_MODE>(icb, 1)));
         }
     }
 #endif

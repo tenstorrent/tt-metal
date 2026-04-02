@@ -9,7 +9,6 @@
 
 /*************************************************************************
  * LLK MATH — unary eltwise with scalar / row / column broadcast (Quasar)
- * TileShape derived from operand, same idea as llk_math_reduce_init / llk_math_eltwise_unary_datacopy_init.
  *************************************************************************/
 
 inline TileShape llk_math_eltwise_unary_broadcast_tile_shape(const std::uint32_t operand) {
@@ -23,7 +22,13 @@ inline TileShape llk_math_eltwise_unary_broadcast_tile_shape(const std::uint32_t
 }
 
 /**
- * @brief Init math for unary broadcast (addrmods / MOP when unpack_to_dest is false).
+ * @brief Initialize FPU addrmods / MOP for unary broadcast math (when unpack writes to srcB).
+ *
+ * @tparam BROADCAST_TYPE Scalar, row, or column broadcast (not NONE).
+ * @tparam unpack_to_dest When true, unpack targeted dest; math MOP may be deferred per tt_llk.
+ * @tparam is_fp32_dest_acc_en Must be false when unpack_to_dest is true (LLK constraint).
+ * @param operand Logical dataflow buffer id for the input operand; tile face geometry is read via
+ *                get_operand_num_faces / get_operand_face_r_dim for addrmods.
  */
 template <BroadcastType BROADCAST_TYPE, bool unpack_to_dest, bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_unary_broadcast_init(const std::uint32_t operand) {
@@ -32,10 +37,15 @@ inline void llk_math_eltwise_unary_broadcast_init(const std::uint32_t operand) {
 }
 
 /**
- * @brief Run one output tile of unary broadcast math.
+ * @brief Run one destination tile of unary broadcast math (MOVB2D / related MOP).
+ *
+ * @param dst_index Tile index into the destination register.
+ * @param operand Same logical buffer as init; used to rebuild TileShape for each call (required by
+ *                _llk_math_eltwise_unary_broadcast_ when unpack_to_dest or template needs it).
  */
 template <BroadcastType BROADCAST_TYPE, bool unpack_to_dest, bool is_fp32_dest_acc_en>
-inline void llk_math_eltwise_unary_broadcast(const std::uint32_t dst_tile_idx, const std::uint32_t operand) {
+inline void llk_math_eltwise_unary_broadcast(const std::uint32_t dst_index, const std::uint32_t operand) {
     const TileShape tile_shape = llk_math_eltwise_unary_broadcast_tile_shape(operand);
-    _llk_math_eltwise_unary_broadcast_<BROADCAST_TYPE, unpack_to_dest, is_fp32_dest_acc_en>(dst_tile_idx, tile_shape);
+    _llk_math_eltwise_unary_broadcast_<BROADCAST_TYPE, unpack_to_dest, is_fp32_dest_acc_en>(
+        dst_index, tile_shape);
 }

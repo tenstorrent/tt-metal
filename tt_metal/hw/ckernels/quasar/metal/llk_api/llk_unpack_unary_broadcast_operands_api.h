@@ -10,7 +10,6 @@
 
 /*************************************************************************
  * LLK UNPACK — unary eltwise with scalar / row / column broadcast (Quasar)
- * Operand / tile_index pattern matches llk_unpack_AB_api.h and llk_unpack_AB_reduce_api.h.
  *************************************************************************/
 
 /**

@@ -10,7 +10,6 @@
 
 /*************************************************************************
  * LLK UNPACK — single-operand unary unpack (UNP_A / UNP_B / UNP_DEST)
- * Same operand / tile_index pattern as llk_unpack_AB_api.h.
  *************************************************************************/
 
 /**
