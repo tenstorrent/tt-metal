@@ -410,7 +410,7 @@ class SFTTrainer:
         state = {}
         for name, param in self.model.parameters().items():
             tensor = param.tensor if hasattr(param, "tensor") else param
-            state[name] = tensor.to_numpy(ttnn.DataType.FLOAT32, self._composer)
+            state[name] = tensor.to_numpy(ttnn.DataType.FLOAT32, self._loss_composer)
 
         with open(path, "wb") as f:
             pickle.dump({"step": self.step, "model_state": state}, f)
