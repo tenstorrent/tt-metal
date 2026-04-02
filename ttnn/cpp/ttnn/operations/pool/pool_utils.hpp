@@ -4,6 +4,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <array>
 #include <map>
 #include <optional>
 
@@ -56,6 +57,68 @@ struct FactoryParameters {
     uint32_t MAX_TILES_PER_REDUCTION{};
     bool is_wide_reduction{};
     uint32_t num_tilized_rows{};
+};
+
+// Centralized CB size computation used by both calculate_L1_usage and the pool factory.
+// This eliminates duplicated CB sizing logic between the two (see #23218).
+struct PoolCBSizes {
+    // Scalar CB
+    uint32_t scalar_cb_pagesize{};
+    uint32_t scalar_cb_npages{};
+    bool has_second_scalar_cb{};
+
+    // Clear value CB
+    uint32_t clear_value_cb_size{};
+
+    // Input CB
+    uint32_t in_cb_pagesize{};
+    uint32_t in_cb_npages{};
+    uint32_t in_cb_raw_size{};  // raw element count before padding (used by factory for in_nblocks_c)
+    bool has_split_reader{};
+
+    // MPWI CBs (return_indices only)
+    uint32_t mpwi_total_size{};
+
+    // Pre-tilize CB
+    uint32_t pre_tilize_cb_pagesize{};
+    uint32_t pre_tilize_cb_npages{};
+    bool has_pre_tilize{};
+
+    // Output CB (globally allocated - backed by output tensor buffer)
+    uint32_t out_cb_pagesize{};
+    uint32_t out_cb_npages{};
+
+    // Output index CB (globally allocated - backed by output index tensor buffer)
+    uint32_t out_idx_cb_pagesize{};
+    uint32_t out_idx_cb_npages{};
+    bool has_out_idx{};
+
+    // Config tensor L1 CB size (for DRAM config tensors)
+    uint32_t config_tensor_l1_size{};
+
+    // Sum of all locally-allocated (non-tensor-backed) CB sizes
+    uint32_t local_cb_total() const;
+    // Sum of all globally-allocated (tensor-backed) CB sizes, with alignment
+    uint32_t global_cb_total() const;
+    // Total L1 usage from all CBs
+    uint32_t total() const;
+};
+
+PoolCBSizes calculate_pool_cb_sizes(
+    const FactoryParameters& params,
+    bool one_scalar_per_core,
+    bool return_indices,
+    const Layout& output_layout,
+    const DataType& output_dtype,
+    const std::array<uint32_t, 2>& output_shard_shape,
+    bool config_tensor_in_dram);
+
+// Separate L1 usage for local CBs vs globally-allocated tensor buffers.
+// Tracking these separately prevents two errors from cancelling out in validation
+struct pool_op_l1_usage {
+    uint32_t local_cb_size{};
+    uint32_t global_cb_size{};
+    uint32_t total() const { return local_cb_size + global_cb_size; }
 };
 
 uint32_t get_bf16_pool_scalar(
@@ -114,7 +177,7 @@ FactoryParameters get_factory_parameters(
     uint32_t in_w,
     const Layout& output_layout);
 
-uint32_t calculate_L1_usage(
+pool_op_l1_usage calculate_L1_usage(
     DataType input_dtype,
     uint32_t in_h,
     uint32_t in_w,

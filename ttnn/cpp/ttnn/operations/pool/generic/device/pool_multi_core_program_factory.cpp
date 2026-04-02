@@ -331,6 +331,17 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
 
+    // Compute CB sizes centrally - used for both CB creation and L1 validation
+    auto output_shard_shape = outputs[0].shard_spec().value().shape;
+    PoolCBSizes cb_sizes = calculate_pool_cb_sizes(
+        params,
+        one_scalar_per_core,
+        return_indices,
+        output_layout,
+        outputs[0].dtype(),
+        {output_shard_shape[0], output_shard_shape[1]},
+        config_tensor_in_dram);
+
     const auto& input_shape = input.padded_shape();
     const uint32_t shard_width = input.shard_spec()->shape[1];
     const uint32_t in_c_per_shard_ceil = in_c % shard_width != 0 && num_shards_c > 1
@@ -355,14 +366,14 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     uint32_t next_cb_index = tt::CBIndex::c_0;
     const uint32_t in_scalar_cb_id_0 = next_cb_index++;
-    const uint32_t in_scalar_cb_pagesize = tile_size(params.data_format);
-    const uint32_t in_scalar_cb_npages = params.multi_buffering_factor;
+    const uint32_t in_scalar_cb_pagesize = cb_sizes.scalar_cb_pagesize;
+    const uint32_t in_scalar_cb_npages = cb_sizes.scalar_cb_npages;
     tt::tt_metal::create_cb(
         in_scalar_cb_id_0, program, all_cores, in_scalar_cb_pagesize, in_scalar_cb_npages, params.data_format);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id_0, in_scalar_cb_pagesize, in_scalar_cb_npages);
 
     uint32_t in_scalar_cb_id_1 = INVALID_CB_ID;
-    if (params.is_avg_pool && params.split_reader && !one_scalar_per_core) {
+    if (cb_sizes.has_second_scalar_cb) {
         in_scalar_cb_id_1 = next_cb_index++;
         tt::tt_metal::create_cb(
             in_scalar_cb_id_1, program, all_cores, in_scalar_cb_pagesize, in_scalar_cb_npages, params.data_format);
@@ -372,9 +383,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     // CB storing just "clear value" (-inf for maxpool, 0 for avgpool)
     uint32_t clear_value_cb_id = next_cb_index++;
-    tt::tt_metal::create_cb(
-        clear_value_cb_id, program, all_cores, tile_size(params.data_format), 1, params.data_format);
-    log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", clear_value_cb_id, tile_size(params.data_format), 1);
+    tt::tt_metal::create_cb(clear_value_cb_id, program, all_cores, cb_sizes.clear_value_cb_size, 1, params.data_format);
+    log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", clear_value_cb_id, cb_sizes.clear_value_cb_size, 1);
 
     // incoming data is the input cb instead of raw l1/dram addr
     // this input shard has halo and padding inserted.
@@ -414,30 +424,22 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_reader_indices_cb_id,
         in_reader_indices_cb_pagesize,
         in_reader_indices_cb_npages);
-    uint32_t in_cb_sz = 0;
+    // in_nblocks_c is factory-specific (used for kernel args), derived from the shared in_cb_raw_size
     uint32_t in_nblocks_c = 1;
     if (return_indices || params.is_wide_reduction) {
-        // for return indices we use 1 whole tile per reduction to simplify logic
-        uint32_t height_multiplier = return_indices ? tt::constants::TILE_HEIGHT : params.num_tilized_rows;
-        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * height_multiplier;
         in_nblocks_c = std::ceil((float)params.in_ntiles_c / params.MAX_TILES_PER_REDUCTION);
-    } else {
-        in_cb_sz = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.num_tilized_rows;
     }
 
     // reader output == input to tilize
     const uint32_t in_cb_id_0 = next_cb_index++;  // input rows for "multiple (out_nelems)" output pixels
     uint32_t in_cb_id_1 = INVALID_CB_ID;          // input rows for "multiple (out_nelems)" output pixels
-    const uint32_t in_cb_page_padded = tt::round_up(
-        in_cb_sz,
-        tt::constants::TILE_HW);  // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
-    const uint32_t in_cb_pagesize = params.nbytes * in_cb_page_padded;
-    const uint32_t in_cb_npages = params.multi_buffering_factor;
+    const uint32_t in_cb_pagesize = cb_sizes.in_cb_pagesize;
+    const uint32_t in_cb_npages = cb_sizes.in_cb_npages;
 
     tt::tt_metal::create_cb(in_cb_id_0, program, all_cores, in_cb_pagesize, in_cb_npages, params.data_format);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_0, in_cb_pagesize, in_cb_npages);
 
-    if (params.split_reader) {
+    if (cb_sizes.has_split_reader) {
         in_cb_id_1 = next_cb_index++;
         tt::tt_metal::create_cb(in_cb_id_1, program, all_cores, in_cb_pagesize, in_cb_npages, params.data_format);
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_1, in_cb_pagesize, in_cb_npages);
@@ -556,30 +558,25 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // Conditionally allocate temporary CB - only needed for TILED output
     uint32_t pre_tilize_cb_id = INVALID_CB_ID;
 
-    if (is_output_tiled) {
+    if (cb_sizes.has_pre_tilize) {
         pre_tilize_cb_id = next_cb_index++;
-        const uint32_t pre_tilize_cb_pagesize = tt::constants::TILE_WIDTH * params.nbytes;
-        const uint32_t pre_tilize_cb_npages = tt::constants::TILE_HEIGHT * params.in_ntiles_c;
         tt::tt_metal::create_cb(
-            pre_tilize_cb_id, program, all_cores, pre_tilize_cb_pagesize, pre_tilize_cb_npages, params.data_format);
+            pre_tilize_cb_id,
+            program,
+            all_cores,
+            cb_sizes.pre_tilize_cb_pagesize,
+            cb_sizes.pre_tilize_cb_npages,
+            params.data_format);
         log_debug(
-            tt::LogOp, "CB {} :: PS = {}, NP = {}", pre_tilize_cb_id, pre_tilize_cb_pagesize, pre_tilize_cb_npages);
+            tt::LogOp,
+            "CB {} :: PS = {}, NP = {}",
+            pre_tilize_cb_id,
+            cb_sizes.pre_tilize_cb_pagesize,
+            cb_sizes.pre_tilize_cb_npages);
     }
 
-    uint32_t out_cb_pagesize;
-    uint32_t out_cb_npages;
-
-    if (is_output_tiled) {
-        out_cb_pagesize = tt::tile_size(params.output_data_format);
-        out_cb_npages =
-            outputs[0].shard_spec().value().shape[0] * outputs[0].shard_spec().value().shape[1] / tt::constants::TILE_HW;
-    } else {
-        out_cb_pagesize =
-            std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), outputs[0].shard_spec().value().shape[1]) *
-            params.nbytes;  // there is just one row of channels after each reduction (or 1
-                            // block of c if its greater than 8 tiles)
-        out_cb_npages = outputs[0].shard_spec().value().shape[0] * params.out_ntiles_c;
-    }
+    const uint32_t out_cb_pagesize = cb_sizes.out_cb_pagesize;
+    const uint32_t out_cb_npages = cb_sizes.out_cb_npages;
 
     const auto [out_cb_id, out_cb] = tt::tt_metal::create_cb(
         next_cb_index++,
@@ -592,21 +589,17 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     uint32_t out_idx_cb_id = INVALID_CB_ID;
     tt::tt_metal::CBHandle out_idx_cb = 0;
-    if (return_indices) {
+    if (cb_sizes.has_out_idx) {
         TT_FATAL(
             outputs.size() == 2,
             "When return_indices is true, there should be two outputs, but got {}",
             outputs.size());
-        uint32_t out_idx_cb_npages = out_cb_npages;
-        uint32_t out_idx_cb_pagesize =
-            std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), outputs[0].shard_spec().value().shape[1]) *
-            params.index_nbytes;
         std::tie(out_idx_cb_id, out_idx_cb) = tt::tt_metal::create_cb(
             next_cb_index++,
             program,
             all_cores,
-            out_idx_cb_pagesize,
-            out_idx_cb_npages,
+            cb_sizes.out_idx_cb_pagesize,
+            cb_sizes.out_idx_cb_npages,
             params.index_format,
             outputs[1].buffer());
     }
@@ -696,7 +689,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         bf16_scalar,                                                                         // 9
         bf16_init_value,                                                                     // 10
         in_nblocks_c,                                                                        // 11
-        in_cb_sz,                                                                            // 12
+        cb_sizes.in_cb_raw_size,                                                             // 12
         params.max_rows_for_reduction,                                                       // 13
         ceil_pad_w,                                                                          // 14
         in_cb_id_0,                                                                          // 15
@@ -882,44 +875,27 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         SetRuntimeArgs(program, compute_kernel, core, args);
     }
 
-    auto temporary_size = calculate_total_cb_size(program);
+    // Validate local and global CB sizes separately to prevent two errors from cancelling out
+    // Note local CBs are non-globally-allocated (computed by the program); global CBs are tensor-backed.
+    auto actual_local_cb_size = calculate_total_cb_size(program);
 
     uint32_t post_allocate_size =
         input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
-    uint32_t l1_usage = calculate_L1_usage(
-        input.dtype(),
-        in_h,
-        in_w,
-        in_c,
-        pad_h,
-        pad_w,
-        ceil_pad_h,
-        ceil_pad_w,
-        ceil_mode,
-        return_indices,
-        kernel_h,
-        kernel_w,
-        input.memory_config(),
-        outputs[0].memory_config(),
-        pool_type,
-        count_include_pad,
-        divisor_override,
-        output_layout,
-        outputs[0].dtype(),
-        config_tensor_in_dram);
-
-    uint32_t output_cb_size = post_allocate_size - memory_used;
+    uint32_t actual_global_cb_size = post_allocate_size == 0 ? 0 : post_allocate_size - memory_used;
 
     // For now assume that if post_op_l1_allocation_size == 0 op is being run
     // in graph capture NO_DISPATCH mode.
     bool is_graph_capture_no_dispatch_mode = post_allocate_size == 0;
     TT_FATAL(
-        temporary_size + output_cb_size == l1_usage || is_graph_capture_no_dispatch_mode,
-        "Calculated CB size {} + {} = {} does not match with the actual CB size {}  ",
-        temporary_size,
-        output_cb_size,
-        temporary_size + output_cb_size,
-        l1_usage);
+        actual_local_cb_size == cb_sizes.local_cb_total() || is_graph_capture_no_dispatch_mode,
+        "Local CB size mismatch: actual {} != expected {}",
+        actual_local_cb_size,
+        cb_sizes.local_cb_total());
+    TT_FATAL(
+        actual_global_cb_size == cb_sizes.global_cb_total() || is_graph_capture_no_dispatch_mode,
+        "Global CB size mismatch: actual {} != expected {}",
+        actual_global_cb_size,
+        cb_sizes.global_cb_total());
 
     {  // debug
         log_debug(tt::LogOp, "raw_in_cb :: PS = {}, NP = {}", raw_in_cb_pagesize, raw_in_cb_npages);
