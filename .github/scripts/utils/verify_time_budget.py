@@ -118,7 +118,7 @@ def main() -> None:
     parser.add_argument(
         "--skip-budget-check",
         action="store_true",
-        help="Validate tests YAML and sum timeouts only; do not compare to time_budget_file.",
+        help="Validate tests YAML and sum timeouts only; do not fail on comparison to time_budget_file. This switch should be used for TESTING ON BRANCH ONLY. All CI pipelines should be subject to time budget checks.",
     )
     args = parser.parse_args()
     verify_timeouts(
