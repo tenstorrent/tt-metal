@@ -389,15 +389,17 @@ class ResBlock(Module):
         logger.info(f"[DUMP] {name}: shape={list(t.shape)} mean={t.mean():.6f} std={t.std():.6f}")
 
     def _all_gather_hw(self, x_rm, N, T, H, W, C):
-        """All-gather on H and W axes using flattened tile-aligned dimensions.
+        """All-gather on H and W axes using tile-padded spatial dimensions.
 
         All-gather requires each device's extent on the gather dim to be a
         multiple of 32 (TILE_SIZE).  Per-device H or W may not satisfy this
-        (e.g. H=20, W=13).  Gathering on H or W directly would interleave
+        (e.g. H=30, W=27).  Gathering on H or W directly would interleave
         tile-padding zeros between devices' valid data.
 
-        Instead, we flatten H*W*C into a single tile-aligned dimension for each
-        gather phase so that tile boundaries align with device boundaries.
+        Strategy: reshape so H (or W) is in the tile-row dim (dim[-2]) and use
+        tilize_with_zero_padding to pad it to the next tile boundary.  After
+        all-gather, reshape to (batch, factor, H_pad, ...) and slice out the
+        padding rows to recover (batch, H*factor, ...).
 
         Args:
             x_rm: (N*T, H, W, C) in ROW_MAJOR layout (local per-device data).
@@ -410,15 +412,16 @@ class ResBlock(Module):
         W_full = W * w_factor
 
         if h_factor > 1:
-            # Phase 1: H-gather.  Flatten H*W*(C//32) into dim=2 (tile-aligned).
-            per_device_flat = H * W * (C // 32)
-            assert (
-                per_device_flat % 32 == 0
-            ), f"H*W*(C//32)={per_device_flat} must be a multiple of 32; H={H}, W={W}, C={C}"
-            x_flat = ttnn.reshape(x_rm, [N * T, 1, per_device_flat, 32])
+            # Phase 1: H-gather.
+            # Shape as (N*T, 1, H, W*C) so H is the tile-row dim.
+            # tilize_with_zero_padding pads H → H_pad = ceil_32(H).
+            wc = W * C
+            assert wc % 32 == 0, f"W*C={wc} must be a multiple of 32; W={W}, C={C}"
+            x_flat = ttnn.reshape(x_rm, [N * T, 1, H, wc])
             ttnn.deallocate(x_rm)
             x_tiled = ttnn.tilize_with_zero_padding(x_flat, use_multicore=True)
             ttnn.deallocate(x_flat)
+            H_pad = x_tiled.shape[2]  # ceil_32(H), may equal H
             x_tiled = vae_all_gather(
                 self.ccl_manager,
                 x_tiled,
@@ -428,30 +431,41 @@ class ResBlock(Module):
             )
             x_rm = ttnn.to_layout(x_tiled, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(x_tiled)
-            # Reshape back to spatial: (N*T, H_full, W, C)
-            x_rm = ttnn.reshape(x_rm, [N * T, H_full, W, C])
+            if H_pad != H:
+                # Strip tile-padding rows from each device's chunk
+                x_rm = ttnn.reshape(x_rm, [N * T, h_factor, H_pad, W, C])
+                x_rm = ttnn.slice(x_rm, [0, 0, 0, 0, 0], [N * T, h_factor, H, W, C])
+                x_rm = ttnn.reshape(x_rm, [N * T, H_full, W, C])
+            else:
+                x_rm = ttnn.reshape(x_rm, [N * T, H_full, W, C])
 
         if w_factor > 1:
-            # Phase 2: W-gather.  Flatten N*T*H_full into dim=2, W*C into dim=3.
+            # Phase 2: W-gather.
+            # Shape as (N*T*H_full, 1, W, C) so W is the tile-row dim.
+            # tilize_with_zero_padding pads W → W_pad = ceil_32(W).
             nt_h = N * T * H_full
-            per_device_wc = W * C
-            assert nt_h % 32 == 0, f"N*T*H_full={nt_h} must be a multiple of 32; N={N}, T={T}, H_full={H_full}"
-            assert per_device_wc % 32 == 0, f"W*C={per_device_wc} must be a multiple of 32; W={W}, C={C}"
-            x_flat = ttnn.reshape(x_rm, [1, 1, nt_h, per_device_wc])
+            assert C % 32 == 0, f"C={C} must be a multiple of 32"
+            x_flat = ttnn.reshape(x_rm, [nt_h, 1, W, C])
             ttnn.deallocate(x_rm)
             x_tiled = ttnn.tilize_with_zero_padding(x_flat, use_multicore=True)
             ttnn.deallocate(x_flat)
+            W_pad = x_tiled.shape[2]  # ceil_32(W), may equal W
             x_tiled = vae_all_gather(
                 self.ccl_manager,
                 x_tiled,
                 cluster_axis=self.parallel_config.w_parallel.mesh_axis,
-                dim=3,
+                dim=2,
                 reshape=False,
             )
             x_rm = ttnn.to_layout(x_tiled, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(x_tiled)
-            # Reshape back to spatial: (N*T, H_full, W_full, C)
-            x_rm = ttnn.reshape(x_rm, [N * T, H_full, W_full, C])
+            if W_pad != W:
+                # Strip tile-padding from each device's chunk
+                x_rm = ttnn.reshape(x_rm, [nt_h, w_factor, W_pad, C])
+                x_rm = ttnn.slice(x_rm, [0, 0, 0, 0], [nt_h, w_factor, W, C])
+                x_rm = ttnn.reshape(x_rm, [N * T, H_full, W_full, C])
+            else:
+                x_rm = ttnn.reshape(x_rm, [N * T, H_full, W_full, C])
 
         return x_rm
 
