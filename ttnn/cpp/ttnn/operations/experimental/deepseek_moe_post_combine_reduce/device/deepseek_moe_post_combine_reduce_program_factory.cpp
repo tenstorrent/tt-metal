@@ -79,12 +79,12 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
     // Use exactly num_tokens / 32 cores (validated above)
     uint32_t num_cores = num_cores_needed;
 
-    // Create CoreRange covering all available cores
-    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
-    auto core_range_set = CoreRangeSet({total_cores});
+    constexpr bool row_major = true;
+
+    // Create CoreRangeSet covering only the cores we actually use
+    auto core_range_set = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, row_major);
 
     // Get cores in row-major order
-    constexpr bool row_major = true;
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
     // Data formats
@@ -211,23 +211,18 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
     for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord& core = cores[i];
 
-        uint32_t tokens_for_this_core = REQUIRED_TOKENS_PER_CORE;
-
         std::vector<uint32_t> reader_runtime_args = {
             combine_buffer->address(),
             weight_buffer->address(),
-            tokens_for_this_core,
             token_start,
         };
 
         std::vector<uint32_t> compute_runtime_args = {
-            tokens_for_this_core,
             token_start,
         };
 
         std::vector<uint32_t> writer_runtime_args = {
             output_buffer->address(),
-            tokens_for_this_core,
             token_start,
         };
 
@@ -235,7 +230,7 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
         tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
 
-        token_start += tokens_for_this_core;
+        token_start += REQUIRED_TOKENS_PER_CORE;
     }
 
     return cached_program_t{

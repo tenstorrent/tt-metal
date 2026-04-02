@@ -13,8 +13,7 @@ constexpr uint32_t emb_dim_tiles = get_compile_time_arg_val(2);
 
 void kernel_main() {
     uint32_t output_addr = get_arg_val<uint32_t>(0);
-    uint32_t tokens_per_core = get_arg_val<uint32_t>(1);
-    uint32_t token_start_idx = get_arg_val<uint32_t>(2);
+    uint32_t token_start_idx = get_arg_val<uint32_t>(1);
 
     constexpr uint32_t tile_size = 2048;
 

@@ -8,7 +8,6 @@
 constexpr uint32_t cb_combine_input = tt::CBIndex::c_0;
 constexpr uint32_t cb_weights = tt::CBIndex::c_1;
 
-// Compile-time arguments
 constexpr bool combine_is_dram = get_compile_time_arg_val(0) == 1;
 constexpr bool weight_is_dram = get_compile_time_arg_val(1) == 1;
 constexpr uint32_t num_tokens = get_compile_time_arg_val(2);
@@ -16,14 +15,14 @@ constexpr uint32_t num_experts = get_compile_time_arg_val(3);
 constexpr uint32_t emb_dim = get_compile_time_arg_val(4);
 constexpr uint32_t emb_dim_tiles = get_compile_time_arg_val(5);
 
+constexpr uint32_t TOKENS_PER_CORE = 32;
+
 void kernel_main() {
     uint32_t combine_addr = get_arg_val<uint32_t>(0);
     uint32_t weight_addr = get_arg_val<uint32_t>(1);
-    uint32_t tokens_per_core = get_arg_val<uint32_t>(2);
-    uint32_t token_start_idx = get_arg_val<uint32_t>(3);
+    uint32_t token_start_idx = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t tile_size = 2048;
-
     constexpr uint32_t combine_page_size = emb_dim * 2;
     constexpr uint32_t weight_page_size = 64;
 
@@ -33,7 +32,7 @@ void kernel_main() {
     const InterleavedAddrGen<weight_is_dram> weight_addrg = {
         .bank_base_address = weight_addr, .page_size = weight_page_size};
 
-    for (uint32_t token_idx = 0; token_idx < tokens_per_core; ++token_idx) {
+    for (uint32_t token_idx = 0; token_idx < TOKENS_PER_CORE; ++token_idx) {
         uint32_t global_token_idx = token_start_idx + token_idx;
 
         uint32_t total_expert_tiles = num_experts * emb_dim_tiles;
@@ -57,7 +56,6 @@ void kernel_main() {
             noc_async_read_page(weight_page_idx, weight_addrg, tile_addr);
         }
         noc_async_read_barrier();
-
         cb_push_back(cb_weights, num_experts);
     }
 }

@@ -20,8 +20,7 @@ constexpr uint32_t num_experts = get_compile_time_arg_val(1);
 constexpr uint32_t emb_dim_tiles = get_compile_time_arg_val(2);
 
 void kernel_main() {
-    uint32_t tokens_per_core = get_arg_val<uint32_t>(0);
-    uint32_t token_start_idx = get_arg_val<uint32_t>(1);
+    uint32_t token_start_idx = get_arg_val<uint32_t>(0);
 
     binary_op_init_common(cb_combine_input, cb_weights, cb_output);
 
@@ -105,7 +104,7 @@ void kernel_main() {
     // Hardware tilize: convert 32 rows to 224 tiles
     // CB17 has asymmetric pages (row-sized: 7168 elements each)
     // Output CB16 has tile-sized pages
-    cb_reserve_back(cb_output, 32 * 224);  // 32 tokens × 224 tiles per token = 7168 tiles
+    cb_reserve_back(cb_output, 224);
 
     using namespace compute_kernel_lib::tilize_config;
     compute_kernel_lib::tilize<
@@ -115,8 +114,8 @@ void kernel_main() {
         InitUninitMode::InitAndUninit,
         WaitMode::WaitBlock,
         ReconfigureRegisterDatatypeMode::NoReconfigure,
-        Fp32Mode::Fast>(32, 32);  // 32 tile-rows, 32 input pages
+        Fp32Mode::Fast>(1, 32);  // 1 tile-row, 32 input pages
 
-    cb_push_back(cb_output, 32 * 224);
+    cb_push_back(cb_output, 224);
     cb_pop_front(cb_rowmajor, BATCH_SIZE);
 }
