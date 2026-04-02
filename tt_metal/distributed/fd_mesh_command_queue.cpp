@@ -305,6 +305,8 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         num_workers += num_virtual_eth_cores;
     }
 
+    TracyTTMetalEnqueueMeshWorkloadTrace(mesh_device_, mesh_workload, this->trace_id());
+
     if (sysmem_manager.get_bypass_mode()) {
         TT_FATAL(!blocking, "Blocking is not supported when recording a trace.");
         trace_nodes_.push_back(MeshTraceNode{});
@@ -386,7 +388,6 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     // Iterate over all programs. Update dispatch commands per program to reflect
     // current device state. Write the finalized program command sequence to each
     // physical device tied to the program.
-    TracyTTMetalEnqueueMeshWorkloadTrace(mesh_device_, mesh_workload, this->trace_id());
     for (auto& [device_range, program] : mesh_workload.get_programs()) {
         auto& program_cmd_seq = mesh_workload.impl().get_dispatch_cmds_for_program(program, command_hash);
         TT_ASSERT(
