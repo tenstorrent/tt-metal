@@ -6,9 +6,10 @@ import math
 
 import ttnn
 from models.common.utility_functions import roundup32
+from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
-class Yolov11Conv2D:
+class Yolov11sConv2D:
     def __init__(
         self,
         conv,
@@ -25,6 +26,9 @@ class Yolov11Conv2D:
         config_override=None,
         deallocate_activation=False,
         split_weights=False,
+        enable_act_double_buffer=True,
+        enable_weights_double_buffer=True,
+        core_count=None,
     ):
         self.is_detect = is_detect
         self.activation = activation
@@ -36,16 +40,27 @@ class Yolov11Conv2D:
         if split_weights:
             self.out_channels = self.out_channels // 2
         self.kernel_size = conv.kernel_size
-        self.padding = conv.padding
+        if hasattr(conv.padding, "__len__"):
+            if len(conv.padding) == 2:
+                self.padding = (conv.padding[0], conv.padding[0], conv.padding[1], conv.padding[1])
+            elif len(conv.padding) == 4:
+                self.padding = (conv.padding[0], conv.padding[1], conv.padding[2], conv.padding[3])
+            else:
+                raise ValueError("Padding should be a scalar or a list of 2 or 4 elements")
+        else:
+            p = conv.padding
+            self.padding = (p, p, p, p)
         self.stride = conv.stride
         self.groups = conv.groups
         self.reshard = reshard
         self.deallocate_activation = deallocate_activation
+        self.core_count = core_count
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc_en=False,
-            packer_l1_acc=True,
+            # packer_l1_acc=True,
+            packer_l1_acc=False if self.is_detect else True,
             math_approx_mode=True,
         )
         self.activation_dtype = activation_dtype
@@ -53,25 +68,35 @@ class Yolov11Conv2D:
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
-            enable_act_double_buffer=False,
+            enable_act_double_buffer=enable_act_double_buffer,
             reshard_if_not_optimal=True if self.reshard else False,
             activation=self.activation,
+            enable_weights_double_buffer=enable_weights_double_buffer,
+            output_layout=ttnn.TILE_LAYOUT,
         )
-        if config_override and "act_block_h" in config_override:
-            self.conv_config.act_block_h_override = config_override["act_block_h"]
-        if "bias" in conv_pth:
-            bias = ttnn.from_device(conv_pth.bias)
-            self.bias = bias
-        else:
-            self.bias = None
-
-        weight = ttnn.from_device(conv_pth.weight)
-        self.weight = weight
+        if config_override:
+            if "act_block_h" in config_override:
+                self.conv_config.act_block_h_override = config_override["act_block_h"]
+            if "act_block_w_div" in config_override:
+                self.conv_config.act_block_w_div = config_override["act_block_w_div"]
+            if "enable_act_double_buffer" in config_override:
+                self.conv_config.enable_act_double_buffer = config_override["enable_act_double_buffer"]
+            if "enable_weights_double_buffer" in config_override:
+                self.conv_config.enable_weights_double_buffer = config_override["enable_weights_double_buffer"]
+            if config_override.get("config_tensors_in_dram"):
+                self.conv_config.config_tensors_in_dram = True
+        self.weight = ttnn.from_device(conv_pth.weight)
+        self.bias = ttnn.from_device(conv_pth.bias) if "bias" in conv_pth else None
+        if self.core_count is not None:
+            shard_grid = get_shard_grid_from_num_cores(self.core_count, self.device)
+            self.conv_config.core_grid = shard_grid
+            self.conv_config.override_sharding_config = True
 
     def __call__(self, x, output_rm_needed=False, to_interleaved=False):
         if self.is_detect:
-            input_height = int(math.sqrt(x.shape[2]))
-            input_width = int(math.sqrt(x.shape[2]))
+            h = int(math.sqrt(x.shape[2]))
+            input_height = h
+            input_width = h
             batch_size = x.shape[0]
         elif self.is_dfl:
             input_height = x.shape[1]
@@ -82,9 +107,6 @@ class Yolov11Conv2D:
             input_height = self.conv.input_height
             input_width = self.conv.input_width
 
-        kernel_size = [self.kernel_size[0], self.kernel_size[1]]
-        stride = [self.stride[0], self.stride[1]]
-        padding = [self.padding[0], self.padding[1]]
         [x, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
@@ -95,9 +117,9 @@ class Yolov11Conv2D:
             input_height=input_height,
             input_width=input_width,
             batch_size=batch_size,
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=padding,
+            kernel_size=self.kernel_size,
+            stride=self.stride,
+            padding=self.padding,
             conv_config=self.conv_config,
             groups=self.groups,
             compute_config=self.compute_config,
@@ -231,11 +253,21 @@ class TtnnConv:
         activation=None,
         deallocate_activation=False,
         split_weights=False,
+        config_override=None,
+        enable_act_double_buffer=True,
+        enable_weights_double_buffer=True,
+        core_count=None,
     ):
         self.enable_act = enable_act
         if self.enable_act:
             activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
-        self.conv = Yolov11Conv2D(
+        merged = dict(config_override) if config_override else {}
+        if enable_act_double_buffer is not None:
+            merged["enable_act_double_buffer"] = enable_act_double_buffer
+        if enable_weights_double_buffer is not None:
+            merged["enable_weights_double_buffer"] = enable_weights_double_buffer
+        co = merged if merged else None
+        self.conv = Yolov11sConv2D(
             parameter.conv,
             conv_pt.conv,
             device=device,
@@ -244,6 +276,10 @@ class TtnnConv:
             activation=activation,
             deallocate_activation=deallocate_activation,
             split_weights=split_weights,
+            config_override=co,
+            enable_act_double_buffer=enable_act_double_buffer,
+            enable_weights_double_buffer=enable_weights_double_buffer,
+            core_count=core_count,
         )
 
     def __call__(self, device, x, output_rm_needed=False, to_interleaved=False):
@@ -254,27 +290,3 @@ class TtnnConv:
 def deallocate_tensors(*tensors):
     for t in tensors:
         ttnn.deallocate(t)
-
-
-def get_mesh_mappers(device):
-    if device.get_num_devices() > 1:
-        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
-        weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device)
-        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
-    else:
-        inputs_mesh_mapper = None
-        weights_mesh_mapper = None
-        output_mesh_composer = None
-    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
-
-
-def get_mesh_mappers(device):
-    if device.get_num_devices() > 1:
-        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
-        weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device)
-        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
-    else:
-        inputs_mesh_mapper = None
-        weights_mesh_mapper = None
-        output_mesh_composer = None
-    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer

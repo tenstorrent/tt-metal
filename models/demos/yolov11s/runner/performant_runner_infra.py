@@ -10,11 +10,11 @@ import ttnn
 from models.common.utility_functions import divup, is_wormhole_b0
 from models.demos.yolov11s.common import load_torch_model
 from models.demos.yolov11s.tt import ttnn_yolov11s
-from models.demos.yolov11s.tt.model_preprocessing import create_yolov11_model_parameters
+from models.demos.yolov11s.tt.model_preprocessing import create_yolov11s_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-class YOLOv11PerformanceRunnerInfra:
+class YOLOv11sPerformanceRunnerInfra:
     def __init__(
         self,
         device,
@@ -47,22 +47,24 @@ class YOLOv11PerformanceRunnerInfra:
 
         self.torch_model = load_torch_model(model_location_generator)
 
+        rh, rw = self.resolution
         self.torch_input_tensor = (
-            torch.randn((batch_size * self.num_devices, 3, 640, 640), dtype=torch.float32)
+            torch.randn((batch_size * self.num_devices, 3, rh, rw), dtype=torch.float32)
             if self.torch_input_tensor is None
             else self.torch_input_tensor
         )
-        self.torch_input_params = torch.randn((batch_size, 3, 640, 640), dtype=torch.float32)
-        self.parameters = create_yolov11_model_parameters(self.torch_model, self.torch_input_params, device=self.device)
+        self.torch_input_params = torch.randn((batch_size, 3, rh, rw), dtype=torch.float32)
+        self.parameters = create_yolov11s_model_parameters(
+            self.torch_model, self.torch_input_params, device=self.device
+        )
 
-        self.ttnn_yolov11s_model = ttnn_yolov11s.TtnnYoloV11(self.device, self.parameters)
+        self.ttnn_yolov11s_model = ttnn_yolov11s.TtnnYoloV11s(self.device, self.parameters)
 
-        self.torch_output_tensor = self.torch_model(self.torch_input_tensor)
+        with torch.no_grad():
+            self.torch_output_tensor = self.torch_model(self.torch_input_tensor)
 
     def _setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=16):
-        if is_wormhole_b0():
-            core_grid = ttnn.CoreGrid(y=8, x=8)
-        else:
+        if not is_wormhole_b0():
             exit("Unsupported device")
 
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
@@ -81,10 +83,26 @@ class YOLOv11PerformanceRunnerInfra:
         )
         assert torch_input_tensor.ndim == 4, "Expected input tensor to have shape (BS, C, H, W)"
 
-        input_tensor = [torch_input_tensor[i].unsqueeze(0) for i in range(torch_input_tensor.shape[0])]
-        tt_inputs_host = ttnn.from_host_shards(
-            [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for t in input_tensor], device.shape
-        )
+        nb = torch_input_tensor.shape[0]
+        if nb == 1:
+            s0 = ttnn.from_torch(
+                torch_input_tensor,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            tt_inputs_host = ttnn.from_host_shards([s0], device.shape)
+        else:
+            tt_inputs_host = ttnn.from_host_shards(
+                [
+                    ttnn.from_torch(
+                        torch_input_tensor[i : i + 1],
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                    )
+                    for i in range(nb)
+                ],
+                device.shape,
+            )
         return tt_inputs_host, input_mem_config
 
     def setup_dram_sharded_input(self, device, torch_input_tensor=None, mesh_mapper=None, mesh_composer=None):
@@ -116,7 +134,7 @@ class YOLOv11PerformanceRunnerInfra:
         self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor, output_tensor, pcc=0.99)
 
         logger.info(
-            f"Yolov11 - batch_size={self.batch_size}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, PCC={self.pcc_message}"
+            f"Yolov11s - batch_size={self.batch_size}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, PCC={self.pcc_message}"
         )
 
     def dealloc_output(self):

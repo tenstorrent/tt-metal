@@ -232,7 +232,7 @@ class C3k2(nn.Module):
                 padding=padding[0],
                 dilation=dilation[0],
                 groups=groups[0],
-                split_weights=True,
+                split_weights=False,
             )
             self.cv2 = Conv(
                 in_channel[1],
@@ -266,7 +266,7 @@ class C3k2(nn.Module):
                 padding=padding[0],
                 dilation=dilation[0],
                 groups=groups[0],
-                split_weights=True,
+                split_weights=False,
             )
             self.cv2 = Conv(
                 in_channel[1],
@@ -312,9 +312,10 @@ class C3k2(nn.Module):
 class Attention(nn.Module):
     def __init__(self, in_channel, out_channel, kernel, stride, padding, dilation, groups):
         super().__init__()
-        self.num_heads = 8
-        self.key_dim = 16
-        self.head_dim = 32
+        dim = in_channel[0]
+        self.head_dim = 64
+        self.num_heads = dim // self.head_dim
+        self.key_dim = int(self.head_dim * 0.5)
         self.scale = self.key_dim**-0.5
 
         self.qkv = Conv(
@@ -715,7 +716,7 @@ class Detect(nn.Module):
 
         y = torch.cat((y1, y2, y3), 2)
 
-        ya, yb = y.split((self.out_channel[0], self.out_channel[13]), 1)
+        ya, yb = y.split((64, 80), 1)
 
         ya = torch.reshape(ya, (ya.shape[0], int(ya.shape[1] / self.in_channel[24]), self.in_channel[24], ya.shape[2]))
         ya = torch.permute(ya, (0, 2, 1, 3))
@@ -748,13 +749,13 @@ class Concat(nn.Module):
         return torch.cat(x, self.d)
 
 
-class YoloV11(nn.Module):
+class YoloV11s(nn.Module):
     def __init__(self):
         super().__init__()
         self.model = nn.Sequential(
-            Conv(3, 32, kernel=3, stride=2, padding=1),  # 0
-            Conv(32, 64, kernel=3, stride=2, padding=1),  # 1
-            C3k2(  # 2
+            Conv(3, 32, kernel=3, stride=2, padding=1),
+            Conv(32, 64, kernel=3, stride=2, padding=1),
+            C3k2(
                 [64, 96, 32, 16],
                 [64, 128, 16, 32],
                 [1, 1, 3, 3],
@@ -764,8 +765,8 @@ class YoloV11(nn.Module):
                 [1, 1, 1, 1],
                 is_bk_enabled=True,
             ),
-            Conv(128, 128, kernel=3, stride=2, padding=1),  # 3
-            C3k2(  # 4
+            Conv(128, 128, kernel=3, stride=2, padding=1),
+            C3k2(
                 [128, 192, 64, 32],
                 [128, 256, 32, 64],
                 [1, 1, 3, 3],
@@ -775,9 +776,9 @@ class YoloV11(nn.Module):
                 [1, 1, 1, 1],
                 is_bk_enabled=True,
             ),
-            Conv(256, 256, kernel=3, stride=2, padding=1),  # 5
+            Conv(256, 256, kernel=3, stride=2, padding=1),
             C3k2(
-                [256, 384, 128, 128, 128, 64, 64, 64, 64],  # 6
+                [256, 384, 128, 128, 128, 64, 64, 64, 64],
                 [256, 256, 64, 64, 128, 64, 64, 64, 64],
                 [1, 1, 1, 1, 1, 3, 3, 3, 3],
                 [1, 1, 1, 1, 1, 1, 1, 1, 1],
@@ -785,9 +786,9 @@ class YoloV11(nn.Module):
                 [1, 1, 1, 1, 1, 1, 1, 1, 1],
                 [1, 1, 1, 1, 1, 1, 1, 1, 1],
             ),
-            Conv(256, 512, kernel=3, stride=2, padding=1),  # 7
+            Conv(256, 512, kernel=3, stride=2, padding=1),
             C3k2(
-                [512, 768, 256, 256, 256, 128, 128, 128, 128],  # 8
+                [512, 768, 256, 256, 256, 128, 128, 128, 128],
                 [512, 512, 128, 128, 256, 128, 128, 128, 128],
                 [1, 1, 1, 1, 1, 3, 3, 3, 3],
                 [1, 1, 1, 1, 1, 1, 1, 1, 1],
@@ -795,9 +796,9 @@ class YoloV11(nn.Module):
                 [1, 1, 1, 1, 1, 1, 1, 1, 1],
                 [1, 1, 1, 1, 1, 1, 1, 1, 1],
             ),
-            SPPF([512, 1024], [256, 512], [1, 1], [1, 1]),  # 9
+            SPPF([512, 1024], [256, 512], [1, 1], [1, 1]),
             C2PSA(
-                [512, 512, 256, 256, 256, 256, 512],  # 10
+                [512, 512, 256, 256, 256, 256, 512],
                 [512, 512, 512, 256, 256, 512, 256],
                 [1, 1, 1, 1, 3, 1, 1],
                 [1, 1, 1, 1, 1, 1, 1],
@@ -807,7 +808,7 @@ class YoloV11(nn.Module):
             ),
             nn.Upsample(scale_factor=2.0, mode="nearest"),
             Concat(),
-            C3k2(  # 13
+            C3k2(
                 [768, 384, 128, 64],
                 [256, 256, 64, 128],
                 [1, 1, 3, 3],
@@ -819,7 +820,7 @@ class YoloV11(nn.Module):
             ),
             nn.Upsample(scale_factor=2.0, mode="nearest"),
             Concat(),
-            C3k2(  # 16
+            C3k2(
                 [512, 192, 64, 32],
                 [128, 128, 32, 64],
                 [1, 1, 3, 3],
@@ -829,9 +830,9 @@ class YoloV11(nn.Module):
                 [1, 1, 1, 1],
                 is_bk_enabled=True,
             ),
-            Conv(128, 128, kernel=3, stride=2, padding=1),  # 17
+            Conv(128, 128, kernel=3, stride=2, padding=1),
             Concat(),
-            C3k2(  # 19
+            C3k2(
                 [384, 384, 128, 64],
                 [256, 256, 64, 128],
                 [1, 1, 3, 3],
@@ -841,10 +842,10 @@ class YoloV11(nn.Module):
                 [1, 1, 1, 1],
                 is_bk_enabled=True,
             ),
-            Conv(256, 256, kernel=3, stride=2, padding=1),  # 20
+            Conv(256, 256, kernel=3, stride=2, padding=1),
             Concat(),
             C3k2(
-                [768, 768, 256, 256, 256, 128, 128, 128, 128],  # 22
+                [768, 768, 256, 256, 256, 128, 128, 128, 128],
                 [512, 512, 128, 128, 256, 128, 128, 128, 128],
                 [1, 1, 1, 1, 1, 3, 3, 3, 3],
                 [1, 1, 1, 1, 1, 1, 1, 1, 1],
@@ -852,7 +853,7 @@ class YoloV11(nn.Module):
                 [1, 1, 1, 1, 1, 1, 1, 1, 1],
                 [1, 1, 1, 1, 1, 1, 1, 1, 1],
             ),
-            Detect(  # 23
+            Detect(
                 [
                     128,
                     64,
@@ -916,35 +917,35 @@ class YoloV11(nn.Module):
         )
 
     def forward(self, x):
-        x = self.model[0](x)  # 0
-        x = self.model[1](x)  # 1
-        x = self.model[2](x)  # 2
-        x = self.model[3](x)  # 3
-        x = self.model[4](x)  # 4
+        x = self.model[0](x)
+        x = self.model[1](x)
+        x = self.model[2](x)
+        x = self.model[3](x)
+        x = self.model[4](x)
         x4 = x
-        x = self.model[5](x)  # 5
-        x = self.model[6](x)  # 6
+        x = self.model[5](x)
+        x = self.model[6](x)
         x6 = x
-        x = self.model[7](x)  # 7
-        x = self.model[8](x)  # 8
-        x = self.model[9](x)  # 9
-        x = self.model[10](x)  # 10
+        x = self.model[7](x)
+        x = self.model[8](x)
+        x = self.model[9](x)
+        x = self.model[10](x)
         x10 = x
-        x = f.upsample(x, scale_factor=2.0)  # 11
-        x = torch.cat((x, x6), 1)  # 12
-        x = self.model[13](x)  # 13
+        x = f.upsample(x, scale_factor=2.0)
+        x = torch.cat((x, x6), 1)
+        x = self.model[13](x)
         x13 = x
-        x = f.upsample(x, scale_factor=2.0)  # 14
-        x = torch.cat((x, x4), 1)  # 15
-        x = self.model[16](x)  # 16
+        x = f.upsample(x, scale_factor=2.0)
+        x = torch.cat((x, x4), 1)
+        x = self.model[16](x)
         x16 = x
-        x = self.model[17](x)  # 17
-        x = torch.cat((x, x13), 1)  # 18
-        x = self.model[19](x)  # 19
+        x = self.model[17](x)
+        x = torch.cat((x, x13), 1)
+        x = self.model[19](x)
         x19 = x
-        x = self.model[20](x)  # 20
-        x = torch.cat((x, x10), 1)  # 21
-        x = self.model[22](x)  # 22
+        x = self.model[20](x)
+        x = torch.cat((x, x10), 1)
+        x = self.model[22](x)
         x22 = x
-        x = self.model[23](x16, x19, x22)  # 23
+        x = self.model[23](x16, x19, x22)
         return x

@@ -19,8 +19,18 @@ class TtnnC3K:
     def __call__(self, device, x, use_shard_concat=True):
         x1 = self.cv1(device, x)
         x2 = self.cv2(device, x)
+        cfg = self.cv1.conv.conv
+        hw = int(cfg.input_height) * int(cfg.input_width)
         k1 = self.k1(device, x1)
         k2 = self.k2(device, k1)
+        if x2.is_sharded() and x2.shape[2] > hw:
+            x2 = ttnn.sharded_to_interleaved(x2, ttnn.L1_MEMORY_CONFIG)
+        if x2.shape[2] > hw:
+            x2 = x2[:, :, :hw, :]
+        if k2.is_sharded() and k2.shape[2] > hw:
+            k2 = ttnn.sharded_to_interleaved(k2, ttnn.L1_MEMORY_CONFIG)
+        if k2.shape[2] > hw:
+            k2 = k2[:, :, :hw, :]
         if use_shard_concat:
             x2 = ttnn.to_layout(x2, ttnn.ROW_MAJOR_LAYOUT)
             k2 = ttnn.to_layout(k2, ttnn.ROW_MAJOR_LAYOUT)

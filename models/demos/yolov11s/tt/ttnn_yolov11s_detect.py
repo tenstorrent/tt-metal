@@ -3,42 +3,136 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.yolov11s.tt.common import TtnnConv, Yolov11Conv2D, deallocate_tensors, sharded_concat_2
+from models.demos.yolov11s.tt.common import TtnnConv, Yolov11sConv2D, deallocate_tensors, sharded_concat_2
+
+_DETECT_CV3_STEM = {
+    "act_block_h": 32,
+    "enable_weights_double_buffer": False,
+    "enable_act_double_buffer": False,
+    "config_tensors_in_dram": True,
+}
+_DETECT_DRAM_HEAVY = {
+    "act_block_h": 32,
+    "enable_weights_double_buffer": False,
+    "enable_act_double_buffer": False,
+    "config_tensors_in_dram": True,
+}
+_DETECT_PW64 = {
+    "act_block_h": 64,
+    "enable_weights_double_buffer": True,
+    "enable_act_double_buffer": True,
+}
+_DETECT_PW128 = {
+    "act_block_h": 64,
+    "enable_weights_double_buffer": True,
+    "enable_act_double_buffer": False,
+}
+_DETECT_PW256 = {
+    "act_block_h": 48,
+    "enable_weights_double_buffer": True,
+    "enable_act_double_buffer": False,
+}
+_DETECT_DEPTHWISE = {
+    "act_block_h": 48,
+    "enable_weights_double_buffer": True,
+    "enable_act_double_buffer": False,
+}
+_DETECT_DFL = {
+    "act_block_h": 32,
+    "enable_weights_double_buffer": True,
+    "enable_act_double_buffer": True,
+}
 
 
 class TtnnDetect:
     def __init__(self, device, parameter, conv_pt):
-        self.cv2_0_0 = TtnnConv(device, parameter.cv2[0][0], conv_pt.cv2[0][0], is_detect=True)
-        self.cv2_0_1 = TtnnConv(device, parameter.cv2[0][1], conv_pt.cv2[0][1], is_detect=True)
-        self.cv2_0_2 = Yolov11Conv2D(parameter.cv2[0][2], conv_pt.cv2[0][2], device=device, is_detect=True)
+        stem = _DETECT_CV3_STEM
+        dram = _DETECT_DRAM_HEAVY
+        pw64 = _DETECT_PW64
+        pw128 = _DETECT_PW128
+        pw256 = _DETECT_PW256
+        dw = _DETECT_DEPTHWISE
+        dfl = _DETECT_DFL
 
-        self.cv2_1_0 = TtnnConv(device, parameter.cv2[1][0], conv_pt.cv2[1][0], is_detect=True)
-        self.cv2_1_1 = TtnnConv(device, parameter.cv2[1][1], conv_pt.cv2[1][1], is_detect=True)
-        self.cv2_1_2 = Yolov11Conv2D(parameter.cv2[1][2], conv_pt.cv2[1][2], device=device, is_detect=True)
+        self.cv2_0_0 = TtnnConv(device, parameter.cv2[0][0], conv_pt.cv2[0][0], is_detect=True, config_override=pw128)
+        self.cv2_0_1 = TtnnConv(device, parameter.cv2[0][1], conv_pt.cv2[0][1], is_detect=True, config_override=pw64)
+        self.cv2_0_2 = Yolov11sConv2D(
+            parameter.cv2[0][2], conv_pt.cv2[0][2], device=device, is_detect=True, config_override=dw
+        )
 
-        self.cv2_2_0 = TtnnConv(device, parameter.cv2[2][0], conv_pt.cv2[2][0], is_detect=True)
-        self.cv2_2_1 = TtnnConv(device, parameter.cv2[2][1], conv_pt.cv2[2][1], is_detect=True)
-        self.cv2_2_2 = Yolov11Conv2D(parameter.cv2[2][2], conv_pt.cv2[2][2], device=device, is_detect=True)
+        self.cv2_1_0 = TtnnConv(device, parameter.cv2[1][0], conv_pt.cv2[1][0], is_detect=True, config_override=pw256)
+        self.cv2_1_1 = TtnnConv(device, parameter.cv2[1][1], conv_pt.cv2[1][1], is_detect=True, config_override=pw64)
+        self.cv2_1_2 = Yolov11sConv2D(
+            parameter.cv2[1][2], conv_pt.cv2[1][2], device=device, is_detect=True, config_override=dw
+        )
 
-        self.cv3_0_0_0 = TtnnConv(device, parameter.cv3[0][0][0], conv_pt.cv3[0][0][0], is_detect=True)
-        self.cv3_0_0_1 = TtnnConv(device, parameter.cv3[0][0][1], conv_pt.cv3[0][0][1], is_detect=True)
-        self.cv3_0_1_0 = TtnnConv(device, parameter.cv3[0][1][0], conv_pt.cv3[0][1][0], is_detect=True)
-        self.cv3_0_1_1 = TtnnConv(device, parameter.cv3[0][1][1], conv_pt.cv3[0][1][1], is_detect=True)
-        self.cv3_0_2_0 = Yolov11Conv2D(parameter.cv3[0][2], conv_pt.cv3[0][2], device=device, is_detect=True)
+        self.cv2_2_0 = TtnnConv(device, parameter.cv2[2][0], conv_pt.cv2[2][0], is_detect=True, config_override=dram)
+        self.cv2_2_1 = TtnnConv(device, parameter.cv2[2][1], conv_pt.cv2[2][1], is_detect=True, config_override=pw64)
+        self.cv2_2_2 = Yolov11sConv2D(
+            parameter.cv2[2][2], conv_pt.cv2[2][2], device=device, is_detect=True, config_override=dw
+        )
 
-        self.cv3_1_0_0 = TtnnConv(device, parameter.cv3[1][0][0], conv_pt.cv3[1][0][0], is_detect=True)
-        self.cv3_1_0_1 = TtnnConv(device, parameter.cv3[1][0][1], conv_pt.cv3[1][0][1], is_detect=True)
-        self.cv3_1_1_0 = TtnnConv(device, parameter.cv3[1][1][0], conv_pt.cv3[1][1][0], is_detect=True)
-        self.cv3_1_1_1 = TtnnConv(device, parameter.cv3[1][1][1], conv_pt.cv3[1][1][1], is_detect=True)
-        self.cv3_1_2_0 = Yolov11Conv2D(parameter.cv3[1][2], conv_pt.cv3[1][2], device=device, is_detect=True)
+        self.cv3_0_0_0 = TtnnConv(
+            device, parameter.cv3[0][0][0], conv_pt.cv3[0][0][0], is_detect=True, config_override=stem
+        )
+        self.cv3_0_0_1 = TtnnConv(
+            device, parameter.cv3[0][0][1], conv_pt.cv3[0][0][1], is_detect=True, config_override=pw128
+        )
+        self.cv3_0_1_0 = TtnnConv(
+            device, parameter.cv3[0][1][0], conv_pt.cv3[0][1][0], is_detect=True, config_override=pw128
+        )
+        self.cv3_0_1_1 = TtnnConv(
+            device, parameter.cv3[0][1][1], conv_pt.cv3[0][1][1], is_detect=True, config_override=pw128
+        )
+        self.cv3_0_2_0 = Yolov11sConv2D(
+            parameter.cv3[0][2], conv_pt.cv3[0][2], device=device, is_detect=True, config_override=dw
+        )
 
-        self.cv3_2_0_0 = TtnnConv(device, parameter.cv3[2][0][0], conv_pt.cv3[2][0][0], is_detect=True)
-        self.cv3_2_0_1 = TtnnConv(device, parameter.cv3[2][0][1], conv_pt.cv3[2][0][1], is_detect=True)
-        self.cv3_2_1_0 = TtnnConv(device, parameter.cv3[2][1][0], conv_pt.cv3[2][1][0], is_detect=True)
-        self.cv3_2_1_1 = TtnnConv(device, parameter.cv3[2][1][1], conv_pt.cv3[2][1][1], is_detect=True)
-        self.cv3_2_2_0 = Yolov11Conv2D(parameter.cv3[2][2], conv_pt.cv3[2][2], device=device, is_detect=True)
+        self.cv3_1_0_0 = TtnnConv(
+            device,
+            parameter.cv3[1][0][0],
+            conv_pt.cv3[1][0][0],
+            is_detect=True,
+            config_override=stem,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
+        )
+        self.cv3_1_0_1 = TtnnConv(
+            device, parameter.cv3[1][0][1], conv_pt.cv3[1][0][1], is_detect=True, config_override=pw256
+        )
+        self.cv3_1_1_0 = TtnnConv(
+            device, parameter.cv3[1][1][0], conv_pt.cv3[1][1][0], is_detect=True, config_override=pw128
+        )
+        self.cv3_1_1_1 = TtnnConv(
+            device, parameter.cv3[1][1][1], conv_pt.cv3[1][1][1], is_detect=True, config_override=pw128
+        )
+        self.cv3_1_2_0 = Yolov11sConv2D(
+            parameter.cv3[1][2], conv_pt.cv3[1][2], device=device, is_detect=True, config_override=dw
+        )
 
-        self.dfl = Yolov11Conv2D(parameter.dfl.conv, conv_pt.dfl.conv, device=device, is_dfl=True)
+        self.cv3_2_0_0 = TtnnConv(
+            device,
+            parameter.cv3[2][0][0],
+            conv_pt.cv3[2][0][0],
+            is_detect=True,
+            config_override=stem,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
+        )
+        self.cv3_2_0_1 = TtnnConv(
+            device, parameter.cv3[2][0][1], conv_pt.cv3[2][0][1], is_detect=True, config_override=dram
+        )
+        self.cv3_2_1_0 = TtnnConv(
+            device, parameter.cv3[2][1][0], conv_pt.cv3[2][1][0], is_detect=True, config_override=pw128
+        )
+        self.cv3_2_1_1 = TtnnConv(
+            device, parameter.cv3[2][1][1], conv_pt.cv3[2][1][1], is_detect=True, config_override=pw128
+        )
+        self.cv3_2_2_0 = Yolov11sConv2D(
+            parameter.cv3[2][2], conv_pt.cv3[2][2], device=device, is_detect=True, config_override=dw
+        )
+
+        self.dfl = Yolov11sConv2D(parameter.dfl.conv, conv_pt.dfl.conv, device=device, is_dfl=True, config_override=dfl)
         self.anchors = conv_pt.anchors
         self.strides = conv_pt.strides
 
@@ -76,9 +170,12 @@ class TtnnDetect:
         y2 = sharded_concat_2(x2, x5)
         y3 = sharded_concat_2(x3, x6)
 
-        y1 = ttnn.sharded_to_interleaved(y1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        y2 = ttnn.sharded_to_interleaved(y2, memory_config=ttnn.L1_MEMORY_CONFIG)
-        y3 = ttnn.sharded_to_interleaved(y3, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if y1.is_sharded():
+            y1 = ttnn.sharded_to_interleaved(y1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if y2.is_sharded():
+            y2 = ttnn.sharded_to_interleaved(y2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if y3.is_sharded():
+            y3 = ttnn.sharded_to_interleaved(y3, memory_config=ttnn.L1_MEMORY_CONFIG)
         y = ttnn.concat((y1, y2, y3), dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
         y = ttnn.to_layout(y, layout=ttnn.TILE_LAYOUT)
         y = ttnn.squeeze(y, dim=0)
@@ -89,7 +186,8 @@ class TtnnDetect:
         ya = ttnn.permute(ya, (0, 2, 1, 3))
         c = self.dfl(ya)
         ttnn.deallocate(ya)
-        c = ttnn.sharded_to_interleaved(c, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if c.is_sharded():
+            c = ttnn.sharded_to_interleaved(c, memory_config=ttnn.L1_MEMORY_CONFIG)
         c = ttnn.permute(c, (0, 3, 1, 2))
         c = ttnn.reshape(c, (c.shape[0], 1, 4, int(c.shape[3] / 4)))
         c = ttnn.reshape(c, (c.shape[0], c.shape[1] * c.shape[2], c.shape[3]))

@@ -11,11 +11,11 @@ from fastapi import FastAPI, File, UploadFile
 from PIL import Image
 
 import ttnn
-from models.demos.yolov11s.runner.performant_runner import YOLOv11PerformantRunner
+from models.demos.yolov11s.runner.performant_runner import YOLOv11sPerformantRunner
 from models.experimental.yolo_common.yolo_web_demo.yolo_evaluation_utils import postprocess
 
 app = FastAPI(
-    title="YOLOv11 object detection",
+    title="YOLOv11s object detection",
     description="Inference engine to detect objects in image.",
     version="0.0",
 )
@@ -38,8 +38,8 @@ async def startup():
     device_id = 0
     device = ttnn.CreateDevice(device_id, l1_small_size=24576, trace_region_size=3211264, num_command_queues=2)
     device.enable_program_cache()
-    model = YOLOv11PerformantRunner(device)
-    # model._capture_yolov11_trace_2cqs() # Disabled to save memory
+    model = YOLOv11sPerformantRunner(device)
+    # model._capture_yolov11s_trace_2cqs() # Disabled to save memory
 
 
 @app.on_event("shutdown")

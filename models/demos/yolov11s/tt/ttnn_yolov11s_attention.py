@@ -11,9 +11,10 @@ class TtnnAttention:
         self.qkv = TtnnConv(device, parameter.qkv, conv_pt.qkv, enable_act=False)
         self.proj = TtnnConv(device, parameter.proj, conv_pt.proj, enable_act=False)
         self.pe = TtnnConv(device, parameter.pe, conv_pt.pe, enable_act=False)
-        self.num_heads = 8
-        self.key_dim = 16
-        self.head_dim = 32
+        dim = conv_pt.qkv.conv.weight.shape[1]
+        self.head_dim = 64
+        self.num_heads = dim // self.head_dim
+        self.key_dim = self.head_dim // 2
         self.scale = self.key_dim**-0.5
 
     def __call__(self, device, x, batch_size=1):
@@ -23,8 +24,8 @@ class TtnnAttention:
         qkv = ttnn.reshape(qkv, (batch_size, self.num_heads, self.key_dim * 2 + self.head_dim, qkv.shape[-1]))
         q, k, v = (
             qkv[:, :, : self.key_dim, :],
-            qkv[:, :, self.key_dim : self.head_dim, :],
-            qkv[:, :, self.head_dim :, :],
+            qkv[:, :, self.key_dim : 2 * self.key_dim, :],
+            qkv[:, :, 2 * self.key_dim :, :],
         )
         q_permuted = ttnn.permute(q, (0, 1, 3, 2))
         attn = ttnn.matmul(q_permuted, k, memory_config=ttnn.L1_MEMORY_CONFIG)

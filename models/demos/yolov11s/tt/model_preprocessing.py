@@ -7,11 +7,11 @@ import torch.nn as nn
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_module_args, preprocess_model_parameters
 
 import ttnn
-from models.demos.yolov11s.reference.yolov11s import Conv, YoloV11
-from models.demos.yolov11s.tt.common import get_mesh_mappers
+from models.demos.utils.common_demo_utils import get_mesh_mappers
+from models.demos.yolov11s.reference.yolov11s import Conv, YoloV11s
 
 
-def create_yolov11_input_tensors(
+def create_yolov11s_input_tensors(
     device, batch=1, input_channels=3, input_height=640, input_width=640, is_sub_module=True
 ):
     num_devices = device.get_num_devices()
@@ -114,7 +114,7 @@ def custom_preprocessor(model, name, mesh_mapper=None):
     return parameters
 
 
-def create_yolov11_model_parameters(model: YoloV11, input_tensor: torch.Tensor, device):
+def create_yolov11s_model_parameters(model: YoloV11s, input_tensor: torch.Tensor, device):
     _, weights_mesh_mapper, _ = get_mesh_mappers(device)
 
     parameters = preprocess_model_parameters(
@@ -143,8 +143,8 @@ def create_yolov11_model_parameters(model: YoloV11, input_tensor: torch.Tensor, 
     return parameters
 
 
-def create_yolov11_model_parameters_detect(
-    model: YoloV11, input_tensor_1: torch.Tensor, input_tensor_2, input_tensor_3, device
+def create_yolov11s_model_parameters_detect(
+    model: YoloV11s, input_tensor_1: torch.Tensor, input_tensor_2, input_tensor_3, device
 ):
     _, weights_mesh_mapper, _ = get_mesh_mappers(device)
 

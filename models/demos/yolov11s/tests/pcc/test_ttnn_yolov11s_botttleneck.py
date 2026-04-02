@@ -6,9 +6,9 @@
 import pytest
 
 import ttnn
-from models.demos.yolov11s.common import YOLOV11_L1_SMALL_SIZE
+from models.demos.yolov11s.common import YOLOV11S_L1_SMALL_SIZE
 from models.demos.yolov11s.reference.yolov11s import Bottleneck as torch_bottleneck
-from models.demos.yolov11s.tt.model_preprocessing import create_yolov11_input_tensors, create_yolov11_model_parameters
+from models.demos.yolov11s.tt.model_preprocessing import create_yolov11s_input_tensors, create_yolov11s_model_parameters
 from models.demos.yolov11s.tt.ttnn_yolov11s_bottleneck import TtnnBottleneck as ttnn_bottleneck
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -26,7 +26,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ([64, 64], [64, 64], [3, 3], [1, 1], [1, 1], [1, 1], [1, 1], [1, 64, 20, 20]),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV11_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV11S_L1_SMALL_SIZE}], indirect=True)
 def test_yolo_v11_bottleneck(
     device,
     reset_seeds,
@@ -41,7 +41,7 @@ def test_yolo_v11_bottleneck(
 ):
     torch_module = torch_bottleneck(in_channel, out_channel, kernel, stride, padding, dilation, groups)
     torch_module.eval()
-    torch_input, ttnn_input = create_yolov11_input_tensors(
+    torch_input, ttnn_input = create_yolov11s_input_tensors(
         device,
         batch=fwd_input_shape[0],
         input_channels=fwd_input_shape[1],
@@ -51,7 +51,7 @@ def test_yolo_v11_bottleneck(
     ttnn_input = ttnn.to_device(ttnn_input, device=device)
     ttnn_input = ttnn.to_layout(ttnn_input, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
     torch_output = torch_module(torch_input)
-    parameters = create_yolov11_model_parameters(torch_module, torch_input, device=device)
+    parameters = create_yolov11s_model_parameters(torch_module, torch_input, device=device)
     ttnn_module = ttnn_bottleneck(device=device, parameter=parameters.conv_args, conv_pt=parameters)
     ttnn_output = ttnn_module(x=ttnn_input, device=device)
     ttnn_output = ttnn.to_torch(ttnn_output)

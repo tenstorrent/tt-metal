@@ -14,9 +14,12 @@ class TtnnC2PSA:
         self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2)
         self.psablock = TtnnPSABlock(device, parameter.m[0], conv_pt.m[0])
 
-    def __call__(self, device, x, hw=400):
+    def __call__(self, device, x):
         x = self.cv1(device, x)
         x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+        cfg = self.cv1.conv.conv
+        hw = int(cfg.input_height) * int(cfg.input_width)
+        hw = min(hw, x.shape[2])
         a, b = x[:, :, :hw, : int(self.out_channel_0 / 2)], x[:, :, :hw, int(self.out_channel_0 / 2) :]
         x = self.psablock(device, b)
         x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)

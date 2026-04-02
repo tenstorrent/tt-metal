@@ -5,10 +5,10 @@
 import pytest
 
 import ttnn
-from models.demos.yolov11s.common import YOLOV11_L1_SMALL_SIZE, load_torch_model
+from models.demos.yolov11s.common import YOLOV11S_L1_SMALL_SIZE, load_torch_model
 from models.demos.yolov11s.reference import yolov11s
 from models.demos.yolov11s.tt import ttnn_yolov11s
-from models.demos.yolov11s.tt.model_preprocessing import create_yolov11_input_tensors, create_yolov11_model_parameters
+from models.demos.yolov11s.tt.model_preprocessing import create_yolov11s_input_tensors, create_yolov11s_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -25,15 +25,15 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         # False
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV11_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV11S_L1_SMALL_SIZE}], indirect=True)
 def test_yolov11s(device, reset_seeds, resolution, use_pretrained_weights, model_location_generator, min_channels=8):
-    torch_model = yolov11s.YoloV11()
+    torch_model = yolov11s.YoloV11s()
     torch_model.eval()
 
     if use_pretrained_weights:
         torch_model = load_torch_model(model_location_generator)
 
-    torch_input, ttnn_input = create_yolov11_input_tensors(
+    torch_input, ttnn_input = create_yolov11s_input_tensors(
         device,
         batch=resolution[0],
         input_channels=resolution[1],
@@ -42,7 +42,7 @@ def test_yolov11s(device, reset_seeds, resolution, use_pretrained_weights, model
         is_sub_module=False,
     )
     n, c, h, w = ttnn_input.shape
-    if c == 3:  # for sharding config of padded input
+    if c == 3:
         c = min_channels
     input_mem_config = ttnn.create_sharded_memory_config(
         [n, c, h, w],
@@ -51,8 +51,8 @@ def test_yolov11s(device, reset_seeds, resolution, use_pretrained_weights, model
     )
     ttnn_input = ttnn_input.to(device, input_mem_config)
     torch_output = torch_model(torch_input)
-    parameters = create_yolov11_model_parameters(torch_model, torch_input, device=device)
-    ttnn_model = ttnn_yolov11s.TtnnYoloV11(device, parameters)
+    parameters = create_yolov11s_model_parameters(torch_model, torch_input, device=device)
+    ttnn_model = ttnn_yolov11s.TtnnYoloV11s(device, parameters)
     ttnn_output = ttnn_model(ttnn_input)
     ttnn_output = ttnn.to_torch(ttnn_output)
     assert_with_pcc(torch_output, ttnn_output, 0.99)

@@ -11,8 +11,8 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.utils.common_demo_utils import get_mesh_mappers
-from models.demos.yolov11s.common import YOLOV11_L1_SMALL_SIZE
-from models.demos.yolov11s.runner.performant_runner import YOLOv11PerformantRunner
+from models.demos.yolov11s.common import YOLOV11S_L1_SMALL_SIZE
+from models.demos.yolov11s.runner.performant_runner import YOLOv11sPerformantRunner
 
 try:
     from tracy import signpost
@@ -22,7 +22,7 @@ except ModuleNotFoundError:
     use_signpost = False
 
 
-def run_yolov11_inference(
+def run_yolov11s_inference(
     device,
     batch_size_per_device,
     act_dtype,
@@ -35,25 +35,30 @@ def run_yolov11_inference(
     num_devices = device.get_num_devices()
     batch_size = batch_size_per_device * num_devices
 
-    performant_runner = YOLOv11PerformantRunner(
+    input_shape = (batch_size, 3, *resolution)
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
+
+    performant_runner = YOLOv11sPerformantRunner(
         device,
         batch_size_per_device,
         act_dtype,
         weight_dtype,
         resolution=resolution,
+        torch_input_tensor=torch_input_tensor,
         model_location_generator=model_location_generator,
         inputs_mesh_mapper=inputs_mesh_mapper,
         weights_mesh_mapper=weights_mesh_mapper,
         outputs_mesh_composer=outputs_mesh_composer,
     )
 
-    input_shape = (batch_size, 3, *resolution)
-    torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
+    for _ in range(10):
+        _ = performant_runner.run()
+    ttnn.synchronize_device(device)
     if use_signpost:
         signpost(header="start")
     t0 = time.time()
     for _ in range(100):
-        _ = performant_runner.run(torch_input_tensor=torch_input_tensor)
+        _ = performant_runner.run()
     ttnn.synchronize_device(device)
     t1 = time.time()
     if use_signpost:
@@ -78,7 +83,7 @@ def run_yolov11_inference(
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": YOLOV11_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    [{"l1_small_size": YOLOV11S_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
     indirect=True,
 )
 def test_e2e_performant(
@@ -90,7 +95,7 @@ def test_e2e_performant(
     resolution,
     reset_seeds,
 ):
-    run_yolov11_inference(
+    run_yolov11s_inference(
         device,
         batch_size_per_device,
         act_dtype,
@@ -115,7 +120,7 @@ def test_e2e_performant(
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": YOLOV11_L1_SMALL_SIZE, "trace_region_size": 23887872, "num_command_queues": 2}],
+    [{"l1_small_size": YOLOV11S_L1_SMALL_SIZE, "trace_region_size": 23887872, "num_command_queues": 2}],
     indirect=True,
 )
 def test_e2e_performant_dp(
@@ -127,7 +132,7 @@ def test_e2e_performant_dp(
     resolution,
     reset_seeds,
 ):
-    run_yolov11_inference(
+    run_yolov11s_inference(
         mesh_device,
         batch_size_per_device,
         act_dtype,
