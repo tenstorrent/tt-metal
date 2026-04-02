@@ -17,7 +17,7 @@ Owner:
 
 import threading
 from pathlib import Path
-from triage import triage_singleton, ScriptConfig, run_script
+from triage import triage_singleton, ScriptConfig, run_script, TTTriageError
 from ttexalens.context import Context
 from ttexalens.hardware.risc_debug import ParsedElfFile
 from ttexalens.tt_exalens_lib import parse_elf
@@ -61,12 +61,12 @@ class ElfsCache:
             ParsedElfFile object for the given path
         """
         if not elf_path.exists():
-            raise KeyError(f"ELF file {elf_path} does not exist.")
+            raise TTTriageError(f"ELF file {elf_path} does not exist.")
         with self._lock:
             if elf_path not in self._cache:
                 parsed_elf = parse_elf(elf_path, self.context)
                 if not parsed_elf:
-                    raise KeyError(
+                    raise TTTriageError(
                         f"Failed to extract DWARF info from ELF file {elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
                     )
                 self._cache[elf_path] = parsed_elf

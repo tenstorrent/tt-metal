@@ -281,7 +281,7 @@ class TriageScript:
                 )
 
             triage_script = TriageScript(
-                name=script_path.stem,
+                name=script_path.name,
                 path=script_path,
                 config=deepcopy(script_config),
                 module=script_module,
