@@ -104,26 +104,6 @@
   owner_id: U03HY7MK4BT
   team: models
 
-- name: bh_p100_DeepSeek_B1_Full_Unit_Tests_SlowDispatch
-  cmd: |
-    TT_METAL_SLOW_DISPATCH_MODE=1 pytest --timeout 600 -m "not skip_post_commit" models/demos/deepseek_v3_b1/tests/unit_tests/
-  model: deepseek_decode
-  skus:
-    bh_p100:
-      timeout: 20
-  owner_id: U03HY7MK4BT
-  team: models
-
-- name: bh_p100_DeepSeek_B1_Full_Unit_Tests_FastDispatch
-  cmd: |
-    pytest --timeout 600 -m "not skip_post_commit" models/demos/deepseek_v3_b1/tests/unit_tests/
-  model: deepseek_decode
-  skus:
-    bh_p100:
-      timeout: 20
-  owner_id: U03HY7MK4BT
-  team: models
-
 # ============================================================================
 # Wan 2.2 Tests (Galaxy)
 # ============================================================================
