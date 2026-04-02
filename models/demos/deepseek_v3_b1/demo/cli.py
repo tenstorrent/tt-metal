@@ -124,6 +124,18 @@ def create_parser() -> argparse.ArgumentParser:
         metavar="ID",
         help="Force all MoE stages to use this layer id (e.g. 3); default: use stage-dependent layer ids",
     )
+    parser.add_argument(
+        "--launch-only",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Only launch the pipeline, export H2D/D2H socket descriptors on mesh id 0, and keep the pipeline alive.",
+    )
+    parser.add_argument(
+        "--io-socket-descriptor-prefix",
+        type=str,
+        default="deepseek_v3_b1",
+        help="Prefix used when exporting H2D/D2H socket descriptors; sockets will be named <prefix>_h2d and <prefix>_d2h.",
+    )
     return parser
 
 
@@ -143,6 +155,8 @@ def run_demo(
     lm_head_persistent_mode: bool = True,
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
+    launch_only: bool = False,
+    io_socket_descriptor_prefix: str | None = None,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     iterations = max_new_tokens
@@ -159,10 +173,11 @@ def run_demo(
             lm_head_persistent_mode=lm_head_persistent_mode,
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
+            io_socket_descriptor_prefix=io_socket_descriptor_prefix,
         )
 
         my_mesh_id = mesh_device.get_system_mesh_id()
-        if my_mesh_id == 0:
+        if my_mesh_id == 0 and not launch_only:
             prompt_ids = []
             tokenizer = load_tokenizer(tokenizer_name_or_path)
             for prompt in prompts:
@@ -193,7 +208,17 @@ def run_demo(
                 generated_text = tokenizer.decode(generated_tokens[slot_id], skip_special_tokens=True)
                 logger.info("Output ({} tokens): {}", len(generated_tokens[slot_id]), generated_text)
 
-        model_pipeline.barrier()
+        if launch_only and my_mesh_id == 0:
+            # Keep process/pipeline alive until user interrupts
+            # Only runs on mesh 0, all other processes wait for a barrier
+            logger.info("Pipeline launched; keeping sockets alive until interrupted.")
+            try:
+                while True:
+                    time.sleep(3600)
+            except KeyboardInterrupt:
+                logger.info("Shutting down launch-only pipeline after interrupt.")
+
+    model_pipeline.barrier()
     logger.info("Pod pipeline complete")
 
 
@@ -222,6 +247,8 @@ def main(argv: list[str] | None = None) -> int:
         lm_head_persistent_mode=args.persistent_mode,
         dense_layer_id_override=args.dense_layer_id_override,
         moe_layer_id_override=args.moe_layer_id_override,
+        launch_only=args.launch_only,
+        io_socket_descriptor_prefix=args.io_socket_descriptor_prefix,
     )
     print(file=sys.stdout, flush=True)
     return 0
