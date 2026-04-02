@@ -48,18 +48,28 @@ FORCE_INLINE void write_data_to_remote_core_with_ack(
     uint32_t l1_read_addr,
     uint64_t dst_addr,
     uint64_t downstream_bytes_sent_noc_addr,
-    uint32_t packet_size) {
+    uint32_t packet_size,
+    uint32_t link_id = 0) {
     packet_header_addr->to_noc_fused_unicast_write_atomic_inc(
         NocUnicastAtomicIncFusedCommandHeader{dst_addr, downstream_bytes_sent_noc_addr, packet_size, false},
         packet_size);
+    DPRINT << "d2d_xchg: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") link=" << link_id
+           << " pre_wait edm=(" << (uint32_t)fabric_connection.edm_noc_x << "," << (uint32_t)fabric_connection.edm_noc_y
+           << ") buf=" << (uint32_t)fabric_connection.edm_buffer_base_addr << ENDL();
     fabric_connection.wait_for_empty_write_slot();
+    DPRINT << "d2d_xchg: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") link=" << link_id << " got_slot"
+           << ENDL();
     fabric_connection.send_payload_without_header_non_blocking_from_address(l1_read_addr, packet_size);
     if constexpr (flush) {
         fabric_connection.send_payload_flush_blocking_from_address(
             (uint32_t)packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+        DPRINT << "d2d_xchg: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") link=" << link_id
+               << " flushed" << ENDL();
     } else {
         fabric_connection.send_payload_flush_non_blocking_from_address(
             (uint32_t)packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+        DPRINT << "d2d_xchg: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") link=" << link_id
+               << " sent_nb" << ENDL();
     }
 }
 
@@ -88,14 +98,16 @@ FORCE_INLINE void send_pages_over_socket(
                 l1_read_addr_0,
                 dst_addr_0,
                 downstream_bytes_sent_noc_addr,
-                whole_packet_size);
+                whole_packet_size,
+                0);
             write_data_to_remote_core_with_ack(
                 downstream_fabric_connection_2,
                 downstream_data_packet_header_addr_2,
                 l1_read_addr_1,
                 dst_addr_1,
                 downstream_bytes_sent_noc_addr,
-                whole_packet_size);
+                whole_packet_size,
+                1);
             l1_read_addr_0 += whole_packet_size;
             l1_read_addr_1 += whole_packet_size;
             dst_addr_0 += whole_packet_size;
@@ -108,14 +120,16 @@ FORCE_INLINE void send_pages_over_socket(
                 l1_read_addr_0,
                 dst_addr_0,
                 downstream_bytes_sent_noc_addr,
-                partial_packet_size);
+                partial_packet_size,
+                0);
             write_data_to_remote_core_with_ack(
                 downstream_fabric_connection_2,
                 downstream_data_packet_header_addr_2,
                 l1_read_addr_1,
                 dst_addr_1,
                 downstream_bytes_sent_noc_addr,
-                partial_packet_size);
+                partial_packet_size,
+                1);
         }
         socket_push_pages(sender_socket, 1);
     } else {
@@ -131,14 +145,32 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricEdmSender upstream_fabric_connection;
 
     if constexpr (use_fabric_on_sender) {
+        size_t fc1_arg_start = rt_args_idx;
         downstream_fabric_connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+        size_t fc2_arg_start = rt_args_idx;
         downstream_fabric_connection_2 =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+        DPRINT << "d2d_xchg: fc1 eth_ch=" << get_arg_val<uint32_t>(fc1_arg_start) << " edm=("
+               << (uint32_t)downstream_fabric_connection.edm_noc_x << ","
+               << (uint32_t)downstream_fabric_connection.edm_noc_y
+               << ") buf=" << (uint32_t)downstream_fabric_connection.edm_buffer_base_addr
+               << " nbufs=" << (uint32_t)downstream_fabric_connection.num_buffers_per_channel << ENDL();
+        DPRINT << "d2d_xchg: fc2 eth_ch=" << get_arg_val<uint32_t>(fc2_arg_start) << " edm=("
+               << (uint32_t)downstream_fabric_connection_2.edm_noc_x << ","
+               << (uint32_t)downstream_fabric_connection_2.edm_noc_y
+               << ") buf=" << (uint32_t)downstream_fabric_connection_2.edm_buffer_base_addr
+               << " nbufs=" << (uint32_t)downstream_fabric_connection_2.num_buffers_per_channel << ENDL();
     }
     if constexpr (use_fabric_on_receiver) {
+        size_t fc_up_arg_start = rt_args_idx;
         upstream_fabric_connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+        DPRINT << "d2d_xchg: fc_up eth_ch=" << get_arg_val<uint32_t>(fc_up_arg_start) << " edm=("
+               << (uint32_t)upstream_fabric_connection.edm_noc_x << ","
+               << (uint32_t)upstream_fabric_connection.edm_noc_y
+               << ") buf=" << (uint32_t)upstream_fabric_connection.edm_buffer_base_addr
+               << " nbufs=" << (uint32_t)upstream_fabric_connection.num_buffers_per_channel << ENDL();
     }
 
     SocketSenderInterface sender_socket = create_sender_socket_interface(sender_socket_config_addr);
@@ -189,11 +221,20 @@ void kernel_main() {
         fabric_set_unicast_route(upstream_socket_packet_header_addr, receiver_socket);
     }
 
+    uint32_t d2d_iter = 0;
     while (true) {
+        DPRINT << "d2d_xchg: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") iter=" << d2d_iter
+               << " reserve_downstream" << ENDL();
         socket_reserve_pages(sender_socket, 1);
+        DPRINT << "d2d_xchg: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") iter=" << d2d_iter
+               << " wait_upstream" << ENDL();
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
+            DPRINT << "d2d_xchg: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0]
+                   << ") terminated at iter=" << d2d_iter << ENDL();
             break;
         }
+        DPRINT << "d2d_xchg: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") iter=" << d2d_iter
+               << " forwarding" << ENDL();
 
         auto l1_read_addr = receiver_socket.read_ptr;
         uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
@@ -217,6 +258,9 @@ void kernel_main() {
         } else {
             socket_notify_sender(receiver_socket);
         }
+        DPRINT << "d2d_xchg: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") iter=" << d2d_iter
+               << " done" << ENDL();
+        d2d_iter++;
     }
 
     update_socket_config(sender_socket);

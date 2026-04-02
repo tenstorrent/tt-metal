@@ -47,8 +47,14 @@ void kernel_main() {
 
     tt::tt_fabric::WorkerToFabricEdmSender upstream_fabric_connection;
     if constexpr (use_fabric) {
+        size_t fc_arg_start = rt_args_idx;
         upstream_fabric_connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+        DPRINT << "d2h_send: fc_up eth_ch=" << get_arg_val<uint32_t>(fc_arg_start) << " edm=("
+               << (uint32_t)upstream_fabric_connection.edm_noc_x << ","
+               << (uint32_t)upstream_fabric_connection.edm_noc_y
+               << ") buf=" << (uint32_t)upstream_fabric_connection.edm_buffer_base_addr
+               << " nbufs=" << (uint32_t)upstream_fabric_connection.num_buffers_per_channel << ENDL();
     }
 
     SocketSenderInterface sender_socket = create_sender_socket_interface(send_socket_config_addr);
@@ -84,12 +90,17 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
 
+    uint32_t d2h_iter = 0;
     while (true) {
-        // Wait for space in D2H socket
+        DPRINT << "d2h_send: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") iter=" << d2h_iter
+               << " reserve_d2h" << ENDL();
         socket_reserve_pages(sender_socket, 1);
         if constexpr (loopback_mode) {
-            // Wait for data in CB with termination checks
+            DPRINT << "d2h_send: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") iter=" << d2h_iter
+                   << " wait_cb" << ENDL();
             if (!cb_wait_for_pages_with_termination(upstream_interface_index, 1, termination_semaphore)) {
+                DPRINT << "d2h_send: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0]
+                       << ") terminated at iter=" << d2h_iter << ENDL();
                 break;
             }
             uint32_t read_addr = get_read_ptr(upstream_interface_index);
@@ -103,10 +114,15 @@ void kernel_main() {
             noc_async_writes_flushed();
             cb_pop_front(upstream_interface_index, 1);
         } else {
-            // Wait for pages in receiver socket with timeout and termination checks
+            DPRINT << "d2h_send: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") iter=" << d2h_iter
+                   << " wait_upstream" << ENDL();
             if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
+                DPRINT << "d2h_send: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0]
+                       << ") terminated at iter=" << d2h_iter << ENDL();
                 break;
             }
+            DPRINT << "d2h_send: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") iter=" << d2h_iter
+                   << " got_upstream_page" << ENDL();
             uint32_t read_addr = receiver_socket.read_ptr;
             noc_async_wide_write_any_len_with_state(
                 NOC_INDEX,
@@ -131,6 +147,9 @@ void kernel_main() {
 
         socket_push_pages(sender_socket, 1);
         socket_notify_receiver(sender_socket);
+        DPRINT << "d2h_send: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") iter=" << d2h_iter
+               << " done" << ENDL();
+        d2h_iter++;
         invalidate_l1_cache();
     }
 
