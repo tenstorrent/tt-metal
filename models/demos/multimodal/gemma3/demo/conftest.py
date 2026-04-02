@@ -1,7 +1,21 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import argparse
+
 from models.tt_transformers.tt.model_config import parse_optimizations
+
+
+def _cli_bool(value):
+    """argparse bool that accepts 0/1, true/false (Python bool('False') is True)."""
+    if isinstance(value, bool):
+        return value
+    v = str(value).strip().lower()
+    if v in ("1", "true", "yes", "y", "on"):
+        return True
+    if v in ("0", "false", "no", "n", "off"):
+        return False
+    raise argparse.ArgumentTypeError(f"expected boolean string, got {value!r}")
 
 
 # These inputs override the default inputs used by simple_text_demo.py. Check the main demo to see the default values.
@@ -16,7 +30,11 @@ def pytest_addoption(parser):
     )
     parser.addoption("--data_parallel", action="store", type=int, help="Number of data parallel workers")
     parser.addoption(
-        "--paged_attention", action="store", type=bool, help="Whether to use paged attention or default attention"
+        "--paged_attention",
+        action="store",
+        type=_cli_bool,
+        default=None,
+        help="Whether to use paged attention (1/true) or default KV (0/false). Omit to use the parametrized default.",
     )
     parser.addoption("--page_params", action="store", type=dict, help="Page parameters for paged attention")
     parser.addoption("--sampling_params", action="store", type=dict, help="Sampling parameters for decoding")
