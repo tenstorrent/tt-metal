@@ -232,7 +232,6 @@ MoEComputeMeshWorkloadFactory::create_at(
     uint32_t hidden_size = tilize_input_shape[-1];
     uint32_t experts = tilize_mapping_shape[-1];
     uint32_t selected_experts_k = tilize_indices_shape[-1];
-    // uint32_t experts_per_device = tt::div_up(experts, num_devices) + 1; // breaking change
     uint32_t experts_per_device = tt::div_up(experts, num_devices);
 
     // Cores

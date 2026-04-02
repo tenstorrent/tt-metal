@@ -6,18 +6,11 @@
 TG (Single Galaxy) MoE Combine Test for Quad Galaxy Validation
 
 Tests ttnn.experimental.selective_reduce_combine operation in isolation on a 4x8 mesh (32 devices).
-Based on tests/nightly/tg/ccl/moe/test_selective_combine_6U.py adapted for quad validation.
-
-Key Design Principles:
-1. **Same Work Per Device**: Each device handles 2 experts (same as quad: 256/128 = 2)
-2. **Isolated Testing**: Tests only the combine operation with mocked compute outputs
-3. **All-to-All Gather**: Validates expert outputs are correctly gathered back to source devices
 
 Configuration:
 - Mesh: 4x8 (32 devices)
 - Experts: 64 (2 per device)
 - Batch: 64 (reduced from quad's 512 due to L1 constraints)
-- cluster_axis: 0 (dispatch along axis-0)
 """
 
 import os

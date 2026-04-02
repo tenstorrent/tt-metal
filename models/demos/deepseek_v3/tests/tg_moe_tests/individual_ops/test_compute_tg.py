@@ -6,12 +6,6 @@
 TG (Single Galaxy) MoE Compute Test for Quad Galaxy Validation
 
 Tests ttnn.experimental.moe_compute operation in isolation on a 4x8 mesh (32 devices).
-Based on tests/nightly/tg/ccl/moe/test_moe_compute_6U.py adapted for quad validation.
-
-Key Design Principles:
-1. **Same Work Per Device**: Each device handles 2 experts (same as quad: 256/128 = 2)
-2. **Isolated Testing**: Tests only the compute operation with mocked dispatch outputs
-3. **Correctness Focus**: Validates token counts, activation metadata, and matmul outputs
 
 Configuration:
 - Mesh: 4x8 (32 devices)
@@ -19,7 +13,6 @@ Configuration:
 - Tokens per device: 16 (reduced from 32 due to L1 memory constraints)
 - cluster_axis: 0 (dispatch along axis-0)
 
-Note: L1 memory is limited on TG with cluster_axis=0. Test uses reduced scale to fit.
 """
 
 import os

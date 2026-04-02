@@ -1110,7 +1110,6 @@ void kernel_main() {
         cb_wait_front(input_tensor_cb_id, 1);
         uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id);
         uint16_t* token_indices = (uint16_t*)(get_read_ptr(indices_tensor_cb_id));
-        // uint16_t* token_indices = (uint16_t*)(get_read_ptr(indices_tensor_cb_id)) + 1; // breaking change
 
         // In payload split mode: reader already reads only this worker's portion into CB
         // In non-split mode: reader reads full page, payload_offset=0

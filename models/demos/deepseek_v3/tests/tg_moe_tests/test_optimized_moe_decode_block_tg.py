@@ -5,11 +5,13 @@
 """
 MoE Decode Block End-to-End Test
 
-Supports two configurations:
-1. Quad Galaxy (16x8): Full production setup with 128 devices, 256 experts
-2. Single Galaxy 16x1 Torus: Development/testing setup using top 2 rows of 4x8 TG
+Supports:
+Single Galaxy 16x1 Torus: Development/testing setup using top 2 rows of 4x8 TG
    - Requires: TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_16x1_torus_graph_descriptor.textproto"
-   - Key difference: No reduce_scatter (no replication), takes first output from fast_reduce
+
+Run with:
+'MESH_DEVICE=TG16X1 TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_16x1_torus_graph_descriptor.textproto" \
+ pytest models/demos/deepseek_v3/tests/tg_moe_tests/test_optimized_moe_decode_block_tg.py -v'
 """
 
 import os
@@ -448,7 +450,6 @@ def verify_combine(iteration, mesh_device, mesh_shape, cluster_axis, tt_combine_
         )
 
     # check pcc
-    print(torch_combine_output - torch_combine_golden)
     pcc_passed, pcc_output = comp_pcc(torch_combine_output, torch_combine_golden, pcc=PCC_THRESHOLD)
     logger.info(f"Combine Output - Iteration: {iteration} - PCC: {pcc_output}")
     if not pcc_passed:

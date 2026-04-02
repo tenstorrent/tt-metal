@@ -51,8 +51,6 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     uint32_t total_tokens =
         tilize_input_shape[0] *
         tilize_input_shape[1];  // tokens_per_device from input, total tokens across all dispatch devices (512)
-    // uint32_t total_tokens =
-    //     tilize_input_shape[0]; // breaking change
 
     //-------------------------------------------------------------------------
     // Tilize outputs

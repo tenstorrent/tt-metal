@@ -10,7 +10,6 @@ Tests ttnn.experimental.all_to_all_dispatch_metadata operation on single galaxy 
 This test validates dispatch operations with:
 - 64 experts (2 per device) - same per-device workload as quad
 - 4x8 mesh configuration
-- Both correctness and performance modes
 
 If this test fails, dispatch is likely broken on quad as well.
 """
