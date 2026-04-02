@@ -75,7 +75,8 @@ class WarmupForwardMixin:
     def _create_decode_warmup_inputs(self, max_batch_size, num_blocks):
         tokens = torch.zeros(max_batch_size, 1, dtype=torch.int32)
         start_pos = torch.zeros(max_batch_size, dtype=torch.int32)
-        page_table = torch.zeros(max_batch_size, num_blocks, dtype=torch.int32)
+        # num_blocks==0: non-paged KV; a synthetic page table would not match cache layout (TT_FATAL in paged_update_cache).
+        page_table = None if num_blocks == 0 else torch.zeros(max_batch_size, num_blocks, dtype=torch.int32)
         return tokens, start_pos, page_table
 
     def warmup_model_decode(
@@ -99,7 +100,7 @@ class WarmupForwardMixin:
         logger.info("Starting decode warmup")
         logger.info(f"Tokens shape: {tokens.shape}")
         logger.info(f"Start pos shape: {start_pos.shape}")
-        logger.info(f"Page table shape: {page_table.shape}")
+        logger.info(f"Page table: {page_table.shape if page_table is not None else None}")
 
         for param in sampling_params:
             logger.info(f"Warming up decode for sampling params: {param}")
