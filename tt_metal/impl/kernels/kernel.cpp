@@ -145,7 +145,7 @@ Kernel::Kernel(
 
 void Kernel::register_kernel_with_watcher() {
     // Watcher server may not exist yet if MetalContext hasn't been fully initialized
-    // (e.g., during mock device testing or before devices are opened)
+    // (e.g., during mock device testing)
     auto& watcher = MetalContext::instance().watcher_server();
     if (!watcher) {
         this->watcher_kernel_id_ = -1;
