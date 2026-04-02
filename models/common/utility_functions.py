@@ -1083,8 +1083,6 @@ def skip_with_llk_assert(reason_str="Test is not passing with LLK asserts enable
     return ti_skip(is_llk_assert_enabled(), reason=reason_str)
 
 
-
-
 def run_for_blackhole(reason_str="only runs for Blackhole"):
     return ti_skip(not is_blackhole(), reason=reason_str)
 
