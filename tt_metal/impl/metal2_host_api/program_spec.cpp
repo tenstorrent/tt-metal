@@ -325,6 +325,11 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 "KernelSpec '{}' has too many threads. The architecture supports up to {} for compute kernels.",
                 kernel.unique_id,
                 QUASAR_TENSIX_ENGINES_PER_NODE);
+            // Looks odd here, but threads is not allowed; the remapper doesn't support it.
+            TT_FATAL(
+                kernel.num_threads != 3,
+                "KernelSpec '{}' has 3 threads, which is not supported. Legal values are 1, 2, and 4.",
+                kernel.unique_id);
         }
         if (kernel.is_dm_kernel()) {
             TT_FATAL(
