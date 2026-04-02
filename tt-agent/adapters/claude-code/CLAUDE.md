@@ -10,11 +10,8 @@ may override when their domain requires it.
 
 ## Skills
 
-See `tt-agent/skills/` for available skills, organized by layer:
-- `orchestration/` — routes, plans, decomposes
-- `workflows/` — autonomous loops (iterate until converged)
-- `tools/` — single-purpose capabilities
-- `meta/` — system-level utilities
+See `tt-agent/skills/` for available skills. Each skill declares its layer via
+`metadata.layer` in frontmatter (orchestration, workflow, tool, or meta).
 
 ## Knowledge
 
