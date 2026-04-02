@@ -57,8 +57,8 @@ class DispatcherCoreData:
     watcher_previous_kernel_id: int = triage_field("Previous Kernel ID", verbose=1)
     previous_kernel_name: str | None = triage_field("Previous Kernel Name", verbose=1)
     kernel_offset: int | None = triage_field("Kernel Offset", hex_serializer, verbose=1)
-    kernel_path: str = triage_field("Kernel Path", verbose=1)
-    firmware_path: str = triage_field("Firmware Path", verbose=1)
+    kernel_path: Path | None = triage_field("Kernel Path", verbose=1)
+    firmware_path: Path = triage_field("Firmware Path", verbose=1)
     # New watcher/mailbox fields (verbose=1)
     dispatch_mode: str | None = triage_field("Dispatch Mode", verbose=1)
     brisc_noc_id: int | None = triage_field("BRISC NOC", verbose=1)
@@ -70,7 +70,7 @@ class DispatcherCoreData:
     launch_msg_rd_ptr: int = triage_field("RD PTR", verbose=2)
     kernel_config_base: int = triage_field("Base", hex_serializer, verbose=2)
     kernel_text_offset: int = triage_field("Offset", hex_serializer, verbose=2)
-    kernel_xip_path: str | None = triage_field("Kernel XIP Path", verbose=2)
+    kernel_xip_path: Path | None = triage_field("Kernel XIP Path", verbose=2)
 
     # Non-triage fields
     mailboxes: ElfVariable | None = None
@@ -515,38 +515,36 @@ class DispatcherData:
                 firmware_resolved = firmware_base / "subordinate_idle_erisc" / "subordinate_idle_erisc.elf"
             else:
                 firmware_resolved = firmware_base / proc_name_l / f"{proc_name_l}.elf"
-        firmware_path = str(firmware_resolved.resolve())  # DispatcherCoreData.firmware_path is str
+        firmware_path = firmware_resolved.resolve()
 
         if kernel:
-            kernel_path = Path(kernel.path)
-            kernel_path_resolved = None
+            kernel_root = Path(kernel.path)
+            kernel_path_resolved: Path | None = None
             if location in location.device.active_eth_block_locations:
                 if proc_name_l == "erisc":
-                    kernel_path_resolved = kernel_path / "erisc" / "erisc.elf"
+                    kernel_path_resolved = kernel_root / "erisc" / "erisc.elf"
                 elif proc_name_l == "erisc0":
                     kernel_path_resolved = (
-                        (kernel_path / "active_erisc" / "active_erisc.elf") if self._is_2_erisc_mode else None
+                        (kernel_root / "active_erisc" / "active_erisc.elf") if self._is_2_erisc_mode else None
                     )
                 elif proc_name_l == "erisc1":
                     kernel_path_resolved = (
-                        kernel_path / "subordinate_active_erisc" / "subordinate_active_erisc.elf"
+                        kernel_root / "subordinate_active_erisc" / "subordinate_active_erisc.elf"
                         if self._is_2_erisc_mode
-                        else kernel_path / "active_erisc" / "active_erisc.elf"
+                        else kernel_root / "active_erisc" / "active_erisc.elf"
                     )
             else:
                 if proc_name_l == "erisc" or proc_name_l == "erisc0":
-                    kernel_path_resolved = kernel_path / "idle_erisc" / "idle_erisc.elf"
+                    kernel_path_resolved = kernel_root / "idle_erisc" / "idle_erisc.elf"
                 elif proc_name_l == "erisc1":
-                    kernel_path_resolved = kernel_path / "subordinate_idle_erisc" / "subordinate_idle_erisc.elf"
+                    kernel_path_resolved = kernel_root / "subordinate_idle_erisc" / "subordinate_idle_erisc.elf"
                 else:
-                    kernel_path_resolved = kernel_path / proc_name_l / f"{proc_name_l}.elf"
-            kernel_path = (
-                str(kernel_path_resolved.resolve()) if kernel_path_resolved is not None else None
-            )  # DispatcherCoreData.kernel_path is str; also used in str concat on next line
+                    kernel_path_resolved = kernel_root / proc_name_l / f"{proc_name_l}.elf"
+            kernel_path = kernel_path_resolved.resolve() if kernel_path_resolved is not None else None
             # For NCRISC we don't have XIP ELF file
             kernel_xip_path = (
-                kernel_path + ".xip.elf"
-                if kernel_path and not (proc_name == "NCRISC" and location.device.is_wormhole())
+                kernel_path.with_name(kernel_path.name + ".xip.elf")
+                if kernel_path is not None and not (proc_name == "NCRISC" and location.device.is_wormhole())
                 else None
             )
             if proc_name == "NCRISC" and location.device.is_wormhole():
