@@ -51,11 +51,7 @@ def iter_micro_batch(prompts, answers, completions, micro_batch_size=16):
 def train_grpo(run, yaml_config_path, checkpoint_interval):
     metrics = TrainingMetricsTracker(run.output_dir)
 
-    ctx = setup_inference(
-        yaml_config_path,
-        hf_model_id="unsloth/Llama-3.2-1B-Instruct",
-        load_pretrained=True,
-    )
+    ctx = setup_inference(yaml_config_path, hf_model_id="unsloth/Llama-3.2-1B-Instruct", checkpoint_path=None)
     grpo_cfg = setup_grpo_config(yaml_config_path)
     optimizer = setup_training_optimizer(yaml_config_path, ctx.tt_model)
 
