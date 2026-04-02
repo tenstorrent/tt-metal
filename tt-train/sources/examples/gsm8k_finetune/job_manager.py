@@ -346,7 +346,7 @@ class JobManager:
         if is_lb_partition:
             reset_command = "tt-smi -r"
         else:
-            reset_command = "tt-smi -glx_reset"
+            reset_command = "srun tt-smi -glx_reset"
 
         # Always pin non-lb jobs to the allowed Galaxy nodes.
         nodelist_directive = ""

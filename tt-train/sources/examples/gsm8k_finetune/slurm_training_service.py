@@ -766,7 +766,7 @@ def list_jobs():
 # Capabilities: what the server/demo actually supports (dashboard should restrict or warn)
 SUPPORTED_TRAINERS = get_supported_trainers()
 SUPPORTED_OPTIMIZERS = {"adamw"}
-SUPPORTED_DATASETS = {"gsm8k"}  # others work in gsm8k_finetune but less tested
+SUPPORTED_DATASETS = {"gsm8k", "shakespeare"}  # others work in gsm8k_finetune but less tested
 
 
 @app.get("/v1/catalog")
@@ -783,6 +783,8 @@ def catalog():
         "tinyllama": "TinyLlama 1.1B",
         "gpt2": "GPT-2",
         "llama8b": "Llama 3.1 8B",
+        "llama70b": "Llama 3.1 70B",
+        "llama405b": "Llama 3.1 405B",
         "qwen3_0_6b": "Qwen3 0.6B",
         "qwen3_1_7b": "Qwen3 1.7B",
     }
@@ -798,7 +800,7 @@ def catalog():
         )
 
         # Mark smaller models as supported by default, larger ones may need more resources
-        is_supported = model_id in {"tinyllama", "gpt2", "qwen3_0_6b", "qwen3_1_7b"}
+        is_supported = model_id in {"tinyllama", "gpt2", "llama8b", "llama70b", "llama405b", "qwen3_0_6b", "qwen3_1_7b"}
 
         models.append(
             {
@@ -814,26 +816,24 @@ def catalog():
         "sft": "SFT",
         "lora": "LoRA",
         "grpo": "GRPO",
+        "pretrain": "Pretrain",
     }
 
-    trainers = []
-    for trainer_id in sorted(TRAINING_TYPES.keys()):
-        trainers.append(
-            {
-                "id": trainer_id,
-                "display_name": trainer_display_names.get(trainer_id, trainer_id.upper()),
-                "supported": True,  # All registered trainers are supported
-            }
-        )
+    # Trainers known to clients but not yet available in the registry
+    future_trainers: set = {"grpo"}
 
-    # Placeholder for future trainers not yet in the registry
-    future_trainers: set = set()
-    for trainer_id in sorted(future_trainers - set(TRAINING_TYPES.keys())):
+    # Return trainers in expected usage order: Pretrain -> LoRA -> SFT -> GRPO
+    trainer_order = ["pretrain", "lora", "sft", "grpo"]
+    all_trainer_ids = list(TRAINING_TYPES.keys()) + sorted(future_trainers - set(TRAINING_TYPES.keys()))
+    all_trainer_ids.sort(key=lambda t: trainer_order.index(t) if t in trainer_order else len(trainer_order))
+
+    trainers = []
+    for trainer_id in all_trainer_ids:
         trainers.append(
             {
                 "id": trainer_id,
                 "display_name": trainer_display_names.get(trainer_id, trainer_id.upper()),
-                "supported": False,
+                "supported": trainer_id in TRAINING_TYPES,
             }
         )
 
@@ -845,6 +845,7 @@ def catalog():
         "models": models,
         "datasets": [
             {"id": "gsm8k", "display_name": "GSM8K", "supported": True},
+            {"id": "shakespeare", "display_name": "Shakespeare", "supported": True},
             {"id": "math_qa", "display_name": "Math QA", "supported": True},
             {"id": "aqua_rat", "display_name": "AQuA-RAT", "supported": True},
             {"id": "svamp", "display_name": "SVAMP", "supported": True},
