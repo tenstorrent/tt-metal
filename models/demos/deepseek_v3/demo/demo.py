@@ -531,7 +531,7 @@ def run_demo(
             )
             raise
 
-    batch_size_per_row = USERS_PER_ROW
+    batch_size_per_row = max_users_per_row
     batch_size = batch_size_per_row * mesh_device.shape[0]
 
     # Configure sampling
