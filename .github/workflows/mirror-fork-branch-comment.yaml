@@ -1,0 +1,81 @@
+name: "/mirror comment trigger"
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  mirror:
+    # Only run on PR comments (not issue comments) that start with /mirror
+    if: >
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/mirror')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get PR details
+        id: pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_JSON=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "${{ github.event.issue.pull_request.url }}")
+
+          FORK_OWNER=$(echo "$PR_JSON" | jq -r '.head.repo.owner.login')
+          SRC_BRANCH=$(echo "$PR_JSON" | jq -r '.head.ref')
+          PR_NUMBER=$(echo "$PR_JSON" | jq -r '.number')
+
+          if [ "$FORK_OWNER" = "null" ] || [ "$SRC_BRANCH" = "null" ]; then
+            echo "Error: Could not extract fork owner or branch from PR"
+            exit 1
+          fi
+
+          echo "fork_owner=$FORK_OWNER" >> $GITHUB_OUTPUT
+          echo "src_branch=$SRC_BRANCH" >> $GITHUB_OUTPUT
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "source=${FORK_OWNER}:${SRC_BRANCH}" >> $GITHUB_OUTPUT
+
+      - name: Parse optional target branch from comment
+        id: parse
+        run: |
+          COMMENT="${{ github.event.comment.body }}"
+          # /mirror [optional-target-branch]
+          TARGET=$(echo "$COMMENT" | sed -n 's|^/mirror\s*||p' | xargs)
+          echo "target_branch=$TARGET" >> $GITHUB_OUTPUT
+
+      - name: React to comment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -s -X POST \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "${{ github.event.comment.url }}/reactions" \
+            -d '{"content":"rocket"}'
+
+      - name: Trigger mirror workflow
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SOURCE="${{ steps.pr.outputs.source }}"
+          TARGET="${{ steps.parse.outputs.target_branch }}"
+
+          echo "Triggering mirror for source=$SOURCE target=$TARGET"
+
+          BODY='{"ref":"main","inputs":{"source":"'"$SOURCE"'"'
+          if [ -n "$TARGET" ]; then
+            BODY="$BODY"',"target_branch":"'"$TARGET"'"'
+          fi
+          BODY="$BODY"'}}'
+
+          curl -s -X POST \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/mirror-fork-branch.yaml/dispatches" \
+            -d "$BODY"
+
+          echo "Mirror workflow dispatched for $SOURCE"
