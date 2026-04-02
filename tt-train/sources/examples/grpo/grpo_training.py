@@ -115,6 +115,7 @@ def train_grpo(yaml_config_path, checkpoint_interval):
                     Tp,
                     len(prompts_batch),
                     grpo_cfg.clip_eps,
+                    ctx.dp_mapper,
                     ctx.dp_composer,
                 )
                 loss.backward(retain_graph=False)
