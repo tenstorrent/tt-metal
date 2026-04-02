@@ -1,7 +1,6 @@
 # Tenstorrent Model Bring-up Rules
 
 ## Environment
-- ARCH_NAME=wormhole_b0
 - PYTHONPATH must include $(pwd) and $(pwd)/models
 - Env settings for every command run: export TT_METAL_HOME=$(pwd) && export PYTHONPATH=$(pwd) && source python_env/bin/activate
 
