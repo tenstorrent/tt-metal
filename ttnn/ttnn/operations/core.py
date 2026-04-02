@@ -5,7 +5,7 @@
 import math
 import os
 import pathlib
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import ttnn.decorators
 from loguru import logger
@@ -546,7 +546,12 @@ def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.MeshDevice 
 
 
 @ttnn.register_python_operation(name="ttnn.dump_tensor")
-def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor) -> None:
+def dump_tensor(
+    file_name: Union[str, pathlib.Path],
+    tensor: ttnn.Tensor,
+    *,
+    mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
+) -> None:
     """
     Dump tensor to a file.
 
@@ -554,12 +559,21 @@ def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor) -> Non
         file_name (str | pathlib.Path): The file name.
         tensor (ttnn.Tensor): the tensor to be dumped.
 
+    Keyword Args:
+        mode (ttnn.DumpTensorMode, optional): How host-side distributed tensors are written. Defaults to
+            ``DISTRIBUTED_GATHER``.
+
+            * ``DISTRIBUTED_GATHER``: perform a host all-gather, write the full tensor from global rank 0 only,
+              and synchronize with barriers. Use this for a single canonical file from a distributed tensor.
+            * ``LOCAL``: skip collectives and write the caller's local shard only. In multi-host runs, each process
+              must use a distinct ``file_name`` (for example a per-host cache path).
+
     Returns:
         `None`: tensor saved to a specified file.
     """
     file_name = pathlib.Path(file_name)
     _validate_file_extension(file_name)
-    ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(file_name), tensor)
+    ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(file_name), tensor, mode)
 
 
 @ttnn.register_python_operation(name="ttnn.as_tensor")
