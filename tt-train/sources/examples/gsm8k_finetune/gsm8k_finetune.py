@@ -417,12 +417,23 @@ def train():
     tc = model_config["transformer_config"]
     model_type = tc["model_type"]
 
+    _QWEN3_REPO_BY_DIM = {
+        1024: "Qwen/Qwen3-0.6B",
+        2048: "Qwen/Qwen3-1.7B",
+    }
+
     if model_type == "gpt2":
         repo_id = "gpt2"
     elif model_type == "llama":
         repo_id = "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
     elif model_type == "qwen3":
-        repo_id = "Qwen/Qwen3-0.6B"
+        dim = tc.get("embedding_dim", 1024)
+        repo_id = _QWEN3_REPO_BY_DIM.get(dim)
+        if repo_id is None:
+            raise ValueError(
+                f"No HuggingFace repo for qwen3 with embedding_dim={dim}. "
+                f"Known sizes: {sorted(_QWEN3_REPO_BY_DIM.keys())}"
+            )
     else:
         raise ValueError(f"Unsupported model_type: {model_type}. Supported: gpt2, llama, qwen3")
 

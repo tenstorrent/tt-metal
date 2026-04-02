@@ -12,6 +12,7 @@ Architecture: HuggingFace Transformers Qwen3 design with:
   - RoPE positional encoding
 """
 
+import sys
 from dataclasses import dataclass
 
 import torch
@@ -533,6 +534,7 @@ def load_weights_from_hf(
             total=len(items),
             desc="  Loading weights",
             unit="w",
+            file=sys.stdout,
         ):
             new_tensor = future.result()
             if new_tensor is None:

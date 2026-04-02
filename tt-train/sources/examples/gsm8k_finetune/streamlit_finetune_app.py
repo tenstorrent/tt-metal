@@ -741,6 +741,7 @@ def main():
             "TinyLlama 1.1B": '"model_configs/tinyllama.yaml"',
             "GPT-2": '"model_configs/gpt2s.yaml"',
             "Qwen3 0.6B": '"model_configs/qwen3_0_6b.yaml"',
+            "Qwen3 1.7B": '"model_configs/qwen3_1_7b.yaml"',
         }
         model_options = list(model_config_mapping.keys())
         selected_model_display = st.selectbox("Base Model", model_options, index=0)
