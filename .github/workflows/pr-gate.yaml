@@ -370,6 +370,8 @@ jobs:
           ${{ github.workspace }}/data
         key: ${{ steps.cpm_key.outputs.key }}
         restore-keys: cpm-v2-Linux-
+    - name: Debug - check data/ after cache restore
+      run: ls -la data/ 2>/dev/null || echo "data/ not present after restore"
     - name: CMake configure
       # CPM_SOURCE_CACHE directs CPM to store/read downloaded packages from
       # .cpmcache under the workspace — the same path restored above.
