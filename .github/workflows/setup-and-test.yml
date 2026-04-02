@@ -86,7 +86,7 @@ jobs:
     steps:
       # Step 1: Checkout the repository
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # Step 2: Install SFPI
       - name: Install SFPI
@@ -255,7 +255,7 @@ jobs:
           fi
           echo "CHIP_ARCH=$CHIP_ARCH" >> $GITHUB_ENV
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Download all coverage artifacts
         uses: actions/download-artifact@v4
         with:

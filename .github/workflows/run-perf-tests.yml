@@ -31,12 +31,12 @@ jobs:
       performance: ${{ steps.set.outputs.performance }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 200
 
       - name: Detect which directories changed
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@v4
         id: filter
         if: github.event_name != 'schedule'
         with:

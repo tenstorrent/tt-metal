@@ -44,7 +44,7 @@ jobs:
       wormhole: ${{ steps.filter.outputs.wormhole_any_changed }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 200
 

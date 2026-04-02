@@ -55,7 +55,7 @@ jobs:
           echo "fork_repo=$FORK_REPO" >> $GITHUB_OUTPUT
 
       - name: Checkout base repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
