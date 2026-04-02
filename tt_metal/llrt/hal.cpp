@@ -195,8 +195,7 @@ HalProcessorSet Hal::parse_processor_set_spec(std::string_view spec) const {
         }
     }
     if (set.empty()) {
-        TT_THROW(
-            "Invalid RISC selection: \"{}\". Valid values are BR,NC,TR0,TR1,TR2,TR*,ER0,ER1,ER*,DR0,DR*.", spec);
+        TT_THROW("Invalid RISC selection: \"{}\". Valid values are BR,NC,TR0,TR1,TR2,TR*,ER0,ER1,ER*,DR0,DR*.", spec);
     }
     return set;
 }

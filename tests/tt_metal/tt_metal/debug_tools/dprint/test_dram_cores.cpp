@@ -49,8 +49,7 @@ SETW:
 HEX/OCT/DEC:
 1e240361100123456)";
 
-void RunTest(
-    DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+void RunTest(DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     auto* device = mesh_device->get_devices()[0];
 
     // Test printing on a single DRAM core

@@ -287,8 +287,8 @@ TEST_P(WatcherAssertTest, TestWatcherAssert) {
     bool using_slow_dispatch = this->IsSlowDispatch();
 
     if ((is_idle_eth || is_dram) && !using_slow_dispatch) {
-        log_info(tt::LogTest, "{} requires Slow Dispatch (Fast Dispatch not yet supported).",
-                 is_dram ? "DRAM" : "IDLE_ETH");
+        log_info(
+            tt::LogTest, "{} requires Slow Dispatch (Fast Dispatch not yet supported).", is_dram ? "DRAM" : "IDLE_ETH");
         GTEST_SKIP();
     }
     if (using_slow_dispatch && !is_quasar && !is_idle_eth && !is_dram) {
