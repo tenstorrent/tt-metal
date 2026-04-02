@@ -26,7 +26,7 @@ from ...utils.conv3d import (
     get_conv3d_config,
 )
 from ...utils.substate import pop_substate, rename_substate
-from ...utils.tensor import typed_tensor
+from ...utils.tensor import local_device_to_torch, typed_tensor
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -327,7 +327,7 @@ class WanCausalConv3d(Module):
             prepared = ttnn.experimental.prepare_conv3d_weights(
                 weight_tensor=weight_tt, C_in_block=self.conv_config.C_in_block, device=self.mesh_device
             )
-            state["weight"] = ttnn.to_torch(ttnn.get_device_tensors(prepared)[0])
+            state["weight"] = local_device_to_torch(prepared)  # ttnn.to_torch(ttnn.get_device_tensors(prepared)[0])
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
 
@@ -767,7 +767,7 @@ class WanConv2d(Module):
             prepared = ttnn.experimental.prepare_conv3d_weights(
                 weight_tensor=weight_tt, C_in_block=self.conv_config.C_in_block, device=self.mesh_device
             )
-            state["weight"] = ttnn.to_torch(ttnn.get_device_tensors(prepared)[0])
+            state["weight"] = local_device_to_torch(prepared)  # ttnn.to_torch(ttnn.get_device_tensors(prepared)[0])
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
 

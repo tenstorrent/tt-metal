@@ -11,4 +11,4 @@ rank_bindings:
   - rank: 3
     mesh_id: 0
 
-mesh_graph_desc_path: "tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
+mesh_graph_desc_path: "/data/sadesoye/tt-metal/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"

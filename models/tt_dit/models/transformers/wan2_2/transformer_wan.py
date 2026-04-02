@@ -639,7 +639,8 @@ class WanTransformer3DModel(Module):
 
         return spatial_1BNI
 
-    @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False)
+    # Prep run is False because we warmup the entire pipeline first. Remove if this is not desired.
+    @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
     def combined_step(
         self,
         do_classifier_free_guidance: bool,

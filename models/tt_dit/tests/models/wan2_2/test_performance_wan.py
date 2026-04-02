@@ -245,14 +245,6 @@ def test_pipeline_performance(
                 width=width,
                 num_frames=num_frames,
                 num_inference_steps=2,  # Small number of steps to reduce test time.
-            )
-            pipeline(
-                prompt=prompts[0],
-                image_prompt=image_prompt,
-                height=height,
-                width=width,
-                num_frames=num_frames,
-                num_inference_steps=2,  # Small number of steps to reduce test time.
                 traced=traced,
             )
 
