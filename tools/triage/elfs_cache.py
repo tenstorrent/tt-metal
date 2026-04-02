@@ -17,7 +17,7 @@ Owner:
 
 import threading
 from pathlib import Path
-from triage import triage_singleton, ScriptConfig, run_script, TTTriageError
+from triage import triage_singleton, ScriptConfig, run_script
 from ttexalens.context import Context
 from ttexalens.hardware.risc_debug import ParsedElfFile
 from ttexalens.tt_exalens_lib import parse_elf
@@ -47,7 +47,7 @@ class ElfsCache:
         self._cache: dict[Path, ParsedElfFile] = {}
         self._lock = threading.Lock()
 
-    def __getitem__(self, elf_path: Path | str) -> ParsedElfFile:
+    def __getitem__(self, elf_path: Path) -> ParsedElfFile:
         """
         Get a ParsedElfFile from cache or parse and cache it if not present.
 
@@ -60,20 +60,19 @@ class ElfsCache:
         Returns:
             ParsedElfFile object for the given path
         """
-        elf_path = Path(elf_path)
         if not elf_path.exists():
-            raise TTTriageError(f"ELF file {elf_path} does not exist.")
+            raise KeyError(f"ELF file {elf_path} does not exist.")
         with self._lock:
             if elf_path not in self._cache:
                 parsed_elf = parse_elf(elf_path, self.context)
                 if not parsed_elf:
-                    raise TTTriageError(
+                    raise KeyError(
                         f"Failed to extract DWARF info from ELF file {elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
                     )
                 self._cache[elf_path] = parsed_elf
             return self._cache[elf_path]
 
-    def has_elf(self, elf_path: Path | str) -> bool:
+    def has_elf(self, elf_path: Path) -> bool:
         """
         Check if an ELF file is already cached.
 
@@ -84,7 +83,7 @@ class ElfsCache:
             True if the ELF file is cached, False otherwise
         """
         with self._lock:
-            return Path(elf_path) in self._cache
+            return elf_path in self._cache
 
     def clear_cache(self) -> None:
         """

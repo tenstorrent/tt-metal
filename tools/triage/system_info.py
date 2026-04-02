@@ -16,7 +16,6 @@ Owner:
 
 import platform
 from dataclasses import dataclass
-from pathlib import Path
 
 from triage import ScriptConfig, triage_field, run_script
 from ttexalens.context import Context
@@ -40,7 +39,7 @@ def get_os_version():
     os_version = None
 
     try:
-        with Path("/etc/os-release").open() as f:
+        with open("/etc/os-release") as f:
             for line in f:
                 if line.startswith("VERSION_ID="):
                     os_version = line.strip().split("=", 1)[1].strip('"')

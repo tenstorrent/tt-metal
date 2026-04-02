@@ -507,6 +507,8 @@ class DispatcherData:
                     if self._is_2_erisc_mode
                     else firmware_base / "active_erisc" / "active_erisc.elf"
                 )
+            else:
+                firmware_resolved = firmware_base / proc_name_l / f"{proc_name_l}.elf"
 
         else:
             if proc_name_l == "erisc" or proc_name_l == "erisc0":

@@ -142,8 +142,8 @@ def run(args, context: Context):
 
     if all_debug_bus_data:
         all_debug_bus_data["git_commit"] = _get_git_commit_hash()
-        output_path = args["--path"] if args["--path"] else "debug_bus_signal_groups.json"
-        with Path(output_path).open("w") as f:
+        output_path = Path(args["--path"]) if args["--path"] else Path("debug_bus_signal_groups.json")
+        with output_path.open("w") as f:
             json.dump(all_debug_bus_data, f, indent=2)
         log_warning(f"Some riscs are broken. Generated JSON file with debug bus signals at {output_path}")
 
