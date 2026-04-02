@@ -92,7 +92,6 @@ class ModelArgs(TTModelArgs):
 
         self.use_qk_fused = False  # For Gemma 3, we do not use qk fused ops (rotary embedding + paged cache update)
         self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
-        self.padded_vocab_size = 262400
 
     @lru_cache(maxsize=None)
     def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
@@ -133,7 +132,7 @@ class ModelArgs(TTModelArgs):
         # This dictionary is used to override the default ceil warmup prefill value
         # Longer seqlens take too much time to warmup, so CI times out
         model_specific_ceil_warmup_lengths = {
-            "gemma-3-4b": 2048,
+            "gemma-3-4b": 65536,
             "gemma-3-27b": 2048,
         }
 
