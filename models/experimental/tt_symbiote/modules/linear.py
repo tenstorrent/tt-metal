@@ -9,10 +9,10 @@ import torch
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule, deallocate_weights_after, run_on_devices, DeviceArch
-from models.experimental.tt_symbiote.core.run_config import trace_disabled
+from models.experimental.tt_symbiote.core.run_config import trace_disabled, trace_enabled
 
 
-@trace_disabled
+@trace_enabled
 class TTNNLinear(TTNNModule):
     """TTNN-accelerated linear layer."""
 
@@ -357,7 +357,6 @@ class PytorchLinearActivation(nn.Module):
         return hidden_states
 
 
-@trace_disabled
 class TTNNLinearActivation(TTNNModule):
     """Linear layer with activation using TTNN."""
 
