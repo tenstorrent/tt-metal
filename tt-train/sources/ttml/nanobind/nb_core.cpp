@@ -229,7 +229,8 @@ void py_module(nb::module_& m) {
 
                 auto new_topo = tt::tt_metal::TensorTopology(
                     topo.distribution_shape(), std::move(new_placements), topo.mesh_coords());
-                tensor->set_value(ttnn_tensor.with_tensor_topology(new_topo));
+                ttnn_tensor.update_tensor_topology(new_topo);
+                tensor->set_value(ttnn_tensor);
             },
             nb::arg("tensor"),
             nb::arg("placements"));

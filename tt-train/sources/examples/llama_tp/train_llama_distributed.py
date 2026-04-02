@@ -29,7 +29,7 @@ import numpy as np
 import ttnn
 import ttml
 from ttml.models.llama import Llama, LlamaConfig, LlamaRopeScalingConfig
-from ttml.common.utils import round_up_to_tile, get_tt_metal_home
+from ttml.common.utils import round_up_to_tile
 from ttml.common.config import load_config, DeviceConfig
 from ttml.common.data import CharTokenizer
 
@@ -101,15 +101,9 @@ def create_warmup_linear_scheduler(optimizer, total_steps: int):
     """10 % linear warmup then linear decay to 1 % of peak lr."""
     warmup_steps = max(1, int(total_steps * 0.1))
     decay_steps = max(1, total_steps - warmup_steps)
-    warmup = LinearScheduler(
-        optimizer, start_factor=0.0, end_factor=1.0, total_steps=warmup_steps
-    )
-    decay = LinearScheduler(
-        optimizer, start_factor=1.0, end_factor=0.01, total_steps=decay_steps
-    )
-    return SequentialScheduler(
-        optimizer, [warmup, decay], milestones=[warmup_steps, decay_steps]
-    )
+    warmup = LinearScheduler(optimizer, start_factor=0.0, end_factor=1.0, total_steps=warmup_steps)
+    decay = LinearScheduler(optimizer, start_factor=1.0, end_factor=0.01, total_steps=decay_steps)
+    return SequentialScheduler(optimizer, [warmup, decay], milestones=[warmup_steps, decay_steps])
 
 
 _SCHEDULER_FACTORIES = {
@@ -250,12 +244,8 @@ def distributed_collate_fn(
             input_placements[cp_axis] = 3  # Shard sequence dim (dim 3 for input_ids)
             labels_placements[cp_axis] = 1  # Shard sequence dim (dim 1 for labels)
 
-        mapper_input = ttml.core.distributed.create_tensor_to_mesh_mapper(
-            mesh_device, input_placements
-        )
-        mapper_labels = ttml.core.distributed.create_tensor_to_mesh_mapper(
-            mesh_device, labels_placements
-        )
+        mapper_input = ttml.core.distributed.create_tensor_to_mesh_mapper(mesh_device, input_placements)
+        mapper_labels = ttml.core.distributed.create_tensor_to_mesh_mapper(mesh_device, labels_placements)
 
         input_ids_t = ttml.autograd.Tensor.from_numpy(
             input_ids_np,
@@ -307,17 +297,11 @@ LLAMA_TP_PLAN = {
 
 def main():
     parser = argparse.ArgumentParser(description="Llama TP Training with SFTTrainer")
-    parser.add_argument(
-        "-c", "--config", type=str, required=True, help="YAML config path"
-    )
-    parser.add_argument(
-        "--data_path", type=str, default="", help="Path to training text file"
-    )
+    parser.add_argument("-c", "--config", type=str, required=True, help="YAML config path")
+    parser.add_argument("--data_path", type=str, default="", help="Path to training text file")
     parser.add_argument("--batch_size", type=int, default=None)
     parser.add_argument("--max_steps", type=int, default=None)
-    parser.add_argument(
-        "--debug_dispatch", action="store_true", help="Enable dispatch trace logging"
-    )
+    parser.add_argument("--debug_dispatch", action="store_true", help="Enable dispatch trace logging")
     parser.add_argument(
         "--debug_dispatch_first_step_only",
         action="store_true",
@@ -396,13 +380,7 @@ def main():
     print("Llama TP Training with SFTTrainer (layout-aware dispatch)")
     print("=" * 70)
 
-    # Env setup
-    if "TT_METAL_RUNTIME_ROOT" not in os.environ:
-        tt_metal_home = get_tt_metal_home()
-        if tt_metal_home:
-            os.environ["TT_METAL_RUNTIME_ROOT"] = tt_metal_home
-
-    tt_train_root = f"{get_tt_metal_home()}/tt-train"
+    tt_train_root = f"{os.getenv('TT_METAL_RUNTIME_ROOT')}/tt-train"
     configs_root = f"{tt_train_root}/configs"
 
     yaml_config = load_config(args.config, f"{configs_root}/training_configs")
@@ -451,11 +429,7 @@ def main():
 
     # Vocab must be divisible by TILE_SIZE * TP_DEGREE for clean sharding
     # Otherwise slice ops produce non-tile-aligned outputs causing TILE->ROW_MAJOR conversions
-    tp_degree = (
-        device_cfg.mesh_shape[device_cfg.tp_axis]
-        if device_cfg.tp_axis is not None
-        else 1
-    )
+    tp_degree = device_cfg.mesh_shape[device_cfg.tp_axis] if device_cfg.tp_axis is not None else 1
     vocab_alignment = 32 * tp_degree  # TILE_SIZE * TP_DEGREE
 
     llama_config = LlamaConfig(
@@ -473,9 +447,7 @@ def main():
         weight_tying=llama_config.weight_tying,
         rope_scaling=llama_config.rope_scaling,
     )
-    print(
-        f"   Dataset: {len(dataset)} samples, seq_len={seq_len}, vocab={llama_config.vocab_size}"
-    )
+    print(f"   Dataset: {len(dataset)} samples, seq_len={seq_len}, vocab={llama_config.vocab_size}")
 
     # Device
     print("\n2. Opening device mesh...")
@@ -484,9 +456,7 @@ def main():
         print(f"   Enabling fabric for {num_devices} devices...")
         ttml.core.distributed.enable_fabric(num_devices)
 
-    ttml.autograd.AutoContext.get_instance().open_device(
-        device_cfg.mesh_shape, device_cfg.device_ids
-    )
+    ttml.autograd.AutoContext.get_instance().open_device(device_cfg.mesh_shape, device_cfg.device_ids)
     mesh_device = ttml.autograd.AutoContext.get_instance().get_device()
     ttml.autograd.AutoContext.get_instance().set_seed(seed)
     np.random.seed(seed)
@@ -510,27 +480,17 @@ def main():
     # Validate axes
     mesh_dims = len(device_cfg.mesh_shape)
     if tp_axis is not None and tp_axis >= mesh_dims:
-        raise ValueError(
-            f"tp_axis={tp_axis} out of range for mesh with {mesh_dims} dims"
-        )
+        raise ValueError(f"tp_axis={tp_axis} out of range for mesh with {mesh_dims} dims")
     if ddp_axis is not None and ddp_axis >= mesh_dims:
-        raise ValueError(
-            f"ddp_axis={ddp_axis} out of range for mesh with {mesh_dims} dims"
-        )
+        raise ValueError(f"ddp_axis={ddp_axis} out of range for mesh with {mesh_dims} dims")
     if cp_axis is not None and cp_axis >= mesh_dims:
-        raise ValueError(
-            f"cp_axis={cp_axis} out of range for mesh with {mesh_dims} dims"
-        )
+        raise ValueError(f"cp_axis={cp_axis} out of range for mesh with {mesh_dims} dims")
     if tp_axis is not None and ddp_axis is not None and tp_axis == ddp_axis:
-        raise ValueError(
-            f"tp_axis and ddp_axis cannot be the same (both are {tp_axis})"
-        )
+        raise ValueError(f"tp_axis and ddp_axis cannot be the same (both are {tp_axis})")
     if tp_axis is not None and cp_axis is not None and tp_axis == cp_axis:
         raise ValueError(f"tp_axis and cp_axis cannot be the same (both are {tp_axis})")
     if ddp_axis is not None and cp_axis is not None and ddp_axis == cp_axis:
-        raise ValueError(
-            f"ddp_axis and cp_axis cannot be the same (both are {ddp_axis})"
-        )
+        raise ValueError(f"ddp_axis and cp_axis cannot be the same (both are {ddp_axis})")
 
     tp_size = device_cfg.mesh_shape[tp_axis] if tp_axis is not None else 1
     dp_size = device_cfg.mesh_shape[ddp_axis] if ddp_axis is not None else 1
@@ -586,9 +546,7 @@ def main():
         print("\n4. Distributing model...")
         if tp_axis is not None:
             print(f"   TP enabled on axis {tp_axis}")
-            print(
-                f"   Plan: {len(LLAMA_TP_PLAN)} module patterns (ColwiseParallel / RowwiseParallel)"
-            )
+            print(f"   Plan: {len(LLAMA_TP_PLAN)} module patterns (ColwiseParallel / RowwiseParallel)")
         if cp_axis is not None:
             print(f"   CP enabled on axis {cp_axis}")
 
@@ -605,9 +563,7 @@ def main():
             )
         else:
             # CP only: parallelize_module with empty plan still runs GQA rule (cp_axis)
-            model = parallelize_module(
-                model, mesh_device, {}, tp_axis=None, cp_axis=cp_axis
-            )
+            model = parallelize_module(model, mesh_device, {}, tp_axis=None, cp_axis=cp_axis)
 
         if args.track_memory:
             MemoryUsageTracker.end_capture("MODEL_DISTRIBUTION")
@@ -652,9 +608,7 @@ def main():
     )
 
     # Build optimizer config from yaml (use optimizer_cfg directly, with defaults)
-    optimizer_dict = (
-        optimizer_cfg if optimizer_cfg else {"type": "AdamW", "lr": learning_rate}
-    )
+    optimizer_dict = optimizer_cfg if optimizer_cfg else {"type": "AdamW", "lr": learning_rate}
     print(f"   Optimizer: {optimizer_dict}")
 
     optimizer = ttml.optimizers.create_optimizer(optimizer_dict, model.parameters())

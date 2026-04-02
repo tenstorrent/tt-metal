@@ -89,7 +89,8 @@ tt::tt_metal::Tensor repair_topology(
     tt::tt_metal::Tensor output,
     const std::optional<uint32_t> cluster_axis,
     const tt::tt_metal::TensorTopology& new_topology) {
-    return output.with_tensor_topology(new_topology);
+    output.update_tensor_topology(new_topology);
+    return output;
 }
 
 // Build a topology where the given cluster_axis is replicated (output of all_gather / all_reduce).
