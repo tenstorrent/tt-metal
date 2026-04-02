@@ -6,7 +6,9 @@ import shutil
 import sys
 import tempfile
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 # Ethernet dispatch must be selected before ttnn/metal runtime reads env (common_demo_utils imports ttnn).
 if __name__ == "__main__" and "--tt-eth-dispatch" in sys.argv:
@@ -21,11 +23,83 @@ from sahi.postprocess.combine import GreedyNMMPostprocess, LSNMSPostprocess, NMM
 from sahi.predict import get_prediction, get_sliced_prediction
 from sahi.prediction import ObjectPrediction, PredictionResult
 from sahi.slicing import slice_image
-from sahi.utils.cv import read_image_as_pil
+from sahi.utils.cv import read_image_as_pil, visualize_object_predictions
 
 from models.demos.utils.common_demo_utils import get_mesh_mappers, load_coco_class_names, postprocess, preprocess
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+
+def _r4(x: float) -> float:
+    return round(float(x), 4)
+
+
+def _timing_pre_device_post(t: dict[str, Any]) -> tuple[float, float, float]:
+    """Unified triple: (pre-processing, device inference, post-processing) in seconds."""
+    pre = float(t.get("host_slice_and_preprocess_sec", 0) or 0)
+    dev = float(t.get("device_inference_sec", 0) or 0)
+    post = float(t.get("host_postprocess_and_sahi_merge_sec", 0) or 0)
+    return pre, dev, post
+
+
+def _format_pre_device_post_line(label: str, t: dict[str, Any]) -> str:
+    pre, dev, post = _timing_pre_device_post(t)
+    return f"  {label:16} pre={pre:.4f}s  device={dev:.4f}s  post={post:.4f}s"
+
+
+@dataclass
+class SlicedPipelineTiming:
+    """Wall-clock style breakdown for one sliced-image run (seconds)."""
+
+    total_wall_sec: float = 0.0
+    host_sahi_slice_sec: float = 0.0
+    host_preprocess_before_device_sec: float = 0.0
+    device_inference_sec: float = 0.0
+    host_postprocess_and_sahi_merge_sec: float = 0.0
+    host_slice_image_export_sec: float = 0.0
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    def host_slice_and_preprocess_sec(self) -> float:
+        return _r4(self.host_sahi_slice_sec + self.host_preprocess_before_device_sec)
+
+    def to_summary_dict(self) -> dict[str, Any]:
+        out = {
+            "total_wall_sec": _r4(self.total_wall_sec),
+            "host_sahi_slice_sec": _r4(self.host_sahi_slice_sec),
+            "host_preprocess_before_device_sec": _r4(self.host_preprocess_before_device_sec),
+            "host_slice_and_preprocess_sec": self.host_slice_and_preprocess_sec(),
+            "device_inference_sec": _r4(self.device_inference_sec),
+            "host_postprocess_and_sahi_merge_sec": _r4(self.host_postprocess_and_sahi_merge_sec),
+            "host_slice_image_export_sec": _r4(self.host_slice_image_export_sec),
+        }
+        if self.extra:
+            out["extra"] = {k: _r4(v) if isinstance(v, (int, float)) else v for k, v in self.extra.items()}
+        return out
+
+
+def _timing_from_sahi_durations(d: dict[str, Any]) -> SlicedPipelineTiming:
+    """Map SAHI PredictionResult.durations_in_seconds (slice / prediction / postprocess) to our schema."""
+    slice_t = float(d.get("slice", 0) or 0)
+    pred_t = float(d.get("prediction", 0) or 0)
+    post_t = float(d.get("postprocess", 0) or 0)
+    return SlicedPipelineTiming(
+        host_sahi_slice_sec=slice_t,
+        host_preprocess_before_device_sec=0.0,
+        device_inference_sec=pred_t,
+        host_postprocess_and_sahi_merge_sec=post_t,
+    )
+
+
+def _timing_full_ultralytics(d: dict[str, Any]) -> SlicedPipelineTiming:
+    """Full-image get_prediction: no SAHI slice; model forward + host decode/NMS in SAHI buckets."""
+    pred_t = float(d.get("prediction", 0) or 0)
+    post_t = float(d.get("postprocess", 0) or 0)
+    return SlicedPipelineTiming(
+        host_sahi_slice_sec=0.0,
+        host_preprocess_before_device_sec=0.0,
+        device_inference_sec=pred_t,
+        host_postprocess_and_sahi_merge_sec=post_t,
+    )
 
 
 def load_image_bgr_sahi(image_path) -> np.ndarray:
@@ -271,6 +345,11 @@ def parse_args() -> argparse.Namespace:
         help="Save original image with SAHI slice boundaries drawn on top.",
     )
     parser.add_argument(
+        "--save-slice-images",
+        action="store_true",
+        help="After per-slice inference, save each crop with detections drawn to OUTPUT_DIR/<image_stem>_slices/*.png.",
+    )
+    parser.add_argument(
         "--pre-resize-to",
         type=int,
         nargs=2,
@@ -313,7 +392,9 @@ def run_prediction(detection_model, image_path: str):
     start = time.perf_counter()
     result = get_prediction(image=image_path, detection_model=detection_model)
     elapsed = time.perf_counter() - start
-    return result, elapsed
+    timing = _timing_full_ultralytics(result.durations_in_seconds)
+    timing.total_wall_sec = elapsed
+    return result, elapsed, timing.to_summary_dict()
 
 
 class TTYoloBackend:
@@ -368,6 +449,33 @@ class TTYoloBackend:
         self.confidence_threshold = args.confidence_threshold
         self.slice_parallel_devices = getattr(args, "tt_slice_parallel_devices", None)
 
+        mesh_shape_list = None
+        try:
+            mesh_shape_list = list(self.device.shape)
+        except Exception:
+            pass
+        n_par_cfg = getattr(args, "tt_slice_parallel_devices", None)
+        if n_par_cfg is not None and int(n_par_cfg) > 1 and not getattr(args, "tt_force_single_device", False):
+            opened_desc = f"open_mesh_device MeshShape(1, {int(n_par_cfg)})"
+        elif self._is_mesh_device:
+            opened_desc = "open_mesh_device (full or explicit --tt-mesh-shape)"
+        else:
+            opened_desc = "open_device (single chip)"
+        self.device_verify_info = {
+            "num_devices": self.num_devices,
+            "is_mesh_device": self._is_mesh_device,
+            "device_batch_size": batch_size,
+            "tt_slice_parallel_devices": n_par_cfg,
+            "mesh_shape": mesh_shape_list,
+            "opened_as": opened_desc,
+        }
+        print(
+            "TT device verify: "
+            f"num_devices={self.num_devices}, batch_dim_sharded={batch_size}, "
+            f"mesh={self._is_mesh_device}, mesh_shape={mesh_shape_list!r}, "
+            f"{opened_desc}, --tt-slice-parallel-devices={n_par_cfg!r}"
+        )
+
     def close(self):
         try:
             self.runner.release()
@@ -389,6 +497,23 @@ class TTYoloBackend:
         preds = self.ttnn.to_torch(preds, dtype=torch.float32, mesh_composer=self.output_mesh_composer)
         return postprocess(preds, im_tensor, orig_imgs, paths, self.names)
 
+    def _forward_preprocessed_batch_timed(self, im_tensor: torch.Tensor, orig_imgs: list, paths: tuple):
+        """Returns (results list) and per-forward device vs host post timing."""
+        t0 = time.perf_counter()
+        preds = self.runner.run(im_tensor)
+        t1 = time.perf_counter()
+        if isinstance(preds, (list, tuple)):
+            preds = preds[0]
+        preds = self.ttnn.to_torch(preds, dtype=torch.float32, mesh_composer=self.output_mesh_composer)
+        t2 = time.perf_counter()
+        results = postprocess(preds, im_tensor, orig_imgs, paths, self.names)
+        t3 = time.perf_counter()
+        part = {
+            "device_run_sec": t1 - t0,
+            "host_d2h_and_tt_postprocess_sec": t3 - t1,
+        }
+        return results, part
+
     def infer_bgr_image(self, image_bgr, image_id: str):
         im_tensor = preprocess([image_bgr], res=self._TT_INPUT_RES)
         if self.num_devices > 1:
@@ -397,6 +522,18 @@ class TTYoloBackend:
         paths = ([image_id] * self.num_devices,)
         results = self._forward_preprocessed_batch(im_tensor, orig_imgs, paths)
         return results[0]
+
+    def infer_bgr_image_timed(self, image_bgr, image_id: str):
+        t0 = time.perf_counter()
+        im_tensor = preprocess([image_bgr], res=self._TT_INPUT_RES)
+        if self.num_devices > 1:
+            im_tensor = im_tensor.repeat(self.num_devices, 1, 1, 1)
+        t1 = time.perf_counter()
+        orig_imgs = [image_bgr] * self.num_devices
+        paths = ([image_id] * self.num_devices,)
+        results, part = self._forward_preprocessed_batch_timed(im_tensor, orig_imgs, paths)
+        part["host_preprocess_sec"] = t1 - t0
+        return results[0], part
 
     def infer_bgr_images_distinct(self, images_bgr: list, image_id: str):
         """
@@ -408,6 +545,16 @@ class TTYoloBackend:
         im_tensor = torch.cat(parts, dim=0)
         paths = ([f"{image_id}#slot{i}" for i in range(self.num_devices)],)
         return self._forward_preprocessed_batch(im_tensor, images_bgr, paths)
+
+    def infer_bgr_images_distinct_timed(self, images_bgr: list, image_id: str):
+        t0 = time.perf_counter()
+        parts = [preprocess([im], res=self._TT_INPUT_RES) for im in images_bgr]
+        im_tensor = torch.cat(parts, dim=0)
+        t1 = time.perf_counter()
+        paths = ([f"{image_id}#slot{i}" for i in range(self.num_devices)],)
+        results, part = self._forward_preprocessed_batch_timed(im_tensor, images_bgr, paths)
+        part["host_preprocess_sec"] = t1 - t0
+        return results, part
 
 
 def result_to_object_predictions(result_dict, shift_xy=(0, 0), full_shape=None, confidence_threshold=0.25):
@@ -432,6 +579,49 @@ def result_to_object_predictions(result_dict, shift_xy=(0, 0), full_shape=None, 
     return preds
 
 
+def _tagged_slice_dir(parent: Path, image_stem: str) -> Path:
+    d = parent / f"{image_stem}_slices"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def save_tagged_slice_png(
+    slice_rgb: np.ndarray,
+    object_prediction_list: list,
+    slice_dir: Path,
+    index: int,
+    start_x: int,
+    start_y: int,
+):
+    """Draw SAHI ObjectPredictions (slice coordinates) on slice_rgb and save PNG."""
+    visualize_object_predictions(
+        np.ascontiguousarray(slice_rgb),
+        object_prediction_list,
+        output_dir=str(slice_dir),
+        file_name=f"slice_{index:03d}_x{start_x}_y{start_y}",
+        hide_labels=False,
+        hide_conf=False,
+    )
+
+
+def save_tagged_tt_slice_from_result(
+    slice_rgb: np.ndarray,
+    tt_result: dict,
+    confidence_threshold: float,
+    slice_dir: Path,
+    index: int,
+    start_x: int,
+    start_y: int,
+):
+    preds = result_to_object_predictions(
+        tt_result,
+        shift_xy=(0, 0),
+        full_shape=[int(slice_rgb.shape[0]), int(slice_rgb.shape[1])],
+        confidence_threshold=confidence_threshold,
+    )
+    save_tagged_slice_png(slice_rgb, preds, slice_dir, index, start_x, start_y)
+
+
 def build_postprocess(postprocess_type: str, match_metric: str, match_threshold: float, class_agnostic: bool):
     cls_map = {
         "NMS": NMSPostprocess,
@@ -448,11 +638,13 @@ def build_postprocess(postprocess_type: str, match_metric: str, match_threshold:
 
 def run_tt_full_prediction(tt_backend: TTYoloBackend, image_path: Path):
     start = time.perf_counter()
+    t0 = time.perf_counter()
     try:
         image_bgr = load_image_bgr_sahi(image_path)
     except Exception as e:
         raise ValueError(f"Failed to read image: {image_path}") from e
-    result_dict = tt_backend.infer_bgr_image(image_bgr, str(image_path))
+    t_load = time.perf_counter() - t0
+    result_dict, fwd = tt_backend.infer_bgr_image_timed(image_bgr, str(image_path))
     obj_preds = result_to_object_predictions(
         result_dict,
         shift_xy=(0, 0),
@@ -460,7 +652,15 @@ def run_tt_full_prediction(tt_backend: TTYoloBackend, image_path: Path):
         confidence_threshold=tt_backend.confidence_threshold,
     )
     elapsed = time.perf_counter() - start
-    return PredictionResult(object_prediction_list=obj_preds, image=str(image_path)), elapsed
+    timing = SlicedPipelineTiming(
+        total_wall_sec=elapsed,
+        host_sahi_slice_sec=0.0,
+        host_preprocess_before_device_sec=t_load + fwd["host_preprocess_sec"],
+        device_inference_sec=fwd["device_run_sec"],
+        host_postprocess_and_sahi_merge_sec=fwd["host_d2h_and_tt_postprocess_sec"],
+        extra={"host_read_image_sec": _r4(t_load)},
+    )
+    return PredictionResult(object_prediction_list=obj_preds, image=str(image_path)), elapsed, timing.to_summary_dict()
 
 
 def run_tt_sliced_prediction(
@@ -474,8 +674,15 @@ def run_tt_sliced_prediction(
     postprocess_match_metric: str,
     postprocess_match_threshold: float,
     postprocess_class_agnostic: bool,
+    tagged_slice_parent: Path | None = None,
+    slice_file_stem: str | None = None,
 ):
     start = time.perf_counter()
+    tagged_dir = None
+    if tagged_slice_parent is not None and slice_file_stem is not None:
+        tagged_dir = _tagged_slice_dir(tagged_slice_parent, slice_file_stem)
+
+    t_sl0 = time.perf_counter()
     slice_result = slice_image(
         image=str(image_path),
         slice_height=slice_height,
@@ -484,6 +691,7 @@ def run_tt_sliced_prediction(
         overlap_width_ratio=overlap_width_ratio,
         auto_slice_resolution=False,
     )
+    host_sahi_slice_sec = time.perf_counter() - t_sl0
     print(f"Performing prediction on {len(slice_result.images)} slices.")
     all_obj_preds = []
     full_shape = [slice_result.original_image_height, slice_result.original_image_width]
@@ -491,11 +699,35 @@ def run_tt_sliced_prediction(
     parallel = tt_backend.num_devices if use_distinct_slice_batch else 1
     black_bgr = np.zeros((TTYoloBackend._TT_INPUT_RES[1], TTYoloBackend._TT_INPUT_RES[0], 3), dtype=np.uint8)
 
+    host_preprocess_sec = 0.0
+    device_inference_sec = 0.0
+    host_tt_post_only_sec = 0.0
+    slice_export_sec = 0.0
+
     slice_entries = list(zip(slice_result.starting_pixels, slice_result.images))
+    slice_global_idx = 0
     if not use_distinct_slice_batch:
         for (start_x, start_y), slice_img in slice_entries:
+            t_h0 = time.perf_counter()
             slice_bgr = cv2.cvtColor(slice_img, cv2.COLOR_RGB2BGR)
-            result_dict = tt_backend.infer_bgr_image(slice_bgr, str(image_path))
+            host_preprocess_sec += time.perf_counter() - t_h0
+            result_dict, fwd = tt_backend.infer_bgr_image_timed(slice_bgr, str(image_path))
+            host_preprocess_sec += fwd["host_preprocess_sec"]
+            device_inference_sec += fwd["device_run_sec"]
+            host_tt_post_only_sec += fwd["host_d2h_and_tt_postprocess_sec"]
+            if tagged_dir is not None:
+                t_e0 = time.perf_counter()
+                save_tagged_tt_slice_from_result(
+                    slice_img,
+                    result_dict,
+                    tt_backend.confidence_threshold,
+                    tagged_dir,
+                    slice_global_idx,
+                    start_x,
+                    start_y,
+                )
+                slice_export_sec += time.perf_counter() - t_e0
+            slice_global_idx += 1
             all_obj_preds.extend(
                 result_to_object_predictions(
                     result_dict,
@@ -509,14 +741,36 @@ def run_tt_sliced_prediction(
             chunk = slice_entries[idx : idx + n_valid]
             shifts = []
             batch_bgr = []
+            slice_rgbs = []
+            t_h0 = time.perf_counter()
             for (start_x, start_y), slice_img in chunk:
                 shifts.append((start_x, start_y))
                 batch_bgr.append(cv2.cvtColor(slice_img, cv2.COLOR_RGB2BGR))
+                slice_rgbs.append(slice_img)
             for _ in range(parallel - len(chunk)):
                 shifts.append((0, 0))
                 batch_bgr.append(black_bgr.copy())
-            batch_results = tt_backend.infer_bgr_images_distinct(batch_bgr, str(image_path))
+                slice_rgbs.append(None)
+            host_preprocess_sec += time.perf_counter() - t_h0
+            batch_results, fwd = tt_backend.infer_bgr_images_distinct_timed(batch_bgr, str(image_path))
+            host_preprocess_sec += fwd["host_preprocess_sec"]
+            device_inference_sec += fwd["device_run_sec"]
+            host_tt_post_only_sec += fwd["host_d2h_and_tt_postprocess_sec"]
             for j in range(n_valid):
+                if tagged_dir is not None:
+                    t_e0 = time.perf_counter()
+                    sx, sy = shifts[j]
+                    save_tagged_tt_slice_from_result(
+                        slice_rgbs[j],
+                        batch_results[j],
+                        tt_backend.confidence_threshold,
+                        tagged_dir,
+                        slice_global_idx,
+                        sx,
+                        sy,
+                    )
+                    slice_export_sec += time.perf_counter() - t_e0
+                slice_global_idx += 1
                 all_obj_preds.extend(
                     result_to_object_predictions(
                         batch_results[j],
@@ -526,17 +780,40 @@ def run_tt_sliced_prediction(
                     )
                 )
     # Match sahi.predict.get_sliced_prediction: shift each slice to full-image coords before NMS/NMM.
-    # Running postprocess on slice-local boxes breaks overlap logic and merges (wrong unions / missed suppressions).
+    t_sh0 = time.perf_counter()
     all_obj_preds = [p.get_shifted_object_prediction() for p in all_obj_preds]
+    host_shift_sec = time.perf_counter() - t_sh0
     postprocess = build_postprocess(
         postprocess_type=postprocess_type,
         match_metric=postprocess_match_metric,
         match_threshold=postprocess_match_threshold,
         class_agnostic=postprocess_class_agnostic,
     )
+    t_m0 = time.perf_counter()
     merged_obj_preds = postprocess(all_obj_preds)
+    sahi_merge_sec = time.perf_counter() - t_m0
     elapsed = time.perf_counter() - start
-    return PredictionResult(object_prediction_list=merged_obj_preds, image=str(image_path)), elapsed
+    host_post_incl_merge = host_tt_post_only_sec + host_shift_sec + sahi_merge_sec
+    timing = SlicedPipelineTiming(
+        total_wall_sec=elapsed,
+        host_sahi_slice_sec=host_sahi_slice_sec,
+        host_preprocess_before_device_sec=host_preprocess_sec,
+        device_inference_sec=device_inference_sec,
+        host_postprocess_and_sahi_merge_sec=host_post_incl_merge,
+        host_slice_image_export_sec=slice_export_sec,
+        extra={
+            "host_tt_postprocess_only_sec": _r4(host_tt_post_only_sec),
+            "host_shift_predictions_sec": _r4(host_shift_sec),
+            "sahi_merge_only_sec": _r4(sahi_merge_sec),
+        },
+    )
+    if tagged_dir is not None:
+        print(f"Saved {len(slice_result.images)} per-slice images with detections (pre-merge) to: {tagged_dir}")
+    return (
+        PredictionResult(object_prediction_list=merged_obj_preds, image=str(image_path)),
+        elapsed,
+        timing.to_summary_dict(),
+    )
 
 
 def run_sliced_prediction(
@@ -551,23 +828,130 @@ def run_sliced_prediction(
     postprocess_match_metric: str,
     postprocess_match_threshold: float,
     postprocess_class_agnostic: bool,
+    tagged_slice_parent: Path | None = None,
+    slice_file_stem: str | None = None,
 ):
+    """
+    Ultralytics + SAHI sliced path. When tagged_slice_parent is set, mirrors get_sliced_prediction but
+    saves each crop with slice-local boxes immediately after get_prediction (before shift + merge).
+    """
     start = time.perf_counter()
-    result = get_sliced_prediction(
+    if tagged_slice_parent is None or slice_file_stem is None:
+        result = get_sliced_prediction(
+            image=image_path,
+            detection_model=detection_model,
+            slice_height=slice_height,
+            slice_width=slice_width,
+            overlap_height_ratio=overlap_height_ratio,
+            overlap_width_ratio=overlap_width_ratio,
+            perform_standard_pred=perform_standard_pred,
+            postprocess_type=postprocess_type,
+            postprocess_match_metric=postprocess_match_metric,
+            postprocess_match_threshold=postprocess_match_threshold,
+            postprocess_class_agnostic=postprocess_class_agnostic,
+            auto_slice_resolution=False,
+        )
+        elapsed = time.perf_counter() - start
+        timing = _timing_from_sahi_durations(result.durations_in_seconds)
+        timing.total_wall_sec = elapsed
+        return result, elapsed, timing.to_summary_dict()
+
+    from sahi.models.ultralytics import UltralyticsDetectionModel
+
+    tagged_dir = _tagged_slice_dir(tagged_slice_parent, slice_file_stem)
+    t_sl0 = time.perf_counter()
+    slice_image_result = slice_image(
         image=image_path,
-        detection_model=detection_model,
         slice_height=slice_height,
         slice_width=slice_width,
         overlap_height_ratio=overlap_height_ratio,
         overlap_width_ratio=overlap_width_ratio,
-        perform_standard_pred=perform_standard_pred,
-        postprocess_type=postprocess_type,
-        postprocess_match_metric=postprocess_match_metric,
-        postprocess_match_threshold=postprocess_match_threshold,
-        postprocess_class_agnostic=postprocess_class_agnostic,
+        auto_slice_resolution=False,
     )
+    host_sahi_slice_sec = time.perf_counter() - t_sl0
+    num_slices = len(slice_image_result.images)
+    print(f"Performing prediction on {num_slices} slices.")
+
+    pt = postprocess_type
+    if isinstance(detection_model, UltralyticsDetectionModel) and detection_model.is_obb:
+        pt = "NMS"
+    postprocess_merge = build_postprocess(
+        pt, postprocess_match_metric, postprocess_match_threshold, postprocess_class_agnostic
+    )
+
+    device_inference_sec = 0.0
+    host_post_per_slice_sec = 0.0
+    slice_export_sec = 0.0
+    object_prediction_list = []
+    for slice_ind in range(num_slices):
+        slice_img = slice_image_result.images[slice_ind]
+        sx, sy = slice_image_result.starting_pixels[slice_ind]
+        prediction_result = get_prediction(
+            image=np.ascontiguousarray(slice_img),
+            detection_model=detection_model,
+            shift_amount=[sx, sy],
+            full_shape=[
+                slice_image_result.original_image_height,
+                slice_image_result.original_image_width,
+            ],
+        )
+        d = prediction_result.durations_in_seconds
+        device_inference_sec += float(d.get("prediction", 0) or 0)
+        host_post_per_slice_sec += float(d.get("postprocess", 0) or 0)
+        t_e0 = time.perf_counter()
+        save_tagged_slice_png(
+            slice_img,
+            prediction_result.object_prediction_list,
+            tagged_dir,
+            slice_ind,
+            sx,
+            sy,
+        )
+        slice_export_sec += time.perf_counter() - t_e0
+        for object_prediction in prediction_result.object_prediction_list:
+            if object_prediction:
+                object_prediction_list.append(object_prediction.get_shifted_object_prediction())
+
+    if num_slices > 1 and perform_standard_pred:
+        prediction_result = get_prediction(
+            image=image_path,
+            detection_model=detection_model,
+            shift_amount=[0, 0],
+            full_shape=[
+                slice_image_result.original_image_height,
+                slice_image_result.original_image_width,
+            ],
+        )
+        d = prediction_result.durations_in_seconds
+        device_inference_sec += float(d.get("prediction", 0) or 0)
+        host_post_per_slice_sec += float(d.get("postprocess", 0) or 0)
+        object_prediction_list.extend(prediction_result.object_prediction_list)
+
+    t_m0 = time.perf_counter()
+    if len(object_prediction_list) > 1:
+        object_prediction_list = postprocess_merge(object_prediction_list)
+    sahi_merge_sec = time.perf_counter() - t_m0
+
     elapsed = time.perf_counter() - start
-    return result, elapsed
+    host_post_total = host_post_per_slice_sec + sahi_merge_sec
+    timing = SlicedPipelineTiming(
+        total_wall_sec=elapsed,
+        host_sahi_slice_sec=host_sahi_slice_sec,
+        host_preprocess_before_device_sec=0.0,
+        device_inference_sec=device_inference_sec,
+        host_postprocess_and_sahi_merge_sec=host_post_total,
+        host_slice_image_export_sec=slice_export_sec,
+        extra={
+            "host_post_per_slice_sec": _r4(host_post_per_slice_sec),
+            "sahi_merge_only_sec": _r4(sahi_merge_sec),
+        },
+    )
+    print(f"Saved {num_slices} per-slice images with detections (pre-merge) to: {tagged_dir}")
+    return (
+        PredictionResult(image=image_path, object_prediction_list=object_prediction_list),
+        elapsed,
+        timing.to_summary_dict(),
+    )
 
 
 def maybe_export_visuals(result, export_dir: Path, file_stem: str):
@@ -671,11 +1055,12 @@ def main():
         temp_resize_dir = Path(tempfile.mkdtemp(prefix="sahi_preresize_"))
         processing_images = resize_images_for_processing(images, resize_width, resize_height, temp_resize_dir)
 
+    slice_save_parent = output_dir if args.save_slice_images else None
     rows = []
     for image in processing_images:
         if args.backend == "ultralytics":
-            full_result, full_time = run_prediction(detection_model, str(image))
-            sliced_result, sliced_time = run_sliced_prediction(
+            full_result, full_time, full_timing = run_prediction(detection_model, str(image))
+            sliced_result, sliced_time, sliced_timing = run_sliced_prediction(
                 detection_model=detection_model,
                 image_path=str(image),
                 slice_height=args.slice_height,
@@ -687,10 +1072,12 @@ def main():
                 postprocess_match_metric=args.postprocess_match_metric,
                 postprocess_match_threshold=args.postprocess_match_threshold,
                 postprocess_class_agnostic=args.postprocess_class_agnostic,
+                tagged_slice_parent=slice_save_parent,
+                slice_file_stem=image.stem if slice_save_parent else None,
             )
         else:
-            full_result, full_time = run_tt_full_prediction(tt_backend, image)
-            sliced_result, sliced_time = run_tt_sliced_prediction(
+            full_result, full_time, full_timing = run_tt_full_prediction(tt_backend, image)
+            sliced_result, sliced_time, sliced_timing = run_tt_sliced_prediction(
                 tt_backend=tt_backend,
                 image_path=image,
                 slice_height=args.slice_height,
@@ -701,6 +1088,8 @@ def main():
                 postprocess_match_metric=args.postprocess_match_metric,
                 postprocess_match_threshold=args.postprocess_match_threshold,
                 postprocess_class_agnostic=args.postprocess_class_agnostic,
+                tagged_slice_parent=slice_save_parent,
+                slice_file_stem=image.stem if slice_save_parent else None,
             )
 
         full_count = len(full_result.object_prediction_list)
@@ -714,6 +1103,8 @@ def main():
             "sliced_detections": sliced_count,
             "time_ratio_sliced_over_full": round(sliced_time / full_time, 4) if full_time > 0 else None,
             "delta_detections_sliced_minus_full": sliced_count - full_count,
+            "full_timing_sec": full_timing,
+            "sliced_timing_sec": sliced_timing,
         }
         rows.append(row)
 
@@ -730,10 +1121,19 @@ def main():
                 overlap_width_ratio=args.overlap_width_ratio,
             )
 
+        ft = full_timing
+        st = sliced_timing
         print(
             f"[{image.name}] full={full_count} ({full_time:.3f}s), "
             f"sliced={sliced_count} ({sliced_time:.3f}s), "
-            f"delta={sliced_count - full_count}"
+            f"delta={sliced_count - full_count}\n"
+            f"{_format_pre_device_post_line('full (single)', ft)}\n"
+            f"{_format_pre_device_post_line('sliced', st)}"
+            + (
+                f"\n  {'':16} slice_export={float(st.get('host_slice_image_export_sec', 0) or 0):.4f}s (--save-slice-images)"
+                if float(st.get("host_slice_image_export_sec", 0) or 0) > 0
+                else ""
+            )
         )
 
     summary = {
@@ -743,6 +1143,7 @@ def main():
             "tt_model": args.tt_model if args.backend == "tt" else None,
             "tt_slice_parallel_devices": args.tt_slice_parallel_devices if args.backend == "tt" else None,
             "tt_mesh_shape": list(args.tt_mesh_shape) if args.backend == "tt" and args.tt_mesh_shape else None,
+            "tt_device_verify": tt_backend.device_verify_info if args.backend == "tt" and tt_backend else None,
             "confidence_threshold": args.confidence_threshold,
             "device": args.device if args.backend == "ultralytics" else f"tt:{args.tt_device_id}",
             "slice_height": args.slice_height,
@@ -755,18 +1156,38 @@ def main():
             "postprocess_match_threshold": args.postprocess_match_threshold,
             "postprocess_class_agnostic": args.postprocess_class_agnostic,
             "pre_resize_to": args.pre_resize_to,
+            "save_slice_images": args.save_slice_images,
             "num_images": len(images),
         },
         "per_image": rows,
     }
 
     if rows:
+        n = len(rows)
+        timing_keys = [
+            "total_wall_sec",
+            "host_sahi_slice_sec",
+            "host_preprocess_before_device_sec",
+            "host_slice_and_preprocess_sec",
+            "device_inference_sec",
+            "host_postprocess_and_sahi_merge_sec",
+            "host_slice_image_export_sec",
+        ]
+
+        def mean_sliced_timing(key: str) -> float:
+            return round(sum(r["sliced_timing_sec"].get(key, 0) for r in rows) / n, 4)
+
+        def mean_full_timing(key: str) -> float:
+            return round(sum(r["full_timing_sec"].get(key, 0) for r in rows) / n, 4)
+
         summary["aggregate"] = {
-            "mean_full_time_sec": round(sum(r["full_time_sec"] for r in rows) / len(rows), 4),
-            "mean_sliced_time_sec": round(sum(r["sliced_time_sec"] for r in rows) / len(rows), 4),
+            "mean_full_time_sec": round(sum(r["full_time_sec"] for r in rows) / n, 4),
+            "mean_sliced_time_sec": round(sum(r["sliced_time_sec"] for r in rows) / n, 4),
             "mean_delta_detections_sliced_minus_full": round(
-                sum(r["delta_detections_sliced_minus_full"] for r in rows) / len(rows), 4
+                sum(r["delta_detections_sliced_minus_full"] for r in rows) / n, 4
             ),
+            "mean_full_timing_sec": {k: mean_full_timing(k) for k in timing_keys},
+            "mean_sliced_timing_sec": {k: mean_sliced_timing(k) for k in timing_keys},
         }
 
     summary_path = output_dir / "summary.json"

@@ -1,6 +1,6 @@
-# SAHI + Ultralytics quick test
+# SAHI + Ultralytics / Tenstorrent YOLO eval
 
-This adds a lightweight test harness to evaluate whether sliced inference with SAHI helps your use case (for example, large images with small objects).
+This harness compares **full-image** vs **SAHI sliced** inference (large images, small objects). It supports **`--backend ultralytics`** (PyTorch/GPU/CPU) and **`--backend tt`** (Tenstorrent YOLOv8s / YOLOv8x performant runners).
 
 ## 1) Install dependencies
 
@@ -35,6 +35,16 @@ python -m pip install -U sahi && python -m pip uninstall -y opencv-python || tru
 python -m pip install -U opencv-python-headless
 ```
 
+### libGL / `ImportError: libGL.so.1`
+
+On minimal Linux images, install Mesa GL user libraries:
+
+```bash
+sudo apt-get install -y libgl1
+```
+
+(or use only `opencv-python-headless` and avoid pulling in the full `opencv-python` GUI stack.)
+
 ### ttnn / NumPy / OpenCV pins
 
 Upgrading `opencv-python-headless` without a cap can pull **NumPy 2.x**, which conflicts with **ttnn** (`numpy<2`) and common **Ultralytics** pins. If you hit that, constrain NumPy and OpenCV:
@@ -45,7 +55,7 @@ python -m pip install -U "numpy>=1.24.4,<2" "opencv-python-headless<=4.11.0.86"
 
 ### Example: explicit `python_env` path
 
-Replace `/path/to/tt-metal` with your checkout (for example `/home/you/tt-metal`):
+Replace `/path/to/tt-metal` with your checkout (for example `/home/cust-team/sdawle/image_slicing/tt-metal`):
 
 ```bash
 "/path/to/tt-metal/python_env/bin/python" -m ensurepip --upgrade && \
@@ -62,14 +72,87 @@ Pip may warn that some packages list a dependency on the `opencv-python` *distri
 
 ## 2) Run baseline vs sliced inference
 
-### Tenstorrent (`--backend tt`) behavior (current implementation)
+Set **`PYTHONPATH`** and **`TT_METAL_HOME`** to the repo root when running TT (same as other demos):
 
-- **Full-image path:** The image is loaded with **PIL + EXIF orientation** (`ImageOps.exif_transpose`) and converted to BGR for the TT runner, so full-image boxes line up with SAHI’s tiling and `export_visuals` (OpenCV `imread` alone does not apply EXIF).
-- **Sliced path:** Per-slice boxes are shifted to **full-image coordinates before** SAHI merge postprocess (NMS / NMM / GREEDYNMM / LSNMS), matching `sahi.predict.get_sliced_prediction`. Running merge on slice-local boxes only breaks overlap logic and can misalign overlays.
-- **`--tt-slice-parallel-devices N`:** Opens a dedicated **`MeshShape(1, N)`** mesh (first N devices). Each forward can run **up to N different** 640×640 tiles—**one distinct slice per chip**—with black padding if the last chunk has fewer than N tiles. Omit this flag to run slices **sequentially**; in that mode each slice is **replicated** on all devices in the batch (same input on every chip per forward).
-- **Teardown:** Slice-parallel mode does **not** use `create_submesh()` off a larger parent mesh, avoiding Metal errors when closing meshes that share command queues.
+```bash
+export TT_METAL_HOME="$(pwd)"
+export PYTHONPATH="$(pwd)"
+```
 
-Single image:
+### Tenstorrent (`--backend tt`) — current behavior
+
+- **Full-image path:** Image is loaded with **PIL + EXIF** (`read_image_as_pil`), converted to BGR for the TT runner. Inference uses a **640×640 letterbox** (`preprocess`); boxes are scaled back to the original resolution via `scale_boxes` in `common_demo_utils.postprocess`.
+- **Sliced path:** SAHI `slice_image` builds tiles. Each tile is inferred; predictions are **shifted to full-image coordinates** before SAHI merge (NMS / NMM / GREEDYNMM / LSNMS), matching `sahi.predict.get_sliced_prediction` semantics.
+- **`--tt-slice-parallel-devices N`:** Opens **`MeshShape(1, N)`** — **N** chips in one row. Each forward can run **up to N distinct** 640×640 crops (**one slice per chip**). The last chunk is padded with black if fewer than N tiles remain (padded slots are not merged). **`N` must be ≤ the number of devices** reported by the system (or configured with `--tt-mesh-shape`). Omit this flag for **sequential** per-slice inference; without it, a single slice may be **replicated** across the opened mesh per forward.
+- **Teardown:** Slice-parallel mode does **not** use `create_submesh()` off a larger parent mesh (avoids CQ sharing issues on close).
+- **Verification:** On TT init the script prints **`TT device verify:`** with `num_devices`, `mesh_shape`, `device_batch_size`, and how the device was opened. **`summary.json`** includes **`config.tt_device_verify`** with the same fields.
+- **Timing:** For each image, stdout shows **full** and **sliced** lines with **`pre` / `device` / `post`** (seconds). Per-image and aggregate breakdowns are in **`summary.json`** (`full_timing_sec`, `sliced_timing_sec`, `aggregate.mean_*_timing_sec`).
+- **`--save-slice-images`:** After each slice’s inference, saves **`OUTPUT_DIR/<stem>_slices/slice_NNN_xX_yY.png`** with **detections drawn** (slice-local boxes, **before** cross-tile merge). No separate script.
+
+### Multi-chip / Ethernet dispatch
+
+On systems such as T3K (1×8), you may need Ethernet dispatch (same idea as some Metal tests). Either:
+
+```bash
+export TT_METAL_GTEST_ETH_DISPATCH=1
+```
+
+or pass **`--tt-eth-dispatch`** (the script sets the env var before `ttnn` loads if this flag appears early on the command line).
+
+---
+
+### Example: TT reference command (YOLOv8s, 1280×1280, 640 tiles, NMM, parallel mesh)
+
+Below is a **copy-paste** command using paths under this repo. Adjust **`--tt-slice-parallel-devices`** to match your hardware (e.g. **`4`** for a 2×2 grid on 1280×1280 with 640×640 tiles and zero overlap). **`32`** is only valid if the machine exposes **at least 32** mesh devices; otherwise the script raises an error.
+
+```bash
+python models/demos/yolo_eval/sahi_ultralytics_eval.py \
+  --backend tt \
+  --tt-model yolov8s \
+  --pre-resize-to 1280 1280 \
+  --slice-height 640 \
+  --slice-width 640 \
+  --overlap-height-ratio 0 \
+  --overlap-width-ratio 0 \
+  --postprocess-type NMM \
+  --postprocess-match-metric IOU \
+  --postprocess-match-threshold 0.2 \
+  --confidence-threshold 0.50 \
+  --save-visuals \
+  --save-slice-grid-overlay \
+  --tt-slice-parallel-devices 32 \
+  --input '/home/cust-team/sdawle/image_slicing/tt-metal/models/demos/yolo_eval/sample_images/crowded_freeway.jpg' \
+  --output-dir '/home/cust-team/sdawle/image_slicing/tt-metal/models/demos/yolo_eval/sample_images_output'
+```
+
+**Typical 4-tile 1280×1280 run** (replace `--tt-slice-parallel-devices 32` with **`4`** on a 4-chip or 1×4 mesh):
+
+```bash
+python models/demos/yolo_eval/sahi_ultralytics_eval.py \
+  --backend tt \
+  --tt-model yolov8s \
+  --tt-eth-dispatch \
+  --tt-slice-parallel-devices 4 \
+  --pre-resize-to 1280 1280 \
+  --slice-height 640 \
+  --slice-width 640 \
+  --overlap-height-ratio 0 \
+  --overlap-width-ratio 0 \
+  --postprocess-type NMM \
+  --postprocess-match-metric IOU \
+  --postprocess-match-threshold 0.2 \
+  --confidence-threshold 0.50 \
+  --save-visuals \
+  --save-slice-grid-overlay \
+  --input '/home/cust-team/sdawle/image_slicing/tt-metal/models/demos/yolo_eval/sample_images/crowded_freeway.jpg' \
+  --output-dir '/home/cust-team/sdawle/image_slicing/tt-metal/models/demos/yolo_eval/sample_images_output'
+```
+
+Optional: add **`--save-slice-images`** to export per-tile PNGs with boxes (same folder pattern as above).
+
+---
+
+### Ultralytics backend (single image)
 
 ```bash
 python models/demos/yolo_eval/sahi_ultralytics_eval.py \
@@ -87,19 +170,14 @@ python models/demos/yolo_eval/sahi_ultralytics_eval.py \
   --save-slice-grid-overlay
 ```
 
-Optional quick sanity image:
+Quick synthetic image:
 
 ```bash
 python -c "from PIL import Image; Image.new('RGB',(1024,768),(120,80,200)).save('/tmp/sahi_test_image.png')"
-```
-
-Then run:
-
-```bash
 python models/demos/yolo_eval/sahi_ultralytics_eval.py --input /tmp/sahi_test_image.png --model yolov8x.pt --slice-height 320 --slice-width 320 --overlap-height-ratio 0.2 --overlap-width-ratio 0.2
 ```
 
-Directory of images:
+Directory of images (Ultralytics):
 
 ```bash
 python models/demos/yolo_eval/sahi_ultralytics_eval.py \
@@ -113,7 +191,7 @@ python models/demos/yolo_eval/sahi_ultralytics_eval.py \
   --save-visuals
 ```
 
-TT backend, **sequential slices** (default multi-chip behavior: one slice at a time, replicated on all devices in the mesh):
+TT backend, **sequential slices** (omit `--tt-slice-parallel-devices`; multi-chip mesh may still replicate one slice per forward):
 
 ```bash
 python models/demos/yolo_eval/sahi_ultralytics_eval.py \
@@ -133,95 +211,34 @@ python models/demos/yolo_eval/sahi_ultralytics_eval.py \
   --save-slice-grid-overlay
 ```
 
-**Multi-chip / Ethernet dispatch:** On systems such as T3K (1×8), you may want dispatch on Ethernet cores (same idea as metal unit tests). Either export before Python:
-
-```bash
-export TT_METAL_GTEST_ETH_DISPATCH=1
-```
-
-or pass the script flag (sets the variable before `ttnn` loads):
-
-```bash
-python models/demos/yolo_eval/sahi_ultralytics_eval.py --tt-eth-dispatch --backend tt ...
-```
-
-**Sample: T3K-style 4-way slice parallel (YOLOv8s, 1280×1280 → four 640×640 tiles, no overlap)**
-Use this when you want **four different slices per forward** on a **1×4** mesh. Adjust `--input` and `--output-dir` to your paths; from repo root:
-
-```bash
-python models/demos/yolo_eval/sahi_ultralytics_eval.py \
-  --backend tt \
-  --tt-model yolov8s \
-  --tt-eth-dispatch \
-  --tt-slice-parallel-devices 4 \
-  --pre-resize-to 1280 1280 \
-  --slice-height 640 \
-  --slice-width 640 \
-  --overlap-height-ratio 0 \
-  --overlap-width-ratio 0 \
-  --postprocess-type GREEDYNMM \
-  --postprocess-match-metric IOS \
-  --postprocess-match-threshold 0.1 \
-  --confidence-threshold 0.55 \
-  --save-visuals \
-  --save-slice-grid-overlay \
-  --input /absolute/path/to/image.jpg \
-  --output-dir models/demos/yolo_eval/sahi_outputs/my_run
-```
-
-Same flags with a typical **local** layout (repo at `~/sdawle/tt-metal`, sample images under `~/sdawle/sample_images/`; change paths as needed):
-
-```bash
-python models/demos/yolo_eval/sahi_ultralytics_eval.py \
-  --backend tt \
-  --tt-model yolov8s \
-  --tt-eth-dispatch \
-  --tt-slice-parallel-devices 4 \
-  --pre-resize-to 1280 1280 \
-  --slice-height 640 \
-  --slice-width 640 \
-  --overlap-height-ratio 0 \
-  --overlap-width-ratio 0 \
-  --postprocess-type GREEDYNMM \
-  --postprocess-match-metric IOS \
-  --postprocess-match-threshold 0.1 \
-  --confidence-threshold 0.55 \
-  --save-visuals \
-  --save-slice-grid-overlay \
-  --input "$HOME/sdawle/sample_images/people/pedestrians_03.jpg" \
-  --output-dir models/demos/yolo_eval/sahi_outputs/citytraffic_yolov8s_tt
-```
-
-If the last batch has fewer than N slices, the remainder is padded with black images; padded slots are not merged into SAHI output. Omit **`--tt-slice-parallel-devices`** for sequential slicing (each slice replicated across the opened mesh per forward).
-
 ## 3) Outputs
 
-- Printed per-image comparison:
-  - full-image detection count + latency
-  - sliced detection count + latency
-  - detection delta (sliced - full)
-- JSON summary:
-  - `<output-dir>/summary.json` (default output dir: `models/demos/yolo_eval/sahi_outputs`)
-- Optional visual outputs:
-  - `<image>_full.*`
-  - `<image>_sliced.*`
-  - `<image>_slice_grid.png` (original image with SAHI tile boundaries)
+- **Stdout (per image):**
+  - Detection counts and wall times for full vs sliced.
+  - Two lines with **`pre` / `device` / `post`** timing for **full (single)** and **sliced** (seconds; see `sahi_ultralytics_eval.py` for definitions).
+  - If **`--save-slice-images`**, an extra line reports **`slice_export`** I/O time.
+- **`summary.json`** (under `--output-dir`):
+  - **`config`:** run settings, **`tt_device_verify`** (TT only), etc.
+  - **`per_image`:** `full_timing_sec`, `sliced_timing_sec`, detection deltas.
+  - **`aggregate`:** means including **`mean_full_timing_sec`**, **`mean_sliced_timing_sec`**.
+- **Visuals (optional):**
+  - `<stem>_full.*`, `<stem>_sliced.*`
+  - `<stem>_slice_grid.png` — tile boundaries on the input.
+  - `<stem>_slices/*.png` — per-tile predictions if **`--save-slice-images`**.
+
+Default output directory if omitted: `models/demos/yolo_eval/sahi_outputs`.
 
 ## Notes for tuning
 
-- Start with `slice-height/width` in the range `512-768`.
-- Increase overlap (`0.2 -> 0.3`) when objects are often cut at tile boundaries.
-- Expect sliced inference to be slower; the tradeoff is often better recall on small objects.
-- If you see many duplicate boxes, use stricter merge settings:
-  - `--postprocess-type NMS --postprocess-match-metric IOU --postprocess-match-threshold 0.5`
-  - optionally raise `--confidence-threshold` to `0.35` or `0.4`
-- If you need an exact fixed-size tiling setup, use `--pre-resize-to WIDTH HEIGHT`.
-  - Example: `--pre-resize-to 640 640 --slice-height 320 --slice-width 320 --overlap-height-ratio 0 --overlap-width-ratio 0`
-  - This yields exactly `4` tiles per image.
+- Start with `slice-height/width` in the range **512–768** (or **640** to match YOLO native size).
+- Increase overlap (`0.2 → 0.3`) when objects are often cut at tile boundaries.
+- Sliced inference is usually slower; the tradeoff is often better recall on small objects.
+- Duplicate boxes across tiles: try **`--postprocess-type NMS`** with **`--postprocess-match-metric IOU`** / threshold tuning, or stricter **`--confidence-threshold`**.
+- Fixed tiling: **`--pre-resize-to W H`** with **`--overlap-*-ratio 0`** gives a predictable grid (e.g. 1280×1280 + 640×640 + no overlap ⇒ **4** tiles).
 
 ## Offline tests
 
-Chunk batching for `--tt-slice-parallel-devices` (no device):
+Chunk batching for **`--tt-slice-parallel-devices`** (no device):
 
 ```bash
 pytest models/demos/yolo_eval/test_sahi_parallel_chunks.py
