@@ -285,6 +285,12 @@ def test_mla(
         rope_tensors=rope_tensors,
     )
 
+    # Second forward to test program cache hit
+    tt_output = mla_tt.forward(
+        hidden_states=tt_hidden_states,
+        rope_tensors=rope_tensors,
+    )
+
     if skip_host_comparison == False:
         tt_output_cpu = ttnn.to_torch(
             tt_output,
