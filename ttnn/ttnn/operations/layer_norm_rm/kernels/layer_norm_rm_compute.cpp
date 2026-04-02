@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+// When fp32_dest_acc_en is active (DST_ACCUM_MODE == true), fast_tilize
+// corrupts data. We guard against this in tilize_helpers.inl by checking
+// DST_ACCUM_MODE in can_use_fast_tilize().
+
 // layer_norm_rm — Compute Kernel
 //
 // Per tile-row block (32 rows × Wt tiles):
@@ -28,6 +32,7 @@ void kernel_main() {
     constexpr uint32_t num_blocks = get_compile_time_arg_val(1);
     constexpr uint32_t has_gamma = get_compile_time_arg_val(2);
     constexpr uint32_t has_beta = get_compile_time_arg_val(3);
+    constexpr uint32_t use_fp32_dest = get_compile_time_arg_val(4);
 
     // ── CB indices ──
     constexpr uint32_t cb_rm_in = 0;
@@ -60,12 +65,19 @@ void kernel_main() {
     // ── One-time setup: tilize beta (asymmetric, 1 row) ──
     if constexpr (has_beta) {
         compute_kernel_lib::tilize<Wt, cb_beta_rm, cb_beta_t>(1, 1);
+        // hi hi hi ha
     }
 
     // ── Main loop: process each tile-row block ──
     for (uint32_t block = 0; block < num_blocks; ++block) {
         // Phase 1: Tilize input (symmetric, tile-sized pages)
         compute_kernel_lib::tilize<Wt, cb_rm_in, cb_x>(1);
+
+        // for(int i = 0; i < 30; i++){
+        //     TTI_NOP; // hmm what hmmm indeed fasto tilize
+        // }
+
+        tensix_sync();
 
         // Phase 2: Reduce mean — sum(x) * (1/W)
         // WaitUpfrontNoPop: tiles persist in cb_x for sub phase

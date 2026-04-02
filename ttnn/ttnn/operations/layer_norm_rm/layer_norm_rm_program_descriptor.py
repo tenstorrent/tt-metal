@@ -29,6 +29,7 @@ def create_program_descriptor(
     gamma: ttnn.Tensor = None,
     beta: ttnn.Tensor = None,
     epsilon: float = 1e-5,
+    compute_kernel_config: dict = None,
 ) -> ttnn.ProgramDescriptor:
     """Create the ProgramDescriptor for layer_norm_rm."""
 
@@ -230,29 +231,43 @@ def create_program_descriptor(
         config=ttnn.WriterConfigDescriptor(),
     )
 
+    # --- Compute kernel config ---
+    compute_config_kwargs = {}
+    use_fp32_dest = 0
+    if compute_kernel_config is not None:
+        if "math_fidelity" in compute_kernel_config:
+            compute_config_kwargs["math_fidelity"] = compute_kernel_config["math_fidelity"]
+        if "fp32_dest_acc_en" in compute_kernel_config:
+            compute_config_kwargs["fp32_dest_acc_en"] = compute_kernel_config["fp32_dest_acc_en"]
+            if compute_kernel_config["fp32_dest_acc_en"]:
+                use_fp32_dest = 1
+        if "math_approx_mode" in compute_kernel_config:
+            compute_config_kwargs["math_approx_mode"] = compute_kernel_config["math_approx_mode"]
+    compute_config_desc = ttnn.ComputeConfigDescriptor(**compute_config_kwargs)
+
     # --- Compute kernel(s) — one per core group ---
     kernels = [reader_kernel, writer_kernel]
 
-    compute_ct_args_g1 = [Wt, blocks_per_core_g1, has_gamma, has_beta]
+    compute_ct_args_g1 = [Wt, blocks_per_core_g1, has_gamma, has_beta, use_fp32_dest]
     kernels.append(
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "layer_norm_rm_compute.cpp"),
             core_ranges=core_group_1,
             compile_time_args=compute_ct_args_g1,
             runtime_args=[],
-            config=ttnn.ComputeConfigDescriptor(),
+            config=compute_config_desc,
         )
     )
 
     if has_group_2:
-        compute_ct_args_g2 = [Wt, blocks_per_core_g2, has_gamma, has_beta]
+        compute_ct_args_g2 = [Wt, blocks_per_core_g2, has_gamma, has_beta, use_fp32_dest]
         kernels.append(
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "layer_norm_rm_compute.cpp"),
                 core_ranges=core_group_2,
                 compile_time_args=compute_ct_args_g2,
                 runtime_args=[],
-                config=ttnn.ComputeConfigDescriptor(),
+                config=compute_config_desc,
             )
         )
 

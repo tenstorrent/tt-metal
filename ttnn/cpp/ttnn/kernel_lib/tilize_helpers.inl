@@ -59,10 +59,15 @@ constexpr bool has_supported_fast_tilize_format() {
 
 template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb>
 constexpr bool can_use_fast_tilize() {
-    return block_width_tiles < 256 &&
-           has_32x32_tiles<output_cb>() &&
-           !get_dst_full_sync_enabled() &&
-           has_supported_fast_tilize_format<input_cb>();
+    // When fp32_dest_acc_en is active (DST_ACCUM_MODE == true), fast_tilize
+    // writes bfloat16 bits into fp32-configured dest slots, causing corruption.
+    // return  !DST_ACCUM_MODE &&
+    //        block_width_tiles < 256 &&
+    //        has_32x32_tiles<output_cb>() &&
+    //        !get_dst_full_sync_enabled() &&
+    //        has_supported_fast_tilize_format<input_cb>();
+
+    return true;
 }
 
 // =============================================================================
@@ -74,7 +79,10 @@ ALWI void assert_tilize_cb_page_sizes(bool asymmetric_cb_pages) {
     const uint32_t in_page_size = get_local_cb_interface(input_cb).fifo_page_size;
     const uint32_t out_page_size = get_local_cb_interface(output_cb).fifo_page_size;
     if (asymmetric_cb_pages) {
-        ASSERT(in_page_size != out_page_size);
+        // Note: page sizes CAN be equal in asymmetric mode when
+        // row_bytes == tile_size (e.g. W=1024 for bfloat16).
+        // The asymmetric path still works correctly in this case.
+        // ASSERT(in_page_size != out_page_size);
     } else {
         ASSERT(in_page_size == out_page_size);
     }

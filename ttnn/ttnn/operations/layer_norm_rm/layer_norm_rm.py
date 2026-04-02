@@ -21,6 +21,7 @@ def layer_norm_rm(
     *,
     epsilon: float = 1e-5,
     memory_config: ttnn.MemoryConfig = None,
+    compute_kernel_config=None,
 ) -> ttnn.Tensor:
     """
     Layer-normalize each row of a row-major interleaved tensor.
@@ -32,6 +33,8 @@ def layer_norm_rm(
         beta:  Optional shift tensor, shape [1, 1, 1, W], bfloat16, ROW_MAJOR.
         epsilon: Small constant for numerical stability (default 1e-5).
         memory_config: Output memory config (default DRAM interleaved).
+        compute_kernel_config: Optional dict with keys 'fp32_dest_acc_en' (bool)
+            and/or 'math_fidelity' (ttnn.MathFidelity). Controls compute precision.
 
     Returns:
         Output tensor with same shape, dtype, and layout as input.
@@ -52,7 +55,14 @@ def layer_norm_rm(
         output_memory_config,
     )
 
-    program_descriptor = create_program_descriptor(input_tensor, output_tensor, gamma, beta, epsilon)
+    program_descriptor = create_program_descriptor(
+        input_tensor,
+        output_tensor,
+        gamma,
+        beta,
+        epsilon,
+        compute_kernel_config=compute_kernel_config,
+    )
 
     # Build tensor list — output MUST be last
     tensors = [input_tensor]
