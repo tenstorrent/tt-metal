@@ -2388,10 +2388,6 @@ class ModelArgs:
     def is_distributed_norm(self, mode: Mode):
         if not self.is_multichip:
             return False
-        # For decode on 2D grid, non-distributed norm avoids the extra stats all-gather
-        # (1 big all-gather instead of 1 tiny stats all-gather + 1 big output all-gather)
-        if mode == Mode.DECODE:
-            return False
         if all([dim > 1 for dim in list(self.mesh_device.shape)]):  # 2D grid
             return True
         elif (
