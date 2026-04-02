@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import time
 
 import pytest
 import soundfile as sf
@@ -31,7 +32,7 @@ from qwen_omni_utils import process_mm_info
 
 from models.common.utility_functions import comp_pcc
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
-from models.experimental.tt_symbiote.core.run_config import DispatchManager
+from models.experimental.tt_symbiote.core.run_config import DispatchManager, TracedRun
 from models.experimental.tt_symbiote.modules.moe import TTNNQwen3OmniThinkerNaiveMoE, TTNNQwen3TalkerMoE
 from models.experimental.tt_symbiote.core.hf_generation_compat import apply_qwen3_omni_talker_prepare_inputs_fix
 from models.experimental.tt_symbiote.modules.attention import TTNNQwenAudioAttention
@@ -50,6 +51,94 @@ from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 
 _ALLOWED_SYMBIOTE_RUN_MODES = frozenset({"CPU", "NORMAL", "NORMAL_WITH_FALLBACK"})
+
+_QWEN_OMNI_AUDIO_SAMPLE_RATE_HZ = 24000
+
+
+def _qwen_omni_ttft_probe_s(model, inputs: dict, *, use_audio_in_video: bool, mesh_device) -> float:
+    """Wall time for thinker-only generation with a single new token (no talker / code2wav).
+
+    Serves as a TTFT-style proxy; it includes one thinker decode step.
+
+    **Memory:** This runs a **second** full thinker forward (vision + audio towers + text), so peak
+    device DRAM can nearly **double** vs a single ``generate``. On multimodal Qwen3-Omni that often
+    OOMs on Wormhole; the test therefore keeps the probe **opt-in** via
+    ``TT_SYMBIOTE_QWEN_OMNI_TTFT_PROBE=1``.
+    """
+    t0 = time.perf_counter()
+    with torch.no_grad():
+        model.generate(
+            **inputs,
+            return_audio=False,
+            thinker_max_new_tokens=1,
+            use_audio_in_video=use_audio_in_video,
+        )
+    ttnn.synchronize_device(mesh_device)
+    return time.perf_counter() - t0
+
+
+def _print_qwen_omni_performance_metrics(
+    *,
+    prompt_tokens: int,
+    text_ids: torch.Tensor,
+    audio: torch.Tensor | None,
+    total_time_s: float,
+    prefill_proxy_s: float | None,
+    mesh_device,
+) -> None:
+    """Print text throughput metrics plus audio duration / RTF for multimodal output."""
+    seq_len = int(text_ids.shape[-1])
+    generated_tokens = max(0, seq_len - prompt_tokens)
+
+    decode_time_s = total_time_s
+    if prefill_proxy_s is not None:
+        decode_time_s = max(total_time_s - prefill_proxy_s, 1e-9)
+
+    e2e_throughput = generated_tokens / total_time_s if total_time_s > 0 else 0.0
+    decode_throughput = generated_tokens / decode_time_s if decode_time_s > 0 else 0.0
+    ms_per_tok = (decode_time_s / generated_tokens * 1000.0) if generated_tokens > 0 else 0.0
+
+    print(f"\n{'=' * 80}")
+    print("QWEN-OMNI PERFORMANCE METRICS")
+    print(f"{'=' * 80}")
+    print("  --- Thinker text (full pipeline wall clock) ---")
+    print(f"  Prompt tokens:        {prompt_tokens}")
+    print(f"  Generated tokens:     {generated_tokens}")
+    if prefill_proxy_s is not None:
+        print(
+            f"  TTFT proxy (thinker, 1 tok, no audio): {prefill_proxy_s:.3f}s  "
+            "(extra full thinker forward; can OOM on multimodal — default is off)"
+        )
+    else:
+        print(
+            "  TTFT proxy:            (skipped; set TT_SYMBIOTE_QWEN_OMNI_TTFT_PROBE=1 to enable — "
+            "uses ~2× peak DRAM)"
+        )
+    print(f"  Total time (e2e):     {total_time_s:.3f}s")
+    print(
+        f"  Decode time (heur.):  {decode_time_s:.3f}s  "
+        "(total − TTFT proxy when probe ran; remainder includes talker + code2wav)"
+    )
+    print(f"  E2E text throughput:  {e2e_throughput:.2f} tokens/s")
+    print(f"  Decode text thruput:  {decode_throughput:.2f} tokens/s")
+    print(f"  Decode ms/token:      {ms_per_tok:.2f}ms")
+
+    if audio is not None:
+        n_samples = int(audio.reshape(-1).numel())
+        audio_duration_s = n_samples / _QWEN_OMNI_AUDIO_SAMPLE_RATE_HZ
+        rtf = total_time_s / audio_duration_s if audio_duration_s > 0 else 0.0
+        print("  --- Audio output ---")
+        print(f"  Audio samples:        {n_samples}")
+        print(f"  Audio duration:       {audio_duration_s:.3f}s @ {_QWEN_OMNI_AUDIO_SAMPLE_RATE_HZ} Hz")
+        print(f"  RTF (e2e / audio len): {rtf:.3f}x")
+    else:
+        print("  --- Audio output ---")
+        print("  (none; return_audio=False or no talker)")
+
+    print("  --- Device ---")
+    print(f"  Mesh devices:         {mesh_device.get_num_devices()}")
+    print(f"{'=' * 80}\n")
+
 
 # Static HF → TTNN maps
 NN_TO_TTNN_THINKER = {
@@ -729,12 +818,25 @@ def test_qwen_omni(mesh_device):
     input_device = getattr(model, "device", None) or torch.device("cpu")
     input_dtype = getattr(model, "dtype", None) or torch.bfloat16
     inputs = inputs.to(input_device).to(input_dtype)
+    prompt_tokens = int(inputs["input_ids"].shape[-1])
+
     print("Running inference...")
+    # Default off: a probe run is a second full thinker forward (vision/audio/text) and often OOMs
+    # on Wormhole before the real generate; enable only with headroom (TT_SYMBIOTE_QWEN_OMNI_TTFT_PROBE=1).
+    run_ttft_probe = os.environ.get("TT_SYMBIOTE_QWEN_OMNI_TTFT_PROBE", "0").lower() in ("1", "true", "yes")
+    prefill_proxy_s = None
+    if run_ttft_probe:
+        print("TTFT probe: thinker-only, 1 new token (no audio)...")
+        prefill_proxy_s = _qwen_omni_ttft_probe_s(
+            model, inputs, use_audio_in_video=USE_AUDIO_IN_VIDEO, mesh_device=mesh_device
+        )
+
     DispatchManager.clear_timings()
 
     # Inference: Generation of the output text and audio
     # Use deterministic talker decoding to make waveform quality reproducible.
     talker_max_new_tokens = int(os.environ.get("TT_SYMBIOTE_QWEN_OMNI_TALKER_MAX_NEW_TOKENS", "1024"))
+    t_start = time.perf_counter()
     text_ids, audio = model.generate(
         **inputs,
         speaker="Ethan",
@@ -743,18 +845,33 @@ def test_qwen_omni(mesh_device):
         talker_do_sample=False,
         talker_max_new_tokens=talker_max_new_tokens,
     )
+    ttnn.synchronize_device(mesh_device)
+    total_time_s = time.perf_counter() - t_start
+
     DispatchManager.save_stats_to_file("qwen_omni_timing_stats.csv")
+    TracedRun.release_all()
 
     text = processor.batch_decode(
-        text_ids[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True, clean_up_tokenization_spaces=False
+        text_ids[:, prompt_tokens:], skip_special_tokens=True, clean_up_tokenization_spaces=False
     )
 
+    print(f"\n{'=' * 80}")
     print(f"QWEN-OMNI OUTPUT: {text}")
+    print(f"{'=' * 80}")
+
+    _print_qwen_omni_performance_metrics(
+        prompt_tokens=prompt_tokens,
+        text_ids=text_ids,
+        audio=audio,
+        total_time_s=total_time_s,
+        prefill_proxy_s=prefill_proxy_s,
+        mesh_device=mesh_device,
+    )
 
     if audio is not None:
         sf.write(
             "output.wav",
             audio.reshape(-1).detach().cpu().numpy(),
-            samplerate=24000,
+            samplerate=_QWEN_OMNI_AUDIO_SAMPLE_RATE_HZ,
         )
         print("Audio output saved to output.wav")
