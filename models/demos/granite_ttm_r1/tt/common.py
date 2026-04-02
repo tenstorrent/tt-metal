@@ -23,7 +23,7 @@ def preprocess_parameters(hf_model: torch.nn.Module, device) -> Any:
     from ttnn.model_preprocessing import preprocess_model_parameters
 
     return preprocess_model_parameters(
-        init_model=lambda: hf_model,
+        initialize_model=lambda: hf_model,
         custom_preprocessor=custom_preprocessor,
         device=device,
     )
@@ -61,9 +61,9 @@ def custom_preprocessor(torch_model, name):
         parameters["bias"] = (
             preprocess_linear_bias(torch_model.bias, dtype=ttnn.bfloat16) if torch_model.bias is not None else None
         )
-    elif isinstance(torch_model, torch.nn.LayerNorm):
-        parameters["weight"] = ttnn.from_torch(torch_model.weight, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        parameters["bias"] = ttnn.from_torch(torch_model.bias, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    # torch.nn.LayerNorm is handled by the default preprocessor via
+    # preprocess_layernorm_parameter, which reshapes weight/bias to (1, d_model)
+    # in TILE_LAYOUT — satisfying the TTNN layer_norm gamma shape requirement.
     return parameters
 
 
