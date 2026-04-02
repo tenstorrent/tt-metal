@@ -232,12 +232,16 @@ def test_unary_composite_multigammaln_ttnn(input_shapes, device):
 )
 @pytest.mark.parametrize("k", [1, 5])
 def test_unary_composite_polygamma_ttnn(input_shapes, k, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, 1, 10, device)
-    output_tensor = ttnn.polygamma(input_tensor1, k)
+    torch.manual_seed(213919)
+    torch_input = torch.rand(input_shapes, dtype=torch.bfloat16) * 9.0 + 1.0
     golden_function = ttnn.get_golden_function(ttnn.polygamma)
-    golden_tensor = golden_function(in_data1, k)
+    golden_tensor = golden_function(torch_input, k)
 
-    assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=1, allow_nonfinite=True)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.polygamma(input_tensor, k)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
