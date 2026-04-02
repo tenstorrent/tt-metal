@@ -188,38 +188,45 @@ class ModelPipeline:
         while len(generated_tokens) < max_new_tokens:
             result = pending.popleft() if pending else self.model.read_result()
 
-            if not unverified_spec_tokens:
+            print("Got MD from Device: ")
+            print(f"Token 0 Pos: {result.token_0_pos}, Token 1 Pos: {result.token_1_pos}")
+            print(f"Token 0 Type: {result.token_0_type}, Token 1 Type: {result.token_1_type}")
+            print(f"Token 0: {result.token_0}, Token 1: {result.token_1}")
+            print(f"Slot ID: {result.slot_id}")
+
+            if not unverified_spec_tokens and not verified_spec_tokens:
                 unverified_spec_tokens.append(result.token_1)
                 emit(result.token_0)
+                print("Prefill done")
             else:
                 if result.token_0_type == TokenType.BASE:
                     # On acceptance, we check that the base token matches the first token of the last unverified spec token
                     if result.token_0 == unverified_spec_tokens[-1]:
                         verified_spec_tokens.append(unverified_spec_tokens.pop())
                         emit(result.token_0)
+                        print("Base Accept")
                         continue
                     # On rejection, we discard the last unverified spec token and populate the new spec token
                     else:
                         unverified_spec_tokens.pop()
                         unverified_spec_tokens.append(result.token_1)
                         emit(result.token_0)
+                        print("Base Reject")
+
                 if result.token_0_type == TokenType.SPEC:
                     # If we have a verified spec token it means we have an acceptance case, remove it and emit the token
                     if verified_spec_tokens:
                         verified_spec_tokens.pop()
                         unverified_spec_tokens.append(result.token_1)
                         emit(result.token_0)
+                        print("Spec Accept")
                     else:
+                        print("Spec Reject")
                         continue
 
             if is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens:
                 break
 
-            print("Got MD from Device: ")
-            print(f"Token 0 Pos: {result.token_0_pos}, Token 1 Pos: {result.token_1_pos}")
-            print(f"Token 0 Type: {result.token_0_type}, Token 1 Type: {result.token_1_type}")
-            print(f"Token 0: {result.token_0}, Token 1: {result.token_1}")
-            print(f"Slot ID: {result.slot_id}")
 
             self._write_spec_pair(
                 result.token_0,

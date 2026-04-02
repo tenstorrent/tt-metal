@@ -538,6 +538,7 @@ void kernel_main() {
                                                 uint32_t tok1_id = 0,
                                                 uint32_t tok1_type = 0,
                                                 uint32_t tok1_pos = 0,
+                                                uint32_t input_pos_id = 0,
                                                 uint32_t slot_id = 0) {
         cb_reserve_back(cb, 1);
         volatile tt_l1_ptr uint32_t* page = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb));
@@ -548,6 +549,8 @@ void kernel_main() {
         page[4] = tok1_type;
         page[5] = tok1_pos;
         page[6] = slot_id;
+        page[7] = 0; // input token id
+        page[8] = input_pos_id;
         cb_push_back(cb, 1);
     };
 #endif
@@ -833,7 +836,8 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_output_l1_addr);
             invalidate_l1_cache();
             uint32_t base_token_type = metadata_ptr->tok0_type;
-            uint32_t base_token_pos = metadata_ptr->position_id;
+            uint32_t base_token_pos = metadata_ptr->position_id;            
+            uint32_t input_pos_id = metadata_ptr->tok0_pos;
             uint32_t slot_id = metadata_ptr->slot_id;
 
             constexpr uint32_t eh_gather_dst_cb = get_named_compile_time_arg_val("gather_dst_cb");
@@ -843,7 +847,7 @@ void kernel_main() {
             uint32_t base_token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
 
             write_token_metadata_to_socket_cb(
-                eh_gather_dst_cb, base_token_id, base_token_type, base_token_pos, 0, 0, 0, slot_id);
+                eh_gather_dst_cb, base_token_id, base_token_type, base_token_pos, 0, 0, 0, input_pos_id, slot_id);
             cb_pop_front(argmax_socket_cb, 1);
             DPRINT << ">argmax pop token done" << ENDL();
         }
@@ -890,10 +894,9 @@ void kernel_main() {
             uint32_t slot_id = metadata_ptr->slot_id;
             uint32_t spec_token_type = TOKEN_TYPE_SPEC;
             uint32_t spec_token_pos = metadata_ptr->tok0_pos + 2;
+            uint32_t input_pos_id = metadata_ptr->position_id + 1;
             cb_pop_front(argmax_socket_cb, 1);
 
-            DPRINT << "SPEC STAGE BASE TOKEN ID: " << base_token_id << ENDL();
-            DPRINT << "SPEC STAGE SPEC TOKEN ID: " << spec_token_id << ENDL();
             // Push the base and speculative tokens to the argmax socket CB that will be written to the socket later
             write_token_metadata_to_socket_cb(
                 argmax_socket_cb,
@@ -903,6 +906,7 @@ void kernel_main() {
                 spec_token_id,
                 spec_token_type,
                 spec_token_pos,
+                input_pos_id,
                 slot_id);
         }
 #endif
