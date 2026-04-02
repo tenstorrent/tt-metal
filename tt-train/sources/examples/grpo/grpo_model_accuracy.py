@@ -51,12 +51,19 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--num-prompts", type=int, default=None, help="Number of prompts to test (default: all)")
+    parser.add_argument(
+        "--yaml-path",
+        type=str,
+        default="tt-train/sources/examples/grpo/grpo_model_accuracy.yaml",
+    )
     accuracy_args, _ = parser.parse_known_args()
 
     run = setup_accuracy_run()
     tracker = AccuracyMetricsTracker(run.output_dir)
 
-    yaml_config_path = "tt-train/sources/examples/grpo/grpo_model_accuracy.yaml"
+    run.logger.info(f"args: {vars(accuracy_args)}")
+
+    yaml_config_path = accuracy_args.yaml_path
     ctx = setup_inference(
         yaml_config_path,
         hf_model_id="unsloth/Llama-3.2-1B-Instruct",
