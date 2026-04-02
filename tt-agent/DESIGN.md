@@ -10,12 +10,35 @@ Each decision is dated so you can judge whether it is still current.
 
 tt-agent lives inside `tt-metal/tt-agent/` rather than a separate repo.
 
-**Why:** Skills reference tt-metal paths deeply (API headers, programming examples,
-operator source). The agent needs tt-metal checked out regardless. Co-location is
-correct, not a compromise.
+**Why:** Skills originated from tt-metal's deep hardware stack (API headers, programming
+examples, operator source). Co-location is correct for the primary repo, not a compromise.
+See "Multi-repo readiness" for how skills generalize beyond tt-metal.
 
 **Extraction path:** When tt-agent outgrows tt-metal, `git subtree split --prefix=tt-agent`
 yields a clean repo with full history.
+
+---
+
+## 2026-04-02: Multi-repo readiness
+
+tt-agent starts in tt-metal but must work across all Tenstorrent repos (vLLM,
+tt-inference-server, tt-shield, etc.) without structural changes.
+
+**Architectural constraints:**
+
+1. **Skills never hardcode repo identity.** Detect context from the working directory
+   (git remote, file structure), not from string-matching repo names.
+2. **knowledge/references/ are tt-metal hints, not requirements.** Skills must work
+   (via deepwiki + local search) even without them. They accelerate research in
+   tt-metal; they are not load-bearing.
+3. **Deepwiki is the repo-agnostic backbone.** Local Grep/Read works in whatever repo
+   you're in. Deepwiki can search any TT repo by name.
+4. **Notes are repo-tagged.** Context notes include which repo was researched, so
+   findings from different repos don't get confused.
+
+**Why now:** Decisions made while only targeting tt-metal easily bake in assumptions
+(hardcoded paths, tt-metal-specific references as required inputs) that are expensive
+to undo later. These constraints cost nothing to follow now.
 
 ---
 
@@ -66,7 +89,7 @@ pollute history.
 
 **What didn't change:** Notes are still the shared blackboard. They persist across
 sessions and follow the same naming conventions (`context-<topic>.md`,
-`experiments-<task>.md`, etc.). Always dated with tt-metal commit hash.
+`experiments-<task>.md`, etc.). Always dated with repo name and commit hash.
 
 ---
 
