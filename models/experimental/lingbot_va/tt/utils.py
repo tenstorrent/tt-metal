@@ -28,7 +28,7 @@ from models.tt_dit.parallel.manager import CCLManager
 from models.experimental.lingbot_va.tt.vae_encoder import WanVAEEncoder, patch_wan_causal_conv_wormhole_bf16_parity
 from models.experimental.lingbot_va.tt.vae_decoder import WanVAEDecoder
 from models.tt_dit.models.vae.vae_wan2_1 import WanCausalConv3d
-from models.tt_dit.utils.conv3d import conv_pad_in_channels, conv_pad_height, conv_unpad_height
+from models.tt_dit.utils.conv3d import aligned_channels, conv_pad_in_channels, conv_pad_height, conv_unpad_height
 
 from .transformer_wan import (
     CROSS_ATTN_NORM,
@@ -311,6 +311,35 @@ def patchify(x, patch_size):
     return x
 
 
+def _patchify_ttnn(x: ttnn.Tensor, patch_size: int | None) -> ttnn.Tensor:
+    """Patchify **BCTHW** layout using only TTNN ops (matches :func:`patchify` on torch)."""
+    if patch_size is None or patch_size == 1:
+        return x
+    batch_size, channels, frames, height, width = x.shape
+    ps = patch_size
+    x = ttnn.reshape(x, (batch_size, channels, frames, height // ps, ps, width // ps, ps))
+    x = ttnn.permute(x, (0, 1, 6, 4, 2, 3, 5))
+    return ttnn.reshape(x, (batch_size, channels * ps * ps, frames, height // ps, width // ps))
+
+
+def _conv_pad_in_channels_ttnn(tensor_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
+    """Pad channel dimension (last axis) to alignment; **BTHWC** layout."""
+    c_in = tensor_BTHWC.shape[-1]
+    padded_c = aligned_channels(c_in)
+    if padded_c == c_in:
+        return tensor_BTHWC
+    return ttnn.pad(tensor_BTHWC, [(0, 0), (0, 0), (0, 0), (0, 0), (0, padded_c - c_in)], value=0.0)
+
+
+def _conv_pad_height_ttnn(tensor_BTHWC: ttnn.Tensor, h_factor: int) -> tuple[ttnn.Tensor, int]:
+    """Pad height (dim 2) to a multiple of ``h_factor``; **BTHWC** layout. Returns (padded, original H)."""
+    _b, _t, h, _w, _c = tensor_BTHWC.shape
+    pad_h = (h_factor - h % h_factor) % h_factor
+    if pad_h == 0:
+        return tensor_BTHWC, h
+    return ttnn.pad(tensor_BTHWC, [(0, 0), (0, 0), (0, pad_h), (0, 0), (0, 0)], value=0.0), h
+
+
 class WanVAEStreamingWrapper:
     def __init__(
         self,
@@ -423,6 +452,47 @@ class WanVAEStreamingWrapper:
             _safe_deallocate_tensor(video_BTHWC, "encode_chunk video_BTHWC")
             _safe_deallocate_tensor(out_tt, "encode_chunk encoder out")
             _safe_deallocate_tensor(enc_tt, "encode_chunk enc")
+            gc.collect()
+
+    def encode_chunk_ttnn(self, x_chunk: ttnn.Tensor) -> ttnn.Tensor:
+        """Encode one chunk with TTNN-only preprocessing (no ``torch`` ops); **BCTHW** in/out.
+
+        If ``x_chunk`` is not ``ttnn.bfloat16``, it is typecast to bfloat16 (same as ``encode_chunk``'s
+        ``ttnn.from_torch(..., dtype=ttnn.bfloat16)`` path).
+        """
+        self.clear_cache()
+        feat_idx = [0]
+        ps = getattr(self.vae.config, "patch_size", None)
+        x_input = x_chunk
+        if x_chunk.dtype != ttnn.bfloat16:
+            x_input = ttnn.typecast(x_chunk, ttnn.bfloat16)
+        x = _patchify_ttnn(x_input, ps)
+        video_BTHWC = ttnn.permute(x, (0, 2, 3, 4, 1))
+        if x is not x_chunk:
+            _safe_deallocate_tensor(x, "encode_chunk_ttnn patchify")
+        if x_input is not x_chunk and x_input is not x:
+            _safe_deallocate_tensor(x_input, "encode_chunk_ttnn dtype cast")
+        prev = video_BTHWC
+        video_BTHWC = _conv_pad_in_channels_ttnn(video_BTHWC)
+        if prev is not video_BTHWC:
+            _safe_deallocate_tensor(prev, "encode_chunk_ttnn pre C pad")
+        prev = video_BTHWC
+        video_BTHWC, logical_h = _conv_pad_height_ttnn(video_BTHWC, self.parallel_config.height_parallel.factor)
+        if prev is not video_BTHWC:
+            _safe_deallocate_tensor(prev, "encode_chunk_ttnn pre H pad")
+        enc_tt = None
+        out_tt = None
+        try:
+            out_tt, logical_h = self.encoder(video_BTHWC, logical_h, feat_cache=self.feat_cache, feat_idx=feat_idx)
+            enc_tt = self.quant_conv(out_tt, logical_h)
+            enc_h = enc_tt.shape[2]
+            enc_tt = conv_unpad_height(enc_tt, min(logical_h, enc_h))
+            ttnn.synchronize_device(self.mesh_device)
+            return ttnn.permute(enc_tt, (0, 4, 1, 2, 3))
+        finally:
+            _safe_deallocate_tensor(video_BTHWC, "encode_chunk_ttnn video_BTHWC")
+            _safe_deallocate_tensor(out_tt, "encode_chunk_ttnn encoder out")
+            _safe_deallocate_tensor(enc_tt, "encode_chunk_ttnn enc")
             gc.collect()
 
 

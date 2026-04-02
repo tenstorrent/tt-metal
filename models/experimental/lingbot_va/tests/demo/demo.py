@@ -58,6 +58,7 @@ from models.tt_dit.parallel.manager import CCLManager
 
 from models.experimental.lingbot_va.tt.transformer_wan import NUM_HEADS as LINGBOT_NUM_HEADS
 from tt.utils import (
+    _safe_deallocate_tensor,
     load_text_encoder as load_text_encoder_tt,
     load_transformer as load_transformer_tt,
     WanVAEStreamingWrapper as TTWanVAEStreamingWrapper,
@@ -563,6 +564,26 @@ def _get_t5_prompt_embeds(models, prompt, num_videos_per_prompt=1, max_sequence_
     return prompt_embeds.to(device)
 
 
+def _get_t5_prompt_embeds_ttnn(models, text_inputs, num_videos_per_prompt=1, max_sequence_length=512):
+    """TTNN text-encoder pass using TTNN pre-tokenized inputs, returns TTNN tensor."""
+    _ = (num_videos_per_prompt, max_sequence_length)
+    text_encoder = models["text_encoder"]
+
+    tt_input = text_inputs["input_ids"]
+    tt_mask = text_inputs["attention_mask"]
+
+    mesh_device = text_encoder.mesh_device
+    tt_outputs = text_encoder(tt_input, attention_mask=tt_mask)
+    last_hidden = tt_outputs[-1]
+
+    try:
+        ttnn.synchronize_device(mesh_device)
+    except Exception as e:
+        logger.warning("synchronize_device failed after text encoder pass: %s", e)
+
+    return last_hidden
+
+
 def _encode_prompt(models, _state, prompt, do_classifier_free_guidance=True, max_sequence_length=512):
     prompt = [prompt] if isinstance(prompt, str) else prompt
     batch_size = len(prompt)
@@ -580,6 +601,32 @@ def _encode_prompt(models, _state, prompt, do_classifier_free_guidance=True, max
             models, prompt=negative_prompt, num_videos_per_prompt=1, max_sequence_length=max_sequence_length
         )
 
+    return prompt_embeds, negative_prompt_embeds
+
+
+def _encode_prompt_ttnn(
+    models,
+    prompt_tokenized_inputs,
+    negative_prompt_tokenized_inputs=None,
+    do_classifier_free_guidance=True,
+    max_sequence_length=512,
+):
+    """Encode prompt embeddings via TTNN text encoder using pre-tokenized inputs."""
+    prompt_embeds = _get_t5_prompt_embeds_ttnn(
+        models,
+        prompt_tokenized_inputs,
+        num_videos_per_prompt=1,
+        max_sequence_length=max_sequence_length,
+    )
+
+    negative_prompt_embeds = None
+    if do_classifier_free_guidance and negative_prompt_tokenized_inputs is not None:
+        negative_prompt_embeds = _get_t5_prompt_embeds_ttnn(
+            models,
+            negative_prompt_tokenized_inputs,
+            num_videos_per_prompt=1,
+            max_sequence_length=max_sequence_length,
+        )
     return prompt_embeds, negative_prompt_embeds
 
 
@@ -740,6 +787,112 @@ def _encode_obs(models, state, obs):
     return video_latent
 
 
+def _encode_obs_ttnn(models, state, obs):
+    """Encode observations to TTNN latents.
+
+    * ``obs['obs_ttnn']``: list of per-frame dicts mapping ``config.obs_cam_keys`` to **ttnn** tensors
+      (E2E / device path).
+    * ``obs['obs']``: same structure as :func:`_encode_obs` — list of dicts with numpy RGB (H, W, 3) per
+      camera key (e.g. ``run_generate`` / ``_load_init_obs``, or ``message['obs']`` from
+      :func:`build_infer_message`).
+    """
+    config = models["config"]
+    mesh_device = models["mesh_device"]
+
+    env_type = models["env_type"]
+    streaming_vae = models["streaming_vae"]
+    vae = models["vae"]
+
+    obs_ttnn = obs.get("obs_ttnn")
+    if obs_ttnn is not None:
+        if not isinstance(obs_ttnn, list) or len(obs_ttnn) < 1:
+            return None
+        videos = []
+        for k in config.obs_cam_keys:
+            if k not in obs_ttnn[0]:
+                raise KeyError(f"Missing camera key '{k}' in obs['obs_ttnn']")
+            videos.append(obs_ttnn[0][k])
+
+        if env_type == "robotwin_tshape":
+            videos_high = ttnn.add(ttnn.multiply(videos[0], 2.0 / 255.0), -1.0)
+            videos_left_and_right = ttnn.add(ttnn.multiply(ttnn.concat(videos[1:], dim=0), 2.0 / 255.0), -1.0)
+            enc_out_high = streaming_vae.encode_chunk_ttnn(videos_high)
+            enc_out_left_and_right = streaming_vae.encode_chunk_ttnn(videos_left_and_right)
+            lr_parts = ttnn.chunk(enc_out_left_and_right, enc_out_left_and_right.shape[0], dim=0)
+            enc_out = ttnn.concat([ttnn.concat(list(lr_parts), dim=-1), enc_out_high], dim=-2)
+        else:
+            videos_merged = ttnn.add(ttnn.multiply(ttnn.concat(videos, dim=0), 2.0 / 255.0), -1.0)
+            enc_out = streaming_vae.encode_chunk_ttnn(videos_merged)
+    else:
+        images = obs.get("obs")
+        if images is None:
+            raise ValueError(
+                "_encode_obs_ttnn requires obs['obs_ttnn'] (TTNN) or obs['obs'] (numpy/RGB), same as _encode_obs"
+            )
+        # Match _encode_obs preprocessing, then upload BCTHW to mesh for encode_chunk_ttnn.
+        height = state["height"]
+        width = state["width"]
+        if not isinstance(images, list):
+            images = [images]
+        if len(images) < 1:
+            return None
+
+        videos_torch = []
+        for k_i, k in enumerate(config.obs_cam_keys):
+            if env_type == "robotwin_tshape":
+                height_i, width_i = (height, width) if k_i == 0 else (height // 2, width // 2)
+            else:
+                height_i, width_i = height, width
+            history_video_k = torch.from_numpy(np.stack([each[k] for each in images])).float().permute(3, 0, 1, 2)
+            history_video_k = F.interpolate(
+                history_video_k, size=(height_i, width_i), mode="bilinear", align_corners=False
+            ).unsqueeze(0)
+            videos_torch.append(history_video_k)
+
+        def _encode_chunk_ttnn_from_torch(bcthw: torch.Tensor) -> ttnn.Tensor:
+            t = bcthw.detach().to(torch.bfloat16).contiguous()
+            if t.device.type != "cpu":
+                t = t.cpu()
+            v_tt = ttnn.from_torch(
+                t,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.bfloat16,
+                device=mesh_device,
+            )
+            try:
+                return streaming_vae.encode_chunk_ttnn(v_tt)
+            finally:
+                _safe_deallocate_tensor(v_tt, "_encode_obs_ttnn from_torch upload")
+
+        if env_type == "robotwin_tshape":
+            videos_high = videos_torch[0] / 255.0 * 2.0 - 1.0
+            videos_left_and_right = torch.cat(videos_torch[1:], dim=0) / 255.0 * 2.0 - 1.0
+            enc_out_high = _encode_chunk_ttnn_from_torch(videos_high)
+            enc_out_left_and_right = _encode_chunk_ttnn_from_torch(videos_left_and_right)
+            lr_parts = ttnn.chunk(enc_out_left_and_right, enc_out_left_and_right.shape[0], dim=0)
+            enc_out = ttnn.concat([ttnn.concat(list(lr_parts), dim=-1), enc_out_high], dim=-2)
+        else:
+            videos_merged = torch.cat(videos_torch, dim=0) / 255.0 * 2.0 - 1.0
+            enc_out = _encode_chunk_ttnn_from_torch(videos_merged)
+
+    mu, _ = ttnn.chunk(enc_out, 2, dim=1)
+    latents_mean = ttnn.from_torch(
+        torch.tensor(vae.config.latents_mean, dtype=torch.bfloat16).view(1, -1, 1, 1, 1),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+    )
+    latents_std_inv = ttnn.from_torch(
+        torch.tensor(1.0 / np.array(vae.config.latents_std), dtype=torch.bfloat16).view(1, -1, 1, 1, 1),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+    )
+    mu_norm = ttnn.multiply(ttnn.subtract(mu, latents_mean), latents_std_inv)
+    parts = ttnn.chunk(mu_norm, mu_norm.shape[0], dim=0)
+    return ttnn.concat(list(parts), dim=-1)
+
+
 def _reset_state(models, state, prompt):
     config = models["config"]
     transformer = models["transformer"]
@@ -823,7 +976,7 @@ def _infer_impl(models, state, obs, frame_st_id=0):
     action_mask = state["action_mask"]
 
     if frame_st_id == 0 and state.get("init_latent") is None:
-        init_latent = _encode_obs(models, state, obs)
+        init_latent = _encode_obs_ttnn(models, state, obs)
         state["init_latent"] = init_latent
 
     _set_seed()
@@ -853,6 +1006,9 @@ def _infer_impl(models, state, obs, frame_st_id=0):
 
     use_cfg = state["use_cfg"]
     init_latent = state.get("init_latent")
+    if init_latent is not None and isinstance(init_latent, ttnn.Tensor):
+        init_latent = ttnn.to_torch(init_latent).to(dtype)
+        state["init_latent"] = init_latent
     patch_size = config.patch_size
 
     with torch.no_grad():
@@ -1083,7 +1239,7 @@ def run_inference(
     # Phase 2: load only TT VAE encoder; run _encode_obs, then free.
     _prepare_state_for_vae_encode(state, config)
     _load_tt_vae_into_models(models)
-    state["init_latent"] = _encode_obs(models, state, message)
+    state["init_latent"] = _encode_obs_ttnn(models, state, message)
     _free_tt_vae_from_models(models)
 
     # Phase 3: load TT transformer and run inference.
@@ -1151,7 +1307,7 @@ def run_generate(
     _prepare_state_for_vae_encode(state, config)
     init_obs = _load_init_obs(config, config.input_img_path)
     _load_tt_vae_into_models(models)
-    state["init_latent"] = _encode_obs(models, state, init_obs)
+    state["init_latent"] = _encode_obs_ttnn(models, state, init_obs)
     _free_tt_vae_from_models(models)
 
     # Phase 3: load TT transformer and run generation.
