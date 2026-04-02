@@ -17,12 +17,16 @@ class _FakeTokenizer:
 
 
 class _FakeMeshDevice:
+    def __init__(self, shape=(1, 1)):
+        self.shape = shape
+
     def get_submeshes(self):
         return []
 
 
 class _FakeGenerator:
     def __init__(self, **kwargs):
+        self.init_kwargs = kwargs
         self.tokenizer = kwargs["tokenizer"]
         self.generate_kwargs = None
 
@@ -57,14 +61,14 @@ def test_stop_at_eos_signature_defaults():
     assert inspect.signature(demo_module.DeepseekGeneratorDP.generate).parameters["stop_at_eos"].default is True
 
 
-def _patch_demo_runtime(monkeypatch, fake_generator):
+def _patch_demo_runtime(monkeypatch, fake_generator, *, mesh_shape=(1, 1)):
     monkeypatch.setenv("MESH_DEVICE", "TG")
     monkeypatch.setattr(demo_module, "validate_model_path", lambda *args, **kwargs: None)
     monkeypatch.setattr(demo_module, "load_tokenizer", lambda *args, **kwargs: _FakeTokenizer())
-    monkeypatch.setattr(demo_module, "system_name_to_mesh_shape", lambda *args, **kwargs: (1, 1))
+    monkeypatch.setattr(demo_module, "system_name_to_mesh_shape", lambda *args, **kwargs: mesh_shape)
     monkeypatch.setattr(demo_module, "get_fabric_config", lambda: "fake-fabric")
     monkeypatch.setattr(demo_module.ttnn, "set_fabric_config", lambda *args, **kwargs: None)
-    monkeypatch.setattr(demo_module.ttnn, "open_mesh_device", lambda *args, **kwargs: _FakeMeshDevice())
+    monkeypatch.setattr(demo_module.ttnn, "open_mesh_device", lambda *args, **kwargs: _FakeMeshDevice(shape=mesh_shape))
     monkeypatch.setattr(demo_module.ttnn, "synchronize_device", lambda *args, **kwargs: None)
     monkeypatch.setattr(demo_module.ttnn, "close_mesh_device", lambda *args, **kwargs: None)
     monkeypatch.setattr(demo_module, "DeepseekGeneratorDP", lambda **kwargs: fake_generator)
@@ -109,6 +113,25 @@ def test_run_demo_defaults_to_stop_at_eos(monkeypatch, tmp_path):
     )
 
     assert fake_generator.generate_kwargs["stop_at_eos"] is True
+
+
+def test_run_demo_sizes_sampling_params_from_max_users_per_row(monkeypatch, tmp_path):
+    fake_generator = _FakeGenerator(tokenizer=_FakeTokenizer())
+
+    _patch_demo_runtime(monkeypatch, fake_generator, mesh_shape=(4, 8))
+
+    demo_module.run_demo(
+        prompts=["prompt-0"],
+        model_path=tmp_path / "model",
+        cache_dir=tmp_path / "cache",
+        max_users_per_row=8,
+    )
+
+    sampling_params = fake_generator.init_kwargs["sampling_params"]
+    expected_batch = 8 * 4
+    assert len(sampling_params.temperature) == expected_batch
+    assert len(sampling_params.top_p) == expected_batch
+    assert len(sampling_params.top_k) == expected_batch
 
 
 def test_lmeval_helpers():

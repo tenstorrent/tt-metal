@@ -3,6 +3,7 @@
 
 import errno
 import hashlib
+import os
 import re
 import tempfile
 from pathlib import Path
@@ -14,7 +15,11 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
-from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN, build_test_cases_and_ids
+from models.demos.deepseek_v3.tests.pytest_utils import (
+    DEFAULT_PREFILL_SEQ_LEN,
+    build_expanded_test_ids,
+    expand_test_cases_with_position_ids_ranges,
+)
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, sub_state_dict
@@ -39,6 +44,33 @@ REFERENCE_ENTRY_VERSION = 1
 
 def _default_reference_cache_dir(cache_path: Path) -> Path:
     return cache_path / "tests_cache"
+
+
+def _build_model_test_cases_and_ids(users_per_row: int, prefill_seq_len: int):
+    """
+    Keep model-level prefill coverage conservative.
+
+    RowBatchedModel prefill is still only exercised reliably with batch_size_per_row=1,
+    while the lower-level module tests cover the row-batched prefill paths.
+    """
+    base_cases = [("decode", 1, users_per_row, None)]
+
+    max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
+    if max_seq_len_env is None:
+        base_cases.append(("prefill", prefill_seq_len, 1, None))
+    else:
+        max_seq_len = int(max_seq_len_env)
+        base_cases.extend(
+            [
+                ("decode", 1, users_per_row, 0),
+                ("decode", 1, users_per_row, max_seq_len - 1),
+                ("prefill", max_seq_len, 1, None),
+            ]
+        )
+
+    expanded_cases = expand_test_cases_with_position_ids_ranges(base_cases)
+    expanded_ids = build_expanded_test_ids(expanded_cases)
+    return expanded_cases, expanded_ids
 
 
 def _legacy_reference_cache_path(cache_path: Path) -> Path:
@@ -305,7 +337,7 @@ def run_test_forward_pass_dpmodel(
     decode_position_ids: int | None = None,
 ):
     if mode == "prefill":
-        assert batch_size_per_row == 1, "Prefill only supports a batch size of 1"
+        assert batch_size_per_row == 1, "Model-level prefill only supports a batch size of 1"
         batch_size = batch_size_per_row
     else:
         assert mode == "decode" and seq_len == 1, "Decode only supports a sequence length of 1"
@@ -447,7 +479,16 @@ def run_test_forward_pass_dpmodel(
         test_name="test_model",
         real_weights=True,
     )
-    model_config = get_model_config(RowBatchedModel, mode, hf_config_short, mesh_device)
+    # The generator still drives prefill one prompt at a time, but the underlying
+    # row-batched prefill kernels/cache layout are configured for a full row.
+    configured_row_width = batch_size_per_row if mode == "decode" else USERS_PER_ROW
+    model_config = get_model_config(
+        RowBatchedModel,
+        mode,
+        hf_config_short,
+        mesh_device,
+        configured_row_width,
+    )
     model_state = RowBatchedModel.create_state(hf_config_short, paged_config, mesh_device, ccl, paged_input_caches)
     model_shared_state = RowBatchedModel.create_shared_state(hf_config_short, mesh_device)
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
@@ -517,7 +558,7 @@ def run_test_forward_pass_dpmodel(
     ttnn.deallocate(tt_output)
 
 
-TEST_CASES, TEST_IDS = build_test_cases_and_ids(
+TEST_CASES, TEST_IDS = _build_model_test_cases_and_ids(
     USERS_PER_ROW,
     DEFAULT_PREFILL_SEQ_LEN,
 )
@@ -566,6 +607,39 @@ def test_forward_pass(
         force_recalculate_weight_config,
         state_dict,
         decode_position_ids,
+    )
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": get_fabric_config()},
+    ],
+    indirect=True,
+)
+def test_mode_decode_forward_pass_batch_8_users_per_row(
+    hf_config_short,
+    cache_path,
+    mesh_device,
+    ccl,
+    force_recalculate_weight_config,
+    set_deterministic_env,
+    state_dict,
+):
+    hf_config_short.num_hidden_layers = 5
+
+    run_test_forward_pass_dpmodel(
+        mode="decode",
+        seq_len=1,
+        batch_size_per_row=8,
+        hf_config_short=hf_config_short,
+        cache_path=cache_path,
+        mesh_device=mesh_device,
+        ccl=ccl,
+        force_recalculate_weight_config=force_recalculate_weight_config,
+        state_dict=state_dict,
+        decode_position_ids=17,
     )
 
 
