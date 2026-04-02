@@ -22,9 +22,12 @@ enum class RuntimeArgDispatch : uint8_t {
 };
 
 // Entry in the named runtime arg namespace map.
+// length == 1: emits constexpr Arg (scalar).
+// length > 1:  emits constexpr ArrayArg (array of contiguous slots).
 struct NamedRuntimeArgEntry {
     std::string field;
     uint32_t index;
+    uint32_t length = 1;
     RuntimeArgDispatch dispatch;
 };
 
