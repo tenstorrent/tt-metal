@@ -56,9 +56,12 @@ if __name__ == "__main__":
         type=str,
         default="tt-train/sources/examples/grpo/grpo_model_accuracy.yaml",
     )
+    parser.add_argument("--checkpoint-path", type=str, default=None)
+    parser.add_argument("--output-dir", type=str, default=None)
+
     accuracy_args, _ = parser.parse_known_args()
 
-    run = setup_accuracy_run()
+    run = setup_accuracy_run(output_dir=accuracy_args.output_dir)
     tracker = AccuracyMetricsTracker(run.output_dir)
 
     run.logger.info(f"args: {vars(accuracy_args)}")
@@ -67,7 +70,7 @@ if __name__ == "__main__":
     ctx = setup_inference(
         yaml_config_path,
         hf_model_id="unsloth/Llama-3.2-1B-Instruct",
-        load_pretrained=True,
+        checkpoint_path=accuracy_args.checkpoint_path,
     )
     grpo_cfg = setup_grpo_config(yaml_config_path)
 
