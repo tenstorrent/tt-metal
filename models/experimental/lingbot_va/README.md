@@ -2,9 +2,9 @@
 
 ### Platforms: Wormhole (n150)
 
-### Supported input — vision (RobotWin): `(256, 320)` = (Height, Width) **per camera**, RGB **uint8**; three fixed keys `observation.images.cam_high`, `observation.images.cam_left_wrist`, `observation.images.cam_right_wrist` (e.g. `observation.images.<key>.png` under `--images-dir`; layout matches `VA_CONFIGS["robotwin"]` in `reference/utils.py`).
+Supported input - vision (RobotWin): `(256, 320)` = (Height, Width) **per camera**, RGB **uint8**; three fixed keys `observation.images.cam_high`, `observation.images.cam_left_wrist`, `observation.images.cam_right_wrist` (e.g. `observation.images.<key>.png` under `--images-dir`; layout matches `VA_CONFIGS["robotwin"]` in `reference/utils.py`).
 
-### Supported input — language: Natural-language **task prompt** (instruction string); **512** token limit after preprocessing (tokenizer runs on CPU — see **PyTorch / CPU components**).
+Supported input - language: Natural-language **task prompt** (instruction string); **512** token limit after preprocessing (tokenizer runs on CPU — see **PyTorch / CPU components**).
 
 ## Introduction
 

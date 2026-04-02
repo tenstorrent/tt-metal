@@ -749,12 +749,32 @@ def ShardTensor2dMesh(mesh_device: MeshDevice, mesh_shape: Tuple[int, int], dims
 
 
 # Deprecated. Use `ttnn.create_mesh_composer` directly.
-def ConcatMesh2dToTensor(mesh_device: MeshDevice, mesh_shape: Tuple[int, int], dims: Tuple[int, int]):
+def ConcatMesh2dToTensor(
+    mesh_device: MeshDevice, mesh_shape: Tuple[int, int], dims: Tuple[Optional[int], Optional[int]]
+):
+    """Build a 2D mesh composer. ``MeshComposerConfig`` requires int dims; ``None`` means that mesh
+    axis has a single device (concat is a no-op) — we substitute an unused dimension index."""
+    ms = (int(mesh_shape[0]), int(mesh_shape[1]))
+    used = set()
+    resolved: List[Optional[int]] = [None, None]
+    for ax in (0, 1):
+        d = dims[ax]
+        if ms[ax] > 1 and d is not None:
+            resolved[ax] = int(d)
+            used.add(resolved[ax])
+    next_d = 0
+    for ax in (0, 1):
+        if resolved[ax] is None:
+            while next_d in used:
+                next_d += 1
+            resolved[ax] = next_d
+            used.add(next_d)
+            next_d += 1
     return ttnn.create_mesh_composer(
         mesh_device,
         ttnn.MeshComposerConfig(
-            [dims[0], dims[1]],
-            ttnn.MeshShape(mesh_shape[0], mesh_shape[1]),
+            dims=[resolved[0], resolved[1]],
+            mesh_shape_override=ttnn.MeshShape(ms[0], ms[1]),
         ),
     )
 
