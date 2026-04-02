@@ -127,9 +127,39 @@ def preprocess_generation_inputs(inputs, model_config, paged_cache, max_new_toke
     return {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in out.items()}
 
 
+def logits_postprocess_generation_kwargs(
+    *,
+    temperature: float,
+    top_p: float,
+    top_k: int,
+    repetition_penalty: float,
+    no_repeat_ngram_size: int,
+):
+    """
+    Build `model.generate` kwargs for logits post-processing (HF applies processors / warpers).
+
+    Default temperature=0 keeps greedy decoding; temperature>0 enables sampling with top-p/top-k.
+    """
+    kwargs = {}
+    if repetition_penalty is not None and repetition_penalty != 1.0:
+        kwargs["repetition_penalty"] = repetition_penalty
+    if no_repeat_ngram_size > 0:
+        kwargs["no_repeat_ngram_size"] = no_repeat_ngram_size
+    if temperature > 0:
+        kwargs["do_sample"] = True
+        kwargs["temperature"] = temperature
+        kwargs["top_p"] = top_p
+        kwargs["top_k"] = top_k
+    else:
+        kwargs["do_sample"] = False
+    return kwargs
+
+
 def load_model(mesh_device, model_name="inclusionAI/Ling-mini-2.0"):
     print(f"Loading {model_name}...")
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    if tokenizer.pad_token is None and tokenizer.eos_token is not None:
+        tokenizer.pad_token = tokenizer.eos_token
     model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True)
 
     nn_to_ttnn = {
@@ -184,7 +214,15 @@ def warmup(model, tokenizer, mesh_device, paged_cache):
     print("Warmup complete.")
 
 
-def chat_loop(model, tokenizer, paged_cache, mesh_device, max_new_tokens=256):
+def chat_loop(
+    model,
+    tokenizer,
+    paged_cache,
+    mesh_device,
+    max_new_tokens=256,
+    logits_gen_kwargs=None,
+):
+    logits_gen_kwargs = logits_gen_kwargs or {}
     messages = []
     print("\n--- Ling-mini-2.0 Chatbot ---")
     print("Type 'quit' or 'exit' to stop, '/clear' to reset history.\n")
@@ -238,6 +276,7 @@ def chat_loop(model, tokenizer, paged_cache, mesh_device, max_new_tokens=256):
             max_new_tokens=max_new_tokens,
             use_cache=True,
             past_key_values=paged_cache,
+            **logits_gen_kwargs,
         )
 
         response = tokenizer.decode(outputs[0][inputs["input_ids"].shape[-1] :], skip_special_tokens=True)
@@ -250,13 +289,42 @@ def main():
     parser = argparse.ArgumentParser(description="HF Chatbot with TTNN acceleration")
     parser.add_argument("--model", default="inclusionAI/Ling-mini-2.0", help="HuggingFace model name")
     parser.add_argument("--max-new-tokens", type=int, default=256, help="Max tokens to generate per turn")
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.0,
+        help="Logits temperature; 0=greedy, >0 enables sampling (top-p/top-k apply)",
+    )
+    parser.add_argument("--top-p", type=float, default=0.95, dest="top_p")
+    parser.add_argument("--top-k", type=int, default=50, dest="top_k")
+    parser.add_argument(
+        "--repetition-penalty",
+        type=float,
+        default=1.0,
+        dest="repetition_penalty",
+        help=">1.0 discourages repeating tokens (1.0 disables)",
+    )
+    parser.add_argument(
+        "--no-repeat-ngram-size",
+        type=int,
+        default=0,
+        dest="no_repeat_ngram_size",
+        help="If >0, blocks repeating n-grams of this size",
+    )
     args = parser.parse_args()
+    logits_gen_kwargs = logits_postprocess_generation_kwargs(
+        temperature=args.temperature,
+        top_p=args.top_p,
+        top_k=args.top_k,
+        repetition_penalty=args.repetition_penalty,
+        no_repeat_ngram_size=args.no_repeat_ngram_size,
+    )
     DispatchManager.DisableTiming()  # Disable timing during interactive chat
     mesh_device = setup_mesh_device()
     try:
         model, tokenizer, paged_cache = load_model(mesh_device, args.model)
         warmup(model, tokenizer, mesh_device, paged_cache)
-        chat_loop(model, tokenizer, paged_cache, mesh_device, args.max_new_tokens)
+        chat_loop(model, tokenizer, paged_cache, mesh_device, args.max_new_tokens, logits_gen_kwargs)
     finally:
         cleanup(mesh_device)
 
