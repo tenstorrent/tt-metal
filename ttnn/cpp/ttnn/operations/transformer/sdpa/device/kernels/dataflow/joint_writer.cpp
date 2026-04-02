@@ -63,7 +63,7 @@ void kernel_main() {
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
             for (uint32_t q_chunk = local_q_start; q_chunk < local_q_end; ++q_chunk) {
-                generate_mask<false, false, 0, use_joint_mask, cb_mask_in>(
+                generate_mask<false, 0, use_joint_mask, cb_mask_in>(
                     Sq_chunk_t,
                     Sk_chunk_t,
                     q_chunk,
@@ -71,7 +71,8 @@ void kernel_main() {
                     mask_chunk_0 != (uint32_t)(-1),
                     mask_chunk_1 != (uint32_t)(-1),
                     unpadded_N,
-                    unpadded_L);
+                    unpadded_L,
+                    false);
 
                 const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
                 const auto dst_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);

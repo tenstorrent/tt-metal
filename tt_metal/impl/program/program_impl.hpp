@@ -219,6 +219,7 @@ public:
     void allocate_circular_buffers(const IDevice* device);
     void allocate_dataflow_buffers(const IDevice* device);
     bool is_finalized() const;
+    bool is_compiled() const { return !compiled_.empty(); }
     void set_finalized();
     void allocate_kernel_bin_buf_on_device(IDevice* device);
     bool is_cached() const { return this->cached_device_hash_.has_value(); }
@@ -256,7 +257,9 @@ public:
     // Helper function to finalize program offsets with custom getters. Returns the maximum kernel binaries size among
     // all the programs, to determine whether the mesh workload can fit in the prefetcher cache all of the programs in
     // it.
+    // context_id is which context the program and device belong to
     static uint32_t finalize_program_offsets(
+        ContextId context_id,
         IDevice* device,
         const KernelsGetter& kernels_getter,
         const KernelGroupsGetter& kernel_groups_getter,

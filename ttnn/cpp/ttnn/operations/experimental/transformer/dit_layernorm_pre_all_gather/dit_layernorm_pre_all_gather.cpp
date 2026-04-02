@@ -6,9 +6,9 @@
 
 #include "device/dit_layernorm_pre_all_gather_device_operation.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteDitLayerNormPreAllGather::invoke(
+ttnn::Tensor dit_layernorm_pre_allgather(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& recip_tensor,
     const DataType dtype,
@@ -22,4 +22,4 @@ ttnn::Tensor ExecuteDitLayerNormPreAllGather::invoke(
         input_tensor, recip_tensor, dtype, kernel_config_val, memory_config.value_or(input_tensor.memory_config()));
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental

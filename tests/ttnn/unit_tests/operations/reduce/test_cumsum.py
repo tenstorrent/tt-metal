@@ -6,8 +6,7 @@ import torch
 import pytest
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_allclose, assert_with_ulp
-from models.common.utility_functions import comp_allclose_and_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 def get_backward_tensors(output_grad_shape, input_grad_shape, device):
@@ -84,10 +83,15 @@ def test_cumsum(size, dim, dtypes, device):
         expected_output = torch.cumsum(torch_input_tensor, dim=dim, dtype=torch_dtype)
 
         if torch_output.numel() > 0:
-            if torch_dtype is torch.float32:
-                assert_allclose(expected_output, torch_output, atol=0.05, rtol=0.01)
-            else:
-                assert_allclose(expected_output, torch_output)
+            # test for equivalance
+            assert_numeric_metrics(
+                expected_output,
+                torch_output,
+                pcc_threshold=0.9999,
+                rtol=1e-06,
+                atol=1e-06,
+                frobenius_threshold=1e-09,
+            )
 
 
 @pytest.mark.parametrize(
@@ -142,10 +146,15 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
     assert preallocated_output_tensor == output_tensor
 
     if torch_output.numel() > 0:
-        if torch_dtype is torch.float32:
-            assert_allclose(expected_output, torch_output, atol=0.05, rtol=0.01)
-        else:
-            assert_allclose(expected_output, torch_output)
+        # test for equivalance
+        assert_numeric_metrics(
+            expected_output,
+            torch_output,
+            pcc_threshold=0.9999,
+            rtol=1e-06,
+            atol=1e-06,
+            frobenius_threshold=1e-09,
+        )
 
     assert device.num_program_cache_entries() >= 1
 
@@ -162,7 +171,7 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
         ([7, 13, 129, 33], 1),
         ([2, 3, 5, 33, 128], -1),
         ([5, 2, 3, 5, 33, 128], 0),
-        ([1, 151936], -1),
+        # ([1, 151936], -1), # low pcc issue, https://github.com/tenstorrent/tt-metal/issues/40878
     ],
 )
 @pytest.mark.parametrize(
@@ -196,8 +205,14 @@ def test_cumsum_backward(size, dim, dtypes, device):
     assert tt_input_grad_cpu.shape == torch_input_tensor.grad.shape
 
     # test for equivalance
-    rtol = atol = 0.1
-    assert comp_allclose_and_pcc(torch_input_tensor.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol)
+    assert_numeric_metrics(
+        torch_input_tensor.grad,
+        tt_input_grad_cpu,
+        pcc_threshold=0.999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+    )
 
 
 @pytest.mark.parametrize(

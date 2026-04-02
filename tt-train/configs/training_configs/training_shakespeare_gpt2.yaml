@@ -9,7 +9,7 @@ training_config:
   max_steps: 5000
   gradient_accumulation_steps: 1
   data_path: "data/tokenized_shakespeare.csv"
-  model_config: "configs/model_configs/gpt2s.yaml"
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/gpt2s.yaml"
   optimizer:
     type: AdamW
     lr: 0.0003

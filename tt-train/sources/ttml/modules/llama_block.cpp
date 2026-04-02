@@ -8,10 +8,12 @@
 #include "modules/grouped_query_attention.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/rope_op.hpp"
+#include "ops/swiglu_op.hpp"
 #include "ops/unary_ops.hpp"
 
 namespace ttml::modules {
-LlamaMLP::LlamaMLP(uint32_t embedding_size, std::optional<uint32_t> intermediate_dim, float dropout_prob) {
+LlamaMLP::LlamaMLP(uint32_t embedding_size, std::optional<uint32_t> intermediate_dim, float dropout_prob) :
+    m_dropout_prob(dropout_prob) {
     uint32_t multiple_of = 256;
     uint32_t hidden_size = 0U;
     if (intermediate_dim) {
@@ -23,22 +25,15 @@ LlamaMLP::LlamaMLP(uint32_t embedding_size, std::optional<uint32_t> intermediate
     m_w1 = std::make_shared<LinearLayer>(embedding_size, hidden_size, /*has_bias=*/false);
     m_w3 = std::make_shared<LinearLayer>(embedding_size, hidden_size, /*has_bias=*/false);
     m_w2 = std::make_shared<LinearLayer>(hidden_size, embedding_size, /*has_bias=*/false);
-    m_dropout = std::make_shared<DropoutLayer>(dropout_prob);
-
     create_name("llama_mlp");
     register_module(m_w1, "w1");
     register_module(m_w3, "w3");
     register_module(m_w2, "w2");
-    register_module(m_dropout, "dropout");
 }
 
 autograd::TensorPtr LlamaMLP::operator()(const autograd::TensorPtr& input) {
-    auto swished = ops::silu((*m_w1)(input));
-    auto gate = (*m_w3)(input);
-    auto gated = ops::mul(swished, gate);
-    auto x = (*m_w2)(gated);
-    x = (*m_dropout)(x);
-    return x;
+    const float dropout_prob = (get_run_mode() == RunMode::EVAL) ? 0.0F : m_dropout_prob;
+    return ops::swiglu(input, m_w1->get_weight(), m_w2->get_weight(), m_w3->get_weight(), dropout_prob);
 }
 
 LlamaBlock::LlamaBlock(

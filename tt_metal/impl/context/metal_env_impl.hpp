@@ -37,6 +37,7 @@ public:
     llrt::RunTimeOptions& get_rtoptions();
     const Hal& get_hal();
     Cluster& get_cluster();
+    distributed::SystemMesh& get_system_mesh();
     const MetalEnvDescriptor& get_descriptor() const;
 
     bool check_use_count_zero() const;
@@ -72,10 +73,10 @@ public:
     tt::tt_fabric::ControlPlane& get_control_plane();
     void initialize_control_plane();
 
-    // --- System mesh ---
-    distributed::SystemMesh& get_system_mesh();
-
     // --- Custom topology ---
+    // Need to call set_fabric_config to reinit the control plane after calling this
+    // TODO: Remove these two functions in favor of a unified set fabric config where you can
+    // pass in a custom topology.
     void set_custom_fabric_topology(
         const std::string& mesh_graph_desc_file,
         const std::map<tt_fabric::FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
@@ -93,6 +94,10 @@ public:
     bool consume_force_reinit();
 
 private:
+    // During init we need to bypass set_fabric_config to avoid reinitialization of the control plane
+    // by directly setting the fabric config state.
+    friend class DeviceManager;
+
     MetalEnvDescriptor descriptor_;
 
     std::unique_ptr<llrt::RunTimeOptions> rtoptions_;

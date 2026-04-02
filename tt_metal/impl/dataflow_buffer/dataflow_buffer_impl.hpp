@@ -14,7 +14,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 
-#include "tt_metal/hw/inc/internal/dataflow_buffer_interface.h"
+#include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 
 namespace tt::tt_metal {
 struct KernelGroup;
@@ -26,7 +26,7 @@ namespace tt::tt_metal::experimental::dfb::detail {
 struct LocalDFBInterfaceHost {
     std::array<uint32_t, 4> base_addr = {0};
     std::array<uint32_t, 4> limit = {0};
-    std::array<::experimental::PackedTileCounter, 4> packed_tile_counter = {0};
+    std::array<::dfb::PackedTileCounter, 4> packed_tile_counter = {0};
     uint8_t num_tcs_to_rr = 1;
     bool broadcast_tc = false;  // DM-DM BLOCKED producer: post to all TCs instead of round-robin
     uint8_t remapper_pair_index = 0;
@@ -41,6 +41,14 @@ struct DFBRiscConfig {
     LocalDFBInterfaceHost config;
 };
 
+// One group of cores that share the same HW config (TC/remapper assignments).
+// l1_by_core stores the allocated L1 base address per core (same formula fills base_addr/limit at serialize time).
+struct DfbGroup {
+    CoreRangeSet core_ranges;
+    std::vector<DFBRiscConfig> hw_risc_configs;            // base_addr/limit intentionally zeroed
+    std::vector<std::pair<CoreCoord, uint32_t>> l1_by_core; // (core, alloc_addr)
+};
+
 struct DataflowBufferImpl {
     uint32_t id{};
     CoreRangeSet core_ranges;
@@ -49,33 +57,37 @@ struct DataflowBufferImpl {
     uint16_t risc_mask = 0;  // bits 0-7 = DM riscs, bits 8-15 = Tensix riscs
     uint8_t tensix_trisc_mask = 0;  // bits 0-3: which TRISC(s) use DFB (producer=bit2, consumer=bit0 or bit3)
     uint16_t capacity = 0;
-    std::vector<DFBRiscConfig> risc_configs;
 
-    // Shared config fields (written to dfb_initializer_t)
+    // Per-CoreRangeSet groups of cores sharing identical HW config (TC/remapper).
+    std::vector<DfbGroup> groups;
+
+    // Maps each CoreCoord to {group_index, alloc_addr}
+    std::unordered_map<CoreCoord, std::pair<size_t, uint32_t>> core_lookup_;
+
+    // Shared config fields (written to dfb_initializer_t, same for all cores)
     uint32_t entry_size = 0;
     uint32_t stride_in_entries = 0;
-    ::experimental::dfb_txn_id_descriptor_t producer_txn_descriptor = {};
-    ::experimental::dfb_txn_id_descriptor_t consumer_txn_descriptor = {};
+    dfb_txn_id_descriptor_t producer_txn_descriptor = {};
+    dfb_txn_id_descriptor_t consumer_txn_descriptor = {};
 
     // Flag to track if TC/remapper allocation has been finalized
     bool configs_finalized = false;
     // Flag to track if this DFB uses remapper (set during finalization)
     bool use_remapper = false;
 
-    std::optional<uint32_t> allocated_address;
-
     uint32_t total_size() const { return config.entry_size * config.num_entries; }
     uint32_t serialized_size() const;
-    std::vector<uint8_t> serialize() const;  // returns config to write to device
+    std::vector<uint8_t> serialize_for_core(const CoreCoord& core) const;
 };
 
 class TileCounterAllocator {
 public:
-    ::experimental::PackedTileCounter allocate(uint8_t tensix_id);
-    void reset() { next_tc_id_.fill(0); }
+    // Allocate a tile counter for (core, tensix_id). Each core has an independent counter sequence
+    ::dfb::PackedTileCounter allocate(const CoreCoord& core, uint8_t tensix_id);
+    void reset() { next_tc_id_.clear(); }
 
 private:
-    std::array<uint8_t, 4> next_tc_id_ = {0};
+    std::unordered_map<CoreCoord, std::array<uint8_t, 4>> next_tc_id_;
 };
 
 class RemapperIndexAllocator {

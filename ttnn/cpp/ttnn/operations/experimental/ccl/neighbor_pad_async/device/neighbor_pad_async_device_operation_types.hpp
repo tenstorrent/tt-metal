@@ -28,8 +28,6 @@ struct NeighborPadAsyncParams {
     MemoryConfig output_mem_config;
     ttnn::ccl::Topology topology;
     uint32_t ring_size = 0;
-    std::optional<uint32_t> secondary_cluster_axis;
-    std::optional<std::vector<uint32_t>> secondary_mesh_shape;
 
     // Secondary dimension for 2D padding (optional)
     std::optional<uint32_t> pad_dim2;
@@ -53,8 +51,6 @@ struct NeighborPadAsyncParams {
         MemoryConfig output_mem_config,
         ttnn::ccl::Topology topology,
         uint32_t ring_size,
-        std::optional<uint32_t> secondary_cluster_axis,
-        const std::optional<std::vector<uint32_t>>& secondary_mesh_shape,
         std::optional<uint32_t> pad_dim2 = std::nullopt,
         uint32_t pad2_left = 0,
         uint32_t pad2_right = 0,
@@ -73,8 +69,6 @@ struct NeighborPadAsyncParams {
         output_mem_config(std::move(output_mem_config)),
         topology(topology),
         ring_size(ring_size),
-        secondary_cluster_axis(secondary_cluster_axis),
-        secondary_mesh_shape(secondary_mesh_shape ? std::make_optional(*secondary_mesh_shape) : std::nullopt),
         pad_dim2(pad_dim2),
         pad2_left(pad2_left),
         pad2_right(pad2_right),
@@ -97,8 +91,6 @@ struct NeighborPadAsyncParams {
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("ring_size", ring_size);
-        attrs.emplace_back("secondary_cluster_axis", secondary_cluster_axis);
-        attrs.emplace_back("secondary_mesh_shape", secondary_mesh_shape);
         attrs.emplace_back("pad_dim2", pad_dim2);
         attrs.emplace_back("pad2_left", pad2_left);
         attrs.emplace_back("pad2_right", pad2_right);

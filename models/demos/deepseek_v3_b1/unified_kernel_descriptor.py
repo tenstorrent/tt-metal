@@ -75,6 +75,34 @@ class PerCoreCompileTimeDescriptor:
 
 
 @dataclass
+class PerCorePositionalCTADescriptor:
+    """
+    Descriptor for per-core positional compile-time args (list of uint32 values)
+    for each RISC processor.
+
+    Each RISC can have different positional CTAs per core. Cores with the same
+    values are grouped together and share a kernel descriptor.
+
+    Use case: Compressed tensor format arrays that differ per shard.
+
+    Args:
+        ncrisc_core_values: List of (CoreCoord, list[int]) tuples for NCRISC
+        ncrisc_other_value: Positional CTAs for NCRISC cores NOT in ncrisc_core_values
+        brisc_core_values: List of (CoreCoord, list[int]) tuples for BRISC
+        brisc_other_value: Positional CTAs for BRISC cores NOT in brisc_core_values
+        trisc_core_values: List of (CoreCoord, list[int]) tuples for TRISC
+        trisc_other_value: Positional CTAs for TRISC cores NOT in trisc_core_values
+    """
+
+    ncrisc_core_values: list = field(default_factory=list)  # List of (CoreCoord, list[int]) tuples
+    ncrisc_other_value: list = field(default_factory=list)
+    brisc_core_values: list = field(default_factory=list)
+    brisc_other_value: list = field(default_factory=list)
+    trisc_core_values: list = field(default_factory=list)
+    trisc_other_value: list = field(default_factory=list)
+
+
+@dataclass
 class PerCoreRuntimeArgsDescriptor:
     """
     Descriptor for per-core runtime args for each RISC processor.
@@ -165,6 +193,7 @@ class UnifiedKernelDescriptor:
     trisc_compute_config: Optional[ttnn.ComputeConfigDescriptor] = None
     unified_compile_time_core_descriptors: list = field(default_factory=list)
     per_core_compile_time_descriptors: list = field(default_factory=list)  # List of PerCoreCompileTimeDescriptor
+    per_core_positional_cta_descriptor: Optional[PerCorePositionalCTADescriptor] = None  # Per-core positional CTAs
     per_core_runtime_args_descriptor: Optional[
         PerCoreRuntimeArgsDescriptor
     ] = None  # Per-core runtime args for all RISCs
@@ -240,7 +269,11 @@ class UnifiedKernelDescriptor:
             - kernels: List of KernelDescriptor objects
             - groups: List of KernelGroup objects for identifying kernels by role
         """
-        if not self.unified_compile_time_core_descriptors and not self.per_core_compile_time_descriptors:
+        if (
+            not self.unified_compile_time_core_descriptors
+            and not self.per_core_compile_time_descriptors
+            and not self.per_core_positional_cta_descriptor
+        ):
             # Simple case: no per-core compile-time arg overrides
             return self._get_simple_kernel_descriptors()
 
@@ -342,7 +375,34 @@ class UnifiedKernelDescriptor:
                 arg_lookup[(core_coord.x, core_coord.y)] = value
             per_core_lookup[desc.named_compile_time_arg] = (arg_lookup, desc.other_value)
 
-        # Step 2: For each core, compute its complete named compile-time args
+        # Preprocess per-core positional CTAs for each RISC
+        def _build_positional_cta_lookup(core_values, other_value, base_args):
+            lookup = {}
+            base = tuple(base_args)
+            default = base  # no per-core overrides: just use base args
+            if core_values:
+                default = base + tuple(other_value)
+                for core_coord, values in core_values:
+                    lookup[(core_coord.x, core_coord.y)] = base + tuple(values)
+            return lookup, default
+
+        if self.per_core_positional_cta_descriptor is not None:
+            desc = self.per_core_positional_cta_descriptor
+            ncrisc_cta_lookup, ncrisc_cta_default = _build_positional_cta_lookup(
+                desc.ncrisc_core_values, desc.ncrisc_other_value, self.ncrisc_compile_time_args
+            )
+            brisc_cta_lookup, brisc_cta_default = _build_positional_cta_lookup(
+                desc.brisc_core_values, desc.brisc_other_value, self.brisc_compile_time_args
+            )
+            trisc_cta_lookup, trisc_cta_default = _build_positional_cta_lookup(
+                desc.trisc_core_values, desc.trisc_other_value, self.trisc_compile_time_args
+            )
+        else:
+            ncrisc_cta_lookup, ncrisc_cta_default = {}, tuple(self.ncrisc_compile_time_args)
+            brisc_cta_lookup, brisc_cta_default = {}, tuple(self.brisc_compile_time_args)
+            trisc_cta_lookup, trisc_cta_default = {}, tuple(self.trisc_compile_time_args)
+
+        # Step 2: For each core, compute its complete named compile-time args + positional CTAs
         core_to_args = {}
         for core_coord in all_cores:
             args = {}
@@ -361,23 +421,34 @@ class UnifiedKernelDescriptor:
                 else:
                     args[arg_name] = other_value
 
-            # Convert to frozen (hashable) form, use (x, y) tuple as key
-            core_to_args[(core_coord.x, core_coord.y)] = tuple(sorted(args.items()))
+            # Get per-core positional CTAs for each RISC
+            ncrisc_pos_ctas = ncrisc_cta_lookup.get(core_key, ncrisc_cta_default)
+            brisc_pos_ctas = brisc_cta_lookup.get(core_key, brisc_cta_default)
+            trisc_pos_ctas = trisc_cta_lookup.get(core_key, trisc_cta_default)
 
-        # Step 3: Group cores by their unique arg combinations
+            # Convert to frozen (hashable) form, include positional CTAs in key
+            frozen_named = tuple(sorted(args.items()))
+            core_to_args[(core_coord.x, core_coord.y)] = (frozen_named, ncrisc_pos_ctas, brisc_pos_ctas, trisc_pos_ctas)
+
+        # Step 3: Group cores by their unique arg combinations (named + positional)
         args_to_cores = {}
-        for core_tuple, frozen_args in core_to_args.items():
-            args_to_cores.setdefault(frozen_args, []).append(core_tuple)
+        for core_tuple, frozen_key in core_to_args.items():
+            args_to_cores.setdefault(frozen_key, []).append(core_tuple)
 
         # Step 4: Create kernel descriptors for each unique group
         descriptors = []
         groups = []
         compute_config = self.trisc_compute_config or ttnn.ComputeConfigDescriptor()
 
-        for frozen_args, core_tuples in args_to_cores.items():
+        for (frozen_named, ncrisc_pos_ctas, brisc_pos_ctas, trisc_pos_ctas), core_tuples in args_to_cores.items():
             # Convert frozen args to list of tuples and dict
-            unified_named_args = list(frozen_args)
-            arg_values_dict = dict(frozen_args)
+            unified_named_args = list(frozen_named)
+            arg_values_dict = dict(frozen_named)
+
+            # Per-group positional CTAs for each RISC
+            group_ncrisc_positional = list(ncrisc_pos_ctas)
+            group_brisc_positional = list(brisc_pos_ctas)
+            group_trisc_positional = list(trisc_pos_ctas)
 
             # Combine with common named_compile_time_args for each RISC
             ncrisc_named_compile_time_args_merged = list(self.ncrisc_named_compile_time_args) + unified_named_args
@@ -400,7 +471,7 @@ class UnifiedKernelDescriptor:
                     kernel_source=self.kernel_source,
                     source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                     core_ranges=core_range_set,
-                    compile_time_args=self.ncrisc_compile_time_args,
+                    compile_time_args=group_ncrisc_positional,
                     named_compile_time_args=ncrisc_named_compile_time_args_merged,
                     defines=self.defines,
                     common_runtime_args=self.ncrisc_common_runtime_args,
@@ -419,7 +490,7 @@ class UnifiedKernelDescriptor:
                     kernel_source=self.kernel_source,
                     source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                     core_ranges=core_range_set,
-                    compile_time_args=self.brisc_compile_time_args,
+                    compile_time_args=group_brisc_positional,
                     named_compile_time_args=brisc_named_compile_time_args_merged,
                     defines=self.defines,
                     common_runtime_args=self.brisc_common_runtime_args,
@@ -438,7 +509,7 @@ class UnifiedKernelDescriptor:
                     kernel_source=self.kernel_source,
                     source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                     core_ranges=core_range_set,
-                    compile_time_args=self.trisc_compile_time_args,
+                    compile_time_args=group_trisc_positional,
                     named_compile_time_args=trisc_named_compile_time_args_merged,
                     defines=self.defines,
                     common_runtime_args=self.trisc_common_runtime_args,

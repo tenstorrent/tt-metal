@@ -80,6 +80,7 @@ CoreRangeSet = ttnn._ttnn.tensor.CoreRangeSet
 CoreRange = ttnn._ttnn.tensor.CoreRange
 CoreCoord = ttnn._ttnn.tensor.CoreCoord
 corerange_to_cores = ttnn._ttnn.tensor.corerange_to_cores
+get_optimal_worker_cores_for_sharded_tensor = ttnn._ttnn.tensor.get_optimal_worker_cores_for_sharded_tensor
 
 QueueId = ttnn._ttnn.types.QueueId
 
@@ -110,5 +111,7 @@ MeshProgramDescriptor = ttnn._ttnn.program_descriptor.MeshProgramDescriptor
 merge_program_descriptors = ttnn._ttnn.program_descriptor.merge_program_descriptors
 cb_descriptor_from_sharded_tensor = ttnn._ttnn.program_descriptor.cb_descriptor_from_sharded_tensor
 get_cb_address = ttnn._ttnn.program_descriptor.get_cb_address
+UnpackToDestMode = ttnn._ttnn.program_descriptor.UnpackToDestMode
+compute_program_descriptor_hash = ttnn._ttnn.operations.generic.compute_program_descriptor_hash
 
 TensorAccessorArgs = ttnn._ttnn.tensor_accessor_args.TensorAccessorArgs

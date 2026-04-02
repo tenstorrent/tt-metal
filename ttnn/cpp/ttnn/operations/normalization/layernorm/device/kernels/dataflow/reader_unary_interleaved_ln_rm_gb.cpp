@@ -24,9 +24,10 @@ void kernel_main() {
     uint32_t beta_addr = get_arg_val<uint32_t>(7);
     uint32_t b_addr = get_arg_val<uint32_t>(8);
 
-    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0, cb_id_in1 = tt::CBIndex::c_1;
-    constexpr uint32_t cb_id_gamma = tt::CBIndex::c_5;
-    constexpr uint32_t cb_id_beta = tt::CBIndex::c_6;
+    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in"),
+                       cb_id_in1 = get_named_compile_time_arg_val("cb_inb");
+    constexpr uint32_t cb_id_gamma = get_named_compile_time_arg_val("cb_gamma");
+    constexpr uint32_t cb_id_beta = get_named_compile_time_arg_val("cb_beta");
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_in0(cb_id_in0);
@@ -69,11 +70,11 @@ void kernel_main() {
 
     // Generate constant tiles for layernorm compute
     if constexpr (!use_welford) {
-        constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
+        constexpr uint32_t cb_in_2 = get_named_compile_time_arg_val("cb_scaler");
         uint32_t scaler = get_arg_val<uint32_t>(4);
         generate_reduce_scaler(cb_in_2, scaler);
     }
-    constexpr uint32_t eps_cb_id = 3;
+    constexpr uint32_t eps_cb_id = get_named_compile_time_arg_val("cb_eps");
     const uint32_t eps = get_arg_val<uint32_t>(5);
     generate_bcast_col_scalar(eps_cb_id, eps);
 

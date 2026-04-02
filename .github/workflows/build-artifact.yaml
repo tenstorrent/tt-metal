@@ -216,6 +216,18 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      fetch-depth:
+        required: false
+        type: number
+        default: 500
+        description: >-
+          Git fetch depth for the checkout step. Must be large enough to
+          include all tags and history needed for `git describe`.
+      publish-artifact:
+        required: false
+        type: boolean
+        default: true
+        description: "Make resulting artifact available in the workflow"
 
 jobs:
   # =============================================================================

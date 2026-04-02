@@ -452,7 +452,12 @@ PhysicalSystemDescriptor run_local_discovery(
             psd.get_pcie_devices_per_tray()[hostname_key],
             psd.get_pcie_id_to_asic_location()[hostname_key]);
         psd.get_asic_descriptors()[src_unique_id] = ASICDescriptor{
-            TrayID{tray_id}, asic_location, cluster_desc->get_board_type(src_chip_id), src_unique_id, hostname_key};
+            TrayID{tray_id},
+            asic_location,
+            cluster_desc->get_board_type(src_chip_id),
+            src_unique_id,
+            src_chip_id,
+            hostname_key};
     };
 
     for (const auto& [chip_id, unique_id] : chip_unique_ids) {

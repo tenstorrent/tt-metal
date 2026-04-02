@@ -16,7 +16,7 @@ from models.demos.deepseek_v3.tt.mlp.mlp import MLP
 from models.demos.deepseek_v3.tt.mlp.mlp_dequant import MLPDequant
 from models.demos.deepseek_v3.tt.mlp.non_expert import NonExpert
 from models.demos.deepseek_v3.tt.mlp.shared_expert import SharedExpert
-from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config, load_weight
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
@@ -29,7 +29,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
 
 # TODO: Doesn't work on multi-host - we should figure out why
 @pytest.mark.requires_device(["TG"])
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": get_fabric_config()}], indirect=True)
 def test_convert_weights_for_non_dequantized_mlp(hf_config, tmp_path, mesh_device):
     # Add a skip for mesh device shape 8x8 due to known issue https://github.com/tenstorrent/tt-metal/issues/35375
     if tuple(mesh_device.shape) == (8, 8):
@@ -51,7 +51,7 @@ def test_convert_weights_for_non_dequantized_mlp(hf_config, tmp_path, mesh_devic
 
 # TODO: Doesn't work on multi-host - we should figure out why
 @pytest.mark.requires_device(["TG"])
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": get_fabric_config()}], indirect=True)
 @pytest.mark.parametrize(
     "MLPClass,module_path",
     [(NonExpert, "model.layers.0.mlp"), (SharedExpert, "model.layers.3.mlp.shared_experts")],
@@ -134,7 +134,7 @@ _max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
 _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DEFAULT_PREFILL_SEQ_LEN
 
 
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": get_fabric_config()}], indirect=True)
 @pytest.mark.parametrize(
     "mode,seq_len",
     [

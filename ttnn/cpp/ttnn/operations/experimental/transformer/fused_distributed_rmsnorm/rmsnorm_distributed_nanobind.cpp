@@ -7,7 +7,8 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
+#include "ttnn/types.hpp"
 
 #include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/rmsnorm_pre_all_gather.hpp"
 #include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/rmsnorm_post_all_gather.hpp"
@@ -16,9 +17,8 @@ namespace ttnn::operations::experimental::transformer {
 
 namespace {
 void bind_rmsnorm_pre_all_gather_operation(nb::module_& mod) {
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"wan_fused_rmsnorm_pre_allgather", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::wan_fused_rmsnorm_pre_allgather,
         R"doc(
             Computes per-row RMSNorm statistics over the last dimension of :attr:`input_tensor`, producing a
             one-tile-wide tensor that contains sum(x**2) per row (placed in the leftmost column). Intended to be
@@ -54,18 +54,17 @@ void bind_rmsnorm_pre_all_gather_operation(nb::module_& mod) {
               - Inputs must be interleaved memory layout when unsharded.
               - Inputs cannot be height-sharded; padded height must equal TILE_HEIGHT (32).
             )doc",
-        ttnn::nanobind_arguments_t{
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("dtype") = DataType::BFLOAT16,
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("memory_config") = nb::none()});
+        &ttnn::experimental::wan_fused_rmsnorm_pre_allgather,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("dtype") = DataType::BFLOAT16,
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("memory_config") = nb::none());
 }
 
 void bind_rmsnorm_post_all_gather_operation(nb::module_& mod) {
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"wan_fused_rmsnorm_post_allgather", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::wan_fused_rmsnorm_post_allgather,
         R"doc(
             Applies RMSNorm using gathered statistics and optionally fuses per-head output reshape, gamma scaling,
             and rotary positional embeddings (ROPE). This is the second stage of the distributed RMSNorm.
@@ -157,19 +156,19 @@ void bind_rmsnorm_post_all_gather_operation(nb::module_& mod) {
 
 
         )doc",
-        ttnn::nanobind_arguments_t{
-            nb::arg("input_tensor"),
-            nb::arg("stats"),
-            nb::kw_only(),
-            nb::arg("epsilon") = 1e-5,
-            nb::arg("num_heads_per_device") = 1,
-            nb::arg("weight") = nb::none(),
-            nb::arg("transformation_mat") = nb::none(),
-            nb::arg("rope_cos") = nb::none(),
-            nb::arg("rope_sin") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("dtype") = nb::none()});
+        &ttnn::experimental::wan_fused_rmsnorm_post_allgather,
+        nb::arg("input_tensor"),
+        nb::arg("stats"),
+        nb::kw_only(),
+        nb::arg("epsilon") = 1e-5,
+        nb::arg("num_heads_per_device") = 1,
+        nb::arg("weight") = nb::none(),
+        nb::arg("transformation_mat") = nb::none(),
+        nb::arg("rope_cos") = nb::none(),
+        nb::arg("rope_sin") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("dtype") = nb::none());
 }
 
 }  // namespace

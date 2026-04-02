@@ -67,51 +67,58 @@ int main() {
 
     {
         ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
-        auto allclose = run_test<host_function<std::plus<float>>>(shape, ttnn::add, device);
+        auto allclose = run_test<host_function<std::plus<float>>>(
+            shape, [](const auto& a, const auto& b) { return ttnn::add(a, b); }, device);
         TT_FATAL(allclose, "Error");
     }
 
     {
         ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
-        auto allclose = run_test<host_function<std::minus<float>>>(shape, ttnn::subtract, device);
+        auto allclose = run_test<host_function<std::minus<float>>>(
+            shape, [](const auto& a, const auto& b) { return ttnn::subtract(a, b); }, device);
         TT_FATAL(allclose, "Error");
     }
 
     {
         ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
-        auto allclose = run_test<host_function<std::multiplies<float>>>(shape, ttnn::multiply, device, 1e-2f, 1e-3f);
+        auto allclose = run_test<host_function<std::multiplies<float>>>(
+            shape, [](const auto& a, const auto& b) { return ttnn::multiply(a, b); }, device, 1e-2f, 1e-3f);
         TT_FATAL(allclose, "Error");
     }
 
     auto run_binary_ops = [&] {
         {
             ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
-            auto allclose = run_test<host_function<std::plus<float>>>(shape, ttnn::add, device);
+            auto allclose = run_test<host_function<std::plus<float>>>(
+                shape, [](const auto& a, const auto& b) { return ttnn::add(a, b); }, device);
             TT_FATAL(allclose, "Error");
         }
 
         {
             ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
-            auto allclose = run_test<host_function<std::minus<float>>>(shape, ttnn::subtract, device);
+            auto allclose = run_test<host_function<std::minus<float>>>(
+                shape, [](const auto& a, const auto& b) { return ttnn::subtract(a, b); }, device);
             TT_FATAL(allclose, "Error");
         }
 
         {
             ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT * 2, tt::constants::TILE_WIDTH * 2});
-            auto allclose = run_test<host_function<std::plus<float>>>(shape, ttnn::add, device);
+            auto allclose = run_test<host_function<std::plus<float>>>(
+                shape, [](const auto& a, const auto& b) { return ttnn::add(a, b); }, device);
             TT_FATAL(allclose, "Error");
         }
 
         {
             ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
-            auto allclose =
-                run_test<host_function<std::multiplies<float>>>(shape, ttnn::multiply, device, 1e-2f, 1e-3f);
+            auto allclose = run_test<host_function<std::multiplies<float>>>(
+                shape, [](const auto& a, const auto& b) { return ttnn::multiply(a, b); }, device, 1e-2f, 1e-3f);
             TT_FATAL(allclose, "Error");
         }
 
         {
             ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT * 4, tt::constants::TILE_WIDTH * 4});
-            auto allclose = run_test<host_function<std::plus<float>>>(shape, ttnn::add, device);
+            auto allclose = run_test<host_function<std::plus<float>>>(
+                shape, [](const auto& a, const auto& b) { return ttnn::add(a, b); }, device);
             TT_FATAL(allclose, "Error");
         }
     };

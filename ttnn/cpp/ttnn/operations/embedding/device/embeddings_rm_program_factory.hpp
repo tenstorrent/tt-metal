@@ -15,7 +15,7 @@ struct EmbeddingsRMProgramFactory {
         tt::tt_metal::KernelHandle writer_kernel_id{};
         std::vector<tt::tt_metal::CoreCoord> cores;
         tt::tt_metal::CBHandle cb_out{};
-        bool is_local_shards_only = false;
+        bool output_sharded = false;
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 

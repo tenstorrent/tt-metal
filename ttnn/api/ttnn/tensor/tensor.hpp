@@ -20,7 +20,6 @@
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tile.hpp>
-#include <tt-metalium/device.hpp>
 
 #include <tt_stl/optional_reference.hpp>
 
@@ -50,9 +49,18 @@ public:
     Tensor& operator=(Tensor&& other) noexcept;
     ~Tensor();
 
-    // Constructs a tensor with `Storage`, `TensorSpec`, and `TensorTopology`.
+    // Transitional constructor: use Tensor(HostTensor) instead.
+    //
+    // Accepts a pre-transition HostStorage (constructed without TensorSpec and
+    // TensorTopology) and assigns them during Tensor construction.
+    // Overrides any existing spec/topology in the HostStorage.
+    //
+    // TODO(#40348): Remove this.
     [[nodiscard]] Tensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
+
     [[nodiscard]] Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
+
+    [[nodiscard]] explicit Tensor(HostTensor tensor);
 
     // Constructors of `Tensor` that take physical data encoded in `HostBuffer`.
     // The encoded data type and physical size of the data must match the specified tensor physical shape and data type.
@@ -184,7 +192,7 @@ public:
     [[nodiscard]] Tensor reshape(
         const tt::tt_metal::Shape& new_logical_shape, const tt::tt_metal::Shape& new_padded_shape) const;
 
-    Tensor with_tensor_topology(TensorTopology tensor_topology) const;
+    void update_tensor_topology(const TensorTopology& tensor_topology);
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
@@ -236,9 +244,13 @@ public:
     const HostStorage& host_storage() const&;
     const HostStorage& host_storage() const&& = delete;  // prevents dangling reference to temporaries.
 
+    // Returns the associated HostTensor.
+    const HostTensor& host_tensor() const&;
+    const HostTensor& host_tensor() const&& = delete;  // prevents dangling reference to temporaries.
+
     // Returns device `MeshBuffer`.
     // Throws if the tensor is not allocated on a device.
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const;
+    const distributed::MeshBuffer& mesh_buffer() const;
 
     // Returns the device the tensor is allocated on.
     // Throws if the tensor is not allocated on a device.

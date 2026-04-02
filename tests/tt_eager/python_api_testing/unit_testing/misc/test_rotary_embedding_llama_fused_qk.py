@@ -7,7 +7,7 @@ from loguru import logger
 import torch
 import ttnn
 from models.common.utility_functions import skip_for_blackhole
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_rotary_embedding_llama import (
+from tests.ttnn.nightly.unit_tests.operations.experimental.test_rotary_embedding_llama import (
     run_test_rotary_embedding_llama,
 )
 
@@ -134,4 +134,6 @@ def test_rotary_embedding_llama_fused_qk_with_program_cache(
     if (batch * 2) % ttnn.TILE_SIZE != 0:
         num_ops += 1  # slice
 
-    assert device.num_program_cache_entries() == num_ops
+    assert (
+        device.cache_entries_counter.total == num_ops
+    ), f"Expected {num_ops} program cache entries, but found {device.cache_entries_counter.total}"

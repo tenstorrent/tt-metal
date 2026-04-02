@@ -96,8 +96,6 @@ def vae_neighbor_pad(
     padding_left: int = 0,
     padding_right: int = 0,
     padding_mode: str = "replicate",
-    secondary_cluster_axis=None,
-    secondary_mesh_shape=None,
 ) -> ttnn.Tensor:
     neighbor_semaphore = ccl_manager.get_np_ping_pong_semaphore(cluster_axis)
     barrier_semaphore = ccl_manager.get_barrier_semaphore(cluster_axis)
@@ -113,8 +111,6 @@ def vae_neighbor_pad(
         [barrier_semaphore],
         num_links=[ccl_manager.num_links],
         topology=ttnn.Topology.Linear,
-        secondary_cluster_axis=secondary_cluster_axis,
-        secondary_mesh_shape=secondary_mesh_shape,
     )
 
     return x_pad

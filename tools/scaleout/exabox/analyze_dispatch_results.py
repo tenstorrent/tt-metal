@@ -6,34 +6,69 @@
 
 """Analyze dispatch test logs and generate summary with exit codes."""
 
-import argparse
 import json
+import os
 import re
 import sys
-from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
-from pathlib import Path
+
+from analysis_common import (
+    DOMAIN_DISPATCH,
+    Colors,
+    analysis_timestamp,
+    analysis_timestamp_display,
+    apply_common_args,
+    build_base_argparser,
+    csv_stem_and_suffix,
+    print_message_section,
+    print_section_header,
+    print_separator,
+    read_log_file,
+    validate_file_exists,
+    write_csv,
+)
 
 # Constants for limiting output verbosity
 MAX_ERROR_LINES = 30
 MAX_SKIP_REASONS = 5
 
+# Error categories for dispatch tests.
+# Maps category_key -> (compiled_regex, severity).
+# Add new entries here to detect new error types automatically.
+DISPATCH_ERROR_CATEGORIES = {
+    "segfault": (re.compile(r"segmentation fault|core dumped", re.IGNORECASE), "critical"),
+    "signal_abort": (re.compile(r"Signal: (Aborted|Segmentation)", re.IGNORECASE), "critical"),
+    "arc_failure": (re.compile(r"ARC core.*failed", re.IGNORECASE), "warning"),
+    "timeout": (re.compile(r"warning.*timed out", re.IGNORECASE), "warning"),
+}
 
-class Colors:
-    GREEN = "\033[0;32m"
-    RED = "\033[0;31m"
-    YELLOW = "\033[1;33m"
-    BLUE = "\033[0;34m"
-    CYAN = "\033[0;36m"
-    BOLD = "\033[1m"
-    NC = "\033[0m"
+# CSV field definitions
+SUMMARY_CSV_FIELDS = [
+    "timestamp",
+    "log_file",
+    "domain",
+    "hosts",
+    "total_processes",
+    "tests_run",
+    "tests_passed",
+    "tests_failed",
+    "tests_skipped",
+    "warnings_count",
+    "critical_errors_count",
+    "status",
+]
 
-    @classmethod
-    def disable(cls):
-        """Disable colors (for --no-color flag)."""
-        for attr in ["GREEN", "RED", "YELLOW", "BLUE", "CYAN", "BOLD", "NC"]:
-            setattr(cls, attr, "")
+DETAIL_CSV_FIELDS = [
+    "timestamp",
+    "log_file",
+    "domain",
+    "record_type",
+    "test_name",
+    "test_status",
+    "error_category",
+    "error_severity",
+    "error_message",
+]
 
 
 @dataclass
@@ -42,6 +77,7 @@ class LogAnalysis:
 
     filepath: str
     content: str = ""
+    hosts: str = ""
     total_processes: int = 0
     tests_run: set[str] = field(default_factory=set)
     tests_passed: set[str] = field(default_factory=set)
@@ -51,6 +87,7 @@ class LogAnalysis:
     skip_reasons: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     critical_errors: list[str] = field(default_factory=list)
+    categorized_errors: list[tuple[str, str, str]] = field(default_factory=list)
 
     @property
     def num_failed(self) -> int:
@@ -77,42 +114,39 @@ class LogAnalysis:
         """Whether warnings were detected."""
         return len(self.warnings) > 0
 
+    @property
+    def status(self) -> str:
+        if self.num_failed > 0 or self.num_passed == 0:
+            return "FAILED"
+        return "PASSED"
+
 
 def analyze_log_file(filepath: str) -> LogAnalysis:
     """Analyze a single dispatch test log file."""
     result = LogAnalysis(filepath=filepath)
 
-    try:
-        with open(filepath, encoding="utf-8", errors="replace") as f:
-            result.content = f.read()
-    except (OSError, PermissionError) as e:
-        print(f"Warning: Could not read {filepath}: {e}", file=sys.stderr)
+    content = read_log_file(filepath)
+    if content is None:
         return result
+    result.content = content
 
-    lines = result.content.split("\n")
+    lines = content.split("\n")
 
     # Count MPI processes (GTest instances)
-    result.total_processes = result.content.count("Running main() from gmock_main.cc")
+    result.total_processes = content.count("Running main() from gmock_main.cc")
 
-    # Extract test names from different states
-    # [ RUN      ] TestSuite.TestName
-    for match in re.finditer(r"\[ RUN      \] (.+)", result.content):
+    for match in re.finditer(r"\[ RUN      \] (.+)", content):
         result.tests_run.add(match.group(1).strip())
 
-    # [       OK ] TestSuite.TestName (123 ms)
-    for match in re.finditer(r"\[       OK \] ([^\(]+)", result.content):
-        test_name = match.group(1).strip()
-        result.tests_passed.add(test_name)
+    for match in re.finditer(r"\[       OK \] ([^\(]+)", content):
+        result.tests_passed.add(match.group(1).strip())
 
-    # [  FAILED  ] TestSuite.TestName (456 ms)
-    for match in re.finditer(r"\[  FAILED  \] ([^\(]+)", result.content):
+    for match in re.finditer(r"\[  FAILED  \] ([^\(]+)", content):
         test_name = match.group(1).strip()
-        # Filter out summary lines like "[  FAILED  ] 2 tests, listed below:"
         if not re.match(r"\d+ tests?", test_name):
             result.tests_failed.add(test_name)
 
-    # [  SKIPPED ] TestSuite.TestName
-    for match in re.finditer(r"\[  SKIPPED \] ([^\(]+)", result.content):
+    for match in re.finditer(r"\[  SKIPPED \] ([^\(]+)", content):
         test_name = match.group(1).strip()
         # Filter out summary lines
         if not re.match(r"\d+ tests?", test_name):
@@ -120,7 +154,7 @@ def analyze_log_file(filepath: str) -> LogAnalysis:
 
     # Extract failure details (lines around FAILED markers)
     in_failure = False
-    failure_context = []
+    failure_context: list[str] = []
     for line in lines:
         if "[  FAILED  ]" in line:
             in_failure = True
@@ -132,7 +166,6 @@ def analyze_log_file(filepath: str) -> LogAnalysis:
                 result.failure_details.extend(failure_context)
                 in_failure = False
                 failure_context = []
-
     # Capture any remaining failure context if loop ended mid-collection
     if failure_context:
         result.failure_details.extend(failure_context)
@@ -149,18 +182,16 @@ def analyze_log_file(filepath: str) -> LogAnalysis:
                 else:
                     result.skip_reasons.append(prev_line.strip())
 
-    # Extract warnings
-    warning_pattern = re.compile(r"warning.*timed out|ARC core.*failed", re.IGNORECASE)
-    for line in lines:
-        if warning_pattern.search(line):
-            result.warnings.append(line.strip())
-
-    # Extract critical errors (actual crashes only, not test error cases)
-    # TT_FATAL messages are often intentional error-handling tests, so only flag real crashes
-    critical_pattern = re.compile(r"segmentation fault|core dumped|Signal: (Aborted|Segmentation)", re.IGNORECASE)
-    for line in lines:
-        if critical_pattern.search(line):
-            result.critical_errors.append(line.strip())
+    # Classify errors using the category registry
+    for cat_key, (pattern, severity) in DISPATCH_ERROR_CATEGORIES.items():
+        for line in lines:
+            if pattern.search(line):
+                msg = line.strip()
+                result.categorized_errors.append((cat_key, severity, msg))
+                if severity == "critical":
+                    result.critical_errors.append(msg)
+                else:
+                    result.warnings.append(msg)
 
     return result
 
@@ -172,16 +203,12 @@ def print_summary(analysis: LogAnalysis) -> None:
     num_failed = len(analysis.tests_failed)
     num_skipped = len(analysis.tests_skipped)
 
-    print("=" * 50)
-    print("Dispatch Test Log Analyzer")
-    print("=" * 50)
+    print_section_header("Dispatch Test Log Analyzer")
     print(f"Log file: {analysis.filepath}")
-    print(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Timestamp: {analysis_timestamp_display()}")
     print("=" * 50 + "\n")
 
-    print("=" * 50)
-    print("TEST RESULTS")
-    print("=" * 50)
+    print_section_header("TEST RESULTS")
     print("Overview")
     print("=" * 50)
     print(f"MPI Processes:       {analysis.total_processes}")
@@ -198,25 +225,22 @@ def print_test_details(analysis: LogAnalysis) -> None:
     num_failed = len(analysis.tests_failed)
     num_skipped = len(analysis.tests_skipped)
 
-    # Show passed tests
     if num_passed > 0:
-        print("-" * 50)
+        print_separator()
         print(f"PASSED TESTS ({num_passed})")
-        print("-" * 50)
+        print_separator()
         for i, test in enumerate(sorted(analysis.tests_passed), 1):
             print(f"{i:2d}. {test}")
         print()
 
-    # Show failed tests
     if num_failed > 0:
-        print("-" * 50)
+        print_separator()
         print(f"{Colors.RED}FAILED TESTS ({num_failed}){Colors.NC}")
-        print("-" * 50)
+        print_separator()
         for i, test in enumerate(sorted(analysis.tests_failed), 1):
             print(f"{i:2d}. {test}")
         print()
 
-        # Show failure details
         if analysis.failure_details:
             print("Failure Details:")
             for line in analysis.failure_details[:MAX_ERROR_LINES]:
@@ -225,16 +249,14 @@ def print_test_details(analysis: LogAnalysis) -> None:
                 print(f"  ... ({len(analysis.failure_details) - MAX_ERROR_LINES} more lines)")
             print()
 
-    # Show skipped tests
     if num_skipped > 0:
-        print("-" * 50)
+        print_separator()
         print(f"{Colors.YELLOW}SKIPPED TESTS ({num_skipped}){Colors.NC}")
-        print("-" * 50)
+        print_separator()
         for i, test in enumerate(sorted(analysis.tests_skipped), 1):
             print(f"{i:2d}. {test}")
         print()
 
-        # Show skip reasons
         if analysis.skip_reasons:
             print("Skip Reasons:")
             for reason in analysis.skip_reasons[:MAX_SKIP_REASONS]:
@@ -246,44 +268,14 @@ def print_test_details(analysis: LogAnalysis) -> None:
         print()
 
 
-def deduplicate_and_count_messages(messages: list[str]) -> dict[str, int]:
-    """Deduplicate messages by normalizing timestamps and MPI rank prefixes."""
-    message_counts = defaultdict(int)
-    for message in messages:
-        # Remove timestamp patterns and MPI rank prefixes to group similar messages
-        normalized = re.sub(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+", "<timestamp>", message)
-        normalized = re.sub(r"\[1,\d+\]<std(out|err)>:", "", normalized)
-        message_counts[normalized.strip()] += 1
-    return message_counts
-
-
-def print_message_section(messages: list[str], header: str, color: str, max_items: int = 10) -> None:
-    """Print a section of deduplicated messages with counts."""
-    print(f"{color}{header}{Colors.NC}")
-
-    message_counts = deduplicate_and_count_messages(messages)
-    items_to_show = list(sorted(message_counts.items(), key=lambda x: -x[1]))[:max_items]
-
-    for message, count in items_to_show:
-        if count > 1:
-            print(f"  [{count}x] {message}")
-        else:
-            print(f"  {message}")
-
-    if len(message_counts) > max_items:
-        print(f"  ... ({len(message_counts) - max_items} more unique types)")
-    print()
-
-
 def print_warnings_and_errors(analysis: LogAnalysis) -> None:
     """Print warnings and critical errors section."""
-
     if not analysis.has_warnings and not analysis.has_critical:
         return
 
-    print("-" * 50)
+    print_separator()
     print("WARNINGS & CRITICAL ERRORS")
-    print("-" * 50)
+    print_separator()
 
     if analysis.has_critical:
         print_message_section(analysis.critical_errors, "⚠️  CRITICAL ERRORS DETECTED:", Colors.RED)
@@ -298,10 +290,8 @@ def print_warnings_and_errors(analysis: LogAnalysis) -> None:
 
 def print_recommendations(analysis: LogAnalysis) -> None:
     """Print actionable recommendations."""
-
-    print("=" * 50)
-    print("Recommendations")
-    print("=" * 50 + "\n")
+    print_section_header("Recommendations")
+    print()
 
     recs = []
 
@@ -344,7 +334,7 @@ def print_recommendations(analysis: LogAnalysis) -> None:
 def output_json(analysis: LogAnalysis):
     """Output JSON results."""
     result = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": analysis_timestamp(),
         "log_file": analysis.filepath,
         "summary": {
             "total_processes": analysis.total_processes,
@@ -371,10 +361,9 @@ def output_text(analysis: LogAnalysis):
     print_warnings_and_errors(analysis)
     print_recommendations(analysis)
 
-    # Final result
-    print("-" * 50)
+    print_separator()
     print("FINAL TEST RESULT")
-    print("-" * 50)
+    print_separator()
 
     if analysis.num_failed > 0:
         print(f"STATUS: {Colors.RED}FAILED{Colors.NC}")
@@ -387,38 +376,116 @@ def output_text(analysis: LogAnalysis):
         print("All tests passed successfully.")
 
 
+def output_csv(analysis: LogAnalysis, csv_path: str, csv_prefix: str | None = None) -> None:
+    """Write analysis results to CSV files."""
+    ts = analysis_timestamp()
+    log_basename = os.path.basename(analysis.filepath)
+
+    summary_row = {
+        "timestamp": ts,
+        "log_file": log_basename,
+        "domain": DOMAIN_DISPATCH,
+        "hosts": analysis.hosts,
+        "total_processes": analysis.total_processes,
+        "tests_run": len(analysis.tests_run),
+        "tests_passed": len(analysis.tests_passed),
+        "tests_failed": len(analysis.tests_failed),
+        "tests_skipped": len(analysis.tests_skipped),
+        "warnings_count": len(analysis.warnings),
+        "critical_errors_count": len(analysis.critical_errors),
+        "status": analysis.status,
+    }
+
+    stem, suffix = csv_stem_and_suffix(csv_path, csv_prefix, DOMAIN_DISPATCH)
+
+    write_csv([summary_row], f"{stem}_summary{suffix}", SUMMARY_CSV_FIELDS)
+
+    # Detail CSV: one row per test result + one row per categorized error
+    detail_rows: list[dict] = []
+
+    for test in sorted(analysis.tests_passed):
+        detail_rows.append(
+            {
+                "timestamp": ts,
+                "log_file": log_basename,
+                "domain": DOMAIN_DISPATCH,
+                "record_type": "test_result",
+                "test_name": test,
+                "test_status": "PASSED",
+                "error_category": "",
+                "error_severity": "",
+                "error_message": "",
+            }
+        )
+
+    for test in sorted(analysis.tests_failed):
+        detail_rows.append(
+            {
+                "timestamp": ts,
+                "log_file": log_basename,
+                "domain": DOMAIN_DISPATCH,
+                "record_type": "test_result",
+                "test_name": test,
+                "test_status": "FAILED",
+                "error_category": "test_failed",
+                "error_severity": "error",
+                "error_message": "",
+            }
+        )
+
+    for test in sorted(analysis.tests_skipped):
+        detail_rows.append(
+            {
+                "timestamp": ts,
+                "log_file": log_basename,
+                "domain": DOMAIN_DISPATCH,
+                "record_type": "test_result",
+                "test_name": test,
+                "test_status": "SKIPPED",
+                "error_category": "test_skipped",
+                "error_severity": "info",
+                "error_message": "",
+            }
+        )
+
+    for cat_key, severity, msg in analysis.categorized_errors:
+        detail_rows.append(
+            {
+                "timestamp": ts,
+                "log_file": log_basename,
+                "domain": DOMAIN_DISPATCH,
+                "record_type": "error",
+                "test_name": "",
+                "test_status": "",
+                "error_category": cat_key,
+                "error_severity": severity,
+                "error_message": msg[:500],
+            }
+        )
+
+    if detail_rows:
+        write_csv(detail_rows, f"{stem}_details{suffix}", DETAIL_CSV_FIELDS)
+
+
 def main():
-    parser = argparse.ArgumentParser(
-        description="Analyze dispatch test logs and generate summary.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
+    parser = build_base_argparser("Analyze dispatch test logs and generate summary.")
     parser.add_argument("log_file", help="Dispatch test log file to analyze")
-    parser.add_argument("--json", action="store_true", help="Output results as JSON")
-    parser.add_argument("--no-color", action="store_true", help="Disable colored output")
-
     args = parser.parse_args()
+    apply_common_args(args)
 
-    if args.no_color or args.json:
-        Colors.disable()
-
-    # Verify log file exists
-    log_file = Path(args.log_file)
-    if not log_file.is_file():
-        print(f"Error: Log file not found: {args.log_file}", file=sys.stderr)
-        sys.exit(1)
-
-    # Analyze log file
+    log_file = validate_file_exists(args.log_file)
     analysis = analyze_log_file(str(log_file))
+    analysis.hosts = args.hosts or ""
 
-    # Output results
+    if args.csv:
+        output_csv(analysis, args.csv, csv_prefix=args.csv_prefix)
+
     if args.json:
         output_json(analysis)
     else:
         output_text(analysis)
 
-    if analysis.num_failed > 0:
-        sys.exit(1)
-    elif analysis.num_passed == 0:
+    if analysis.num_failed > 0 or analysis.num_passed == 0:
         sys.exit(1)
     else:
         sys.exit(0)

@@ -10,20 +10,16 @@
 
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
 
-#include "ttnn-nanobind/decorators.hpp"
-
+#include "ttnn-nanobind/bind_function.hpp"
 #include "quantization.hpp"
 
 namespace ttnn::operations::quantization {
 namespace {
 
-template <typename T>
-void bind_quantize_operation(
-    nb::module_& mod,
-    const T& operation,
-    const std::string& description,
-    const std::string& supported_dtype = "BFLOAT16") {
+void bind_quantize(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -59,42 +55,26 @@ void bind_quantize_operation(
             >>> zero_point = -213
             >>> output = {1}(input_tensor, scale, zero_point)
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
-        description,
-        supported_dtype);
+        "quantize",
+        "ttnn.quantize",
+        "Quantize Operation",
+        "BFLOAT16");
 
-    bind_registered_operation(
+    ttnn::bind_function<"quantize">(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const T& self,
-               const ttnn::Tensor& input_tensor,
-               const std::variant<ttnn::Tensor, float>& scale,
-               const std::variant<Tensor, int32_t>& zero_point,
-               const std::optional<int32_t> axis,
-               const std::optional<const DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor, scale, zero_point, axis, dtype, memory_config, output_tensor);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("scale"),
-            nb::arg("zero_point"),
-            nb::kw_only(),
-            nb::arg("axis") = nb::none(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+        doc.c_str(),
+        &ttnn::quantize,
+        nb::arg("input_tensor"),
+        nb::arg("scale"),
+        nb::arg("zero_point"),
+        nb::kw_only(),
+        nb::arg("axis") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
-template <typename T>
-void bind_requantize_operation(
-    nb::module_& mod,
-    const T& operation,
-    const std::string& description,
-    const std::string& supported_dtype = "BFLOAT16") {
+void bind_requantize(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -159,55 +139,28 @@ void bind_requantize_operation(
             >>> out_zero_point = -73
             >>> output = {1}(input_tensor, in_scale, in_zero_point, out_scale, out_zero_point)
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
-        description,
-        supported_dtype);
+        "requantize",
+        "ttnn.requantize",
+        "Re-quantize Operation",
+        "BFLOAT16");
 
-    bind_registered_operation(
+    ttnn::bind_function<"requantize">(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const T& self,
-               const ttnn::Tensor& input_tensor,
-               const std::variant<ttnn::Tensor, float>& in_scale,
-               const std::variant<Tensor, int32_t>& in_zero_point,
-               const std::variant<ttnn::Tensor, float>& out_scale,
-               const std::variant<Tensor, int32_t>& out_zero_point,
-               const std::optional<int32_t> axis,
-               const std::optional<const DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(
-                    input_tensor,
-                    in_scale,
-                    in_zero_point,
-                    out_scale,
-                    out_zero_point,
-                    axis,
-                    dtype,
-                    memory_config,
-                    output_tensor);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("in_scale"),
-            nb::arg("in_zero_point"),
-            nb::arg("out_scale"),
-            nb::arg("out_zero_point"),
-            nb::kw_only(),
-            nb::arg("axis") = nb::none(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+        doc.c_str(),
+        &ttnn::requantize,
+        nb::arg("input_tensor"),
+        nb::arg("in_scale"),
+        nb::arg("in_zero_point"),
+        nb::arg("out_scale"),
+        nb::arg("out_zero_point"),
+        nb::kw_only(),
+        nb::arg("axis") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
-template <typename T>
-void bind_dequantize_operation(
-    nb::module_& mod,
-    const T& operation,
-    const std::string& description,
-    const std::string& supported_dtype = "BFLOAT16") {
+void bind_dequantize(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -243,41 +196,30 @@ void bind_dequantize_operation(
             >>> zero_point = -213
             >>> output = {1}(input_tensor, scale, zero_point)
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
-        description,
-        supported_dtype);
+        "dequantize",
+        "ttnn.dequantize",
+        "De-quantize Operation",
+        "BFLOAT16");
 
-    bind_registered_operation(
+    ttnn::bind_function<"dequantize">(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const T& self,
-               const ttnn::Tensor& input_tensor,
-               const std::variant<ttnn::Tensor, float>& scale,
-               const std::variant<Tensor, int32_t>& zero_point,
-               const std::optional<int32_t> axis,
-               const std::optional<const DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor, scale, zero_point, axis, dtype, memory_config, output_tensor);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("scale"),
-            nb::arg("zero_point"),
-            nb::kw_only(),
-            nb::arg("axis") = nb::none(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+        doc.c_str(),
+        &ttnn::dequantize,
+        nb::arg("input_tensor"),
+        nb::arg("scale"),
+        nb::arg("zero_point"),
+        nb::kw_only(),
+        nb::arg("axis") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
 }  // namespace
 
 void py_module(nb::module_& mod) {
-    bind_quantize_operation(mod, ttnn::quantize, "Quantize Operation");
-    bind_requantize_operation(mod, ttnn::requantize, "Re-quantize Operation");
-    bind_dequantize_operation(mod, ttnn::dequantize, "De-quantize Operation");
+    bind_quantize(mod);
+    bind_requantize(mod);
+    bind_dequantize(mod);
 }
 }  // namespace ttnn::operations::quantization

@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Ring Joint Attention SDPA Tests for WAN 2.2 Model Shapes on Blackhole
+Ring Joint Attention SDPA Tests for Video Generation Models on Blackhole
 
-Tests Ring Joint Attention accuracy and determinism using WAN 2.2 model shapes
+Tests Ring Joint Attention accuracy and determinism using video generation model shapes
 on BH multi-chip setups (single ring 1xN or Galaxy 4x8 mesh).
 Perf tests are included but skipped on CI.
 
@@ -14,6 +14,7 @@ BH adaptation: uses init_device_compute_kernel_config instead of WormholeCompute
 import os
 import math
 import torch
+from dataclasses import dataclass, field
 from itertools import product
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
@@ -53,16 +54,83 @@ GALAXY_DEVICE_COUNT = 32
 GALAXY_TP_SIZE = 4
 GALAXY_SP_SIZE = 8
 
-# WAN 2.2 model workload configuration constants (per-device sequence lengths)
-GALAXY_SEQ_LENS_PER_DEVICE = [2368, 9472]  # WAN 2.2 Galaxy per-device
-NON_GALAXY_SEQ_LENS_PER_DEVICE = [2240, 8544]  # WAN 2.2 non-Galaxy per-device
-HEADS_PER_DEVICE = 10  # WAN 2.2 attention heads per device
-HEAD_DIMENSION = 128  # WAN 2.2 head dimension
+# ============================================================================
+# MODEL CONFIGURATIONS
+# ============================================================================
+#
+# Each model defines per-device sequence lengths for Galaxy and Quiet Box,
+# tuned so per-core work matches between platforms (11 vs 10 cores/head).
+# See test_instructions.md for full parallelization context.
+
 BATCH_SIZE = 1
 
-# Chunk size sweep parameters
-Q_CHUNK_SIZES = [224, 256, 288]
-K_CHUNK_SIZES = [128, 256, 512]
+
+@dataclass
+class ModelConfig:
+    """Benchmark configuration for a video generation model."""
+
+    galaxy_seq_per_device: int
+    non_galaxy_seq_per_device: int
+    heads_per_device: int  # After TP split (same for both platforms)
+    head_dim: int
+    q_chunk_sizes: list = field(default_factory=list)
+    k_chunk_sizes: list = field(default_factory=list)
+
+
+MODEL_CONFIGS = {
+    # WAN 2.2 — 1×Galaxy deployment (32 chips, ~75K total tokens at 720p)
+    "wan2_2_1xGLX": ModelConfig(
+        galaxy_seq_per_device=9472,
+        non_galaxy_seq_per_device=8544,
+        heads_per_device=10,
+        head_dim=128,
+        q_chunk_sizes=[224, 256, 288],
+        k_chunk_sizes=[128, 256, 512],
+    ),
+    # WAN 2.2 — 4×Galaxy deployment (128 chips, 720p split across 4 Galaxies)
+    "wan2_2_4xGLX": ModelConfig(
+        galaxy_seq_per_device=2368,
+        non_galaxy_seq_per_device=2240,
+        heads_per_device=10,
+        head_dim=128,
+        q_chunk_sizes=[224, 256, 288],
+        k_chunk_sizes=[128, 256, 512],
+    ),
+    # VideogenModel1 720p — 1×Galaxy deployment (115,200 total tokens)
+    # Single benchmark config: Sq_chunk_t=7 (q=224), k=512
+    # Galaxy: 14400/dev, q_per_core=6. QB: 13440/dev, q_per_core=6.
+    "videogen_model1_720p": ModelConfig(
+        galaxy_seq_per_device=14400,
+        non_galaxy_seq_per_device=13440,
+        heads_per_device=10,
+        head_dim=128,
+        q_chunk_sizes=[224],
+        k_chunk_sizes=[512],
+    ),
+    # VideogenModel1 480p — 1×Galaxy deployment (49,920 total tokens)
+    # q288 chosen for zero slot waste on Galaxy (22 chunks / 11 cores = 2 each).
+    # Galaxy: 6240/dev, q_per_core=2. QB: 5760/dev, q_per_core=2.
+    "videogen_model1_480p": ModelConfig(
+        galaxy_seq_per_device=6240,
+        non_galaxy_seq_per_device=5760,
+        heads_per_device=10,
+        head_dim=128,
+        q_chunk_sizes=[288],
+        k_chunk_sizes=[512],
+    ),
+    # VideogenModel1 768×512 — 1×Galaxy deployment (49,152 total tokens)
+    # q288 chosen for zero slot waste on Galaxy (22 chunks / 11 cores = 2 each).
+    # Zero K pad waste (6144 = 12×512 exactly).
+    # Galaxy: 6144/dev, q_per_core=2. QB: 5760/dev, q_per_core=2.
+    "videogen_model1_768x512": ModelConfig(
+        galaxy_seq_per_device=6144,
+        non_galaxy_seq_per_device=5760,
+        heads_per_device=10,
+        head_dim=128,
+        q_chunk_sizes=[288],
+        k_chunk_sizes=[512],
+    ),
+}
 
 # Accuracy threshold constants
 DEFAULT_PCC_THRESHOLD = 0.994
@@ -73,66 +141,11 @@ BLACKHOLE_CLOCK_GHZ = 1.35  # Blackhole clock frequency in GHz
 MM_FLOPS_PER_CYCLE_PER_CORE = 2048  # Matrix multiply FLOPs per cycle per core
 
 
-def post_process_ops_log(
-    output_logs_subdir, float_columns=None, columns=None, sum_vals=True, op_name="", has_signposts=False
-):
-    """Process the ops log CSV and extract performance data."""
-    from tracy.process_model_log import get_latest_ops_log_filename
-    import pandas as pd
-
-    filename = get_latest_ops_log_filename(output_logs_subdir)
-    df = pd.read_csv(filename)
-
-    if has_signposts:
-        markers = df[df["OP TYPE"] == "signpost"]["OP CODE"]
-        start = markers[markers == "start"].index[0]
-        stop = markers[markers == "stop"].index[0]
-        df = df.iloc[start + 1 : stop]
-    if op_name != "":
-        df = df[df["OP CODE"] == op_name]
-
-    results = {}
-    if float_columns:
-        for col in float_columns:
-            df_filtered = df[df[col] != "-"]
-            if sum_vals:
-                results[col] = df_filtered[col].astype(float).sum()
-            else:
-                results[col] = df_filtered[col].astype(float).to_numpy()
-    if columns:
-        for col in columns:
-            df_filtered = df[df[col] != "-"]
-            results[col] = df_filtered[col]
-    else:
-        results = df
-    return results
-
-
-def compute_ring_joint_cores_used(seqlen, q_chunk_size, compute_cores, num_heads, ring_size):
-    """
-    Compute number of cores actually used for ring joint attention based on parallelization scheme.
-    """
-    B = BATCH_SIZE
-    local_seq_len = seqlen // ring_size
-    q_num_chunks = math.ceil(local_seq_len / q_chunk_size)
-
-    batch_parallel = min(B, compute_cores)
-    nh_parallel = min(compute_cores // batch_parallel, num_heads)
-    q_parallel = min(compute_cores // (batch_parallel * nh_parallel), q_num_chunks)
-
-    cores_used = batch_parallel * nh_parallel * q_parallel
-    return cores_used
-
-
-def compute_ring_joint_utilization(local_seqlen, total_seqlen, head_dim, num_heads_per_device, duration_ns, core_count):
-    """
-    Compute math utilization for ring joint attention.
-    """
-    mm_flops = 4 * local_seqlen * total_seqlen * head_dim * num_heads_per_device
-    cycles = duration_ns * BLACKHOLE_CLOCK_GHZ
-    theoretical_flops = core_count * cycles * MM_FLOPS_PER_CYCLE_PER_CORE
-    utilization = (mm_flops / theoretical_flops) * 100
-    return utilization
+from tests.nightly.sdpa_perf_utils import (
+    post_process_ops_log,
+    compute_cores_used as compute_ring_joint_cores_used,
+    compute_math_utilization as compute_ring_joint_utilization,
+)
 
 
 def fa_rand(*shape):
@@ -204,13 +217,11 @@ def calculate_mesh_config(num_devices):
     return sp_size, tp_size, arch_type
 
 
-def generate_input_shapes():
+def generate_test_configs():
     """
-    Generate WAN 2.2 model input shapes based on available BH devices.
+    Generate (b, nh, s, d, q_chunk, k_chunk) tuples for all model configs.
 
-    Per-device sequence lengths are WAN 2.2 model shapes:
-    - Galaxy: 2368, 9472
-    - Non-Galaxy (BH T3K): 2240, 8544
+    Each model defines its own Q/K chunk sizes, so the cross-product is per-model.
 
     NOTE: Uses detect_devices_without_opening() to avoid holding device locks
     during pytest collection, which would block subprocess profiling.
@@ -220,24 +231,48 @@ def generate_input_shapes():
         return [], []
 
     sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
+    is_galaxy = arch_type.startswith("galaxy")
 
-    if arch_type.startswith("galaxy"):
-        seq_lens_per_device = GALAXY_SEQ_LENS_PER_DEVICE
-    else:
-        seq_lens_per_device = NON_GALAXY_SEQ_LENS_PER_DEVICE
+    configs = []
+    config_ids = []
 
-    shapes = []
-    shape_ids = []
+    for model_name, model in MODEL_CONFIGS.items():
+        seq_per_device = model.galaxy_seq_per_device if is_galaxy else model.non_galaxy_seq_per_device
+        total_seq = seq_per_device * sp_size
+        total_heads = model.heads_per_device * tp_size
 
-    for seq_len_per_device in seq_lens_per_device:
-        total_seq_len = seq_len_per_device * sp_size
-        total_heads = HEADS_PER_DEVICE * tp_size
+        for q_chunk, k_chunk in product(model.q_chunk_sizes, model.k_chunk_sizes):
+            configs.append((BATCH_SIZE, total_heads, total_seq, model.head_dim, q_chunk, k_chunk))
+            config_ids.append(f"{model_name}-{seq_per_device}x{sp_size}_h{total_heads}-k{k_chunk}-q{q_chunk}")
 
-        shape = [BATCH_SIZE, total_heads, total_seq_len, HEAD_DIMENSION]
-        shapes.append(shape)
-        shape_ids.append(f"wan2_2_compat_{seq_len_per_device}x{sp_size}_h{total_heads}")
+    return configs, config_ids
 
-    return shapes, shape_ids
+
+def generate_perf_table_configs():
+    """
+    Generate (model_name, b, nh, s, d) tuples for perf table tests.
+
+    One entry per model — the perf table sweeps Q/K chunk sizes internally.
+    """
+    num_devices = detect_devices_without_opening()
+    if num_devices < 2:
+        return [], []
+
+    sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
+    is_galaxy = arch_type.startswith("galaxy")
+
+    configs = []
+    config_ids = []
+
+    for model_name, model in MODEL_CONFIGS.items():
+        seq_per_device = model.galaxy_seq_per_device if is_galaxy else model.non_galaxy_seq_per_device
+        total_seq = seq_per_device * sp_size
+        total_heads = model.heads_per_device * tp_size
+
+        configs.append((model_name, BATCH_SIZE, total_heads, total_seq, model.head_dim))
+        config_ids.append(f"{model_name}_{seq_per_device}x{sp_size}_h{total_heads}")
+
+    return configs, config_ids
 
 
 def create_global_semaphores(mesh_device, cores, initial_value):
@@ -286,9 +321,14 @@ def run_ring_joint_sdpa(
     num_devices = detect_devices_without_opening()
     sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
 
+    # Ring topology requires >2 devices; fall back to linear for <=2
+    use_ring = sp_size > 2
+    fabric_config = ttnn.FabricConfig.FABRIC_1D_RING if use_ring else ttnn.FabricConfig.FABRIC_1D
+    topology = Topology.Ring if use_ring else Topology.Linear
+
     # Configure fabric for ring joint attention
     ttnn.set_fabric_config(
-        ttnn.FabricConfig.FABRIC_1D,
+        fabric_config,
         ttnn.FabricReliabilityMode.STRICT_INIT,
         None,
         ttnn.FabricTensixConfig.DISABLED,
@@ -487,7 +527,7 @@ def run_ring_joint_sdpa(
                 num_links=num_links,
                 cluster_axis=sp_axis,
                 mesh_device=mesh_device,
-                topology=Topology.Linear,
+                topology=topology,
                 subdevice_id=worker_sub_device_id,
                 ccl_core_grid_offset=(ccl_column, 0),  # Point to CCL column
                 use_column_major_ccl=True,
@@ -576,19 +616,18 @@ def run_ring_joint_sdpa(
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
-# Generate input shapes dynamically based on detected hardware
-INPUT_SHAPES, INPUT_IDS = generate_input_shapes()
+# Generate test parameters dynamically based on detected hardware
+TEST_CONFIGS, TEST_CONFIG_IDS = generate_test_configs()
+PERF_TABLE_CONFIGS, PERF_TABLE_CONFIG_IDS = generate_perf_table_configs()
 
 
 # === TEST 1: PERFORMANCE SWEEP (skipped on CI) ===
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
-@pytest.mark.parametrize("q_chunk_size", Q_CHUNK_SIZES, ids=[f"q{s}" for s in Q_CHUNK_SIZES])
-@pytest.mark.parametrize("k_chunk_size", K_CHUNK_SIZES, ids=[f"k{s}" for s in K_CHUNK_SIZES])
 @pytest.mark.parametrize(
-    "b, nh, s, d",
-    INPUT_SHAPES,
-    ids=INPUT_IDS,
+    "b, nh, s, d, q_chunk_size, k_chunk_size",
+    TEST_CONFIGS,
+    ids=TEST_CONFIG_IDS,
 )
 def test_ring_joint_attention_sdpa_sweep_perf_impl(b, nh, s, d, q_chunk_size, k_chunk_size, dtype):
     """
@@ -600,12 +639,10 @@ def test_ring_joint_attention_sdpa_sweep_perf_impl(b, nh, s, d, q_chunk_size, k_
 
 # === TEST 2: ACCURACY VERIFICATION ===
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
-@pytest.mark.parametrize("q_chunk_size", Q_CHUNK_SIZES, ids=[f"q{s}" for s in Q_CHUNK_SIZES])
-@pytest.mark.parametrize("k_chunk_size", K_CHUNK_SIZES, ids=[f"k{s}" for s in K_CHUNK_SIZES])
 @pytest.mark.parametrize(
-    "b, nh, s, d",
-    INPUT_SHAPES,
-    ids=INPUT_IDS,
+    "b, nh, s, d, q_chunk_size, k_chunk_size",
+    TEST_CONFIGS,
+    ids=TEST_CONFIG_IDS,
 )
 def test_ring_joint_attention_sdpa_accuracy(b, nh, s, d, q_chunk_size, k_chunk_size, dtype):
     """
@@ -636,12 +673,10 @@ def test_ring_joint_attention_sdpa_accuracy(b, nh, s, d, q_chunk_size, k_chunk_s
 
 # === TEST 3: DETERMINISM VERIFICATION ===
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
-@pytest.mark.parametrize("q_chunk_size", Q_CHUNK_SIZES, ids=[f"q{s}" for s in Q_CHUNK_SIZES])
-@pytest.mark.parametrize("k_chunk_size", K_CHUNK_SIZES, ids=[f"k{s}" for s in K_CHUNK_SIZES])
 @pytest.mark.parametrize(
-    "b, nh, s, d",
-    INPUT_SHAPES,
-    ids=INPUT_IDS,
+    "b, nh, s, d, q_chunk_size, k_chunk_size",
+    TEST_CONFIGS,
+    ids=TEST_CONFIG_IDS,
 )
 def test_ring_joint_attention_sdpa_determinism(b, nh, s, d, q_chunk_size, k_chunk_size, dtype):
     """
@@ -655,26 +690,31 @@ def test_ring_joint_attention_sdpa_determinism(b, nh, s, d, q_chunk_size, k_chun
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 @pytest.mark.timeout(1000)
 @pytest.mark.parametrize(
-    "b, nh, s, d",
-    INPUT_SHAPES,
-    ids=INPUT_IDS,
+    "model_name, b, nh, s, d",
+    PERF_TABLE_CONFIGS,
+    ids=PERF_TABLE_CONFIG_IDS,
 )
-def test_ring_joint_attention_create_perf_table(b, nh, s, d):
+def test_ring_joint_attention_create_perf_table(model_name, b, nh, s, d):
     """
     Sweep chunk sizes for ring joint attention SDPA and print a performance table.
     Skipped on CI - run locally with tracy profiler.
     """
     from tracy.process_model_log import run_device_profiler
 
+    model = MODEL_CONFIGS[model_name]
+
     num_devices = detect_devices_without_opening()
     sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
     ring_size = sp_size
+    is_galaxy = arch_type.startswith("galaxy")
+    seq_per_device = model.galaxy_seq_per_device if is_galaxy else model.non_galaxy_seq_per_device
+    total_heads = model.heads_per_device * tp_size
 
     if ring_size < 2:
         pytest.skip(f"Ring joint attention requires at least 2 devices, got {ring_size}")
 
     # Use hardcoded grid constants (cannot query device due to TLB conflicts with subprocess tests)
-    if arch_type.startswith("galaxy"):
+    if is_galaxy:
         full_grid_rows = GALAXY_GRID_ROWS
         total_compute_cores = GALAXY_SDPA_CORES
         total_cores = GALAXY_TOTAL_CORES
@@ -689,17 +729,16 @@ def test_ring_joint_attention_create_perf_table(b, nh, s, d):
     subdir = "ttnn_ring_joint_sdpa_performance"
     perf_results = []
 
-    for q_chunk_size, k_chunk_size in product(Q_CHUNK_SIZES, K_CHUNK_SIZES):
+    for q_chunk_size, k_chunk_size in product(model.q_chunk_sizes, model.k_chunk_sizes):
         float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
         cols = ["ATTRIBUTES"]
 
-        test_id = f"k{k_chunk_size}-q{q_chunk_size}-bf16"
-        shape_id = INPUT_IDS[INPUT_SHAPES.index([b, nh, s, d])]
+        config_id = f"{model_name}-{seq_per_device}x{sp_size}_h{total_heads}-k{k_chunk_size}-q{q_chunk_size}"
         command = (
             f"pytest tests/nightly/blackhole/ccl/"
             f"test_ring_joint_sdpa.py::"
             f"test_ring_joint_attention_sdpa_sweep_perf_impl"
-            f"[{shape_id}-{test_id}]"
+            f"[{config_id}-bf16]"
         )
 
         try:
@@ -800,7 +839,7 @@ def test_ring_joint_attention_create_perf_table(b, nh, s, d):
 
     # Print summary table
     print(f"\n{'='*190}")
-    print(f"Ring Joint Attention Performance Sweep: b={b}, nh={nh}, s={s}, d={d}")
+    print(f"Ring Joint Attention Performance Sweep: {model_name} — b={b}, nh={nh}, s={s}, d={d}")
     print(f"Architecture: {arch_type}, Ring size: {ring_size} devices")
     print(f"Total MM FLOPs (all devices): {mm_flops:,} ({mm_flops/1e9:.2f} GFLOPs)")
     print(f"Per-device workload: Q={s // ring_size} tokens, K/V={s} tokens (via ring), {nh} heads")

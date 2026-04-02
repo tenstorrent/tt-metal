@@ -5,9 +5,9 @@
 #include "neighbor_pad_async.hpp"
 #include "ttnn/operations/experimental/ccl/neighbor_pad_async/device/neighbor_pad_async_device_operation.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteNeighborPadAsync::invoke(
+ttnn::Tensor neighbor_pad_async(
     const ttnn::Tensor& input_tensor,
     std::vector<int32_t> dim,
     std::vector<uint32_t> padding_left,
@@ -19,8 +19,6 @@ ttnn::Tensor ExecuteNeighborPadAsync::invoke(
     const std::optional<std::vector<size_t>>& num_preferred_links,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::ccl::Topology> topology,
-    std::optional<uint32_t> secondary_cluster_axis,
-    const std::optional<std::vector<uint32_t>>& secondary_mesh_shape,
     const std::optional<ttnn::Tensor>& persistent_output_buffer) {
     TT_FATAL(!dim.empty() && dim.size() <= 2, "dim must have 1 or 2 elements, got {}", dim.size());
     const size_t num_dims = dim.size();
@@ -81,8 +79,6 @@ ttnn::Tensor ExecuteNeighborPadAsync::invoke(
         links[0],
         memory_config,
         topology,
-        secondary_cluster_axis,
-        secondary_mesh_shape,
         pad_dim2,
         pad2_left,
         pad2_right,
@@ -91,4 +87,4 @@ ttnn::Tensor ExecuteNeighborPadAsync::invoke(
         persistent_output_buffer);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

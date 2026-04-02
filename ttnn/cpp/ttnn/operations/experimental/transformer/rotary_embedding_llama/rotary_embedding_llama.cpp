@@ -6,9 +6,9 @@
 
 #include "device/rotary_embedding_llama_device_operation.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::experimental {
 
-Tensor RotaryEmbeddingLlamaOperation::invoke(
+Tensor rotary_embedding_llama(
     const Tensor& input_tensor,
     const Tensor& cos_cache,
     const Tensor& sin_cache,
@@ -20,4 +20,4 @@ Tensor RotaryEmbeddingLlamaOperation::invoke(
         input_tensor, cos_cache, sin_cache, trans_mat, is_decode_mode, memory_config, compute_kernel_config);
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental

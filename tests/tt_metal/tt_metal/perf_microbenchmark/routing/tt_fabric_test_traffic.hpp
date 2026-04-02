@@ -258,6 +258,8 @@ struct TestTrafficConfig {
     std::optional<uint32_t> atomic_inc_address;
     uint32_t link_id = 0;  // Link ID for multi-link tests
     std::optional<tt::tt_metal::NOC> noc_id;
+    uint8_t vc_id = 0;  // VC selection: 0=VC0 (default), 2=VC2
+    bool use_vc2() const { return vc_id == 2; }
 
     // Credit info (copied from pattern if populated by allocator)
     std::optional<SenderCreditInfo> sender_credit_info;
@@ -293,6 +295,8 @@ struct TestTrafficSenderConfig {
     uint32_t payload_buffer_size;  // Add payload buffer size field
     uint32_t link_id = 0;          // Link ID for multi-link tests
     std::optional<tt::tt_metal::NOC> noc_id;
+    uint8_t vc_id = 0;  // VC selection: 0=VC0 (default), 2=VC2
+    bool use_vc2() const { return vc_id == 2; }
 
     // Credit flow info (when enable_flow_control is true)
     std::optional<SenderCreditInfo> sender_credit_info;

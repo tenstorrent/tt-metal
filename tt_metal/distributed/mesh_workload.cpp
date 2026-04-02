@@ -8,6 +8,7 @@
 #include <mesh_workload.hpp>
 #include <cstdint>
 #include <tt_metal/impl/program/program_command_sequence.hpp>
+#include "distributed/mesh_device_impl.hpp"
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <algorithm>
 #include <cstddef>
@@ -419,7 +420,12 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
     tt::stl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
 
     this->max_program_kernels_sizeB_ = tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
-        mesh_device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
+        extract_context_id(mesh_device),
+        mesh_device,
+        kernels_getter,
+        kernel_groups_getter,
+        semaphores_getter,
+        programs);
 
     set_finalized();
 }

@@ -168,7 +168,7 @@ TEST_F(MultiDeviceTensorCreationTest, Arange) {
 
     Tensor tensor = ttnn::arange(
         /*start=*/0,
-        /*end=*/1024,
+        /*stop=*/1024,
         /*step=*/1,
         ttnn::DataType::FLOAT32,
         std::ref(*mesh_device));

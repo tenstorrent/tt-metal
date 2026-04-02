@@ -101,7 +101,7 @@ inline void llk_pack_untilize_hw_configure_disaggregated(
 }
 
 template <bool untilize = false, bool zero_output = false, bool tilize = false>
-inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t num_tiles = 1) {
+inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t num_tiles = 1, const std::uint32_t input_operand = 0) {
     // TODO (https://github.com/tenstorrent/tt-metal/issues/18948): Revisit for narrow_tile
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
@@ -113,6 +113,22 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
             pack_src_format[output_id], pack_dst_format[output_id], face_r_dim)),
         "");
 
+#ifdef ARCH_BLACKHOLE
+    // For pack with tilize enabled, check if the original input format is 8-bit.
+    // 8-bit datums (Int8, UInt8, Fp8_e4m3, Lf8) do not require the tilize workaround on Blackhole.
+    const std::uint32_t src_format = static_cast<std::uint32_t>(unpack_src_format[input_operand]);
+    const bool is_input_8bit_format = IS_8BIT_FORMAT(src_format);
+    _llk_pack_init_<untilize, zero_output, tilize>(
+        pack_src_format[output_id],
+        pack_dst_format[output_id],
+        face_r_dim,
+        tile_c_dim,
+        num_faces,
+        false,  // partial_face,
+        false,  // narrow_tile,
+        num_tiles,
+        is_input_8bit_format);
+#else
     _llk_pack_init_<untilize, zero_output, tilize>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
@@ -122,6 +138,7 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
         false,  // partial_face,
         false,  // narrow_tile,
         num_tiles);
+#endif
 }
 
 template <bool out_of_order_output, bool untilize>
@@ -152,7 +169,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 
     LLK_ASSERT(
         (are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-            pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output_id))),
+            pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output))),
         "");
 
     LLK_ASSERT((tile_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
@@ -212,12 +229,12 @@ inline void llk_pack_untilize(
             (block_c_index * ((num_faces > 2) ? num_faces / 2 : num_faces) * block_ct_dim * FACE_C_DIM)) /
             16;
 
-    for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
-        LLK_ASSERT(
-            (are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-                pack_src_format[output_id], pack_dst_format[output_id], face_r_dim)),
-            "");
+    LLK_ASSERT(
+        (are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
+            pack_src_format[output_id], pack_dst_format[output_id], face_r_dim)),
+        "");
 
+    for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         _llk_pack_untilize_<block_ct_dim, full_ct_dim, narrow_row, tile_dst_ct_offset, dense>(
             pack_tile_addr,
             pack_dst_format[output_id],
@@ -289,15 +306,13 @@ inline void llk_matmul_pack(
     std::uint8_t output_id = get_output_id(output);
 
     static_assert((!(untilize && out_of_order_output)) && "untilize out of order packing is not supported!");
+    LLK_ASSERT(
+        (are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
+            pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output))),
+        "");
+    LLK_ASSERT(((start_tile_index + ntiles - 1) < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
 
     for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
-        LLK_ASSERT((tile_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
-
-        LLK_ASSERT(
-            (are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-                pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output_id))),
-            "");
-
         std::uint32_t pack_tile_addr =
             get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 

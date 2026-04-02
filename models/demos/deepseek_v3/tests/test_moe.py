@@ -13,9 +13,8 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
-from models.demos.deepseek_v3.tt.model.row_batched_model import get_fabric_config
 from models.demos.deepseek_v3.tt.moe import MoE
-from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
@@ -112,10 +111,10 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "mode,num_tokens",
+    "mode, batch_size_per_row, seq_len",
     [
-        ("decode", 128),
-        ("prefill", _prefill_seq_len),
+        ("decode", USERS_PER_ROW, 1),
+        ("prefill", 1, _prefill_seq_len),
     ],
 )
 @pytest.mark.parametrize(
@@ -128,7 +127,8 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
 def test_forward_pass(
     device_params,
     mode,
-    num_tokens,
+    batch_size_per_row,
+    seq_len,
     set_deterministic_env,
     reference_model,
     hf_config,
@@ -144,6 +144,7 @@ def test_forward_pass(
 
     module_path = "model.layers.3.mlp" if weight_type == "real" else None
     checkpoint_state_dict = request.getfixturevalue("state_dict") if weight_type == "real" else None
+    num_tokens = batch_size_per_row * mesh_device.shape[0] if mode == "decode" else seq_len
     state_dict, torch_input, reference_output = generate_reference_io(
         mode=mode,
         num_tokens=num_tokens,

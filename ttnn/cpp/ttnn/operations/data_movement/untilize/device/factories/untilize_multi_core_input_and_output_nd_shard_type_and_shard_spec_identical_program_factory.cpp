@@ -30,7 +30,6 @@ UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::c
 
     const auto& a = tensor_args.input;
     const auto& output = tensor_return_value;
-    const auto& use_pack_untilize = operation_attributes.use_pack_untilize;
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -122,23 +121,8 @@ UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::c
     if (fp32_dest_acc_en) {
         unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
-    std::string compute_kernel;
-    if (!use_pack_untilize || a.dtype() == DataType::UINT16) {
-        log_debug(tt::LogOp, "Using slow untilize.");
-
-        compute_kernel = std::string(
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/"
-            "untilize_variable_num_blocks.cpp");
-
-        unpack_to_dest_mode[src0_cb_index] =
-            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
-    } else {
-        log_debug(tt::LogOp, "Using fast pack untilize.");
-
-        compute_kernel = std::string(
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/"
-            "pack_untilize_variable_num_blocks.cpp");
-    }
+    std::string compute_kernel(
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp");
     KernelHandle untilize_kernel_id = CreateKernel(
         program,
         compute_kernel,

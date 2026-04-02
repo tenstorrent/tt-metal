@@ -499,6 +499,8 @@ public:
 
     void set_build_options(JitBuildOptions& build_options) const override;
 
+    const std::vector<QuasarComputeProcessor>& get_compute_processors() const { return this->compute_processors_; }
+
 private:
     const QuasarComputeConfig config_;
     const std::vector<QuasarComputeProcessor> compute_processors_;

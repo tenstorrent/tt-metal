@@ -94,7 +94,6 @@ void kernel_main() {
             get_named_compile_time_arg_val("cb_local_ms"),
             get_named_compile_time_arg_val("cb_r1_result_l"),
             get_named_compile_time_arg_val("cb_r1_result_ms"),
-            get_named_compile_time_arg_val("cb_packet_slot"),
             get_named_compile_time_arg_val("l1_alignment"),
             get_named_compile_time_arg_val("page_size_bytes"),
             get_named_compile_time_arg_val("slot_size"),
@@ -191,6 +190,8 @@ void kernel_main() {
             compute_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
             compute_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
             compute_args.r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            compute_args.swap_r1_reduction_order = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            compute_args.swap_r2_reduction_order = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         }
         Worker::Op<ComputeCTArgs> op;
         op(compute_args);

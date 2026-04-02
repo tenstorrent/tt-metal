@@ -4,12 +4,10 @@
 
 #include "typecast_nanobind.hpp"
 
-#include <optional>
-
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 #include "typecast.hpp"
 
@@ -33,22 +31,14 @@ void bind_typecast(nb::module_& mod) {
             "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "No"
     )doc";
 
-    bind_registered_operation(
+    ttnn::bind_function<"typecast", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::typecast,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::experimental::typecast)& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::DataType dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& optional_output_tensor) {
-                return self(input_tensor, dtype, memory_config, optional_output_tensor);
-            },
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("dtype").noconvert(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("optional_output_tensor") = nb::none()});
+        &ttnn::experimental::typecast,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("dtype").noconvert(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("optional_output_tensor") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::copy::detail

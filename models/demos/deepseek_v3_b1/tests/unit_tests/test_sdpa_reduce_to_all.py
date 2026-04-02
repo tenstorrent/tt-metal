@@ -303,6 +303,11 @@ def test_sdpa_reduce_to_all(bh_2d_mesh_device, scatter_enabled, position_id):
     logger.info(f"L tensor match: {match}, max_diff: {max_diff:.4f}")
     assert match, f"L tensor mismatch! Max diff: {max_diff}"
 
+    # Reduction order should be deterministic so all devices produce identical results.
+    for i in range(1, num_devices):
+        dev_eq = torch.equal(output_l_torch[i], out_l_root)
+        assert dev_eq, f"L tensor mismatch on device {i}"
+
     # ========================================================================
     # Verify scatter output (only when scatter is enabled)
     # Each core (x=i, y=j) should have ref_l[j, i*l_width:(i+1)*l_width]

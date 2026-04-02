@@ -9,19 +9,43 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/variant.h>
 
 #include "dit_rms_norm_unary_fused.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
+ttnn::Tensor dit_rms_norm_unary_fused_wrapper(
+    const ttnn::Tensor& input_tensor,
+    float epsilon,
+    const std::optional<ttnn::Tensor>& weight,
+    const std::optional<ttnn::Tensor>& bias,
+    const std::optional<ttnn::Tensor>& residual_input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<std::string>& activation) {
+    std::optional<ttnn::operations::unary::UnaryWithParam> act_param = std::nullopt;
+    if (activation.has_value()) {
+        act_param = ttnn::operations::unary::utils::string_to_unary_with_param(activation.value());
+    }
+    return ttnn::experimental::dit_rms_norm_unary_fused(
+        input_tensor,
+        epsilon,
+        weight,
+        bias,
+        residual_input_tensor,
+        memory_config,
+        program_config,
+        compute_kernel_config,
+        act_param);
+}
+
 void bind_dit_rms_norm_unary_fused(nb::module_& mod) {
-    bind_registered_operation(
-        mod,
-        ttnn::experimental::dit_rms_norm_unary_fused,
-        R"doc(
+    const char* doc = R"doc(
         dit_rms_norm_unary_fused(input_tensor, epsilon=1e-5, weight=None, bias=None, residual_input_tensor=None, *, memory_config=None, program_config=None, compute_kernel_config=None, activation=None)
 
         Fused RMSNorm + unary activation for DiT transformer blocks.
@@ -70,29 +94,13 @@ void bind_dit_rms_norm_unary_fused(nb::module_& mod) {
         -------
         ttnn.Tensor
             Normalized (and optionally activated) output tensor with the same shape and layout as input.
-        )doc",
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::experimental::dit_rms_norm_unary_fused)& self,
-               const ttnn::Tensor& input_tensor,
-               float epsilon,
-               const std::optional<ttnn::Tensor>& weight,
-               const std::optional<ttnn::Tensor>& bias,
-               const std::optional<ttnn::Tensor>& residual_input_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config,
-               std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-               const std::optional<ttnn::operations::unary::UnaryWithParam>& activation) {
-                return self(
-                    input_tensor,
-                    epsilon,
-                    weight,
-                    bias,
-                    residual_input_tensor,
-                    memory_config,
-                    program_config,
-                    compute_kernel_config,
-                    activation);
-            },
+        )doc";
+
+    ttnn::bind_function<"dit_rms_norm_unary_fused", "ttnn.experimental.">(
+        mod,
+        doc,
+        ttnn::overload_t(
+            &ttnn::experimental::dit_rms_norm_unary_fused,
             nb::arg("input_tensor"),
             nb::arg("epsilon") = 1e-5f,
             nb::arg("weight") = nb::none(),
@@ -102,33 +110,9 @@ void bind_dit_rms_norm_unary_fused(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("activation") = nb::none()},
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::experimental::dit_rms_norm_unary_fused)& self,
-               const ttnn::Tensor& input_tensor,
-               float epsilon,
-               const std::optional<ttnn::Tensor>& weight,
-               const std::optional<ttnn::Tensor>& bias,
-               const std::optional<ttnn::Tensor>& residual_input_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config,
-               std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-               const std::optional<std::string>& activation) {
-                std::optional<ttnn::operations::unary::UnaryWithParam> act_param = std::nullopt;
-                if (activation.has_value()) {
-                    act_param = ttnn::operations::unary::utils::string_to_unary_with_param(activation.value());
-                }
-                return self(
-                    input_tensor,
-                    epsilon,
-                    weight,
-                    bias,
-                    residual_input_tensor,
-                    memory_config,
-                    program_config,
-                    compute_kernel_config,
-                    act_param);
-            },
+            nb::arg("activation") = nb::none()),
+        ttnn::overload_t(
+            &dit_rms_norm_unary_fused_wrapper,
             nb::arg("input_tensor"),
             nb::arg("epsilon") = 1e-5f,
             nb::arg("weight") = nb::none(),
@@ -138,7 +122,7 @@ void bind_dit_rms_norm_unary_fused(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("activation") = nb::none()});
+            nb::arg("activation") = nb::none()));
 }
 
 }  // namespace ttnn::operations::experimental::transformer

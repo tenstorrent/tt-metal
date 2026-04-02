@@ -6,7 +6,7 @@ training_config:
   num_epochs: 1
   max_steps: 5000
   tokenizer_type: bpe
-  model_config: "configs/model_configs/nanogpt.yaml"
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/nanogpt.yaml"
   optimizer:
     type: AdamW
     lr: 0.0003

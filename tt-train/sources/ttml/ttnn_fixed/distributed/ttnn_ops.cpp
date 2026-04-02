@@ -200,7 +200,7 @@ tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor, const std::o
             all_reduce_barrier_semaphores,
             reduce_scatter_semaphores,
             all_gather_semaphores,
-            ttnn::operations::reduction::ReduceType::Sum,
+            reduction_common::ReduceType::Sum,
             /* memory_config */ std::nullopt,
             topology,
             std::optional<size_t>(num_links),
@@ -213,7 +213,7 @@ tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor, const std::o
             all_reduce_barrier_semaphores,
             reduce_scatter_semaphores,
             all_gather_semaphores,
-            ttnn::operations::reduction::ReduceType::Sum,
+            reduction_common::ReduceType::Sum,
             /* memory_config */ std::nullopt,
             topology,
             /* num_preferred_links */ num_links);

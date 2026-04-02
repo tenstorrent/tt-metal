@@ -6,9 +6,9 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn {
 
-std::vector<ttnn::Tensor> ChunkOperation::invoke(const ttnn::Tensor& input_tensor, const uint32_t num_chunks, int dim) {
+std::vector<ttnn::Tensor> chunk(const ttnn::Tensor& input_tensor, const uint32_t num_chunks, int dim) {
     TT_FATAL(num_chunks > 0, "Number of chunks must be greater than zero");
 
     auto size = input_tensor.logical_shape();
@@ -48,4 +48,4 @@ std::vector<ttnn::Tensor> ChunkOperation::invoke(const ttnn::Tensor& input_tenso
     return chunks;
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

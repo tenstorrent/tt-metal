@@ -4,18 +4,11 @@
 
 #pragma once
 #include <cstdint>
-
-#include "ttnn/decorators.hpp"
-
-namespace ttnn::operations::expand {
-struct ExpandOperation {
-    static Tensor invoke(
-        const ttnn::Tensor& tensor,
-        ttsl::Span<const int32_t> shape_vector,
-        const std::optional<MemoryConfig>& memory_config);
-};
-}  // namespace ttnn::operations::expand
+#include "ttnn/types.hpp"
 
 namespace ttnn {
-constexpr auto expand = ttnn::register_operation<"ttnn::expand", ttnn::operations::expand::ExpandOperation>();
-}
+Tensor expand(
+    const ttnn::Tensor& tensor,
+    ttsl::Span<const int32_t> shape_vector,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+}  // namespace ttnn

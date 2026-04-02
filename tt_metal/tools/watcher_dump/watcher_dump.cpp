@@ -8,9 +8,12 @@
 #include <string>
 #include <vector>
 
+#include "impl/context/context_types.hpp"
 #include "device.hpp"
 #include "dispatch_core_common.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_accessor.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "impl/debug/noc_logging.hpp"
 #include "impl/dispatch/debug_tools.hpp"
 #include "impl/dispatch/system_memory_manager.hpp"
@@ -26,6 +29,7 @@ string output_dir_name = "generated/watcher/";
 string logfile_name = "cq_dump.txt";
 
 void dump_data(
+    MetalEnv& env,
     vector<ChipId>& device_ids,
     bool dump_watcher,
     bool dump_cqs,
@@ -33,15 +37,15 @@ void dump_data(
     bool dump_noc_xfers,
     bool eth_dispatch,
     int num_hw_cqs) {
+    MetalEnvImpl& env_impl = MetalEnvAccessor(env).impl();
     // Don't clear L1, this way we can dump the state.
-    tt_metal::MetalContext::instance().rtoptions().set_clear_l1(false);
+    env_impl.get_rtoptions().set_clear_l1(false);
 
     // Watcher should be disabled for this, so we don't (1) overwrite the kernel_names.txt and (2) do any other dumping
     // than the one we want.
-    tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(false);
+    env_impl.get_rtoptions().set_watcher_enabled(false);
 
-    std::filesystem::path parent_dir(
-        tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + output_dir_name);
+    std::filesystem::path parent_dir(env_impl.get_rtoptions().get_root_dir() + output_dir_name);
     std::filesystem::path cq_dir(parent_dir.string() + "command_queue_dump/");
     std::filesystem::create_directories(cq_dir);
 
@@ -58,20 +62,24 @@ void dump_data(
         devices.push_back(std::unique_ptr<IDevice>(device));
         if (dump_cqs) {
             cout << "Dumping Command Queues into: " << cq_dir.string() << endl;
-            std::unique_ptr<SystemMemoryManager> sysmem_manager = std::make_unique<SystemMemoryManager>(id, num_hw_cqs);
+            std::unique_ptr<SystemMemoryManager> sysmem_manager =
+                std::make_unique<SystemMemoryManager>(DEFAULT_CONTEXT_ID, id, num_hw_cqs);
             internal::dump_cqs(cq_file, iq_file, *sysmem_manager, dump_cqs_raw_data);
         }
     }
 
     // Watcher doesn't have kernel ids since we didn't create them here, need to read from file.
     if (dump_watcher) {
-        cout << "Dumping Watcher Log into: " << MetalContext::instance().watcher_server()->log_file_name() << endl;
-        MetalContext::instance().watcher_server()->isolated_dump(device_ids);
+        WatcherServer* watcher_server = MetalContext::instance().watcher_server().get();
+        TT_FATAL(watcher_server != nullptr, "Watcher server is null after device initialization");
+        cout << "Dumping Watcher Log into: " << watcher_server->log_file_name() << endl;
+        watcher_server->isolated_dump(device_ids);
     }
 
     // Dump noc data if requested
     if (dump_noc_xfers) {
-        DumpNocData(device_ids);
+        DispatchCoreConfig dispatch_core_config{eth_dispatch ? DispatchCoreType::ETH : DispatchCoreType::WORKER};
+        DumpNocData(env_impl, device_ids, num_hw_cqs, dispatch_core_config);
     }
 }
 
@@ -97,6 +105,7 @@ int main(int argc, char* argv[]) {
     cout << "Running watcher dump tool..." << endl;
     // Default devices is all of them.
     vector<ChipId> device_ids;
+    MetalEnv& env = MetalContext::instance().get_env();
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     device_ids.reserve(num_devices);
     for (ChipId id = 0; id < num_devices; id++) {
@@ -145,7 +154,7 @@ int main(int argc, char* argv[]) {
             cout << "CQ raw data dumping currently disabled" << endl;
             // dump_cqs_raw_data = true;
         } else if (s == "--dump-noc-transfer-data") {
-            tt::tt_metal::MetalContext::instance().rtoptions().set_record_noc_transfers(true);
+            MetalEnvAccessor(env).impl().get_rtoptions().set_record_noc_transfers(true);
             dump_noc_xfers = true;
         } else if (s == "--eth-dispatch") {
             eth_dispatch = true;
@@ -157,6 +166,6 @@ int main(int argc, char* argv[]) {
     }
 
     // Call dump function with user config.
-    dump_data(device_ids, dump_watcher, dump_cqs, dump_cqs_raw_data, dump_noc_xfers, eth_dispatch, num_hw_cqs);
+    dump_data(env, device_ids, dump_watcher, dump_cqs, dump_cqs_raw_data, dump_noc_xfers, eth_dispatch, num_hw_cqs);
     std::cout << "Watcher dump tool finished." << std::endl;
 }

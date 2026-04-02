@@ -35,6 +35,8 @@ set(SOURCES
     optimizers/adamw_composite_test.cpp
     optimizers/sgd_test.cpp
     optimizers/adamw_test.cpp
+    optimizers/muon_composite_test.cpp
+    ops/newton_schulz_op_test.cpp
     optimizers/adamw_full_precision_test.cpp
     optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
@@ -53,6 +55,7 @@ set(SOURCES
     ops/cross_entropy_bw_op_test.cpp
     ops/rope_test.cpp
     ops/rmsnorm_op_test.cpp
+    ops/polynorm_op_test.cpp
     ops/unary_ops_test.cpp
     ops/embedding_op_test.cpp
     ops/softmax_test.cpp
@@ -105,7 +108,7 @@ else()
 endif()
 
 add_definitions(-DTEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
-add_definitions(-DTEST_LOCAL_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/local_data")
+add_definitions(-DTEST_LOCAL_DATA_DIR="${CMAKE_SOURCE_DIR}/tt-train/tests/local_data")
 
 # Define the target file location
 set(SHAKESPEARE_URL "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt")
@@ -127,6 +130,22 @@ endif()
 include(GoogleTest)
 gtest_discover_tests(ttml_tests)
 
+add_executable(swiglu_fusion_benchmark benchmark/swiglu_fusion_benchmark.cpp)
+target_link_libraries(
+    swiglu_fusion_benchmark
+    PUBLIC
+        ttml
+        TTNN::TTNN
+)
+
+add_executable(polynorm_fusion_benchmark benchmark/polynorm_fusion_benchmark.cpp)
+target_link_libraries(
+    polynorm_fusion_benchmark
+    PUBLIC
+        ttml
+        TTNN::TTNN
+)
+
 ############################################################################################################################
 # Benchmark tests (using Google Benchmark)
 # Only available when building via tt-metal (Build from tt-train would require adding new dependency)
@@ -136,6 +155,7 @@ if(TARGET benchmark::benchmark)
     set(BENCHMARK_SOURCES
         benchmark/matmuls_benchmark.cpp
         benchmark/from_vector_benchmark.cpp
+        benchmark/adamw_benchmark.cpp
     )
 
     foreach(BENCH_SRC ${BENCHMARK_SOURCES})

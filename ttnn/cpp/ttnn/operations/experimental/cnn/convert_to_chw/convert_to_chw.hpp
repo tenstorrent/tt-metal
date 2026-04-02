@@ -4,21 +4,13 @@
 
 #pragma once
 
-#include <ttnn/decorators.hpp>
-#include <ttnn/tensor/tensor.hpp>
+#include <optional>
 
-namespace ttnn::operations::experimental::cnn {
-
-struct ExecuteConvertToCHW {
-    static ttnn::Tensor invoke(const Tensor& a, const std::optional<DataType>& dtype = std::nullopt);
-};
-
-}  // namespace ttnn::operations::experimental::cnn
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::experimental {
 
-constexpr auto convert_to_chw = ttnn::register_operation<
-    "ttnn::experimental::convert_to_chw",
-    ttnn::operations::experimental::cnn::ExecuteConvertToCHW>();
+ttnn::Tensor convert_to_chw(const Tensor& input, const std::optional<DataType>& dtype = std::nullopt);
 
 }  // namespace ttnn::experimental

@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <vector>
 
 #include <fmt/base.h>
 
@@ -81,6 +82,10 @@ public:
 
     // Defined in config.cpp (uses tt-logger).
     void validate(std::string_view name) const;
+
+    // Returns all config attributes as key-value pairs for Inspector.
+    // Defined in config.cpp (uses reflection for_each).
+    std::vector<std::pair<std::string, std::string>> get_config_entries() const;
 
     // Defined in config.cpp (uses reflection for_each).
     friend std::ostream& operator<<(std::ostream& os, const Config& config);

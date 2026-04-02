@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import abstractmethod
+from time import perf_counter
 from typing import Sequence
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -83,13 +85,19 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
     ) -> ModelState:
-        return {
+        logger.info(f"Creating {cls.__name__} shared state...")
+        mlp_start = perf_counter()
+        mlp_shared_state = cls.create_mlp_shared_state(
+            hf_config,
+            mesh_device,
+        )
+        logger.info(f"Created {cls.__name__} MLP shared state in {perf_counter() - mlp_start:.2f}s")
+        state = {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
-            "mlp": cls.create_mlp_shared_state(
-                hf_config,
-                mesh_device,
-            ),
+            "mlp": mlp_shared_state,
         }
+        logger.info(f"Created {cls.__name__} shared state")
+        return state
 
     @classmethod
     @abstractmethod

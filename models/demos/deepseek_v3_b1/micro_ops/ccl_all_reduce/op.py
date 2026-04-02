@@ -129,7 +129,6 @@ class DeepseekMinimalAllReduce:
         num_standard_tiles = (input_num_pages + tiny_tiles_per_standard_tile - 1) // tiny_tiles_per_standard_tile
 
         # Packet and alignment info
-        l1_alignment = 16  # L1 alignment
         packet_size_bytes = input_num_pages * page_size_bytes
 
         # CB indices
@@ -137,10 +136,8 @@ class DeepseekMinimalAllReduce:
         compute_cb_in1 = 1  # For remote data (standard tiles, intermediate tensor)
         compute_cb_in2 = 2  # For local data (standard tiles, re-interpreted input)
         compute_cb_out = 3  # For output (standard tiles, re-interpreted output)
-        packet_header_cb_id = 4  # For fabric packet headers
         packet_cb_id = 5  # For fabric packets
         compute_cb_residual = 6  # For fused residual add
-        compute_cb_temp = 7
 
         # Packet header size
         packet_header_size_bytes = 32  # Size of one packet header
@@ -231,9 +228,7 @@ class DeepseekMinimalAllReduce:
                 ]
 
                 sender_brisc_ct_args = [
-                    ("packet_header_cb_id", packet_header_cb_id),
                     ("packet_cb_id", src0_cb_index),
-                    ("l1_alignment", l1_alignment),
                     ("input_num_tiles", input_num_pages),
                     ("page_size_bytes", page_size_bytes),
                     ("payload_size_bytes", packet_size_bytes),
@@ -248,7 +243,6 @@ class DeepseekMinimalAllReduce:
                 # Receiver kernel: NCRISC (reader) + TRISC (compute)
                 receiver_ncrisc_ct_args = [
                     ("cb_in1", compute_cb_in1),
-                    ("l1_alignment", l1_alignment),
                     ("cb_in2", compute_cb_in2),
                     ("remote_sender_noc_x", remote_sender_noc_x),
                     ("remote_sender_noc_y", remote_sender_noc_y),
@@ -262,7 +256,6 @@ class DeepseekMinimalAllReduce:
                     ("cb_in1", compute_cb_in2),
                     ("cb_out0", compute_cb_out),
                     ("cb_residual", compute_cb_residual),
-                    ("cb_temp", compute_cb_temp),
                     ("has_residual", has_residual),
                     ("num_tiles", num_standard_tiles),
                 ]
@@ -327,18 +320,6 @@ class DeepseekMinimalAllReduce:
                     )
                 ]
 
-                # CB4: Packet headers
-                cb4_format = ttnn.CBFormatDescriptor(
-                    buffer_index=packet_header_cb_id,
-                    data_format=ttnn.uint32,
-                    page_size=packet_header_size_bytes,
-                )
-                cb4_desc = ttnn.CBDescriptor(
-                    total_size=2 * packet_header_size_bytes,
-                    core_ranges=worker_core_set,
-                    format_descriptors=[cb4_format],
-                )
-
                 # CB5: Packet data for sender
                 cb5_format = ttnn.CBFormatDescriptor(
                     buffer_index=packet_cb_id,
@@ -350,7 +331,7 @@ class DeepseekMinimalAllReduce:
                     core_ranges=worker_core_set,
                     format_descriptors=[cb5_format],
                 )
-                cb_list = [cb0_desc, cb1_desc, cb2_desc, cb3_desc, cb4_desc, cb5_desc]
+                cb_list = [cb0_desc, cb1_desc, cb2_desc, cb3_desc, cb5_desc]
                 if residual_tensor_mesh is not None:
                     cb6_desc = ttnn.cb_descriptor_from_sharded_tensor(
                         compute_cb_residual, residual_tensors_per_device[device_idx]
@@ -366,20 +347,6 @@ class DeepseekMinimalAllReduce:
                         )
                     ]
                     cb_list.append(cb6_desc)
-                    # CB7: Temp scratch buffer (not backed by tensor)
-                    cb7_desc = ttnn.CBDescriptor(
-                        total_size=num_standard_tiles * standard_tile_size_bytes,
-                        core_ranges=receiver_core_set,
-                        format_descriptors=[
-                            ttnn.CBFormatDescriptor(
-                                buffer_index=compute_cb_temp,
-                                data_format=dtype,
-                                page_size=standard_tile_size_bytes,
-                                tile=ttnn.TileDescriptor(intermediate_tile_height, intermediate_tile_width),
-                            )
-                        ],
-                    )
-                    cb_list.append(cb7_desc)
 
                 # === KERNEL DESCRIPTORS using UnifiedKernelDescriptor ===
                 # Single unified kernel with is_sender compile-time arg to differentiate roles

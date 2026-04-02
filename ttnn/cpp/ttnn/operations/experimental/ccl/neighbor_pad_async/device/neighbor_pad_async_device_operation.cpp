@@ -58,25 +58,6 @@ void NeighborPadAsyncDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(num_sticks_per_halo_dim >= args.num_links, "Not enough work to split among links, reduce num links");
     }
 
-    if (args.secondary_cluster_axis.has_value()) {
-        const auto& mesh_view = tensor_args.input_tensor.device()->get_view();
-        uint32_t target_ring_size = (args.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-        TT_FATAL(
-            args.secondary_cluster_axis.value() == 0 || args.secondary_cluster_axis.value() == 1,
-            "Unsupported secondary cluster axis {}.",
-            args.secondary_cluster_axis.value());
-        TT_FATAL(
-            args.secondary_mesh_shape.has_value(),
-            "If secondary cluster axis is specified, need to have a secondary mesh shape");
-        TT_FATAL(
-            !(target_ring_size % args.secondary_mesh_shape.value().at(0)) &&
-                !(target_ring_size % args.secondary_mesh_shape.value().at(1)),
-            "Secondary mesh shape ({},{}) is not valid given main cluster axis device count {}",
-            args.secondary_mesh_shape.value().at(0),
-            args.secondary_mesh_shape.value().at(1),
-            target_ring_size);
-    }
-
     // Validate secondary padding dimension (2D padding)
     if (args.pad_dim2.has_value()) {
         uint32_t dim2 = args.pad_dim2.value();
@@ -166,8 +147,6 @@ ttsl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
         args.output_mem_config,
         args.topology,
         args.ring_size,
-        args.secondary_cluster_axis,
-        args.secondary_mesh_shape,
         args.pad_dim2,
         args.pad2_left,
         args.pad2_right,
@@ -193,8 +172,6 @@ Tensor neighbor_pad_async(
     std::optional<size_t> num_preferred_links,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::ccl::Topology> topology,
-    std::optional<uint32_t> secondary_cluster_axis,
-    const std::optional<std::vector<uint32_t>>& secondary_mesh_shape,
     std::optional<uint32_t> pad_dim2,
     uint32_t pad2_left,
     uint32_t pad2_right,
@@ -224,8 +201,6 @@ Tensor neighbor_pad_async(
         memory_config.value_or(input_tensor.memory_config()),
         topology_,
         num_devices,
-        secondary_cluster_axis,
-        secondary_mesh_shape,
         pad_dim2,
         pad2_left,
         pad2_right,

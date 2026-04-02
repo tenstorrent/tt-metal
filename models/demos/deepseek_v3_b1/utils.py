@@ -4,6 +4,8 @@
 
 import struct
 
+import ttnn
+
 
 def float_to_bfloat16_packed(value):
     """Convert float to packed bfloat16 (two copies in uint32)"""
@@ -21,6 +23,60 @@ def float_to_uint32(value):
     return int.from_bytes(struct.pack("f", value), byteorder="little")
 
 
+def merge_per_core_runtime_args(*groups):
+    """
+    Merge per-core runtime arg groups in-order with core-aware concatenation.
+
+    Each group is a list of tuples: (core_coord, list[int]).
+    If a core appears in multiple groups, args are concatenated in group order.
+    """
+    merged = []
+    core_to_index = {}
+    for group in groups:
+        for core, args in group:
+            key = (core.x, core.y)
+            args_list = list(args)
+            if key in core_to_index:
+                idx = core_to_index[key]
+                merged_core, merged_args = merged[idx]
+                merged[idx] = (merged_core, merged_args + args_list)
+            else:
+                core_to_index[key] = len(merged)
+                merged.append((core, args_list))
+    return merged
+
+
+def merge_kernel_defines(*define_groups):
+    """
+    Merge kernel defines in-order with key-aware deduplication.
+
+    Each input is an iterable of (name, value) tuples. First occurrence preserves
+    ordering; later occurrences override the value for that define name.
+    """
+    merged = {}
+    ordered_names = []
+    for group in define_groups:
+        for name, value in group:
+            if name not in merged:
+                ordered_names.append(name)
+            merged[name] = value
+    return [(name, merged[name]) for name in ordered_names]
+
+
+def fabric_config_enables_torus_x(fabric_config) -> bool:
+    return fabric_config in (
+        ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+    )
+
+
+def fabric_config_enables_torus_y(fabric_config) -> bool:
+    return fabric_config in (
+        ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+    )
+
+
 def generate_mm_weights(shape, dtype):
     import torch
 
@@ -33,3 +89,21 @@ def generate_mm_weights(shape, dtype):
     # # Alternatively, we could pass the original shape and use fan_out
     # torch.nn.init.kaiming_normal_(torch_mm_weights.T, mode="fan_in", nonlinearity="linear")
     # return torch_mm_weights
+
+
+# Hardcoded optimal DRAM bank to logical worker assignment for Blackhole to avoid differences from harvesting
+def get_pinned_optimal_dram_bank_to_logical_worker_assignment(device, noc):
+    import ttnn
+
+    assert noc == ttnn.NOC.NOC_0, "Only NOC_0 is supported for now"
+    assert device.arch() == ttnn.Arch.BLACKHOLE, "Only Blackhole is supported for now"
+    return [
+        ttnn.CoreCoord(0, 9),
+        ttnn.CoreCoord(0, 0),
+        ttnn.CoreCoord(0, 7),
+        ttnn.CoreCoord(0, 3),
+        ttnn.CoreCoord(7, 9),
+        ttnn.CoreCoord(7, 1),
+        ttnn.CoreCoord(7, 6),
+        ttnn.CoreCoord(7, 4),
+    ]

@@ -11,9 +11,8 @@ from diffusers import DiffusionPipeline
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import is_blackhole, torch_random
 from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
-from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.demos.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from models.demos.stable_diffusion_xl_base.tt.tt_geglu import TtGEGLU
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -38,8 +37,9 @@ def _get_diffusers_pipeline(is_ci_env):
         ((512, 512), (1024, 640), "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0", 0.950),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_geglu(device, image_resolution, input_shape, module_path, pcc, is_ci_env, reset_seeds, lora_path):
+    if image_resolution == (512, 512) and is_blackhole():
+        pytest.skip("512x512 resolution not supported on Blackhole")
     pipeline = _get_diffusers_pipeline(is_ci_env)
     pipeline.unet.eval()
 

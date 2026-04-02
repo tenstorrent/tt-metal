@@ -9,8 +9,7 @@ from diffusers import AutoencoderKL
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import torch_random
-from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch_random
 from models.demos.stable_diffusion_xl_base.vae.tt.model_configs import load_vae_model_optimisations
 from models.demos.stable_diffusion_xl_base.vae.tt.tt_downblock2d import TtDownEncoderBlock2D
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -20,8 +19,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "image_resolution, input_shape, block_id, pcc",
     [
         # 1024x1024 image resolution
-        ((1024, 1024), (1, 128, 1024, 1024), 0, 0.999),
-        ((1024, 1024), (1, 128, 512, 512), 1, 0.998),
+        # Blackhole has lower PCC due to DRAM groupnorm numerical differences
+        ((1024, 1024), (1, 128, 1024, 1024), 0, 0.999 if is_wormhole_b0() else 0.998),
+        ((1024, 1024), (1, 128, 512, 512), 1, 0.998 if is_wormhole_b0() else 0.996),
         ((1024, 1024), (1, 256, 256, 256), 2, 0.999),
         ((1024, 1024), (1, 512, 128, 128), 3, 0.999),
         # 512x512 image resolution
@@ -31,14 +31,26 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ((512, 512), (1, 512, 64, 64), 3, 0.999),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_downblock2d(device, image_resolution, block_id, input_shape, pcc, debug_mode, is_ci_env, reset_seeds):
+def test_downblock2d(
+    device,
+    image_resolution,
+    block_id,
+    input_shape,
+    pcc,
+    debug_mode,
+    is_ci_env,
+    is_ci_v2_env,
+    sdxl_base_vae_location,
+    reset_seeds,
+):
+    if image_resolution == (512, 512) and is_blackhole():
+        pytest.skip("512x512 not supported on Blackhole")
     vae = AutoencoderKL.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        sdxl_base_vae_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        subfolder="vae",
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_v2_env or is_ci_env,
+        subfolder=None if is_ci_v2_env else "vae",
     )
     vae.eval()
     state_dict = vae.state_dict()

@@ -9,7 +9,7 @@ training_config:
   clip_grad_norm_max_norm: 1.0
   tokenizer_type: "char"
   data_path: "data/shakespeare.txt"
-  model_config: "configs/model_configs/nanogpt.yaml"
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/nanogpt.yaml"
   optimizer:
     type: AdamW
     lr: 0.0003

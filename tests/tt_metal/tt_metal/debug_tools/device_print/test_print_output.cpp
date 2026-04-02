@@ -21,6 +21,16 @@ public:
     }
 };
 
+TEST_F(DevicePrintOutputFixture, PrintSimpleString) {
+    std::vector<std::string> messages = {
+        "Hello world!",
+        "First line.",
+        "Second line.",
+    };
+
+    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_simple_string.cpp", messages);
+}
+
 TEST_F(DevicePrintOutputFixture, PrintSingleUintArg) {
     std::vector<uint32_t> runtime_args = {42};
     std::vector<std::string> messages = {
@@ -28,6 +38,15 @@ TEST_F(DevicePrintOutputFixture, PrintSingleUintArg) {
     };
 
     TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_single_uint_arg.cpp", messages, runtime_args);
+}
+
+TEST_F(DevicePrintOutputFixture, PrintFactorial) {
+    std::vector<uint32_t> runtime_args = {5};
+    std::vector<std::string> messages = {
+        "factorial(5) = 120",
+    };
+
+    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_factorial.cpp", messages, runtime_args);
 }
 
 TEST_F(DevicePrintOutputFixture, PrintBasicTypes) {
@@ -104,7 +123,7 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
         auto& program_ = workload.get_programs().at(device_range);
 
         constexpr CoreCoord core = {0, 0};
-        uint32_t iterations_count = 100;
+        uint32_t iterations_count = 1000;
         std::vector<uint32_t> runtime_args = {iterations_count};
 
         // BRISC
@@ -154,4 +173,83 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
                                                      << " times (expected " << 5 * device_counter << " times)";
         }
     }
+}
+
+TEST_F(DevicePrintOutputFixture, PrintAllArgumentSizes) {
+    std::vector<std::string> messages = {
+        "No arguments",
+        "1 argument: 1",
+        "2 arguments: 1 2",
+        "3 arguments: 1 2 3",
+        "4 arguments: 1 2 3 4",
+        "5 arguments: 1 2 3 4 5",
+        "6 arguments: 1 2 3 4 5 6",
+        "7 arguments: 1 2 3 4 5 6 7",
+        "8 arguments: 1 2 3 4 5 6 7 8",
+        "9 arguments: 1 2 3 4 5 6 7 8 9",
+        "10 arguments: 1 2 3 4 5 6 7 8 9 10",
+        "11 arguments: 1 2 3 4 5 6 7 8 9 10 11",
+        "12 arguments: 1 2 3 4 5 6 7 8 9 10 11 12",
+        "13 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13",
+        "14 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14",
+        "15 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15",
+        "16 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16",
+        "17 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17",
+        "18 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18",
+        "19 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19",
+        "20 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20",
+        "21 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21",
+        "22 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22",
+        "23 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23",
+        "24 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24",
+        "25 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25",
+        "26 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26",
+        "27 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27",
+        "28 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28",
+        "29 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29",
+        "30 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30",
+        "31 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31",
+        "32 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32",
+    };
+
+    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_all_argument_sizes.cpp", messages);
+}
+
+// When DWARF debug info is present in the ELF, enum values are printed as their symbolic names.
+// Without '#' the output is just the value name; with '#' the full qualified type::value name is printed.
+// Bit-field enums print each active flag separated by " | ".
+// Unrecognised values are printed as (EnumType)integer.
+TEST_F(DevicePrintOutputFixture, PrintEnumValue) {
+    std::vector<std::string> messages = {
+        // Plain format: only the value name
+        "Enum1 value: Value2",
+        // Alternate form (#): full qualified type name + value name
+        "Enum1 full name value: test::deep::Enum1::Value3",
+        "Enum1 unrecognized value: (test::deep::Enum1)100",
+        "Enum1 full name unrecognized value: (test::deep::Enum1)100",
+        "Enum2 value: ValueB",
+        "Enum2 full name value: test_shallow::Enum2::ValueC",
+        "EnumClass value: ValueY",
+        "EnumClass full name value: EnumClass::ValueZ",
+        // Bit-field enum: active flags joined by " | "
+        "BitEnum value: Flag1 | Flag3",
+        "BitEnum full name value: flags::BitEnum::Flag2 | flags::BitEnum::Flag3",
+    };
+
+    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_enum_value.cpp", messages);
+}
+
+TEST_F(DevicePrintOutputFixture, PrintBuiltinTypes) {
+    std::vector<std::string> messages = {
+        "i=1",
+        "unknown=5",
+        "u=42",
+        "ll=-123456789012345",
+        "ull=123456789012345",
+        "s=-12345",
+        "us=12345",
+        "cvllu=98765432109876",
+    };
+
+    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_builtin_types.cpp", messages);
 }

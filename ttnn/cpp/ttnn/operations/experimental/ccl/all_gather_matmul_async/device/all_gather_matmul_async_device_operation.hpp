@@ -7,11 +7,10 @@
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_device_operation_types.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_program_factory.hpp"
 
-#include "ttnn/decorators.hpp"
-
 #include <optional>
 #include <variant>
 #include <vector>
+#include "ttnn/types.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -22,6 +21,7 @@ struct AllGatherMatmulAsyncDeviceOperation {
     using tensor_return_value_t = AllGatherMatmulAsyncResult;
     using program_factory_t = std::variant<AllGatherMatmulAsyncMeshWorkloadFactory>;
 
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);

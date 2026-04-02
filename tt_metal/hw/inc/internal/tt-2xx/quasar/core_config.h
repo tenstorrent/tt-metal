@@ -10,7 +10,8 @@ enum ProgrammableCoreType {
     TENSIX = 0,
     ACTIVE_ETH = 1,
     IDLE_ETH = 2,
-    COUNT = 3,
+    DRAM = 3,
+    COUNT = 4,
 };
 
 enum class TensixProcessorTypes : uint8_t {
@@ -86,7 +87,8 @@ union subordinate_map_t {
 } __attribute__((packed));
 
 constexpr uint8_t MaxProcessorsPerCoreType = 24;
-constexpr uint8_t MaxProcessorsForThreadingVariables = 16;  // 8 DMs + 4 trisc engines; round up to multiple of 8 for alignment
+constexpr uint8_t MaxProcessorsForThreadingVariables =
+    16;  // 8 DMs + 4 compute engine slots; round up to multiple of 8 for alignment
 constexpr uint8_t MaxDMProcessorsPerCoreType = 8;
 constexpr uint8_t MaxNumKernels = MaxDMProcessorsPerCoreType+1; // +1 for the compute kernel.
 constexpr uint8_t NumTensixDispatchClasses = 3;

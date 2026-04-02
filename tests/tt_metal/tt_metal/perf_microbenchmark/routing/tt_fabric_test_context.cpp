@@ -85,6 +85,7 @@ void TestContext::wait_for_programs_with_progress() {
     }
 
     // Create progress monitor (but don't start polling thread yet)
+    progress_config_.show_workers = show_workers_;
     TestProgressMonitor monitor(this, progress_config_);
 
     // Poll and check for completion in this thread
@@ -327,6 +328,22 @@ void TestContext::compile_programs() {
         }
     }
 
+    if (show_workers_) {
+        for (const auto& [coord, test_device] : test_devices_) {
+            const auto& node_id = test_device.get_node_id();
+            const auto& senders = test_device.get_senders();
+            const auto& receivers = test_device.get_receivers();
+            if (!senders.empty() || !receivers.empty()) {
+                log_info(
+                    tt::LogTest,
+                    "Device {}: {} sender(s), {} receiver(s)",
+                    tt::tt_fabric::fabric_tests::format_device_label(node_id),
+                    senders.size(),
+                    receivers.size());
+            }
+        }
+    }
+
     // Enqueue all programs
     for (auto& [coord, test_device] : test_devices_) {
         auto& program_handle = test_device.get_program_handle();
@@ -555,6 +572,7 @@ void TestContext::process_traffic_config(TestConfig& config) {
                 .atomic_inc_address = dest.atomic_inc_address,
                 .link_id = sender.link_id,
                 .noc_id = sender.noc_id,
+                .vc_id = sender.vc_id.value_or(tt::tt_fabric::fabric_tests::default_worker_vc_id),
                 .sender_credit_info = pattern.sender_credit_info,
                 .credit_return_batch_size = pattern.credit_return_batch_size,
             };
@@ -616,7 +634,8 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
         .dst_noc_encoding = dst_noc_encoding,
         .payload_buffer_size = payload_buffer_size,
         .link_id = traffic_config.link_id,
-        .noc_id = traffic_config.noc_id};
+        .noc_id = traffic_config.noc_id,
+        .vc_id = traffic_config.vc_id};
 
     TestTrafficReceiverConfig receiver_config = {
         .parameters = traffic_config.parameters,

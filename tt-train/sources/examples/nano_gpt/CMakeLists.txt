@@ -36,19 +36,20 @@ target_compile_definitions(
     nano_gpt
     PRIVATE
         DATA_FOLDER="${CMAKE_SOURCE_DIR}/data"
-        CONFIGS_FOLDER="${CMAKE_SOURCE_DIR}/configs"
+        CONFIGS_FOLDER="${TT_TRAIN_SOURCE_DIR}/configs"
 )
+target_compile_definitions(llama_inference PRIVATE CONFIGS_FOLDER="${TT_TRAIN_SOURCE_DIR}/configs")
 target_compile_definitions(
     nano_gpt_aggregator
     PRIVATE
         DATA_FOLDER="${CMAKE_SOURCE_DIR}/data"
-        CONFIGS_FOLDER="${CMAKE_SOURCE_DIR}/configs"
+        CONFIGS_FOLDER="${TT_TRAIN_SOURCE_DIR}/configs"
 )
 target_compile_definitions(
     nano_gpt_optimizer
     PRIVATE
         DATA_FOLDER="${CMAKE_SOURCE_DIR}/data"
-        CONFIGS_FOLDER="${CMAKE_SOURCE_DIR}/configs"
+        CONFIGS_FOLDER="${TT_TRAIN_SOURCE_DIR}/configs"
 )
 
 # Define the target file location

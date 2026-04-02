@@ -12,8 +12,6 @@ from conftest import is_galaxy
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
     CONCATENATED_TEXT_EMBEDINGS_SIZE,
     MAX_SEQUENCE_LENGTH,
-    SDXL_L1_SMALL_SIZE,
-    SDXL_TRACE_REGION_SIZE,
     TEXT_ENCODER_2_PROJECTION_DIM,
     determinate_min_batch_size,
     prepare_device,
@@ -36,11 +34,6 @@ def _run_forward_pass(tt_sdxl, pipeline, prompt, negative_prompt, batch_size):
     return out[0]
 
 
-@pytest.mark.parametrize(
-    "device_params",
-    [{"l1_small_size": SDXL_L1_SMALL_SIZE, "trace_region_size": SDXL_TRACE_REGION_SIZE}],
-    indirect=["device_params"],
-)
 @pytest.mark.parametrize(
     "prompt, negative_prompt, lora_prompt",
     [

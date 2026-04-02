@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import shutil
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -87,6 +88,15 @@ def _try_load_cached_config(config_path: Path, weight_cache_path: Path, force_re
     """
     if force_recalculate:
         logger.info("Forcing recalculating weights")
+        if weight_cache_path.exists():
+            logger.info(f"Deleting existing cache directory: {weight_cache_path}")
+            try:
+                if weight_cache_path.is_dir():
+                    shutil.rmtree(weight_cache_path)
+                else:
+                    weight_cache_path.unlink()
+            except OSError as e:
+                logger.warning(f"Failed to remove weight cache at {weight_cache_path}: {e}")
         return None
     if not config_path.exists():
         logger.info("Weight configuration file does not exist, forcing recalculating weights")
@@ -115,6 +125,7 @@ def get_weight_config(
     random_weights: bool = False,
     model_path: str | None = None,
     single_layer: str | None = None,
+    cache_subdir_name: str | None = None,
 ):
     """
     Get weight configuration, either from cache or by converting weights.
@@ -129,6 +140,8 @@ def get_weight_config(
         random_weights: If True, generate random weights from reference model
         model_path: Path to HuggingFace model directory (required if random_weights=False and state_dicts=None)
         single_layer: Optional single layer name (used for validation with random weights)
+        cache_subdir_name: Optional cache subdirectory name under ``weight_cache_path``.
+            Defaults to ``"{num_hidden_layers}_layers"``.
 
     Returns:
         Weight configuration dictionary
@@ -142,11 +155,8 @@ def get_weight_config(
     if not weight_cache_path.is_absolute():
         weight_cache_path = weight_cache_path.resolve()
 
-    weight_cache_path = (
-        weight_cache_path
-        / f"{hf_config.num_hidden_layers}_layers"
-        / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
-    )
+    cache_subdir_name = cache_subdir_name or f"{hf_config.num_hidden_layers}_layers"
+    weight_cache_path = weight_cache_path / cache_subdir_name / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
     config_path = weight_cache_path / "config.json"
 
     # Try to load from cache

@@ -154,12 +154,17 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
 
     auto path = fmt::format("{}/{}", compute_root, utils::get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
 
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    // Use HiFi3 when fp32_dest_acc_en is True on Wormhole (less likely to give bad results).
+    const auto default_fp32_acc_math_fidelity =
+        (args.fp32_dest_acc_en && device->arch() == tt::ARCH::WORMHOLE_B0) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
+
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
         path,
         core_group_1,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
+            .math_fidelity = default_fp32_acc_math_fidelity,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .bfp8_pack_precise = args.bfp8_pack_precise,
@@ -179,7 +184,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
             path,
             core_group_2,
             tt::tt_metal::ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
+                .math_fidelity = default_fp32_acc_math_fidelity,
                 .fp32_dest_acc_en = args.fp32_dest_acc_en,
                 .unpack_to_dest_mode = unpack_to_dest_mode,
                 .bfp8_pack_precise = args.bfp8_pack_precise,
@@ -387,12 +392,18 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
 
     auto path = fmt::format("{}/{}", compute_root, utils::get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
 
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    // Use HiFi3 when fp32_dest_acc_en is True on Wormhole (less likely to give bad results).
+    const auto default_fp32_acc_math_fidelity_sub =
+        (args.fp32_dest_acc_en && input.device()->arch() == tt::ARCH::WORMHOLE_B0) ? MathFidelity::HiFi3
+                                                                                   : MathFidelity::HiFi4;
+
     auto eltwise_unary_kernel_id = tt::tt_metal::CreateKernel(
         program,
         path,
         all_cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
+            .math_fidelity = default_fp32_acc_math_fidelity_sub,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .bfp8_pack_precise = args.bfp8_pack_precise,

@@ -309,7 +309,6 @@ class SdpaReduceToAll:
                 cb_r1_result_l = 4
                 cb_r1_result_ms = 5
                 cb_l_out = 6
-                cb_packet_slot = 7
 
                 # Scatter compile-time parameters
                 if scatter_enabled:
@@ -350,7 +349,6 @@ class SdpaReduceToAll:
                     ("cb_local_ms", cb_local_ms),
                     ("cb_r1_result_l", cb_r1_result_l),
                     ("cb_r1_result_ms", cb_r1_result_ms),
-                    ("cb_packet_slot", cb_packet_slot),
                     ("l1_alignment", l1_alignment),
                     ("page_size_bytes", input_page_size_bytes),
                     ("slot_size", slot_size),
@@ -430,19 +428,6 @@ class SdpaReduceToAll:
                             buffer_index=cb_r1_result_ms,
                             data_format=input_dtype,
                             page_size=aligned_page_size,
-                            tile=tile_desc,
-                        )
-                    ],
-                )
-
-                cb_packet_slot_desc = ttnn.CBDescriptor(
-                    total_size=2 * header_cb_size,
-                    core_ranges=shard_grid,
-                    format_descriptors=[
-                        ttnn.CBFormatDescriptor(
-                            buffer_index=cb_packet_slot,
-                            data_format=ttnn.uint32,
-                            page_size=header_cb_size,
                             tile=tile_desc,
                         )
                     ],
@@ -585,6 +570,14 @@ class SdpaReduceToAll:
                             else:
                                 r2_neighbor_r1_neighbor_idx = (r2_neighbor_device_idx - 1 + num_devices) % num_devices
 
+                            # Deterministic reduction order based on device indices so all devices produce identical results.
+                            # R1: swap so lower device index is always arg1 ("worker")
+                            swap_r1_reduction_order = 1 if device_idx < r1_neighbor_device_idx else 0
+                            # R2: swap so the R1 pair with lower min device index is always arg1 ("worker")
+                            r1_pair_min = min(device_idx, r1_neighbor_device_idx)
+                            r2_pair_min = min(r2_neighbor_device_idx, r2_neighbor_r1_neighbor_idx)
+                            swap_r2_reduction_order = 1 if r1_pair_min < r2_pair_min else 0
+
                             trisc_core_args.append(
                                 (
                                     core,
@@ -594,6 +587,8 @@ class SdpaReduceToAll:
                                         r1_neighbor_device_idx,
                                         r2_neighbor_device_idx,
                                         r2_neighbor_r1_neighbor_idx,
+                                        swap_r1_reduction_order,
+                                        swap_r2_reduction_order,
                                     ],
                                 )
                             )
@@ -701,7 +696,6 @@ class SdpaReduceToAll:
                         cb_r1_result_l_desc,
                         cb_r1_result_ms_desc,
                         cb_l_out_desc,
-                        cb_packet_slot_desc,
                     ],
                 )
 

@@ -6,8 +6,6 @@
 
 #include "neighbor_pad_async_device_operation_types.hpp"
 #include "neighbor_pad_async_program_factory.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -45,8 +43,6 @@ Tensor neighbor_pad_async(
     std::optional<size_t> num_preferred_links,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::ccl::Topology> topology,
-    std::optional<uint32_t> secondary_cluster_axis,
-    const std::optional<std::vector<uint32_t>>& secondary_mesh_shape,
     std::optional<uint32_t> pad_dim2 = std::nullopt,
     uint32_t pad2_left = 0,
     uint32_t pad2_right = 0,

@@ -13,7 +13,7 @@ namespace ckernel {
 
 // clang-format off
 /**
- * Performs elementwise natural logarithm of the gamma function: out = lgamma(x). lgamma is computed using Stirling approximation.
+ * Performs elementwise natural logarithm of the gamma function (suitable for bfloat16 inputs): out = lgamma(x). lgamma is computed using Stirling approximation.
  * For x < 0.5, the reflection formula (1 - x) is used before Stirling approximation.
  * The final reflection formula correction for (inputs < 0.5) is not part of this kernel.
  * Note: This API will be deprecated soon in favor of a single fused kernel
@@ -37,6 +37,39 @@ ALWI void lgamma_stirling_tile_init() {
     MATH((llk_math_eltwise_unary_sfpu_lgamma_stirling_init<APPROX, DST_ACCUM_MODE>()));
 }
 
+// clang-format off
+/**
+ * Performs elementwise natural logarithm of the gamma function (suitable for float32 inputs): out = lgamma(x). lgamma is computed using Stirling approximation.
+ * For x < 0.5, the reflection formula (1 - x) is used before Stirling approximation.
+ * The final reflection formula correction for (inputs < 0.5) is not part of this kernel.
+ * Note: This API will be deprecated soon in favor of a single fused kernel
+ *
+ * lgamma_stirling_float_tile(idst0, idst1, idst2); // computes lgamma(x) for x >= 0.5 and lgamma(1-x) for x < 0.5 using Stirling approximation.
+ *
+ * idst0: input x
+ * idst1: log(z) where z = (x < 0.5) ? 1-x : x
+ * idst2: output lgamma(x) for x >= 0.5 and lgamma(1-x) for x < 0.5 using Stirling approximation.
+ *
+ * | Argument | Description                                                | Type     | Valid Range                                           | Required |
+ * |----------|------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst0    | Index of the tile in DST register buffer (input)           | uint32_t | 0 to (num_dests-1)                                    | Yes      |
+ * | idst1    | Index of the tile in DST register buffer (log(z))        | uint32_t | 0 to (num_dests-1)                                    | Yes      |
+ * | idst2    | Index of the tile in DST register buffer (output)          | uint32_t | 0 to (num_dests-1)                                    | Yes      |
+ */
+
+// clang-format on
+ALWI void lgamma_stirling_float_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2) {
+    MATH((llk_math_eltwise_binary_sfpu_lgamma_stirling<APPROX, DST_ACCUM_MODE>(idst0, idst1, idst2)));
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void lgamma_stirling_float_tile_init() {
+    MATH((llk_math_eltwise_binary_sfpu_lgamma_stirling_init<APPROX, DST_ACCUM_MODE>()));
+}
+
+// clang-format off
 /**
  * Combines the Stirling-based lgamma approximation with the reflection formula correction for inputs x < 0.5.
  * Uses (1 - x) via the reflection formula and writes the adjusted lgamma result to the output tile.

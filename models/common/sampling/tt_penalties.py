@@ -91,8 +91,6 @@ class TTPenalties(LightweightModule):
 
         padded_vocab_size = getattr(args, "padded_vocab_size", None)
         self.vocab_size = padded_vocab_size if padded_vocab_size is not None else args.vocab_size
-        num_devices = max(mesh_device.shape[-1], mesh_device.shape[-2])
-        self.num_devices = num_devices
 
         self.sub_core_grids = getattr(args, "sub_core_grids", None)
         self._op_kwargs = {"sub_core_grids": self.sub_core_grids} if self.sub_core_grids else {}
@@ -100,6 +98,14 @@ class TTPenalties(LightweightModule):
         # sampling_dp > 1 when multiple mesh rows each sample independently
         # (e.g. GPT-OSS on [4,8] Galaxy: 4 rows × 32 users = 128 total)
         self._sampling_dp = getattr(args, "sampling_dp", 1)
+
+        # When rows are used for data parallelism (sampling_dp > 1), vocab
+        # must be sharded along columns; otherwise pick the larger dimension.
+        if self._sampling_dp > 1:
+            num_devices = mesh_device.shape[-1]
+        else:
+            num_devices = max(mesh_device.shape[-1], mesh_device.shape[-2])
+        self.num_devices = num_devices
         # Total batch across all rows. Host tensors use this size; after
         # (0, ...) sharding each row gets max_batch_size entries.
         self._total_batch = self.max_batch_size * self._sampling_dp

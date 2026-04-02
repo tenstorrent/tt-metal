@@ -7,7 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_conversions.h"
-#include "ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "sfpi.h"
 
@@ -207,7 +207,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
 
     // 2^z_f32 = exp(z_f32 * ln(2)); use Cody-Waite + Taylor exp for <1 ULP float32 accuracy
     constexpr float LN2 = 0.693147180559945309f;
-    sfpi::vFloat y = _sfpu_exp_f32_accurate_(z_f32 * LN2);
+    sfpi::vFloat y = _sfpu_exp_fp32_accurate_(z_f32 * LN2);
 
     // Division by 0 when base is 0 and pow is negative => set to NaN (only for negative exponents)
     v_if((abs_base == 0.f) && pow < 0.f) {

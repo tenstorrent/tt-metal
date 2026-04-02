@@ -240,6 +240,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         cores = grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, false);
     }
     if (use_width_sharding) {
+        TT_FATAL(NC != 0, "Batch size NC must be non-zero (shape[0]={}, shape[1]={})", shape[0], shape[1]);
         uint32_t shard_Wt = num_cols_per_core_group_1 / NC;
         uint32_t shard_row_size = shard_Wt * src0_single_tile_size;
         uint32_t shard_batch_size = shard_row_size * Ht;
@@ -250,6 +251,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         std::vector<uint32_t> writer_rt_args = {num_cols_per_core_group_1};
         tt_metal::SetRuntimeArgs(program, writer_kernel_id, all_cores, writer_rt_args);
     } else {
+        TT_FATAL(Wt != 0, "Width in tiles (Wt) must be non-zero (W={}, tile_width={})", W, tile_width);
         for (uint32_t i = 0, num_cols_read = 0; i < num_cores; i++) {
             const CoreCoord& core = cores[i];
             uint32_t num_cols_per_core = 0;

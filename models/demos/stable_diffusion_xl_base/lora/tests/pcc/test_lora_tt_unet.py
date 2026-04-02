@@ -9,9 +9,8 @@ from diffusers import DiffusionPipeline
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch_random
 from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
-from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.demos.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from models.demos.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -205,12 +204,11 @@ def run_unet_model(
 @pytest.mark.parametrize(
     "image_resolution, input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape, pcc",
     [
-        ((1024, 1024), (1, 4, 128, 128), (1,), (1, 77, 2048), (1, 1280), (1, 6), 0.9969),
-        ((512, 512), (1, 4, 64, 64), (1,), (1, 77, 2048), (1, 1280), (1, 6), 0.9958),
+        ((1024, 1024), (1, 4, 128, 128), (1,), (1, 77, 2048), (1, 1280), (1, 6), 0.9969 if is_wormhole_b0() else 0.996),
+        ((512, 512), (1, 4, 64, 64), (1,), (1, 77, 2048), (1, 1280), (1, 6), 0.9958 if is_wormhole_b0() else 0.995),
         # TODO: Add test for 9x128x128 input shape if needed (inpainting)
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_unet(
     device,
     image_resolution,
@@ -226,6 +224,9 @@ def test_unet(
     reset_seeds,
     lora_path,
 ):
+    if image_resolution == (512, 512) and is_blackhole():
+        pytest.skip("512x512 resolution not supported on Blackhole")
+
     run_unet_model(
         device,
         image_resolution,

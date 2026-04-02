@@ -8,21 +8,15 @@
 
 #if defined(COMPILE_FOR_NCRISC)
 #include "api/dataflow/dataflow_api.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
-#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include <array>
 #include <cstdint>
 #include <utility>
-#include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
-#include "tt_metal/fabric/hw/inc/linear/api.h"
-#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 
 using address_t = uint32_t;
-using namespace tt::tt_fabric::linear::experimental;
 
 #elif defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
@@ -43,14 +37,16 @@ namespace deepseek_b1_ops {
 
 // Unified kernel for CCL Broadcast operation
 struct Broadcast {
+    static constexpr uint32_t MAX_NUM_LINKS = 2;
+
     // ========================================================================
     // Runtime args structs - different layout per RISC
     // ========================================================================
-    template <uint32_t cb0Id, uint32_t NumPagesToRead, uint32_t isSender, uint32_t useSocket = 0>
+    template <uint32_t cb0Id, uint32_t NumPagesToRead, uint32_t isRoot, uint32_t useSocket = 0>
     struct ReaderCTArgs {
         static constexpr uint32_t cb0_id = cb0Id;
         static constexpr uint32_t num_pages_to_read = NumPagesToRead;
-        static constexpr uint32_t is_sender = isSender;
+        static constexpr bool is_root = isRoot != 0;
         static constexpr bool use_socket = useSocket != 0;
     };
 
@@ -64,48 +60,33 @@ struct Broadcast {
         uint32_t cb0Id,
         uint32_t NumPagesToRead,
         uint32_t tensorPageSize,
-        uint32_t numTargetsForwardDirection,
-        uint32_t numTargetsBackwardDirection,
-        uint32_t isSender,
-        uint32_t coreNocX,
-        uint32_t coreNocY,
-        uint32_t isSecondarySender,
-        uint32_t hasSecondaryTarget,
-        uint32_t startDistanceInHopsForward,
-        uint32_t rangeHopsForward,
-        uint32_t startDistanceInHopsBackward,
-        uint32_t rangeHopsBackward>
+        uint32_t numNeighbors,
+        uint32_t numLinks,
+        uint32_t isRoot,
+        uint32_t chunkSizeBytes,
+        uint32_t lastChunkSizeBytes,
+        uint32_t numChunks>
     struct WriterCTArgs {
         static constexpr uint32_t cb0_id = cb0Id;
         static constexpr uint32_t num_pages_to_read = NumPagesToRead;
         static constexpr uint32_t tensor0_page_size = tensorPageSize;
-        static constexpr uint32_t num_targets_forward_direction = numTargetsForwardDirection;
-        static constexpr uint32_t num_targets_backward_direction = numTargetsBackwardDirection;
-        static constexpr uint32_t is_sender = isSender;
-        static constexpr uint32_t core_noc_x = coreNocX;
-        static constexpr uint32_t core_noc_y = coreNocY;
-        static constexpr uint32_t is_secondary_sender = isSecondarySender;
-        static constexpr uint32_t has_secondary_target = hasSecondaryTarget;
-        static constexpr uint32_t start_distance_in_hops_forward = startDistanceInHopsForward;
-        static constexpr uint32_t range_hops_forward = rangeHopsForward;
-        static constexpr uint32_t start_distance_in_hops_backward = startDistanceInHopsBackward;
-        static constexpr uint32_t range_hops_backward = rangeHopsBackward;
+        static constexpr uint32_t num_neighbors = numNeighbors;
+        static constexpr uint32_t num_links = numLinks;
+        static constexpr uint32_t num_connections = num_neighbors * num_links;
+        static constexpr bool is_root = isRoot != 0;
+        static constexpr uint32_t chunk_size_bytes = chunkSizeBytes;
+        static constexpr uint32_t last_chunk_size_bytes = lastChunkSizeBytes;
+        static constexpr uint32_t num_chunks = numChunks;
+        static_assert(num_links <= Broadcast::MAX_NUM_LINKS, "num_links exceeds MAX_NUM_LINKS");
+        static_assert(num_chunks > 0, "num_chunks must be greater than 0");
     };
     struct WriterArgs {
         uint32_t tensor_address0;
-        uint32_t out_ready_sem_bank_addr;
-        uint32_t wait_output_semaphore;
-        uint32_t reset_global_semaphore;
-        uint32_t out_ready_sem_noc0_x;
-        uint32_t out_ready_sem_noc0_y;
-        uint32_t out_ready_sem_wait_value;
-        uint32_t barrier_sem;
-        uint32_t barrier_sem_noc0_x;
-        uint32_t barrier_sem_noc0_y;
-        uint32_t ring_index;
-        uint32_t secondary_sync_sem;
-        uint32_t num_connections;
-        uint32_t fabric_args_start_index = 0;
+        uint32_t my_noc_x;
+        uint32_t my_noc_y;
+        std::array<uint32_t, MAX_NUM_LINKS> sem_bank_addrs;
+        uint32_t per_core_rta_arg_idx_offset = 0;
+        uint32_t per_core_rta_num_args = 0;
     };
 
     // TRISC args - not used for CCL broadcast op
@@ -130,7 +111,7 @@ struct Broadcast {
             // BRISC - bcast reader
             // ================================================================
             if constexpr (IsWorkerCore) {
-                if (CTArgs::is_sender) {
+                if (CTArgs::is_root) {
 #if defined(ENABLE_SOCKET_READER)
                     if constexpr (CTArgs::use_socket) {
                         static_assert(noc_mode == DM_DYNAMIC_NOC);
@@ -138,7 +119,7 @@ struct Broadcast {
                         set_receiver_socket_page_size(recv, args.socket_page_size);
                         socket_wait_for_pages(recv, args.socket_num_pages);
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
-
+                        invalidate_l1_cache();
                         noc_async_read(
                             get_noc_addr(recv.read_ptr),
                             get_write_ptr(CTArgs::cb0_id),
@@ -165,172 +146,113 @@ struct Broadcast {
             // ================================================================
             if constexpr (IsWorkerCore) {
                 PacketHeaderPool::reset();
-                constexpr uint32_t num_primary_connections = (CTArgs::start_distance_in_hops_forward > 0 ? 1 : 0) +
-                                                             (CTArgs::start_distance_in_hops_backward > 0 ? 1 : 0);
 
-                constexpr uint32_t secondary_connection_idx = num_primary_connections;
-
-                // Reset pool so broadcast can be called across loop iterations
-                PacketHeaderPool::reset();
-
-                auto sem_route_id = PacketHeaderPool::allocate_header_n(num_primary_connections);
-                auto fused_route_id = PacketHeaderPool::allocate_header_n(num_primary_connections);
-                // Allocate separate route for secondary axis unicast (if applicable)
-                auto secondary_route_id = CTArgs::has_secondary_target ? PacketHeaderPool::allocate_header_n(1) : 0;
-
-                tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
-
-                size_t fabric_args_start_index = size_t(args.fabric_args_start_index);
-                if constexpr (CTArgs::is_secondary_sender || CTArgs::is_sender) {
-                    open_connections(fabric_connection, args.num_connections, fabric_args_start_index);
+                std::array<tt::tt_fabric::WorkerToFabricEdmSender, CTArgs::num_connections> connections;
+                std::array<volatile PACKET_HEADER_TYPE*, CTArgs::num_connections> headers;
+                size_t arg_idx = args.per_core_rta_arg_idx_offset;
+                for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
+                    const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
+                    const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
+                    for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
+                        const uint32_t connection_idx = neighbor_idx * CTArgs::num_links + link_idx;
+                        connections[connection_idx] =
+                            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
+                                arg_idx);
+                        connections[connection_idx].open_start();
+                        headers[connection_idx] = PacketHeaderPool::allocate_header();
+                        fabric_set_unicast_route(headers[connection_idx], dst_chip_id, dst_mesh_id);
+                        connections[connection_idx].open_finish();
+                    }
                 }
 
-                uint8_t starts[] = {
-                    static_cast<uint8_t>(CTArgs::start_distance_in_hops_forward),
-                    static_cast<uint8_t>(CTArgs::start_distance_in_hops_backward)};
-                uint8_t ranges[] = {
-                    static_cast<uint8_t>(CTArgs::range_hops_forward),
-                    static_cast<uint8_t>(CTArgs::range_hops_backward)};
-                if (ranges[0] == 0) {
-                    starts[0] = starts[1];
-                    ranges[0] = ranges[1];
+                const uint64_t dst_noc_base = get_noc_addr(args.my_noc_x, args.my_noc_y, args.tensor_address0, 0);
+                std::array<uint64_t, CTArgs::num_links> sem_nocs;
+                std::array<volatile tt_l1_ptr uint32_t*, CTArgs::num_links> sem_ptrs;
+                for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
+                    sem_nocs[link_idx] =
+                        safe_get_noc_addr(args.my_noc_x, args.my_noc_y, args.sem_bank_addrs[link_idx], 0);
+                    sem_ptrs[link_idx] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.sem_bank_addrs[link_idx]);
                 }
 
-                // Configure fused route for payload + semaphore increment
-                tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader fused_header(0, 0, 1, true);
-                if constexpr (CTArgs::is_secondary_sender || CTArgs::is_sender) {
-                    fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<
-                        UnicastFusedAtomicIncUpdateMask::Val | UnicastFusedAtomicIncUpdateMask::Flush>(
-                        fabric_connection, fused_route_id, starts, ranges, fused_header, CTArgs::tensor0_page_size);
-                }
+                auto send_chunk = [&](uint32_t connection_idx,
+                                      uint32_t link_idx,
+                                      uint32_t src_base_addr,
+                                      uint32_t chunk_idx,
+                                      uint32_t size) {
+                    uint32_t chunk_offset = chunk_idx * CTArgs::chunk_size_bytes;
+                    headers[connection_idx]->to_noc_fused_unicast_write_atomic_inc(
+                        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                            dst_noc_base + chunk_offset, sem_nocs[link_idx], 1, false},
+                        size);
+                    connections[connection_idx].wait_for_empty_write_slot();
+                    connections[connection_idx].send_payload_without_header_non_blocking_from_address(
+                        src_base_addr + chunk_offset, size);
+                    connections[connection_idx].send_payload_flush_non_blocking_from_address(
+                        reinterpret_cast<uint32_t>(headers[connection_idx]), sizeof(PACKET_HEADER_TYPE));
+                };
 
-                uint32_t num_total_targets =
-                    CTArgs::num_targets_forward_direction + CTArgs::num_targets_backward_direction;
+                std::array<uint32_t, CTArgs::num_links> link_counters = {};
+                auto forward_chunks = [&](uint32_t src_base_addr, auto&& wait_for_link_chunk) {
+                    uint32_t current_link = 0;
 
-                uint64_t barrier_sem_noc_addr_in_pkt =
-                    safe_get_noc_addr(args.barrier_sem_noc0_x, args.barrier_sem_noc0_y, args.barrier_sem, 0);
-                uint64_t secondary_sync_sem_noc_addr_in_pkt =
-                    safe_get_noc_addr(args.barrier_sem_noc0_x, args.barrier_sem_noc0_y, args.secondary_sync_sem, 0);
+                    for (uint32_t chunk_idx = 0; chunk_idx < CTArgs::num_chunks; chunk_idx++) {
+                        link_counters[current_link]++;
+                        wait_for_link_chunk(current_link, link_counters[current_link]);
 
-                if (CTArgs::is_sender) {
+                        const uint32_t chunk_size = (chunk_idx < CTArgs::num_chunks - 1)
+                                                        ? CTArgs::chunk_size_bytes
+                                                        : CTArgs::last_chunk_size_bytes;
+
+                        for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
+                            const uint32_t connection_idx = neighbor_idx * CTArgs::num_links + current_link;
+                            send_chunk(connection_idx, current_link, src_base_addr, chunk_idx, chunk_size);
+                        }
+
+                        if (++current_link == CTArgs::num_links) {
+                            current_link = 0;
+                            // flush only when about to reuse a packet header
+                            if (CTArgs::num_neighbors > 0) {
+                                noc_async_writes_flushed();
+                            }
+                        }
+                    }
+                };
+
+                // Roles:
+                // - Root node: no semaphore wait, sources chunks from local CB read pointer.
+                // - Non-root node: waits for chunk arrival and forwards from local output tensor storage.
+                //   Non-root can be either:
+                //   * forwarding node (num_neighbors > 0), or
+                //   * leaf node (num_neighbors == 0), where forwarding loops are no-ops.
+                // In the leaf case, num_links remains configured (> 0), wait/reset semantics are still
+                // preserved for non-root nodes, and no fabric send occurs due to zero neighbors.
+
+                if constexpr (CTArgs::is_root) {
                     cb_wait_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
-                    size_t l1_read_addr = get_read_ptr(CTArgs::cb0_id);
-                    uint64_t dst_noc_addr =
-                        get_noc_addr(CTArgs::core_noc_x, CTArgs::core_noc_y, args.tensor_address0, 0);
-
-                    uint64_t out_ready_sem_noc_addr_in_pkt = safe_get_noc_addr(
-                        args.out_ready_sem_noc0_x, args.out_ready_sem_noc0_y, args.out_ready_sem_bank_addr, 0);
-
-                    // For dual-axis mode: first unicast to secondary sender, then mcast along primary axis
-                    if constexpr (CTArgs::has_secondary_target) {
-                        auto& secondary_slot = fabric_connection.get(secondary_connection_idx);
-                        volatile PACKET_HEADER_TYPE* secondary_header =
-                            PacketHeaderPool::header_table[secondary_route_id].first;
-
-                        // Set up unicast route for 2D fabric
-                        fabric_set_unicast_route(fabric_connection, secondary_header, secondary_connection_idx);
-
-                        // Send data + semaphore increment to secondary sender
-                        fabric_unicast_noc_fused_unicast_with_atomic_inc(
-                            &secondary_slot.sender,
-                            secondary_header,
-                            l1_read_addr,
-                            CTArgs::tensor0_page_size * CTArgs::num_pages_to_read,
-                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                                dst_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, true},
-                            1);  // 1 hop to secondary sender
-                    }
-                    fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state<
-                        UnicastFusedAtomicIncUpdateMask::WriteDstAddr | UnicastFusedAtomicIncUpdateMask::SemaphoreAddr |
-                        UnicastFusedAtomicIncUpdateMask::PayloadSize>(
-                        fabric_connection,
-                        fused_route_id,
-                        l1_read_addr,
-                        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                            dst_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, true},
-                        CTArgs::tensor0_page_size * CTArgs::num_pages_to_read);
-
-                    noc_async_write(l1_read_addr, dst_noc_addr, CTArgs::tensor0_page_size * CTArgs::num_pages_to_read);
-
-                    // increment locally
-                    uint64_t out_ready_sem_noc_addr = safe_get_noc_addr(
-                        args.out_ready_sem_noc0_x, args.out_ready_sem_noc0_y, args.out_ready_sem_bank_addr);
-                    noc_semaphore_inc(out_ready_sem_noc_addr, 1);
-
-                    // 3. wait for mcast output ready semaphore
-                    // NOTE: We use wait_min instead of wait+reset to handle the case where broadcast
-                    // is async and a fast device increments the semaphore multiple times before a slow
-                    // device observes it. With wait+reset the slow device could miss an increment and
-                    // hang. In a real decoder this shouldn't be a problem because other ops
-                    // between iterations will naturally sync the devices, but wait_min is a
-                    // pragmatic choice to streamline standalone testing.
-                    if (args.wait_output_semaphore) {
-                        volatile tt_l1_ptr uint32_t* sem_ptr =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr);
-                        noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
-                    }
-
-                    // 4. global semaphore reset
-                    if (args.reset_global_semaphore) {
-                        unified_kernels::semaphore_dec(
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr));
-                    }
-                    noc_async_writes_flushed();
+                    const uint32_t src = get_read_ptr(CTArgs::cb0_id);
+                    constexpr uint32_t tensor_size_bytes = CTArgs::tensor0_page_size * CTArgs::num_pages_to_read;
+                    noc_async_write(src, dst_noc_base, tensor_size_bytes);
+                    auto no_wait = [&](uint32_t, uint32_t) {};
+                    forward_chunks(src, no_wait);
                     cb_pop_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
-
-                } else if constexpr (CTArgs::is_secondary_sender) {
-                    // Secondary sender: wait for data from primary sender, then broadcast along primary axis
-                    // First wait for data to arrive from primary sender
-                    if (args.wait_output_semaphore) {
-                        volatile tt_l1_ptr uint32_t* sem_ptr =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr);
-                        noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
-                    }
-
-                    // Reset semaphore after receiving data
-                    if (args.reset_global_semaphore) {
-                        unified_kernels::semaphore_dec(
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr));
-                    }
-
-                    // broadcast the received data along the primary axis
-                    uint64_t src_noc_addr =
-                        get_noc_addr(CTArgs::core_noc_x, CTArgs::core_noc_y, args.tensor_address0, 0);
-
-                    // Mcast the data along primary axis
-                    uint64_t out_ready_sem_noc_addr_in_pkt = safe_get_noc_addr(
-                        args.out_ready_sem_noc0_x, args.out_ready_sem_noc0_y, args.out_ready_sem_bank_addr, 0);
-
-                    fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state<
-                        UnicastFusedAtomicIncUpdateMask::WriteDstAddr | UnicastFusedAtomicIncUpdateMask::SemaphoreAddr |
-                        UnicastFusedAtomicIncUpdateMask::PayloadSize>(
-                        fabric_connection,
-                        fused_route_id,
-                        static_cast<size_t>(args.tensor_address0),
-                        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                            src_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, true},
-                        CTArgs::tensor0_page_size * CTArgs::num_pages_to_read);
-                    noc_async_writes_flushed();
-
                 } else {
-                    // Receiver: wait for data from broadcaster
-                    if (args.wait_output_semaphore) {
-                        volatile tt_l1_ptr uint32_t* sem_ptr =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr);
-                        noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
-                    }
-
-                    // Reset global semaphore
-                    if (args.reset_global_semaphore) {
-                        unified_kernels::semaphore_dec(
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr));
+                    const uint32_t src = args.tensor_address0;
+                    auto sem_wait = [&](uint32_t link_idx, uint32_t link_threshold) {
+                        noc_semaphore_wait_min(sem_ptrs[link_idx], link_threshold);
+                    };
+                    forward_chunks(src, sem_wait);
+                    for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
+                        if (link_counters[link_idx] > 0) {
+                            unified_kernels::semaphore_dec(sem_ptrs[link_idx], link_counters[link_idx]);
+                        }
                     }
                 }
-                if constexpr (CTArgs::is_secondary_sender || CTArgs::is_sender) {
-                    close_connections(fabric_connection);
+
+                for (uint32_t i = 0; i < CTArgs::num_connections; i++) {
+                    connections[i].close();
                 }
 
-                noc_async_write_barrier();
+                noc_async_full_barrier();
             }
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================

@@ -76,8 +76,21 @@ def parse_cluster_descriptor(yaml_path: str) -> tuple[str, dict[int, int], dict[
         else:
             chip_to_bus_id[int(chip_id)] = int(bus_id_val, 16)
 
-    # Parse chip_to_boardtype: {chip_id: "ubb"} - keys can be int or str
-    chip_to_boardtype: dict[int, str] = {int(k): v for k, v in data.get("chip_to_boardtype", {}).items()}
+    # Parse chip_to_boardtype from boards section.
+    # UMD serializes board type per board: boards: [[{board_id:}, {board_type:}, {chips:}], ...]
+    chip_to_boardtype: dict[int, str] = {}
+    for board_entry in data.get("boards", []):
+        board_type = None
+        chip_ids: list[int] = []
+        for item in board_entry:
+            if isinstance(item, dict):
+                if "board_type" in item:
+                    board_type = str(item["board_type"]).lower()
+                elif "chips" in item:
+                    chip_ids = [int(c) for c in item["chips"]]
+        if board_type:
+            for chip_id in chip_ids:
+                chip_to_boardtype[chip_id] = board_type
 
     return arch, chips_with_mmio, chip_to_bus_id, chip_to_boardtype
 

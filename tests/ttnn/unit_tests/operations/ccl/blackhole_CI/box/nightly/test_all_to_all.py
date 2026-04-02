@@ -10,6 +10,7 @@ from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 from models.common.utility_functions import skip_for_wormhole_b0, skip_for_n_or_less_dev
+from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 
 
 def run_with_trace(
@@ -143,6 +144,8 @@ def run_all_to_all_impl(
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
 
+    mesh_device.cache_entries_counter = CacheEntriesCounter(mesh_device)
+
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
     ccl_sub_device_crs = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
@@ -220,41 +223,42 @@ def run_all_to_all_impl(
         input_tensor_mesh_list.append(input_tensor_mesh)
 
     tt_out_tensor_list = []
-    if trace_mode:
-        tt_out_tensor = run_with_trace(
-            mesh_device,
-            topology,
-            input_tensor_mesh_list[0],
-            persistent_intermediate_buffers[0],
-            persistent_output_buffers[0],
-            in_dim,
-            out_dim,
-            num_links,
-            output_mem_config,
-            multi_device_global_semaphore=ccl_semaphore_handles[0],
-            num_iter=num_iters,
-            subdevice_id=worker_sub_device_id,
-        )
-        tt_out_tensor_list.append(tt_out_tensor)
-    else:
-        for i in range(num_iters):
-            tt_out_tensor = ttnn.experimental.all_to_all_async(
-                input_tensor_mesh_list[i if not reuse_inputs else 0],
-                persistent_intermediate_buffer=persistent_intermediate_buffers[i],
-                persistent_output_buffer=persistent_output_buffers[i],
-                in_dim=in_dim,
-                out_dim=out_dim,
-                multi_device_global_semaphore=ccl_semaphore_handles[i],
-                num_links=num_links,
-                memory_config=output_mem_config,
-                topology=topology,
+    with mesh_device.cache_entries_counter.measure():
+        if trace_mode:
+            tt_out_tensor = run_with_trace(
+                mesh_device,
+                topology,
+                input_tensor_mesh_list[0],
+                persistent_intermediate_buffers[0],
+                persistent_output_buffers[0],
+                in_dim,
+                out_dim,
+                num_links,
+                output_mem_config,
+                multi_device_global_semaphore=ccl_semaphore_handles[0],
+                num_iter=num_iters,
                 subdevice_id=worker_sub_device_id,
             )
-            tt_out_tensor_list.append(persistent_output_buffers[i])
+            tt_out_tensor_list.append(tt_out_tensor)
+        else:
+            for i in range(num_iters):
+                tt_out_tensor = ttnn.experimental.all_to_all_async(
+                    input_tensor_mesh_list[i if not reuse_inputs else 0],
+                    persistent_intermediate_buffer=persistent_intermediate_buffers[i],
+                    persistent_output_buffer=persistent_output_buffers[i],
+                    in_dim=in_dim,
+                    out_dim=out_dim,
+                    multi_device_global_semaphore=ccl_semaphore_handles[i],
+                    num_links=num_links,
+                    memory_config=output_mem_config,
+                    topology=topology,
+                    subdevice_id=worker_sub_device_id,
+                )
+                tt_out_tensor_list.append(persistent_output_buffers[i])
 
-        logger.info(f"Waiting for op")
-        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
-        logger.info(f"Done op")
+            logger.info(f"Waiting for op")
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+            logger.info(f"Done op")
 
     passed = True
     if do_check:
@@ -274,8 +278,8 @@ def run_all_to_all_impl(
                     passed = False
 
     assert (
-        mesh_device.num_program_cache_entries() == 1
-    ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
+        mesh_device.cache_entries_counter.total == 1
+    ), f"Device has {mesh_device.cache_entries_counter.total} program cache entries"
 
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()

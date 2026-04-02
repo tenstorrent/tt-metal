@@ -14,6 +14,7 @@
 #include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "debug_helpers.hpp"
+#include "impl/context/metal_env_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -24,7 +25,12 @@ constexpr uint8_t DEBUG_SANITIZE_SENTINEL_OK_8 = 0xda;
 
 class WatcherDeviceReader {
 public:
-    WatcherDeviceReader(FILE* f, ChipId device_id, const std::vector<std::string>& kernel_names);
+    WatcherDeviceReader(
+        FILE* f,
+        ChipId device_id,
+        const std::vector<std::string>& kernel_names,
+        tt::tt_metal::MetalEnvImpl& env,
+        WatcherServer& watcher_server);
     ~WatcherDeviceReader();
     void Dump(FILE* file = nullptr);
     const std::vector<std::string>& get_cached_enable_symbols(HalProgrammableCoreType core_type) const {
@@ -40,6 +46,8 @@ private:
     struct DumpData;
     FILE* f;
     ChipId device_id;
+    tt::tt_metal::MetalEnvImpl& env;
+    WatcherServer& watcher_server;  // Reference to the parent object
     const std::vector<std::string>& kernel_names;
     std::map<CoreCoord, uint32_t> logical_core_to_eth_link_retraining_count;
     std::map<HalProgrammableCoreType, EnableSymbolsInfo> symbols_info_cache_;

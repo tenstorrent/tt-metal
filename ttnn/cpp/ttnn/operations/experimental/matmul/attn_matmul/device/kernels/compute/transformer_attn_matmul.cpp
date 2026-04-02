@@ -8,6 +8,8 @@
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
 #include "experimental/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 using std::uint32_t;
 
@@ -64,37 +66,25 @@ void kernel_main() {
                     tile_regs_release();
                     cb_intermed0_obj.push_back(onetile);
 
-                    // untilize tile and write to CBIndex::c_25
-                    reconfig_data_format_srca(cb_in1, cb_intermed0);
-                    cb_intermed0_obj.wait_front(onetile);
-                    untilize_init(cb_intermed0);
-                    cb_intermed1_obj.reserve_back(onetile);
-                    untilize_block(cb_intermed0, onetile, cb_intermed1);
-                    cb_intermed1_obj.push_back(onetile);
+                    // untilize tile and write to CBIndex::c_25 with reconfiguration
+                    compute_kernel_lib::untilize<
+                        onetile,
+                        cb_intermed0,
+                        cb_intermed1,
+                        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+                        compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
+                        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure>(1);
 
-                    cb_intermed0_obj.pop_front(onetile);
-                    untilize_uninit(cb_intermed0);
-
-                    reconfig_data_format_srca(cb_intermed0, cb_in1);
-                    mm_init_short(cb_in0, cb_in1, transpose_hw);
+                    mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed0, transpose_hw);
                 }
                 cb_in0_obj.pop_front(Kt);
 
                 // cb_intermed2 comes from reader; untilized row-major tile
-                pack_reconfig_data_format(cb_intermed1, out_cb_id);
-                cb_intermed2_obj.wait_front(onetile);
-                cb_out_obj.reserve_back(onetile);
-
-                // tilize CB::intermed2 and write to CBIndex::c_16
-                tilize_init_short_with_dt(cb_in1, cb_intermed2, onetile, out_cb_id);
-                tilize_block(cb_intermed2, onetile, out_cb_id);
-                cb_out_obj.push_back(onetile);
-
-                cb_intermed2_obj.pop_front(onetile);
-                tilize_uninit_with_dt(cb_intermed2, cb_in1, out_cb_id);
+                // tilize CB::intermed2 and write to CBIndex::c_16 with reconfiguration
+                compute_kernel_lib::tilize<onetile, cb_intermed2, out_cb_id>(1);
 
                 pack_reconfig_data_format(out_cb_id, cb_intermed0);
-                mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed2, transpose_hw);
+                mm_block_init_short_with_both_dt(cb_in0, cb_in1, cb_intermed2, cb_intermed2, transpose_hw);
             }
         }
     }
