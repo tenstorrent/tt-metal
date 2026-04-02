@@ -6,6 +6,7 @@
 
 #if defined(__linux__) || defined(__APPLE__)
 #include <pthread.h>
+#include <unistd.h>
 #endif
 // Include LSan interface only when a sanitizer that provides __lsan_ignore_object
 // is actually active.  __has_include is insufficient — the header ships with the
@@ -19,8 +20,8 @@
 #include <sanitizer/lsan_interface.h>
 #endif
 #include <taskflow/taskflow.hpp>
-#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <thread>
 
 namespace tt::tt_metal::detail {
@@ -66,16 +67,22 @@ inline Executor& GetExecutor() {
                 // here rather than aborting because fork() is sometimes called
                 // from paths the application cannot control (e.g. Python's
                 // subprocess fallback from posix_spawn).
-                // Note: fprintf is used here instead of log_warning to avoid
-                // pulling tt-logger into this header and because this callback
-                // must remain lightweight (atfork handlers run in constrained
-                // process context).
-                if (exec && exec->num_topologies() != 0) {
-                    fprintf(
-                        stderr,
+                // Cache num_topologies() once — avoids calling it twice with internal
+                // synchronization in this constrained atfork context.
+                const auto num_topologies = exec ? exec->num_topologies() : 0;
+                if (num_topologies != 0) {
+                    // Use write(2) instead of fprintf: write() is async-signal-safe,
+                    // fprintf is not (it may acquire internal stdio locks).
+                    char buf[128];
+                    int n = snprintf(
+                        buf,
+                        sizeof(buf),
                         "WARNING: fork() called while executor has in-flight work "
                         "(num_topologies=%zu). This may cause hangs in the child process.\n",
-                        exec->num_topologies());
+                        num_topologies);
+                    if (n > 0) {
+                        (void)write(STDERR_FILENO, buf, static_cast<size_t>(n));
+                    }
                 }
             },
             /*parent=*/nullptr,
@@ -88,6 +95,7 @@ inline Executor& GetExecutor() {
                 // ASan/LSan builds so it is not reported as unintentional.
 #ifdef TT_LSAN_ACTIVE
                 __lsan_ignore_object(exec);
+#undef TT_LSAN_ACTIVE
 #endif
                 exec = new Executor(EXECUTOR_NTHREADS);
             });
