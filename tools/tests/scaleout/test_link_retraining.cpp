@@ -96,9 +96,7 @@ public:
         return *physical_system_descriptor_;
     }
     const std::unordered_map<uint64_t, ChipId>& get_asic_id_to_chip_id() const { return asic_id_to_chip_id_; }
-    std::string get_cabling_descriptor_path() const {
-        return "/data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto";
-    }
+    std::string get_cabling_descriptor_path() const { return "tools/tests/scaleout/cabling_descriptors/t3k.textproto"; }
 };
 
 [[nodiscard]] uint32_t get_link_training_status(const tt::Cluster& cluster, ChipId chip_id, const tt_xy_pair& coord) {
@@ -336,6 +334,47 @@ TEST_F(DirectedRetrainingFixture, TestOnDemandCableRestart) {
         EXPECT_EQ(get_link_training_status(get_cluster(), link.chip_id, link.coord), 1);
     }
 
+    validate_connectivity(get_physical_system_descriptor(), get_cabling_descriptor_path());
+}
+
+TEST_F(DirectedRetrainingFixture, TestLinkRetrainingWithDescriptorRefresh) {
+    validate_connectivity(get_physical_system_descriptor(), get_cabling_descriptor_path());
+
+    // Take down MMIO-to-MMIO and non-MMIO-to-non-MMIO links
+    process_ethernet_connections(
+        get_physical_system_descriptor(),
+        get_asic_id_to_chip_id(),
+        get_cluster(),
+        get_driver(),
+        [&](ChipId chip_id, const tt_xy_pair& coord) { set_link_training_status(get_cluster(), chip_id, coord, 0); });
+
+    // Retrain all downed links
+    reset_ethernet_links(
+        get_physical_system_descriptor(),
+        get_physical_system_descriptor().get_asic_topology(get_physical_system_descriptor().my_host_name()));
+
+    // Verify links are back up at the register level
+    process_ethernet_connections(
+        get_physical_system_descriptor(),
+        get_asic_id_to_chip_id(),
+        get_cluster(),
+        get_driver(),
+        [&](ChipId chip_id, const tt_xy_pair& coord) {
+            EXPECT_EQ(get_link_training_status(get_cluster(), chip_id, coord), 1);
+        });
+
+    // Refresh the cluster descriptor so the driver sees the recovered topology
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    cluster.rediscover_ethernet_links();
+
+    // Re-run physical system discovery with the refreshed descriptor
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*get_driver());
+    get_physical_system_descriptor().clear();
+    auto new_psd = tt::tt_metal::run_physical_system_discovery(
+        driver_ref, distributed_context_, context_->rtoptions().get_target_device(), true, true);
+    get_physical_system_descriptor().merge(std::move(new_psd));
+
+    // Validate that the refreshed topology matches the expected cabling
     validate_connectivity(get_physical_system_descriptor(), get_cabling_descriptor_path());
 }
 
