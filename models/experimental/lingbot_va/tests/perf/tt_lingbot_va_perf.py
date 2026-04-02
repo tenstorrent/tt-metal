@@ -15,6 +15,13 @@ from pathlib import Path
 
 import torch
 import ttnn
+from diffusers.pipelines.wan.pipeline_wan import prompt_clean
+
+from models.experimental.lingbot_va.tests.perf.e2e_perf_helper import (
+    _encode_obs_ttnn,
+    _encode_prompt_ttnn,
+    run_inference,
+)
 
 
 class TtLingbotVA:
@@ -76,11 +83,37 @@ class TtLingbotVA:
         state: dict = {}
         prompt = message.get("prompt", "")
         prompt_list = [prompt] if isinstance(prompt, str) else prompt
+        batch_size = len(prompt_list)
+
         lingbot_demo._load_text_encoder_into_models(models, config)
-        prompt_embeds, neg_embeds = lingbot_demo._encode_prompt(
+        tokenizer = models["tokenizer"]
+        cleaned_prompt = [prompt_clean(u) for u in prompt_list]
+        state["prompt_tokenized_inputs"] = tokenizer(
+            cleaned_prompt,
+            padding="max_length",
+            max_length=512,
+            truncation=True,
+            add_special_tokens=True,
+            return_attention_mask=True,
+            return_tensors="pt",
+        )
+        if config.guidance_scale > 1:
+            state["negative_prompt_tokenized_inputs"] = tokenizer(
+                batch_size * [""],
+                padding="max_length",
+                max_length=512,
+                truncation=True,
+                add_special_tokens=True,
+                return_attention_mask=True,
+                return_tensors="pt",
+            )
+        else:
+            state["negative_prompt_tokenized_inputs"] = None
+
+        prompt_embeds, neg_embeds = _encode_prompt_ttnn(
             models,
-            state,
-            prompt,
+            state["prompt_tokenized_inputs"],
+            state["negative_prompt_tokenized_inputs"],
             do_classifier_free_guidance=(config.guidance_scale > 1),
             max_sequence_length=512,
         )
@@ -91,13 +124,12 @@ class TtLingbotVA:
 
         lingbot_demo._prepare_state_for_vae_encode(state, config)
         lingbot_demo._load_tt_vae_into_models(models)
-        state["init_latent"] = lingbot_demo._encode_obs(models, state, message)
+        state["init_latent"] = _encode_obs_ttnn(models, state, message)
         lingbot_demo._free_tt_vae_from_models(models)
 
         lingbot_demo._load_transformer_into_models(models, config)
 
         instance = cls(models, state, message)
-        instance.single_run_inputs = instance._prepare_single_run_inputs()
         return instance
 
     def _prepare_single_run_inputs(self) -> dict:
@@ -148,23 +180,8 @@ class TtLingbotVA:
         }
 
     def forward_reset_and_infer(self) -> ttnn.Tensor:
-        """Run one preprocessed WanTransformer forward with ``single_run=True``."""
-        if self.single_run_inputs is None:
-            self.single_run_inputs = self._prepare_single_run_inputs()
-
-        transformer = self.models["transformer"]
-        tt_transformer = getattr(transformer, "_tt_model", transformer)
-        return tt_transformer.forward(
-            spatial=self.single_run_inputs["spatial_1BND"],
-            prompt=self.single_run_inputs["prompt_1BLP"],
-            timestep=self.single_run_inputs["temb"],
-            grid_id=self.single_run_inputs["metadata"],
-            action_mode=False,
-            update_cache=0,
-            cache_name="pos",
-            timestep_per_frame=self.single_run_inputs["block_temb"],
-            single_run=True,
-        )
+        """Run helper-based E2E perf inference and return TTNN transformer output."""
+        return run_inference(self.models, self.state, self.message, self._prepare_single_run_inputs)
 
     def __call__(self, l1_input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Pipeline entrypoint: runs one Lingbot chunk."""
