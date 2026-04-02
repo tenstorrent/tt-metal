@@ -263,7 +263,7 @@ void kernel_main() {
 
             // reduce only one final tile
             compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(
-                cb_ex2pe, cb_scaler, cb_ex_partial, compute_kernel_lib::ReduceInputBlockShape::single());
+                cb_ex2pe_id, cb_scaler_id, cb_ex_partial_id, compute_kernel_lib::ReduceInputBlockShape::single());
 
             // GLOBAL reduction: Can safely use reduce helper (single tile reduction)
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
@@ -272,9 +272,9 @@ void kernel_main() {
                     ReduceDim::REDUCE_SCALAR,
                     compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    cb_ex_external,
-                    cb_scaler_global,
-                    cb_ex_global,
+                    cb_ex_external_id,
+                    cb_scaler_global_id,
+                    cb_ex_global_id,
                     compute_kernel_lib::ReduceInputBlockShape::single());
                 cb_ex.reserve_back(1);
                 cb_ex.push_back(1);
@@ -361,7 +361,7 @@ void kernel_main() {
             cb_ex2pe.push_back(1);
 
             compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(
-                cb_ex2pe, cb_scaler, cb_ex_partial, compute_kernel_lib::ReduceInputBlockShape::single());
+                cb_ex2pe_id, cb_scaler_id, cb_ex_partial_id, compute_kernel_lib::ReduceInputBlockShape::single());
 
             cb_ex_partial.wait_front(1);
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
@@ -370,9 +370,9 @@ void kernel_main() {
                     ReduceDim::REDUCE_SCALAR,
                     compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    cb_ex_external,
-                    cb_scaler_global,
-                    cb_ex_global,
+                    cb_ex_external_id,
+                    cb_scaler_global_id,
+                    cb_ex_global_id,
                     compute_kernel_lib::ReduceInputBlockShape::single());
                 cb_ex.reserve_back(1);
                 cb_ex.push_back(1);
