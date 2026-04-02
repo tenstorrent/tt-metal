@@ -120,8 +120,8 @@ def test_accuracy_sdxl_lora(
     sigmas,
     lora_path,
 ):
-    if vae_on_device and is_blackhole():
-        pytest.skip("Device VAE not supported on Blackhole")
+    if image_resolution == (512, 512) and is_blackhole():
+        pytest.skip("512x512 resolution not supported on Blackhole")
 
     start_from, num_prompts = evaluation_range
 
