@@ -302,16 +302,23 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
 
         // Set per-core runtime args: positional values followed by named values.
         // Build merged vectors per core, then set once.
-        if (!kernel_descriptor.named_per_core_runtime_args.empty()) {
+        if (!kernel_descriptor.named_per_core_runtime_args.empty() ||
+            !kernel_descriptor.named_per_core_runtime_arg_arrays.empty()) {
             // Start with positional args per core
             std::map<CoreCoord, std::vector<uint32_t>> core_to_args;
             for (const auto& [core, positional] : kernel_descriptor.runtime_args) {
                 core_to_args[core] = positional;
             }
-            // Append named per-core values in order (index = position)
+            // Append named per-core scalar values in order (index = position)
             for (const auto& arg : kernel_descriptor.named_per_core_runtime_args) {
                 for (const auto& [core, value] : arg.core_values) {
                     core_to_args[core].push_back(value);
+                }
+            }
+            // Append named per-core array values (N contiguous slots per core)
+            for (const auto& arg : kernel_descriptor.named_per_core_runtime_arg_arrays) {
+                for (const auto& [core, values] : arg.core_values) {
+                    core_to_args[core].insert(core_to_args[core].end(), values.begin(), values.end());
                 }
             }
             for (const auto& [core, merged] : core_to_args) {
@@ -370,7 +377,8 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
         // RT namespace map: rt::get<rt::ns::field>()
         if (!kernel_descriptor.named_common_runtime_args.empty() ||
             !kernel_descriptor.named_per_core_runtime_args.empty() ||
-            !kernel_descriptor.named_common_runtime_arg_arrays.empty()) {
+            !kernel_descriptor.named_common_runtime_arg_arrays.empty() ||
+            !kernel_descriptor.named_per_core_runtime_arg_arrays.empty()) {
             NamedRuntimeArgNamespaces rt_ns_map;
 
             // Common scalars: one slot each
@@ -397,6 +405,13 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                 auto [ns, field] = split_name(arg.name);
                 rt_ns_map[ns].push_back({field, per_core_index, 1, RuntimeArgDispatch::PER_CORE});
                 per_core_index += 1;
+            }
+            // Per-core arrays: N contiguous slots each
+            for (const auto& arg : kernel_descriptor.named_per_core_runtime_arg_arrays) {
+                auto [ns, field] = split_name(arg.name);
+                uint32_t len = arg.core_values.empty() ? 0 : static_cast<uint32_t>(arg.core_values[0].second.size());
+                rt_ns_map[ns].push_back({field, per_core_index, len, RuntimeArgDispatch::PER_CORE});
+                per_core_index += len;
             }
 
             kernel->set_named_runtime_arg_namespaces(rt_ns_map);
