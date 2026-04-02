@@ -54,10 +54,14 @@ ttnn::Tensor slice(
 
     auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config()
                                                             : memory_config_arg.value_or(input_tensor.memory_config());
+    // output_memory_config may be recomputed below for sharded tensors to match the
+    // sliced output dimensions. memory_config stays as the original (input-compatible)
+    // config and is used for input layout conversion (to_layout in the rm_only path).
+    auto output_memory_config = memory_config;
 
     auto ret_adjustment([&](const ttnn::Tensor& input_tensor) {
         if (input_tensor.storage_type() == StorageType::DEVICE) {
-            auto tensor = ttnn::to_memory_config(input_tensor, memory_config, std::nullopt);
+            auto tensor = ttnn::to_memory_config(input_tensor, output_memory_config, std::nullopt);
             tensor = ttnn::to_layout(tensor, input_layout);
             return tensor;
         }
@@ -118,13 +122,14 @@ ttnn::Tensor slice(
     // (Issue #38016)
     if (!memory_config_arg.has_value() && !optional_output_tensor.has_value() && input_tensor.is_sharded() &&
         input_rank >= 2) {
-        const auto& mem_layout = memory_config.memory_layout();
-        // Note: BLOCK_SHARDED is not handled here — it would require adjusting both
-        // shard height and width simultaneously, which is more complex. For now, callers
-        // using BLOCK_SHARDED should provide an explicit output memory_config.
+        const auto& mem_layout = output_memory_config.memory_layout();
+        TT_FATAL(
+            mem_layout != tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
+            "ttnn::slice does not support implicit memory_config inheritance for BLOCK_SHARDED tensors. "
+            "Please provide an explicit output memory_config.");
         if (mem_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
             mem_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
-            const auto& shard_spec_val = memory_config.shard_spec().value();
+            const auto& shard_spec_val = output_memory_config.shard_spec().value();
             uint32_t num_cores = shard_spec_val.num_cores();
 
             // Compute output dimensions, tile-aligned if using TILE path
@@ -164,8 +169,8 @@ ttnn::Tensor slice(
             if (new_shard_shape != shard_spec_val.shape) {
                 auto new_shard_spec =
                     tt::tt_metal::ShardSpec(shard_spec_val.grid, new_shard_shape, shard_spec_val.orientation);
-                memory_config =
-                    MemoryConfig(memory_config.memory_layout(), memory_config.buffer_type(), new_shard_spec);
+                output_memory_config = MemoryConfig(
+                    output_memory_config.memory_layout(), output_memory_config.buffer_type(), new_shard_spec);
             }
         }
     }
@@ -220,7 +225,7 @@ ttnn::Tensor slice(
         ttnn::Shape(modified_begins),
         ttnn::Shape(padded_ends),
         ttnn::Shape(modified_step),
-        memory_config,
+        output_memory_config,
         /*use_tensor_args*/ false,
         std::nullopt,
         std::nullopt,
