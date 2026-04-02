@@ -10,8 +10,13 @@
 #endif
 // Include LSan interface only when present
 // __has_feature(leak_sanitizer) / __has_feature(address_sanitizer) for clang
-// compile-time predicates; __SANITIZE_ADDRESS__ / __SANITIZE_LEAK__ for gcc
-#if (defined(__has_feature) && (__has_feature(leak_sanitizer) || __has_feature(address_sanitizer))) || \
+// compile-time predicates; __SANITIZE_ADDRESS__ / __SANITIZE_LEAK__ for gcc.
+// __has_feature is a Clang built-in; GCC does not define it.  Provide a
+// fallback so the #if below is well-formed on both compilers.
+#ifndef __has_feature
+#  define __has_feature(x) 0
+#endif
+#if __has_feature(leak_sanitizer) || __has_feature(address_sanitizer) || \
     defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_LEAK__)
 #define TT_LSAN_ACTIVE 1
 #include <sanitizer/lsan_interface.h>
@@ -82,7 +87,7 @@ inline Executor& GetExecutor() {
                         "(num_topologies=%zu). This may cause hangs in the child process.\n",
                         num_topologies);
                     if (n > 0) {
-                        ::write(STDERR_FILENO, buf, static_cast<size_t>(n));
+                        [[maybe_unused]] auto _ = ::write(STDERR_FILENO, buf, static_cast<size_t>(n));
                     }
                 }
             },
