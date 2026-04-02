@@ -46,31 +46,31 @@ def compute_decoder_stage_dims(target_height, target_width, h_factor, w_factor, 
 # Blockings are (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block).
 # See models/tt_dit/tests/models/wan2_2/sweep_results.md for sweep methodology.
 _BLOCKINGS = {
-    # --- BH Galaxy 6U 4x32, 720p — v3: sliding window + fused tilize+matmul ---
-    # conv_in: 32→384 k333, (23,25,7) -> H_out=23, W_out=5
+    # --- BH Galaxy 6U 4x32, 720p — v4: T_out_block > 1 + joint spatial sweep ---
+    # conv_in: 32→384 k333, T=1 optimal (small shape)
     (4, 32, 32, 384, (3, 3, 3), 23, 5): (32, 128, 1, 16, 2),
-    # lat_res + mid_res: 384→384 k333, (23,25,7) -> H_out=23, W_out=5
+    # lat_res + mid_res: 384→384 k333, T=1 optimal (small shape)
     (4, 32, 384, 384, (3, 3, 3), 23, 5): (96, 96, 1, 32, 1),
-    # up0_tconv: 384→768 k311 at stage 0 — H_out=23, W_out=5 (k311 no spatial change)
-    (4, 32, 384, 768, (3, 1, 1), 23, 5): (96, 256, 1, 32, 2),
-    # up0_spatial: 384→192 k133, (41,48,12) -> H_out=46, W_out=10
+    # up0_tconv: 384→768 k311, T=3 gives -8%
+    (4, 32, 384, 768, (3, 1, 1), 23, 5): (128, 256, 3, 8, 4),
+    # up0_spatial: 384→192 k133, T=1 (kT=1, no T blocking possible)
     (4, 32, 384, 192, (1, 3, 3), 46, 10): (96, 96, 1, 16, 4),
-    # up1_res0: 192→384 k333, (43,48,12) -> H_out=46, W_out=10
-    (4, 32, 192, 384, (3, 3, 3), 46, 10): (96, 128, 1, 16, 2),
-    # up1_res: 384→384 k333, (43,48,12) -> H_out=46, W_out=10
+    # up1_res0: 192→384 k333, T=3 gives -4%
+    (4, 32, 192, 384, (3, 3, 3), 46, 10): (96, 128, 3, 8, 4),
+    # up1_res: 384→384 k333, T=1 optimal (multi C_in block, L1 pressure at higher T)
     (4, 32, 384, 384, (3, 3, 3), 46, 10): (96, 128, 1, 16, 2),
-    # up1_tconv: 384→768 k311 at stage 1 — H_out=46, W_out=10 (k311 no spatial change)
-    (4, 32, 384, 768, (3, 1, 1), 46, 10): (192, 384, 1, 16, 2),
-    # up1_spatial: 384→192 k133, (81,94,22) -> H_out=92, W_out=20
+    # up1_tconv: 384→768 k311, T=3 gives -6%
+    (4, 32, 384, 768, (3, 1, 1), 46, 10): (192, 384, 3, 16, 2),
+    # up1_spatial: 384→192 k133, T=1 (kT=1)
     (4, 32, 384, 192, (1, 3, 3), 92, 20): (192, 96, 1, 32, 4),
-    # up2_res: 192→192 k333, (83,94,22) -> H_out=92, W_out=20
-    (4, 32, 192, 192, (3, 3, 3), 92, 20): (96, 96, 1, 32, 2),
-    # up2_spatial: 192→96 k133, (81,186,42) -> H_out=184, W_out=40
+    # up2_res: 192→192 k333, T=3 gives -13%
+    (4, 32, 192, 192, (3, 3, 3), 92, 20): (96, 96, 3, 8, 4),
+    # up2_spatial: 192→96 k133, T=1 (kT=1)
     (4, 32, 192, 96, (1, 3, 3), 184, 40): (192, 96, 1, 4, 8),
-    # up3_res: 96→96 k333, (83,186,42) -> H_out=184, W_out=40
-    (4, 32, 96, 96, (3, 3, 3), 184, 40): (96, 96, 1, 16, 4),
-    # conv_out: 96→3 k333, (83,186,42) -> H_out=184, W_out=40
-    (4, 32, 96, 3, (3, 3, 3), 184, 40): (96, 32, 1, 32, 2),
+    # up3_res: 96→96 k333, T=6 gives -19%
+    (4, 32, 96, 96, (3, 3, 3), 184, 40): (96, 96, 6, 8, 4),
+    # conv_out: 96→3 k333, T=9 gives -55%
+    (4, 32, 96, 3, (3, 3, 3), 184, 40): (96, 32, 9, 8, 4),
     # --- BH Galaxy / WH Galaxy 4x8, 720p — v2 (shared key, not per-layer swept) ---
     # h_dev=184, w_dev=160. Stages: lat(23,20) up0(46,40) up1(92,80) up2(184,160)
     (4, 8, 32, 384, (3, 3, 3), 23, 20): (32, 128, 1, 16, 16),  # conv_in
