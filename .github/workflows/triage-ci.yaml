@@ -1,48 +1,177 @@
-name: "(triage) Cursor CLI smoke test"
+name: "(triage) CI Triage Autonomy"
 
 on:
   workflow_dispatch:
+    inputs:
+      days:
+        description: "Number of days of Slack history to export"
+        required: false
+        default: "30"
+      data-report-model:
+        description: "Cursor model for Slack data gathering report"
+        required: false
+        type: choice
+        options:
+          - auto
+          - claude-4-sonnet
+          - claude-4-opus
+          - claude-3.7-sonnet
+          - gpt-5
+          - gpt-5-mini
+          - gpt-4.1
+          - o3
+          - gemini-2.5-pro
+          - gemini-2.5-flash
+        default: "claude-4-sonnet"
+      data-gathering-mode:
+        description: "If checked, run Cursor agent to generate Slack stats report"
+        required: false
+        type: boolean
+        default: false
+      auto-disable-model:
+        description: "Cursor model for stale auto-disable mode"
+        required: false
+        type: choice
+        options:
+          - auto
+          - claude-4-sonnet
+          - claude-4-opus
+          - claude-3.7-sonnet
+          - gpt-5
+          - gpt-5-mini
+          - gpt-4.1
+          - o3
+          - gemini-2.5-pro
+          - gemini-2.5-flash
+        default: "claude-4-sonnet"
+      stale-hours-threshold:
+        description: "Slack message age threshold in hours for automatic disable actions"
+        required: false
+        default: "32"
+      stale-progress-hold-hours:
+        description: "Hours to defer disable after fresh progress signal"
+        required: false
+        default: "24"
+      max-auto-disable-actions:
+        description: "Maximum number of disable PRs to attempt in one run"
+        required: false
+        default: "3"
+      max-attempts-per-item:
+        description: "Maximum attempts per candidate before needs_human"
+        required: false
+        default: "10"
+      extra-pr-check-workflows:
+        description: "Optional comma-separated early workflows after PR create (pr-gate.yaml,merge-gate.yaml)"
+        required: false
+        default: ""
+      target-pr-repo:
+        description: "Repository where auto-disable draft PRs should be created"
+        required: false
+        default: "ebanerjeeTT/tt-metal"
+      target-pr-base:
+        description: "Base branch in target PR repo"
+        required: false
+        default: "main"
+      fork-workflow-outcomes:
+        description: "JSON mapping of mocked fork workflow results; values can be 'outcome' string or object {outcome,error,...}"
+        required: false
+        default: "{}"
+      fork-push-check-only:
+        description: "If checked, only verify fork branch creation and skip all triage/AI work"
+        required: false
+        type: boolean
+        default: false
+      auto-disable-dry-run:
+        description: "If checked, produce plan only and skip push/PR/kickoff execution"
+        required: false
+        type: boolean
+        default: false
+      m4-max-new-issues:
+        description: "Maximum number of new M4 issues/slack bootstrap messages to create in one run"
+        required: false
+        default: "1"
+      m4-max-agent-reviews:
+        description: "Deprecated compatibility input (M4 now reviews all eligible jobs in one batch call)"
+        required: false
+        default: "0"
+      testing-mode:
+        description: "If checked, run only owner-resolution Slack testing session"
+        required: false
+        type: boolean
+        default: false
+      testing-max-codeowners:
+        description: "Maximum CODEOWNERS GitHub users to test in testing mode"
+        required: false
+        default: "10"
+      run-scope:
+        description: "Which modular stage(s) to run"
+        required: false
+        type: choice
+        options:
+          - full
+          - data-report-only
+          - draft-prs-only
+          - create-issues-only
+          - thread-lifecycle-only
+          - issue-lifecycle-only
+          - bug-escape-only
+        default: "full"
+      issue-lifecycle-processed-hours:
+        description: "Minimum hours between processing the same issue again"
+        required: false
+        default: "24"
+      issue-lifecycle-max-issues:
+        description: "Maximum number of issues to process per issue lifecycle run"
+        required: false
+        default: "3"
+      issue-lifecycle-model:
+        description: "Cursor model for issue lifecycle analysis"
+        required: false
+        type: choice
+        options:
+          - auto
+          - claude-4-sonnet
+          - claude-4-opus
+          - claude-3.7-sonnet
+          - gpt-5
+          - gpt-5-mini
+          - gpt-4.1
+          - o3
+          - gemini-2.5-pro
+          - gemini-2.5-flash
+        default: "claude-4-sonnet"
 
 permissions:
-  contents: read
+  actions: write
+  contents: write
+  issues: read
+  pull-requests: write
 
 jobs:
-  cursor-cli-smoke-test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Ensure CURSOR_API_KEY is configured
-        env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-        run: |
-          if [ -z "$CURSOR_API_KEY" ]; then
-            echo "Missing secret CURSOR_API_KEY"
-            exit 1
-          fi
-
-      - name: Install Cursor CLI
-        run: |
-          set -euo pipefail
-          install_script="$(mktemp)"
-          curl --fail --show-error --silent --location \
-            --proto '=https' --tlsv1.2 \
-            https://cursor.com/install \
-            -o "$install_script"
-          bash "$install_script"
-          rm -f "$install_script"
-          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
-
-      - name: Run simple Cursor prompt
-        env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-        run: |
-          set -euo pipefail
-          output="$(agent -p "Reply with exactly: CURSOR_CI_OK")"
-          echo "Agent output: $output"
-          if [[ "$output" != *"CURSOR_CI_OK"* ]]; then
-            echo "Unexpected agent output; expected CURSOR_CI_OK"
-            exit 1
-          fi
+  triage:
+    uses: tenstorrent/tt-auto-triage/.github/workflows/triage-ci.yaml@spike/port-tt-metal-ci-autonomy
+    with:
+      days: ${{ inputs.days }}
+      data-report-model: ${{ inputs['data-report-model'] }}
+      data-gathering-mode: ${{ inputs['data-gathering-mode'] }}
+      auto-disable-model: ${{ inputs['auto-disable-model'] }}
+      stale-hours-threshold: ${{ inputs['stale-hours-threshold'] }}
+      stale-progress-hold-hours: ${{ inputs['stale-progress-hold-hours'] }}
+      max-auto-disable-actions: ${{ inputs['max-auto-disable-actions'] }}
+      max-attempts-per-item: ${{ inputs['max-attempts-per-item'] }}
+      extra-pr-check-workflows: ${{ inputs['extra-pr-check-workflows'] }}
+      target-pr-repo: ${{ inputs['target-pr-repo'] }}
+      target-pr-base: ${{ inputs['target-pr-base'] }}
+      fork-workflow-outcomes: ${{ inputs['fork-workflow-outcomes'] }}
+      fork-push-check-only: ${{ inputs['fork-push-check-only'] }}
+      auto-disable-dry-run: ${{ inputs['auto-disable-dry-run'] }}
+      m4-max-new-issues: ${{ inputs['m4-max-new-issues'] }}
+      m4-max-agent-reviews: ${{ inputs['m4-max-agent-reviews'] }}
+      testing-mode: ${{ inputs['testing-mode'] }}
+      testing-max-codeowners: ${{ inputs['testing-max-codeowners'] }}
+      run-scope: ${{ inputs['run-scope'] }}
+      issue-lifecycle-processed-hours: ${{ inputs['issue-lifecycle-processed-hours'] }}
+      issue-lifecycle-max-issues: ${{ inputs['issue-lifecycle-max-issues'] }}
+      issue-lifecycle-model: ${{ inputs['issue-lifecycle-model'] }}
+      triage-logic-ref: "spike/port-tt-metal-ci-autonomy"
+    secrets: inherit
