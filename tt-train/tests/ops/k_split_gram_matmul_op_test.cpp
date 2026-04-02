@@ -46,9 +46,9 @@ std::vector<float> compute_gram_tile(const std::vector<float>& in_vec, uint32_t 
         for (uint32_t i = 0; i < 32; i++) {
             for (uint32_t j = 0; j < 32; j++) {
                 float sum = 0.0f;
-                for (uint32_t l = 0; l < 32; l++) {
-                    sum += in_vec[(m_tile * 32 + i) * K + k_tile * 32 + l] *
-                           in_vec[(n_tile * 32 + j) * K + k_tile * 32 + l];
+                for (uint32_t k = 0; k < 32; k++) {
+                    sum += in_vec[(m_tile * 32 + i) * K + k_tile * 32 + k] *
+                           in_vec[(n_tile * 32 + j) * K + k_tile * 32 + k];
                 }
                 result[i * 32 + j] += sum;
             }
