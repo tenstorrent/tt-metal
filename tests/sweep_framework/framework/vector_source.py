@@ -6,17 +6,19 @@ import json
 import pathlib
 import sys
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Any
 
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 if __package__ in (None, ""):
-    REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
     if str(REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(REPO_ROOT))
 
 from tests.sweep_framework.framework.execution_capabilities import (
-    is_requirement_eligible,
-    requirements_from_vector_data,
+    normalize_mesh_shape,
     resolve_active_profile,
 )
+from tests.sweep_framework.framework.constants import normalize_hardware_group
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
 
 
@@ -107,46 +109,127 @@ class FileVectorSource(VectorSource):
 class VectorExportSource(VectorSource):
     """Vectors export directory source"""
 
+    @dataclass(frozen=True)
+    class ExportManifestEntry:
+        module_name: str
+        base_module_name: str
+        file_path: pathlib.Path
+        grouping_kind: str
+        hardware_group: tuple[str, str, int] | None
+        mesh_shapes: tuple[tuple[int, int], ...]
+        suite_names: tuple[str, ...]
+
     def __init__(self, export_dir: pathlib.Path | None = None):
         if export_dir is None:
             # Default to vectors_export directory relative to this file
             self.export_dir = pathlib.Path(__file__).parent.parent / "vectors_export"
         else:
             self.export_dir = export_dir
+        self._manifest_entries_by_base: dict[str, list[VectorExportSource.ExportManifestEntry]] | None = None
+        self._manifest_entries_by_module: dict[str, list[VectorExportSource.ExportManifestEntry]] | None = None
+        self._manifest_path = self.export_dir / "export_manifest.json"
 
-    def _find_module_files(self, module_name: str) -> list[pathlib.Path]:
-        """Find all JSON files for a given module (including grouped variants)."""
-        all_files = []
+    @staticmethod
+    def _normalize_manifest_hardware_group(value: Any) -> tuple[str, str, int] | None:
+        if not isinstance(value, dict):
+            return None
+        return normalize_hardware_group(value.get("board_type"), value.get("device_series"), value.get("card_count"))
 
-        # First try exact match
-        exact_match = list(self.export_dir.glob(f"{module_name}.json"))
-        if exact_match:
-            all_files.extend(exact_match)
+    @staticmethod
+    def _normalize_manifest_mesh_shapes(value: Any) -> tuple[tuple[int, int], ...]:
+        if not isinstance(value, list):
+            return ()
+        mesh_shapes = set()
+        for mesh_shape in value:
+            normalized = normalize_mesh_shape(mesh_shape)
+            if normalized is not None:
+                mesh_shapes.add(normalized)
+        return tuple(sorted(mesh_shapes))
 
-        # Also look for grouped variants using the dotted suffix format.
-        mesh_variants = list(self.export_dir.glob(f"{module_name}.mesh_*.json"))
-        if mesh_variants:
-            logger.info(f"Found {len(mesh_variants)} mesh variant file(s) for module '{module_name}'")
-            all_files.extend(sorted(mesh_variants))  # Sort for consistent ordering
+    def _load_manifest_index(self) -> None:
+        if self._manifest_entries_by_base is not None and self._manifest_entries_by_module is not None:
+            return
 
-        hardware_variants = list(self.export_dir.glob(f"{module_name}.hw_*.json"))
-        if hardware_variants:
-            logger.info(f"Found {len(hardware_variants)} hardware variant file(s) for module '{module_name}'")
-            all_files.extend(sorted(hardware_variants))
+        self._manifest_entries_by_base = {}
+        self._manifest_entries_by_module = {}
 
-        if all_files:
-            return sorted(set(all_files))
+        if not self._manifest_path.exists():
+            logger.warning(f"Export manifest not found at {self._manifest_path}")
+            return
 
-        logger.warning(f"No vector file found for module '{module_name}' in {self.export_dir}")
         try:
-            tail = module_name.split(".")[-1]
-            similar_files = list(self.export_dir.glob(f"*{tail}*.json"))
-            if similar_files:
-                top_names = [f.name for f in similar_files[:5]]
-                logger.info(f"Similar files found: {top_names}")
-        except Exception:
-            pass
-        return []
+            with open(self._manifest_path, "r", encoding="utf-8") as file:
+                manifest = json.load(file)
+        except (json.JSONDecodeError, IOError) as e:
+            logger.warning(f"Failed to load export manifest at {self._manifest_path}: {e}")
+            return
+
+        raw_entries = manifest.get("files")
+        if not isinstance(raw_entries, list):
+            logger.warning(f"Invalid export manifest format at {self._manifest_path}: missing 'files' list")
+            return
+
+        for raw_entry in raw_entries:
+            if not isinstance(raw_entry, dict):
+                continue
+            module_name = str(raw_entry.get("module_name") or "").strip()
+            base_module_name = str(raw_entry.get("base_module_name") or "").strip()
+            file_path_str = str(raw_entry.get("file_path") or "").strip()
+            if not module_name or not base_module_name or not file_path_str:
+                continue
+
+            file_path = pathlib.Path(file_path_str)
+            if not file_path.is_absolute():
+                file_path = REPO_ROOT / file_path
+
+            entry = VectorExportSource.ExportManifestEntry(
+                module_name=module_name,
+                base_module_name=base_module_name,
+                file_path=file_path,
+                grouping_kind=str(raw_entry.get("grouping_kind") or "ungrouped"),
+                hardware_group=self._normalize_manifest_hardware_group(raw_entry.get("hardware_group")),
+                mesh_shapes=self._normalize_manifest_mesh_shapes(raw_entry.get("mesh_shapes")),
+                suite_names=tuple(sorted(set(raw_entry.get("suite_names", [])))),
+            )
+            self._manifest_entries_by_base.setdefault(entry.base_module_name, []).append(entry)
+            self._manifest_entries_by_module.setdefault(entry.module_name, []).append(entry)
+
+    def _find_module_entries(self, module_name: str) -> list[ExportManifestEntry]:
+        """Find manifest entries for a module by base name or full grouped name."""
+        self._load_manifest_index()
+        assert self._manifest_entries_by_base is not None
+        assert self._manifest_entries_by_module is not None
+
+        entries = list(self._manifest_entries_by_base.get(module_name, []))
+        entries.extend(self._manifest_entries_by_module.get(module_name, []))
+        if not entries:
+            logger.warning(f"No manifest entry found for module '{module_name}' in {self._manifest_path}")
+            return []
+
+        by_path = {}
+        for entry in entries:
+            by_path[entry.file_path] = entry
+        return sorted(by_path.values(), key=lambda item: item.file_path.name)
+
+    @staticmethod
+    def _is_manifest_entry_eligible(entry: ExportManifestEntry, profile) -> bool:
+        # Manifest grouping is authoritative: grouped-by-hw files are checked by hardware,
+        # grouped-by-mesh files are checked by mesh.
+        if entry.grouping_kind == "hw":
+            if entry.hardware_group and entry.hardware_group not in profile.allowed_hardware_groups:
+                return False
+            return True
+        if entry.grouping_kind == "mesh":
+            if entry.mesh_shapes and not set(entry.mesh_shapes).intersection(profile.allowed_mesh_shapes):
+                return False
+            return True
+
+        # Fallback for legacy/ungrouped entries that may carry both hints.
+        if entry.hardware_group and entry.hardware_group not in profile.allowed_hardware_groups:
+            return False
+        if entry.mesh_shapes and not set(entry.mesh_shapes).intersection(profile.allowed_mesh_shapes):
+            return False
+        return True
 
     def _get_active_profile(self):
         """Resolve the active execution capability profile for the current host."""
@@ -158,35 +241,59 @@ class VectorExportSource(VectorSource):
             logger.warning(f"Execution capability profile selection skipped: {e}")
             return None
 
+    @staticmethod
+    def _annotate_vector(vector_data: dict, *, input_hash: str, suite_name: str, module_name: str) -> None:
+        """Attach common vector metadata used by the runner."""
+        vector_data["input_hash"] = input_hash
+        vector_data["suite_name"] = suite_name
+        # Preserve stored sweep_name (may include mesh suffix), fallback to module_name
+        if "sweep_name" not in vector_data:
+            vector_data["sweep_name"] = module_name
+
     def load_vectors(self, module_name: str, suite_name: str | None = None, vector_id: str | None = None) -> list[dict]:
-        """Load test vectors from vectors_export directory (including grouped variants)."""
-        module_files = self._find_module_files(module_name)
-        if not module_files:
+        """Load test vectors from manifest-declared vectors_export files."""
+        module_entries = self._find_module_entries(module_name)
+        if not module_entries:
             return []
 
-        active_profile = self._get_active_profile()
+        # Explicit vector lookup should bypass eligibility filtering.
+        active_profile = None if vector_id else self._get_active_profile()
+        if active_profile is not None:
+            eligible_entries = [
+                entry for entry in module_entries if self._is_manifest_entry_eligible(entry, active_profile)
+            ]
+            skipped_entries = len(module_entries) - len(eligible_entries)
+            if skipped_entries > 0:
+                logger.info(
+                    f"Skipped {skipped_entries} manifest vector file(s) via execution capability profile, "
+                    f"selected {len(eligible_entries)}"
+                )
+            module_entries = eligible_entries
 
         all_vectors = []
-        filtered_count = 0
 
         # Load vectors from all matching files (e.g., base + mesh variants)
-        for module_file in module_files:
+        for entry in module_entries:
+            module_file = entry.file_path
             try:
                 with open(module_file, "r") as file:
                     data = json.load(file)
 
                 for suite_key, suite_content in data.items():
+                    if entry.suite_names and suite_key not in entry.suite_names:
+                        continue
                     if suite_name and suite_name != suite_key:
                         continue
 
                     if vector_id:
                         if vector_id in suite_content:
                             vector = suite_content[vector_id]
-                            vector["input_hash"] = vector_id
-                            vector["suite_name"] = suite_key
-                            # Preserve stored sweep_name (may include mesh suffix), fallback to module_name
-                            if "sweep_name" not in vector:
-                                vector["sweep_name"] = module_name
+                            self._annotate_vector(
+                                vector,
+                                input_hash=vector_id,
+                                suite_name=suite_key,
+                                module_name=module_name,
+                            )
                             all_vectors.append(vector)
                             logger.info(
                                 f"Vector ID '{vector_id}' found in suite '{suite_name}' of module '{module_name}' (file: {module_file.name})"
@@ -198,40 +305,32 @@ class VectorExportSource(VectorSource):
                         break
                     else:
                         for input_hash, vector_data in suite_content.items():
-                            vector_data["input_hash"] = input_hash
-                            vector_data["suite_name"] = suite_key
-                            # Preserve stored sweep_name (may include mesh suffix), fallback to module_name
-                            if "sweep_name" not in vector_data:
-                                vector_data["sweep_name"] = module_name
-
-                            if active_profile is not None:
-                                requirement = requirements_from_vector_data(vector_data, module_name=module_file.stem)
-                                if not is_requirement_eligible(requirement, active_profile):
-                                    filtered_count += 1
-                                    continue
-
+                            self._annotate_vector(
+                                vector_data,
+                                input_hash=input_hash,
+                                suite_name=suite_key,
+                                module_name=module_name,
+                            )
                             all_vectors.append(vector_data)
 
             except (json.JSONDecodeError, IOError) as e:
                 logger.error(f"Error loading vectors from {module_file}: {e}")
 
-        if active_profile is not None and filtered_count > 0:
-            logger.info(
-                f"Filtered out {filtered_count} vectors via execution capability profile, "
-                f"loaded {len(all_vectors)} vectors"
-            )
-
         return all_vectors
 
     def get_available_suites(self, module_name: str) -> list[str]:
-        """Get list of available suites for a module from vectors_export directory (including grouped variants)."""
-        module_files = self._find_module_files(module_name)
-        if not module_files:
+        """Get list of available suites for a module from manifest-declared vector files."""
+        module_entries = self._find_module_entries(module_name)
+        if not module_entries:
             return []
 
         # Collect unique suite names across all grouped variant files
         all_suites = set()
-        for module_file in module_files:
+        for entry in module_entries:
+            module_file = entry.file_path
+            if entry.suite_names:
+                all_suites.update(entry.suite_names)
+                continue
             try:
                 with open(module_file, "r") as file:
                     data = json.load(file)
