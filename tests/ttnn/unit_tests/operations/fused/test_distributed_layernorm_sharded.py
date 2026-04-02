@@ -71,12 +71,16 @@ def create_input_and_weight_tensors(input_width, num_devices, seed, mean, std):
 def create_tt_tensors(
     torch_chunk, device, df, core_grid, input_width, is_weight=False, grid_offset=ttnn.CoreCoord(0, 0)
 ):
+    from_kw = {}
+    if not is_weight:
+        from_kw["pad_value"] = TEST_PADDING_VALUE
     tt_tensor = ttnn.from_torch(
         torch_chunk,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG if is_weight else ttnn.L1_MEMORY_CONFIG,
         dtype=df,
+        **from_kw,
     )
 
     with device.cache_entries_counter.measure():

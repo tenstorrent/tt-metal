@@ -15,6 +15,13 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from models.common.utility_functions import is_blackhole, is_watcher_enabled, run_for_blackhole
 
+TEST_PADDING_VALUE = -42
+
+
+# DRAM activations: tilize_with_val_padding(pad_value) + fill_implicit_tile_padding (#31982).
+def _round_up_tile(x, tile=32):
+    return math.ceil(x / tile) * tile
+
 
 # perf_test_mode is used to skip the torch execution and pcc comparison, and always runs the operation once
 def run_group_norm_DRAM(
@@ -50,7 +57,20 @@ def run_group_norm_DRAM(
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    input_tensor_tilized = ttnn.tilize_with_zero_padding(input_tensor_row_major, use_multicore=True)
+    ushape = input_tensor_row_major.shape
+    out_shape = [
+        ushape[0],
+        ushape[1],
+        _round_up_tile(ushape[2]),
+        _round_up_tile(ushape[3]),
+    ]
+    input_tensor_tilized = ttnn.tilize_with_val_padding(
+        input_tensor_row_major,
+        output_tensor_shape=out_shape,
+        pad_value=TEST_PADDING_VALUE,
+        use_multicore=True,
+    )
+    input_tensor_tilized = ttnn.fill_implicit_tile_padding(input_tensor_tilized, TEST_PADDING_VALUE)
 
     # Create dram group norm params
     [gamma_t, beta_t], input_mask_tensor = ttnn.dram_group_norm_params_from_torch(
@@ -120,6 +140,8 @@ def run_group_norm_DRAM(
         (1, 2560, 1, 512, 32, 2, 8, 8),  # test mcast num_out_blocks 2
         (1, 2560, 1, 1024, 32, 4, 8, 8),  # test mcast num_out_blocks 4
         (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
+        # L=97 → small Ht after tilize: need num_out_blocks<=block_h and core grid with num_virtual_rows | Ht (max grid y=4 for x=8)
+        (1, 256, 1, 97, 32, 1, 4, 8),
         (2, 768, 1, 512, 32, 2, 8, 8),  # test batch size 2 (still multicast)
         (8, 768, 1, 512, 32, 2, 8, 8),  # test batch size 8 (no multicast)
         (8, 768, 1, 512, 32, 3, 8, 8),  # test batch size 8 (no multicast), but uneven num_out_blocks divisor
@@ -290,6 +312,9 @@ def test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits):
         tt_input_tensor_per_group_split_sharded = ttnn.to_memory_config(
             tt_input_tensor_per_group_split, sharded_mem_config_per_split
         )
+        tt_input_tensor_per_group_split_sharded = ttnn.fill_implicit_tile_padding(
+            tt_input_tensor_per_group_split_sharded, TEST_PADDING_VALUE
+        )
         tt_output_tensor_per_group_split = ttnn.group_norm(
             tt_input_tensor_per_group_split_sharded,
             num_groups=num_groups_per_split,
@@ -358,8 +383,12 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
     ]
 
     input_tensor_tilized = ttnn.tilize_with_val_padding(
-        input_tensor_row_major, output_tensor_shape=out_shape, pad_value=0, use_multicore=True
+        input_tensor_row_major,
+        output_tensor_shape=out_shape,
+        pad_value=TEST_PADDING_VALUE,
+        use_multicore=True,
     )
+    input_tensor_tilized = ttnn.fill_implicit_tile_padding(input_tensor_tilized, TEST_PADDING_VALUE)
 
     input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y, ttnn.DataType.BFLOAT16)
     input_mask_tensor = ttnn.to_device(input_mask_tensor, device)

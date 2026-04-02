@@ -314,6 +314,7 @@ def do_test_main(
     bias=None,
     weight_bias_layout=ttnn.TILE_LAYOUT,
     op_name="layer_norm",
+    tile_padding_value=None,
 ):
     """
     Helper function to run the layer norm or rms norm tests.
@@ -339,15 +340,29 @@ def do_test_main(
 
     # Generate the tt tensor based on the inputs
     sharded_mem_config = create_sharded_mem_config(h, w, num_cores_h, num_cores_w, two_stage)
+    from_torch_kw = {}
+    if tile_padding_value is not None:
+        from_torch_kw["pad_value"] = tile_padding_value
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor,
         layout=ttnn.Layout.TILE,
         device=device,
         memory_config=sharded_mem_config,
+        **from_torch_kw,
     )
+    if tile_padding_value is not None:
+        tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, tile_padding_value)
 
     if residual is not None:
-        residual = ttnn.from_torch(residual, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_mem_config)
+        residual = ttnn.from_torch(
+            residual,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=sharded_mem_config,
+            **from_torch_kw,
+        )
+        if tile_padding_value is not None:
+            residual = ttnn.fill_implicit_tile_padding(residual, tile_padding_value)
     if weight is not None:
         weight = ttnn.from_torch(weight, layout=weight_bias_layout, device=device)
     if bias is not None:
@@ -421,6 +436,7 @@ def layernorm_test_main(
         bias=bias,
         weight_bias_layout=weight_bias_layout,
         op_name="layer_norm",
+        tile_padding_value=-42,  # non-zero implicit tile padding (#31982); same as fused TEST_PADDING_VALUE
     )
 
 
@@ -462,4 +478,5 @@ def rms_norm_test_main(
         bias=bias,
         weight_bias_layout=weight_layout,
         op_name="rms_norm",
+        tile_padding_value=-42,
     )

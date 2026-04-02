@@ -49,13 +49,14 @@ import ttnn
 
 from tests.ttnn.unit_tests.operations.fused.distributed_norm_test_utils import run_distributed_norm_test
 
-# Non-zero implicit tile padding on activations; exposes pad-as-data bugs (#31982).
 TEST_PADDING_VALUE = -42
+
+# Mesh shards hidden_dim across 8 devices: hidden_dim % 8 == 0 required.
 
 
 @pytest.mark.parametrize("batch_size", [1, 2])
-@pytest.mark.parametrize("seq_len", [512, 1024, 2048])
-@pytest.mark.parametrize("hidden_dim", [2048, 4096, 8192])
+@pytest.mark.parametrize("seq_len", [512, 1024, 2048, 513, 1025])
+@pytest.mark.parametrize("hidden_dim", [2048, 4096, 8192, 2056, 4104])
 @pytest.mark.parametrize("eps", [1e-5, 1e-6])
 @pytest.mark.parametrize(
     "mean, var, outlier_pct, outlier_var",
@@ -141,8 +142,8 @@ def test_distributed_norm_allclose(
 
 
 @pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("seq_len", [1024])
-@pytest.mark.parametrize("hidden_dim", [4096])
+@pytest.mark.parametrize("seq_len", [1025])
+@pytest.mark.parametrize("hidden_dim", [4104])
 @pytest.mark.parametrize("eps", [1e-6])
 @pytest.mark.parametrize(
     "norm_type, use_welford",
@@ -229,8 +230,8 @@ def test_distributed_layernorm_memory_layouts(mesh_device, norm_type, weight_lay
     passes, max_abs_diff, max_rel_diff, mean_rel_diff = run_distributed_norm_test(
         mesh_device=mesh_device,
         batch_size=1,
-        seq_len=1024,
-        hidden_dim=4096,
+        seq_len=1025,
+        hidden_dim=4104,
         eps=1e-6,
         norm_type=norm_type,
         mean=0,
@@ -290,8 +291,8 @@ def test_distributed_rmsnorm_memory_layouts(mesh_device, norm_type, weight_layou
     passes, max_abs_diff, max_rel_diff, mean_rel_diff = run_distributed_norm_test(
         mesh_device=mesh_device,
         batch_size=1,
-        seq_len=1024,
-        hidden_dim=4096,
+        seq_len=1025,
+        hidden_dim=4104,
         eps=1e-6,
         norm_type=norm_type,
         mean=0,
@@ -344,8 +345,8 @@ def test_distributed_norm_large_batch(mesh_device, norm_type, use_welford):
     passes, max_abs_diff, max_rel_diff, mean_rel_diff = run_distributed_norm_test(
         mesh_device=mesh_device,
         batch_size=4,  # Larger batch
-        seq_len=2048,
-        hidden_dim=4096,
+        seq_len=2049,
+        hidden_dim=4104,
         eps=1e-6,
         norm_type=norm_type,
         mean=0,
@@ -366,7 +367,7 @@ def test_distributed_norm_large_batch(mesh_device, norm_type, use_welford):
     )
 
 
-@pytest.mark.parametrize("hidden_dim", [1024, 2048, 4096, 8192])
+@pytest.mark.parametrize("hidden_dim", [1024, 2048, 4096, 8192, 2056, 4104])
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -419,7 +420,7 @@ def test_distributed_layernorm_sweep_hidden_dim(mesh_device, hidden_dim):
 @pytest.mark.parametrize(
     "hidden_dim",
     [
-        2048,
+        2056,
     ],
 )
 @pytest.mark.parametrize(

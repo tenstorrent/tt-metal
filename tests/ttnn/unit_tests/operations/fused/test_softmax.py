@@ -11,6 +11,9 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 from models.common.utility_functions import torch_random
 
+# Non-zero implicit tile padding on softmax inputs (#31982).
+TEST_PADDING_VALUE = -42
+
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
@@ -20,6 +23,7 @@ from models.common.utility_functions import torch_random
         (1, 2048, 32000, -1),
         (1, 512, 32000, -1),
         (1, 32, 32000, -1),  # base case
+        (1, 32, 97, -1),  # softmax dim non-multiple of 32 (interleaved)
     ],
 )
 def test_large_softmax(device, batch_size, h, w, dim):
@@ -28,9 +32,10 @@ def test_large_softmax(device, batch_size, h, w, dim):
     torch_input_tensor = torch_random((batch_size, h, w), -1, 1, dtype=torch.bfloat16)
     torch_output_tensor = F.softmax(torch_input_tensor, dim=dim, dtype=torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-
-    input_tensor = ttnn.to_device(input_tensor, device)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, pad_value=TEST_PADDING_VALUE
+    )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     output_tensor = ttnn.softmax(input_tensor, dim=dim, numeric_stable=True)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -64,7 +69,10 @@ def test_softmax_stable_neg_values(device, input_vector, math_approx, fp32_acc_e
         packer_l1_acc=False,
     )
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, pad_value=TEST_PADDING_VALUE
+    )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     output_tensor = ttnn.softmax(input_tensor, dim=-1, compute_kernel_config=compute_kernel_config, numeric_stable=True)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -93,8 +101,14 @@ def run_softmax_stable_with_program_cache(
     torch_output_tensor = F.softmax(torch_output_tensor, dim=-1, dtype=torch.bfloat16)
 
     input_tensor = ttnn.from_torch(
-        torch_input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True
+        torch_input_tensor,
+        dtype=in_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        preserve_nan_values=True,
+        pad_value=TEST_PADDING_VALUE,
     )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -187,8 +201,14 @@ def run_softmax_sharded_stable(
     )
 
     input_tensor = ttnn.from_torch(
-        torch_input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        torch_input_tensor,
+        dtype=in_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+        pad_value=TEST_PADDING_VALUE,
     )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     with device.cache_entries_counter.measure():
         if not skip_scale_mask:
             output_tensor = ttnn.scale_mask_softmax_in_place(
@@ -241,7 +261,7 @@ def test_softmax_sharded_stable_with_program_cache(
 
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64])
-@pytest.mark.parametrize("w", [32, 64])
+@pytest.mark.parametrize("w", [32, 64, 97])
 @pytest.mark.parametrize("dim", [-1, -2, -3, 0, 1, 2])
 def test_softmax(device, batch_size, h, w, dim):
     torch.manual_seed(0)
@@ -249,9 +269,10 @@ def test_softmax(device, batch_size, h, w, dim):
     torch_input_tensor = torch_random((batch_size, h, w), -1, 1, dtype=torch.bfloat16)
     torch_output_tensor = F.softmax(torch_input_tensor, dim=dim, dtype=torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-
-    input_tensor = ttnn.to_device(input_tensor, device)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, pad_value=TEST_PADDING_VALUE
+    )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     output_tensor = ttnn.softmax(input_tensor, dim=dim)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -263,7 +284,10 @@ def test_softmax_with_3D(device):
     torch.manual_seed(0)
     torch_input_tensor = torch_random((8, 1500, 1500), -10, 10, dtype=torch.bfloat16)
     torch_output_tensor = F.softmax(torch_input_tensor, dim=-1, dtype=torch.bfloat16)
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, pad_value=TEST_PADDING_VALUE
+    )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     output_tensor = ttnn.softmax(input_tensor, dim=-1)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -275,9 +299,10 @@ def test_softmax_with_padded_tile_layout(device):
     torch.manual_seed(0)
     torch_input_tensor = torch_random((8, 2, 2), -10, 10, dtype=torch.bfloat16)
     torch_output_tensor = F.softmax(torch_input_tensor, dim=-1, dtype=torch.bfloat16)
-    input_tensor = ttnn.from_torch(torch_input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
-    input_tensor = ttnn.to_device(input_tensor, device)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, pad_value=TEST_PADDING_VALUE
+    )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     output_tensor = ttnn.softmax(input_tensor, dim=-1)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -289,9 +314,10 @@ def test_softmax_with_padded_tile_layout_large(device):
     torch.manual_seed(0)
     torch_input_tensor = torch_random((8, 100, 1200), -10, 10, dtype=torch.bfloat16)
     torch_output_tensor = F.softmax(torch_input_tensor, dim=-1, dtype=torch.bfloat16)
-    input_tensor = ttnn.from_torch(torch_input_tensor)
-    input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
-    input_tensor = ttnn.to_device(input_tensor, device)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, pad_value=TEST_PADDING_VALUE
+    )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     output_tensor = ttnn.softmax(input_tensor, dim=-1)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -307,7 +333,10 @@ def test_specific_tensor_combination(device):
 
     torch_output_tensor = torch.softmax(torch_input_tensor, -1)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, pad_value=TEST_PADDING_VALUE
+    )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     output = ttnn.softmax(input_tensor, -1)
     output = ttnn.from_device(output)
@@ -333,7 +362,14 @@ def test_5d_softmax(device, input_shape, dim):
     torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
     torch_output_tensor = torch.softmax(torch_input_tensor, dim)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        pad_value=TEST_PADDING_VALUE,
+    )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     output_tensor = ttnn.softmax(input_tensor, dim)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -371,7 +407,10 @@ def test_large_fill_softmax(device, input_shape, dtype, dlayout, dim, numeric_st
     )
     torch_output_tensor = torch.softmax(torch_input_tensor, dim)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=dlayout, device=device)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=dtype, layout=dlayout, device=device, pad_value=TEST_PADDING_VALUE
+    )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     output_tensor = ttnn.softmax(input_tensor, dim, numeric_stable=numeric_stable)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -405,7 +444,14 @@ def test_softmax_sd(device):
         ),
     )
 
-    input = ttnn.from_torch(input, device=device, layout=ttnn.Layout.TILE, memory_config=mem_config)
+    input = ttnn.from_torch(
+        input,
+        device=device,
+        layout=ttnn.Layout.TILE,
+        memory_config=mem_config,
+        pad_value=TEST_PADDING_VALUE,
+    )
+    input = ttnn.fill_implicit_tile_padding(input, TEST_PADDING_VALUE)
 
     out = ttnn.softmax_in_place(
         input,
@@ -428,6 +474,8 @@ def test_softmax_sd(device):
         ([32, 32, 32, 32], -2, [torch.float32, ttnn.float32]),
         ([32, 32, 32, 32], -3, [torch.bfloat16, ttnn.bfloat16]),
         ([32, 32, 32, 32], -3, [torch.float32, ttnn.float32]),
+        ([32, 97], -1, [torch.bfloat16, ttnn.bfloat16]),
+        ([32, 97], -1, [torch.float32, ttnn.float32]),
     ],
 )
 def test_softmax_dtypes(device, shape, dim, dtype):
@@ -436,7 +484,10 @@ def test_softmax_dtypes(device, shape, dim, dtype):
     torch_dtype, ttnn_dtype = dtype
 
     torch_tensor = torch.rand(shape, dtype=torch_dtype)
-    ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn_dtype)
+    ttnn_tensor = ttnn.from_torch(
+        torch_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn_dtype, pad_value=TEST_PADDING_VALUE
+    )
+    ttnn_tensor = ttnn.fill_implicit_tile_padding(ttnn_tensor, TEST_PADDING_VALUE)
 
     torch_output = torch.softmax(
         torch_tensor,
@@ -472,7 +523,10 @@ def test_softmax_bfloat8_dims(device, shape, dim, dtype):
     torch_dtype, ttnn_dtype = dtype
 
     torch_tensor = torch.rand(shape, dtype=torch_dtype)
-    ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn_dtype)
+    ttnn_tensor = ttnn.from_torch(
+        torch_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn_dtype, pad_value=TEST_PADDING_VALUE
+    )
+    ttnn_tensor = ttnn.fill_implicit_tile_padding(ttnn_tensor, TEST_PADDING_VALUE)
 
     torch_output = torch.softmax(
         torch_tensor,
@@ -514,7 +568,8 @@ def test_softmax_accuracy(device, shape, fp32_acc_en, math_approx_mode, expected
         packer_l1_acc=True,
     )
 
-    ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device, pad_value=TEST_PADDING_VALUE)
+    ttnn_tensor = ttnn.fill_implicit_tile_padding(ttnn_tensor, TEST_PADDING_VALUE)
 
     ttnn_output = ttnn.softmax(
         ttnn_tensor, dim=-1, compute_kernel_config=compute_kernel_config, numeric_stable=numeric_stable
@@ -551,7 +606,8 @@ def test_softmax_large_kernel_block_size(device, Wt):
         fp32_dest_acc_en=True,
     )
 
-    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device, pad_value=TEST_PADDING_VALUE)
+    ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, TEST_PADDING_VALUE)
     ttnn_output = ttnn.softmax(ttnn_input, dim=-1, compute_kernel_config=compute_config, numeric_stable=True)
     ttnn_output = ttnn.to_torch(ttnn_output)
 
@@ -563,7 +619,14 @@ def test_softmax_4096x4096_fp32(device):
     torch_input_tensor = torch.rand((1, 1, 4096, 4096), dtype=torch.float32)
     torch_output = torch.ops.aten._softmax.default(torch_input_tensor, dim=3, half_to_float=False)
 
-    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        pad_value=TEST_PADDING_VALUE,
+    )
+    ttnn_input_tensor = ttnn.fill_implicit_tile_padding(ttnn_input_tensor, TEST_PADDING_VALUE)
 
     ttnn_output_tensor = ttnn.softmax(ttnn_input_tensor, dim=3)
     output_torch = ttnn_output_tensor.cpu().to_torch()
