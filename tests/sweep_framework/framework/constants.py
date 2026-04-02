@@ -90,6 +90,19 @@ def _sanitize_suffix_token(value) -> str:
     return text or "unknown"
 
 
+def normalize_hardware_group(board_type, device_series, card_count) -> Tuple[str, str, int]:
+    """Normalize hardware metadata to the canonical suffix-compatible tuple."""
+    board = _sanitize_suffix_token(board_type)
+    series = _sanitize_suffix_token(device_series)
+    cards = 0
+    if card_count is not None:
+        try:
+            cards = int(card_count)
+        except (TypeError, ValueError):
+            logger.debug("Invalid card_count %r; defaulting to 0", card_count)
+    return (board, series, cards)
+
+
 def format_mesh_suffix(mesh_shape: Tuple[int, int]) -> str:
     """Format mesh shape tuple as filename suffix.
 
@@ -135,9 +148,7 @@ def parse_mesh_suffix(module_name: str) -> Optional[Tuple[int, int]]:
 
 def format_hardware_suffix(board_type, device_series, card_count) -> str:
     """Format hardware metadata as a filename suffix."""
-    board = _sanitize_suffix_token(board_type)
-    series = _sanitize_suffix_token(device_series)
-    cards = 0 if card_count is None else int(card_count)
+    board, series, cards = normalize_hardware_group(board_type, device_series, card_count)
     return f".hw_{board}_{series}_{cards}c"
 
 
@@ -145,7 +156,7 @@ def parse_hardware_suffix(module_name: str) -> Optional[Tuple[str, str, int]]:
     """Extract normalized hardware metadata from a module name suffix."""
     match = HARDWARE_SUFFIX_PATTERN.search(module_name)
     if match:
-        return (match.group(1), match.group(2), int(match.group(3)))
+        return normalize_hardware_group(match.group(1), match.group(2), int(match.group(3)))
     return None
 
 

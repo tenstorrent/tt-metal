@@ -11,79 +11,32 @@ import os
 import pathlib
 import random
 import sys
-import ast
 from collections import defaultdict
 
-from model_tracer.mesh_metadata import infer_mesh_shape
-from framework.constants import format_hardware_suffix, format_mesh_suffix
+from framework.constants import format_hardware_suffix, format_mesh_suffix, normalize_hardware_group
 from framework.permutations import permutations
 from framework.serialize import serialize_structured
 from framework.statuses import VectorStatus, VectorValidity
 from framework.sweeps_logger import sweeps_logger as logger
+from framework.vector_metadata import (
+    get_hardware_from_vector,
+    get_mesh_shape_from_vector,
+    normalize_mesh_shape_for_manifest,
+)
 
 SWEEPS_DIR = pathlib.Path(__file__).parent
 SWEEP_SOURCES_DIR = SWEEPS_DIR / "sweeps"
+REPO_ROOT = SWEEPS_DIR.parent.parent
+EXPORT_DIR_PATH = SWEEPS_DIR / "vectors_export"
+EXPORT_MANIFEST_PATH = EXPORT_DIR_PATH / "export_manifest.json"
 
 
 # Shuffle control (set in __main__ when --randomize is provided)
 SHUFFLE_SEED = None
 DO_RANDOMIZE = False
 VECTOR_GROUPING_MODE = "mesh"
-
-
-def get_mesh_shape_from_vector(vector):
-    """Extract mesh_device_shape from traced_machine_info.
-
-    Args:
-        vector: Dictionary containing vector parameters including traced_machine_info
-
-    Returns:
-        tuple: (rows, cols) representing mesh shape (e.g., (4, 8) for Galaxy), or
-               None if mesh shape cannot be determined (vector has no routing restriction).
-    """
-    machine_info = vector.get("traced_machine_info")
-
-    # Handle dict format (current V2 format)
-    if machine_info and isinstance(machine_info, dict):
-        mesh_shape = infer_mesh_shape(
-            mesh_shape=machine_info.get("mesh_device_shape"),
-            device_ids=machine_info.get("device_ids"),
-            device_count=machine_info.get("device_count"),
-            device_series=machine_info.get("device_series"),
-            card_count=machine_info.get("card_count"),
-        )
-        if mesh_shape and len(mesh_shape) == 2:
-            return tuple(mesh_shape)
-
-    # Handle list format (legacy format)
-    elif machine_info and isinstance(machine_info, list) and len(machine_info) > 0:
-        # Check if mesh_device_shape is directly in machine_info (old format)
-        mesh_shape = machine_info[0].get("mesh_device_shape")
-        if mesh_shape and isinstance(mesh_shape, list) and len(mesh_shape) == 2:
-            return tuple(mesh_shape)
-
-        for entry in machine_info:
-            if not isinstance(entry, dict):
-                continue
-            tensor_placements = entry.get("tensor_placements")
-            placement_mesh_shape = None
-            distribution_shape = None
-            if tensor_placements and isinstance(tensor_placements, list) and len(tensor_placements) > 0:
-                placement_mesh_shape = tensor_placements[0].get("mesh_device_shape")
-                distribution_shape = tensor_placements[0].get("distribution_shape")
-
-            mesh_shape = infer_mesh_shape(
-                mesh_shape=entry.get("mesh_device_shape") or placement_mesh_shape,
-                distribution_shape=distribution_shape,
-                device_ids=entry.get("device_ids"),
-                device_count=entry.get("device_count"),
-                device_series=entry.get("device_series"),
-                card_count=entry.get("card_count"),
-            )
-            if mesh_shape and len(mesh_shape) == 2:
-                return tuple(mesh_shape)
-
-    return None  # Unknown mesh shape: no routing restriction
+SWEEPS_TAG = os.getenv("USER")
+EXPORT_MANIFEST_STATE = None
 
 
 def group_vectors_by_mesh_shape(vectors):
@@ -104,40 +57,6 @@ def group_vectors_by_mesh_shape(vectors):
     return grouped
 
 
-def _get_traced_machine_entries(vector):
-    """Normalize traced_machine_info to a list of dict entries."""
-    machine_info = vector.get("traced_machine_info")
-    if isinstance(machine_info, dict):
-        return [machine_info]
-    if isinstance(machine_info, list):
-        return [entry for entry in machine_info if isinstance(entry, dict)]
-    return []
-
-
-def get_hardware_from_vector(vector):
-    """Extract a hardware tuple from traced_machine_info when present."""
-    for entry in _get_traced_machine_entries(vector):
-        board_type = entry.get("board_type")
-        device_series = entry.get("device_series")
-        card_count = entry.get("card_count")
-
-        if isinstance(device_series, list):
-            device_series = device_series[0] if device_series else None
-
-        if not board_type and not device_series and card_count is None:
-            continue
-
-        if card_count is not None:
-            try:
-                card_count = int(card_count)
-            except (TypeError, ValueError):
-                card_count = 0
-
-        return (board_type or "unknown", device_series or "unknown", card_count)
-
-    return None
-
-
 def group_vectors_by_hardware(vectors):
     """Group vectors by their traced hardware tuple."""
     grouped = defaultdict(list)
@@ -146,6 +65,178 @@ def group_vectors_by_hardware(vectors):
         grouped[hardware].append(vector)
 
     return grouped
+
+
+def _collect_mesh_shapes_from_vectors(vectors):
+    """Unique mesh shapes inferred from traced_machine_info (same logic as grouping)."""
+    shapes = set()
+    for vector in vectors:
+        mesh_shape = get_mesh_shape_from_vector(vector)
+        if mesh_shape is None:
+            continue
+        normalized = normalize_mesh_shape_for_manifest(mesh_shape)
+        if normalized is not None:
+            shapes.add(tuple(normalized))
+    return [[rows, cols] for rows, cols in sorted(shapes)]
+
+
+def _normalize_hardware_for_manifest(hardware_group):
+    """Normalize hardware routing metadata to a stable manifest shape."""
+    if hardware_group is None:
+        return None
+
+    board_type, device_series, card_count = hardware_group
+    board_type, device_series, card_count = normalize_hardware_group(board_type, device_series, card_count)
+    return {
+        "board_type": board_type,
+        "device_series": device_series,
+        "card_count": card_count,
+    }
+
+
+def _collect_trace_ids(vectors):
+    """Collect any trace IDs present in generated vectors."""
+    trace_ids = set()
+    for vector in vectors:
+        value = vector.get("trace_ids", vector.get("trace_id"))
+        if value is None:
+            continue
+        values = value if isinstance(value, (list, tuple, set)) else [value]
+        for item in values:
+            try:
+                trace_ids.add(int(item))
+            except (TypeError, ValueError):
+                continue
+    return sorted(trace_ids)
+
+
+def initialize_export_manifest(
+    *,
+    tag,
+    group_by,
+    module_name_filter,
+    suite_name_filter,
+    skip_modules,
+    model_traced,
+    randomize_enabled,
+    randomize_seed,
+    use_db,
+    mesh_shape_filter,
+    master_trace,
+):
+    """Initialize the per-run export manifest state."""
+    global EXPORT_MANIFEST_STATE
+    EXPORT_MANIFEST_STATE = {
+        "generation": {
+            "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+            "tag": tag,
+            "group_by": group_by,
+            "module_name_filter": module_name_filter,
+            "suite_name_filter": suite_name_filter,
+            "skip_modules": sorted(skip_modules),
+            "model_traced": model_traced,
+            "randomize": {"enabled": randomize_enabled, "seed": randomize_seed},
+            "use_db": use_db,
+            "mesh_shape_filter": mesh_shape_filter,
+            "master_trace": master_trace,
+        },
+        "files": {},
+    }
+
+
+def _require_export_manifest_state():
+    """Return the initialized export manifest state."""
+    if EXPORT_MANIFEST_STATE is None:
+        raise RuntimeError("Export manifest state was not initialized before vector export.")
+    return EXPORT_MANIFEST_STATE
+
+
+def _record_export_manifest_entry(
+    *,
+    module_name,
+    base_module_name,
+    suite_name,
+    vectors,
+    serialized_vectors,
+    export_path,
+    grouping_kind,
+    group_key,
+):
+    """Record manifest metadata for a grouped vector export."""
+    state = _require_export_manifest_state()
+    entries = state["files"]
+
+    entry = entries.setdefault(
+        module_name,
+        {
+            "module_name": module_name,
+            "base_module_name": base_module_name,
+            "file_path": str(export_path.relative_to(REPO_ROOT)),
+            "grouping_kind": grouping_kind,
+            "hardware_group": None,
+            "mesh_shapes": [],
+            "suite_names": [],
+            "vector_count": 0,
+            "input_hash_count": 0,
+            "trace_ids": [],
+        },
+    )
+
+    # grouping_kind is the authoritative routing dimension for the file.
+    # Other recorded metadata is preserved for observability/debugging.
+    if grouping_kind == "hw":
+        entry["hardware_group"] = _normalize_hardware_for_manifest(group_key)
+    elif grouping_kind == "mesh":
+        normalized = normalize_mesh_shape_for_manifest(group_key)
+        if normalized is not None:
+            entry["mesh_shapes"] = [normalized]
+
+    batch_mesh_shapes = _collect_mesh_shapes_from_vectors(vectors)
+    if batch_mesh_shapes:
+        existing = {tuple(pair) for pair in entry["mesh_shapes"]}
+        existing.update(tuple(pair) for pair in batch_mesh_shapes)
+        entry["mesh_shapes"] = [[r, c] for r, c in sorted(existing)]
+
+    if suite_name not in entry["suite_names"]:
+        entry["suite_names"].append(suite_name)
+        entry["suite_names"].sort()
+
+    entry["vector_count"] += len(vectors)
+    entry["input_hash_count"] += len(serialized_vectors)
+    entry["trace_ids"] = sorted(set(entry["trace_ids"]).union(_collect_trace_ids(vectors)))
+
+
+def write_export_manifest():
+    """Persist the export manifest. This is required for successful generation."""
+    state = _require_export_manifest_state()
+    EXPORT_DIR_PATH.mkdir(parents=True, exist_ok=True)
+
+    files = sorted(state["files"].values(), key=lambda entry: entry["module_name"])
+    manifest = {
+        "generation": state["generation"],
+        "file_count": len(files),
+        "files": files,
+    }
+
+    tmp_path = EXPORT_MANIFEST_PATH.with_suffix(EXPORT_MANIFEST_PATH.suffix + ".tmp")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as file:
+            json.dump(manifest, file, indent=2)
+            file.flush()
+            try:
+                os.fsync(file.fileno())
+            except OSError as e:
+                logger.warning("Failed to fsync export manifest temp file %s: %s", tmp_path, e)
+        os.replace(tmp_path, EXPORT_MANIFEST_PATH)
+    except (IOError, OSError) as e:
+        raise RuntimeError(f"Failed to write export manifest to {EXPORT_MANIFEST_PATH}: {e}") from e
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                # Best-effort cleanup: failure to delete the temp file is non-fatal and can be ignored.
+                pass
 
 
 # Generate vectors for each suite in test module parameters
@@ -408,14 +499,22 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
         # A None group means the vector has no routing restriction, so keep the
         # base module name and let any compatible runner pick up the file.
         grouped_module_name = module_name if group_key is None else f"{module_name}{format_group_suffix(group_key)}"
+        grouping_kind = "ungrouped" if group_key is None else VECTOR_GROUPING_MODE
 
         # Export vectors WITHOUT modifying sweep_name.
         # Routing info is already present in traced_machine_info; sweep_name stays
         # stable for historical comparison (full_test_name in Superset).
-        _export_grouped_vectors_to_file(grouped_module_name, suite_name, grouped_subset)
+        _export_grouped_vectors_to_file(
+            grouped_module_name,
+            suite_name,
+            grouped_subset,
+            base_module_name=module_name,
+            grouping_kind=grouping_kind,
+            group_key=group_key,
+        )
 
 
-def _export_grouped_vectors_to_file(module_name, suite_name, vectors):
+def _export_grouped_vectors_to_file(module_name, suite_name, vectors, *, base_module_name, grouping_kind, group_key):
     """Export one grouped vector file with deduplication and atomic writes.
 
     Args:
@@ -423,7 +522,6 @@ def _export_grouped_vectors_to_file(module_name, suite_name, vectors):
         suite_name: Name of the test suite
         vectors: List of vector dictionaries for this group
     """
-    EXPORT_DIR_PATH = SWEEPS_DIR / "vectors_export"
     EXPORT_PATH = EXPORT_DIR_PATH / f"{module_name}.json"
 
     # Create export directory with proper error handling
@@ -486,6 +584,16 @@ def _export_grouped_vectors_to_file(module_name, suite_name, vectors):
             f"Vectors generated for module {module_name}, suite {suite_name} already exist with tag {SWEEPS_TAG}, "
             f"and have not changed. ({len(existing_hashes)} existing tests). Skipping..."
         )
+        _record_export_manifest_entry(
+            module_name=module_name,
+            base_module_name=base_module_name,
+            suite_name=suite_name,
+            vectors=vectors,
+            serialized_vectors=serialized_vectors,
+            export_path=EXPORT_PATH,
+            grouping_kind=grouping_kind,
+            group_key=group_key,
+        )
         return
 
     # Prepare data for atomic write
@@ -513,6 +621,17 @@ def _export_grouped_vectors_to_file(module_name, suite_name, vectors):
                 f"Validation failed after export. File was written to {EXPORT_PATH}. "
                 f"If issues persist, delete the file and regenerate."
             )
+
+        _record_export_manifest_entry(
+            module_name=module_name,
+            base_module_name=base_module_name,
+            suite_name=suite_name,
+            vectors=vectors,
+            serialized_vectors=serialized_vectors,
+            export_path=EXPORT_PATH,
+            grouping_kind=grouping_kind,
+            group_key=group_key,
+        )
 
         # Extract grouping suffix from module name for logging.
         if ".mesh_" in module_name:
@@ -571,6 +690,8 @@ def generate_tests(module_name, skip_modules=None, model_traced=None, suite_name
     else:
         if module_name in skip_modules_set:
             logger.info(f"Skipping module {module_name} (in skip list).")
+            write_export_manifest()
+            logger.info(f"Wrote export manifest to {EXPORT_MANIFEST_PATH}")
             return
         logger.info(f"Generating test vectors for module {module_name}.")
         try:
@@ -578,6 +699,9 @@ def generate_tests(module_name, skip_modules=None, model_traced=None, suite_name
         except Exception as e:
             logger.error(f"Failed to generate vectors for module {module_name}: {e}")
             raise
+
+    write_export_manifest()
+    logger.info(f"Wrote export manifest to {EXPORT_MANIFEST_PATH}")
 
 
 if __name__ == "__main__":
@@ -704,5 +828,25 @@ if __name__ == "__main__":
         resolved = os.path.abspath(args.master_trace)
         MasterConfigLoader.set_master_file_path(resolved)
         logger.info(f"Master trace override: {resolved}")
+    else:
+        resolved = None
+
+    skip_modules_set = set()
+    if args.skip_modules:
+        skip_modules_set = {name.strip() for name in args.skip_modules.split(",")}
+
+    initialize_export_manifest(
+        tag=SWEEPS_TAG,
+        group_by=VECTOR_GROUPING_MODE,
+        module_name_filter=args.module_name,
+        suite_name_filter=args.suite_name,
+        skip_modules=skip_modules_set,
+        model_traced=args.model_traced,
+        randomize_enabled=DO_RANDOMIZE,
+        randomize_seed=SHUFFLE_SEED,
+        use_db=args.use_db,
+        mesh_shape_filter=args.mesh_shape,
+        master_trace=resolved,
+    )
 
     generate_tests(args.module_name, args.skip_modules, args.model_traced, args.suite_name)

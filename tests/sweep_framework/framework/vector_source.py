@@ -2,12 +2,27 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ast
 import json
+import os
 import pathlib
+import sys
 from abc import ABC, abstractmethod
 
-from framework.sweeps_logger import sweeps_logger as logger
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+if __package__ in (None, ""):
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+
+from tests.sweep_framework.framework.execution_capabilities import (
+    resolve_active_profile,
+)
+from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
+from tests.sweep_framework.framework.vector_routing import (
+    EXPORT_MANIFEST_NAME,
+    ManifestFileEntry,
+    is_manifest_entry_eligible,
+    load_manifest_file_entries,
+)
 
 
 class VectorSource(ABC):
@@ -103,173 +118,117 @@ class VectorExportSource(VectorSource):
             self.export_dir = pathlib.Path(__file__).parent.parent / "vectors_export"
         else:
             self.export_dir = export_dir
+        self._manifest_entries_by_base: dict[str, list[ManifestFileEntry]] | None = None
+        self._manifest_entries_by_module: dict[str, list[ManifestFileEntry]] | None = None
+        self._manifest_path = self.export_dir / EXPORT_MANIFEST_NAME
 
-    def _find_module_files(self, module_name: str) -> list[pathlib.Path]:
-        """Find all JSON files for a given module (including grouped variants)."""
-        all_files = []
+    def _load_manifest_index(self) -> None:
+        if self._manifest_entries_by_base is not None and self._manifest_entries_by_module is not None:
+            return
 
-        # First try exact match
-        exact_match = list(self.export_dir.glob(f"{module_name}.json"))
-        if exact_match:
-            all_files.extend(exact_match)
+        self._manifest_entries_by_base = {}
+        self._manifest_entries_by_module = {}
 
-        # Also look for grouped variants using the dotted suffix format.
-        mesh_variants = list(self.export_dir.glob(f"{module_name}.mesh_*.json"))
-        if mesh_variants:
-            logger.info(f"Found {len(mesh_variants)} mesh variant file(s) for module '{module_name}'")
-            all_files.extend(sorted(mesh_variants))  # Sort for consistent ordering
-
-        hardware_variants = list(self.export_dir.glob(f"{module_name}.hw_*.json"))
-        if hardware_variants:
-            logger.info(f"Found {len(hardware_variants)} hardware variant file(s) for module '{module_name}'")
-            all_files.extend(sorted(hardware_variants))
-
-        if all_files:
-            return sorted(set(all_files))
-
-        logger.warning(f"No vector file found for module '{module_name}' in {self.export_dir}")
+        strict_manifest = os.environ.get("GITHUB_ACTIONS", "").lower() == "true"
         try:
-            tail = module_name.split(".")[-1]
-            similar_files = list(self.export_dir.glob(f"*{tail}*.json"))
-            if similar_files:
-                top_names = [f.name for f in similar_files[:5]]
-                logger.info(f"Similar files found: {top_names}")
-        except Exception:
-            pass
-        return []
+            entries = load_manifest_file_entries(self._manifest_path, repo_root=REPO_ROOT, strict=strict_manifest)
+        except RuntimeError as e:
+            logger.warning(f"Failed to load export manifest at {self._manifest_path}: {e}")
+            if strict_manifest:
+                raise
+            return
 
-    def _get_machine_info(self):
-        """Get machine info using get_machine_info from generic_ops_tracer."""
-        try:
-            import sys
-            import os
+        for entry in entries:
+            self._manifest_entries_by_base.setdefault(entry.base_module_name, []).append(entry)
+            self._manifest_entries_by_module.setdefault(entry.module_name, []).append(entry)
 
-            # Add model_tracer to path if not already there
-            # Go up 4 levels from this file (tests/sweep_framework/framework/vector_source.py)
-            # to get to repo root, then into model_tracer
-            model_tracer_path = pathlib.Path(__file__).resolve().parent.parent.parent.parent / "model_tracer"
-            model_tracer_path_str = str(model_tracer_path)
+    def _find_module_entries(self, module_name: str) -> list[ManifestFileEntry]:
+        """Find manifest entries for a module by base name or full grouped name."""
+        self._load_manifest_index()
+        assert self._manifest_entries_by_base is not None
+        assert self._manifest_entries_by_module is not None
 
-            if model_tracer_path_str not in sys.path:
-                sys.path.insert(0, model_tracer_path_str)
-
-            # Import the module
-            from generic_ops_tracer import get_machine_info
-
-            machine_info = get_machine_info()
-
-            # get_machine_info() might return None if tt-smi fails
-            if machine_info is None:
-                logger.warning("get_machine_info() returned None - tt-smi might have failed")
-                return None
-
-            # Validate that board_type is a recognized arch name (e.g. "Wormhole",
-            # "Blackhole"). Reject PCI addresses and device paths — an invalid
-            # board type would cause lead-model strict matching to filter out
-            # every vector.
-            board = machine_info.get("board_type", "")
-            if not board or ":" in board or "/" in board:
-                logger.warning(
-                    f"get_machine_info() returned suspicious board_type='{board}' "
-                    f"— ignoring machine info to avoid incorrect hardware filtering."
-                )
-                return None
-
-            # Validate that card_count is present and usable. Downstream filtering
-            # assumes this is known; if it is missing or invalid, disable
-            # machine-based filtering by returning None.
-            card_count = machine_info.get("card_count")
-            if not isinstance(card_count, int) or card_count <= 0:
-                logger.warning(
-                    f"get_machine_info() returned invalid card_count='{card_count}' "
-                    f"— ignoring machine info to avoid incorrect hardware filtering."
-                )
-                return None
-
-            # Optionally sanity-check device_count if provided: if present but
-            # invalid, treat machine info as unusable.
-            if "device_count" in machine_info:
-                device_count = machine_info.get("device_count")
-                if not isinstance(device_count, int) or device_count <= 0:
-                    logger.warning(
-                        f"get_machine_info() returned invalid device_count='{device_count}' "
-                        f"— ignoring machine info to avoid incorrect hardware filtering."
-                    )
-                    return None
-            logger.debug(f"Successfully retrieved machine info: {machine_info}")
-            return machine_info
-        except Exception as e:
-            import traceback
-
-            logger.warning(f"Failed to get machine info: {e}\n{traceback.format_exc()}")
-            return None
-
-    def load_vectors(self, module_name: str, suite_name: str | None = None, vector_id: str | None = None) -> list[dict]:
-        """Load test vectors from vectors_export directory (including grouped variants)
-
-        If MESH_DEVICE_SHAPE environment variable is set, filters vectors to only load
-        those matching the current machine's configuration.
-        """
-        import os
-
-        module_files = self._find_module_files(module_name)
-        if not module_files:
+        entries = list(self._manifest_entries_by_base.get(module_name, []))
+        entries.extend(self._manifest_entries_by_module.get(module_name, []))
+        if not entries:
+            logger.warning(f"No manifest entry found for module '{module_name}' in {self._manifest_path}")
             return []
 
-        # Check if this is a model_traced run (resource filtering only applies to model_traced)
-        is_model_traced = "model_traced" in module_name
-        is_lead_models = os.environ.get("LEAD_MODELS_RUN", "").strip() == "1"
+        by_path = {}
+        for entry in entries:
+            by_path[entry.file_path] = entry
+        return sorted(by_path.values(), key=lambda item: item.file_path.name)
 
-        # Get current machine info (for device/card filtering in model_traced runs)
-        current_machine_info = None
-        if is_model_traced:
-            current_machine_info = self._get_machine_info()
+    def _get_active_profile(self):
+        """Resolve the active execution capability profile for the current host."""
+        try:
+            profile = resolve_active_profile()
+            logger.info(f"Using execution capability profile '{profile.name}' for vector filtering")
+            return profile
+        except Exception as e:
+            logger.warning(f"Execution capability profile selection skipped: {e}")
+            return None
 
-        # Check if mesh filtering is enabled via environment variable
-        mesh_filter = os.environ.get("MESH_DEVICE_SHAPE", "").strip()
-        target_mesh = None
+    @staticmethod
+    def _annotate_vector(vector_data: dict, *, input_hash: str, suite_name: str, module_name: str) -> None:
+        """Attach common vector metadata used by the runner."""
+        vector_data["input_hash"] = input_hash
+        vector_data["suite_name"] = suite_name
+        # Preserve stored sweep_name (may include mesh suffix), fallback to module_name
+        if "sweep_name" not in vector_data:
+            vector_data["sweep_name"] = module_name
 
-        if mesh_filter:
-            logger.info(f"Mesh filtering enabled: MESH_DEVICE_SHAPE={mesh_filter}")
+    def load_vectors(self, module_name: str, suite_name: str | None = None, vector_id: str | None = None) -> list[dict]:
+        """Load test vectors from manifest-declared vectors_export files."""
+        module_entries = self._find_module_entries(module_name)
+        if not module_entries:
+            return []
 
-            if current_machine_info:
-                logger.info(
-                    f"Current machine: board_type={current_machine_info['board_type']}, "
-                    f"device_series={current_machine_info['device_series']}, "
-                    f"card_count={current_machine_info['card_count']}"
+        # Explicit vector lookup should bypass eligibility filtering.
+        active_profile = None if vector_id else self._get_active_profile()
+        if active_profile is not None:
+            eligible_entries = [
+                entry
+                for entry in module_entries
+                if is_manifest_entry_eligible(
+                    grouping_kind=entry.grouping_kind,
+                    hardware_group=entry.hardware_group,
+                    mesh_shapes=entry.mesh_shapes,
+                    profile=active_profile,
                 )
-            else:
-                logger.warning("Could not determine current machine info from tt-smi")
-
-            # Parse target mesh shape from the env var (e.g., "1x2" -> (1, 2))
-            try:
-                target_rows, target_cols = map(int, mesh_filter.lower().split("x"))
-                target_mesh = (target_rows, target_cols)
-            except (ValueError, AttributeError):
-                logger.warning(f"Invalid MESH_DEVICE_SHAPE format: {mesh_filter}, expected NxM (e.g., 1x2)")
+            ]
+            skipped_entries = len(module_entries) - len(eligible_entries)
+            if skipped_entries > 0:
+                logger.info(
+                    f"Skipped {skipped_entries} manifest vector file(s) via execution capability profile, "
+                    f"selected {len(eligible_entries)}"
+                )
+            module_entries = eligible_entries
 
         all_vectors = []
-        filtered_count = 0
-        machine_mismatch_count = 0
 
         # Load vectors from all matching files (e.g., base + mesh variants)
-        for module_file in module_files:
+        for entry in module_entries:
+            module_file = entry.file_path
             try:
                 with open(module_file, "r") as file:
                     data = json.load(file)
 
                 for suite_key, suite_content in data.items():
+                    if entry.suite_names and suite_key not in entry.suite_names:
+                        continue
                     if suite_name and suite_name != suite_key:
                         continue
 
                     if vector_id:
                         if vector_id in suite_content:
                             vector = suite_content[vector_id]
-                            vector["input_hash"] = vector_id
-                            vector["suite_name"] = suite_key
-                            # Preserve stored sweep_name (may include mesh suffix), fallback to module_name
-                            if "sweep_name" not in vector:
-                                vector["sweep_name"] = module_name
+                            self._annotate_vector(
+                                vector,
+                                input_hash=vector_id,
+                                suite_name=suite_key,
+                                module_name=module_name,
+                            )
                             all_vectors.append(vector)
                             logger.info(
                                 f"Vector ID '{vector_id}' found in suite '{suite_name}' of module '{module_name}' (file: {module_file.name})"
@@ -281,173 +240,32 @@ class VectorExportSource(VectorSource):
                         break
                     else:
                         for input_hash, vector_data in suite_content.items():
-                            vector_data["input_hash"] = input_hash
-                            vector_data["suite_name"] = suite_key
-                            # Preserve stored sweep_name (may include mesh suffix), fallback to module_name
-                            if "sweep_name" not in vector_data:
-                                vector_data["sweep_name"] = module_name
-
-                            # Normalize traced_machine_info to a list of dict entries.
-                            # Some vectors carry multiple machine descriptors; filtering
-                            # should accept a vector if ANY entry matches.
-                            traced_machine_info = vector_data.get("traced_machine_info")
-                            traced_machine_entries = []
-                            if isinstance(traced_machine_info, dict):
-                                traced_machine_entries = [traced_machine_info]
-                            elif isinstance(traced_machine_info, list):
-                                traced_machine_entries = [
-                                    entry for entry in traced_machine_info if isinstance(entry, dict)
-                                ]
-
-                            def _extract_mesh_shape(entry: dict) -> tuple[int, int] | None:
-                                """Extract mesh shape from machine entry when present."""
-                                mesh = entry.get("mesh_device_shape")
-                                if isinstance(mesh, list) and len(mesh) == 2:
-                                    return (mesh[0], mesh[1])
-                                if isinstance(mesh, str):
-                                    try:
-                                        parsed = ast.literal_eval(mesh)
-                                        if isinstance(parsed, list) and len(parsed) == 2:
-                                            return (parsed[0], parsed[1])
-                                    except (SyntaxError, ValueError):
-                                        pass
-
-                                # Legacy location used by some vectors
-                                placements = entry.get("tensor_placements")
-                                if isinstance(placements, list) and placements:
-                                    placement_mesh = placements[0].get("mesh_device_shape")
-                                    if isinstance(placement_mesh, list) and len(placement_mesh) == 2:
-                                        return (placement_mesh[0], placement_mesh[1])
-                                    if isinstance(placement_mesh, str):
-                                        try:
-                                            parsed = ast.literal_eval(placement_mesh)
-                                            if isinstance(parsed, list) and len(parsed) == 2:
-                                                return (parsed[0], parsed[1])
-                                        except (SyntaxError, ValueError):
-                                            pass
-                                return None
-
-                            # Filter vectors based on hardware compatibility for all model_traced runs.
-                            # CI now routes model_traced work by traced hardware, so vectors should
-                            # only load when their traced machine metadata matches the current runner.
-                            skip_for_resources = False
-                            if current_machine_info and traced_machine_entries:
-                                current_board = current_machine_info.get("board_type", "").lower()
-                                current_series = current_machine_info.get("device_series", "").lower()
-                                current_card_count = current_machine_info.get("card_count")
-                                current_device_count = current_machine_info.get("device_count")
-
-                                has_matching_hardware = False
-                                for entry in traced_machine_entries:
-                                    traced_board = entry.get("board_type", "").lower()
-                                    traced_series = entry.get("device_series", "").lower()
-                                    traced_card_count = entry.get("card_count")
-                                    traced_device_count = entry.get("device_count")
-
-                                    board_match = (
-                                        not traced_board
-                                        or not current_board
-                                        or traced_board == current_board
-                                        or ("wormhole" in traced_board and "wormhole" in current_board)
-                                    )
-                                    series_match = (
-                                        not traced_series or not current_series or traced_series == current_series
-                                    )
-                                    card_match = traced_card_count is None or traced_card_count == current_card_count
-                                    device_match = True
-                                    if is_lead_models:
-                                        device_match = (
-                                            traced_device_count is None or traced_device_count == current_device_count
-                                        )
-
-                                    if board_match and series_match and card_match and device_match:
-                                        has_matching_hardware = True
-                                        break
-
-                                if not has_matching_hardware:
-                                    logger.debug(
-                                        f"Skipping vector - traced hardware does not match current machine "
-                                        f"(current: board_type={current_machine_info.get('board_type')}, "
-                                        f"device_series={current_machine_info.get('device_series')}, "
-                                        f"card_count={current_machine_info.get('card_count')}, "
-                                        f"device_count={current_machine_info.get('device_count')})"
-                                    )
-                                    machine_mismatch_count += 1
-                                    skip_for_resources = True
-
-                            if skip_for_resources:
-                                continue
-
-                            # Apply mesh filtering if enabled
-                            if mesh_filter and target_mesh:
-                                # If mesh shape is missing in JSON, do not filter out.
-                                # Otherwise, accept when ANY traced entry matches target mesh.
-                                traced_mesh_entries = []
-                                for entry in traced_machine_entries:
-                                    mesh_shape = _extract_mesh_shape(entry)
-                                    if mesh_shape is not None:
-                                        traced_mesh_entries.append((entry, mesh_shape))
-
-                                if traced_mesh_entries:
-                                    matching_entries = [
-                                        entry for entry, mesh_shape in traced_mesh_entries if mesh_shape == target_mesh
-                                    ]
-                                    if not matching_entries:
-                                        filtered_count += 1
-                                        continue
-
-                                    # Optional machine compatibility check: require at least one compatible entry.
-                                    if current_machine_info:
-                                        current_board = current_machine_info.get("board_type", "").lower()
-                                        current_series = current_machine_info.get("device_series", "").lower()
-                                        has_compatible_entry = False
-                                        for entry in matching_entries:
-                                            traced_board = entry.get("board_type", "").lower()
-                                            traced_series = entry.get("device_series", "").lower()
-
-                                            board_match = True
-                                            if traced_board and current_board:
-                                                board_match = traced_board == current_board or (
-                                                    "wormhole" in traced_board and "wormhole" in current_board
-                                                )
-
-                                            series_match = True
-                                            if traced_series and current_series:
-                                                series_match = traced_series == current_series
-
-                                            if board_match and series_match:
-                                                has_compatible_entry = True
-                                                break
-
-                                        if not has_compatible_entry:
-                                            machine_mismatch_count += 1
-                                            continue
-
+                            self._annotate_vector(
+                                vector_data,
+                                input_hash=input_hash,
+                                suite_name=suite_key,
+                                module_name=module_name,
+                            )
                             all_vectors.append(vector_data)
 
             except (json.JSONDecodeError, IOError) as e:
                 logger.error(f"Error loading vectors from {module_file}: {e}")
 
-        # Log filtering results if filtering was enabled
-        if mesh_filter and (filtered_count > 0 or machine_mismatch_count > 0):
-            total_filtered = filtered_count + machine_mismatch_count
-            logger.info(
-                f"Filtered out {total_filtered} vectors "
-                f"(mesh mismatch: {filtered_count}, machine mismatch: {machine_mismatch_count}), "
-                f"loaded {len(all_vectors)} vectors"
-            )
-
         return all_vectors
 
     def get_available_suites(self, module_name: str) -> list[str]:
-        """Get list of available suites for a module from vectors_export directory (including grouped variants)."""
-        module_files = self._find_module_files(module_name)
-        if not module_files:
+        """Get list of available suites for a module from manifest-declared vector files."""
+        module_entries = self._find_module_entries(module_name)
+        if not module_entries:
             return []
 
         # Collect unique suite names across all grouped variant files
         all_suites = set()
-        for module_file in module_files:
+        for entry in module_entries:
+            module_file = entry.file_path
+            if entry.suite_names:
+                all_suites.update(entry.suite_names)
+                continue
             try:
                 with open(module_file, "r") as file:
                     data = json.load(file)
