@@ -452,6 +452,13 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             })
         .def("is_sharded", &MemoryConfig::is_sharded, "Whether tensor data is sharded across multiple cores in L1")
         .def(
+            "experimental_set_per_core_allocation",
+            [](MemoryConfig& self, bool enable) {
+                experimental::per_core_allocation::set_per_core_allocation(self, enable);
+            },
+            nb::arg("enable"),
+            "Enable or disable experimental per-core L1 allocation on this MemoryConfig.")
+        .def(
             "with_shard_spec",
             &MemoryConfig::with_shard_spec,
             "Returns a new MemoryConfig with the shard spec set to the given value")
