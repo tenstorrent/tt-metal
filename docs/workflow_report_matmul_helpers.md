@@ -47,7 +47,7 @@ Added after phase 3 to close gaps identified during implementation — matmul_ti
 
 A final session reviewed peer feedback, removed matmul_tile (abysmal perf), answered reviewer questions, and produced a clean PR branch with analysis artifacts stripped out.
 
-## Coordination Mechanics
+### Coordination Mechanics
 
 - Each instance wrote results to a dedicated file (e.g., `docs/phase3_instance1_results.md`)
 - Instances ran in separate Claude Code sessions on the same branch
@@ -57,25 +57,33 @@ A final session reviewed peer feedback, removed matmul_tile (abysmal perf), answ
 
 ## What Worked
 
-- **Analysis parallelism (phase 1)**: Four independent research tasks with no dependencies. Clean parallelism, high-quality outputs that phase 2 could synthesize.
-- **Orchestration doc as shared context**: Every instance had the same understanding of constraints, prior failures, and goals. No drift between instances.
-- **Explicit "lessons from prior attempts" section**: Prevented repeating known mistakes (param structs, unused enums, programming example migrations).
-- **Separating analysis from design from implementation**: Phase 1 instances were told "document facts, do NOT propose design changes." This prevented premature design decisions before the full picture was understood.
+- **Orchestration doc as shared context**: The single most valuable artifact. Every instance had the same understanding of constraints, prior failures, and goals. No drift between instances. It also captured "lessons from prior attempts" which prevented repeating known mistakes.
+- **Separating analysis from design from implementation**: Phase 1 instances were told "document facts, do NOT propose design changes." This prevented premature design decisions before the full picture was understood, and gave the design phase a solid foundation.
+- **Clean parallelism in research phases**: Phase 1's four analysis tasks had zero dependencies. This is the ideal case for multi-instance work — each instance explores independently, results are combined afterward.
+- **"Expendable prior work" framing**: Telling instances the existing helper was reference-only, not sacred, led to a better redesign rather than incremental patching.
 
-## What Didn't Work
+## Lessons Learned
 
-- **Phase 3 ordering dependencies**: Instance 3 (migration) needed instances 1+2 (helpers + tests) done first. This required manual coordination and serialized part of the "parallel" phase.
-- **matmul_tile built then removed**: Phase 4 instance 1 built a complete helper that was cut after peer review. The orchestration doc could have flagged this as needing external validation before implementation.
-- **High artifact-to-PR ratio**: 11 analysis/design/results files (~5,300 lines) were generated and ultimately discarded. The analysis was necessary to arrive at the right design, but someone replicating this should expect this ratio.
-- **Incomplete local test coverage**: Claude ran local tests after each phase (C++ integration tests + Python matmul unit tests), but chose a representative subset rather than exhaustive testing. CI later caught failures that local testing missed — meaning Claude either failed to identify all applicable tests or opted for speed over completeness. The local tests passed, creating false confidence.
+### Gate design on peer review before implementing
 
-## Claude's Assessment
+Phase 2's design doc went straight to implementation without peer review. Reviewers later questioned the matmul_tile helper (abysmal perf — shouldn't exist) and the bias_add helper (overlap with existing eltwise helpers). Both could have been caught before spending phases 3-4 implementing. **Recommendation**: Insert a human review checkpoint between design and implementation phases.
 
-**Strengths of this workflow**: The phased approach forced disciplined thinking — analysis before design, design before implementation. The orchestration doc was the key artifact: it gave each instance enough context to make judgment calls independently rather than following narrow instructions. The "expendable prior work" framing was important — telling instances the existing matmul_block helper was reference-only, not sacred, led to a better redesign.
+### Specify test suites explicitly in the orchestration doc
 
-**What I'd change**:
+Claude ran local tests after each phase but chose a representative subset for speed (C++ integration tests + Python matmul unit tests). CI later caught failures that local testing missed. Claude either failed to identify all applicable tests or opted for speed over completeness — either way, the passing local tests created false confidence. **Recommendation**: The orchestration doc should list the exact test commands and explicitly state whether to prioritize completeness or speed.
 
-- **Gate implementation on external review.** Phase 2's design doc should have been reviewed by peers before phase 3 started. The matmul_tile removal and bias_add questions from reviewers could have been caught earlier, saving a full phase of wasted work.
-- **Reduce phases.** Phases 1 and 2 could merge — one instance can analyze and design. The analysis files were useful as intermediate artifacts but a single instance with the right prompt could have produced the design directly. This would cut the calendar time roughly in half.
-- **Better local test selection.** Claude chose a representative test subset for speed, but missed tests that CI caught. Either the orchestration doc should specify which test suites to run, or Claude should be explicitly told to prioritize completeness over speed for validation phases. A full test run may take longer but avoids false confidence from a passing subset.
-- **Fewer, larger instances over more, smaller ones.** The 4-instance phase 1 was clean parallelism, but phase 3's 3 instances had dependencies that made coordination overhead outweigh the parallelism benefit. Two instances (helpers+tests combined, migration separate) would have been simpler.
+### Plan for unplanned phases
+
+Phase 4 was added ad-hoc when phase 3 revealed gaps (matmul_tile need, inline code duplication). Because it wasn't in the original plan, the instance assignments were less structured and one instance's entire output (matmul_tile) was later discarded. **Recommendation**: Either build slack into the original plan for discovered work, or treat unplanned phases as a signal to pause and re-plan rather than bolt on.
+
+### Parallelize only truly independent work
+
+Phase 1 (4 analysis instances) was ideal parallelism — no dependencies, no coordination needed. Phase 3 (3 implementation instances) was not — instance 3 needed instances 1+2 done first, serializing the phase and requiring manual coordination. **Recommendation**: If instances have ordering dependencies, run them sequentially or combine them into fewer, larger instances. Reserve parallelism for genuinely independent tasks.
+
+### Expect high artifact-to-PR ratio
+
+11 analysis/design/results files (~5,300 lines) were generated and discarded from the final PR. This is not waste — the analysis was necessary to arrive at the right design. But it means the visible output (a clean PR) understates the actual work, which matters for planning and setting expectations.
+
+### Rebase early
+
+The orchestration ran over several days on a branch 231 commits behind main. By the time CI ran, a "device 2.0 API" migration had landed on main that conflicted with the same kernel files we modified. An earlier rebase or CI check would have caught this before the full workflow completed.
