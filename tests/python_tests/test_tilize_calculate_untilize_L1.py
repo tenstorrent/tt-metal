@@ -43,10 +43,7 @@ from helpers.utils import passed_test
     ],
 )
 def test_tilize_calculate_untilize_L1(
-    formats,
-    dest_acc,
-    mathop,
-    math_fidelity,
+    formats, dest_acc, mathop, math_fidelity, workers_tensix_coordinates
 ):
     input_dimensions = [32, 32]
 
@@ -85,7 +82,7 @@ def test_tilize_calculate_untilize_L1(
         L1_to_L1_iterations=2,
     )
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     assert len(res_from_L1) == len(golden_tensor)
 

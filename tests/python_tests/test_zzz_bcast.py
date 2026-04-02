@@ -76,10 +76,7 @@ supported_formats = [
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
 )
 def test_unpack_bcast(
-    tile_dimensions,
-    formats,
-    broadcast_type,
-    dest_acc,
+    tile_dimensions, formats, broadcast_type, dest_acc, workers_tensix_coordinates
 ):
     # --- Skips -----------------------------------------------------------
 
@@ -200,7 +197,7 @@ def test_unpack_bcast(
         and dest_acc == DestAccumulation.Yes,
     )
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     # --- Assertions ------------------------------------------------------
     assert len(res_from_L1) == len(

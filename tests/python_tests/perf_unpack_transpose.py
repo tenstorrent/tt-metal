@@ -27,6 +27,7 @@ def test_perf_unpack_transpose(
     formats,
     unpack_transpose_faces,
     unpack_transpose_within_face,
+    workers_tensix_coordinates,
 ):
 
     if (
@@ -67,4 +68,4 @@ def test_perf_unpack_transpose(
         ),
     )
 
-    configuration.run(perf_report)
+    configuration.run(perf_report, location=workers_tensix_coordinates)

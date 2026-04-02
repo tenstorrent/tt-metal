@@ -54,10 +54,7 @@ dimension_combinations = [
     dimensions=dimension_combinations,
 )
 def test_pack_rows(
-    formats,
-    dest_acc,
-    num_rows_to_pack,
-    dimensions,
+    formats, dest_acc, num_rows_to_pack, dimensions, workers_tensix_coordinates
 ):
     row_num_datums = 16
 
@@ -118,7 +115,7 @@ def test_pack_rows(
         unpack_to_dest=formats.input_format.is_32_bit(),
     )
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 

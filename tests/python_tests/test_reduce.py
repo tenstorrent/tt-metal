@@ -72,6 +72,7 @@ def test_reduce(
     pool_type,
     is_reduce_to_one,
     math_fidelity,
+    workers_tensix_coordinates,
     tile_dimensions,
 ):
 
@@ -182,7 +183,7 @@ def test_reduce(
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     assert len(res_from_L1) == len(
         golden_tensor
@@ -246,6 +247,7 @@ def test_reduce_bfp4_b(
     pool_type,
     is_reduce_to_one,
     math_fidelity,
+    workers_tensix_coordinates,
     tile_dimensions,
 ):
 
@@ -352,7 +354,7 @@ def test_reduce_bfp4_b(
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     assert len(res_from_L1) == len(
         golden_tensor

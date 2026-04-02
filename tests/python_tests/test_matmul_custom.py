@@ -83,6 +83,7 @@ ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
 def test_matmul_custom(
     math_fidelity,
     format_dest_acc_and_dims,
+    workers_tensix_coordinates,
     boot_mode=BootMode.DEFAULT,
 ):
     if get_chip_architecture() == ChipArchitecture.WORMHOLE:
@@ -155,7 +156,7 @@ def test_matmul_custom(
         boot_mode=boot_mode,
     )
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     assert len(res_from_L1) == len(
         golden_tensor

@@ -6,7 +6,7 @@ from conftest import skip_for_coverage
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.perf import PerfConfig
 from helpers.profiler import Profiler
-from helpers.test_config import BuildMode, TestConfig
+from helpers.test_config import TestConfig, TestMode
 
 
 def get_expected_overhead():
@@ -22,23 +22,23 @@ def get_expected_overhead():
 # Coverage uses different linker script, that doesn't utilize local data memory at all, only L1
 # Because of this, measured overhead is at 2.3k instead of ~23 cycles
 @skip_for_coverage
-def test_profiler_overhead():
+def test_profiler_overhead(workers_tensix_coordinates):
 
     # This is a test of the profiler itself and doesn't use configuration.run method at all,
     # therefore it can't leverage default producer-consumer separation of compile and execute phases.
     # In order to avoid compiling the test elf twice we run it in only one of two phases - the consumer/execute phase,
     # where everything is done.
-    if TestConfig.BUILD_MODE == BuildMode.PRODUCE or TestConfig.WITH_COVERAGE:
+    if TestConfig.MODE == TestMode.PRODUCE or TestConfig.WITH_COVERAGE:
         pytest.skip()
 
     configuration = PerfConfig("sources/profiler_overhead_test.cpp")
 
     configuration.generate_variant_hash()
     configuration.build_elfs()
-    configuration.run_elf_files()
-    configuration.wait_for_tensix_operations_finished()
+    configuration.run_elf_files(workers_tensix_coordinates)
+    configuration.wait_for_tensix_operations_finished(workers_tensix_coordinates)
     runtime = Profiler.get_data(
-        configuration.test_name, configuration.variant_id, TestConfig.TENSIX_LOCATION
+        configuration.test_name, configuration.variant_id, workers_tensix_coordinates
     )
 
     # filter out all zones that don't have marker "OVERHEAD"

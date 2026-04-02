@@ -34,7 +34,7 @@ from helpers.param_config import (
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import BuildMode, TestConfig
+from helpers.test_config import TestConfig, TestMode
 from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     BROADCAST_TYPE,
@@ -382,6 +382,7 @@ def test_unpack_comprehensive(
     num_faces,
     face_r_dim,
     input_dimensions,
+    workers_tensix_coordinates,
 ):
 
     # torch.manual_seed(0.0)
@@ -413,10 +414,7 @@ def test_unpack_comprehensive(
             face_r_dim=face_r_dim,
             tile_cnt=tile_cnt_A,
         )
-    elif (
-        transpose_of_faces == Transpose.Yes
-        and TestConfig.BUILD_MODE != BuildMode.PRODUCE
-    ):
+    elif transpose_of_faces == Transpose.Yes and TestConfig.MODE != TestMode.PRODUCE:
         # Both transpose flags are ALWAYS on together (mutually inclusive constraint)
         transpose_golden = get_golden_generator(TransposeGolden)
         # First apply within-face transpose, then face transpose
@@ -568,7 +566,7 @@ def test_unpack_comprehensive(
         unpack_to_dest=(formats.input_format.is_32_bit() and acc_to_dest),
     )
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     assert len(res_from_L1) == len(
         golden_tensor

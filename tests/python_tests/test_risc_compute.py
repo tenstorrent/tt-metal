@@ -16,7 +16,7 @@ from helpers.test_config import TestConfig
 from helpers.utils import passed_test
 
 
-def test_risc_compute():
+def test_risc_compute(workers_tensix_coordinates):
     formats = input_output_formats([DataFormat.Int32])[0]
     input_dimensions = [32, 96]
 
@@ -46,7 +46,7 @@ def test_risc_compute():
             tile_count_res=tile_cnt_A,
         ),
     )
-    res_from_L1 = configuration.run().result
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     assert len(res_from_L1) == len(
         golden_tensor

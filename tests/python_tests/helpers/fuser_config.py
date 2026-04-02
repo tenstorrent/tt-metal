@@ -7,7 +7,6 @@ from functools import reduce
 from typing import List
 
 import pandas as pd
-import pytest
 from helpers.device import (
     collect_pipeline_results,
     write_pipeline_operands_to_l1,
@@ -21,7 +20,7 @@ from .llk_params import DestAccumulation, DestSync, PerfRunType
 from .logger import logger
 from .perf import PerfReport
 from .profiler import Profiler, ProfilerData
-from .test_config import BuildMode, ProfilerBuild, StimuliMode, TestConfig
+from .test_config import ProfilerBuild, TestConfig, TestMode
 
 
 @dataclass
@@ -107,14 +106,20 @@ class FuserConfig:
     def generate_and_build_test(self, cpp_path, test_config: TestConfig):
         from .fused_generator import FusedKernelGenerator
 
-        code_generator = FusedKernelGenerator(self)
-        code_generator.write_kernel(cpp_path, self.global_config.regenerate_cpp)
-        test_config.build_elfs()
+        if TestConfig.MODE != TestMode.CONSUME:
+            code_generator = FusedKernelGenerator(self)
+            code_generator.write_kernel(cpp_path, self.global_config.regenerate_cpp)
 
-    def run_perf_test(self, worker_id: str, run_count: int = 2):
+        test_config.generate_variant_hash()
+
+        if TestConfig.MODE != TestMode.CONSUME:
+            test_config.build_elfs()
+
+    def run_perf_test(self, worker_id: str, location: str, run_count: int = 2):
         from .fused_generator import FUSED_TESTS_DIR
 
         self.global_config.profiler_enabled = True
+        write_pipeline_operands_to_l1(self.pipeline)
 
         run_types = [
             PerfRunType.L1_TO_L1,
@@ -136,27 +141,22 @@ class FuserConfig:
             )
 
             test_config = self.create_test_config(cpp_path, profiler_enabled=True)
-            test_config.generate_variant_hash()
+            self.generate_and_build_test(cpp_path, test_config)
 
-            write_pipeline_operands_to_l1(self.pipeline, TestConfig.TENSIX_LOCATION)
-
-            if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
-                self.generate_and_build_test(cpp_path, test_config)
-
-            if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+            if TestConfig.MODE == TestMode.PRODUCE:
                 continue
 
             logger.info("Running perf test for run type: {}", run_type.name)
             for run_index in range(run_count):
-                test_config.run_elf_files()
-                test_config.wait_for_tensix_operations_finished()
+                test_config.run_elf_files(location)
+                test_config.wait_for_tensix_operations_finished(location)
 
                 meta = Profiler._get_meta(test_config.test_name, test_config.variant_id)
                 buffer_data = [
                     read_words_from_device(
-                        TestConfig.TENSIX_LOCATION,
-                        addr,
+                        addr=addr,
                         word_count=TestConfig.THREAD_PERFORMANCE_DATA_BUFFER_LENGTH,
+                        location=location,
                     )
                     for addr in TestConfig.THREAD_PERFORMANCE_DATA_BUFFER
                 ]
@@ -167,7 +167,7 @@ class FuserConfig:
             get_stats = Profiler.STATS_FUNCTION[run_type]
             all_results.append(get_stats(ProfilerData.concat(runs)))
 
-        if TestConfig.BUILD_MODE != BuildMode.PRODUCE and all_results:
+        if TestConfig.MODE != TestMode.PRODUCE and all_results:
             results = reduce(
                 lambda left, right: pd.merge(
                     left, right, on="marker", how="outer", validate="1:1"
@@ -184,28 +184,22 @@ class FuserConfig:
             perf_report.post_process()
             perf_report.dump_csv(f"{csv_prefix}.{worker_id}.post.csv")
 
-    def run_regular_test(self):
+    def run_regular_test(self, location: str):
         from .fused_generator import FUSED_TESTS_DIR
         from .fused_golden import FusedGolden
 
-        if TestConfig.STIMULI_MODE == StimuliMode.GENERATE_ONLY:
-            pytest.skip(TestConfig.SKIP_JUST_FOR_STIMULI_MARKER)
+        write_pipeline_operands_to_l1(self.pipeline, location)
 
         cpp_path = FUSED_TESTS_DIR / f"{self.global_config.test_name}.cpp"
 
         test_config = self.create_test_config(cpp_path, profiler_enabled=False)
-        test_config.generate_variant_hash()
+        self.generate_and_build_test(cpp_path, test_config)
 
-        write_pipeline_operands_to_l1(self.pipeline, TestConfig.TENSIX_LOCATION)
+        if TestConfig.MODE == TestMode.PRODUCE:
+            return
 
-        if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
-            self.generate_and_build_test(cpp_path, test_config)
-
-        if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
-            pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
-
-        test_config.run_elf_files()
-        test_config.wait_for_tensix_operations_finished()
-        collect_pipeline_results(self.pipeline, TestConfig.TENSIX_LOCATION)
+        test_config.run_elf_files(location)
+        test_config.wait_for_tensix_operations_finished(location)
+        collect_pipeline_results(self.pipeline)
         golden = FusedGolden()
         assert golden.check_pipeline(self)

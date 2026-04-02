@@ -4,7 +4,7 @@
 
 import pytest
 import torch
-from conftest import skip_for_coverage, skip_for_wormhole
+from conftest import skip_for_wormhole
 from helpers.device import (
     read_from_device,
     write_to_device,
@@ -26,7 +26,7 @@ from helpers.llk_params import (
 from helpers.pack import pack_bfp16
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import BuildMode, TestConfig
+from helpers.test_config import TestConfig, TestMode
 from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
     DEST_SYNC,
@@ -41,7 +41,6 @@ from helpers.unpack import unpack_res_tiles
 from helpers.utils import passed_test
 
 
-@skip_for_coverage
 @skip_for_wormhole
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b]),
@@ -54,6 +53,7 @@ def test_sdpa_reinits(
     dest_acc,
     math_fidelity,
     input_dimensions,
+    workers_tensix_coordinates,
 ):
     """
     Test for SDPA reinits operations using sources/sdpa_reinits_test.cpp
@@ -188,10 +188,10 @@ def test_sdpa_reinits(
 
     # Build ELFs
     configuration.generate_variant_hash()
-    if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
+    if TestConfig.MODE in [TestMode.PRODUCE, TestMode.DEFAULT]:
         configuration.build_elfs()
 
-    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+    if TestConfig.MODE == TestMode.PRODUCE:
         pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
 
     # Manually write stimuli to the addresses the CPP file expects
@@ -204,15 +204,15 @@ def test_sdpa_reinits(
 
     # Write input data to device
     write_to_device(
-        TestConfig.TENSIX_LOCATION, BUFFER_A_ADDR, pack_bfp16(tilized_A.flatten())
+        workers_tensix_coordinates, BUFFER_A_ADDR, pack_bfp16(tilized_A.flatten())
     )
     write_to_device(
-        TestConfig.TENSIX_LOCATION, BUFFER_B_ADDR, pack_bfp16(tilized_B.flatten())
+        workers_tensix_coordinates, BUFFER_B_ADDR, pack_bfp16(tilized_B.flatten())
     )
 
     # Run the test - all 4 operations execute in sequence with reinits
-    configuration.run_elf_files()
-    configuration.wait_for_tensix_operations_finished()
+    configuration.run_elf_files(workers_tensix_coordinates)
+    configuration.wait_for_tensix_operations_finished(workers_tensix_coordinates)
 
     # Read and validate all 4 outputs
     tile_size = 2048  # Float16_b tile size
@@ -221,7 +221,7 @@ def test_sdpa_reinits(
 
     # Validate Operation 0: Matmul
     read_data0 = read_from_device(
-        TestConfig.TENSIX_LOCATION, BUFFER_RES0_ADDR, num_bytes=read_bytes_cnt
+        workers_tensix_coordinates, BUFFER_RES0_ADDR, num_bytes=read_bytes_cnt
     )
     res_from_L1_0 = unpack_res_tiles(
         read_data0, formats.output_format, output_tile_cnt, False, 4, 16
@@ -232,7 +232,7 @@ def test_sdpa_reinits(
 
     # Validate Operation 1: ReduceBlockMax
     read_data1 = read_from_device(
-        TestConfig.TENSIX_LOCATION, BUFFER_RES1_ADDR, num_bytes=read_bytes_cnt
+        workers_tensix_coordinates, BUFFER_RES1_ADDR, num_bytes=read_bytes_cnt
     )
     res_from_L1_1 = unpack_res_tiles(
         read_data1, formats.output_format, output_tile_cnt, False, 4, 16
@@ -243,7 +243,7 @@ def test_sdpa_reinits(
 
     # Validate Operation 2: Elwsub with column broadcast
     read_data2 = read_from_device(
-        TestConfig.TENSIX_LOCATION, BUFFER_RES2_ADDR, num_bytes=read_bytes_cnt
+        workers_tensix_coordinates, BUFFER_RES2_ADDR, num_bytes=read_bytes_cnt
     )
     res_from_L1_2 = unpack_res_tiles(
         read_data2, formats.output_format, output_tile_cnt, False, 4, 16
@@ -254,7 +254,7 @@ def test_sdpa_reinits(
 
     # Validate Operation 3: Matmul (final operation after all reinits)
     read_data3 = read_from_device(
-        TestConfig.TENSIX_LOCATION, BUFFER_RES3_ADDR, num_bytes=read_bytes_cnt
+        workers_tensix_coordinates, BUFFER_RES3_ADDR, num_bytes=read_bytes_cnt
     )
     res_from_L1_3 = unpack_res_tiles(
         read_data3, formats.output_format, output_tile_cnt, False, 4, 16

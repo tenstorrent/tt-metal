@@ -49,7 +49,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     TOPK,
 )
-from helpers.utils import _RECORD_TEST_ORDER, passed_test
+from helpers.utils import passed_test
 
 NUM_STAGES = 2  # Values and Indices stage
 
@@ -288,6 +288,7 @@ def test_topk_sfpu(
     K: int,
     sort_direction: TopKSortDirection,
     stable_sort: bool,
+    workers_tensix_coordinates: str,
 ):
 
     if (
@@ -354,7 +355,7 @@ def test_topk_sfpu(
         unpack_to_dest=False,
     )
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
     res_tensor = transform_result_tensor_to_right_form(
@@ -365,8 +366,7 @@ def test_topk_sfpu(
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"
 
-    # TODO: Fix issue #1344 on tt-llk.
-    if input_dimensions[1] == 128 and not _RECORD_TEST_ORDER:
+    if input_dimensions[1] == 128:  # TODO: Fix issue #1344 on tt-llk.
         assert validate_topk_indices(
             res_tensor, golden_tensor, src_A, formats, input_dimensions, K, stable_sort
         )

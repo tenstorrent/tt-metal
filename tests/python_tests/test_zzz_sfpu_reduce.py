@@ -112,6 +112,7 @@ def test_sfpu_reduce(
     reduce_pool,
     input_bounds,
     dimension_combinations,
+    workers_tensix_coordinates,
 ):
 
     if reduce_pool in [ReducePool.Average, ReducePool.Min] and TestConfig.WITH_COVERAGE:
@@ -199,7 +200,7 @@ def test_sfpu_reduce(
         disable_format_inference=True,
         compile_time_formats=True,
     )
-    res_from_L1 = configuration.run().result
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
     res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)

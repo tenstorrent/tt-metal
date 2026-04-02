@@ -16,9 +16,7 @@ from test_matmul import test_matmul as run_matmul
 @parametrize(
     boot_mode=[BootMode.BRISC, BootMode.TRISC, BootMode.EXALENS],
 )
-def test_boot_modes(
-    boot_mode,
-):
+def test_boot_modes(boot_mode, workers_tensix_coordinates):
     math_fidelity = MathFidelity.LoFi
     format_dest_acc_and_dims = (
         InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
@@ -31,5 +29,6 @@ def test_boot_modes(
     run_matmul(
         math_fidelity,
         format_dest_acc_and_dims,
+        workers_tensix_coordinates,
         boot_mode[0],
     )

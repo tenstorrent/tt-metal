@@ -89,6 +89,7 @@ def test_perf_eltwise_unary_sfpu(
     fast_mode,
     stable_sort,
     input_dimensions,
+    workers_tensix_coordinates,
 ):
     # Skip tests where template parameters are not used by the operation
     # Operations that don't use is_fp32_dest_acc_en parameter
@@ -191,4 +192,4 @@ def test_perf_eltwise_unary_sfpu(
         dest_acc=dest_acc,
     )
 
-    configuration.run(perf_report)
+    configuration.run(perf_report, location=workers_tensix_coordinates)

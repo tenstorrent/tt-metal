@@ -203,13 +203,7 @@ def commit_brisc_command(
 
     logger.error(f"{command.name} -> {hex(Mailboxes.BriscCommand0.value)}")
 
-    raise TimeoutError(
-        (
-            f"Polling brisc command timed out | Python counter: {common_counter} | Brisc Counter: {temp_value} | "
-            f"Start counter: {read_from_device(location, Mailboxes.BriscBread0.value, 0)} |"
-            f"Reset counter: {read_from_device(location, Mailboxes.BriscBread1.value, 0)} |"
-        )
-    )
+    raise TimeoutError("Polling brisc command timed out")
 
 
 def assert_if_all_in_reset(location: str = "0,0", place: str = ""):
