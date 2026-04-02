@@ -291,7 +291,7 @@ class TtRoutedExpert(LightweightModule):
             down_proj,
             program_config=self.down_program_config,
             compute_kernel_config=self.compute_kernel_config,
-            **({"optional_output_tensor": out} if out is not None else {}),
+            optional_output_tensor=out,
         )
 
         return output
