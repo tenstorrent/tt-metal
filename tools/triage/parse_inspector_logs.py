@@ -154,7 +154,7 @@ def read_yaml(yaml_path: str | Path):
             content = f.read()
             tree = ryml.parse_in_arena(content)
             data = ryml_to_lazy(tree, tree.root_id())
-    except:
+    except Exception:
         # Fallback to standard yaml library
         with p.open("r") as f:
             data = yaml.safe_load(f)
