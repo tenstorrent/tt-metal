@@ -476,6 +476,22 @@ class UnifiedKernelDescriptor:
             brisc_runtime_args = self._build_runtime_args("brisc", core_range_set)
             trisc_runtime_args = self._build_runtime_args("trisc", core_range_set)
 
+            # Filter named per-core RT args to only cores in this group.
+            # Without this, cores from other groups leak into SetRuntimeArgs
+            # causing a user_arg_count mismatch.
+            group_core_set = set(core_tuples)
+
+            def _filter_per_core_rt(args):
+                if not args:
+                    return args
+                return [
+                    (name, {c: v for c, v in mapping.items() if (c.x, c.y) in group_core_set}) for name, mapping in args
+                ]
+
+            ncrisc_per_core_rt = _filter_per_core_rt(self.ncrisc_named_per_core_runtime_args)
+            brisc_per_core_rt = _filter_per_core_rt(self.brisc_named_per_core_runtime_args)
+            trisc_per_core_rt = _filter_per_core_rt(self.trisc_named_per_core_runtime_args)
+
             # Track kernel indices for this group
             ncrisc_idx = len(descriptors)
             descriptors.append(
@@ -488,7 +504,7 @@ class UnifiedKernelDescriptor:
                     defines=self.defines,
                     common_runtime_args=self.ncrisc_common_runtime_args,
                     named_common_runtime_args=self.ncrisc_named_common_runtime_args,
-                    named_per_core_runtime_args=self.ncrisc_named_per_core_runtime_args,
+                    named_per_core_runtime_args=ncrisc_per_core_rt,
                     runtime_args=ncrisc_runtime_args,
                     config=ttnn.DataMovementConfigDescriptor(
                         processor=ttnn.DataMovementProcessor.RISCV_1,
@@ -509,7 +525,7 @@ class UnifiedKernelDescriptor:
                     defines=self.defines,
                     common_runtime_args=self.brisc_common_runtime_args,
                     named_common_runtime_args=self.brisc_named_common_runtime_args,
-                    named_per_core_runtime_args=self.brisc_named_per_core_runtime_args,
+                    named_per_core_runtime_args=brisc_per_core_rt,
                     runtime_args=brisc_runtime_args,
                     config=ttnn.DataMovementConfigDescriptor(
                         processor=ttnn.DataMovementProcessor.RISCV_0,
@@ -530,7 +546,7 @@ class UnifiedKernelDescriptor:
                     defines=self.defines,
                     common_runtime_args=self.trisc_common_runtime_args,
                     named_common_runtime_args=self.trisc_named_common_runtime_args,
-                    named_per_core_runtime_args=self.trisc_named_per_core_runtime_args,
+                    named_per_core_runtime_args=trisc_per_core_rt,
                     runtime_args=trisc_runtime_args,
                     config=compute_config,
                 )
