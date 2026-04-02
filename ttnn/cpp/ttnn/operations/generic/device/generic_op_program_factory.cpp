@@ -87,11 +87,13 @@ void override_program_runtime_arguments(
                 }
             }
         }
-        // Build the effective common runtime args: positional + named values
+        // Build the effective common runtime args: positional + named scalars + named arrays
         auto effective_common_args = kernel_desc.common_runtime_args;
-        effective_common_args.reserve(effective_common_args.size() + kernel_desc.named_common_runtime_args.size());
         for (const auto& arg : kernel_desc.named_common_runtime_args) {
             effective_common_args.push_back(arg.value);
+        }
+        for (const auto& arg : kernel_desc.named_common_runtime_arg_arrays) {
+            effective_common_args.insert(effective_common_args.end(), arg.values.begin(), arg.values.end());
         }
         if (!effective_common_args.empty()) {
             auto& cached_common_runtime_args = GetCommonRuntimeArgs(program, kernel_handle);

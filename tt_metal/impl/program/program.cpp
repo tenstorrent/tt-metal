@@ -323,17 +323,19 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
             }
         }
 
-        // Set common runtime args: positional values followed by named values.
-        if (!kernel_descriptor.named_common_runtime_args.empty()) {
+        // Set common runtime args: positional values followed by named scalars, then named arrays.
+        if (!kernel_descriptor.named_common_runtime_args.empty() ||
+            !kernel_descriptor.named_common_runtime_arg_arrays.empty()) {
             std::vector<uint32_t> merged_common_rt_args;
-            merged_common_rt_args.reserve(
-                kernel_descriptor.common_runtime_args.size() + kernel_descriptor.named_common_runtime_args.size());
             merged_common_rt_args.insert(
                 merged_common_rt_args.end(),
                 kernel_descriptor.common_runtime_args.begin(),
                 kernel_descriptor.common_runtime_args.end());
             for (const auto& arg : kernel_descriptor.named_common_runtime_args) {
                 merged_common_rt_args.push_back(arg.value);
+            }
+            for (const auto& arg : kernel_descriptor.named_common_runtime_arg_arrays) {
+                merged_common_rt_args.insert(merged_common_rt_args.end(), arg.values.begin(), arg.values.end());
             }
             SetCommonRuntimeArgs(*this, kernel_handle, merged_common_rt_args);
         } else {
@@ -367,21 +369,36 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
 
         // RT namespace map: rt::get<rt::ns::field>()
         if (!kernel_descriptor.named_common_runtime_args.empty() ||
-            !kernel_descriptor.named_per_core_runtime_args.empty()) {
+            !kernel_descriptor.named_per_core_runtime_args.empty() ||
+            !kernel_descriptor.named_common_runtime_arg_arrays.empty()) {
             NamedRuntimeArgNamespaces rt_ns_map;
-            uint32_t base_index = static_cast<uint32_t>(kernel_descriptor.common_runtime_args.size());
-            for (uint32_t i = 0; i < kernel_descriptor.named_common_runtime_args.size(); ++i) {
-                auto [ns, field] = split_name(kernel_descriptor.named_common_runtime_args[i].name);
-                rt_ns_map[ns].push_back({field, base_index + i, RuntimeArgDispatch::COMMON});
+
+            // Common scalars: one slot each
+            uint32_t common_index = static_cast<uint32_t>(kernel_descriptor.common_runtime_args.size());
+            for (const auto& arg : kernel_descriptor.named_common_runtime_args) {
+                auto [ns, field] = split_name(arg.name);
+                rt_ns_map[ns].push_back({field, common_index, 1, RuntimeArgDispatch::COMMON});
+                common_index += 1;
             }
-            uint32_t per_core_base = 0;
+            // Common arrays: N contiguous slots each
+            for (const auto& arg : kernel_descriptor.named_common_runtime_arg_arrays) {
+                auto [ns, field] = split_name(arg.name);
+                uint32_t len = static_cast<uint32_t>(arg.values.size());
+                rt_ns_map[ns].push_back({field, common_index, len, RuntimeArgDispatch::COMMON});
+                common_index += len;
+            }
+
+            // Per-core scalars: one slot each
+            uint32_t per_core_index = 0;
             if (!kernel_descriptor.runtime_args.empty()) {
-                per_core_base = static_cast<uint32_t>(kernel_descriptor.runtime_args[0].second.size());
+                per_core_index = static_cast<uint32_t>(kernel_descriptor.runtime_args[0].second.size());
             }
-            for (uint32_t i = 0; i < kernel_descriptor.named_per_core_runtime_args.size(); ++i) {
-                auto [ns, field] = split_name(kernel_descriptor.named_per_core_runtime_args[i].name);
-                rt_ns_map[ns].push_back({field, per_core_base + i, RuntimeArgDispatch::PER_CORE});
+            for (const auto& arg : kernel_descriptor.named_per_core_runtime_args) {
+                auto [ns, field] = split_name(arg.name);
+                rt_ns_map[ns].push_back({field, per_core_index, 1, RuntimeArgDispatch::PER_CORE});
+                per_core_index += 1;
             }
+
             kernel->set_named_runtime_arg_namespaces(rt_ns_map);
         }
 
