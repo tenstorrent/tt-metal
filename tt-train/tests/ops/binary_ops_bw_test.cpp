@@ -2,6 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// GCC 12 emits a false-positive -Wnonnull inside xtensor's xbroadcast::has_linear_assign
+// when std::equal is inlined over empty-vector iterators. Fixed in GCC 13.
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ < 13
+#pragma GCC diagnostic ignored "-Wnonnull"
+#endif
+
 #include <gtest/gtest.h>
 
 #include <stdexcept>
@@ -127,10 +133,8 @@ TEST_F(BinaryOpsBackwardTest, DivSameShape) {
 // ============================================================================
 
 struct BroadcastCase {
-    // Use xarray's native shape type (svector) instead of std::vector to avoid a GCC 12
-    // false-positive -Wnonnull inside xtensor's xbroadcast::has_linear_assign (fixed in GCC 13).
-    xt::xarray<float>::shape_type a_shape;
-    xt::xarray<float>::shape_type b_shape;
+    std::vector<size_t> a_shape;
+    std::vector<size_t> b_shape;
     std::string name;
 };
 
