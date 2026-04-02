@@ -221,13 +221,14 @@ def test_binary_comp_uint16_ops(input_shapes, mem_configs, ttnn_function, device
 )
 @pytest.mark.parametrize("use_legacy", (True, False))
 def test_binary_comp_uint16_relational(input_shapes, mem_configs, ttnn_function, device, use_legacy):
-    in_data = torch.randint(0, 100, input_shapes, dtype=torch.int32)
-    in_data[-1] = 65535
+    # Use full uint16 range (0-65535) to test edge cases
+    in_data = torch.randint(0, 65536, input_shapes, dtype=torch.int32)
     other_data = in_data.clone()
+    # Replace ~50% with different values across the full range
     mask = torch.rand(input_shapes) > 0.5
+    other_data[mask] = torch.randint(0, 65536, input_shapes, dtype=torch.int32)[mask]
+
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
-    other_data[mask] = torch.randint(0, 100, input_shapes, dtype=torch.int32)[mask]
-    other_data[-1] = 65535
     other_tensor = ttnn.from_torch(other_data, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
     cq_id = 0
     mem_cfg = mem_configs
@@ -242,3 +243,57 @@ def test_binary_comp_uint16_relational(input_shapes, mem_configs, ttnn_function,
 
     output_tensor = ttnn.to_torch(output_tensor).to(golden_tensor.dtype)
     assert torch.equal(output_tensor, golden_tensor)
+
+
+@pytest.mark.parametrize(
+    "ttnn_function",
+    (ttnn.lt, ttnn.gt, ttnn.le, ttnn.ge),
+)
+def test_binary_comp_uint16_edge_cases(ttnn_function, device):
+    """Test uint16 comparison edge cases: zeros, max values, equal, adjacent."""
+    shape = torch.Size([1, 1, 32, 32])
+
+    # Case 1: All zeros vs all zeros
+    a = torch.zeros(shape, dtype=torch.int32)
+    b = torch.zeros(shape, dtype=torch.int32)
+    ta = ttnn.from_torch(a, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    tb = ttnn.from_torch(b, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn_function(ta, tb)).to(torch.int32)
+    golden = ttnn.get_golden_function(ttnn_function)(a, b).int()
+    assert torch.equal(result, golden), f"Failed on zeros: {ttnn_function}"
+
+    # Case 2: All max (65535) vs all zeros
+    a = torch.full(shape, 65535, dtype=torch.int32)
+    b = torch.zeros(shape, dtype=torch.int32)
+    ta = ttnn.from_torch(a, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    tb = ttnn.from_torch(b, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn_function(ta, tb)).to(torch.int32)
+    golden = ttnn.get_golden_function(ttnn_function)(a, b).int()
+    assert torch.equal(result, golden), f"Failed on max vs zero: {ttnn_function}"
+
+    # Case 3: All zeros vs all max (65535)
+    a = torch.zeros(shape, dtype=torch.int32)
+    b = torch.full(shape, 65535, dtype=torch.int32)
+    ta = ttnn.from_torch(a, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    tb = ttnn.from_torch(b, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn_function(ta, tb)).to(torch.int32)
+    golden = ttnn.get_golden_function(ttnn_function)(a, b).int()
+    assert torch.equal(result, golden), f"Failed on zero vs max: {ttnn_function}"
+
+    # Case 4: Adjacent values (n vs n+1)
+    a = torch.arange(0, 1024, dtype=torch.int32).reshape(shape)
+    b = a + 1
+    ta = ttnn.from_torch(a, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    tb = ttnn.from_torch(b, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn_function(ta, tb)).to(torch.int32)
+    golden = ttnn.get_golden_function(ttnn_function)(a, b).int()
+    assert torch.equal(result, golden), f"Failed on adjacent values: {ttnn_function}"
+
+    # Case 5: Identical tensors (all equal)
+    a = torch.randint(0, 65536, shape, dtype=torch.int32)
+    b = a.clone()
+    ta = ttnn.from_torch(a, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    tb = ttnn.from_torch(b, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn_function(ta, tb)).to(torch.int32)
+    golden = ttnn.get_golden_function(ttnn_function)(a, b).int()
+    assert torch.equal(result, golden), f"Failed on identical tensors: {ttnn_function}"
