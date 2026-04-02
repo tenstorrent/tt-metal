@@ -23,4 +23,10 @@ struct Arg {
     Dispatch dispatch;
 };
 
+struct ArrayArg {
+    uint32_t index;
+    uint32_t length;
+    Dispatch dispatch;
+};
+
 }  // namespace rt_args
