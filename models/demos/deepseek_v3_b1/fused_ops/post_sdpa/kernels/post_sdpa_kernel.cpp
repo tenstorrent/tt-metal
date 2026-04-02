@@ -549,7 +549,7 @@ void kernel_main() {
     // ========================================================================
     // CCL All-Reduce: Exchange [1, 7168] between devices
     // Sender core (11,9): NCRISC writer (link 1) + BRISC writer (link 0)
-    // Receiver core (12,9): BRISC reader + TRISC compute
+    // Receiver core (12,9): NCRISC reader + TRISC compute
     // ========================================================================
 #if defined(COMPILE_FOR_NCRISC)
     if constexpr (Core::is_allreduce_sender_core) {
