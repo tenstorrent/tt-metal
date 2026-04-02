@@ -25,8 +25,8 @@ void validate_pool2d(
     const bool return_indices,
     const Layout& output_layout) {
     // check the input tensor
-    TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
-    TT_FATAL(input.buffer() != nullptr, "Operands to reshape need to be allocated in buffers on device!");
+    TT_FATAL(input.storage_type() == StorageType::DEVICE, "Pool2D input must be on device!");
+    TT_FATAL(input.buffer() != nullptr, "Pool2D input must be allocated in buffers on device!");
     TT_FATAL(input.dtype() == DataType::BFLOAT16, "Only BFLOAT16 supported for now");
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR supported for now. Tracked by issue #23338");
 
@@ -172,31 +172,29 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Pool2D::tensor_return_value_t
     const auto& input_shape = input.logical_shape();
     auto sliding_window_config = op_attr.sliding_window_config_;
     uint32_t batch_size = sliding_window_config.batch_size;
-    uint32_t activation_h = sliding_window_config.input_hw.first;
-    uint32_t activation_w = sliding_window_config.input_hw.second;
-    uint32_t activation_c = input_shape[3];
-    uint32_t output_channels = input_shape[3];
+    uint32_t channels = input_shape[3];
 
     uint32_t filter_h = sliding_window_config.window_hw.first;
     uint32_t filter_w = sliding_window_config.window_hw.second;
-    uint32_t stride_h = sliding_window_config.stride_hw.first;
-    uint32_t stride_w = sliding_window_config.stride_hw.second;
-    uint32_t pad_h = sliding_window_config.get_pad_h();
-    uint32_t pad_w = sliding_window_config.get_pad_w();
 
-    // GS specific parameters
-    int num_cores = 9 * 12;
+    // Use sliding_window_config for output dimensions (accounts for dilation, ceil_mode, etc.)
+    auto output_shape = sliding_window_config.get_output_shape();
+    uint32_t output_height = output_shape[1];
+    uint32_t output_width = output_shape[2];
+
+    // Use actual core count from the operation's core range
+    int num_cores = static_cast<int>(sliding_window_config.num_cores_nhw * sliding_window_config.num_cores_c);
+    if (num_cores == 0) {
+        num_cores = 1;
+    }
     int tensix_mul_adds_per_cycle_lofi = 2048;
 
-    // Calculate output dimensions: relevant for window/stride based OPs (conv, pool, downsample)
-    int output_height = std::floor(((activation_h - filter_h + pad_h) / stride_h) + 1);
-    int output_width = std::floor(((activation_w - filter_w + pad_w) / stride_w) + 1);
+    // For pooling, each output element requires filter_h * filter_w operations per channel
+    // (comparisons for max pool, additions for avg pool), not cross-channel like convolution
+    int64_t num_ops_per_elem = filter_h * filter_w;
+    int64_t num_ops = num_ops_per_elem * output_height * output_width * channels * batch_size;
 
-    // Calculate number of mul/add / compare operations
-    int64_t num_mul_adds_per_elem = activation_c * filter_h * filter_w;  // 1 multiply and 1 add per element
-    int64_t num_mul_adds = num_mul_adds_per_elem * output_height * output_width * output_channels * batch_size;
-
-    int ideal_dev_clock_cycles = std::ceil((float)num_mul_adds / (float)(num_cores * tensix_mul_adds_per_cycle_lofi));
+    int ideal_dev_clock_cycles = std::ceil((float)num_ops / (float)(num_cores * tensix_mul_adds_per_cycle_lofi));
 
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input}, {outputs}, ideal_dev_clock_cycles);

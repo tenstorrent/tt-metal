@@ -226,14 +226,9 @@ static std::vector<Tensor> pool2d_L1(
 
         // Apply zero padding to channels if needed - we need it in case when output dtype is block float because if we
         // have random values it would affect common exponent calculation
-
-        Tensor input_tensor_padded;
         if (padding_needed > 0 && is_block_float(dtype)) {
             ttnn::SmallVector<std::array<uint32_t, 2>> pad_spec = {{0, 0}, {0, 0}, {0, 0}, {0, padding_needed}};
-
-            input_tensor_padded = ttnn::pad(input_tensor, pad_spec, 0.0f);
-        } else {
-            input_tensor_padded = input_tensor;
+            input_tensor_flattened = ttnn::pad(input_tensor_flattened, pad_spec, 0.0f);
         }
         input_tensor_sharded = ttnn::to_memory_config(input_tensor_flattened, in_memory_config, std::nullopt);
         out_memory_config = input_tensor_sharded.memory_config();
