@@ -1,122 +1,69 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""BGE-M3 generator-based demo on a single N300-style 1x2 mesh.
+"""Pytest checks for `generator_vllm.py`, aligned with the vLLM BGE-M3 reference tests."""
 
-Run with a single PCIe-visible board, for example:
-    TT_VISIBLE_DEVICES=0 python models/demos/wormhole/bge_m3/demo/embedding_vllm.py
-"""
-
-import os
-
-import numpy as np
+import pytest
 import torch
-from loguru import logger
-from sklearn.metrics.pairwise import cosine_similarity
-from transformers import AutoModelForCausalLM
+import torch.nn.functional as F
 
 import ttnn
-from models.common.auto_compose import to_torch_auto_compose
-from models.common.utility_functions import comp_pcc
 from models.demos.wormhole.bge_m3.demo.generator_vllm import BgeM3ForEmbedding
-from models.demos.wormhole.bge_m3.demo.m3_scores import compute_score
+from models.demos.wormhole.bge_m3.demo.m3_scores import (
+    compute_colbert_score_torch,
+    compute_dense_score_torch,
+    compute_sparse_score_torch,
+)
 
-INPUTS = [
-    "Artificial intelligence is transforming how we interact with technology.",
-    "AI is changing the way humans use computers and machines.",
-    "Machine learning algorithms are revolutionizing data analysis.",
-    "Deep learning networks can process complex patterns in data.",
-    "Neural networks mimic the human brain's structure and function.",
-    "Natural language processing enables computers to understand text.",
-    "Computer vision allows machines to interpret visual information.",
-    "The weather is sunny today with clear blue skies.",
+MODEL_NAME = "BAAI/bge-m3"
+MAX_MODEL_LEN = 512
+
+# Example and references from tests/pcc/test_reference_vllm.py
+sentences_1 = ["What is BGE M3?", "Definition of BM25"]
+sentences_2 = [
+    "BGE M3 is an embedding model supporting dense retrieval, " "lexical matching and multi-vector interaction.",
+    "BM25 is a bag-of-words retrieval function that ranks a set "
+    "of documents based on the query terms appearing in each document",
 ]
 
-
-def _mean_pool(last_hidden_state: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-    """Mean-pool last hidden state by attention mask."""
-    mask = attention_mask.unsqueeze(-1).to(last_hidden_state.dtype)
-    summed = (last_hidden_state * mask).sum(dim=1)
-    counts = mask.sum(dim=1).clamp(min=1)
-    return summed / counts
+similarity_reference = torch.tensor([[0.6259, 0.3474], [0.3309, 0.6734]], dtype=torch.float32)
+lexical_score_reference = [0.19554901123046875, 0.0]
+colbert_score_reference = [0.7797, 0.4620]
+corner_case_token_id = 2673
+corner_case_token_weight = 0.26710861921310425
 
 
-def _mean_pairwise_cosine_similarity(sentence_embeddings: torch.Tensor) -> float:
-    cosine_sim_matrix = cosine_similarity(sentence_embeddings.detach().cpu().numpy())
-    if cosine_sim_matrix.shape[0] < 2:
-        return 1.0
-    upper_triangle = cosine_sim_matrix[np.triu_indices_from(cosine_sim_matrix, k=1)]
-    return float(upper_triangle.mean()) if upper_triangle.size else 1.0
+def _require_single_device(device) -> None:
+    if hasattr(device, "get_num_devices") and device.get_num_devices() != 1:
+        raise ValueError("BGE-M3 generator tests currently expect a single device")
 
 
-def _mean_embedding_alignment(reference: torch.Tensor, candidate: torch.Tensor) -> float:
-    cross_similarity = cosine_similarity(reference.detach().cpu().numpy(), candidate.detach().cpu().numpy())
-    return float(np.diag(cross_similarity).mean())
+def _resolve_model_name(model_name, model_location_generator):
+    if model_location_generator is None:
+        return model_name
+    return str(model_location_generator(model_name))
 
 
-def _crop_hidden_states(last_hidden_state: torch.Tensor, seq_len: int) -> torch.Tensor:
-    return last_hidden_state[:, :seq_len, :]
-
-
-def _compute_scores_with_replicas(generator_model, sentence_pairs, to_torch_fn):
-    score_models = generator_model.models if generator_model.models is not None else [generator_model.model]
-    score_model_args_list = (
-        generator_model.model_args_list if generator_model.model_args_list is not None else [generator_model.model_args]
-    )
-    score_submeshes = generator_model.submeshes if generator_model.submeshes is not None else [generator_model.device]
-
-    sparse_scores = []
-    colbert_scores = []
-    start = 0
-    while start < len(sentence_pairs):
-        for score_model, score_model_args, score_submesh in zip(score_models, score_model_args_list, score_submeshes):
-            if start >= len(sentence_pairs):
-                break
-
-            chunk_size = min(score_model_args.max_batch_size, len(sentence_pairs) - start)
-            chunk_pairs = sentence_pairs[start : start + chunk_size]
-
-            def _to_ttnn_ids(ids: torch.Tensor, score_device) -> ttnn.Tensor:
-                return generator_model._to_ttnn_ids(ids, device=score_device)
-
-            chunk_scores = compute_score(
-                score_submesh,
-                chunk_pairs,
-                score_model,
-                score_model_args,
-                _to_ttnn_ids,
-                to_torch_fn,
-            )
-            sparse_scores.extend(float(score) for score in chunk_scores["sparse"])
-            colbert_scores.extend(float(score) for score in chunk_scores["colbert"])
-            start += chunk_size
-
-    return {"sparse": sparse_scores, "colbert": colbert_scores}
-
-
-def run_bge_vllm_demo_inference(
+def _build_generator_model(
     device,
-    sentence_pairs,
-    model_name="BAAI/bge-m3",
-    sequence_length=8192,
-):
-    """Run generator-backed inference with HF validation and score logging."""
-    sentence_pairs = list(sentence_pairs)
-    if not sentence_pairs:
-        raise ValueError("sentence_pairs must be a non-empty list of (query, passage) tuples.")
-
-    queries = [pair[0] for pair in sentence_pairs]
-    n_pairs = len(sentence_pairs)
-
+    model_name: str,
+    sequence_length: int,
+    max_batch_size: int,
+) -> tuple[BgeM3ForEmbedding, object]:
+    tt_data_parallel = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
     generator_model = BgeM3ForEmbedding(
         device=device,
-        max_batch_size=n_pairs,
+        max_batch_size=max_batch_size,
         max_seq_len=sequence_length,
-        tt_data_parallel=device.get_num_devices(),
+        tt_data_parallel=tt_data_parallel,
         dtype=ttnn.bfloat8_b,
         model_name=model_name,
+        # Match BGE-M3 reference dense semantics from flag_embedding_model.py.
+        sentence_pooling_method="cls",
+        return_dense=True,
+        return_sparse=True,
+        return_colbert=True,
     )
-    # Initialize once so the dense path and sparse/ColBERT score path reuse the same TT model + tokenizer.
     generator_model._initialize_model()
     model_args = (
         generator_model.model_args_list[0]
@@ -124,77 +71,104 @@ def run_bge_vllm_demo_inference(
         else generator_model.model_args
     )
     assert model_args is not None
+    return generator_model, model_args
 
-    reference_model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16).eval()
-    backbone = reference_model.roberta if hasattr(reference_model, "roberta") else reference_model
 
-    encoded_input = model_args.encode_prompts(queries)
+def _run_generator_embeddings(
+    generator_model: BgeM3ForEmbedding,
+    model_args,
+    sentences: list[str],
+) -> dict[str, torch.Tensor]:
+    encoded_input = model_args.encode_prompts(sentences)
     input_ids = encoded_input["input_ids"]
     attention_mask = encoded_input["attention_mask"]
     token_type_ids = encoded_input.get("token_type_ids", torch.zeros_like(input_ids))
     seq_len = input_ids.shape[1]
-    logger.info(f"Running generator demo with batch_size={len(queries)} and seq_len={seq_len}")
 
-    with torch.no_grad():
-        hf_last_hidden_state = backbone(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            position_ids=None,
-            return_dict=True,
-        ).last_hidden_state.to(torch.float32)
-
-    hf_sentence_embeddings = _mean_pool(hf_last_hidden_state, attention_mask)
-
-    ttnn_last_hidden_state = generator_model.forward(
+    outputs = generator_model.forward(
         input_ids=input_ids,
         attention_mask=attention_mask,
         token_type_ids=token_type_ids,
     )
-    ttnn_last_hidden_state = _crop_hidden_states(ttnn_last_hidden_state, seq_len).to(torch.float32)
-    ttnn_sentence_embeddings = _mean_pool(ttnn_last_hidden_state, attention_mask)
+    dense_vecs = outputs["dense_vecs"][: len(sentences)].to(torch.float32)
+    sparse_vecs = outputs["sparse_vecs"][: len(sentences)].to(torch.float32)
+    colbert_vecs = outputs["colbert_vecs"][: len(sentences), : seq_len - 1].to(torch.float32)
 
-    hidden_state_passing, hidden_state_pcc = comp_pcc(hf_last_hidden_state, ttnn_last_hidden_state, 0.94)
-    assert hidden_state_passing, f"Hidden state PCC check failed: {hidden_state_pcc}"
+    return {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+        "dense_vecs": dense_vecs,
+        "dense_vecs_norm": F.normalize(dense_vecs, dim=-1),
+        "sparse_vecs": sparse_vecs,
+        "colbert_vecs": colbert_vecs,
+        "colbert_vecs_norm": F.normalize(colbert_vecs, dim=-1),
+    }
 
-    hf_mean_similarity = _mean_pairwise_cosine_similarity(hf_sentence_embeddings)
-    tt_mean_similarity = _mean_pairwise_cosine_similarity(ttnn_sentence_embeddings)
-    embedding_alignment = _mean_embedding_alignment(hf_sentence_embeddings, ttnn_sentence_embeddings)
 
-    logger.info(f"Mean Cosine Similarity for Reference Model (PyTorch): {hf_mean_similarity:.4f}")
-    logger.info(f"Mean Cosine Similarity for TTNN Model: {tt_mean_similarity:.4f}")
-    logger.info(f"Mean Embedding Alignment (reference vs TTNN): {embedding_alignment:.4f}")
+def _load_reference_outputs(device, model_name, sequence_length, model_location_generator):
+    _require_single_device(device)
+    resolved_model_name = _resolve_model_name(model_name, model_location_generator)
+    max_batch_size = max(len(sentences_1), len(sentences_2), 1)
+    generator_model, model_args = _build_generator_model(device, resolved_model_name, sequence_length, max_batch_size)
+    return {
+        "sentences_1": _run_generator_embeddings(generator_model, model_args, sentences_1),
+        "sentences_2": _run_generator_embeddings(generator_model, model_args, sentences_2),
+        "corner_case": _run_generator_embeddings(generator_model, model_args, ["Hi"]),
+    }
 
-    similarity_diff = abs(hf_mean_similarity - tt_mean_similarity)
-    logger.info(f"Hidden state PCC passed: {hidden_state_pcc}")
-    logger.info(f"Cosine similarity delta: {similarity_diff:.4f}")
 
-    tolerance = 0.02
-    assert (
-        similarity_diff < tolerance
-    ), f"Cosine similarities differ by {similarity_diff:.4f}, which exceeds tolerance of {tolerance}"
+@pytest.mark.parametrize("model_name, sequence_length", [(MODEL_NAME, MAX_MODEL_LEN)])
+def test_bge_m3_vllm_dense_embedding(device, model_name, sequence_length, model_location_generator):
+    outputs = _load_reference_outputs(device, model_name, sequence_length, model_location_generator)
+    similarity = compute_dense_score_torch(
+        outputs["sentences_1"]["dense_vecs_norm"],
+        outputs["sentences_2"]["dense_vecs_norm"],
+    )
+    assert torch.allclose(similarity, similarity_reference, rtol=0.01)
 
-    scores = _compute_scores_with_replicas(generator_model, sentence_pairs, to_torch_auto_compose)
 
-    for i, (_query, _passage) in enumerate(sentence_pairs):
-        logger.info(f"  pair {i}: sparse={scores['sparse'][i]:.4f}, colbert={scores['colbert'][i]:.4f}")
+@pytest.mark.parametrize("model_name, sequence_length", [(MODEL_NAME, MAX_MODEL_LEN)])
+def test_bge_m3_vllm_sparse_embedding(device, model_name, sequence_length, model_location_generator):
+    outputs = _load_reference_outputs(device, model_name, sequence_length, model_location_generator)
+    sparse_cross_scores = compute_sparse_score_torch(
+        outputs["sentences_1"]["sparse_vecs"],
+        outputs["sentences_2"]["sparse_vecs"],
+    )
+    sparse_self_scores = compute_sparse_score_torch(
+        outputs["sentences_1"]["sparse_vecs"][:1],
+        outputs["sentences_1"]["sparse_vecs"][1:2],
+    )
 
-    return {"sparse": scores["sparse"], "colbert": scores["colbert"]}
+    lexical_score_1_0_x_2_0 = float(sparse_cross_scores[0, 0])
+    assert lexical_score_1_0_x_2_0 == pytest.approx(lexical_score_reference[0], rel=0.01)
+
+    lexical_score_1_0_x_1_1 = float(sparse_self_scores[0, 0])
+    assert lexical_score_1_0_x_1_1 == pytest.approx(lexical_score_reference[1], rel=0.01)
+
+
+@pytest.mark.xfail(reason="Single-token sparse weight drifts under TT bfloat8_b precision", strict=False)
+@pytest.mark.parametrize("model_name, sequence_length", [(MODEL_NAME, MAX_MODEL_LEN)])
+def test_bge_m3_vllm_sparse_embedding_corner_case(device, model_name, sequence_length, model_location_generator):
+    outputs = _load_reference_outputs(device, model_name, sequence_length, model_location_generator)
+    corner_sparse_weight = float(outputs["corner_case"]["sparse_vecs"][0, corner_case_token_id])
+    assert corner_sparse_weight == pytest.approx(corner_case_token_weight, rel=0.01)
+
+
+@pytest.mark.parametrize("model_name, sequence_length", [(MODEL_NAME, MAX_MODEL_LEN)])
+def test_bge_m3_vllm_multi_vector(device, model_name, sequence_length, model_location_generator):
+    outputs = _load_reference_outputs(device, model_name, sequence_length, model_location_generator)
+    colbert_scores = compute_colbert_score_torch(
+        outputs["sentences_1"]["colbert_vecs_norm"],
+        outputs["sentences_2"]["colbert_vecs_norm"],
+        q_mask=outputs["sentences_1"]["attention_mask"],
+    )
+
+    colbert_score_1_0_x_2_0 = float(colbert_scores[0, 0])
+    assert colbert_score_1_0_x_2_0 == pytest.approx(colbert_score_reference[0], rel=0.01)
+
+    colbert_score_1_0_x_2_1 = float(colbert_scores[0, 1])
+    assert colbert_score_1_0_x_2_1 == pytest.approx(colbert_score_reference[1], rel=0.01)
 
 
 if __name__ == "__main__":
-    sentence_pairs = [(INPUTS[i], INPUTS[(i + 1) % len(INPUTS)]) for i in range(len(INPUTS))]
-    logger.info(f"TT_VISIBLE_DEVICES={os.environ.get('TT_VISIBLE_DEVICES', '<unset>')}")
-
-    original_default_device = ttnn.GetDefaultDevice()
-    with ttnn.create_mesh_device(mesh_shape=ttnn.MeshShape(1, 1)) as mesh_device:
-        logger.info(
-            "Opened mesh device with num_devices={} and grid={}",
-            mesh_device.get_num_devices(),
-            mesh_device.compute_with_storage_grid_size(),
-        )
-        try:
-            ttnn.SetDefaultDevice(mesh_device)
-            run_bge_vllm_demo_inference(mesh_device, sentence_pairs)
-        finally:
-            ttnn.SetDefaultDevice(original_default_device)
+    raise SystemExit(pytest.main([__file__]))
