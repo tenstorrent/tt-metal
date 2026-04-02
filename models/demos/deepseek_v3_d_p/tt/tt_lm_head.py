@@ -6,8 +6,8 @@
 TTNN implementation of the LM Head (language model output projection) for DeepSeek V3.
 
 Projects hidden states to vocabulary logits:
-    Input:  [batch, seq_len, emb_dim]
-    Output: [batch, seq_len, vocab_size]
+    Input:  [dispatch_group_size, seq_len, emb_dim]
+    Output: [dispatch_group_size, seq_len, vocab_size]
 
 Weight Sharding (across mesh columns):
     - weight: Sharded on output dimension (-1) across mesh columns
@@ -35,9 +35,9 @@ class TtLMHead(LightweightModule):
     TTNN implementation of the LM Head for DeepSeek V3.
 
     Architecture:
-        Input: x [batch, seq_len, emb_dim]
-        1. output = x @ weight → [batch, seq_len, vocab_size]
-        2. All-gather output across mesh columns → [batch, seq_len, vocab_size]
+        Input: x [dispatch_group_size, seq_len, emb_dim]
+        1. output = x @ weight → [dispatch_group_size, seq_len, vocab_size]
+        2. All-gather output across mesh columns → [dispatch_group_size, seq_len, vocab_size]
     """
 
     def __init__(
@@ -148,10 +148,10 @@ class TtLMHead(LightweightModule):
         Forward pass: project hidden states to vocabulary logits.
 
         Args:
-            x: Input tensor [batch, seq_len, emb_dim]
+            x: Input tensor [dispatch_group_size, seq_len, emb_dim]
 
         Returns:
-            Logits tensor [batch, seq_len, vocab_size]
+            Logits tensor [dispatch_group_size, seq_len, vocab_size]
         """
         logger.debug(f"[TtLMHead.forward] INPUT SHAPES:")
         logger.debug(f"  x.shape={x.shape}")
