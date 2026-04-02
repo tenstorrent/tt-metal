@@ -356,7 +356,7 @@ jobs:
       run: |
         HASH=$(find . \( -name 'CMakeLists.txt' -o -name '*.cmake' \) -type f \
           | sort | xargs sha256sum | sha256sum | awk '{print $1}')
-        echo "key=cpm-Linux-${HASH}" | tee -a "$GITHUB_OUTPUT"
+        echo "key=cpm-v2-Linux-${HASH}" | tee -a "$GITHUB_OUTPUT"
     - name: Restore CPM cache
       # Cache path must be under $GITHUB_WORKSPACE — that directory is a
       # bind-mount shared between the container and the host, so the host-side
@@ -369,7 +369,7 @@ jobs:
           ${{ github.workspace }}/.cpmcache
           ${{ github.workspace }}/data
         key: ${{ steps.cpm_key.outputs.key }}
-        restore-keys: cpm-Linux-
+        restore-keys: cpm-v2-Linux-
     - name: CMake configure
       # CPM_SOURCE_CACHE directs CPM to store/read downloaded packages from
       # .cpmcache under the workspace — the same path restored above.
