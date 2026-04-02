@@ -30,6 +30,7 @@ SHUFFLE_SEED = None
 DO_RANDOMIZE = False
 VECTOR_GROUPING_MODE = "mesh"
 GENERATION_MANIFEST_FILENAME = "generation_manifest.json"
+GENERATED_VECTOR_FILES = set()
 
 
 def get_mesh_shape_from_vector(vector):
@@ -320,7 +321,7 @@ def _backup_corrupted_json_file(path: pathlib.Path) -> None:
         logger.warning(f"Failed to back up corrupted JSON file {path}: {e}")
 
 
-def write_generation_manifest(module_name, model_traced, suite_name):
+def write_generation_manifest(module_name, model_traced, suite_name, vector_files):
     """Write vector-generation metadata consumed by matrix computation."""
     export_dir = SWEEPS_DIR / "vectors_export"
     manifest_path = export_dir / GENERATION_MANIFEST_FILENAME
@@ -337,6 +338,7 @@ def write_generation_manifest(module_name, model_traced, suite_name):
         "module_name": module_name,
         "model_traced": model_traced,
         "suite_name": suite_name,
+        "vector_files": sorted(vector_files),
     }
 
     try:
@@ -439,6 +441,7 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
         # A None group means the vector has no routing restriction, so keep the
         # base module name and let any compatible runner pick up the file.
         grouped_module_name = module_name if group_key is None else f"{module_name}{format_group_suffix(group_key)}"
+        GENERATED_VECTOR_FILES.add(f"{grouped_module_name}.json")
 
         # Export vectors WITHOUT modifying sweep_name.
         # Routing info is already present in traced_machine_info; sweep_name stays
@@ -736,5 +739,6 @@ if __name__ == "__main__":
         MasterConfigLoader.set_master_file_path(resolved)
         logger.info(f"Master trace override: {resolved}")
 
-    write_generation_manifest(args.module_name, args.model_traced, args.suite_name)
+    GENERATED_VECTOR_FILES.clear()
     generate_tests(args.module_name, args.skip_modules, args.model_traced, args.suite_name)
+    write_generation_manifest(args.module_name, args.model_traced, args.suite_name, GENERATED_VECTOR_FILES)
