@@ -11,9 +11,10 @@
 #include "tt-metalium/kernel_types.hpp"
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/tensor/types.hpp"
-#include <bit>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+
+#include <bit>
 
 namespace ttnn::prim {
 
@@ -78,8 +79,7 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
             tt::tt_metal::split_work_to_cores(grid, num_rows_total);
 
     constexpr uint32_t in_tiles = 4;
-    constexpr uint32_t op_tiles = 1;
-    // constexpr uint32_t start_tiles = 4;
+    constexpr uint32_t acc_tiles = 1;
     constexpr uint32_t out_tiles = 4;
 
     auto acc_dataformat = datatype_to_dataformat_converter(output_tensor.dtype());
@@ -90,12 +90,8 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
     const auto input_dataformat = datatype_to_dataformat_converter(input_tensor.dtype());
     const auto output_dataformat = datatype_to_dataformat_converter(output_tensor.dtype());
 
-    std::cout << "input_dataformat: " << input_dataformat << std::endl;
-    std::cout << "acc_dataformat: " << acc_dataformat << std::endl;
-    std::cout << "output_dataformat: " << output_dataformat << std::endl;
-
     create_cb(program, input_dataformat, AccumulationCB::SRC, all_cores, in_tiles);
-    create_cb(program, acc_dataformat, AccumulationCB::ACC, all_cores, op_tiles);
+    create_cb(program, acc_dataformat, AccumulationCB::ACC, all_cores, acc_tiles);
     create_cb(program, output_dataformat, AccumulationCB::DST, all_cores, out_tiles);
 
     std::vector<UnpackToDestMode> unpack_to_dst(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
@@ -131,9 +127,6 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
     const ReaderDataMovementConfig reader_config{reader_compile_time_args};
     // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     // Use HiFi3 silently when fp32_dest_acc_en is True on Wormhole B0.
-    // constexpr bool fp32_dest_acc_en = true;
-    // const auto math_fidelity =
-    //     (fp32_dest_acc_en && device->arch() == tt::ARCH::WORMHOLE_B0) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
     const ComputeConfig compute_config{
         .math_fidelity = MathFidelity::HiFi4,
         .fp32_dest_acc_en = true,
@@ -178,8 +171,7 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
              tile_offset,
              tile_offset / input_tile_offset,
              tile_offset % input_tile_offset,
-             static_cast<uint32_t>(operation_attributes.flip),
-             static_cast<uint32_t>(operation_attributes.op)});
+             static_cast<uint32_t>(operation_attributes.flip)});
 
         SetRuntimeArgs(
             program,

@@ -46,16 +46,14 @@ def get_backward_tensors(output_grad_shape, input_grad_shape, device):
 )
 def test_cumprod_normal(dim, shape, dtypes, device):
     torch.manual_seed(0)
-    torch_dtype, ttnn_output_dtype = dtypes
-
     if dim < len(shape) and -len(shape) <= dim:
         for _ in range(2):
-            torch_input_tensor = torch.randn(shape, dtype=torch_dtype)
+            torch_input_tensor = torch.randn(shape, dtype=dtypes[0])
             torch_result_tensor = torch.cumprod(torch_input_tensor, dim)
             ttnn_input_tensor = ttnn.from_torch(
                 torch_input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
             )
-            ttnn_result_tensor = ttnn.cumprod(ttnn_input_tensor, dim, dtype=ttnn_output_dtype)
+            ttnn_result_tensor = ttnn.cumprod(ttnn_input_tensor, dim, dtype=dtypes[1])
 
             # assert metadata
             assert ttnn_input_tensor.shape == ttnn_result_tensor.shape
@@ -74,7 +72,6 @@ def test_cumprod_normal(dim, shape, dtypes, device):
                 rtol = 0.03
                 atol = 1.04
                 frobenius_threshold = 0.01
-
             # test for equivalance
             assert_numeric_metrics(
                 torch_result_tensor,

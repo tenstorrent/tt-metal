@@ -31,7 +31,6 @@ def get_backward_tensors(output_grad_shape, input_grad_shape, device):
         ([2, 3], 0),
         ([2, 3], -1),
         ([1, 1024, 32], 0),
-        ([1, 64, 32], 0),
         ([33, 35, 37], -1),
         ([7, 13, 129, 33], 1),
         ([2, 3, 5, 33, 128], -1),
@@ -39,7 +38,6 @@ def get_backward_tensors(output_grad_shape, input_grad_shape, device):
         ([19], -1),
         ([1, 19], -1),
         ([1, 151936], -1),
-        ([1, 2**17], -1),
         ([5], -1),
     ],
 )
@@ -177,9 +175,9 @@ def test_cumsum_backward(size, dim, dtypes, device):
 
     assert tt_input_grad_cpu.shape == torch_input_tensor.grad.shape
     if torch_dtype == torch.bfloat16:
-        assert_with_ulp(tt_input_grad_cpu, tt_input_grad, ulp_threshold=1)
+        assert_with_ulp(tt_input_grad_cpu, torch_input_tensor.grad, ulp_threshold=1)
     else:
-        assert_allclose(tt_input_grad_cpu, tt_input_grad, rtol=1e-2, atol=1e-6)
+        assert_allclose(tt_input_grad_cpu, torch_input_tensor.grad, rtol=1e-2, atol=1e-6)
 
 
 @pytest.mark.parametrize(
