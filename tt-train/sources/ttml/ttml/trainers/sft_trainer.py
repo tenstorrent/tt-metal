@@ -289,7 +289,8 @@ class SFTTrainer:
             self._optimizer.set_lr(self._lr_schedule(self.step))
             self._optimizer.step()
             lr = float(self._optimizer.get_lr())
-            memory_snapshot("OPTIMIZER_STEP")
+            if self.step == 0:
+                memory_snapshot("OPTIMIZER_STEP")
 
             self.step += 1
 
