@@ -347,4 +347,68 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, FlattenedDispatch_PerfMeasurement) {
     // No assertion on timing — just reporting. Compare with/without TT_METAL_ENABLE_FLATTENED_DISPATCH.
 }
 
+// Heavy perf test: all cores, many RTAs, many CBs — stresses the write path
+// where flattened dispatch should show a bigger win (single cq_write vs 7+).
+TEST_F(UnitMeshCQSingleCardProgramFixture, FlattenedDispatch_PerfHeavy) {
+    auto& mesh_device = devices_[0];
+    auto grid_size = mesh_device->compute_with_storage_grid_size();
+    CoreRange core_range({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    uint32_t num_cores = core_range.size();
+
+    Program program = Program();
+    auto l1_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+    KernelHandle kid = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
+        core_range,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = {l1_addr}});
+
+    // 100 unique RTAs per core
+    vector<uint32_t> rt_args(100, 0);
+    rt_args[0] = 7;
+    rt_args[1] = 13;
+    for (CoreCoord core : core_range) {
+        SetRuntimeArgs(program, kid, core, rt_args);
+    }
+
+    // 32 CBs
+    for (uint32_t cb_idx = 0; cb_idx < 32; cb_idx++) {
+        CircularBufferConfig config =
+            CircularBufferConfig(2048, {{cb_idx, tt::DataFormat::Float16_b}}).set_page_size(cb_idx, 64);
+        CreateCircularBuffer(program, core_range, config);
+    }
+
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range_, std::move(program));
+
+    auto& cq = mesh_device->mesh_command_queue();
+
+    // Warmup
+    for (int i = 0; i < 100; i++) {
+        distributed::EnqueueMeshWorkload(cq, workload, false);
+    }
+    distributed::Finish(cq);
+
+    // Timed run
+    constexpr int N = 1000;
+    auto start = std::chrono::high_resolution_clock::now();
+    for (int i = 0; i < N; i++) {
+        distributed::EnqueueMeshWorkload(cq, workload, false);
+    }
+    distributed::Finish(cq);
+    auto end = std::chrono::high_resolution_clock::now();
+
+    double total_us = std::chrono::duration<double, std::micro>(end - start).count();
+    double per_dispatch_us = total_us / N;
+
+    log_info(
+        tt::LogTest,
+        "HEAVY dispatch perf: {:.1f} us/dispatch (total {:.1f} ms for {} dispatches, {} cores, 100 RTAs, 32 CBs)",
+        per_dispatch_us,
+        total_us / 1000.0,
+        N,
+        num_cores);
+}
+
 }  // namespace tt::tt_metal
