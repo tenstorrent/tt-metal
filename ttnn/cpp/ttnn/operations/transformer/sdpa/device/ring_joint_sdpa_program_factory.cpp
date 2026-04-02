@@ -10,6 +10,8 @@
 #include <cmath>
 #include <string>
 
+#include <tracy/Tracy.hpp>
+
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
@@ -27,6 +29,7 @@ RingJointSDPAProgramFactory::cached_mesh_workload_t RingJointSDPAProgramFactory:
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const RingJointSDPAInputs& tensor_args,
     RingJointSDPAResult& output_tensors) {
+    ZoneScopedN("RingJointSDPA::create_mesh_workload");
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_vars;
 
@@ -44,6 +47,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const ttnn::MeshCoordinate& coord,
     const RingJointSDPAInputs& tensor_args,
     RingJointSDPAResult& output_tensors) {
+    ZoneScopedN("RingJointSDPA::create_at");
     /*
     The QKV inputs are fractured on the sequence dimension across ring_size.
     The sequence length comes in padded such that it is divisible by `TILE_HEIGHT * ring_size`.
@@ -532,165 +536,173 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // the mcast_enabled compile-time arg can be determined first.
 
     // Create circular buffers
+    {
+        ZoneScopedN("RingJointSDPA::create_circular_buffers");
 
-    tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
-    tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_k.dtype());
-    tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
+        tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
+        tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_k.dtype());
+        tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
 
-    // This is done only in the non-causal case:
-    // Lightweight mask: both streaming and non-streaming paths use Float16_b
-    // to support L1-accumulation and avoid Bfp4_b precision loss.
-    tt::DataFormat mask_df = (args.is_causal ? tt::DataFormat::Bfp4_b : tt::DataFormat::Float16_b);
-    tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
-    tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
-                                                       // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat stats_df = im_df;
+        // This is done only in the non-causal case:
+        // Lightweight mask: both streaming and non-streaming paths use Float16_b
+        // to support L1-accumulation and avoid Bfp4_b precision loss.
+        tt::DataFormat mask_df = (args.is_causal ? tt::DataFormat::Bfp4_b : tt::DataFormat::Float16_b);
+        tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
+        tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
+        tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
+                                                           // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+        tt::DataFormat stats_df = im_df;
 
-    uint32_t q_tile_size = tt::tile_size(q_df);
-    uint32_t k_tile_size = tt::tile_size(k_df);
-    uint32_t v_tile_size = tt::tile_size(v_df);
-    uint32_t mask_tile_size = tt::tile_size(mask_df);
-    uint32_t out_tile_size = tt::tile_size(out_df);
-    uint32_t scalar_tile_size = tt::tile_size(scalar_df);
-    uint32_t im_tile_size = tt::tile_size(im_df);
-    uint32_t stats_tile_size = tt::tile_size(stats_df);
+        uint32_t q_tile_size = tt::tile_size(q_df);
+        uint32_t k_tile_size = tt::tile_size(k_df);
+        uint32_t v_tile_size = tt::tile_size(v_df);
+        uint32_t mask_tile_size = tt::tile_size(mask_df);
+        uint32_t out_tile_size = tt::tile_size(out_df);
+        uint32_t scalar_tile_size = tt::tile_size(scalar_df);
+        uint32_t im_tile_size = tt::tile_size(im_df);
+        uint32_t stats_tile_size = tt::tile_size(stats_df);
 
-    log_debug(tt::LogOp, "q_data_format: {}", q_df);
-    log_debug(tt::LogOp, "k_data_format: {}", k_df);
-    log_debug(tt::LogOp, "v_data_format: {}", v_df);
-    log_debug(tt::LogOp, "mask_data_format: {}", mask_df);
-    log_debug(tt::LogOp, "out_data_format: {}", out_df);
-    log_debug(tt::LogOp, "scalar_data_format: {}", scalar_df);
-    log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
-    log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
+        log_debug(tt::LogOp, "q_data_format: {}", q_df);
+        log_debug(tt::LogOp, "k_data_format: {}", k_df);
+        log_debug(tt::LogOp, "v_data_format: {}", v_df);
+        log_debug(tt::LogOp, "mask_data_format: {}", mask_df);
+        log_debug(tt::LogOp, "out_data_format: {}", out_df);
+        log_debug(tt::LogOp, "scalar_data_format: {}", scalar_df);
+        log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
+        log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
 
-    // Q input
-    auto c_in0_config = CircularBufferConfig(q_tiles * q_tile_size, {{tt::CBIndex::c_0, q_df}})
-                            .set_page_size(tt::CBIndex::c_0, q_tile_size);
+        // Q input
+        auto c_in0_config = CircularBufferConfig(q_tiles * q_tile_size, {{tt::CBIndex::c_0, q_df}})
+                                .set_page_size(tt::CBIndex::c_0, q_tile_size);
 
-    CreateCircularBuffer(program, core_grid, c_in0_config);
-    // K input
-    auto c_in1_config = CircularBufferConfig(k_tiles * k_tile_size, {{tt::CBIndex::c_1, k_df}})
-                            .set_page_size(tt::CBIndex::c_1, k_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in1_config);
-    // V input
-    auto c_in2_config = CircularBufferConfig(v_tiles * v_tile_size, {{tt::CBIndex::c_2, v_df}})
-                            .set_page_size(tt::CBIndex::c_2, v_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in2_config);
+        CreateCircularBuffer(program, core_grid, c_in0_config);
+        // K input
+        auto c_in1_config = CircularBufferConfig(k_tiles * k_tile_size, {{tt::CBIndex::c_1, k_df}})
+                                .set_page_size(tt::CBIndex::c_1, k_tile_size);
+        CreateCircularBuffer(program, core_grid, c_in1_config);
+        // V input
+        auto c_in2_config = CircularBufferConfig(v_tiles * v_tile_size, {{tt::CBIndex::c_2, v_df}})
+                                .set_page_size(tt::CBIndex::c_2, v_tile_size);
+        CreateCircularBuffer(program, core_grid, c_in2_config);
 
-    if (args.is_causal) {
-        // attn_mask input
-        auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
-                                .set_page_size(tt::CB::c_in3, mask_tile_size);
-        CreateCircularBuffer(program, core_grid, c_in3_config);
-    }
-    else {
-        // Lightweight mask: single CB holds 1 neginf tile + up to 2 partial mask tiles
-        if (needs_lightweight_mask) {
-            auto c_in3_config =
-                CircularBufferConfig(total_lightweight_mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
-                    .set_page_size(tt::CB::c_in3, mask_tile_size);
+        if (args.is_causal) {
+            // attn_mask input
+            auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
+                                    .set_page_size(tt::CB::c_in3, mask_tile_size);
             CreateCircularBuffer(program, core_grid, c_in3_config);
+        } else {
+            // Lightweight mask: single CB holds 1 neginf tile + up to 2 partial mask tiles
+            if (needs_lightweight_mask) {
+                auto c_in3_config =
+                    CircularBufferConfig(total_lightweight_mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
+                        .set_page_size(tt::CB::c_in3, mask_tile_size);
+                CreateCircularBuffer(program, core_grid, c_in3_config);
+            }
         }
-    }
 
-    // scale input
-    auto c_in4_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_4, scalar_df}})
-                            .set_page_size(tt::CBIndex::c_4, scalar_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in4_config);
+        // scale input
+        auto c_in4_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_4, scalar_df}})
+                                .set_page_size(tt::CBIndex::c_4, scalar_tile_size);
+        CreateCircularBuffer(program, core_grid, c_in4_config);
 
-    // identity scale input
-    auto c_in5_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_5, scalar_df}})
-                            .set_page_size(tt::CBIndex::c_5, scalar_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in5_config);
+        // identity scale input
+        auto c_in5_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_5, scalar_df}})
+                                .set_page_size(tt::CBIndex::c_5, scalar_tile_size);
+        CreateCircularBuffer(program, core_grid, c_in5_config);
 
-    // stats input
-    auto c_in6_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_6, im_df}})
-                            .set_page_size(tt::CBIndex::c_6, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in6_config);
+        // stats input
+        auto c_in6_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_6, im_df}})
+                                .set_page_size(tt::CBIndex::c_6, im_tile_size);
+        CreateCircularBuffer(program, core_grid, c_in6_config);
 
-    // previous block output as input
-    auto c_in7_config = CircularBufferConfig(out_im_tiles * out_tile_size, {{tt::CBIndex::c_7, out_df}})
-                            .set_page_size(tt::CBIndex::c_7, out_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in7_config);
+        // previous block output as input
+        auto c_in7_config = CircularBufferConfig(out_im_tiles * out_tile_size, {{tt::CBIndex::c_7, out_df}})
+                                .set_page_size(tt::CBIndex::c_7, out_tile_size);
+        CreateCircularBuffer(program, core_grid, c_in7_config);
 
-    // column identity input
-    auto c_in8_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_8, scalar_df}})
-                            .set_page_size(tt::CBIndex::c_8, scalar_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in8_config);
+        // column identity input
+        auto c_in8_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_8, scalar_df}})
+                                .set_page_size(tt::CBIndex::c_8, scalar_tile_size);
+        CreateCircularBuffer(program, core_grid, c_in8_config);
 
-    // cb_qk_im
-    auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{tt::CBIndex::c_24, im_df}})
-                                  .set_page_size(tt::CBIndex::c_24, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed0_config);
+        // cb_qk_im
+        auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{tt::CBIndex::c_24, im_df}})
+                                      .set_page_size(tt::CBIndex::c_24, im_tile_size);
+        CreateCircularBuffer(program, core_grid, c_intermed0_config);
 
-    // cb_out_im
-    auto c_intermed1_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_25, im_df}})
-                                  .set_page_size(tt::CBIndex::c_25, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed1_config);
+        // cb_out_im
+        auto c_intermed1_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_25, im_df}})
+                                      .set_page_size(tt::CBIndex::c_25, im_tile_size);
+        CreateCircularBuffer(program, core_grid, c_intermed1_config);
 
-    // cb_out_accumulate_im
-    auto c_intermed2_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_26, im_df}})
-                                  .set_page_size(tt::CBIndex::c_26, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed2_config);
+        // cb_out_accumulate_im
+        auto c_intermed2_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_26, im_df}})
+                                      .set_page_size(tt::CBIndex::c_26, im_tile_size);
+        CreateCircularBuffer(program, core_grid, c_intermed2_config);
 
-    // cb_cur_max
-    auto c_intermed3_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_27, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_27, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed3_config);
+        // cb_cur_max
+        auto c_intermed3_config =
+            CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_27, stats_df}})
+                .set_page_size(tt::CBIndex::c_27, stats_tile_size);
+        CreateCircularBuffer(program, core_grid, c_intermed3_config);
 
-    // cb_prev_max
-    auto c_intermed4_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_28, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_28, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed4_config);
+        // cb_prev_max
+        auto c_intermed4_config =
+            CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_28, stats_df}})
+                .set_page_size(tt::CBIndex::c_28, stats_tile_size);
+        CreateCircularBuffer(program, core_grid, c_intermed4_config);
 
-    // cb_cur_sum
-    auto c_intermed5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_29, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_29, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed5_config);
+        // cb_cur_sum
+        auto c_intermed5_config =
+            CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_29, stats_df}})
+                .set_page_size(tt::CBIndex::c_29, stats_tile_size);
+        CreateCircularBuffer(program, core_grid, c_intermed5_config);
 
-    // cb_prev_sum
-    auto c_intermed6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_30, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_30, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed6_config);
+        // cb_prev_sum
+        auto c_intermed6_config =
+            CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_30, stats_df}})
+                .set_page_size(tt::CBIndex::c_30, stats_tile_size);
+        CreateCircularBuffer(program, core_grid, c_intermed6_config);
 
-    // cb_exp_max_diff
-    auto c_intermed7_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_31, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_31, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed7_config);
+        // cb_exp_max_diff
+        auto c_intermed7_config =
+            CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_31, stats_df}})
+                .set_page_size(tt::CBIndex::c_31, stats_tile_size);
+        CreateCircularBuffer(program, core_grid, c_intermed7_config);
 
-    // Output
-    auto c_out0_config = CircularBufferConfig(out0_t * out_tile_size, {{tt::CBIndex::c_16, out_df}})
-                             .set_page_size(tt::CBIndex::c_16, out_tile_size);
-    CreateCircularBuffer(program, core_grid, c_out0_config);
+        // Output
+        auto c_out0_config = CircularBufferConfig(out0_t * out_tile_size, {{tt::CBIndex::c_16, out_df}})
+                                 .set_page_size(tt::CBIndex::c_16, out_tile_size);
+        CreateCircularBuffer(program, core_grid, c_out0_config);
 
-    // stats output
-    auto c_out1_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_17, im_df}})
-                             .set_page_size(tt::CBIndex::c_17, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_out1_config);
+        // stats output
+        auto c_out1_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_17, im_df}})
+                                 .set_page_size(tt::CBIndex::c_17, im_tile_size);
+        CreateCircularBuffer(program, core_grid, c_out1_config);
 
-    // Streaming compute v2: 1-tile recip scratch CB (c_9) for normalize_row_streaming.
-    // c_4 is used by cb_scale_in in ring joint, so we use c_9 instead.
-    if (use_streaming_compute) {
-        auto c_recip_scratch_config = CircularBufferConfig(1 * im_tile_size, {{tt::CBIndex::c_9, im_df}})
-                                          .set_page_size(tt::CBIndex::c_9, im_tile_size);
-        CreateCircularBuffer(program, core_grid, c_recip_scratch_config);
-    }
+        // Streaming compute v2: 1-tile recip scratch CB (c_9) for normalize_row_streaming.
+        // c_4 is used by cb_scale_in in ring joint, so we use c_9 instead.
+        if (use_streaming_compute) {
+            auto c_recip_scratch_config = CircularBufferConfig(1 * im_tile_size, {{tt::CBIndex::c_9, im_df}})
+                                              .set_page_size(tt::CBIndex::c_9, im_tile_size);
+            CreateCircularBuffer(program, core_grid, c_recip_scratch_config);
+        }
 
-    // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
-    // cb_sum_out (c_10) = compute pushes sum for writer to save to DRAM.
-    // cb_sum_in (c_11) = writer pushes restored sum from DRAM for compute to read.
-    if (use_streaming_compute) {
-        auto c_sum_out_config =
-            CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_10, stats_df}})
-                .set_page_size(tt::CBIndex::c_10, stats_tile_size);
-        CreateCircularBuffer(program, core_grid, c_sum_out_config);
+        // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
+        // cb_sum_out (c_10) = compute pushes sum for writer to save to DRAM.
+        // cb_sum_in (c_11) = writer pushes restored sum from DRAM for compute to read.
+        if (use_streaming_compute) {
+            auto c_sum_out_config =
+                CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_10, stats_df}})
+                    .set_page_size(tt::CBIndex::c_10, stats_tile_size);
+            CreateCircularBuffer(program, core_grid, c_sum_out_config);
 
-        auto c_sum_in_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_11, stats_df}})
-                                   .set_page_size(tt::CBIndex::c_11, stats_tile_size);
-        CreateCircularBuffer(program, core_grid, c_sum_in_config);
-    }
+            auto c_sum_in_config =
+                CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_11, stats_df}})
+                    .set_page_size(tt::CBIndex::c_11, stats_tile_size);
+            CreateCircularBuffer(program, core_grid, c_sum_in_config);
+        }
+    }  // RingJointSDPA::create_circular_buffers
 
     uint32_t q_addr = input_tensor_q.buffer()->address();
     uint32_t k_addr = input_tensor_k.buffer()->address();
@@ -763,49 +775,52 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         return std::tuple<uint32_t, uint32_t, uint32_t>{batch, head, q_chunk};
     };
 
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = {i % grid_size.x, i / grid_size.x};
-        uint32_t chunk_count = base_chunks_per_core + ((i < extra_chunks) ? 1 : 0);
-        if (next_global_chunk >= total_q_chunks) {
-            chunk_count = 0;
-        } else if (chunk_count > total_q_chunks - next_global_chunk) {
-            chunk_count = total_q_chunks - next_global_chunk;
-        }
-
-        auto& work = core_work.at(i);
-        work.logical_core = core;
-        work.physical_core = device->worker_core_from_logical_core(core);
-        work.global_q_start = next_global_chunk;
-        work.global_q_count = chunk_count;
-
-        uint32_t remaining = chunk_count;
-        uint32_t flat_chunk = next_global_chunk;
-        while (remaining > 0) {
-            auto [batch_idx, head_idx, q_chunk_idx] = decode_flat_chunk(flat_chunk);
-            uint32_t chunk_capacity_in_head = num_q_chunks - q_chunk_idx;
-            uint32_t chunk_take = std::min(remaining, chunk_capacity_in_head);
-
-            work.head_work.push_back(CoreHeadWork{
-                .batch = batch_idx,
-                .head = head_idx,
-                .q_chunk_start = q_chunk_idx,
-                .q_chunk_count = chunk_take,
-            });
-
-            if (!head_segments.empty()) {
-                uint32_t head_id = (batch_idx * NH) + head_idx;
-                if (head_id < head_segments.size()) {
-                    head_segments[head_id].push_back(HeadSegmentRef{
-                        .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
-                }
+    {  // Work distribution
+        ZoneScopedN("RingJointSDPA::work_distribution");
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            CoreCoord core = {i % grid_size.x, i / grid_size.x};
+            uint32_t chunk_count = base_chunks_per_core + ((i < extra_chunks) ? 1 : 0);
+            if (next_global_chunk >= total_q_chunks) {
+                chunk_count = 0;
+            } else if (chunk_count > total_q_chunks - next_global_chunk) {
+                chunk_count = total_q_chunks - next_global_chunk;
             }
 
-            remaining -= chunk_take;
-            flat_chunk += chunk_take;
-        }
+            auto& work = core_work.at(i);
+            work.logical_core = core;
+            work.physical_core = device->worker_core_from_logical_core(core);
+            work.global_q_start = next_global_chunk;
+            work.global_q_count = chunk_count;
 
-        next_global_chunk += chunk_count;
-    }
+            uint32_t remaining = chunk_count;
+            uint32_t flat_chunk = next_global_chunk;
+            while (remaining > 0) {
+                auto [batch_idx, head_idx, q_chunk_idx] = decode_flat_chunk(flat_chunk);
+                uint32_t chunk_capacity_in_head = num_q_chunks - q_chunk_idx;
+                uint32_t chunk_take = std::min(remaining, chunk_capacity_in_head);
+
+                work.head_work.push_back(CoreHeadWork{
+                    .batch = batch_idx,
+                    .head = head_idx,
+                    .q_chunk_start = q_chunk_idx,
+                    .q_chunk_count = chunk_take,
+                });
+
+                if (!head_segments.empty()) {
+                    uint32_t head_id = (batch_idx * NH) + head_idx;
+                    if (head_id < head_segments.size()) {
+                        head_segments[head_id].push_back(HeadSegmentRef{
+                            .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
+                    }
+                }
+
+                remaining -= chunk_take;
+                flat_chunk += chunk_take;
+            }
+
+            next_global_chunk += chunk_count;
+        }
+    }  // RingJointSDPA::work_distribution
 
     // Construct chains: for each head that spans >= 2 cores, pick first core
     // with single head segment as injector. Linear forward traversal only —
@@ -813,64 +828,69 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // q_iter_local is inflated by prior-head work, causing deadlock).
     // Injector reselection for DRAM channel spreading is deferred to the
     // mcast eligibility pass below.
-    for (auto& segments : head_segments) {
-        if (segments.size() < 2 || args.is_balanced) {
-            continue;
-        }
-
-        std::optional<std::size_t> chain_start_idx;
-        for (std::size_t idx = 0; idx + 1 < segments.size(); ++idx) {
-            const auto& seg = segments.at(idx);
-            const auto& work = core_work.at(seg.core_idx);
-            if (work.global_q_count == 0) {
+    {  // Chain construction
+        ZoneScopedN("RingJointSDPA::chain_construction");
+        for (auto& segments : head_segments) {
+            if (segments.size() < 2 || args.is_balanced) {
                 continue;
             }
-            if (work.head_work.size() == 1) {
-                chain_start_idx = idx;
-                break;
+
+            std::optional<std::size_t> chain_start_idx;
+            for (std::size_t idx = 0; idx + 1 < segments.size(); ++idx) {
+                const auto& seg = segments.at(idx);
+                const auto& work = core_work.at(seg.core_idx);
+                if (work.global_q_count == 0) {
+                    continue;
+                }
+                if (work.head_work.size() == 1) {
+                    chain_start_idx = idx;
+                    break;
+                }
+            }
+
+            if (!chain_start_idx.has_value()) {
+                continue;
+            }
+
+            const std::size_t start = chain_start_idx.value();
+            for (std::size_t idx = start; idx < segments.size(); ++idx) {
+                const auto& seg = segments.at(idx);
+                const uint32_t core_idx = seg.core_idx;
+                const auto& hw = core_work.at(core_idx).head_work.at(seg.head_work_index);
+                auto& chain = core_chain_info.at(core_idx);
+
+                chain.participates = true;
+                chain.batch = hw.batch;
+                chain.head = hw.head;
+                chain.q_chunk_start = hw.q_chunk_start;
+                chain.q_chunk_count = hw.q_chunk_count;
+
+                if (idx == start) {
+                    chain.is_injector = true;
+                }
+                if (idx == segments.size() - 1) {
+                    chain.is_sink = true;
+                }
+
+                if (idx > start) {
+                    const uint32_t prev_core_idx = segments.at(idx - 1).core_idx;
+                    chain.prev_physical = core_work.at(prev_core_idx).physical_core;
+                }
+                if (idx + 1 < segments.size()) {
+                    const uint32_t next_core_idx = segments.at(idx + 1).core_idx;
+                    chain.next_physical = core_work.at(next_core_idx).physical_core;
+                    const auto& next_hw =
+                        core_work.at(next_core_idx).head_work.at(segments.at(idx + 1).head_work_index);
+                    chain.next_core_q_chunks = next_hw.q_chunk_count;
+                }
             }
         }
-
-        if (!chain_start_idx.has_value()) {
-            continue;
-        }
-
-        const std::size_t start = chain_start_idx.value();
-        for (std::size_t idx = start; idx < segments.size(); ++idx) {
-            const auto& seg = segments.at(idx);
-            const uint32_t core_idx = seg.core_idx;
-            const auto& hw = core_work.at(core_idx).head_work.at(seg.head_work_index);
-            auto& chain = core_chain_info.at(core_idx);
-
-            chain.participates = true;
-            chain.batch = hw.batch;
-            chain.head = hw.head;
-            chain.q_chunk_start = hw.q_chunk_start;
-            chain.q_chunk_count = hw.q_chunk_count;
-
-            if (idx == start) {
-                chain.is_injector = true;
-            }
-            if (idx == segments.size() - 1) {
-                chain.is_sink = true;
-            }
-
-            if (idx > start) {
-                const uint32_t prev_core_idx = segments.at(idx - 1).core_idx;
-                chain.prev_physical = core_work.at(prev_core_idx).physical_core;
-            }
-            if (idx + 1 < segments.size()) {
-                const uint32_t next_core_idx = segments.at(idx + 1).core_idx;
-                chain.next_physical = core_work.at(next_core_idx).physical_core;
-                const auto& next_hw = core_work.at(next_core_idx).head_work.at(segments.at(idx + 1).head_work_index);
-                chain.next_core_q_chunks = next_hw.q_chunk_count;
-            }
-        }
-    }
+    }  // RingJointSDPA::chain_construction
 
     // Third pass: Check multicast eligibility and configure mcast for eligible chains
     uint32_t mcast_chains = 0;
     {
+        ZoneScopedN("RingJointSDPA::mcast_eligibility");
         struct McastCandidate {
             std::vector<uint32_t> core_indices;
             uint32_t ref_q_chunks;
@@ -1059,155 +1079,170 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     reader_compile_time_args[sem_args_offset + 3] = (mcast_chains > 0) ? 1 : 0;
 
     // Create kernels (deferred until after chain construction for mcast_enabled flag)
-    auto reader_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp",
-        core_grid,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
+    KernelHandle reader_kernels_id, writer_kernels_id, compute_kernels_id;
+    {
+        ZoneScopedN("RingJointSDPA::create_kernels");
+        reader_kernels_id = CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp",
+            core_grid,
+            tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
 
-    auto writer_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_writer.cpp",
-        core_grid,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
+        writer_kernels_id = CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_writer.cpp",
+            core_grid,
+            tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
 
-    auto compute_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp",
-        core_grid,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_time_args,
-            .defines = defines});
+        compute_kernels_id = CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp",
+            core_grid,
+            tt::tt_metal::ComputeConfig{
+                .math_fidelity = math_fidelity,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .math_approx_mode = math_approx_mode,
+                .compile_args = compute_compile_time_args,
+                .defines = defines});
+    }  // RingJointSDPA::create_kernels
 
     // Set reader rt args
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = {i % grid_size.x, i / grid_size.x};
+    {
+        ZoneScopedN("RingJointSDPA::set_runtime_args");
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
-        // Prefer the computed even distribution above for chain construction
-        const auto& work = core_work.at(i);
-        uint32_t global_q_start = work.global_q_start;
-        uint32_t global_q_end = work.global_q_start + work.global_q_count;
+            // Prefer the computed even distribution above for chain construction
+            const auto& work = core_work.at(i);
+            uint32_t global_q_start = work.global_q_start;
+            uint32_t global_q_end = work.global_q_start + work.global_q_count;
 
-        // log the above
-        log_debug(tt::LogOp, "core: {}", i);
-        log_debug(tt::LogOp, "x={},y={}", core.x, core.y);
-        log_debug(tt::LogOp, "global_q_start: {}", global_q_start);
-        log_debug(tt::LogOp, "global_q_end: {}", global_q_end);
+            // log the above
+            log_debug(tt::LogOp, "core: {}", i);
+            log_debug(tt::LogOp, "x={},y={}", core.x, core.y);
+            log_debug(tt::LogOp, "global_q_start: {}", global_q_start);
+            log_debug(tt::LogOp, "global_q_end: {}", global_q_end);
 
-        std::vector<uint32_t> reader_args = {
-            q_addr,
-            k_addr,
-            v_addr,
-            gathered_k_addr,
-            gathered_v_addr,
-            joint_q_addr,
-            joint_k_addr,
-            joint_v_addr,
-            global_q_start,
-            global_q_end,
+            std::vector<uint32_t> reader_args = {
+                q_addr,
+                k_addr,
+                v_addr,
+                gathered_k_addr,
+                gathered_v_addr,
+                joint_q_addr,
+                joint_k_addr,
+                joint_v_addr,
+                global_q_start,
+                global_q_end,
+            };
+            // Append chain runtime args for store-and-forward
+            const auto& chain = core_chain_info.at(i);
+
+            log_debug(
+                tt::LogOp,
+                "core logical=({},{})->phys=({},{}), q=[{},{}), chain={{part:{}, inj:{}, sink:{}, "
+                "b:{}, h:{}, q_start:{}, q_cnt:{}, next_cnt:{}}}",
+                core.x,
+                core.y,
+                core_work.at(i).physical_core.x,
+                core_work.at(i).physical_core.y,
+                global_q_start,
+                global_q_end,
+                chain.participates,
+                chain.is_injector,
+                chain.is_sink,
+                chain.batch,
+                chain.head,
+                chain.q_chunk_start,
+                chain.q_chunk_count,
+                chain.next_core_q_chunks);
+
+            reader_args.push_back(static_cast<uint32_t>(chain.participates));
+            reader_args.push_back(static_cast<uint32_t>(chain.is_injector));
+            reader_args.push_back(static_cast<uint32_t>(chain.is_sink));
+            reader_args.push_back(chain.batch);
+            reader_args.push_back(chain.head);
+            reader_args.push_back(chain.q_chunk_start);
+            reader_args.push_back(chain.q_chunk_count);
+            reader_args.push_back(static_cast<uint32_t>(chain.prev_physical.x));
+            reader_args.push_back(static_cast<uint32_t>(chain.prev_physical.y));
+            reader_args.push_back(static_cast<uint32_t>(chain.next_physical.x));
+            reader_args.push_back(static_cast<uint32_t>(chain.next_physical.y));
+            reader_args.push_back(chain.next_core_q_chunks);
+            reader_args.push_back(chain.mcast_num_dests);
+            reader_args.push_back(chain.mcast_sender_wait);
+
+            // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
+            sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_args);
+
+            SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
+
+            // Writer args
+            std::vector<uint32_t> writer_args = {
+                out_addr,
+                joint_out_addr,
+                stats_addr,
+                global_q_start,
+                global_q_end,
+            };
+            sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_args);
+            SetRuntimeArgs(program, writer_kernels_id, core, writer_args);
+
+            // Compute args
+            std::vector<uint32_t> compute_args = {
+                global_q_start,
+                global_q_end,
+            };
+            sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(compute_args);
+            SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
+        }
+    }  // RingJointSDPA::set_runtime_args
+
+    {
+        ZoneScopedN("RingJointSDPA::all_gather_setup");
+        std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> all_gather_fused_op_signaler =
+            ttnn::experimental::ccl::AllGatherFusedOpSignaler();
+
+        all_gather_fused_op_signaler->init_fused_op(
+            sdpa_fused_op_signaler->fused_op_receiver_cores_noc,
+            sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores,
+            sdpa_fused_op_signaler->fused_op_signaler_mode);
+
+        std::vector<Tensor> all_gather_input_tensors = {
+            input_tensor_k,
+            input_tensor_v,
         };
-        // Append chain runtime args for store-and-forward
-        const auto& chain = core_chain_info.at(i);
-
-        log_debug(
-            tt::LogOp,
-            "core logical=({},{})->phys=({},{}), q=[{},{}), chain={{part:{}, inj:{}, sink:{}, "
-            "b:{}, h:{}, q_start:{}, q_cnt:{}, next_cnt:{}}}",
-            core.x,
-            core.y,
-            core_work.at(i).physical_core.x,
-            core_work.at(i).physical_core.y,
-            global_q_start,
-            global_q_end,
-            chain.participates,
-            chain.is_injector,
-            chain.is_sink,
-            chain.batch,
-            chain.head,
-            chain.q_chunk_start,
-            chain.q_chunk_count,
-            chain.next_core_q_chunks);
-
-        reader_args.push_back(static_cast<uint32_t>(chain.participates));
-        reader_args.push_back(static_cast<uint32_t>(chain.is_injector));
-        reader_args.push_back(static_cast<uint32_t>(chain.is_sink));
-        reader_args.push_back(chain.batch);
-        reader_args.push_back(chain.head);
-        reader_args.push_back(chain.q_chunk_start);
-        reader_args.push_back(chain.q_chunk_count);
-        reader_args.push_back(static_cast<uint32_t>(chain.prev_physical.x));
-        reader_args.push_back(static_cast<uint32_t>(chain.prev_physical.y));
-        reader_args.push_back(static_cast<uint32_t>(chain.next_physical.x));
-        reader_args.push_back(static_cast<uint32_t>(chain.next_physical.y));
-        reader_args.push_back(chain.next_core_q_chunks);
-        reader_args.push_back(chain.mcast_num_dests);
-        reader_args.push_back(chain.mcast_sender_wait);
-
-        // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
-        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_args);
-
-        SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
-
-        // Writer args
-        std::vector<uint32_t> writer_args = {
-            out_addr,
-            joint_out_addr,
-            stats_addr,
-            global_q_start,
-            global_q_end,
+        std::vector<Tensor> all_gather_output_tensors = {
+            gathered_input_tensor_k,
+            gathered_input_tensor_v,
         };
-        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_args);
-        SetRuntimeArgs(program, writer_kernels_id, core, writer_args);
+        auto all_gather_shared_variables = ring_attention_all_gather_async_multi_core_with_workers_helper(
+            program,  // Must pass ring_joint_sdpa's program
+            all_gather_input_tensors,
+            coord,
+            forward_coord,
+            backward_coord,
+            all_gather_output_tensors,
+            args.all_gather_operation_attributes.dim,
+            args.all_gather_operation_attributes.num_links,
+            args.all_gather_operation_attributes.ring_size,
+            device_index,
+            args.all_gather_operation_attributes.topology,
+            args.all_gather_operation_attributes.semaphore,
+            args.all_gather_operation_attributes.sub_device_id,
+            all_gather_fused_op_signaler,
+            args.ccl_core_grid_offset,
+            args.all_gather_operation_attributes.core_allocation_strategy);
 
-        // Compute args
-        std::vector<uint32_t> compute_args = {
-            global_q_start,
-            global_q_end,
-        };
-        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(compute_args);
-        SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
-    }
-
-    std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> all_gather_fused_op_signaler =
-        ttnn::experimental::ccl::AllGatherFusedOpSignaler();
-
-    all_gather_fused_op_signaler->init_fused_op(
-        sdpa_fused_op_signaler->fused_op_receiver_cores_noc,
-        sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores,
-        sdpa_fused_op_signaler->fused_op_signaler_mode);
-
-    std::vector<Tensor> all_gather_input_tensors = {
-        input_tensor_k,
-        input_tensor_v,
-    };
-    std::vector<Tensor> all_gather_output_tensors = {
-        gathered_input_tensor_k,
-        gathered_input_tensor_v,
-    };
-    auto all_gather_shared_variables = ring_attention_all_gather_async_multi_core_with_workers_helper(
-        program,  // Must pass ring_joint_sdpa's program
-        all_gather_input_tensors,
-        coord,
-        forward_coord,
-        backward_coord,
-        all_gather_output_tensors,
-        args.all_gather_operation_attributes.dim,
-        args.all_gather_operation_attributes.num_links,
-        args.all_gather_operation_attributes.ring_size,
-        device_index,
-        args.all_gather_operation_attributes.topology,
-        args.all_gather_operation_attributes.semaphore,
-        args.all_gather_operation_attributes.sub_device_id,
-        all_gather_fused_op_signaler,
-        args.ccl_core_grid_offset,
-        args.all_gather_operation_attributes.core_allocation_strategy);
-
-    return cached_program_t{
-        std::move(program),
-        {num_cores, grid_size, reader_kernels_id, writer_kernels_id, compute_kernels_id, all_gather_shared_variables}};
+        return cached_program_t{
+            std::move(program),
+            {num_cores,
+             grid_size,
+             reader_kernels_id,
+             writer_kernels_id,
+             compute_kernels_id,
+             all_gather_shared_variables}};
+    }  // RingJointSDPA::all_gather_setup
 }
 
 void RingJointSDPAProgramFactory::override_runtime_arguments(
@@ -1215,6 +1250,7 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
     const RingJointSDPAParams& args,
     const RingJointSDPAInputs& tensor_args,
     RingJointSDPAResult& output_tensors) {
+    ZoneScopedN("RingJointSDPA::override_runtime_arguments");
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
