@@ -10,7 +10,7 @@ import torch
 import math
 import ttnn
 
-from models.common.utility_functions import comp_pcc, is_blackhole, is_llk_assert_enabled, skip_for_blackhole, skip_for_slow_dispatch
+from models.common.utility_functions import is_blackhole, is_llk_assert_enabled, skip_for_blackhole, skip_for_slow_dispatch
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics
 from ttnn.operations.activations import get_golden_function_for_activation
 
