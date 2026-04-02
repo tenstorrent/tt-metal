@@ -349,9 +349,9 @@ void kernel_main() {
                     ReduceDim::REDUCE_SCALAR,
                     compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    cb_x,
-                    cb_scaler,
-                    cb_ex_partial,
+                    cb_x_id,
+                    cb_scaler_id,
+                    cb_ex_partial_id,
                     compute_kernel_lib::ReduceInputBlockShape::of(out_block_h_actual, block_w));
                 cb_x.pop_front(out_block_hw_normal);
 
@@ -365,9 +365,9 @@ void kernel_main() {
                     ReduceDim::REDUCE_SCALAR,
                     compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    cb_ex_external,
-                    cb_scaler_global,
-                    cb_ex_global,
+                    cb_ex_external_id,
+                    cb_scaler_global_id,
+                    cb_ex_global_id,
                     compute_kernel_lib::ReduceInputBlockShape::col(cb_ex_external_tiles_required));
                 if (num_cores_per_mcast_group > 1) {
                     cb_ex.reserve_back(1);
@@ -481,9 +481,9 @@ void kernel_main() {
                     ReduceDim::REDUCE_SCALAR,
                     compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    cb_xmm,
-                    cb_scaler,
-                    cb_ex2_partial,
+                    cb_xmm_id,
+                    cb_scaler_id,
+                    cb_ex2_partial_id,
                     compute_kernel_lib::ReduceInputBlockShape::of(out_block_h_actual, block_w));
                 cb_xmm.pop_front(out_block_hw_normal);
             }
@@ -495,9 +495,9 @@ void kernel_main() {
                     ReduceDim::REDUCE_SCALAR,
                     compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    cb_ex_external,
-                    cb_scaler_global,
-                    cb_ex2_global,
+                    cb_ex_external_id,
+                    cb_scaler_global_id,
+                    cb_ex2_global_id,
                     compute_kernel_lib::ReduceInputBlockShape::col(cb_ex_external_tiles_required));
                 if (num_cores_per_mcast_group > 1) {
                     cb_ex2.reserve_back(1);
