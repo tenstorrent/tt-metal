@@ -132,7 +132,12 @@ def test_forward_pass(
     )
 
     # Run TTNN forward pass
-    tt_output = run_module_forward(RMSNormClass, mode, tt_input, run_config)
+    if mode == "decode":
+        tt_output = RMSNormClass.forward_decode(
+            tt_input, run_config, memory_config=memory_config, output_memory_config=memory_config
+        )
+    else:
+        tt_output = run_module_forward(RMSNormClass, mode, tt_input, run_config)
 
     # Convert output back to torch
     tt_output_torch = ttnn.to_torch(

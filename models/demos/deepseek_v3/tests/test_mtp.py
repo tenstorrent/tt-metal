@@ -927,8 +927,9 @@ def _decode_step_layerwise_host(
                 }
             )
 
-        x = ttnn.to_memory_config(x, **cfg["norm_reshard"])
-        x = DistributedRMSNorm.forward_decode(x, cfg["norm"])
+        x = DistributedRMSNorm.forward_decode(
+            x, cfg["norm"], **cfg["norm_reshard"], output_memory_config=cfg["norm"]["input_memory_config"]
+        )
         ccl = cfg["lm_head"]["ccl"]
         x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["lm_head"]["all_gather"]))
         logits_tt = LMHead1D.forward_decode(x, cfg["lm_head"])
