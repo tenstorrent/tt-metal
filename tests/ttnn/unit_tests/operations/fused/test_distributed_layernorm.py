@@ -136,9 +136,15 @@ def run_distributed_layernorm(
 inp_shapes = [
     (1, 1, 2048, 8192),
     (1, 1, 128, 8192),
-    (2, 1, 128, 8192),
+    (1, 1, 97, 8192),  # non-32-multiple height
+    (1, 1, 128, 8256),  # non-32-multiple width
 ]
-inp_shape_ids = ["inp_shape0", "inp_shape1", "inp_shape2"]
+inp_shape_ids = [
+    "inp_shape0",
+    "inp_shape1",
+    "inp_shape2",
+    "inp_shape3",
+]  # fourth id is for non-32-multiple width/height
 
 stats_dtypes = [ttnn.bfloat16, ttnn.bfloat8_b]
 stats_dtypes_ids = ["BFLOAT16_stats", "BFLOAT8_B_stats"]

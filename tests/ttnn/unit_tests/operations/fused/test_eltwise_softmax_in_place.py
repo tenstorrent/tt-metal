@@ -9,6 +9,7 @@ import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
+# Interleaved L1/DRAM only here — no L1 height/width shard spec; softmax dim can be non–32 with pad + fill.
 TEST_PADDING_VALUE = -42
 
 
@@ -67,6 +68,13 @@ test_sweep_args = [
         ttnn.TILE_LAYOUT,
         ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         16305027,
+    ),
+    (
+        (1, 1, 32, 97),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        9001,
     ),
 ]
 

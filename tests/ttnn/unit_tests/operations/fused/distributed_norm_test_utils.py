@@ -190,13 +190,17 @@ def compute_ttnn_distributed_norm(
     hidden_dim = torch_weight.shape[0]
     num_mesh_devices = mesh_device.get_num_devices()
 
-    # Convert to TTNN tensors
+    # Convert to TTNN tensors (pad_value + fill: #31982)
+    from_torch_kw = {}
+    if implicit_tile_padding_value is not None:
+        from_torch_kw["pad_value"] = implicit_tile_padding_value
     ttnn_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        **from_torch_kw,
     )
     if implicit_tile_padding_value is not None:
         ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, implicit_tile_padding_value)

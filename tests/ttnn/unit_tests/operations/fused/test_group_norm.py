@@ -17,6 +17,9 @@ from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import s
 
 welford_flavors, welford_ids = (True, False), ("welford", "legacy")
 
+# Activations: fill_implicit_tile_padding (#31982) on all paths below; TILE from_torch also uses pad_value.
+# ttnn.from_torch(..., pad_value=...) is honored only for TILE_LAYOUT (see ttnn.from_torch docstring).
+# L1/BLOCK/HEIGHT-sharded ROW_MAJOR activations: poison via fill after shard; gamma/beta/masks unpadded.
 TEST_PADDING_VALUE = -42
 
 
