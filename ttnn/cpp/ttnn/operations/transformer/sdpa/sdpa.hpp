@@ -154,8 +154,4 @@ ttnn::Tensor ring_distributed_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& page_table = std::nullopt,
     std::optional<int64_t> chunk_start_idx = std::nullopt);
 
-constexpr auto exp_ring_joint_scaled_dot_product_attention = ttnn::register_operation<
-    "ttnn::transformer::exp_ring_joint_scaled_dot_product_attention",
-    ttnn::transformer::ExecuteExpRingJointAttention>();
-
 }  // namespace ttnn::transformer
