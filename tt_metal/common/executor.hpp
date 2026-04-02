@@ -8,12 +8,9 @@
 #include <pthread.h>
 #include <unistd.h>
 #endif
-// Include LSan interface only when a sanitizer that provides __lsan_ignore_object
-// is actually active.  __has_include is insufficient — the header ships with the
-// Clang toolchain and is present even in non-sanitizer builds, which causes
-// __lsan_ignore_object to be declared but not linked (undefined symbol at link time).
-// __has_feature(leak_sanitizer) / __has_feature(address_sanitizer) are Clang's
-// compile-time predicates; __SANITIZE_ADDRESS__ / __SANITIZE_LEAK__ cover GCC.
+// Include LSan interface only when present
+// __has_feature(leak_sanitizer) / __has_feature(address_sanitizer) for clang
+// compile-time predicates; __SANITIZE_ADDRESS__ / __SANITIZE_LEAK__ for gcc
 #if (defined(__has_feature) && (__has_feature(leak_sanitizer) || __has_feature(address_sanitizer))) || \
     defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_LEAK__)
 #define TT_LSAN_ACTIVE 1
@@ -52,6 +49,13 @@ inline Executor& GetExecutor() {
     // and synchronization primitives inherited from the parent are in an
     // indeterminate state post-fork, and calling the destructor would deadlock
     // or crash.  The same pattern is used by jemalloc and glibc malloc.
+    //
+    // The leak is bounded: it exists only in the child process for the
+    // child's lifetime.  The kernel reclaims all memory when the child
+    // exits.  The parent heap is unaffected -- the child's assignment to
+    // exec happens in the child's private copy-on-write address space.
+    // The Executor holds no OS resources (no FDs, no shared memory, no
+    // GPU handles), so no handles are stranded.
     static Executor* exec = [] {
         auto* e = new Executor(EXECUTOR_NTHREADS);
         std::atexit([] {
@@ -67,42 +71,24 @@ inline Executor& GetExecutor() {
                 // here rather than aborting because fork() is sometimes called
                 // from paths the application cannot control (e.g. Python's
                 // subprocess fallback from posix_spawn).
-                // Cache num_topologies() once — avoids calling it twice with internal
-                // synchronization in this constrained atfork context.
                 const auto num_topologies = exec ? exec->num_topologies() : 0;
                 if (num_topologies != 0) {
-                    // Use write(2) instead of fprintf: write() is async-signal-safe,
-                    // fprintf is not (it may acquire internal stdio locks).
+                    // Use write because it is async-signal-safe,
                     char buf[128];
-                    int n = snprintf(
+                    int n = std::snprintf(
                         buf,
                         sizeof(buf),
                         "WARNING: fork() called while executor has in-flight work "
                         "(num_topologies=%zu). This may cause hangs in the child process.\n",
                         num_topologies);
                     if (n > 0) {
-                        (void)write(STDERR_FILENO, buf, static_cast<size_t>(n));
+                        ::write(STDERR_FILENO, buf, static_cast<size_t>(n));
                     }
                 }
             },
             /*parent=*/nullptr,
             /*child=*/
             [] {
-                // The parent's threads are gone in the child; replace with a
-                // fresh Executor.  Intentionally leak the old one -- its
-                // internal state (mutexes, threads) is invalid post-fork and
-                // destroying it would deadlock or crash.  This is the canonical
-                // approach for fork-unsafe objects (same pattern used by jemalloc
-                // and glibc malloc): run a lightweight reinit in the child handler
-                // rather than invoking destructors on indeterminate state.
-                //
-                // The leak is bounded: it exists only in the child process for the
-                // child's lifetime.  The kernel reclaims all memory when the child
-                // exits.  The parent heap is unaffected -- the child's assignment to
-                // exec happens in the child's private copy-on-write address space.
-                // The Executor holds no OS resources (no FDs, no shared memory, no
-                // GPU handles), so no handles are stranded.
-                //
                 // Suppress the leak report in ASan/LSan builds so it is not
                 // flagged as unintentional.
 #ifdef TT_LSAN_ACTIVE
