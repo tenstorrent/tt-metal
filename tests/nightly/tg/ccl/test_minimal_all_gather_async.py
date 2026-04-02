@@ -251,7 +251,7 @@ def test_all_gather_deepseek(
         (
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "reliability_mode": ttnn.FabricReliabilityMode.STRICT_INIT,
                 "trace_region_size": 190112,
             },
             ttnn.Topology.Linear,
