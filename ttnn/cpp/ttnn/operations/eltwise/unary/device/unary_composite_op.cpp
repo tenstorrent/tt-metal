@@ -475,10 +475,13 @@ Tensor triu(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfi
     return ttnn::multiply(input_a, index_u, std::nullopt, output_mem_config);
 }
 
-// polygamma: ψ^(n)(x) = (-1)^(n+1) * n! * Σ_{k=0}^{10} 1/(x+k)^(n+1)
-// Fused SFPU kernel path — single kernel dispatch instead of 11+ composite ops
+// polygamma ψ^(n)(x): implemented via a fused SFPU kernel using a finite-sum + tail approximation.
+// The kernel evaluates (-1)^(n+1) * n! * Σ_{k=0}^{10} 1/(x + k)^(n+1) and applies an Euler–Maclaurin
+// tail correction term to approximate the infinite remainder Σ_{k=11}^{∞} 1/(x + k)^(n+1), rather than
+// performing a hard truncation at k = 10. This is a single kernel dispatch instead of 11+ composite ops.
 Tensor polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_FATAL(k >= 1 && k <= 10, "polygamma order must be in range [1, 10], got {}", k);
+    // Range includes k=11 to support polygamma_bw which computes polygamma(input, n+1)
+    TT_FATAL(k >= 1 && k <= 11, "polygamma order must be in range [1, 11], got {}", k);
     float n = static_cast<float>(k);
     float fact_val = std::tgamma(1.0f + k);       // k!
     float pos_neg = (k % 2 == 0) ? -1.0f : 1.0f;  // (-1)^(k+1)

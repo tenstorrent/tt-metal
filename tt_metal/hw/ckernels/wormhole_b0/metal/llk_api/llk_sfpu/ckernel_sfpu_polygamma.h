@@ -22,9 +22,12 @@ namespace ckernel::sfpu {
  * This dramatically improves accuracy vs plain truncation (e.g. trigamma
  * max ULP drops from ~108 to ~1).
  *
- * Tail at z = x + NUM_TERMS:
- *   tail = 1/(n·z^n) + 1/(2·z^(n+1)) + (n+1)/(12·z^(n+2))
- *          - (n+1)(n+2)(n+3)/(720·z^(n+4))
+ * Tail at z = x + NUM_TERMS (Euler-Maclaurin remainder with B₂, B₄, B₆ corrections):
+ *   tail = 1/(n·z^n) + 1/(2·z^(n+1)) + B₂·(n+1)/(z^(n+2))
+ *          + B₄·(n+1)(n+2)(n+3)/(z^(n+4))
+ *          + B₆·(n+1)(n+2)(n+3)(n+4)(n+5)/(z^(n+6))
+ * where B₂=1/6, B₄=-1/30, B₆=1/42 are Bernoulli numbers, giving coefficients
+ *   (n+1)/12, -(n+1)(n+2)(n+3)/720, (n+1)(n+2)(n+3)(n+4)(n+5)/30240
  *
  * Parameters are passed as bit-cast uint32_t values:
  *   n_packed:     order n (as float bits)
