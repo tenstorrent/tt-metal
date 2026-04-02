@@ -9,6 +9,10 @@ TTNNVitModel, TTNNDeepseekV2MoE, and leaf-op replacements.
 All major modules run on device.
 """
 
+import os
+import shutil
+from datetime import datetime
+
 import torch
 from torch import nn
 from transformers import AutoModel, AutoTokenizer
@@ -88,7 +92,7 @@ def test_deepseek_ocr(device):
 
     prompt = "<image>\n<|grounding|>Convert the document to markdown. "
     image_file = "test.png"
-    output_path = "output_deepseek_ocr/"
+    output_path = os.path.join(os.path.dirname(__file__), "output_deepseek_ocr")
 
     modules1 = register_module_replacement_dict(model, nn_to_nn, model_config=None)
     modules2 = register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
@@ -123,5 +127,17 @@ def test_deepseek_ocr(device):
         test_compress=True,
         eval_mode=True,
     )
-    DispatchManager.save_stats_to_file("deepseek_ocr_timing_stats.csv")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = os.path.join(output_path, f"run_{timestamp}")
+    os.makedirs(run_dir, exist_ok=True)
+
+    DispatchManager.save_stats_to_file(os.path.join(run_dir, f"timing_stats_{timestamp}.csv"))
+
+    with open(os.path.join(run_dir, "ocr_output.md"), "w") as f:
+        f.write(res)
+
+    if os.path.exists(image_file):
+        shutil.copy2(image_file, os.path.join(run_dir, os.path.basename(image_file)))
+
+    print(f"\nResults saved to {run_dir}/")
     print(res)
