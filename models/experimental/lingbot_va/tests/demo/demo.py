@@ -341,7 +341,9 @@ def _load_models_phase1(config, load_text_encoder=True, mesh_device=None):
 
     Args:
         mesh_device: Optional pre-opened mesh (e.g. pytest ``mesh_device``). When ``None``, opens a mesh
-            via ``_open_lingbot_mesh_device`` and applies ``inference_work_mesh_from_opened``.
+            via ``_open_lingbot_mesh_device``. In both cases ``inference_work_mesh_from_opened`` is applied
+            so ``LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH=1`` yields a ``(1,1)`` submesh when the open mesh
+            has more than one device.
     """
     init_logger()
     device = torch.device("cpu")
@@ -353,12 +355,12 @@ def _load_models_phase1(config, load_text_encoder=True, mesh_device=None):
         opened_mesh = _open_lingbot_mesh_device()
         mesh_device, mesh_parent = inference_work_mesh_from_opened(opened_mesh)
     else:
-        mesh_parent = None
+        mesh_device, mesh_parent = inference_work_mesh_from_opened(mesh_device)
     rows, cols = tuple(mesh_device.shape)
     if mesh_parent is not None:
         logger.info(
             "LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH: using (1,1) submesh inside %s-device open.",
-            opened_mesh.get_num_devices(),
+            mesh_parent.get_num_devices(),
         )
     elif mesh_device.get_num_devices() > 1:
         logger.info(
@@ -588,12 +590,6 @@ def _encode_prompt_ttnn(
             max_sequence_length=max_sequence_length,
         )
     return prompt_embeds, negative_prompt_embeds
-
-
-# def _normalize_latents(latents, latents_mean, latents_std):
-#     latents_mean = latents_mean.view(1, -1, 1, 1, 1).to(device=latents.device)
-#     latents_std = latents_std.view(1, -1, 1, 1, 1).to(device=latents.device)
-#     return ((latents.float() - latents_mean) * latents_std).to(latents.dtype)
 
 
 def _postprocess_action(models, state, action):
@@ -1034,6 +1030,24 @@ def _reset_state(models, state, prompt):
     else:
         prompt_list = [prompt] if isinstance(prompt, str) else prompt
         if state.get("_prompt_embeds_prompt") != prompt_list or "prompt_embeds" not in state:
+            if models.get("text_encoder") is not None:
+                _free_tt_model(models, "text_encoder")
+            _load_text_encoder_into_models(models, config)
+            tokenizer = models["tokenizer"]
+            text_encoder = models["text_encoder"]
+            text_inputs = tokenizer(
+                prompt,
+                padding="max_length",
+                max_length=512,
+                truncation=True,
+                add_special_tokens=True,
+                return_attention_mask=True,
+                return_tensors="pt",
+            )
+            text_input_ids, mask = text_inputs.input_ids, text_inputs.attention_mask
+            enc_mesh = text_encoder.mesh_device
+            tt_input = ttnn.from_torch(text_input_ids, dtype=ttnn.uint32, device=enc_mesh)
+            tt_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat16, device=enc_mesh)
             prompt_embeds, negative_prompt_embeds = _encode_prompt_ttnn(
                 models,
                 tt_input,
@@ -1044,6 +1058,7 @@ def _reset_state(models, state, prompt):
             state["prompt_embeds"] = prompt_embeds
             state["negative_prompt_embeds"] = negative_prompt_embeds
             state["_prompt_embeds_prompt"] = prompt_list
+            _free_tt_model(models, "text_encoder")
 
 
 def _infer_impl(models, state, obs, frame_st_id=0):
