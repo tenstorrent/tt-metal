@@ -34,7 +34,9 @@ Read all phase 1 outputs. Produced API design with function signatures, type sys
 | 2 | C++ integration tests (12 feature combination tests) |
 | 3 | Production kernel migration + full regression |
 
-### Phase 4 — Extend Coverage (2 instances)
+### Phase 4 — Extend Coverage (2 instances, unplanned)
+
+Added after phase 3 to close gaps identified during implementation — matmul_tile for the tile-by-tile pattern and PreKBlockFn to eliminate inline code duplication. This phase was not in the original orchestration doc, which led to less structured coordination.
 
 | Instance | Task |
 |----------|------|
@@ -65,7 +67,7 @@ A final session reviewed peer feedback, removed matmul_tile (abysmal perf), answ
 - **Phase 3 ordering dependencies**: Instance 3 (migration) needed instances 1+2 (helpers + tests) done first. This required manual coordination and serialized part of the "parallel" phase.
 - **matmul_tile built then removed**: Phase 4 instance 1 built a complete helper that was cut after peer review. The orchestration doc could have flagged this as needing external validation before implementation.
 - **High artifact-to-PR ratio**: 11 analysis/design/results files (~5,300 lines) were generated and ultimately discarded. The analysis was necessary to arrive at the right design, but someone replicating this should expect this ratio.
-- **Stale base branch**: The orchestration ran over several days. By the time CI ran, the base branch was 231 commits behind main with conflicting API migrations. Earlier CI validation would have caught this.
+- **Incomplete local test coverage**: Claude ran local tests after each phase (C++ integration tests + Python matmul unit tests), but chose a representative subset rather than exhaustive testing. CI later caught failures that local testing missed — meaning Claude either failed to identify all applicable tests or opted for speed over completeness. The local tests passed, creating false confidence.
 
 ## Claude's Assessment
 
@@ -75,5 +77,5 @@ A final session reviewed peer feedback, removed matmul_tile (abysmal perf), answ
 
 - **Gate implementation on external review.** Phase 2's design doc should have been reviewed by peers before phase 3 started. The matmul_tile removal and bias_add questions from reviewers could have been caught earlier, saving a full phase of wasted work.
 - **Reduce phases.** Phases 1 and 2 could merge — one instance can analyze and design. The analysis files were useful as intermediate artifacts but a single instance with the right prompt could have produced the design directly. This would cut the calendar time roughly in half.
-- **Run CI earlier.** A build check after phase 3 (before phase 4) would have surfaced the stale base branch problem days earlier.
+- **Better local test selection.** Claude chose a representative test subset for speed, but missed tests that CI caught. Either the orchestration doc should specify which test suites to run, or Claude should be explicitly told to prioritize completeness over speed for validation phases. A full test run may take longer but avoids false confidence from a passing subset.
 - **Fewer, larger instances over more, smaller ones.** The 4-instance phase 1 was clean parallelism, but phase 3's 3 instances had dependencies that made coordination overhead outweigh the parallelism benefit. Two instances (helpers+tests combined, migration separate) would have been simpler.
