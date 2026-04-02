@@ -453,7 +453,7 @@ def test_group_attn_matmul_fp32(
 
 @pytest.mark.use_module_device
 @pytest.mark.parametrize(
-    "batch, K,seq_len, q_heads, kv_heads",
+    "batch, K, seq_len, q_heads, kv_heads",
     [
         pytest.param(32, 128, 96, 32, 4, id="b32-K128-s96-q32-kv4"),
         pytest.param(32, 64, 128, 16, 2, id="b32-K64-s128-q16-kv2"),
@@ -523,10 +523,6 @@ def test_group_attn_matmul_with_program_cache_exhaustive(
     in1_dtype = ttnn.bfloat16
     output_dtype = ttnn.bfloat16
 
-    num_cores_required = max(q_heads, 32)
-    if compute_grid.x * compute_grid.y < num_cores_required:
-        pytest.skip("compute grid too small for q_heads / minimum 32 cores")
-
     interleaved_input_mem = ttnn.DRAM_MEMORY_CONFIG if input_buffer_type == "dram" else ttnn.L1_MEMORY_CONFIG
     dram_interleaved = ttnn.DRAM_MEMORY_CONFIG
 
@@ -537,13 +533,11 @@ def test_group_attn_matmul_with_program_cache_exhaustive(
         pytest.skip("orientation is unused, dupilcate test")
 
     q_len = 1
-    TILE_SIZE = 32
-
     if in0_sharded:
-        if (q_len * batch) % TILE_SIZE != 0 or K % TILE_SIZE != 0:
+        if (q_len * batch) % ttnn.TILE_SIZE != 0 or K % ttnn.TILE_SIZE != 0:
             pytest.skip("Input 0 shard not supported")
     if in1_sharded:
-        if (kv_heads * K) % TILE_SIZE != 0 or seq_len % TILE_SIZE != 0:
+        if (kv_heads * K) % ttnn.TILE_SIZE != 0 or seq_len % ttnn.TILE_SIZE != 0:
             pytest.skip("Input 1 shard not supported")
 
     input_shape_a = [q_len, q_heads, batch, K]
@@ -711,7 +705,6 @@ def test_attn_matmul_with_program_cache_exhaustive(
 
     q_len = 1
     kv_heads = 1
-    TILE_SIZE = 32
 
     if cache_mode == "standard":
         assert from_cache_num_tokens is None
@@ -725,19 +718,19 @@ def test_attn_matmul_with_program_cache_exhaustive(
 
     if in0_sharded:
         a_k = n_round if cache_mode == "from_cache_post" else K
-        if (q_len * batch) % TILE_SIZE != 0 or a_k % TILE_SIZE != 0:
+        if (q_len * batch) % ttnn.TILE_SIZE != 0 or a_k % ttnn.TILE_SIZE != 0:
             pytest.skip("input 0 shard not supported for this shape")
 
     if in1_sharded:
         if cache_mode == "standard":
-            if (kv_heads * K) % TILE_SIZE != 0 or seq_len % TILE_SIZE != 0:
+            if (kv_heads * K) % ttnn.TILE_SIZE != 0 or seq_len % ttnn.TILE_SIZE != 0:
                 pytest.skip("input 1 shard not supported for standard layout")
         elif cache_mode == "from_cache_pre":
-            if (kv_heads * seq_len) % TILE_SIZE != 0 or K % TILE_SIZE != 0:
+            if (kv_heads * seq_len) % ttnn.TILE_SIZE != 0 or K % ttnn.TILE_SIZE != 0:
                 pytest.skip("input 1 shard not supported for from_cache_pre layout")
         elif cache_mode == "from_cache_post":
             cache_dim = _attn_align_up(max(n_round, K, seq_len))
-            if cache_dim % TILE_SIZE != 0 or seq_len % TILE_SIZE != 0:
+            if cache_dim % ttnn.TILE_SIZE != 0 or seq_len % ttnn.TILE_SIZE != 0:
                 pytest.skip("input 1 shard not supported for from_cache_post layout")
 
     if cache_mode == "from_cache_post":
