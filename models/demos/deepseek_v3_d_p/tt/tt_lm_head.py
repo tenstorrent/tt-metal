@@ -153,5 +153,31 @@ class TtLMHead(LightweightModule):
         Returns:
             Logits tensor [batch, seq_len, vocab_size]
         """
-        output = ttnn.matmul(x, self.weight, compute_kernel_config=self.compute_kernel_config)
+        logger.debug(f"[TtLMHead.forward] INPUT SHAPES:")
+        logger.debug(f"  x.shape={x.shape}")
+
+        # ========================================
+        # Step 0: All-gather x to get full emb_dim (replicated across TP axis)
+        # ========================================
+        # Input x is sharded: (dispatch_group_size/axis0, seq_len_per_chip, emb_dim/axis1)
+        # Both shared_expert and dispatch need full emb_dim, so all-gather first
+        # Only needed if there are multiple devices in TP axis (axis 1)
+        if self.mesh_device.shape[1] > 1:
+            x_full = ttnn.all_gather(
+                x,
+                dim=-1,  # Gather along emb_dim
+                cluster_axis=1,  # Gather across axis 1 (TP axis)
+                num_links=self.num_links,
+                topology=self.topology,
+            )
+        else:
+            x_full = x  # No TP sharding, x already has full emb_dim
+        logger.debug(f"[TtLMHead.forward] x_full (after all_gather) shape: {x_full.shape}")
+
+        # ========================================
+        # Step 1: Local matmul with sharded weight
+        # ========================================
+        output = ttnn.matmul(x_full, self.weight, compute_kernel_config=self.compute_kernel_config)
+        logger.debug(f"[TtLMHead.forward] output (after matmul) shape: {output.shape}")
+
         return output

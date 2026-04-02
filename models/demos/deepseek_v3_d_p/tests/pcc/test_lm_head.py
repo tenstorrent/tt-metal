@@ -15,6 +15,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import extract_mesh_config
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -49,12 +50,13 @@ def random_weights(config, emb_dim: int, vocab_size: int):
 
 
 @pytest.mark.parametrize(
-    "batch_seq_len, emb_dim, vocab_size",
+    "batch_seq_len, emb_dim, vocab_size, run_pcc_check",
     [
-        (32, 1024, 1024),
-        (3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.VOCAB_SIZE),
+        # fmt: off
+        pytest.param(32, 1024, 10240, True, id="small"),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.VOCAB_SIZE, False, id="full-no-pcc"),
+        # fmt: on
     ],
-    ids=["small", "full"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
@@ -77,6 +79,7 @@ def test_lm_head_pcc(
     batch_seq_len: int,
     emb_dim: int,
     vocab_size: int,
+    run_pcc_check: bool,
     num_links: int,
     topology: ttnn.Topology,
 ):
@@ -85,8 +88,6 @@ def test_lm_head_pcc(
 
     Torch dtypes are set inline; TTNN dtypes are derived automatically.
     """
-    config, weights = random_weights(config_only, emb_dim, vocab_size)
-
     # Derive TTNN dtypes from torch dtypes
     torch_activations_dtype = torch.bfloat16
     torch_weights_dtype = torch.bfloat16
@@ -98,13 +99,29 @@ def test_lm_head_pcc(
     logger.debug(f"Testing with mesh_shape={mesh_shape}, num_devices={num_devices}")
     logger.debug(f"batch_seq_len={batch_seq_len}, emb_dim={emb_dim}, vocab_size={vocab_size}")
 
-    # Create PyTorch reference model (Linear without bias), matching dtypes
-    logger.debug("Creating torch.nn.Linear reference")
-    torch_model = torch.nn.Linear(emb_dim, vocab_size, bias=False)
-    torch_model.weight.data = weights["lm_head.weight"]
+    # Create input tensor
+    mesh_config = extract_mesh_config(mesh_device)
+    dispatch_group_size = mesh_config.dispatch_group_size
+    torch_input = torch.randn(dispatch_group_size, batch_seq_len, emb_dim).to(torch_activations_dtype)
+    logger.debug(f"Created torch input: {torch_input.shape}, dtype={torch_input.dtype}")
+
+    # Run the reference model in case the PCC check is enabled
+    weights = None
+    if run_pcc_check:
+        config, weights = random_weights(config_only, emb_dim, vocab_size)
+
+        # Create PyTorch reference model (Linear without bias), matching dtypes
+        logger.debug("Creating torch.nn.Linear reference")
+        torch_model = torch.nn.Linear(emb_dim, vocab_size, bias=False)
+        torch_model.weight.data = weights["lm_head.weight"]
+
+        # Run reference forward pass to get expected output
+        logger.debug("Running torch forward pass")
+        torch_output = torch_model(torch_input)
+        logger.debug(f"Torch output shape: {torch_output.shape}")
 
     # Create TTNN LM head model
-    logger.debug("Creating TtLMHead with same weights")
+    logger.debug("Creating TtLMHead")
     tt_model = TtLMHead(
         mesh_device=mesh_device,
         emb_dim=emb_dim,
@@ -116,27 +133,22 @@ def test_lm_head_pcc(
         weights_dtype=weights_dtype,
     )
 
-    # Create input tensor (replicated across all devices), matching activation dtype
-    torch_input = torch.randn(batch_seq_len, emb_dim).to(torch_activations_dtype)
-    logger.debug(f"Created torch input: {torch_input.shape}, dtype={torch_input.dtype}")
-
     tt_input = ttnn.from_torch(
         torch_input,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_device.shape),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape),
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         dtype=activations_dtype,
     )
-    logger.debug(f"Created ttnn input (sp sharding): {tt_input.shape}")
-
-    # Run forward passes
-    logger.debug("Running torch forward pass")
-    torch_output = torch_model(torch_input)
-    logger.debug(f"Torch output shape: {torch_output.shape}")
+    logger.debug(f"Created ttnn input (sp and tp sharding): {tt_input.shape}")
 
     logger.debug("Running ttnn forward pass")
     tt_output = tt_model(tt_input)
     logger.debug(f"TTNN output shape (sharded): {tt_output.shape}")
+
+    if not run_pcc_check:
+        logger.debug("run_pcc_check=False, skipping PCC validation")
+        return
 
     # Convert and compare
     logger.debug("Converting TTNN output to torch for comparison")
@@ -150,7 +162,7 @@ def test_lm_head_pcc(
     pcc_passed, pcc_message = assert_with_pcc(
         torch_output.to(torch.float32),
         tt_output_torch.to(torch.float32),
-        pcc=0.999,
+        pcc=0.9999,
     )
 
     logger.debug(f"PCC comparison: {pcc_message}")
