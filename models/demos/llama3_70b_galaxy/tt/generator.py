@@ -151,6 +151,8 @@ class Generator(WarmupForwardMixin):
         self.trace_inputs_prefill = defaultdict(lambda: None)
         self.trace_output_prefill = defaultdict(lambda: None)
         # Create persistent buffer for accumulated logits (used for on-device sampling)
+        # It is important that this buffer is allocated before we record any traces,
+        # so that it cannot be corrupted by traced execution.
         self.tt_logits_accumulated = [
             ttnn.from_torch(
                 torch.zeros(1, 1, 1, self.model.args.padded_vocab_size // self.model_args.cluster_shape[0]),

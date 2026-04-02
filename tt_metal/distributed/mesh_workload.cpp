@@ -159,8 +159,10 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
             ReplicatedBufferConfig global_kernel_bin_buf_config = {
                 .size = max_kernel_bin_buf_size,
             };
+            mesh_device->suppress_unsafe_allocation_warning();
             kernel_bin_buf_ =
                 MeshBuffer::create(global_kernel_bin_buf_config, device_local_kernel_bin_buf_config, mesh_device);
+            mesh_device->unsuppress_unsafe_allocation_warning();
             // Iterate over the sub-grids and EnqueueWriteMeshBuffer to each sub-grid that runs an individual program
             for (auto& [device_range, program] : this->programs_) {
                 std::size_t kernel_bin_size =
