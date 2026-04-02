@@ -30,6 +30,13 @@ def get_mesh_device():
     return mesh_config
 
 
+def disable_persistent_kernel_cache() -> None:
+    """No-op: persistent kernel cache enable/disable was removed from the runtime.
+
+    Kept so demos and tests that call this at startup continue to import and run.
+    """
+
+
 ### Math operations ###
 def _nearest_32(x):
     return math.ceil(x / 32) * 32
