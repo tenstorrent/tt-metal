@@ -26,8 +26,8 @@ from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.micro_ops.ccl_all_reduce.op import DeepseekMinimalAllReduce
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
 
-TEST_SENDER_CORE = ttnn.CoreCoord(10, 9)
-TEST_RECEIVER_CORE = ttnn.CoreCoord(11, 9)
+TEST_SENDER_CORE = ttnn.CoreCoord(0, 0)
+TEST_RECEIVER_CORE = ttnn.CoreCoord(0, 1)
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
