@@ -210,28 +210,46 @@ class MLP(LightweightModule):
                     num_buffers_per_channel=2,
                 )
             else:
-                # NOTE: In MLP All-reduce hard codes to 2 links, so we do not get the dynamic link count from the CCL class
-                # to avoid any performance regressions.
-                w1_out = tt_all_reduce(
-                    w1_out,
-                    self.mesh_device,
-                    self.tt_ccl,
-                    cluster_axis=1,
-                    num_all_gather_links=2,
-                    sharded=True if mode == Mode.DECODE else False,
-                    topology=self.args.ccl_topology(),
-                    memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == Mode.DECODE else None,
-                )
-                w3_out = tt_all_reduce(
-                    w3_out,
-                    self.mesh_device,
-                    self.tt_ccl,
-                    cluster_axis=1,
-                    num_all_gather_links=2,
-                    sharded=True if mode == Mode.DECODE else False,
-                    topology=self.args.ccl_topology(),
-                    memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == Mode.DECODE else None,
-                )
+                # Fuse FF1 and FF3 all-reduces: concat → single all-reduce → split
+                # Saves one full CCL round-trip per layer (64 fewer all-reduces total)
+                if mode == Mode.DECODE and not TG:
+                    w1_w3_cat = ttnn.concat([w1_out, w3_out], dim=3)
+                    ttnn.deallocate(w1_out)
+                    ttnn.deallocate(w3_out)
+                    w1_w3_cat = tt_all_reduce(
+                        w1_w3_cat,
+                        self.mesh_device,
+                        self.tt_ccl,
+                        cluster_axis=1,
+                        num_all_gather_links=2,
+                        sharded=False,
+                        topology=self.args.ccl_topology(),
+                    )
+                    split_size = w1_w3_cat.shape[-1] // 2
+                    w1_out = w1_w3_cat[:, :, :, :split_size]
+                    w3_out = w1_w3_cat[:, :, :, split_size:]
+                    ttnn.deallocate(w1_w3_cat)
+                else:
+                    w1_out = tt_all_reduce(
+                        w1_out,
+                        self.mesh_device,
+                        self.tt_ccl,
+                        cluster_axis=1,
+                        num_all_gather_links=2,
+                        sharded=True if mode == Mode.DECODE else False,
+                        topology=self.args.ccl_topology(),
+                        memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == Mode.DECODE else None,
+                    )
+                    w3_out = tt_all_reduce(
+                        w3_out,
+                        self.mesh_device,
+                        self.tt_ccl,
+                        cluster_axis=1,
+                        num_all_gather_links=2,
+                        sharded=True if mode == Mode.DECODE else False,
+                        topology=self.args.ccl_topology(),
+                        memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == Mode.DECODE else None,
+                    )
 
         w2_in = ttnn.mul(
             w1_out,
