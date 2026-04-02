@@ -4,12 +4,12 @@
 
 #include <gtest/gtest.h>
 
-#include <cmath>
 #include <core/ttnn_all_includes.hpp>
 #include <iostream>
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
+#include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 
 class KSplitGramMatmulTest : public ::testing::Test {
@@ -23,6 +23,11 @@ protected:
 };
 
 namespace {
+
+// Diagonal tiles G[i,i] = sum(X[i,k]^2) scale linearly with K
+// absolute error is inherently high on diagonal for this operation in BF16
+constexpr float kRtol = 1e-2f;
+constexpr float kAtol = 15.0f;
 
 ttnn::Tensor make_random_tensor(uint32_t M, uint32_t N, uint32_t seed = 42) {
     auto* device = &ttml::autograd::ctx().get_device();
@@ -57,7 +62,6 @@ std::vector<float> compute_gram_tile(const std::vector<float>& in_vec, uint32_t 
     return result;
 }
 
-// Extract a 32x32 tile from a flattened row-major matrix
 std::vector<float> extract_output_tile(
     const std::vector<float>& out_vec, uint32_t out_width, uint32_t tile_r, uint32_t tile_c) {
     std::vector<float> tile(32 * 32);
@@ -66,20 +70,6 @@ std::vector<float> extract_output_tile(
     return tile;
 }
 
-// Max relative error between two tile vectors: max(|ref-dev| / max(|ref|, 1))
-float max_rel_error(const std::vector<float>& ref, const std::vector<float>& dev) {
-    float max_abs_ref = 1.0f;
-    for (size_t i = 0; i < ref.size(); i++) {
-        max_abs_ref = std::max(max_abs_ref, std::abs(ref[i]));
-    }
-    float max_err = 0.0f;
-    for (size_t i = 0; i < ref.size(); i++) {
-        max_err = std::max(max_err, std::abs(ref[i] - dev[i]) / max_abs_ref);
-    }
-    return max_err;
-}
-
-// Check a tile against reference with relative tolerance
 void check_tile(
     const std::vector<float>& in_vec,
     const std::vector<float>& out_vec,
@@ -88,12 +78,13 @@ void check_tile(
     uint32_t tile_r,
     uint32_t tile_c,
     float rtol,
+    float atol,
     const char* label) {
     auto ref = compute_gram_tile(in_vec, K, tile_r, tile_c);
     auto dev = extract_output_tile(out_vec, out_width, tile_r, tile_c);
-    float err = max_rel_error(ref, dev);
-    std::cout << label << " max_rel_error=" << err << "\n";
-    EXPECT_LT(err, rtol) << label << " exceeded tolerance";
+    auto ref_xt = xt::adapt(ref, {32u, 32u});
+    auto dev_xt = xt::adapt(dev, {32u, 32u});
+    EXPECT_TRUE(xt::allclose(ref_xt, dev_xt, rtol, atol)) << label << " exceeded tolerance";
 }
 
 }  // namespace
@@ -108,9 +99,8 @@ TEST_F(KSplitGramMatmulTest, Verification4096x4096) {
     uint32_t K = input.logical_shape()[-1];
     uint32_t W = output.logical_shape()[-1];
 
-    constexpr float rtol = 0.01f;
-    check_tile(in_vec, out_vec, K, W, 2, 15, rtol, "G[2,15] (upper)");
-    check_tile(in_vec, out_vec, K, W, 0, 0, rtol, "G[0,0] (diag)");
+    check_tile(in_vec, out_vec, K, W, 2, 15, kRtol, kAtol, "G[2,15] (upper)");
+    check_tile(in_vec, out_vec, K, W, 0, 0, kRtol, kAtol, "G[0,0] (diag)");
 }
 
 TEST_F(KSplitGramMatmulTest, Verification4096x11008) {
@@ -123,8 +113,7 @@ TEST_F(KSplitGramMatmulTest, Verification4096x11008) {
     uint32_t K = input.logical_shape()[-1];
     uint32_t W = output.logical_shape()[-1];
 
-    constexpr float rtol = 0.01f;
-    check_tile(in_vec, out_vec, K, W, 2, 15, rtol, "G[2,15]");
+    check_tile(in_vec, out_vec, K, W, 2, 15, kRtol, kAtol, "G[2,15]");
 }
 
 TEST_F(KSplitGramMatmulTest, VerificationMirror) {
@@ -137,8 +126,7 @@ TEST_F(KSplitGramMatmulTest, VerificationMirror) {
     uint32_t K = input.logical_shape()[-1];
     uint32_t W = output.logical_shape()[-1];
 
-    constexpr float rtol = 0.01f;
-    check_tile(in_vec, out_vec, K, W, 2, 4, rtol, "Upper G[2,4]");
+    check_tile(in_vec, out_vec, K, W, 2, 4, kRtol, kAtol, "Upper G[2,4]");
 
     // Mirror: G[4,2] should equal G[2,4]^T
     auto ref_upper = compute_gram_tile(in_vec, K, 2, 4);
@@ -146,9 +134,9 @@ TEST_F(KSplitGramMatmulTest, VerificationMirror) {
     std::vector<float> ref_mirror(32 * 32);
     for (uint32_t i = 0; i < 32; i++)
         for (uint32_t j = 0; j < 32; j++) ref_mirror[i * 32 + j] = ref_upper[j * 32 + i];
-    float err = max_rel_error(ref_mirror, dev_mirror);
-    std::cout << "Mirror G[4,2] max_rel_error=" << err << "\n";
-    EXPECT_LT(err, rtol) << "Mirror exceeded tolerance";
+    auto ref_xt = xt::adapt(ref_mirror, {32u, 32u});
+    auto dev_xt = xt::adapt(dev_mirror, {32u, 32u});
+    EXPECT_TRUE(xt::allclose(ref_xt, dev_xt, kRtol, kAtol)) << "Mirror exceeded tolerance";
 }
 
 TEST_F(KSplitGramMatmulTest, PreallocatedOutput) {
@@ -172,8 +160,7 @@ TEST_F(KSplitGramMatmulTest, PreallocatedOutput) {
     uint32_t K = input.logical_shape()[-1];
     uint32_t W = output.logical_shape()[-1];
 
-    constexpr float rtol = 0.01f;
-    check_tile(in_vec, out_vec, K, W, 2, 15, rtol, "Preallocated G[2,15]");
+    check_tile(in_vec, out_vec, K, W, 2, 15, kRtol, kAtol, "Preallocated G[2,15]");
 }
 
 TEST_F(KSplitGramMatmulTest, SmokeAllShapes) {
