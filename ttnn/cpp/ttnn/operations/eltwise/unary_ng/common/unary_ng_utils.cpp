@@ -62,6 +62,17 @@ std::optional<UnaryShardSpecs> get_shard_specs(const TensorSpec& input_spec, con
         return std::nullopt;
     }
 
+    // For ROW_MAJOR layout, shard bytes must be a multiple of tile_size for the
+    // sharded path to work.  Fall back to the interleaved path otherwise.
+    if (input_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR && input_sharded) {
+        const auto& shard = *get_shard_spec(input_spec);
+        const auto tile_hw = input_spec.tile().get_tile_hw();
+        const uint32_t shard_elements = shard.shape[0] * shard.shape[1];
+        if (shard_elements % tile_hw != 0) {
+            return std::nullopt;
+        }
+    }
+
     TT_FATAL(get_shard_spec(output_spec).has_value(), "Output must have shard spec when using native sharded path");
 
     const auto& out_shape = output_spec.padded_shape();
