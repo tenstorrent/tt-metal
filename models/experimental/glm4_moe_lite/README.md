@@ -83,7 +83,7 @@ python models/experimental/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py \
   --max-new-tokens 128 \
   --batch-size 1 \
   --mesh-rows 4 --mesh-cols 8 \
-  --kv-cache-dtype bf8 \
+  --kv-cache-dtype bf16 \
   --phase both \
   --enable-trace --trace-mode sampling
 ```

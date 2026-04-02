@@ -131,7 +131,7 @@ def main() -> int:
         default="auto",
         help="Comma-separated physical device ids (length=mesh-cols) or 'auto' to let TTNN choose.",
     )
-    ap.add_argument("--kv-cache-dtype", default="bf8", help="bf8 (memory/perf) or bf16 (correctness).")
+    ap.add_argument("--kv-cache-dtype", default="bf16", help="bf8 (memory/perf) or bf16 (correctness).")
     ap.add_argument("--block-size", type=int, default=64)
     ap.add_argument("--min-cache-tokens", type=int, default=128, help="Allocate at least this many tokens in KV cache.")
     ap.add_argument("--batch-size", type=int, default=1, help="Batch size for decode (replicates the prompt B times).")
