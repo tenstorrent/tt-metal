@@ -225,45 +225,34 @@ def tt_all_reduce(
         input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
 
     if not use_composite:
-        # Use fused all_reduce when available (reduce-scatter + all-gather in one op)
-        try:
-            reduced_tensor = ttnn._ttnn.operations.ccl.all_reduce(
-                input_tensor,
-                cluster_axis=cluster_axis,
-                memory_config=memory_config if sharded else ttnn.DRAM_MEMORY_CONFIG,
-                num_links=num_all_gather_links,
-                topology=topology,
-            )
-        except Exception:
-            # Fallback to all_gather + fast_reduce_nc
-            gathered_tensor = ttnn.experimental.all_gather_async(
-                input_tensor,
-                persistent_output_buffer=None,
-                dim=dim,
-                multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
-                num_links=num_all_gather_links,
-                cluster_axis=cluster_axis,
-                topology=topology,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
-                barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
-                subdevice_id=subdevice_id,
-            )
+        gathered_tensor = ttnn.experimental.all_gather_async(
+            input_tensor,
+            persistent_output_buffer=None,
+            dim=dim,
+            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+            num_links=num_all_gather_links,
+            cluster_axis=cluster_axis,
+            topology=topology,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
+            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+            subdevice_id=subdevice_id,
+        )
 
-            if sharded:
-                gathered_tensor = ttnn.to_memory_config(gathered_tensor, ttnn.L1_MEMORY_CONFIG)
+        if sharded:
+            gathered_tensor = ttnn.to_memory_config(gathered_tensor, ttnn.L1_MEMORY_CONFIG)
 
-            reduced_tensor = ttnn.experimental.fast_reduce_nc(
-                gathered_tensor,
-                dims=[dim],
-                output=None,
-                compute_kernel_config=None,
-                memory_config=ttnn.L1_MEMORY_CONFIG if sharded else ttnn.DRAM_MEMORY_CONFIG,
-            )
+        reduced_tensor = ttnn.experimental.fast_reduce_nc(
+            gathered_tensor,
+            dims=[dim],
+            output=None,
+            compute_kernel_config=None,
+            memory_config=ttnn.L1_MEMORY_CONFIG if sharded else ttnn.DRAM_MEMORY_CONFIG,
+        )
 
-            gathered_tensor.deallocate(True)
+        gathered_tensor.deallocate(True)
     else:
         input_mem_cfg = input_tensor.memory_config()
 
