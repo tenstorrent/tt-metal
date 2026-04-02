@@ -72,14 +72,13 @@ void bind_unary_backward_two_float(
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            func,
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor"),
-            nb::arg("min"),
-            nb::arg("max"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()));
+        func,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor"),
+        nb::arg("min"),
+        nb::arg("max"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 template <ttnn::unique_string Name, typename Func>
@@ -130,12 +129,11 @@ void bind_unary_backward_op(
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            func,
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()));
+        func,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 template <ttnn::unique_string Name, typename Func>
@@ -185,13 +183,12 @@ void bind_unary_backward_rsqrt(
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            func,
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("input_grad") = nb::none()));
+        func,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("input_grad") = nb::none());
 }
 
 template <ttnn::unique_string Name>
@@ -369,13 +366,12 @@ void bind_unary_backward_float(
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            func,
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor"),
-            nb::arg(parameter_name_a.c_str()),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()));
+        func,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor"),
+        nb::arg(parameter_name_a.c_str()),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 template <ttnn::unique_string Name, typename Func>
@@ -435,14 +431,13 @@ void bind_unary_backward_two_float_with_default(
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            func,
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg(parameter_name_a.c_str()) = parameter_a_value,
-            nb::arg(parameter_name_b.c_str()) = parameter_b_value,
-            nb::arg("memory_config") = nb::none()));
+        func,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg(parameter_name_a.c_str()) = parameter_a_value,
+        nb::arg(parameter_name_b.c_str()) = parameter_b_value,
+        nb::arg("memory_config") = nb::none());
 }
 
 template <ttnn::unique_string Name, typename Func>
@@ -495,13 +490,12 @@ void bind_unary_backward_float_with_default(
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            func,
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg(parameter_name_a.c_str()) = parameter_a_value,
-            nb::arg("memory_config") = nb::none()));
+        func,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg(parameter_name_a.c_str()) = parameter_a_value,
+        nb::arg("memory_config") = nb::none());
 }
 
 template <ttnn::unique_string Name, typename Func1, typename Func2>
@@ -636,14 +630,13 @@ void bind_unary_backward_rdiv(
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            func,
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor"),
-            nb::arg(parameter_name_a.c_str()),
-            nb::kw_only(),
-            nb::arg(parameter_name_b.c_str()) = nb::none(),
-            nb::arg("memory_config") = nb::none()));
+        func,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor"),
+        nb::arg(parameter_name_a.c_str()),
+        nb::kw_only(),
+        nb::arg(parameter_name_b.c_str()) = nb::none(),
+        nb::arg("memory_config") = nb::none());
 }
 
 template <ttnn::unique_string Name, typename Func>
@@ -695,14 +688,13 @@ void bind_unary_backward_unary_optional_float(
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            func,
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor"),
-            nb::arg(parameter_name.c_str()),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("input_grad") = nb::none()));
+        func,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor"),
+        nb::arg(parameter_name.c_str()),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("input_grad") = nb::none());
 }
 
 template <ttnn::unique_string Name, typename Func>
@@ -753,13 +745,12 @@ void bind_unary_backward_shape(
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            func,
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor"),
-            nb::arg(parameter_name_a.c_str()),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()));
+        func,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor"),
+        nb::arg(parameter_name_a.c_str()),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 template <ttnn::unique_string Name, typename Func>
@@ -808,13 +799,12 @@ void bind_unary_backward_optional(
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            func,
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("input_grad") = nb::none()));
+        func,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("input_grad") = nb::none());
 }
 
 template <ttnn::unique_string Name, typename Func>
@@ -861,13 +851,12 @@ void bind_unary_backward_neg(
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            func,
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("input_grad") = nb::none()));
+        func,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("input_grad") = nb::none());
 }
 
 template <ttnn::unique_string Name, typename Func>
@@ -907,13 +896,12 @@ void bind_unary_backward_prod_bw(nb::module_& mod, Func func) {
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            func,
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("dim") = nb::none(),
-            nb::arg("memory_config") = nb::none()));
+        func,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("dim") = nb::none(),
+        nb::arg("memory_config") = nb::none());
 }
 
 template <ttnn::unique_string Name, typename Func>
@@ -967,14 +955,13 @@ void bind_unary_backward_gelu(
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            func,
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg(parameter_name_a.c_str()) = parameter_a_value,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("input_grad") = nb::none()));
+        func,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg(parameter_name_a.c_str()) = parameter_a_value,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("input_grad") = nb::none());
 }
 
 }  // namespace
