@@ -235,6 +235,7 @@ def write_export_manifest():
             try:
                 tmp_path.unlink()
             except OSError:
+                # Best-effort cleanup: failure to delete the temp file is non-fatal and can be ignored.
                 pass
 
 
