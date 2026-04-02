@@ -996,7 +996,7 @@ def main():
         try:
             summary_path = Path(triage_summary_path)
             summary_path.parent.mkdir(parents=True, exist_ok=True)
-            summary_path.write_text(_build_triage_summary(script_queue))
+            summary_path.write_text(_build_triage_summary(script_queue), encoding="utf-8")
             utils.INFO(f"Triage summary written to {triage_summary_path}")
         except Exception as e:
             utils.WARN(f"Failed to write triage summary: {e}")
