@@ -19,6 +19,7 @@ Tensor to_memory_config(
     std::optional<DataType> dtype,
     const std::optional<Tensor>& output_tensor) {
     using namespace tt::tt_metal;
+
     // Temporary until we see why buffer data not being populated
     const auto original_memory_config = ttnn::get_memory_config(tensor);
     if (original_memory_config.has_value() && original_memory_config.value() == memory_config &&
@@ -28,6 +29,15 @@ Tensor to_memory_config(
     std::vector<std::optional<Tensor>> optional_output_tensors;
     if (output_tensor.has_value()) {
         optional_output_tensors.push_back(output_tensor);
+    }
+
+    if (tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED ||
+        memory_config.memory_layout() == TensorMemoryLayout::ND_SHARDED) {
+        return ttnn::prim::copy(
+            tensor,
+            memory_config,
+            dtype.value_or(tensor.dtype()),
+            optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
     }
 
     if (memory_config.is_sharded()) {
@@ -44,8 +54,11 @@ Tensor to_memory_config(
                  tensor.layout() == Layout::ROW_MAJOR);
             if (!use_reshard_workaround) {
                 if (dtype.has_value()) {
-                    throw std::runtime_error(
-                        "dtype cannot be specified when converting sharded tensor to sharded tensor");
+                    return ttnn::prim::copy(
+                        tensor,
+                        memory_config,
+                        dtype.value_or(tensor.dtype()),
+                        optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
                 }
                 return ttnn::reshard(tensor, memory_config, output_tensor);
             }  // for row-major tensors where shard-spec[1] is different for input shard and output shard
