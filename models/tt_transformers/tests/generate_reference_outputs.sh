@@ -36,6 +36,9 @@ HF_MODELS=(
     "${LLAMA_32_90B_DIR:-meta-llama/Llama-3.2-90B-Vision-Instruct}"
     "${QWEN_25_7B_DIR:-Qwen/Qwen2.5-7B-Instruct}"
     "${QWEN_25_72B_DIR:-Qwen/Qwen2.5-72B-Instruct}"
+    "${QWEN_25_32B_DIR:-Qwen/Qwen2.5-32B-Instruct}"
+    "${MIXTRAL_8X7B_DIR:-mistralai/Mixtral-8x7B-Instruct-v0.1}"
+    "${QWEN_25_CODER_32B_DIR:-Qwen/Qwen2.5-Coder-32B-Instruct}"
 )
 
 # Create reference_outputs directory if it doesn't exist

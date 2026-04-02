@@ -98,20 +98,24 @@ void kernel_main() {
 
     // Gather2 sender args (UsePerCoreSenderIdx: each core gets a contiguous index
     // via gather2_sender_idx, avoiding gaps from the non-rectangular kv_b2 grid)
-    deepseek_b1_ops::Gather::SenderArgs gather2_args{
-        get_named_compile_time_arg_val("gather2_dest_noc_x"),
-        get_named_compile_time_arg_val("gather2_dest_noc_y"),
-        get_named_compile_time_arg_val("gather2_data_size_bytes"),
-        get_semaphore(get_named_compile_time_arg_val("gather2_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("gather2_src_cb"),
-        get_named_compile_time_arg_val("gather2_src_num_pages"),
-        get_named_compile_time_arg_val("gather2_sender_grid_start_x"),
-        get_named_compile_time_arg_val("gather2_sender_grid_start_y"),
-        get_named_compile_time_arg_val("gather2_sender_grid_end_x"),
-        get_named_compile_time_arg_val("gather2_sender_grid_end_y"),
-        get_named_compile_time_arg_val("gather2_row_major"),
-        get_named_compile_time_arg_val("gather2_receiver_data_addr"),
-        get_named_compile_time_arg_val("gather2_sender_idx"),
+    deepseek_b1_ops::Gather::DMArgs gather2_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("gather2_dest_noc_x"),
+                get_named_compile_time_arg_val("gather2_dest_noc_y"),
+                get_named_compile_time_arg_val("gather2_data_size_bytes"),
+                get_semaphore(get_named_compile_time_arg_val("gather2_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("gather2_src_cb"),
+                get_named_compile_time_arg_val("gather2_src_num_pages"),
+                get_named_compile_time_arg_val("gather2_sender_grid_start_x"),
+                get_named_compile_time_arg_val("gather2_sender_grid_start_y"),
+                get_named_compile_time_arg_val("gather2_sender_grid_end_x"),
+                get_named_compile_time_arg_val("gather2_sender_grid_end_y"),
+                get_named_compile_time_arg_val("gather2_row_major"),
+                get_named_compile_time_arg_val("gather2_receiver_data_addr"),
+                get_named_compile_time_arg_val("gather2_sender_idx"),
+            },
+        .receiver = {},
     };
 
     // Mcast3 receiver args
@@ -128,20 +132,24 @@ void kernel_main() {
 
     // Gather3 sender args (UsePerCoreSenderIdx: each core gets a contiguous index
     // via gather3_sender_idx, avoiding gaps from the non-rectangular o_proj grid)
-    deepseek_b1_ops::Gather::SenderArgs gather3_args{
-        get_named_compile_time_arg_val("gather3_dest_noc_x"),
-        get_named_compile_time_arg_val("gather3_dest_noc_y"),
-        get_named_compile_time_arg_val("gather3_data_size_bytes"),
-        get_semaphore(get_named_compile_time_arg_val("gather3_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("gather3_src_cb"),
-        get_named_compile_time_arg_val("gather3_src_num_pages"),
-        get_named_compile_time_arg_val("gather3_sender_grid_start_x"),
-        get_named_compile_time_arg_val("gather3_sender_grid_start_y"),
-        get_named_compile_time_arg_val("gather3_sender_grid_end_x"),
-        get_named_compile_time_arg_val("gather3_sender_grid_end_y"),
-        get_named_compile_time_arg_val("gather3_row_major"),
-        get_named_compile_time_arg_val("gather3_receiver_data_addr"),
-        get_named_compile_time_arg_val("gather3_sender_idx"),
+    deepseek_b1_ops::Gather::DMArgs gather3_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("gather3_dest_noc_x"),
+                get_named_compile_time_arg_val("gather3_dest_noc_y"),
+                get_named_compile_time_arg_val("gather3_data_size_bytes"),
+                get_semaphore(get_named_compile_time_arg_val("gather3_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("gather3_src_cb"),
+                get_named_compile_time_arg_val("gather3_src_num_pages"),
+                get_named_compile_time_arg_val("gather3_sender_grid_start_x"),
+                get_named_compile_time_arg_val("gather3_sender_grid_start_y"),
+                get_named_compile_time_arg_val("gather3_sender_grid_end_x"),
+                get_named_compile_time_arg_val("gather3_sender_grid_end_y"),
+                get_named_compile_time_arg_val("gather3_row_major"),
+                get_named_compile_time_arg_val("gather3_receiver_data_addr"),
+                get_named_compile_time_arg_val("gather3_sender_idx"),
+            },
+        .receiver = {},
     };
 #ifndef SKIP_CCL
     using AllReduceWriterCTArgs = deepseek_b1_ops::AllReduce::WriterCTArgs<
@@ -183,13 +191,17 @@ void kernel_main() {
     deepseek_b1_ops::Matmul::WriterArgs matmul5_args{};
 
     // Gather2 receiver args
-    deepseek_b1_ops::Gather::ReceiverArgs gather2_args{
-        get_named_compile_time_arg_val("gather2_noc0_num_senders"),
-        get_named_compile_time_arg_val("gather2_noc1_num_senders"),
-        get_semaphore(get_named_compile_time_arg_val("gather2_noc0_receiver_semaphore_id")),
-        get_semaphore(get_named_compile_time_arg_val("gather2_noc1_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("gather2_dst_cb"),
-        get_named_compile_time_arg_val("gather2_dst_num_pages"),
+    deepseek_b1_ops::Gather::DMArgs gather2_args{
+        .sender = {},
+        .receiver =
+            {
+                get_named_compile_time_arg_val("gather2_noc0_num_senders"),
+                get_named_compile_time_arg_val("gather2_noc1_num_senders"),
+                get_semaphore(get_named_compile_time_arg_val("gather2_noc0_receiver_semaphore_id")),
+                get_semaphore(get_named_compile_time_arg_val("gather2_noc1_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("gather2_dst_cb"),
+                get_named_compile_time_arg_val("gather2_dst_num_pages"),
+            },
     };
 
     // Mcast3 sender args
@@ -215,13 +227,17 @@ void kernel_main() {
     };
 
     // Gather3 receiver args
-    deepseek_b1_ops::Gather::ReceiverArgs gather3_args{
-        get_named_compile_time_arg_val("gather3_noc0_num_senders"),
-        get_named_compile_time_arg_val("gather3_noc1_num_senders"),
-        get_semaphore(get_named_compile_time_arg_val("gather3_noc0_receiver_semaphore_id")),
-        get_semaphore(get_named_compile_time_arg_val("gather3_noc1_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("gather3_dst_cb"),
-        get_named_compile_time_arg_val("gather3_dst_num_pages"),
+    deepseek_b1_ops::Gather::DMArgs gather3_args{
+        .sender = {},
+        .receiver =
+            {
+                get_named_compile_time_arg_val("gather3_noc0_num_senders"),
+                get_named_compile_time_arg_val("gather3_noc1_num_senders"),
+                get_semaphore(get_named_compile_time_arg_val("gather3_noc0_receiver_semaphore_id")),
+                get_semaphore(get_named_compile_time_arg_val("gather3_noc1_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("gather3_dst_cb"),
+                get_named_compile_time_arg_val("gather3_dst_num_pages"),
+            },
     };
 
 #ifndef SKIP_CCL

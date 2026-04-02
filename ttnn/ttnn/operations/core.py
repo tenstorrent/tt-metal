@@ -5,7 +5,7 @@
 import math
 import os
 import pathlib
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import ttnn.decorators
 from loguru import logger
@@ -253,7 +253,7 @@ def from_torch(
     cq_id: Optional[int] = None,
     preserve_nan_values: bool = False,
     col_tilize: bool = False,
-    fast_approx: bool = False,
+    enable_bfloat_opt: bool = False,
 ) -> Optional[ttnn.Tensor]:
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`. If `tensor` is `None`, the function returns `None`.
@@ -284,7 +284,7 @@ def from_torch(
             host data and is unrelated to Tile-level transpose flags (transpose_within_face /
             transpose_of_faces).  Requires dtype bfloat8_b or bfloat4_b, tensor.ndim >= 2, spec=None.
             Defaults to `False`.
-        fast_approx (bool, optional): If True, use a fast dtype conversion on the device, but with precision loss due to hw rounding rules. Defaults to `False`.
+        enable_bfloat_opt (bool, optional): If True, use a fast bf4/8 dtype conversion on the device, but with precision loss due to hw rounding rules. Defaults to `False`.
 
     Returns:
         ttnn.Tensor | None: A `ttnn.Tensor` created from the input `torch.Tensor`, or `None` if `tensor` is `None`.
@@ -349,7 +349,7 @@ def from_torch(
         mesh_mapper=mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
         preserve_nan_values=preserve_nan_values,
         col_tilize=col_tilize,
-        fast_approx=fast_approx,
+        enable_bfloat_opt=enable_bfloat_opt,
     )
 
 
@@ -546,7 +546,12 @@ def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.MeshDevice 
 
 
 @ttnn.register_python_operation(name="ttnn.dump_tensor")
-def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor) -> None:
+def dump_tensor(
+    file_name: Union[str, pathlib.Path],
+    tensor: ttnn.Tensor,
+    *,
+    mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
+) -> None:
     """
     Dump tensor to a file.
 
@@ -554,12 +559,21 @@ def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor) -> Non
         file_name (str | pathlib.Path): The file name.
         tensor (ttnn.Tensor): the tensor to be dumped.
 
+    Keyword Args:
+        mode (ttnn.DumpTensorMode, optional): How host-side distributed tensors are written. Defaults to
+            ``DISTRIBUTED_GATHER``.
+
+            * ``DISTRIBUTED_GATHER``: perform a host all-gather, write the full tensor from global rank 0 only,
+              and synchronize with barriers. Use this for a single canonical file from a distributed tensor.
+            * ``LOCAL``: skip collectives and write the caller's local shard only. In multi-host runs, each process
+              must use a distinct ``file_name`` (for example a per-host cache path).
+
     Returns:
         `None`: tensor saved to a specified file.
     """
     file_name = pathlib.Path(file_name)
     _validate_file_extension(file_name)
-    ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(file_name), tensor)
+    ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(file_name), tensor, mode)
 
 
 @ttnn.register_python_operation(name="ttnn.as_tensor")

@@ -8,7 +8,6 @@
 #include <variant>
 #include <vector>
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 

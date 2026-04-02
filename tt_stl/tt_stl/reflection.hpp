@@ -19,6 +19,7 @@
 #include <tuple>
 #include <unordered_map>
 #include <variant>
+#include <span>
 #include <vector>
 #include <filesystem>
 
@@ -63,6 +64,15 @@ struct is_specialization<Ref<Args...>, Ref> : std::true_type {};
 
 template <typename Test, template <typename...> class Ref>
 constexpr bool is_specialization_v = detail::is_specialization<Test, Ref>::value;
+
+template <typename T>
+struct is_span : std::false_type {};
+
+template <typename T, std::size_t Extent>
+struct is_span<std::span<T, Extent>> : std::true_type {};
+
+template <typename T>
+constexpr bool is_span_v = is_span<T>::value;
 
 // Forward Declare hash_object
 namespace hash {
@@ -1345,6 +1355,15 @@ inline hash_t hash_object(const T& object) noexcept {
     } else if constexpr (is_specialization_v<T, std::vector>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing std::vector of type {}: {}\n", get_type_name<T>(), object);
+        }
+        hash_t hash = 0;
+        for (const auto& element : object) {
+            hash = hash_objects(hash, element);
+        }
+        return hash;
+    } else if constexpr (is_span_v<T>) {
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing std::span of type {}\n", get_type_name<T>());
         }
         hash_t hash = 0;
         for (const auto& element : object) {
