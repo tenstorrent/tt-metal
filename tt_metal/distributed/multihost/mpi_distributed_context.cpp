@@ -164,6 +164,10 @@ inline void init_env(int& argc, char**& argv) {
     static std::once_flag mpi_once;
 
     std::call_once(mpi_once, [&] {
+        int already_initialized = 0;
+        MPI_Initialized(&already_initialized);
+        if (already_initialized) return;
+
         int provided = 0;
         if (MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided) != MPI_SUCCESS) {
             TT_THROW("MPI_Init_thread failed");
