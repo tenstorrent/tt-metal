@@ -97,14 +97,17 @@ Tensor to_device(
         GraphTracker::instance().track_function_end(input_tensor);
         return input_tensor;
     }
-    auto device_tensor = Tensor(tensor_impl::to_device(input_tensor.host_tensor(), mesh_device, mem_config, cq_id));
+    auto& queue = mesh_device->mesh_command_queue(raw_optional(cq_id));
+    auto device_tensor = Tensor(tensor_impl::to_device(queue, input_tensor.host_tensor(), mesh_device, mem_config));
     GraphTracker::instance().track_function_end(device_tensor);
     return device_tensor;
 }
 
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<tt::tt_metal::QueueId> cq_id) {
     GraphTracker::instance().track_function_start("tt::tt_metal::copy_to_device", host_tensor, device_tensor, cq_id);
-    tensor_impl::copy_to_device(host_tensor.host_tensor(), device_tensor.mesh_tensor(), cq_id);
+    auto& queue =
+        device_tensor.mesh_tensor().mesh_buffer_invariant_breaking()->device()->mesh_command_queue(raw_optional(cq_id));
+    tensor_impl::copy_to_device(queue, host_tensor.host_tensor(), device_tensor.mesh_tensor());
     device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
     GraphTracker::instance().track_function_end(device_tensor);
 }
@@ -134,12 +137,13 @@ void copy_to_host(
 void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blocking, std::optional<QueueId> cq_id) {
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::copy_to_host", device_tensor, host_tensor, blocking, cq_id);
+    auto& queue = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
     tensor_impl::copy_to_host(
+        queue,
         device_tensor.mesh_tensor(),
         device_tensor.device_storage().get_coords(),
         host_tensor.host_tensor(),
-        blocking,
-        cq_id);
+        blocking);
     GraphTracker::instance().track_function_end(host_tensor);
 }
 
@@ -150,8 +154,9 @@ Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_
 
     GraphTracker::instance().track_function_start("Tensor::cpu", input_tensor, blocking);
 
+    auto& queue = input_tensor.device()->mesh_command_queue(raw_optional(cq_id));
     auto output = Tensor(
-        tensor_impl::to_host(input_tensor.mesh_tensor(), input_tensor.device_storage().get_coords(), blocking, cq_id));
+        tensor_impl::to_host(queue, input_tensor.mesh_tensor(), input_tensor.device_storage().get_coords(), blocking));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;

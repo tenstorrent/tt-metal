@@ -545,15 +545,12 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
 }
 
 HostTensor to_host(
+    distributed::MeshCommandQueue& queue,
     const MeshTensor& tensor,
     const std::vector<distributed::MeshCoordinate>& coords,
-    bool blocking,
-    std::optional<tt::tt_metal::QueueId> cq_id) {
+    bool blocking) {
     const auto& mesh_buffer = tensor.mesh_buffer_invariant_breaking();
     distributed::MeshDevice* device = mesh_buffer->device();
-
-    auto cq_id_int = tt::tt_metal::raw_optional(cq_id);
-    distributed::MeshCommandQueue& mesh_cq = device->mesh_command_queue(cq_id_int);
 
     // For performance, perform all allocations via DistributedHostBuffer::transform, run from multiple threads.
     auto distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
@@ -563,7 +560,7 @@ HostTensor to_host(
         [&](const distributed::MeshCoordinate&) { return allocate_host_buffer(tensor.tensor_spec()); },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
-    mesh_cq.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
+    queue.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
 
     return HostTensor(std::move(distributed_host_buffer), tensor.tensor_spec(), tensor.tensor_topology());
 }
@@ -573,10 +570,10 @@ HostTensor to_host(
 // ======================================================================================
 
 MeshTensor to_device(
+    distributed::MeshCommandQueue& queue,
     const HostTensor& tensor,
     distributed::MeshDevice* mesh_device,
-    ttsl::optional_reference<const MemoryConfig> memory_config,
-    std::optional<tt::tt_metal::QueueId> cq_id) {
+    ttsl::optional_reference<const MemoryConfig> memory_config) {
     TT_FATAL(mesh_device != nullptr, "Need target device in order to move tensor to device!");
 
     std::optional<TensorSpec> tensor_spec_overriden_memory_config;
@@ -589,16 +586,16 @@ MeshTensor to_device(
                                   : &tensor.tensor_spec();
 
     auto result = allocate_mesh_tensor(*tensor_spec, *mesh_device, tensor.tensor_topology());
-    tt::tt_metal::tensor_impl::copy_to_device(tensor, result, cq_id);
+    tt::tt_metal::tensor_impl::copy_to_device(queue, tensor, result);
     return result;
 }
 
 void copy_to_host(
+    distributed::MeshCommandQueue& queue,
     const MeshTensor& device_tensor,
     const std::vector<distributed::MeshCoordinate>& coords,
     HostTensor& host_tensor,
-    bool blocking,
-    std::optional<tt::tt_metal::QueueId> cq_id) {
+    bool blocking) {
     // TT_FATAL(device_tensor.is_allocated(), "Buffer must be allocated on device.");
 
     // Is this sufficient?
@@ -610,9 +607,6 @@ void copy_to_host(
 
     const auto& mesh_buffer = device_tensor.mesh_buffer_invariant_breaking();
     const auto& mesh_device = device_tensor.device();
-
-    auto cq_id_int = tt::tt_metal::raw_optional(cq_id);
-    distributed::MeshCommandQueue& mesh_cq = mesh_device.mesh_command_queue(cq_id_int);
 
     const auto& distributed_host_buffer = host_tensor.buffer();
 
@@ -643,7 +637,7 @@ void copy_to_host(
         });
     }
 
-    mesh_cq.enqueue_read(mesh_buffer, dst_distributed_host_buffer, /*shards=*/std::nullopt, blocking);
+    queue.enqueue_read(mesh_buffer, dst_distributed_host_buffer, /*shards=*/std::nullopt, blocking);
 
     host_tensor = HostTensor(
         std::move(dst_distributed_host_buffer), device_tensor.tensor_spec(), device_tensor.tensor_topology());
@@ -710,7 +704,7 @@ void copy_as_distributed_tensor(
 }  // namespace
 
 void copy_to_device(
-    const HostTensor& host_tensor, MeshTensor& device_tensor, std::optional<tt::tt_metal::QueueId> cq_id) {
+    distributed::MeshCommandQueue& command_queue, const HostTensor& host_tensor, MeshTensor& device_tensor) {
     // TODO: bring this back?
     // TT_FATAL(device_tensor.is_allocated(), "Buffer must be allocated on device.");
 
@@ -723,8 +717,6 @@ void copy_to_device(
     auto mesh_buffer = device_tensor.mesh_buffer_invariant_breaking();
     const auto& host_storage_shape = host_tensor.buffer().shape();
     const auto& mesh_device_shape = mesh_buffer->device()->shape();
-
-    auto& command_queue = mesh_buffer->device()->mesh_command_queue(raw_optional(cq_id));
 
     // Special case of replicating tensors on 1x1 mesh across the entire mesh device.
     if (host_storage_shape.mesh_size() < mesh_device_shape.mesh_size() &&
