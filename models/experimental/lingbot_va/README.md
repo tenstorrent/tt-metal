@@ -34,7 +34,7 @@ At a high level (no GPU path; reference and prep run on **CPU**, model math on *
 | **Device** (`tests/perf/test_perf_ttnn_lingbot_va.py`) | 0.49           |
 | **End-to-end** (`tests/perf/test_perf_e2e.py`)         | 5.68           |
 
-NOTE: Device perf profiles a single-pass demo.run_inferencepath with Tracy, whereas the E2E perf test measures pipeline wall-clock throughput of theTtLingbotVAforward path (currently driven by a single-passWanTransformer3DModel execution).
+NOTE: Device perf profiles a single-pass demo.run_inference path with Tracy, whereas the E2E perf test measures pipeline wall-clock throughput of the TtLingbotVA forward path (currently driven by a single-pass WanTransformer3DModel execution).
 
 ## PyTorch / CPU components
 
@@ -170,8 +170,25 @@ Sample RobotWin camera PNGs live under `tests/demo/sample_images/robotwin/` (thr
 
 ### Generate multi-chunk video (`demo.mp4`)
 
-From the **tt-metal** repo root:
+#### N150
 
+1. From the **tt-metal** repo root:
+
+```bash
+python3 models/experimental/lingbot_va/tests/demo/demo.py \
+  --checkpoint models/experimental/lingbot_va/reference/checkpoints/ \
+  --images-dir models/experimental/lingbot_va/tests/demo/sample_images/robotwin/ \
+  --prompt "Use an arm to place the smooth blue drinking cup on the wooden coaster" \
+  --generate
+```
+
+#### N300 (Single-Mesh)
+
+1. Explicitly set the environment variable below to run on a single mesh.
+```
+export LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH=1
+```
+2. From the **tt-metal** repo root:
 ```bash
 python3 models/experimental/lingbot_va/tests/demo/demo.py \
   --checkpoint models/experimental/lingbot_va/reference/checkpoints/ \
@@ -197,7 +214,7 @@ Ensure `--images-dir` contains the three `observation.images.*.png` files, or se
 1. **PyTorch reference runtime:** Running the full **PyTorch reference** stack to completion can take a long time, so it is not always practical to drive bit-for-bit comparisons from an on-demand reference run on the same box.
 2. **PCC and intermediate dumps:** For several checks, **TT outputs and PCC are validated against intermediate tensors** produced by the PyTorch reference on a **separate host** (saved dumps from that run), rather than from a freshly executed reference path collocated with every TT invocation.
 3. **TT-Perf-Report:** When generating reports from the device perf test, some versions of tt-perf-report crash in evaluate_fidelity with KeyError: 'FLOAT32' because the matmul advice path does not list FLOAT32 in its internal datatype → mantissa lookup.
-4. Multi-device support is not currently available in the demo, as it requires in-depth analysis and experiments.
+4. Multi-device support is not currently available.
 
 ## Model Notes
 
