@@ -122,6 +122,11 @@ const MeshTensor& DeviceStorage::get_mesh_tensor() const {
     return *mesh_tensor_;
 }
 
+MeshTensor& DeviceStorage::get_mesh_tensor() {
+    TT_FATAL(mesh_tensor_ != nullptr, "MeshTensor is not allocated");
+    return *mesh_tensor_;
+}
+
 std::shared_ptr<distributed::MeshBuffer> DeviceStorage::get_mesh_buffer_leak_ownership() const {
     TT_FATAL(mesh_tensor_ != nullptr, "MeshTensor is not allocated");
     return mesh_tensor_->mesh_buffer_invariant_breaking();

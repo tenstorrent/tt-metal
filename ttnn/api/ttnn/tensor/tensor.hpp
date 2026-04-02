@@ -199,14 +199,6 @@ public:
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
-private:
-    // TODO(river):
-    // This will be removed as part of Metal Tensor split lowering (#37692).
-    // The function is removed publicly as the underlying storage of Tensor will be changed as part of the refactoring
-    // effort.
-    const Storage& storage() const;
-
-public:
     DataType dtype() const;
     Layout layout() const;
     const tt::tt_metal::Shape& logical_shape() const;
@@ -249,7 +241,13 @@ public:
 
     // Returns the associated HostTensor.
     const HostTensor& host_tensor() const&;
+    HostTensor& host_tensor() &;
     const HostTensor& host_tensor() const&& = delete;  // prevents dangling reference to temporaries.
+
+    // Returns the associated MeshTensor.
+    const MeshTensor& mesh_tensor() const&;
+    MeshTensor& mesh_tensor() &;
+    const MeshTensor& mesh_tensor() const&& = delete;  // prevents dangling reference to temporaries.
 
     // Returns device `MeshBuffer`.
     // Throws if the tensor is not allocated on a device.
@@ -265,7 +263,7 @@ public:
     uint32_t element_size() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("storage", "tensor_spec");
-    auto attribute_values() const { return std::forward_as_tuple(storage(), tensor_spec()); }
+    auto attribute_values() const { return std::forward_as_tuple(tensor_attributes->get_storage(), tensor_spec()); }
 
     static std::uint64_t get_tensor_id_counter();
 

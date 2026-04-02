@@ -117,6 +117,7 @@ struct DeviceStorage {
     const distributed::MeshBuffer& get_mesh_buffer() const;
 
     const MeshTensor& get_mesh_tensor() const;
+    MeshTensor& get_mesh_tensor();
 
     // Get the device the device memory is allocated on
     // Throws if the DeviceStorage is not allocated.
