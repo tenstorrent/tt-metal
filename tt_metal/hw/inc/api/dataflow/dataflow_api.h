@@ -174,15 +174,16 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
 
 #include "api/rt_arg.h"
 
-// Unified accessor for named runtime args.
-// Usage: uint32_t n = rt_args::get<rt_args::my_op::num_tiles>();
+// Unified accessor for named runtime args (works for both Arg and ArrayArg).
+// Scalar:  uint32_t n = rt_args::get<rt_args::my_op::num_tiles>();
+// Array:   uint32_t a = rt_args::get<rt_args::my_op::worker_sem_addr>(i);
 namespace rt_args {
-template <Arg arg, typename T = uint32_t>
-FORCE_INLINE T get() {
+template <auto arg, typename T = uint32_t>
+FORCE_INLINE T get(uint32_t i = 0) {
     if constexpr (arg.dispatch == Dispatch::COMMON) {
-        return get_common_arg_val<T>(arg.index);
+        return get_common_arg_val<T>(arg.index + i);
     } else {
-        return get_arg_val<T>(arg.index);
+        return get_arg_val<T>(arg.index + i);
     }
 }
 }  // namespace rt_args

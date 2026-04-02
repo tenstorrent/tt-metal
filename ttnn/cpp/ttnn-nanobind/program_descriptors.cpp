@@ -702,6 +702,7 @@ void py_module_types(nb::module_& mod) {
                tt::tt_metal::KernelDescriptor::CommonRuntimeArgs common_runtime_args,
                const nb::list& named_common_runtime_args,
                const nb::list& named_per_core_runtime_args,
+               const nb::list& named_common_runtime_arg_arrays,
                std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level,
                tt::tt_metal::KernelDescriptor::ConfigDescriptor config) {
                 tt::tt_metal::KernelDescriptor::NamedCommonRuntimeArgs ncra;
@@ -720,6 +721,18 @@ void py_module_types(nb::module_& mod) {
                     }
                     npcra.push_back({std::move(name), std::move(core_values)});
                 }
+                // Array variant: (name, [val0, val1, ...])
+                tt::tt_metal::KernelDescriptor::NamedCommonRuntimeArgArrays ncraa;
+                for (auto item : named_common_runtime_arg_arrays) {
+                    auto tup = nb::cast<nb::tuple>(item);
+                    auto name = nb::cast<std::string>(tup[0]);
+                    auto values_list = nb::cast<nb::list>(tup[1]);
+                    std::vector<uint32_t> values;
+                    for (auto v : values_list) {
+                        values.push_back(nb::cast<uint32_t>(v));
+                    }
+                    ncraa.push_back({std::move(name), std::move(values)});
+                }
                 new (self) tt::tt_metal::KernelDescriptor{
                     kernel_source,
                     source_type,
@@ -731,6 +744,7 @@ void py_module_types(nb::module_& mod) {
                     std::move(common_runtime_args),
                     std::move(ncra),
                     std::move(npcra),
+                    std::move(ncraa),
                     opt_level,
                     std::move(config),
                 };
@@ -745,6 +759,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("common_runtime_args") = tt::tt_metal::KernelDescriptor::CommonRuntimeArgs(),
             nb::arg("named_common_runtime_args") = nb::list(),
             nb::arg("named_per_core_runtime_args") = nb::list(),
+            nb::arg("named_common_runtime_arg_arrays") = nb::list(),
             nb::arg("opt_level") = nb::none(),
             nb::arg("config"),
             R"pbdoc(
@@ -863,6 +878,33 @@ void py_module_types(nb::module_& mod) {
                 }
             },
             "Named per-core runtime args: list of (name, {CoreCoord: value}) pairs")
+        .def_prop_rw(
+            "named_common_runtime_arg_arrays",
+            [](const tt::tt_metal::KernelDescriptor& self) {
+                nb::list result;
+                for (const auto& arg : self.named_common_runtime_arg_arrays) {
+                    nb::list values;
+                    for (auto v : arg.values) {
+                        values.append(v);
+                    }
+                    result.append(nb::make_tuple(arg.name, values));
+                }
+                return result;
+            },
+            [](tt::tt_metal::KernelDescriptor& self, const nb::list& args) {
+                self.named_common_runtime_arg_arrays.clear();
+                for (auto item : args) {
+                    auto tup = nb::cast<nb::tuple>(item);
+                    auto name = nb::cast<std::string>(tup[0]);
+                    auto values_list = nb::cast<nb::list>(tup[1]);
+                    std::vector<uint32_t> values;
+                    for (auto v : values_list) {
+                        values.push_back(nb::cast<uint32_t>(v));
+                    }
+                    self.named_common_runtime_arg_arrays.push_back({std::move(name), std::move(values)});
+                }
+            },
+            "Named common runtime arg arrays: list of (name, [values]) pairs")
         .def_rw("config", &tt::tt_metal::KernelDescriptor::config, "Configuration descriptor for the kernel")
         .def(
             "clear_runtime_args",

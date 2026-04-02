@@ -73,6 +73,54 @@ TEST_F(NamedArgsTest, TensixTestNamedCommonAndPerCoreRuntimeArgs) {
     EXPECT_EQ(results_core1[1], core1_idx) << "Core (1,0): core_idx should be 20";
 }
 
+TEST_F(NamedArgsTest, TensixTestNamedArrayRuntimeArgs) {
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->get_devices()[0];
+    auto& cq = mesh_device->mesh_command_queue();
+    auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+
+    CoreCoord core = {0, 0};
+    CoreRangeSet cores = std::set<CoreRange>({CoreRange(core, core)});
+
+    const uint32_t write_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+
+    const uint32_t prefix_val = 10;
+    const std::vector<uint32_t> array_data = {100, 200, 300, 400};
+    const uint32_t num_elements = static_cast<uint32_t>(array_data.size());
+
+    // Expected: prefix + sum(array_data) = 10 + 100 + 200 + 300 + 400 = 1010
+    uint32_t expected_sum = prefix_val;
+    for (auto v : array_data) {
+        expected_sum += v;
+    }
+
+    KernelDescriptor kernel = {
+        .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/named_array_runtime_args_kernel.cpp",
+        .core_ranges = cores,
+        .defines =
+            {
+                {"WRITE_ADDRESS", std::to_string(write_addr)},
+                {"NUM_ELEMENTS", std::to_string(num_elements)},
+            },
+        // Scalar named common RT arg
+        .named_common_runtime_args = {{"my_kernel.prefix", prefix_val}},
+        // Array named common RT arg
+        .named_common_runtime_arg_arrays = {{"my_kernel.data", array_data}},
+        .config = DataMovementConfigDescriptor{},
+    };
+
+    distributed::MeshWorkload workload;
+    Program program(ProgramDescriptor{.kernels = {kernel}});
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+
+    std::vector<uint32_t> results;
+    detail::ReadFromDeviceL1(device, core, write_addr, sizeof(uint32_t), results);
+
+    EXPECT_EQ(results[0], expected_sum) << "Sum should be prefix(" << prefix_val << ") + sum(data) = " << expected_sum
+                                        << ", got " << results[0];
+}
+
 TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgs) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_devices()[0];

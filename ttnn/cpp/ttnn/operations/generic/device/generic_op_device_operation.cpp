@@ -61,6 +61,7 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
             kernel.common_runtime_args.size(),
             kernel.named_common_runtime_args.size(),
             kernel.named_per_core_runtime_args.size(),
+            kernel.named_common_runtime_arg_arrays.size(),
             kernel.runtime_args.size(),
             kernel.config.index(),
             kernel.config);
