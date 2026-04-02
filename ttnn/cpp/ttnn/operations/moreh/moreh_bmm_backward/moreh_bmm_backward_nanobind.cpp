@@ -19,17 +19,16 @@ void bind_moreh_bmm_backward_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_bmm_backward">(
         mod,
         "Moreh BMM Backward Operation",
-        ttnn::overload_t(
-            &ttnn::moreh_bmm_backward,
-            nb::arg("output_grad"),
-            nb::arg("input"),
-            nb::arg("mat2"),
-            nb::kw_only(),
-            nb::arg("are_required_outputs") = std::vector<bool>{true, true},
-            nb::arg("input_grad") = nb::none(),
-            nb::arg("mat2_grad") = nb::none(),
-            nb::arg("input_grad_memory_config") = nb::none(),
-            nb::arg("mat2_grad_memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::moreh_bmm_backward,
+        nb::arg("output_grad"),
+        nb::arg("input"),
+        nb::arg("mat2"),
+        nb::kw_only(),
+        nb::arg("are_required_outputs") = std::vector<bool>{true, true},
+        nb::arg("input_grad") = nb::none(),
+        nb::arg("mat2_grad") = nb::none(),
+        nb::arg("input_grad_memory_config") = nb::none(),
+        nb::arg("mat2_grad_memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 }  // namespace ttnn::operations::moreh::moreh_bmm_backward

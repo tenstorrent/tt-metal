@@ -24,17 +24,11 @@ Fields correctly excluded from hash (handled by override_runtime_arguments):
   tensor dtypes directly
 """
 
-import os
 import pytest
 import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import is_wormhole_b0
-
-
-def is_simulator():
-    return os.environ.get("TT_METAL_SIMULATOR") != None
 
 
 @pytest.fixture
@@ -58,7 +52,8 @@ def run_binary_ng_op(device, op, shape_a, shape_b, dtype=ttnn.bfloat16, memory_c
 
     tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
     tt_b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
-    tt_result = op(tt_a, tt_b, memory_config=memory_config)
+    with device.cache_entries_counter.measure():
+        tt_result = op(tt_a, tt_b, memory_config=memory_config)
     tt_result = ttnn.to_torch(tt_result)
 
     return torch_result, tt_result
@@ -74,7 +69,8 @@ def run_scalar_ng_op(device, op, shape, scalar, dtype=ttnn.bfloat16, memory_conf
     torch_result = torch_ops[op](torch_a, scalar)
 
     tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
-    tt_result = op(tt_a, scalar, memory_config=memory_config)
+    with device.cache_entries_counter.measure():
+        tt_result = op(tt_a, scalar, memory_config=memory_config)
     tt_result = ttnn.to_torch(tt_result)
 
     return torch_result, tt_result
@@ -85,7 +81,6 @@ def run_scalar_ng_op(device, op, shape, scalar, dtype=ttnn.bfloat16, memory_conf
 # =============================================================================
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_ng_cache_reuse_same_config(device, isolate_program_cache):
     """Same op, same shapes, same dtypes run twice -> 1 cache entry, different outputs."""
     shape = [1, 1, 32, 64]
@@ -98,11 +93,10 @@ def test_ng_cache_reuse_same_config(device, isolate_program_cache):
     torch_ref2, tt_out2 = run_binary_ng_op(device, ttnn.add, shape, shape, dtype=ttnn.float32)
     assert_with_pcc(torch_ref2, tt_out2, 0.9999)
 
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
     assert not torch.equal(tt_out1, tt_out2)
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_ng_cache_reuse_scalar_different_values(device, isolate_program_cache):
     """Different scalar values but same op -> 1 cache entry, different outputs."""
     shape = [1, 1, 32, 64]
@@ -113,7 +107,7 @@ def test_ng_cache_reuse_scalar_different_values(device, isolate_program_cache):
     torch_ref2, tt_out2 = run_scalar_ng_op(device, ttnn.add, shape, 1.5, dtype=ttnn.float32)
     assert_with_pcc(torch_ref2, tt_out2, 0.999)
 
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
     assert not torch.equal(tt_out1, tt_out2)
 
 
@@ -122,7 +116,6 @@ def test_ng_cache_reuse_scalar_different_values(device, isolate_program_cache):
 # =============================================================================
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_ng_cache_miss_different_op_types(device, isolate_program_cache):
     """Different binary op types -> different cache entries."""
     shape = [1, 1, 32, 64]
@@ -133,10 +126,9 @@ def test_ng_cache_miss_different_op_types(device, isolate_program_cache):
     torch_ref2, tt_out2 = run_binary_ng_op(device, ttnn.mul, shape, shape, dtype=ttnn.float32)
     assert_with_pcc(torch_ref2, tt_out2, 0.9999)
 
-    assert device.num_program_cache_entries() == 2
+    assert device.cache_entries_counter.total == 2
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_ng_cache_miss_different_input_dtypes(device, isolate_program_cache):
     """Different input dtypes -> different cache entries.
     Differentiated via input tensor dtype in compute_program_hash()."""
@@ -148,10 +140,9 @@ def test_ng_cache_miss_different_input_dtypes(device, isolate_program_cache):
     torch_ref2, tt_out2 = run_binary_ng_op(device, ttnn.add, shape, shape, dtype=ttnn.float32)
     assert_with_pcc(torch_ref2, tt_out2, 0.9999)
 
-    assert device.num_program_cache_entries() == 2
+    assert device.cache_entries_counter.total == 2
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_ng_cache_miss_different_memory_configs(device, isolate_program_cache):
     """Different memory configs -> different cache entries."""
     shape = [1, 1, 32, 64]
@@ -166,10 +157,9 @@ def test_ng_cache_miss_different_memory_configs(device, isolate_program_cache):
     )
     assert_with_pcc(torch_ref2, tt_out2, 0.9999)
 
-    assert device.num_program_cache_entries() == 2
+    assert device.cache_entries_counter.total == 2
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_ng_cache_miss_different_subtile_broadcast(device, isolate_program_cache):
     """Different subtile broadcast types -> different cache entries.
     subtile_broadcast_type is in to_hash() and depends on last-2-dim shapes."""
@@ -181,10 +171,9 @@ def test_ng_cache_miss_different_subtile_broadcast(device, isolate_program_cache
     torch_ref2, tt_out2 = run_binary_ng_op(device, ttnn.add, [1, 1, 32, 64], [1, 1, 1, 64], dtype=ttnn.float32)
     assert_with_pcc(torch_ref2, tt_out2, 0.9999)
 
-    assert device.num_program_cache_entries() == 2
+    assert device.cache_entries_counter.total == 2
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_ng_cache_miss_different_output_dtypes(device, isolate_program_cache):
     """Different output dtypes -> different cache entries."""
     shape = [1, 1, 32, 64]
@@ -196,7 +185,8 @@ def test_ng_cache_miss_different_output_dtypes(device, isolate_program_cache):
 
     tt_a1 = ttnn.from_torch(torch_a1, layout=ttnn.TILE_LAYOUT, device=device)
     tt_b1 = ttnn.from_torch(torch_b1, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_out1 = ttnn.add(tt_a1, tt_b1, dtype=ttnn.bfloat16)
+    with device.cache_entries_counter.measure():
+        tt_out1 = ttnn.add(tt_a1, tt_b1, dtype=ttnn.bfloat16)
     assert_with_pcc(torch_ref1, ttnn.to_torch(tt_out1), 0.9999)
 
     # bfloat16 input -> float32 output
@@ -206,13 +196,13 @@ def test_ng_cache_miss_different_output_dtypes(device, isolate_program_cache):
 
     tt_a2 = ttnn.from_torch(torch_a2, layout=ttnn.TILE_LAYOUT, device=device)
     tt_b2 = ttnn.from_torch(torch_b2, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_out2 = ttnn.add(tt_a2, tt_b2, dtype=ttnn.float32)
+    with device.cache_entries_counter.measure():
+        tt_out2 = ttnn.add(tt_a2, tt_b2, dtype=ttnn.float32)
     assert_with_pcc(torch_ref2, ttnn.to_torch(tt_out2), 0.9999)
 
-    assert device.num_program_cache_entries() == 2
+    assert device.cache_entries_counter.total == 2
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_ng_scalar_vs_tensor_cache_differentiation(device, isolate_program_cache):
     """Scalar op vs tensor op -> different cache entries.
     scalar.has_value() is not in to_hash(), but compute_program_hash()
@@ -228,10 +218,9 @@ def test_ng_scalar_vs_tensor_cache_differentiation(device, isolate_program_cache
     torch_ref2, tt_out2 = run_binary_ng_op(device, ttnn.add, shape, shape, dtype=ttnn.float32)
     assert_with_pcc(torch_ref2, tt_out2, 0.9999)
 
-    assert device.num_program_cache_entries() == 2
+    assert device.cache_entries_counter.total == 2
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_ng_cache_miss_different_sub_core_grids(device, isolate_program_cache):
     """Different sub_core_grids -> different cache entries.
     sub_core_grids is in to_hash() and directly determines worker_grid."""
@@ -244,7 +233,8 @@ def test_ng_cache_miss_different_sub_core_grids(device, isolate_program_cache):
     grid_a = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))])
     tt_a1 = ttnn.from_torch(torch_a1, layout=ttnn.TILE_LAYOUT, device=device)
     tt_b1 = ttnn.from_torch(torch_b1, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_out1 = ttnn.add(tt_a1, tt_b1, sub_core_grids=grid_a)
+    with device.cache_entries_counter.measure():
+        tt_out1 = ttnn.add(tt_a1, tt_b1, sub_core_grids=grid_a)
     assert_with_pcc(torch_ref1, ttnn.to_torch(tt_out1), 0.9999)
 
     torch_a2 = torch.rand(shape, dtype=torch.float32)
@@ -254,13 +244,13 @@ def test_ng_cache_miss_different_sub_core_grids(device, isolate_program_cache):
     grid_b = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 5))])
     tt_a2 = ttnn.from_torch(torch_a2, layout=ttnn.TILE_LAYOUT, device=device)
     tt_b2 = ttnn.from_torch(torch_b2, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_out2 = ttnn.add(tt_a2, tt_b2, sub_core_grids=grid_b)
+    with device.cache_entries_counter.measure():
+        tt_out2 = ttnn.add(tt_a2, tt_b2, sub_core_grids=grid_b)
     assert_with_pcc(torch_ref2, ttnn.to_torch(tt_out2), 0.9999)
 
-    assert device.num_program_cache_entries() == 2
+    assert device.cache_entries_counter.total == 2
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_ng_different_input_dtypes_same_output_dtype(device, isolate_program_cache):
     """Different input dtypes with same output dtype -> different cache entries.
     input_dtype is not in to_hash(), but compute_program_hash() includes
@@ -274,7 +264,8 @@ def test_ng_different_input_dtypes_same_output_dtype(device, isolate_program_cac
 
     tt_a1 = ttnn.from_torch(torch_a1, layout=ttnn.TILE_LAYOUT, device=device)
     tt_b1 = ttnn.from_torch(torch_b1, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_out1 = ttnn.add(tt_a1, tt_b1, dtype=ttnn.float32)
+    with device.cache_entries_counter.measure():
+        tt_out1 = ttnn.add(tt_a1, tt_b1, dtype=ttnn.float32)
     assert_with_pcc(torch_ref1, ttnn.to_torch(tt_out1), 0.9999)
 
     # float32 input -> float32 output (same output dtype, different input dtype)
@@ -284,10 +275,11 @@ def test_ng_different_input_dtypes_same_output_dtype(device, isolate_program_cac
 
     tt_a2 = ttnn.from_torch(torch_a2, layout=ttnn.TILE_LAYOUT, device=device)
     tt_b2 = ttnn.from_torch(torch_b2, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_out2 = ttnn.add(tt_a2, tt_b2, dtype=ttnn.float32)
+    with device.cache_entries_counter.measure():
+        tt_out2 = ttnn.add(tt_a2, tt_b2, dtype=ttnn.float32)
     assert_with_pcc(torch_ref2, ttnn.to_torch(tt_out2), 0.9999)
 
-    assert device.num_program_cache_entries() == 2
+    assert device.cache_entries_counter.total == 2
 
 
 # =============================================================================
@@ -299,7 +291,6 @@ def test_ng_different_input_dtypes_same_output_dtype(device, isolate_program_cac
 # =============================================================================
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_ng_cache_reuse_different_logical_shapes(device, isolate_program_cache):
     """Different logical shapes share 1 cache entry, different outputs (by design).
     logical_shape is correctly excluded from compute_program_hash();
@@ -310,11 +301,10 @@ def test_ng_cache_reuse_different_logical_shapes(device, isolate_program_cache):
     torch_ref2, tt_out2 = run_binary_ng_op(device, ttnn.add, [1, 1, 64, 64], [1, 1, 64, 64], dtype=ttnn.float32)
     assert_with_pcc(torch_ref2, tt_out2, 0.9999)
 
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
     assert tt_out1.shape != tt_out2.shape
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_ng_cache_reuse_different_logical_shapes_correctness(device, isolate_program_cache):
     """Correctness across multiple logical shapes sharing a single cache entry.
     override_runtime_arguments correctly updates runtime args for each shape."""
@@ -322,14 +312,17 @@ def test_ng_cache_reuse_different_logical_shapes_correctness(device, isolate_pro
         shape = [1, 1, shape_dim, shape_dim]
         torch_a = torch.rand(shape, dtype=torch.float32)
         torch_b = torch.rand(shape, dtype=torch.float32)
-        torch_ref = torch.add(torch_a, torch_b)
+
+        with device.cache_entries_counter.measure():
+            torch_ref = torch.add(torch_a, torch_b)
 
         tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
         tt_b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
-        tt_out = ttnn.add(tt_a, tt_b)
+        with device.cache_entries_counter.measure():
+            tt_out = ttnn.add(tt_a, tt_b)
         assert_with_pcc(torch_ref, ttnn.to_torch(tt_out), 0.9999)
 
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
 
 
 # =============================================================================
@@ -337,7 +330,6 @@ def test_ng_cache_reuse_different_logical_shapes_correctness(device, isolate_pro
 # =============================================================================
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_ng_cache_correctness_repeated_runs(device, isolate_program_cache):
     """Run same op 5 times with different data -> all results correct."""
     shape = [1, 1, 32, 64]
@@ -346,7 +338,6 @@ def test_ng_cache_correctness_repeated_runs(device, isolate_program_cache):
         assert_with_pcc(torch_ref, tt_out, 0.9999)
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_ng_cache_correctness_scalar_repeated(device, isolate_program_cache):
     """Scalar ops with varying values -> all numerically correct."""
     shape = [1, 1, 32, 64]
@@ -356,7 +347,6 @@ def test_ng_cache_correctness_scalar_repeated(device, isolate_program_cache):
         assert_with_pcc(torch_ref, tt_out, 0.999)
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_ng_cache_correctness_broadcast_repeated(device, isolate_program_cache):
     """Broadcast operations with cache reuse -> all results correct."""
     shape_a = [1, 1, 64, 64]

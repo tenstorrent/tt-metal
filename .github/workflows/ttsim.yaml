@@ -21,7 +21,7 @@ on:
       ttsim-version:
         required: false
         type: string
-        default: "v1.4.8"
+        default: "v1.5.0"
       job-timeout:
         required: false
         type: number
@@ -99,12 +99,9 @@ jobs:
           echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
 
       - name: Download ttsim binary
-        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
-        with:
-          repository: tenstorrent/ttsim
-          tag: ${{ inputs.ttsim-version }}
-          fileName: ${{ steps.ttsim-asset.outputs.asset_name }}
-          out-file-path: /tmp/ttsim
+        run: |
+          mkdir -p /tmp/ttsim
+          curl -fL --retry 5 --retry-delay 10 "https://github.com/tenstorrent/ttsim/releases/download/${{ inputs.ttsim-version }}/${{ steps.ttsim-asset.outputs.asset_name }}" -o "/tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }}"
 
       - name: Install ttsim
         run: |
@@ -254,12 +251,9 @@ jobs:
           echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
 
       - name: Download ttsim binary
-        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
-        with:
-          repository: tenstorrent/ttsim
-          tag: ${{ inputs.ttsim-version }}
-          fileName: ${{ steps.ttsim-asset.outputs.asset_name }}
-          out-file-path: /tmp/ttsim
+        run: |
+          mkdir -p /tmp/ttsim
+          curl -fL --retry 5 --retry-delay 10 "https://github.com/tenstorrent/ttsim/releases/download/${{ inputs.ttsim-version }}/${{ steps.ttsim-asset.outputs.asset_name }}" -o "/tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }}"
 
       - name: Install ttsim
         run: |
@@ -344,12 +338,9 @@ jobs:
           echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
 
       - name: Download ttsim binary
-        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
-        with:
-          repository: tenstorrent/ttsim
-          tag: ${{ inputs.ttsim-version }}
-          fileName: ${{ steps.ttsim-asset.outputs.asset_name }}
-          out-file-path: /tmp/ttsim
+        run: |
+          mkdir -p /tmp/ttsim
+          curl -fL --retry 5 --retry-delay 10 "https://github.com/tenstorrent/ttsim/releases/download/${{ inputs.ttsim-version }}/${{ steps.ttsim-asset.outputs.asset_name }}" -o "/tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }}"
 
       - name: Install ttsim
         run: |
@@ -433,12 +424,9 @@ jobs:
           echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
 
       - name: Download ttsim binary
-        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
-        with:
-          repository: tenstorrent/ttsim
-          tag: ${{ inputs.ttsim-version }}
-          fileName: ${{ steps.ttsim-asset.outputs.asset_name }}
-          out-file-path: /tmp/ttsim
+        run: |
+          mkdir -p /tmp/ttsim
+          curl -fL --retry 5 --retry-delay 10 "https://github.com/tenstorrent/ttsim/releases/download/${{ inputs.ttsim-version }}/${{ steps.ttsim-asset.outputs.asset_name }}" -o "/tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }}"
 
       - name: Install ttsim
         run: |

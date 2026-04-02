@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common.hpp"                // For MeshCoordinate
@@ -26,6 +27,7 @@ struct TestDevice;
 // Progress monitoring configuration
 struct ProgressMonitorConfig {
     bool enabled = false;
+    bool show_workers = false;
     uint32_t poll_interval_seconds = 2;    // How often to poll progress
     uint32_t hung_threshold_seconds = 30;  // When to warn about hung devices
 };
@@ -101,6 +103,10 @@ private:
     // Hung detection state
     std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceState> device_states_;
     std::chrono::seconds hung_threshold_;
+
+    // Per-device completion tracking
+    std::unordered_set<tt::tt_fabric::FabricNodeId> completed_devices_;
+    uint32_t total_active_devices_ = 0;
 };
 
 }  // namespace tt::tt_fabric::fabric_tests

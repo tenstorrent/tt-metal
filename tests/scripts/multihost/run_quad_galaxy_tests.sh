@@ -66,12 +66,15 @@ _resolve_deepseekv3_cache() {
 
 setup_dual_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
-    export HOSTS="g05glx01,g05glx02"
-    export RANKFILE=/etc/mpirun/rankfile_g05glx01_g05glx02
+    export HOSTS="g02glx01,g02glx02"
+    export RANKFILE=/etc/mpirun/rankfile
     export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
     export TCP_INTERFACE="cnx1"
     mkdir -p logs
     mkdir -p generated/artifacts
+
+    echo "Using dual Galaxy hosts: ${HOSTS}"
+    echo "Using dual Galaxy rankfile: ${RANKFILE}"
 
     if ! test -f "$RANKFILE"; then
         echo "File '$RANKFILE' does not exist."
