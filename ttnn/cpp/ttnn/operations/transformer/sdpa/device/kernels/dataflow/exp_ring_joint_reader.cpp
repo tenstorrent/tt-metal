@@ -435,4 +435,5 @@ void kernel_main() {
             noc_semaphore_set(per_link_sem_ptrs[lnk], 0);
         }
     }
+    noc_async_writes_flushed();
 }
