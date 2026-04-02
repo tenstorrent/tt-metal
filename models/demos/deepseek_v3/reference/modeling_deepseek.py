@@ -455,6 +455,8 @@ class MoEGate(nn.Module):
         ### compute gating score
         hidden_states = hidden_states.view(-1, h)
         logits = F.linear(hidden_states.type(torch.float32), self.weight.type(torch.float32), None)
+        # torch.save(logits[2], "/work/logits.pt")
+        # torch.save(self.e_score_correction_bias, "/work/scores_correction_bias.pt")
         if self.scoring_func == "sigmoid":
             scores = logits.sigmoid()
         else:

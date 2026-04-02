@@ -19,6 +19,8 @@
 #endif
 #endif
 
+#define READ_HW_CFG_0_REG_FIELD(reg_field_name) READ_CFG_REG_FIELD(ckernel::dbg_cfgreg::HW_CFG_0, reg_field_name)
+
 namespace ckernel {
 
 template <bool enable_sigmoid = false, bool is_32bit = false>
@@ -72,6 +74,7 @@ ALWI void deepseek_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t
     UNPACK((llk_unpack_set_srcb_dummy_valid()));
     // Sum top2 (SFPU)
     MATH((llk_math_sfpu_deepseek_moe_gate_sum_top2<APPROX, DST_ACCUM_MODE>(0)));
+    // writer + read using python
     // Transpose dest step 0 (FPU)
     MATH((llk_math_deepseek_moe_gate_transpose_dest_single_face_step0_init<is_32bit>()));
     MATH((llk_math_deepseek_moe_gate_transpose_dest_single_face_step0<DST_ACCUM_MODE, is_32bit>()));

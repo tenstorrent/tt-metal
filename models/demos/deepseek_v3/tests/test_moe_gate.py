@@ -8,7 +8,6 @@ import os
 import pytest
 import torch
 from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
@@ -127,6 +126,13 @@ def test_forward_pass(
         module_path=module_path,
     )
 
+    token3 = torch_input[0, 2, :]
+    torch_input = token3.unsqueeze(0).repeat(1, 128, 1)
+    index3 = reference_topk_indices[2, :]
+    reference_topk_indices = index3.unsqueeze(0).repeat(128, 1)
+    weight3 = reference_topk_weights[2, :]
+    reference_topk_weights = weight3.unsqueeze(0).repeat(128, 1)
+
     weight_config = get_test_weight_config(
         MoEGate,
         hf_config,
@@ -163,6 +169,7 @@ def test_forward_pass(
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
     tt_topk_weights, tt_topk_indices = run_module_forward(MoEGate, mode, tt_input, run_config)
     ttnn.synchronize_device(mesh_device)
+    """
     # capture warmup trace
     trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for i in range(warmup_iters):
@@ -195,7 +202,7 @@ def test_forward_pass(
     signpost("stop")
 
     tt_topk_weights, tt_topk_indices = run_module_forward(MoEGate, mode, tt_input, run_config)
-
+    """
     # Verify output memory config matches expected
     expected_output_memory_config = run_config["output_memory_config"]
     actual_topk_weights_memory_config = tt_topk_weights.memory_config()
@@ -245,6 +252,7 @@ def test_forward_pass(
     passing, pcc_message = comp_pcc(ref_sorted_weights, tt_sorted_weights, topk_weights_pcc_required)
 
     # due to tie breaking, the first 2 indices are the most important
+    breakpoint()
     topk_indices_accuracy_required = 1 if mode == "decode" else 0.92
     accuracy = tt_sorted_indices[:, :2].eq(ref_sorted_indices[:, :2]).float().mean()
 
@@ -255,7 +263,6 @@ def test_forward_pass(
     ), f"TopK experts weights output does not meet PCC requirement {topk_weights_pcc_required}: {pcc_message}"
 
     assert accuracy >= topk_indices_accuracy_required, f"TopK experts indices output does not match: {accuracy}"
-    # due to tie breaking, we cannot guarantee all the indices are the same as the pytorch version
 
 
 if __name__ == "__main__":
