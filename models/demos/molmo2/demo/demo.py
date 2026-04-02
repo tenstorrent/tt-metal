@@ -607,6 +607,7 @@ class Molmo2Generator:
         self.vision_trace_id = None
         self.vision_trace_tensors = None
         self.vision_trace_outputs = None  # [feature_layer_18, feature_layer_24]
+        self.vision_trace_config_key = None  # invalidates trace when shape/mode changes
 
         # KV cache (initialized on first run)
         self.kv_caches = None
@@ -727,9 +728,22 @@ class Molmo2Generator:
         n_out = pooled_patches_idx.shape[1]
         k_pool = pooled_patches_idx.shape[2]
 
-        # 1. Patch embedding on TTNN (unfold on CPU, linear+pos_embed on device)
+        # 1. Per-crop patch embedding (L1 in patch_embed_ttnn on T3K), concat; ViT runs inside vision trace.
         vit = self.model.vision_backbone.image_vit
-        embedded_ttnn = vit.patch_embed_ttnn(pixel_values)  # [1, 1, B*N, hidden_dim] on device
+        _, _, height, width = pixel_values.shape
+        patches_h = height // vit.patch_size
+        patches_w = width // vit.patch_size
+        native_patch_grid = patches_h == patches_w == vit.base_num_patches_per_side
+
+        if batch_size > 1 and native_patch_grid:
+            emb_chunks = []
+            for i in range(batch_size):
+                emb_chunks.append(vit.patch_embed_ttnn(pixel_values[i : i + 1]))
+            embedded_ttnn = ttnn.concat(emb_chunks, dim=2)
+            for e in emb_chunks:
+                ttnn.deallocate(e)
+        else:
+            embedded_ttnn = vit.patch_embed_ttnn(pixel_values)  # [1, 1, B*N, hidden_dim] on device
 
         # 2. Prepare indices for TTNN gather
         # Identify valid indices (>= 0) and clip negative to 0
@@ -743,7 +757,7 @@ class Molmo2Generator:
         # Create valid mask: [1, 1, B*N_out*K_pool, 1]
         valid_mask = valid.reshape(1, 1, -1, 1).float()
 
-        # 3. Convert remaining tensors to TTNN (embedded_ttnn already on device)
+        # 3. Convert remaining tensors to TTNN
 
         idx_ttnn = ttnn.from_torch(
             flat_idx,
@@ -789,11 +803,9 @@ class Molmo2Generator:
         hidden_dim: int = 1152,
         n_out: int = 169,
         k_pool: int = 4,
-        pool_dim: int = 2304,
         batch_size: int = 1,
     ) -> dict:
-        """Allocate tensors for vision trace."""
-        # Input: embedded patches
+        """Allocate tensors for vision trace (DRAM; fused ViT uses DRAM attention linears when seq > 1024)."""
         trace_embedded = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, batch_size * num_patches, hidden_dim]),
             ttnn.bfloat16,
@@ -868,7 +880,6 @@ class Molmo2Generator:
         vision_inputs: dict,
     ) -> ttnn.Tensor:
         """Execute vision trace with new inputs."""
-        # Copy new inputs to trace tensors
         ttnn.copy(vision_inputs["embedded"], trace_tensors["embedded"])
         ttnn.copy(vision_inputs["idx"], trace_tensors["idx"])
         ttnn.copy(vision_inputs["valid_mask"], trace_tensors["valid_mask"])
@@ -1080,11 +1091,7 @@ class Molmo2Generator:
         k_pool: int = 4,
         batch_size: int = 1,
     ) -> dict:
-        """Allocate all tensors needed for unified vision + prefill trace.
-
-        This includes input_ids so embed_tokens can be called inside the trace.
-        """
-        # Vision inputs
+        """Allocate tensors for unified vision + prefill trace (ViT + pool + projector inside capture)."""
         trace_embedded = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, batch_size * num_patches, vit_hidden_dim]),
             ttnn.bfloat16,
@@ -1188,7 +1195,7 @@ class Molmo2Generator:
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
 
-        # Step 1: Vision backbone (ViT + pooling + projection)
+        # Step 1: Vision — full ViT + pooling + projector (embedded buffer filled before capture).
         visual_embeddings = self.model.vision_backbone.forward_ttnn(
             images_embedded=trace_tensors["embedded"],
             pooled_patches_idx_ttnn=trace_tensors["idx"],
@@ -1198,7 +1205,7 @@ class Molmo2Generator:
             k_pool=trace_tensors["k_pool"],
             batch_size=trace_tensors["batch_size"],
         )
-        # visual_embeddings shape: [1, 1, num_visual_tokens, 4096]
+        # visual_embeddings shape: [1, 1, batch_size * n_out, 4096]
 
         # Step 2: Text embeddings (INSIDE trace - this is key for performance)
         text_embeddings = self.model.text_model.embed_tokens(trace_tensors["input_ids"])
@@ -1254,9 +1261,23 @@ class Molmo2Generator:
         batch_size = pooled_patches_idx.shape[0]
         seq_len = input_ids.shape[1]
 
-        # Prepare vision inputs -- patch embedding on TTNN (no CPU matmul)
+        # Vision: per-crop patch embedding (L1 in patch_embed_ttnn on T3K), concat patches;
+        # full ViT + pooling + projector run inside unified trace (DRAM linears when seq > 1024).
         vit = self.model.vision_backbone.image_vit
-        embedded_ttnn = vit.patch_embed_ttnn(pixel_values)  # [1, 1, B*N, hidden_dim] on device
+        _, _, height, width = pixel_values.shape
+        patches_h = height // vit.patch_size
+        patches_w = width // vit.patch_size
+        native_patch_grid = patches_h == patches_w == vit.base_num_patches_per_side
+
+        if batch_size > 1 and native_patch_grid:
+            emb_chunks = []
+            for i in range(batch_size):
+                emb_chunks.append(vit.patch_embed_ttnn(pixel_values[i : i + 1]))
+            embedded_ttnn = ttnn.concat(emb_chunks, dim=2)
+            for e in emb_chunks:
+                ttnn.deallocate(e)
+        else:
+            embedded_ttnn = vit.patch_embed_ttnn(pixel_values)  # [1, 1, B*N, hidden_dim] on device
 
         n_out = pooled_patches_idx.shape[1]
         k_pool = pooled_patches_idx.shape[2]
@@ -1357,13 +1378,10 @@ class Molmo2Generator:
         inputs: dict,
     ) -> ttnn.Tensor:
         """Execute unified trace with new inputs."""
-        # Copy vision inputs to trace tensors
         ttnn.copy(inputs["embedded"], trace_tensors["embedded"])
         ttnn.copy(inputs["idx"], trace_tensors["idx"])
         ttnn.copy(inputs["valid_mask"], trace_tensors["valid_mask"])
         ttnn.copy(inputs["valid_token"], trace_tensors["valid_token"])
-
-        # Copy text/fusion inputs
         ttnn.copy(inputs["input_ids"], trace_tensors["input_ids"])
         ttnn.copy(inputs["selector_matrix"], trace_tensors["selector_matrix"])
 
@@ -1405,9 +1423,7 @@ class Molmo2Generator:
             logger.info("Running unified warmup (compile)...")
             warmup_start = time.perf_counter()
 
-            # Run full pipeline once for compilation (same ops as trace)
-            # Step 1: Vision
-            visual_embeddings = self.model.vision_backbone.forward_ttnn(
+            vb_warm_kwargs = dict(
                 images_embedded=inputs["embedded"],
                 pooled_patches_idx_ttnn=inputs["idx"],
                 valid_mask_ttnn=inputs["valid_mask"],
@@ -1416,6 +1432,10 @@ class Molmo2Generator:
                 k_pool=inputs["k_pool"],
                 batch_size=inputs["batch_size"],
             )
+
+            # Run full pipeline once for compilation (same ops as trace)
+            # Step 1: Vision
+            visual_embeddings = self.model.vision_backbone.forward_ttnn(**vb_warm_kwargs)
 
             # Step 2: Text embeddings (compile embed_tokens)
             text_embeddings = self.model.text_model.embed_tokens(inputs["input_ids"])
@@ -1464,7 +1484,6 @@ class Molmo2Generator:
                 batch_size=inputs["batch_size"],
             )
 
-            # Copy initial data to trace tensors
             ttnn.copy(inputs["embedded"], trace_tensors["embedded"])
             ttnn.copy(inputs["idx"], trace_tensors["idx"])
             ttnn.copy(inputs["valid_mask"], trace_tensors["valid_mask"])
@@ -1675,20 +1694,33 @@ class Molmo2Generator:
             vision_inputs = self._prepare_vision_inputs_for_trace(pixel_values, pooled_patches_idx)
             timing["vision_prep_ms"] = (time.perf_counter() - vision_prep_start) * 1000
 
+            trace_cfg_key = (
+                vision_inputs["batch_size"],
+                vision_inputs["n_out"],
+                vision_inputs["k_pool"],
+            )
+            if self.vision_trace_id is not None and self.vision_trace_config_key != trace_cfg_key:
+                ttnn.release_trace(self.mesh_device, self.vision_trace_id)
+                self.vision_trace_id = None
+                self.vision_trace_tensors = None
+                self.vision_trace_outputs = None
+
+            vb_warm_kwargs = dict(
+                images_embedded=vision_inputs["embedded"],
+                pooled_patches_idx_ttnn=vision_inputs["idx"],
+                valid_mask_ttnn=vision_inputs["valid_mask"],
+                valid_token_ttnn=vision_inputs["valid_token"],
+                n_out=vision_inputs["n_out"],
+                k_pool=vision_inputs["k_pool"],
+                batch_size=vision_inputs["batch_size"],
+            )
+
             # Check if we need to capture a new trace
             if self.vision_trace_id is None:
                 # First run: warmup + capture trace
                 logger.info("Running vision warmup (compile)...")
                 warmup_start = time.perf_counter()
-                warmup_output = self.model.vision_backbone.forward_ttnn(
-                    images_embedded=vision_inputs["embedded"],
-                    pooled_patches_idx_ttnn=vision_inputs["idx"],
-                    valid_mask_ttnn=vision_inputs["valid_mask"],
-                    valid_token_ttnn=vision_inputs["valid_token"],
-                    n_out=vision_inputs["n_out"],
-                    k_pool=vision_inputs["k_pool"],
-                    batch_size=vision_inputs["batch_size"],
-                )
+                warmup_output = self.model.vision_backbone.forward_ttnn(**vb_warm_kwargs)
                 ttnn.synchronize_device(self.mesh_device)
                 timing["vision_compile_ms"] = (time.perf_counter() - warmup_start) * 1000
                 logger.info(f"Vision compile completed in {timing['vision_compile_ms']:.2f}ms")
@@ -1702,7 +1734,6 @@ class Molmo2Generator:
                     batch_size=vision_inputs["batch_size"],
                 )
 
-                # Copy initial data to trace tensors
                 ttnn.copy(vision_inputs["embedded"], self.vision_trace_tensors["embedded"])
                 ttnn.copy(vision_inputs["idx"], self.vision_trace_tensors["idx"])
                 ttnn.copy(vision_inputs["valid_mask"], self.vision_trace_tensors["valid_mask"])
@@ -1710,11 +1741,11 @@ class Molmo2Generator:
 
                 # Capture trace
                 self.vision_trace_id, self.vision_trace_outputs = self._capture_vision_trace(self.vision_trace_tensors)
+                self.vision_trace_config_key = trace_cfg_key
 
             # Execute vision trace - START of end-to-end TTFT measurement
             e2e_ttft_start = time.perf_counter()
             vision_trace_start = time.perf_counter()
-            # Copy new inputs to trace tensors
             ttnn.copy(vision_inputs["embedded"], self.vision_trace_tensors["embedded"])
             ttnn.copy(vision_inputs["idx"], self.vision_trace_tensors["idx"])
             ttnn.copy(vision_inputs["valid_mask"], self.vision_trace_tensors["valid_mask"])
@@ -1736,7 +1767,6 @@ class Molmo2Generator:
             )
             timing["fuse_ms"] = (time.perf_counter() - fuse_start) * 1000
 
-            # Cleanup temporary vision input tensors (trace tensors are reused)
             ttnn.deallocate(vision_inputs["embedded"])
             ttnn.deallocate(vision_inputs["idx"])
             ttnn.deallocate(vision_inputs["valid_mask"])

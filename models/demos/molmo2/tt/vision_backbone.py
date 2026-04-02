@@ -158,7 +158,6 @@ class VisionBackbone(LightweightModule):
         hidden_states = self.image_vit.forward(
             images_embedded,
             return_all_hidden_states=True,
-            matmul_output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         # Extract features from specified layers and concat
@@ -408,10 +407,12 @@ class VisionBackbone(LightweightModule):
         is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
 
         # 1. Encode image through ViT (unless features were built per-crop upstream)
+        image_features_owned = False
         if image_features is not None:
             pass
         elif images_embedded is not None:
             image_features = self.encode_image(images_embedded)
+            image_features_owned = True
         else:
             raise ValueError("forward_ttnn requires images_embedded or image_features")
         # image_features: [1, 1, B*T*N, pool_dim]
@@ -468,7 +469,8 @@ class VisionBackbone(LightweightModule):
         ttnn.deallocate(query)
         ttnn.deallocate(to_pool)
         ttnn.deallocate(gathered)
-        ttnn.deallocate(image_features)
+        if image_features_owned:
+            ttnn.deallocate(image_features)
 
         # Reshape: [1, B*N_out, 1, hidden_dim] -> [1, 1, B*N_out, hidden_dim]
         pooled_features = ttnn.reshape(pooled_features, [1, 1, batch_size * n_out, -1])
