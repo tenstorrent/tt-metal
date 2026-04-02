@@ -155,7 +155,7 @@ jobs:
       should-skip: ${{ steps.determine-tests.outputs.should-skip }}
     steps:
       - name: Checkout the appropriate branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.setup-branch.outputs.branch-to-run }}
           fetch-depth: 0
