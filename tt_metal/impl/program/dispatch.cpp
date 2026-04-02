@@ -2136,6 +2136,7 @@ void update_program_dispatch_commands(
     const ProgramDispatchMetadata& dispatch_md,
     ProgramBinaryStatus program_binary_status,
     std::pair<bool, int> unicast_go_signal_update) {
+    ZoneScopedN("update_program_dispatch_commands");
     uint32_t i = 0;
 
     static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
@@ -2486,6 +2487,7 @@ void write_program_command_sequence(
     bool stall_first,
     bool stall_before_program,
     bool send_binary) {
+    ZoneScopedN("write_program_command_sequence");
     LOG_TRACE_LAZY(tt::LogDispatch, "");
     LOG_TRACE_LAZY(
         tt::LogDispatch, "========== Writing Program Command Sequence to CQ {} ==========", command_queue_id);
@@ -2587,6 +2589,352 @@ void write_program_command_sequence(
 
     LOG_TRACE_LAZY(tt::LogDispatch, "========== Finished Writing Program Command Sequence ==========");
     LOG_TRACE_LAZY(tt::LogDispatch, "");
+}
+
+void build_flattened_command_sequence(
+    const ProgramCommandSequence& pcs,
+    bool stall_first,
+    bool stall_before_program,
+    bool send_binary,
+    FlattenedCommandSequence& out) {
+    ZoneScopedN("build_flattened_command_sequence");
+
+    // 1. Calculate total size — same logic as get_one_shot_fetch_size
+    out.total_size = pcs.get_one_shot_fetch_size(stall_first, stall_before_program, send_binary);
+    out.buffer.resize(out.total_size);
+
+    uint32_t write_pos = 0;
+
+    // Helper: copy a sub-buffer into the flat buffer and return its start offset
+    auto copy_sub_buffer = [&](const HostMemDeviceCommand& cmd) -> uint32_t {
+        uint32_t start = write_pos;
+        if (cmd.size_bytes() > 0) {
+            std::memcpy(out.buffer.data() + write_pos, cmd.data(), cmd.size_bytes());
+            write_pos += cmd.size_bytes();
+        }
+        return start;
+    };
+
+    // Helper: translate a pointer into a sub-buffer to a flat offset
+    auto ptr_to_flat = [](const HostMemDeviceCommand& cmd, uint32_t sub_buffer_start, const void* ptr) -> uint32_t {
+        return sub_buffer_start +
+               static_cast<uint32_t>(
+                   reinterpret_cast<const uint8_t*>(ptr) - reinterpret_cast<const uint8_t*>(cmd.data()));
+    };
+
+    // 2. Copy in the same order as write_program_command_sequence (dispatch.cpp:2529-2580)
+    uint32_t preamble_start = copy_sub_buffer(pcs.preamble_command_sequence);
+
+    uint32_t stall_start = 0;
+    const auto stall_idx = pcs.current_stall_seq_idx;
+    if (stall_first) {
+        stall_start = copy_sub_buffer(pcs.stall_command_sequences[stall_idx]);
+    }
+
+    // Runtime args — multiple sub-buffers
+    std::vector<uint32_t> rt_args_starts;
+    rt_args_starts.reserve(pcs.runtime_args_command_sequences.size());
+    for (const auto& rt_cmd : pcs.runtime_args_command_sequences) {
+        rt_args_starts.push_back(copy_sub_buffer(rt_cmd));
+    }
+
+    uint32_t config_buffer_start = copy_sub_buffer(pcs.program_config_buffer_command_sequence);
+
+    if (stall_before_program) {
+        stall_start = copy_sub_buffer(pcs.stall_command_sequences[stall_idx]);
+    }
+
+    uint32_t prefetcher_start = 0;
+    if (send_binary) {
+        if (pcs.prefetcher_cache_used) {
+            prefetcher_start = copy_sub_buffer(pcs.program_binary_setup_prefetcher_cache_command);
+            out.has_prefetcher = true;
+            out.prefetcher_cmd_flat_offset = prefetcher_start;
+            out.prefetcher_cmd_size = pcs.program_binary_setup_prefetcher_cache_command.size_bytes();
+        }
+        copy_sub_buffer(pcs.program_binary_command_sequence);
+    }
+
+    uint32_t launch_msg_start = copy_sub_buffer(pcs.launch_msg_command_sequence);
+    uint32_t go_msg_start = copy_sub_buffer(pcs.go_msg_command_sequence);
+
+    TT_ASSERT(
+        write_pos == out.total_size, "Flattened buffer size mismatch: wrote {} expected {}", write_pos, out.total_size);
+
+    // 3. Translate patch pointers to flat offsets
+
+    // Preamble patches — use the same compile-time offsets as update_program_dispatch_commands
+    static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
+    static constexpr uint32_t write_offsets_offset = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd));
+    static constexpr uint32_t tensix_l1_write_offset_offset = write_offsets_offset + sizeof(uint32_t);
+    static constexpr uint32_t tensix_l1_binary_write_offset_offset = write_offsets_offset + (sizeof(uint32_t) * 2);
+    static constexpr uint32_t eth_l1_write_offset_offset = write_offsets_offset + (sizeof(uint32_t) * 3);
+    static constexpr uint32_t program_host_id_offset =
+        (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.program_host_id));
+
+    // Stall sync_count patch
+    if (stall_first || stall_before_program) {
+        out.stall_sync_count = {stall_start + wait_count_offset, sizeof(uint32_t)};
+    }
+
+    // Preamble patches
+    out.preamble_tensix_write_offset = {preamble_start + tensix_l1_write_offset_offset, sizeof(uint32_t)};
+    out.preamble_tensix_binary_offset = {preamble_start + tensix_l1_binary_write_offset_offset, sizeof(uint32_t)};
+    out.preamble_host_id = {preamble_start + program_host_id_offset, sizeof(uint16_t)};
+    const auto& hal = MetalContext::instance().hal();
+    if (hal.get_programmable_core_type_count() >= 2) {
+        out.has_eth_preamble = true;
+        out.preamble_eth_write_offset = {preamble_start + eth_l1_write_offset_offset, sizeof(uint32_t)};
+    }
+
+    // CB config patches — translate cb_configs_payloads[i] pointers
+    out.cb_config_patches.reserve(pcs.cb_configs_payloads.size());
+    for (const auto* cb_payload_ptr : pcs.cb_configs_payloads) {
+        uint32_t flat_off =
+            ptr_to_flat(pcs.program_config_buffer_command_sequence, config_buffer_start, cb_payload_ptr);
+        TT_ASSERT(
+            flat_off < out.total_size,
+            "CB config payload offset {} out of bounds (total {})",
+            flat_off,
+            out.total_size);
+        out.cb_config_patches.push_back({flat_off});
+    }
+
+    // RTA patches — translate rta_updates[j].dst pointers
+    // Each dst points into one of the runtime_args_command_sequences buffers
+    out.rta_patches.reserve(pcs.rta_updates.size());
+    for (const auto& rta : pcs.rta_updates) {
+        bool found = false;
+        for (size_t k = 0; k < pcs.runtime_args_command_sequences.size(); k++) {
+            const auto& rt_cmd = pcs.runtime_args_command_sequences[k];
+            const auto* buf_start = reinterpret_cast<const uint8_t*>(rt_cmd.data());
+            const auto* buf_end = buf_start + rt_cmd.size_bytes();
+            const auto* dst_ptr = reinterpret_cast<const uint8_t*>(rta.dst);
+            if (dst_ptr >= buf_start && dst_ptr < buf_end) {
+                uint32_t flat_off = rt_args_starts[k] + static_cast<uint32_t>(dst_ptr - buf_start);
+                TT_ASSERT(flat_off + rta.size <= out.total_size);
+                out.rta_patches.push_back({rta.src, flat_off, rta.size});
+                found = true;
+                break;
+            }
+        }
+        TT_ASSERT(found, "RTA update dst pointer not found in any runtime_args_command_sequence");
+    }
+
+    // Launch message data patches — translate launch_messages[].msg_ptr field addresses
+    out.launch_msg_data_patches.reserve(pcs.launch_messages.size());
+    out.profiler_host_id_offsets.reserve(pcs.launch_messages.size());
+    for (const auto& lm : pcs.launch_messages) {
+        FlattenedCommandSequence::LaunchMsgPatchInfo info;
+        // kernel_config_base is an array — get address of each element
+        auto kernel_config = lm.msg_ptr.kernel_config();
+        auto& base_arr = kernel_config.kernel_config_base();
+        for (uint32_t i = 0; i < hal.get_programmable_core_type_count(); i++) {
+            uint32_t flat_off = ptr_to_flat(pcs.launch_msg_command_sequence, launch_msg_start, &base_arr[i]);
+            info.kernel_config_base_offsets.push_back(flat_off);
+        }
+        // host_assigned_id
+        uint32_t host_id_off =
+            ptr_to_flat(pcs.launch_msg_command_sequence, launch_msg_start, &kernel_config.host_assigned_id());
+        info.host_assigned_id_offset = host_id_off;
+        out.profiler_host_id_offsets.push_back(host_id_off);
+        out.launch_msg_data_patches.push_back(std::move(info));
+    }
+
+    // Launch msg CQDispatchWritePackedCmd::addr patches
+    out.mcast_launch_msg_addr_offsets.reserve(pcs.launch_msg_write_packed_cmd_ptrs.size());
+    for (const auto* cmd_ptr : pcs.launch_msg_write_packed_cmd_ptrs) {
+        uint32_t flat_off = ptr_to_flat(pcs.launch_msg_command_sequence, launch_msg_start, &cmd_ptr->addr);
+        out.mcast_launch_msg_addr_offsets.push_back(flat_off);
+    }
+    out.unicast_launch_msg_addr_offsets.reserve(pcs.unicast_launch_msg_write_packed_cmd_ptrs.size());
+    for (const auto* cmd_ptr : pcs.unicast_launch_msg_write_packed_cmd_ptrs) {
+        uint32_t flat_off = ptr_to_flat(pcs.launch_msg_command_sequence, launch_msg_start, &cmd_ptr->addr);
+        out.unicast_launch_msg_addr_offsets.push_back(flat_off);
+    }
+
+    // Go signal patches
+    TT_ASSERT(pcs.mcast_go_signal_cmd_ptr != nullptr);
+    out.go_signal = {
+        ptr_to_flat(pcs.go_msg_command_sequence, go_msg_start, &pcs.mcast_go_signal_cmd_ptr->go_signal),
+        sizeof(uint32_t)};
+    out.go_wait_count = {
+        ptr_to_flat(pcs.go_msg_command_sequence, go_msg_start, &pcs.mcast_go_signal_cmd_ptr->wait_count),
+        sizeof(uint32_t)};
+    out.go_num_unicast_txns = {
+        ptr_to_flat(pcs.go_msg_command_sequence, go_msg_start, &pcs.mcast_go_signal_cmd_ptr->num_unicast_txns),
+        sizeof(uint8_t)};
+}
+
+void update_flattened_command_sequence(
+    ProgramImpl& program,
+    FlattenedCommandSequence& flat,
+    const ProgramCommandSequence& pcs,
+    uint32_t multicast_cores_launch_message_wptr,
+    uint32_t unicast_cores_launch_message_wptr,
+    uint32_t expected_num_workers_completed,
+    CoreCoord dispatch_core,
+    CoreType dispatch_core_type,
+    SubDeviceId sub_device_id,
+    const ProgramDispatchMetadata& dispatch_md,
+    ProgramBinaryStatus program_binary_status,
+    std::pair<bool, int> unicast_go_signal_update) {
+    ZoneScopedN("update_flattened_command_sequence");
+    uint8_t* buf = flat.buffer.data();
+    const auto& hal = MetalContext::instance().hal();
+
+    // #1: Stall sync_count
+    if (flat.stall_sync_count.size > 0) {
+        std::memcpy(buf + flat.stall_sync_count.offset, &dispatch_md.sync_count, sizeof(uint32_t));
+    }
+
+    // #2-#3: Preamble tensix offsets
+    uint32_t tensix_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    std::memcpy(
+        buf + flat.preamble_tensix_write_offset.offset,
+        &dispatch_md.kernel_config_addrs[tensix_index],
+        sizeof(uint32_t));
+    std::memcpy(
+        buf + flat.preamble_tensix_binary_offset.offset,
+        &dispatch_md.kernel_config_addrs[tensix_index],
+        sizeof(uint32_t));
+
+    // #4: Preamble host_id
+    uint16_t runtime_id = program.get_runtime_id();
+    std::memcpy(buf + flat.preamble_host_id.offset, &runtime_id, sizeof(uint16_t));
+
+    // #5: Preamble eth offset
+    if (flat.has_eth_preamble) {
+        uint32_t eth_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+        std::memcpy(
+            buf + flat.preamble_eth_write_offset.offset, &dispatch_md.kernel_config_addrs[eth_index], sizeof(uint32_t));
+    }
+
+    // #6: CB configs — same iteration logic as update_program_dispatch_commands
+    uint32_t max_cbs = hal.get_arch_num_circular_buffers();
+    uint32_t cb_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    uint32_t remote_offset_index = program.get_program_config(cb_index).local_cb_size / sizeof(uint32_t);
+    uint32_t i = 0;
+    for (const auto& cbs_on_core_range : pcs.circular_buffers_on_core_ranges) {
+        uint32_t* cb_config_payload = reinterpret_cast<uint32_t*>(buf + flat.cb_config_patches[i].flat_offset);
+        for (const auto& cb : cbs_on_core_range) {
+            const uint32_t cb_address = cb->address();
+            const uint32_t cb_size = cb->size();
+            for (const auto& buffer_index : cb->local_buffer_indices()) {
+                uint32_t base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;
+                cb_config_payload[base_index] = cb_address;
+                cb_config_payload[base_index + 1] = cb_size;
+                cb_config_payload[base_index + 2] = cb->num_pages(buffer_index);
+                cb_config_payload[base_index + 3] = cb->page_size(buffer_index);
+            }
+            for (const auto& buffer_index : cb->remote_buffer_indices()) {
+                const uint32_t base_index = remote_offset_index + ((max_cbs - 1 - buffer_index) *
+                                                                   UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
+                cb_config_payload[base_index] = cb->config_address();
+                cb_config_payload[base_index + 1] = cb->page_size(buffer_index);
+            }
+        }
+        i++;
+    }
+
+    // #7: RTAs — direct memcpy from kernel data to flat buffer
+    for (const auto& rta : flat.rta_patches) {
+        std::memcpy(buf + rta.flat_offset, rta.src, rta.size);
+    }
+
+    // #8-#9: Launch message data
+    for (const auto& lm : flat.launch_msg_data_patches) {
+        for (uint32_t j = 0; j < dispatch_md.kernel_config_addrs.size(); j++) {
+            std::memcpy(
+                buf + lm.kernel_config_base_offsets[j], &dispatch_md.kernel_config_addrs[j].addr, sizeof(uint32_t));
+        }
+        std::memcpy(buf + lm.host_assigned_id_offset, &runtime_id, sizeof(uint16_t));
+    }
+
+    // #10: Multicast launch msg slot addresses
+    uint32_t multicast_cores_launch_msg_addr =
+        hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::LAUNCH) +
+        (multicast_cores_launch_message_wptr *
+         hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX).size_of<dev_msgs::launch_msg_t>());
+    for (auto off : flat.mcast_launch_msg_addr_offsets) {
+        std::memcpy(buf + off, &multicast_cores_launch_msg_addr, sizeof(uint32_t));
+    }
+
+    // #11: Unicast launch msg slot addresses
+    if (!flat.unicast_launch_msg_addr_offsets.empty()) {
+        uint32_t unicast_cores_launch_message_addr =
+            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH) +
+            (unicast_cores_launch_message_wptr *
+             hal.get_dev_msgs_factory(HalProgrammableCoreType::ACTIVE_ETH).size_of<dev_msgs::launch_msg_t>());
+        for (auto off : flat.unicast_launch_msg_addr_offsets) {
+            std::memcpy(buf + off, &unicast_cores_launch_message_addr, sizeof(uint32_t));
+        }
+    }
+
+    // #12-#13: Go signal
+    uint32_t go_signal_val = hal.make_go_msg_u32(
+        dev_msgs::RUN_MSG_GO,
+        dispatch_core.x,
+        dispatch_core.y,
+        MetalContext::instance()
+            .dispatch_mem_map(dispatch_core_type)
+            .get_dispatch_message_update_offset(*sub_device_id));
+    std::memcpy(buf + flat.go_signal.offset, &go_signal_val, sizeof(uint32_t));
+    std::memcpy(buf + flat.go_wait_count.offset, &expected_num_workers_completed, sizeof(uint32_t));
+
+    // #14: Unicast go signal update (conditional)
+    if (unicast_go_signal_update.first) {
+        TT_FATAL(
+            unicast_go_signal_update.second > 0,
+            "Must specify a valid number of cores to unicast the go signal to when updating dispatch commands");
+        uint8_t num_txns = static_cast<uint8_t>(unicast_go_signal_update.second);
+        std::memcpy(buf + flat.go_num_unicast_txns.offset, &num_txns, sizeof(uint8_t));
+    }
+
+    // #15: Prefetcher cache command — reconstruct in-place
+    if (flat.has_prefetcher && pcs.prefetcher_cache_used) {
+        uint32_t pcie_alignment =
+            tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
+        // Zero the region and reconstruct
+        std::memset(buf + flat.prefetcher_cmd_flat_offset, 0, flat.prefetcher_cmd_size);
+
+        // Build a temporary HostMemDeviceCommand and copy its bytes
+        HostMemDeviceCommand prefetch_cmd(tt::align(sizeof(CQPrefetchCmd), pcie_alignment));
+        auto is_cached = dispatch_md.prefetcher_cache_info.is_cached;
+        auto cache_offset = dispatch_md.prefetcher_cache_info.offset;
+        auto program_sizeB = pcs.kernel_bins_sizeB;
+        auto max_program_sizeB = dispatch_md.prefetcher_cache_info.mesh_max_program_kernels_sizeB;
+        if (is_cached) {
+            prefetch_cmd.add_prefetch_set_ringbuffer_offset(cache_offset);
+        } else {
+            TT_FATAL(
+                program_sizeB <= max_program_sizeB,
+                "Kernel binary size exceeds prefetcher cache size ({}, {})",
+                program_sizeB,
+                max_program_sizeB);
+            bool wraparound_flag = cache_offset != 0 ? false : CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START;
+            prefetch_cmd.add_prefetch_paged_to_ringbuffer(CQPrefetchPagedToRingbufferCmd{
+                .flags = uint8_t(wraparound_flag),
+                .log2_page_size = uint16_t(HostMemDeviceCommand::LOG2_PROGRAM_PAGE_SIZE),
+                .start_page = 0,
+                .wp_offset_update = max_program_sizeB,
+                .base_addr = pcs.kernel_bins_base_addr,
+                .length = program_sizeB});
+        }
+        TT_ASSERT(prefetch_cmd.size_bytes() == flat.prefetcher_cmd_size);
+        std::memcpy(buf + flat.prefetcher_cmd_flat_offset, prefetch_cmd.data(), prefetch_cmd.size_bytes());
+    }
+}
+
+void write_flattened_command_sequence(
+    const FlattenedCommandSequence& flat, SystemMemoryManager& manager, uint32_t command_queue_id) {
+    ZoneScopedN("write_flattened_command_sequence");
+    manager.issue_queue_reserve(flat.total_size, command_queue_id);
+    uint32_t write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
+    manager.cq_write(flat.buffer.data(), flat.total_size, write_ptr);
+    manager.issue_queue_push_back(flat.total_size, command_queue_id);
+    manager.fetch_queue_reserve_back(command_queue_id);
+    manager.fetch_queue_write(flat.total_size, command_queue_id);
 }
 
 TraceNode create_trace_node(ProgramImpl& program, IDevice* device, bool use_prefetcher_cache) {

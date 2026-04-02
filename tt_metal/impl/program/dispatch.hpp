@@ -33,6 +33,7 @@ class SystemMemoryManager;
 enum class ProgramBinaryStatus : uint8_t;
 struct KernelGroup;
 struct ProgramCommandSequence;
+struct FlattenedCommandSequence;
 
 namespace distributed {
 class MeshWorkloadImpl;
@@ -156,6 +157,30 @@ void write_program_command_sequence(
     bool stall_first,
     bool stall_before_program,
     bool send_binary = true);
+
+void build_flattened_command_sequence(
+    const ProgramCommandSequence& pcs,
+    bool stall_first,
+    bool stall_before_program,
+    bool send_binary,
+    FlattenedCommandSequence& out);
+
+void update_flattened_command_sequence(
+    detail::ProgramImpl& program,
+    FlattenedCommandSequence& flat,
+    const ProgramCommandSequence& pcs,
+    uint32_t multicast_cores_launch_message_wptr,
+    uint32_t unicast_cores_launch_message_wptr,
+    uint32_t expected_num_workers_completed,
+    CoreCoord dispatch_core,
+    CoreType dispatch_core_type,
+    SubDeviceId sub_device_id,
+    const ProgramDispatchMetadata& dispatch_md,
+    ProgramBinaryStatus program_binary_status,
+    std::pair<bool, int> unicast_go_signal_update = {false, -1});
+
+void write_flattened_command_sequence(
+    const FlattenedCommandSequence& flat, SystemMemoryManager& manager, uint32_t command_queue_id);
 
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle);
 

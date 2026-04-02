@@ -47,6 +47,7 @@
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
+#include "env_lib.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 #include "tt_metal/impl/device/dispatch.hpp"
 #include <umd/device/types/xy_pair.hpp>
@@ -385,18 +386,70 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             "use_prefetcher_cache: {}, program_cmd_seq.prefetcher_cache_used: {}",
             use_prefetcher_cache,
             program_cmd_seq.prefetcher_cache_used);
-        program_dispatch::update_program_dispatch_commands(
-            program.impl(),
-            program_cmd_seq,
-            cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_mcast_wptr(),
-            cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_unicast_wptr(),
-            expected_num_workers_completed,
-            this->virtual_program_dispatch_core(),
-            dispatch_core_type,
-            sub_device_id,
-            dispatch_metadata,
-            mesh_workload.impl().get_program_binary_status(mesh_device_id),
-            std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores));
+        // Flattened dispatch: after the first dispatch, cache the serialized command bytes
+        // and on subsequent dispatches, patch only the ~15 fields that change, then do a single cq_write.
+        static bool enable_flattened_dispatch = tt::parse_env<bool>("TT_METAL_ENABLE_FLATTENED_DISPATCH", false);
+
+        bool stall_first = dispatch_metadata.stall_first;
+        bool stall_before_program = dispatch_metadata.stall_before_program;
+        // send_binary defaults to true for all callers from fd_mesh_command_queue
+        constexpr bool send_binary = true;
+
+        bool use_flattened = enable_flattened_dispatch && !sysmem_manager.get_bypass_mode();
+        uint8_t flat_variant_key = 0;
+
+        if (use_flattened) {
+            FlatLayoutVariant variant{
+                stall_first, stall_before_program, send_binary, program_cmd_seq.current_stall_seq_idx};
+            flat_variant_key = variant.pack();
+
+            auto& flat_cache = program_cmd_seq.flattened_cache;
+            if (!flat_cache.contains(flat_variant_key)) {
+                // First time for this variant: run normal update, then build flattened buffer
+                program_dispatch::update_program_dispatch_commands(
+                    program.impl(),
+                    program_cmd_seq,
+                    cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_mcast_wptr(),
+                    cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_unicast_wptr(),
+                    expected_num_workers_completed,
+                    this->virtual_program_dispatch_core(),
+                    dispatch_core_type,
+                    sub_device_id,
+                    dispatch_metadata,
+                    mesh_workload.impl().get_program_binary_status(mesh_device_id),
+                    std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores));
+                program_dispatch::build_flattened_command_sequence(
+                    program_cmd_seq, stall_first, stall_before_program, send_binary, flat_cache[flat_variant_key]);
+            } else {
+                // Fast path: patch directly into the flattened buffer
+                program_dispatch::update_flattened_command_sequence(
+                    program.impl(),
+                    flat_cache[flat_variant_key],
+                    program_cmd_seq,
+                    cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_mcast_wptr(),
+                    cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_unicast_wptr(),
+                    expected_num_workers_completed,
+                    this->virtual_program_dispatch_core(),
+                    dispatch_core_type,
+                    sub_device_id,
+                    dispatch_metadata,
+                    mesh_workload.impl().get_program_binary_status(mesh_device_id),
+                    std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores));
+            }
+        } else {
+            program_dispatch::update_program_dispatch_commands(
+                program.impl(),
+                program_cmd_seq,
+                cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_mcast_wptr(),
+                cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_unicast_wptr(),
+                expected_num_workers_completed,
+                this->virtual_program_dispatch_core(),
+                dispatch_core_type,
+                sub_device_id,
+                dispatch_metadata,
+                mesh_workload.impl().get_program_binary_status(mesh_device_id),
+                std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores));
+        }
 
         if (sysmem_manager.get_bypass_mode()) {
             auto local_mesh_range = mesh_device_->get_view().get_local_mesh_coord_range();
@@ -405,17 +458,35 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                 this->capture_program_trace_on_subgrid(
                     local_device_range.value(),
                     program_cmd_seq,
-                    dispatch_metadata.stall_first,
-                    dispatch_metadata.stall_before_program,
+                    stall_first,
+                    stall_before_program,
                     program.get_runtime_id());
                 active_sub_grids.push_back(local_device_range.value());
             }
+        } else if (use_flattened) {
+            // Flattened write path: single cq_write per device
+            auto& flat = program_cmd_seq.flattened_cache.at(flat_variant_key);
+            for_each_local(mesh_device_, device_range, [&](const auto& coord) {
+                auto device = mesh_device_->impl().get_device(coord);
+                // Per-device profiler patch (overwrites host_assigned_id with device-specific value)
+                if (tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
+                        .rtoptions()
+                        .get_profiler_enabled()) {
+                    auto encoded_id =
+                        tt_metal::detail::EncodePerDeviceProgramID(program.get_runtime_id(), device->id());
+                    for (auto off : flat.profiler_host_id_offsets) {
+                        std::memcpy(flat.buffer.data() + off, &encoded_id, sizeof(encoded_id));
+                    }
+                }
+                program_dispatch::write_flattened_command_sequence(flat, device->sysmem_manager(), id_);
+                chip_ids_in_workload.insert(device->id());
+            });
         } else {
             this->write_program_cmds_to_subgrid(
                 device_range,
                 program_cmd_seq,
-                dispatch_metadata.stall_first,
-                dispatch_metadata.stall_before_program,
+                stall_first,
+                stall_before_program,
                 chip_ids_in_workload,
                 program.get_runtime_id());
         }

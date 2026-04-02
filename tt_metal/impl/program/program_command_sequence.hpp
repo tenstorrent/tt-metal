@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include "llrt/hal.hpp"
@@ -19,6 +20,84 @@ class CircularBufferImpl;
 
 constexpr uint32_t UncachedStallSequenceIdx = 0;
 constexpr uint32_t CachedStallSequenceIdx = 1;
+
+/// Identifies a layout variant based on conditional command inclusion flags.
+/// Different flag combinations produce different flat buffer byte layouts.
+/// In steady state, typically only one variant is active (binary committed, cached stall).
+struct FlatLayoutVariant {
+    bool stall_first;
+    bool stall_before_program;
+    bool send_binary;
+    uint32_t stall_seq_idx;
+
+    bool operator==(const FlatLayoutVariant&) const = default;
+
+    uint8_t pack() const {
+        return (stall_first << 3) | (stall_before_program << 2) | (send_binary << 1) | (stall_seq_idx & 1);
+    }
+};
+
+/// A patchable location in the flattened command buffer.
+struct FlatPatch {
+    uint32_t offset = 0;
+    uint32_t size = 0;
+};
+
+/// A flattened, contiguous version of ProgramCommandSequence with pre-computed
+/// patch descriptors. After the first dispatch, subsequent dispatches patch the
+/// known offsets and do a single cq_write to the hugepage.
+struct FlattenedCommandSequence {
+    std::vector<uint8_t> buffer;
+    uint32_t total_size = 0;
+
+    // Preamble patches (#1-#5 from plan)
+    FlatPatch stall_sync_count;
+    FlatPatch preamble_tensix_write_offset;
+    FlatPatch preamble_tensix_binary_offset;
+    FlatPatch preamble_host_id;
+    FlatPatch preamble_eth_write_offset;
+    bool has_eth_preamble = false;
+
+    // CB config patches (#6) — one per core range group
+    struct CbConfigPatchInfo {
+        uint32_t flat_offset;
+    };
+    std::vector<CbConfigPatchInfo> cb_config_patches;
+
+    // RTA patches (#7) — one per rta_update entry
+    // rta_patches[i].src mirrors rta_updates[i].src — it points to RuntimeArgsData owned
+    // by the kernel. This pointer is stable as long as SetRuntimeArgs() is called with the
+    // same-sized vector. A size change triggers PCS re-assembly, which invalidates and
+    // rebuilds the flattened cache.
+    struct RtaPatchInfo {
+        const void* src;
+        uint32_t flat_offset;
+        uint32_t size;
+    };
+    std::vector<RtaPatchInfo> rta_patches;
+
+    // Launch message patches (#8-#11)
+    struct LaunchMsgPatchInfo {
+        std::vector<uint32_t> kernel_config_base_offsets;
+        uint32_t host_assigned_id_offset;
+    };
+    std::vector<LaunchMsgPatchInfo> launch_msg_data_patches;
+    std::vector<uint32_t> mcast_launch_msg_addr_offsets;
+    std::vector<uint32_t> unicast_launch_msg_addr_offsets;
+
+    // Go signal patches (#12-#14)
+    FlatPatch go_signal;
+    FlatPatch go_wait_count;
+    FlatPatch go_num_unicast_txns;
+
+    // Prefetcher cache command region (#15) — reconstructed in-place each dispatch
+    uint32_t prefetcher_cmd_flat_offset = 0;
+    uint32_t prefetcher_cmd_size = 0;
+    bool has_prefetcher = false;
+
+    // Collected host_assigned_id offsets for per-device profiler patching
+    std::vector<uint32_t> profiler_host_id_offsets;
+};
 
 struct ProgramCommandSequence {
     struct RtaUpdate {
@@ -66,6 +145,10 @@ struct ProgramCommandSequence {
             0,
             [](int acc, const HostMemDeviceCommand& cmd) { return cmd.size_bytes() + acc; });
     }
+
+    // Flattened command sequence cache, keyed by packed FlatLayoutVariant bits.
+    // Typically 1-2 entries in steady state (one per layout variant).
+    std::unordered_map<uint8_t, FlattenedCommandSequence> flattened_cache;
 
     uint32_t get_one_shot_fetch_size(bool stall_first, bool stall_before_program, bool send_binary) const {
         uint32_t one_shot_fetch_size =
