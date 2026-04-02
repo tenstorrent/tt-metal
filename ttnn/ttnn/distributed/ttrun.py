@@ -31,6 +31,11 @@ INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
 RANKFILE_LINE_PATTERN = re.compile(r"^\s*rank\s+\d+\s*=\s*([^\s]+)\s+slot\s*=.*$", re.IGNORECASE)
 MPI_HOST_FLAGS = ("--host", "-host", "--hostfile", "-hostfile", "--default-hostfile")
+# mpirun --version / stderr (OpenMPI 4.x and 5.x)
+_OPENMPI_VERSION_RE = re.compile(
+    r"(?:Open\s*MPI|OpenMPI)[^\d]*(\d+)\.(\d+)",
+    re.IGNORECASE,
+)
 
 # Log once per process when forcing mpirun under Slurm (many call sites use get_mpi_launcher).
 _slurm_mpirun_choice_logged: bool = False
@@ -86,12 +91,12 @@ def get_mpi_launcher() -> str:
     When ``SLURM_JOB_ID`` is set, returns ``\"mpirun\"``. Otherwise prefers
     ``mpirun-ulfm`` from :func:`shutil.which` if found, else ``\"mpirun\"``.
     """
-    global _slurm_mpirun_choice_logged
-    if os.environ.get("SLURM_JOB_ID") is not None:
-        if not _slurm_mpirun_choice_logged:
-            logger.warning(f"{TT_RUN_PREFIX} SLURM job detected, using mpirun")
-            _slurm_mpirun_choice_logged = True
-        return "mpirun"
+    # global _slurm_mpirun_choice_logged
+    # if os.environ.get("SLURM_JOB_ID") is not None:
+    #     if not _slurm_mpirun_choice_logged:
+    #         logger.warning(f"{TT_RUN_PREFIX} SLURM job detected, using mpirun")
+    #         _slurm_mpirun_choice_logged = True
+    #     return "mpirun"
 
     mpi_launcher = shutil.which("mpirun-ulfm")
     if not mpi_launcher:
@@ -179,14 +184,59 @@ def _parse_hosts_option(ctx: click.Context, param: click.Parameter, value: Optio
     return hosts
 
 
-def detect_rankfile_syntax(_mpi_launcher: str, _subprocess_run=subprocess.run) -> RankfileSyntax:
-    """Default rankfile form: ``--rankfile`` (works with Open MPI 4.x and 5.x).
+def _get_openmpi_runtime_version(mpi_launcher: str, _subprocess_run=subprocess.run) -> Optional[tuple[int, int]]:
+    """Return ``(major, minor)`` from ``mpirun --version``, or ``None`` if unknown."""
+    exe = mpi_launcher
+    if not os.path.isabs(exe) and os.sep not in exe:
+        resolved = shutil.which(exe)
+        if resolved:
+            exe = resolved
+    try:
+        proc = _subprocess_run(
+            [exe, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return None
+    text = f"{proc.stdout or ''}\n{proc.stderr or ''}"
+    m = _OPENMPI_VERSION_RE.search(text)
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2))
 
-    ``--map-by rankfile:file=`` is not used by default: Open MPI 4.x does not accept it,
-    and some 5.x / PRRTE / Slurm ``mpirun`` builds fail with "unrecognized modifier".
-    Use ``--rankfile-syntax map-by`` or ``mca`` to force another form.
+
+def detect_rankfile_syntax(mpi_launcher: str, _subprocess_run=subprocess.run) -> RankfileSyntax:
+    """Pick rankfile CLI form based on detected Open MPI version.
+
+    * **Open MPI >= 5.0** — use ``--map-by rankfile:file=PATH`` (matches PRRTE; avoids deprecating
+      legacy ``--rankfile`` → auto-rewrite that can clash with ``--bind-to none``).
+    * **Open MPI 4.x / unknown** — use ``--rankfile`` (4.x does not accept the ``map-by`` rankfile modifier).
+
+    For nonstandard builds, force with ``--rankfile-syntax map-by``, ``rankfile``, or ``mca``.
     """
+    ver = _get_openmpi_runtime_version(mpi_launcher, _subprocess_run)
+    if ver is not None and ver >= (5, 0):
+        logger.info(
+            f"{TT_RUN_PREFIX} Open MPI {ver[0]}.{ver[1]} detected; rankfile placement uses --map-by rankfile:file="
+        )
+        return RankfileSyntax.MAP_BY_RANKFILE_FILE
+    if ver is not None:
+        logger.debug(f"{TT_RUN_PREFIX} Open MPI {ver[0]}.{ver[1]} detected; rankfile placement uses --rankfile")
     return RankfileSyntax.RANKFILE
+
+
+def mpi_args_specify_bind_to(mpi_args: Optional[List[str]]) -> bool:
+    """True if ``mpi_args`` already sets a binding policy (``--bind-to`` / ``-bind-to``)."""
+    if not mpi_args:
+        return False
+    for arg in mpi_args:
+        if arg in ("--bind-to", "-bind-to"):
+            return True
+        if arg.startswith("--bind-to=") or arg.startswith("-bind-to="):
+            return True
+    return False
 
 
 def mpi_args_contain_rankfile_options(mpi_args: Optional[List[str]]) -> bool:
@@ -473,6 +523,128 @@ def rankfile_needs_oversubscribe(rankfile_path: Path) -> bool:
     return any(count > 1 for count in host_to_rank_count.values())
 
 
+def host_list_needs_oversubscribe(hosts: List[str]) -> bool:
+    """True iff the host list names the same hostname more than once (multiple Phase 1 procs on one node)."""
+    return len(hosts) > len(set(hosts))
+
+
+def host_csv_needs_oversubscribe(host_csv: str) -> bool:
+    """True iff a comma-separated ``--host`` value lists the same bare hostname more than once.
+
+    Tokens with an explicit slot count (``host:N``) are ignored; OpenMPI treats ``N`` as allocated slots.
+    """
+    tokens = [t.strip() for t in host_csv.split(",") if t.strip()]
+    bare_counts: Dict[str, int] = defaultdict(int)
+    for t in tokens:
+        if ":" in t:
+            continue
+        bare_counts[t] += 1
+    return any(c > 1 for c in bare_counts.values())
+
+
+def extract_rankfile_path_from_mpi_args_list(mpi_args: List[str]) -> Optional[Path]:
+    """Return a resolved rankfile path from MPI placement options, if present and readable."""
+    i = 0
+    while i < len(mpi_args):
+        arg = mpi_args[i]
+        if arg in ("--rankfile", "-rankfile", "-rf"):
+            if i + 1 < len(mpi_args):
+                p = Path(resolve_rankfile_for_mpi(mpi_args[i + 1]))
+                if p.is_file():
+                    return p
+            i += 1
+            continue
+        if arg.startswith("--rankfile=") or arg.startswith("-rankfile="):
+            p = Path(resolve_rankfile_for_mpi(arg.split("=", 1)[1]))
+            if p.is_file():
+                return p
+            i += 1
+            continue
+        if arg == "--map-by" and i + 1 < len(mpi_args):
+            rp = extract_rankfile_path_from_map_by_policy(mpi_args[i + 1])
+            if rp:
+                p = Path(resolve_rankfile_for_mpi(rp))
+                if p.is_file():
+                    return p
+            i += 2
+            continue
+        if arg.startswith("--map-by="):
+            rp = extract_rankfile_path_from_map_by_policy(arg.split("=", 1)[1])
+            if rp:
+                p = Path(resolve_rankfile_for_mpi(rp))
+                if p.is_file():
+                    return p
+            i += 1
+            continue
+        if arg == "--mca" and i + 2 < len(mpi_args) and mpi_args[i + 1] == "rmaps_rankfile_path":
+            p = Path(resolve_rankfile_for_mpi(mpi_args[i + 2]))
+            if p.is_file():
+                return p
+            i += 3
+            continue
+        i += 1
+    return None
+
+
+def mpi_args_host_csvs_need_oversubscribe(mpi_args: List[str]) -> bool:
+    """True if any ``--host`` / ``-host`` / ``--host=`` value implies multiple procs on a node (bare duplicates)."""
+    i = 0
+    while i < len(mpi_args):
+        arg = mpi_args[i]
+        if arg in ("--host", "-host") and i + 1 < len(mpi_args):
+            if host_csv_needs_oversubscribe(mpi_args[i + 1]):
+                return True
+            i += 2
+            continue
+        if arg.startswith("--host=") or arg.startswith("-host="):
+            if host_csv_needs_oversubscribe(arg.split("=", 1)[1]):
+                return True
+        i += 1
+    return False
+
+
+def ensure_oversubscribe_for_multi_proc_per_host(
+    mpi_args: List[str],
+    rankfile_hint: Optional[Path] = None,
+) -> List[str]:
+    """Prepend ``--oversubscribe`` when placement implies multiple MPI processes per host with default slot counts.
+
+    Covers: rankfile mapping (from ``rankfile_hint`` or parsed MPI args), and duplicate bare hostnames in ``--host``.
+    """
+    if "--oversubscribe" in mpi_args:
+        return mpi_args
+
+    need = False
+
+    rankfile_paths: List[Path] = []
+    if rankfile_hint is not None:
+        rankfile_paths.append(rankfile_hint)
+    extracted = extract_rankfile_path_from_mpi_args_list(mpi_args)
+    if extracted is not None:
+        rankfile_paths.append(extracted)
+
+    seen: set[str] = set()
+    for p in rankfile_paths:
+        try:
+            key = str(p.resolve())
+        except OSError:
+            key = str(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        if p.is_file() and rankfile_needs_oversubscribe(p):
+            need = True
+            break
+
+    if not need and mpi_args_host_csvs_need_oversubscribe(mpi_args):
+        need = True
+
+    if not need:
+        return mpi_args
+
+    return ["--oversubscribe"] + mpi_args
+
+
 def build_host_slots_from_rankfile(rankfile_path: Path) -> tuple[str, int]:
     """Build --host host1:N,host2:N string and total rank count from rankfile.
 
@@ -628,9 +800,11 @@ def build_generate_rank_bindings_mpi_cmd(
         return cmd
 
     elif hosts:
-        # Real cluster: one process per host
+        # Real cluster: one MPI process per entry in ``hosts`` (duplicate hostnames => multiple procs on one node).
         np = len(hosts)
         hosts_str = ",".join(hosts)
+        if host_list_needs_oversubscribe(hosts) and "--oversubscribe" not in (mpi_args or []):
+            cmd.extend(["--oversubscribe"])
         cmd.extend(["--host", hosts_str])
         cmd.extend(["-np", str(np)])
         cmd.append(str(executable.resolve()))
@@ -1384,17 +1558,17 @@ def build_mpi_command(
 
     cmd = [mpi_launcher]
 
-    # Check if --bind-to is already specified in mpi_args
-    bind_to_already_specified = False
-    if effective_mpi_args:
-        for i, arg in enumerate(effective_mpi_args):
-            if arg == "--bind-to":
-                bind_to_already_specified = True
-                break
+    bind_to_already_specified = mpi_args_specify_bind_to(effective_mpi_args)
+    rankfile_placement = mpi_args_contain_rankfile_options(effective_mpi_args)
 
-    # Add --bind-to none only if not already specified
-    if not bind_to_already_specified:
+    # Open MPI 5 + PRRTE: ``--map-by rankfile:file=...`` (or auto-rewrite from ``--rankfile``) conflicts with
+    # ``--bind-to none`` ("PE mapping ... cannot be combined with binding directive other than core/hwt").
+    if not bind_to_already_specified and not rankfile_placement:
         cmd.extend(["--bind-to", "none"])
+    elif not bind_to_already_specified and rankfile_placement:
+        logger.debug(
+            f"{TT_RUN_PREFIX} Skipping default --bind-to none because rankfile placement is present in MPI args"
+        )
 
     # Always enable tagged output for easier debugging (prefixes output with rank info)
     cmd.extend(["--tag-output"])
@@ -1801,22 +1975,11 @@ def legacy_flow(
             if verbose:
                 logger.info(f"{TT_RUN_PREFIX} Injected rankfile: {rankfile}")
 
-            # Check if rankfile requires oversubscription (multiple ranks per host)
-            # Add --oversubscribe if needed and not already present
-            if rankfile_needs_oversubscribe(rankfile):
-                has_oversubscribe = False
-                if effective_mpi_args:
-                    has_oversubscribe = "--oversubscribe" in effective_mpi_args
-                if not has_oversubscribe:
-                    # Insert --oversubscribe right after rankfile args (before other args)
-                    rankfile_args_len = len(rankfile_args)
-                    effective_mpi_args = (
-                        effective_mpi_args[:rankfile_args_len]
-                        + ["--oversubscribe"]
-                        + effective_mpi_args[rankfile_args_len:]
-                    )
-                    if verbose:
-                        logger.info(f"{TT_RUN_PREFIX} Added --oversubscribe (rankfile has multiple ranks per host)")
+    rankfile_hint = rankfile.resolve() if rankfile is not None and rankfile.is_file() else None
+    had_oversubscribe = "--oversubscribe" in effective_mpi_args
+    effective_mpi_args = ensure_oversubscribe_for_multi_proc_per_host(effective_mpi_args, rankfile_hint=rankfile_hint)
+    if verbose and not had_oversubscribe and effective_mpi_args and effective_mpi_args[0:1] == ["--oversubscribe"]:
+        logger.info(f"{TT_RUN_PREFIX} Added --oversubscribe (multiple processes per host from rankfile or --host)")
 
     # Build MPI command
     mpi_cmd = build_mpi_command(
