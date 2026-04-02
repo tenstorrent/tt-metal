@@ -203,4 +203,4 @@ def test_ring_attention_all_gather_program_cache(
         )
         ttnn.synchronize_device(submesh_device)
 
-    assert submesh_device.num_program_cache_entries() == 1
+    assert submesh_device.cache_entries_counter.total == 1

@@ -10,6 +10,7 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.common.utility_functions import skip_for_wormhole_b0, skip_for_n_or_less_dev
+from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 
 
 def run_with_trace(
@@ -179,32 +180,35 @@ def run_all_broadcast_impl(
 
         input_tensor_mesh_list.append(input_tensor_mesh)
 
+    cache_entries_counter = CacheEntriesCounter(mesh_device)
+
     tt_out_tensor_list = []
-    if trace_mode:
-        tt_out_tensor = run_with_trace(
-            mesh_device,
-            all_broadcast_topology,
-            input_tensor_mesh_list[0],
-            num_links,
-            output_mem_config,
-            num_iter=num_iters,
-            subdevice_id=worker_sub_device_id,
-        )
-        tt_out_tensor_list.append(tt_out_tensor)
-    else:
-        for i in range(num_iters):
-            tt_out_tensors = ttnn.all_broadcast(
-                input_tensor_mesh_list[i],
-                num_links=num_links,
-                memory_config=output_mem_config,
-                topology=all_broadcast_topology,
+    with cache_entries_counter.measure():
+        if trace_mode:
+            tt_out_tensor = run_with_trace(
+                mesh_device,
+                all_broadcast_topology,
+                input_tensor_mesh_list[0],
+                num_links,
+                output_mem_config,
+                num_iter=num_iters,
                 subdevice_id=worker_sub_device_id,
             )
-            tt_out_tensor_list.append(tt_out_tensors)
+            tt_out_tensor_list.append(tt_out_tensor)
+        else:
+            for i in range(num_iters):
+                tt_out_tensors = ttnn.all_broadcast(
+                    input_tensor_mesh_list[i],
+                    num_links=num_links,
+                    memory_config=output_mem_config,
+                    topology=all_broadcast_topology,
+                    subdevice_id=worker_sub_device_id,
+                )
+                tt_out_tensor_list.append(tt_out_tensors)
 
-        logger.info(f"Waiting for op")
-        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
-        logger.info(f"Done op")
+            logger.info(f"Waiting for op")
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+            logger.info(f"Done op")
 
     passed = True
     for tensor_index in range(len(tt_out_tensor_list)):
@@ -223,8 +227,8 @@ def run_all_broadcast_impl(
                     logger.error(f"output mismatch for tensor {i}")
                     assert eq, f"{i} FAILED: {output}"
     assert (
-        mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
-    ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
+        cache_entries_counter.total == 1 or cache_entries_counter.total == num_iters
+    ), f"Device has {cache_entries_counter.total} program cache entries"
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()
     if not passed:
