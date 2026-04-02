@@ -142,15 +142,6 @@ def test_attn_matmul_fp32(num_loops, in_dtype, device):
                     frobenius_threshold=0.001 * k,
                     check_ulp=False,
                 )
-            elif in_dtype == ttnn.float32:
-                assert_numeric_metrics(
-                    golden_output_tensor,
-                    tt_output_tensor,
-                    atol=0.02 * k,
-                    rtol=47.75 * k,
-                    frobenius_threshold=0.001 * k,
-                    check_ulp=False,
-                )
             else:
                 assert_numeric_metrics(
                     golden_output_tensor,
@@ -195,15 +186,6 @@ def test_attn_matmul_with_program_cache(num_loops, in0_dtype, in1_dtype, out_dty
                     tt_output_tensor,
                     atol=0.016 * k,
                     rtol=38.75 * k,
-                    frobenius_threshold=0.001 * k,
-                    check_ulp=False,
-                )
-            elif in0_dtype == ttnn.bfloat16 or in1_dtype == ttnn.bfloat16 or out_dtype == ttnn.bfloat16:
-                assert_numeric_metrics(
-                    golden_output_tensor,
-                    tt_output_tensor,
-                    atol=0.02 * k,
-                    rtol=47.75 * k,
                     frobenius_threshold=0.001 * k,
                     check_ulp=False,
                 )

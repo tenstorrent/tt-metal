@@ -207,7 +207,6 @@ def test_linear_fp32_acc_l1(
 
         tt_out = tt2torch_tensor(output_t)
 
-        # test_matmul_no_mcast_fp32_acc_l1: no direct table row; keep permissive
         assert_numeric_metrics(pt_out, tt_out, check_allclose=False, check_frobenius=False, check_ulp=False)
 
 
