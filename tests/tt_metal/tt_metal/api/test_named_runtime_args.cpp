@@ -156,3 +156,56 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgs) {
     EXPECT_EQ(results[2], param_a) << "ct_args::my_kernel::param_a should be 42";
     EXPECT_EQ(results[3], param_b) << "ct_args::my_kernel::param_b should be 0xBEEF";
 }
+
+TEST_F(NamedArgsTest, TensixTestNamedPerCoreArrayRuntimeArgs) {
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->get_devices()[0];
+    auto& cq = mesh_device->mesh_command_queue();
+    auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+
+    CoreCoord core0 = {0, 0};
+    CoreCoord core1 = {1, 0};
+    CoreRangeSet cores = std::set<CoreRange>({CoreRange(core0, core1)});
+
+    const uint32_t write_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+
+    const std::vector<uint32_t> core0_weights = {10, 20, 30};
+    const std::vector<uint32_t> core1_weights = {100, 200, 300};
+    const uint32_t num_elements = static_cast<uint32_t>(core0_weights.size());
+
+    uint32_t expected_sum_core0 = 0;
+    for (auto v : core0_weights) {
+        expected_sum_core0 += v;
+    }
+    uint32_t expected_sum_core1 = 0;
+    for (auto v : core1_weights) {
+        expected_sum_core1 += v;
+    }
+
+    KernelDescriptor kernel = {
+        .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/named_per_core_array_runtime_args_kernel.cpp",
+        .core_ranges = cores,
+        .defines =
+            {
+                {"WRITE_ADDRESS", std::to_string(write_addr)},
+                {"NUM_ELEMENTS", std::to_string(num_elements)},
+            },
+        .named_per_core_runtime_arg_arrays = {{"my_kernel.weights", {{core0, core0_weights}, {core1, core1_weights}}}},
+        .config = DataMovementConfigDescriptor{},
+    };
+
+    distributed::MeshWorkload workload;
+    Program program(ProgramDescriptor{.kernels = {kernel}});
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+
+    std::vector<uint32_t> results_core0;
+    detail::ReadFromDeviceL1(device, core0, write_addr, sizeof(uint32_t), results_core0);
+    std::vector<uint32_t> results_core1;
+    detail::ReadFromDeviceL1(device, core1, write_addr, sizeof(uint32_t), results_core1);
+
+    EXPECT_EQ(results_core0[0], expected_sum_core0)
+        << "Core (0,0): sum should be " << expected_sum_core0 << ", got " << results_core0[0];
+    EXPECT_EQ(results_core1[0], expected_sum_core1)
+        << "Core (1,0): sum should be " << expected_sum_core1 << ", got " << results_core1[0];
+}
