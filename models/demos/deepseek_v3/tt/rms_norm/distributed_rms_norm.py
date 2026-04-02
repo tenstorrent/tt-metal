@@ -360,4 +360,5 @@ class DistributedRMSNorm(SharedStateAddOn, RMSNormBase):
         if _has_distinct_buffer(x, tensor_in):
             ttnn.deallocate(tensor_in)
 
+        tt_out = ttnn.typecast(tt_out, dtype=ttnn.bfloat16)
         return tt_out

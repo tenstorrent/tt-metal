@@ -199,6 +199,11 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     )
                 ],
             ),
+            (
+                "RMSNorm shared state",
+                "norm",
+                lambda: DistributedRMSNorm.create_shared_state(hf_config, mesh_device),
+            ),
         ]
         if cls._has_mtp_layer(hf_config):
             shared_state_steps.append(
@@ -324,8 +329,9 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         # Capture pre-norm hidden states for MTP; MTP applies its own hnorm.
         hidden_for_mtp = x if return_hidden else None
 
-        x = ttnn.to_memory_config(x, **cfg["norm_reshard"])
-        x = DistributedRMSNorm.forward_decode(x, cfg["norm"])
+        x = DistributedRMSNorm.forward_decode(
+            x, cfg["norm"], **cfg["norm_reshard"], output_memory_config=cfg["norm"]["input_memory_config"]
+        )
 
         ccl = cfg["lm_head"]["ccl"]
 
