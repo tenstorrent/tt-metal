@@ -127,14 +127,6 @@ class PatchEmbeddingTTNN:
         else:
             self._linear_bias = None
 
-        # Compute kernel config
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-
     def _unfold_conv2d(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
         Unfold using TTNN 6D permute with MultiCoreTileInvariant optimization.
@@ -206,7 +198,6 @@ class PatchEmbeddingTTNN:
             bias=self._linear_bias,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
         )
 
         ttnn.deallocate(x)
@@ -337,20 +328,6 @@ class SigLIPAttentionTTNN:
         else:
             self.bo = None
 
-        # Compute kernel configs
-        self.compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-        self.compute_kernel_config_sdpa = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,  # SDPA needs this off
-        )
-
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         """
         OPTIMIZED forward pass using fused QKV and native TTNN head operations.
@@ -382,7 +359,6 @@ class SigLIPAttentionTTNN:
             bias=self.bqkv,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
         )
 
         # OPTIMIZATION 2: Native TTNN head splitting
@@ -416,7 +392,6 @@ class SigLIPAttentionTTNN:
             is_causal=False,
             scale=self.scale,
             program_config=sdpa_cfg,
-            compute_kernel_config=self.compute_kernel_config_sdpa,
         )
 
         ttnn.deallocate(q_heads)
@@ -437,7 +412,6 @@ class SigLIPAttentionTTNN:
             self.wo,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
         )
         ttnn.deallocate(attn_concat)
 
@@ -503,14 +477,6 @@ class SigLIPMLPTTNN:
         else:
             self.fc2_bias = None
 
-        # Compute kernel config
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         """
         Forward pass using TTNN operations.
@@ -528,7 +494,6 @@ class SigLIPMLPTTNN:
             bias=self.fc1_bias,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
             activation="gelu",
         )
 
@@ -538,7 +503,6 @@ class SigLIPMLPTTNN:
             self.fc2_weight,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
         )
         ttnn.deallocate(x)
 
@@ -852,9 +816,6 @@ class SigLIPVisionTowerTTNN:
         # Run through TTNN transformer blocks
         for block in self.blocks:
             hidden_states = block.forward(hidden_states)
-            ttnn.ReadDeviceProfiler(
-                self.device
-            )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         # Final layer norm (on device)
         if self.post_ln_weight is not None:

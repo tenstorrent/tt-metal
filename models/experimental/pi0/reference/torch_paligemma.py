@@ -16,7 +16,7 @@ import torch
 import torch.nn.functional as F
 
 from models.experimental.pi0.common.configs import PaliGemmaConfig
-from models.experimental.pi0.reference.torch_gemma import GemmaBlock, rms_norm, precompute_freqs_cis
+from models.experimental.pi0.reference.torch_gemma import GemmaBlock, rms_norm, adarms_norm, precompute_freqs_cis
 from models.experimental.pi0.reference.torch_siglip import SigLIPVisionTower, MultiModalProjector
 
 
@@ -52,7 +52,14 @@ class PaliGemmaBackbone:
         self.vlm_norm = weights["vlm_language"].get("model.norm.weight")
 
         # Expert components
-        self.expert_norm = weights["action_expert"].get("model.norm.weight")
+        self.use_expert_adarms = config.expert_config.use_adarms
+        if self.use_expert_adarms:
+            # Pi0.5: adaRMS for final expert norm
+            self.expert_norm_dense_weight = weights["action_expert"].get("model.norm.dense.weight")
+            self.expert_norm_dense_bias = weights["action_expert"].get("model.norm.dense.bias")
+            self.expert_norm = None
+        else:
+            self.expert_norm = weights["action_expert"].get("model.norm.weight")
 
         # VLM blocks
         self.vlm_blocks = []
@@ -143,6 +150,7 @@ class PaliGemmaBackbone:
         position_ids: Optional[torch.Tensor] = None,
         past_key_values: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
         use_cache: bool = False,
+        adarms_cond: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Optional[List[Tuple[torch.Tensor, torch.Tensor]]]]:
         """Forward pass through action expert."""
         new_cache = [] if use_cache else None
@@ -164,16 +172,26 @@ class PaliGemmaBackbone:
                 position_ids,
                 past_kv,
                 use_cache,
+                adarms_cond=adarms_cond,
             )
             if use_cache:
                 new_cache.append(new_kv)
 
         # Final norm
-        hidden_states = rms_norm(
-            hidden_states,
-            self.expert_norm,
-            self.config.expert_config.rms_norm_eps,
-        )
+        if self.use_expert_adarms and adarms_cond is not None:
+            hidden_states, _ = adarms_norm(
+                hidden_states,
+                self.expert_norm_dense_weight,
+                self.expert_norm_dense_bias,
+                adarms_cond,
+                self.config.expert_config.rms_norm_eps,
+            )
+        else:
+            hidden_states = rms_norm(
+                hidden_states,
+                self.expert_norm,
+                self.config.expert_config.rms_norm_eps,
+            )
 
         return hidden_states, new_cache
 

@@ -83,7 +83,13 @@ class SuffixEmbedding:
         self.action_out_weight = weights["action_out_proj.weight"]
         self.action_out_bias = weights["action_out_proj.bias"]
 
-        if not config.pi05:
+        if config.pi05:
+            # Pi0.5: separate time MLP for adaRMS conditioning
+            self.time_mlp_in_weight = weights["time_mlp_in.weight"]
+            self.time_mlp_in_bias = weights["time_mlp_in.bias"]
+            self.time_mlp_out_weight = weights["time_mlp_out.weight"]
+            self.time_mlp_out_bias = weights["time_mlp_out.bias"]
+        else:
             self.state_weight = weights["state_proj.weight"]
             self.state_bias = weights["state_proj.bias"]
             self.time_mlp_in_weight = weights["action_time_mlp_in.weight"]
@@ -123,7 +129,16 @@ class SuffixEmbedding:
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """Fuse action and time embeddings."""
         if self.config.pi05:
-            return action_emb, time_emb
+            # Pi0.5: compute adaRMS conditioning via time MLP
+            time_mlp_in_weight = self.time_mlp_in_weight.to(time_emb.dtype)
+            time_mlp_in_bias = self.time_mlp_in_bias.to(time_emb.dtype)
+            adarms_cond = F.linear(time_emb, time_mlp_in_weight, time_mlp_in_bias)
+            adarms_cond = F.silu(adarms_cond)
+            time_mlp_out_weight = self.time_mlp_out_weight.to(adarms_cond.dtype)
+            time_mlp_out_bias = self.time_mlp_out_bias.to(adarms_cond.dtype)
+            adarms_cond = F.linear(adarms_cond, time_mlp_out_weight, time_mlp_out_bias)
+            adarms_cond = F.silu(adarms_cond)
+            return action_emb, adarms_cond
         else:
             # PI0: Concatenate action and time, apply MLP
             time_expanded = time_emb.unsqueeze(1).expand_as(action_emb)

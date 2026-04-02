@@ -86,6 +86,7 @@ class SuffixEmbeddingTTNN:
         self._att_mask_suffix_len = suffix_len
 
         self.indices = ttnn.arange(0, 512, 1, device=device, dtype=ttnn.float32)
+        self.indices = ttnn.to_layout(self.indices, ttnn.TILE_LAYOUT)  # Pre-convert for trace compatibility
 
     def embed_actions(self, noisy_actions: ttnn.Tensor) -> ttnn.Tensor:
         """
@@ -163,7 +164,23 @@ class SuffixEmbeddingTTNN:
             Tuple of (fused_emb, adarms_cond)
         """
         if self.config.pi05:
-            return action_emb, time_emb
+            # Pi0.5: compute adaRMS conditioning via time MLP
+            time_2d = ttnn.reshape(time_emb, (time_emb.shape[0], 1, -1)) if len(time_emb.shape) == 2 else time_emb
+            adarms_cond = ttnn.linear(
+                time_2d,
+                self.weights["time_mlp_in.weight"],
+                bias=self.weights["time_mlp_in.bias"],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            adarms_cond = ttnn.silu(adarms_cond)
+            adarms_cond = ttnn.linear(
+                adarms_cond,
+                self.weights["time_mlp_out.weight"],
+                bias=self.weights["time_mlp_out.bias"],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            adarms_cond = ttnn.silu(adarms_cond)
+            return action_emb, adarms_cond
 
         # Get shapes
         batch_size = action_emb.shape[0]
@@ -190,9 +207,7 @@ class SuffixEmbeddingTTNN:
             bias=self.weights["action_time_mlp_out.bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        ttnn.ReadDeviceProfiler(
-            self.device
-        )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
+        # ReadDeviceProfiler removed for performance
 
         return x, None
 
@@ -272,9 +287,7 @@ class SuffixEmbeddingTTNN:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        ttnn.ReadDeviceProfiler(
-            self.device
-        )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
+        # ReadDeviceProfiler removed for performance
 
         return suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond
 

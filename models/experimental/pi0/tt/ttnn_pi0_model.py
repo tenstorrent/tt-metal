@@ -78,6 +78,16 @@ class PI0ModelTTNN:
         # Create timestep indices on device using ttnn.arange
         self.timestep_indices = ttnn.arange(0, pad_steps, 1, device=self.device, dtype=ttnn.bfloat16)
 
+        # Pre-compute all timestep tensors for the denoising loop
+        num_steps = self.denoise_config.num_steps
+        self._precomputed_timesteps = []
+        for i in range(num_steps):
+            t_val = 1.0 - i / num_steps
+            t_torch = torch.tensor([t_val], dtype=torch.float32)
+            t_ttnn = ttnn.from_torch(t_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+            t_ttnn = ttnn.reshape(t_ttnn, (1,))
+            self._precomputed_timesteps.append(t_ttnn)
+
         x_t_torch = torch.randn(1, self.config.action_horizon, self.config.action_dim)
         self.x_t_ttnn = ttnn.from_torch(
             x_t_torch,
@@ -211,44 +221,26 @@ class PI0ModelTTNN:
         # Create timesteps as Python list: [1.0, 0.9, 0.8, ..., 0.0]
         timesteps = [1.0 - i / num_steps for i in range(num_steps + 1)]
 
-        # OPTIMIZATION: Pre-compute all timestep tensors on device using TTNN
-        pad_steps = ((num_steps + 31) // 32) * 32
-
-        # Create timestep indices on device using ttnn.arange
-        timestep_indices = self.timestep_indices
-        timestep_indices = ttnn.to_layout(timestep_indices, ttnn.TILE_LAYOUT)
-
-        # Convert to timestep values: 1.0 - index / num_steps
-        timestep_values = ttnn.multiply(timestep_indices, -1.0 / num_steps)
-        timesteps_ttnn = ttnn.add(timestep_values, 1.0)
-        timesteps_ttnn = ttnn.reshape(timesteps_ttnn, (1, pad_steps))
-
-        # Cleanup
-        ttnn.deallocate(timestep_indices)
-        ttnn.deallocate(timestep_values)
-
-        # Step 3: Sample initial noise (small tensor - host generation is fine)
-        # Note: Using torch.randn ensures PCC compatibility with PyTorch reference
-        # The tensor is small (batch * 50 * 32 = 1600 floats), so transfer is negligible
+        # Step 3: Sample initial noise
         x_t_ttnn = self.x_t_ttnn
 
         # Step 4: Denoising loop (stays on device!)
         for i in range(num_steps):
-            t = timesteps[i]  # Already Python float
+            t = timesteps[i]
             t_next = timesteps[i + 1]
-            dt = t_next - t  # Negative since we go from 1.0 to 0.0
+            dt = t_next - t
 
-            # OPTIMIZATION: Slice timestep from pre-computed tensor (no transfer per step!)
-            t_tensor = ttnn.slice(timesteps_ttnn, [0, i], [batch_size, i + 1])
-            t_tensor = ttnn.reshape(t_tensor, (batch_size,))
+            # Use pre-computed timestep tensor (no slice/reshape per step)
+            t_tensor = self._precomputed_timesteps[i]
 
             # Embed suffix (x_t_ttnn already on device - no transfer!)
-            suffix_embs, suffix_pad, suffix_att, _ = self.embed_suffix(state_ttnn, x_t_ttnn, t_tensor)
+            suffix_embs, suffix_pad, suffix_att, adarms_cond = self.embed_suffix(state_ttnn, x_t_ttnn, t_tensor)
 
-            # Forward through expert with cached prefix KV
+            # Forward through expert with cached prefix KV (pass adarms_cond for Pi0.5)
             expert_output, _ = self.backbone.forward_expert(
                 suffix_embs,
                 past_key_values=prefix_kv_cache,
+                adarms_cond=adarms_cond,
             )
 
             # Extract action output (skip state token in PI0 mode)
@@ -267,12 +259,137 @@ class PI0ModelTTNN:
             x_t_ttnn = ttnn.add(x_t_ttnn, velocity_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
 
             # Clear profiler buffer after each denoising step (~500 ops)
-            ttnn.ReadDeviceProfiler(
-                self.device
-            )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
+            # ReadDeviceProfiler removed for performance
 
         # Convert back to PyTorch only at the very end (1 transfer instead of 10!)
         return x_t_ttnn
+
+    def _run_denoising_loop(
+        self,
+        state_ttnn: ttnn.Tensor,
+        x_t_ttnn: ttnn.Tensor,
+        prefix_kv_cache,
+    ) -> ttnn.Tensor:
+        """Run the 10-step denoising loop. Factored out for trace capture."""
+        num_steps = self.denoise_config.num_steps
+        timesteps = [1.0 - i / num_steps for i in range(num_steps + 1)]
+
+        for i in range(num_steps):
+            dt = timesteps[i + 1] - timesteps[i]
+            t_tensor = self._precomputed_timesteps[i]
+
+            suffix_embs, suffix_pad, suffix_att, adarms_cond = self.embed_suffix(state_ttnn, x_t_ttnn, t_tensor)
+
+            expert_output, _ = self.backbone.forward_expert(
+                suffix_embs,
+                past_key_values=prefix_kv_cache,
+                adarms_cond=adarms_cond,
+            )
+
+            if not self.config.pi05:
+                action_output = ttnn.slice(
+                    expert_output, [0, 1, 0], [expert_output.shape[0], expert_output.shape[1], expert_output.shape[2]]
+                )
+            else:
+                action_output = expert_output
+
+            velocity = self.suffix_embedding.project_output(action_output)
+            velocity_scaled = ttnn.mul(velocity, dt)
+            x_t_ttnn = ttnn.add(x_t_ttnn, velocity_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        return x_t_ttnn
+
+    def setup_trace(
+        self,
+        images: List[torch.Tensor],
+        img_masks: List[torch.Tensor],
+        lang_tokens: torch.Tensor,
+        lang_masks: torch.Tensor,
+        state: torch.Tensor,
+    ):
+        """
+        Set up 2CQ + Trace for the denoising loop.
+
+        Call this once to compile and capture. Then call execute_trace() for fast inference.
+        """
+        # Step 1: Run prefix (not traced — runs once per new observation)
+        prefix_embs, prefix_pad, prefix_att = self.embed_prefix(images, img_masks, lang_tokens, lang_masks)
+        _, self._trace_prefix_kv_cache = self.backbone.forward_vlm(prefix_embs, use_cache=True)
+
+        # Step 2: Compile pass — run denoising loop to JIT compile all kernels
+        x_t_compile = self.x_t_ttnn
+        self._run_denoising_loop(state, x_t_compile, self._trace_prefix_kv_cache)
+
+        # Step 3: Capture trace — re-run denoising loop under trace capture
+        # The x_t tensor at self.x_t_ttnn address will be the input
+        self._trace_x_t = self.x_t_ttnn
+        self._trace_state = state
+
+        trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+        self._trace_output = self._run_denoising_loop(self._trace_state, self._trace_x_t, self._trace_prefix_kv_cache)
+        ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+
+        self._trace_id = trace_id
+
+    def execute_trace(self) -> ttnn.Tensor:
+        """Execute the captured denoising trace. Call setup_trace() first."""
+        ttnn.execute_trace(self.device, self._trace_id, cq_id=0, blocking=True)
+        return self._trace_output
+
+    def sample_actions_traced(
+        self,
+        images: List[torch.Tensor],
+        img_masks: List[torch.Tensor],
+        lang_tokens: torch.Tensor,
+        lang_masks: torch.Tensor,
+        state: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Sample actions using 2CQ + Trace for the denoising loop.
+
+        First call sets up the trace. Subsequent calls execute it.
+        The prefix (SigLIP + VLM) runs normally each time.
+        """
+        # Run prefix (new observation each time)
+        prefix_embs, prefix_pad, prefix_att = self.embed_prefix(images, img_masks, lang_tokens, lang_masks)
+        _, prefix_kv_cache = self.backbone.forward_vlm(prefix_embs, use_cache=True)
+
+        if not hasattr(self, "_trace_id"):
+            # First call: compile + capture trace
+            # Compile pass
+            x_t_compile = self.x_t_ttnn
+            self._run_denoising_loop(state, x_t_compile, prefix_kv_cache)
+
+            # Store references for trace
+            self._trace_prefix_kv_cache = prefix_kv_cache
+            self._trace_x_t = self.x_t_ttnn
+            self._trace_state = state
+
+            # Capture trace
+            trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+            self._trace_output = self._run_denoising_loop(
+                self._trace_state, self._trace_x_t, self._trace_prefix_kv_cache
+            )
+            ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+            self._trace_id = trace_id
+        else:
+            # Update prefix KV cache in-place at the same tensor addresses
+            # Copy new KV cache values to the trace's pre-allocated KV tensors
+            for i in range(len(prefix_kv_cache)):
+                new_k, new_v = prefix_kv_cache[i]
+                old_k, old_v = self._trace_prefix_kv_cache[i]
+                ttnn.copy(new_k, old_k)
+                ttnn.copy(new_v, old_v)
+
+        # Execute traced denoising loop
+        ttnn.execute_trace(self.device, self._trace_id, cq_id=0, blocking=True)
+        return self._trace_output
+
+    def release_trace(self):
+        """Release trace resources."""
+        if hasattr(self, "_trace_id"):
+            ttnn.release_trace(self.device, self._trace_id)
+            del self._trace_id
 
     @classmethod
     def from_pretrained(

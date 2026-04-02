@@ -1,0 +1,3 @@
+commit	accuracy_percent	tokens_per_second	peak_memory_gb	status	description
+d40a28a3	99.78	271.1	0.0	keep	10-step Pi0.5, 184.4ms end-to-end, PCC 0.9978 vs CPU ref
+d40a28a3	99.34	364.7	0.0	keep	5-step Pi0.5, 137.1ms end-to-end, PCC 0.9934 vs 10-step CPU ref
