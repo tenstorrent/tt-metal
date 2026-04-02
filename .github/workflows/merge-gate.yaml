@@ -187,8 +187,8 @@ jobs:
       matrix:
         # run t3k tests on CIv1 for now in order to have dedicated machine
         platform: ${{ github.event_name == 'merge_group'
-            && fromJSON('["N300-viommu","n300-llmbox-viommu-prio","p150b-viommu-prio"]')
-            || fromJSON('["N300-viommu","n300-llmbox-viommu","p150b-viommu"]') }}
+            && fromJSON('["N300-viommu","N300-llmbox-viommu-prio","P150b-viommu-prio"]')
+            || fromJSON('["N300-viommu","N300-llmbox-viommu","P150b-viommu"]') }}
     uses: ./.github/workflows/smoke.yaml
     with:
       docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
@@ -210,8 +210,8 @@ jobs:
       matrix:
         # run t3k tests on CIv1 for now in order to have dedicated machine
         platform: ${{ github.event_name == 'merge_group'
-            && fromJSON('["N300-viommu","n300-llmbox-viommu-prio","p150b-viommu-prio"]')
-            || fromJSON('["N300-viommu","n300-llmbox-viommu","p150b-viommu"]') }}
+            && fromJSON('["N300-viommu","N300-llmbox-viommu-prio","p150b-viommu-prio"]')
+            || fromJSON('["N300-viommu","N300-llmbox-viommu","p150b-viommu"]') }}
     uses: ./.github/workflows/smoke.yaml
     with:
       docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
