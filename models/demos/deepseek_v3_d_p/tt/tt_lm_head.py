@@ -157,7 +157,15 @@ class TtLMHead(LightweightModule):
         logger.debug(f"  x.shape={x.shape}")
 
         # ========================================
-        # Step 0: All-gather x to get full emb_dim (replicated across TP axis)
+        # Step 0: Extract last 32 logits
+        # ========================================
+        # Actually, we only care about the last logit. However, due to the matmul constraint
+        # to work on tiles, we need to extract the last tile.
+        x = ttnn.narrow(x, dim=1, start=-32, length=32)
+        logger.debug(f"[TtLMHead.forward] After narrow: x.shape={x.shape}")
+
+        # ========================================
+        # Step 1: All-gather x to get full emb_dim (replicated across TP axis)
         # ========================================
         # Input x is sharded: (dispatch_group_size/axis0, seq_len_per_chip, emb_dim/axis1)
         # Both shared_expert and dispatch need full emb_dim, so all-gather first
@@ -175,7 +183,7 @@ class TtLMHead(LightweightModule):
         logger.debug(f"[TtLMHead.forward] x_full (after all_gather) shape: {x_full.shape}")
 
         # ========================================
-        # Step 1: Local matmul with sharded weight
+        # Step 2: Local matmul with sharded weight
         # ========================================
         output = ttnn.matmul(x_full, self.weight, compute_kernel_config=self.compute_kernel_config)
         logger.debug(f"[TtLMHead.forward] output (after matmul) shape: {output.shape}")

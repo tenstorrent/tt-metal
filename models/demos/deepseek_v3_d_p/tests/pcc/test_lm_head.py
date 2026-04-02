@@ -72,7 +72,7 @@ def random_weights(config, emb_dim: int, vocab_size: int):
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_lm_head_pcc(
+def test_lm_head(
     mesh_device,
     device_params,
     config_only,
