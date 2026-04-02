@@ -5,13 +5,12 @@
 
 Multi-device setup follows ``models/tt_dit/tests/encoders/umt5/test_umt5.py``:
 
-- ``device_params`` with ``fabric_config=FABRIC_1D`` (indirect) for fabric-backed dispatch.
-- ``num_links`` (indirect) passed into ``CCLManager`` (default ``1``, same as T3K row in tt_dit).
+- ``device_params`` with ``fabric_config=FABRIC_1D`` (``line_params``) for fabric-backed dispatch.
+- ``num_links`` passed into ``CCLManager`` (default ``1``).
 - ``parallel_config_and_ccl_manager``: ``tensor_parallel.factor = mesh_device.shape[1]``,
   ``mesh_axis=1`` (column TP).
 
-Mesh shape still comes from ``mesh_shape_request_param()`` (``MESH_DEVICE`` / device count), unlike
-tt_dit’s fixed ``(2,4)`` / ``(4,8)`` grids, so N150/N300 stay the default CI targets.
+Mesh shape comes from ``mesh_shape_request_param()`` (``MESH_DEVICE`` / device count).
 
 **Wall time:** ``pytestmark = pytest.mark.timeout(600)``. Shorten sequence with
 ``LINGBOT_VA_UMT5_PCC_SEQ_LEN`` (e.g. ``128``).
@@ -25,7 +24,6 @@ import torch
 import ttnn
 from transformers import UMT5EncoderModel
 
-from models.common.metrics import compute_pcc
 from models.experimental.lingbot_va.tests.mesh_utils import (
     mesh_num_devices,
     mesh_shape_request_param,
@@ -37,23 +35,22 @@ from models.experimental.lingbot_va.tests.mesh_utils import (
 from models.tt_dit.encoders.umt5.model_umt5 import UMT5Config, UMT5Encoder as TTUMT5Encoder
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.utils.check import assert_quality
+from models.tt_dit.utils.test import line_params
+
+os.environ.setdefault("TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT", "0")
 
 pytestmark = pytest.mark.timeout(600)
 
 CHECKPOINT_PATH = "models/experimental/lingbot_va/reference/checkpoints/text_encoder"
-PCC_THRESHOLD = 0.99
+MIN_PCC = 0.99
+MAX_RELATIVE_RMSE = 0.15
 BATCH_SIZE = 1
 SEQ_LEN = int(os.environ.get("LINGBOT_VA_UMT5_PCC_SEQ_LEN", "512"))
 
 
 @pytest.fixture
-def num_links(request):
-    """CCL link count; indirect param (aligned with tt_dit ``test_umt5``)."""
-    return request.param
-
-
-@pytest.fixture
-def parallel_config_and_ccl_manager(mesh_device, num_links):
+def parallel_config_and_ccl_manager(mesh_device, num_links, topology):
     """Same TP/CCL construction as ``test_umt5.parallel_config_and_ccl_manager``."""
     parallel_config = EncoderParallelConfig(
         tensor_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
@@ -61,7 +58,7 @@ def parallel_config_and_ccl_manager(mesh_device, num_links):
     ccl_manager = CCLManager(
         mesh_device=mesh_device,
         num_links=num_links,
-        topology=ttnn.Topology.Linear,
+        topology=topology,
     )
     return parallel_config, ccl_manager
 
@@ -76,22 +73,29 @@ def hf_model():
     return model
 
 
+@pytest.mark.usefixtures("reset_seeds")
 @pytest.mark.parametrize(
-    "mesh_device",
-    [mesh_shape_request_param()],
-    indirect=True,
-)
-@pytest.mark.parametrize("num_links", [1], indirect=True)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
+    ("mesh_device", "num_links", "device_params", "topology"),
+    [
+        pytest.param(
+            mesh_shape_request_param(),
+            1,
+            line_params,
+            ttnn.Topology.Linear,
+            id="lingbot_umt5_encoder_pcc",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
 )
 def test_umt5_encoder_comparison(
     mesh_device,
+    num_links,
+    topology,
     parallel_config_and_ccl_manager,
     hf_model,
 ):
+    assert num_links >= 1
+    assert topology == ttnn.Topology.Linear
     encoder_parallel_config, ccl_manager = parallel_config_and_ccl_manager
     tp_factor = encoder_parallel_config.tensor_parallel.factor
 
@@ -175,5 +179,4 @@ def test_umt5_encoder_comparison(
 
     assert tt_embed.shape == text_embed.shape, f"Shape mismatch: HF={text_embed.shape}, TT={tt_embed.shape}"
 
-    pcc = compute_pcc(text_embed, tt_embed)
-    assert pcc >= PCC_THRESHOLD, f"PCC {pcc:.6f} < {PCC_THRESHOLD}"
+    assert_quality(text_embed, tt_embed, pcc=MIN_PCC, relative_rmse=MAX_RELATIVE_RMSE)

@@ -6,19 +6,17 @@
 PCC compares tensors at bfloat16 fidelity (reference round-tripped .bfloat16().float()) to match the
 device path and avoid ~0.98x PCC from fp32-vs-bf16 mismatch. Torch output is clamped like ``decode_ttnn``.
 
-Threshold 0.985: after aligning clamp and bf16 reference, end-to-end PCC on Wormhole is still ~0.986–0.987
-because the TT path stacks conv3d, matmul/SDPA (default blocking, HiFi accumulation), and pure-ttnn
-upsample (``TtDupUp3D``) — small per-layer drift compounds through the decoder. ``dup_up_wan`` matches the
-reference ``DupUp3D`` math (BCTHW repeat/reshape/permute) but does not remove accumulated bf16/kernel
-variance elsewhere.
+Threshold ~0.985: TT path stacks conv3d, matmul/SDPA, and pure-ttnn upsample — small per-layer drift
+compounds through the decoder.
 """
+
+import os
 
 import pytest
 import torch
 import ttnn
 from diffusers import AutoencoderKLWan
 
-from models.common.metrics import compute_pcc
 from models.experimental.lingbot_va.tests.mesh_utils import (
     mesh_shape_request_param,
     vae_bcthw_to_torch,
@@ -27,26 +25,26 @@ from models.experimental.lingbot_va.tests.mesh_utils import (
 from models.experimental.lingbot_va.tt.vae_decoder import WanVAEDecoder
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import cache as tt_cache
+from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.conv3d import conv_pad_height, conv_pad_in_channels
+from models.tt_dit.utils.test import line_params
+
+os.environ.setdefault("TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT", "0")
 
 CHECKPOINT_PATH = "models/experimental/lingbot_va/reference/checkpoints/vae"
-PCC_THRESHOLD = 0.985
+MIN_PCC = 0.985
+MAX_RELATIVE_RMSE = 0.25
 LATENT_T = 1
 LATENT_H = 8
 LATENT_W = 4
 
 
 @pytest.fixture
-def num_links(request):
-    return request.param
-
-
-@pytest.fixture
-def vae_ccl_manager(mesh_device, num_links):
+def vae_ccl_manager(mesh_device, num_links, topology):
     return CCLManager(
         mesh_device=mesh_device,
         num_links=num_links,
-        topology=ttnn.Topology.Linear,
+        topology=topology,
     )
 
 
@@ -129,19 +127,24 @@ def decode_ttnn(vae, latents, mesh_device, ccl_manager):
     return video_torch.clamp(-1.0, 1.0)
 
 
+@pytest.mark.usefixtures("reset_seeds")
 @pytest.mark.parametrize(
-    "mesh_device",
-    [mesh_shape_request_param()],
-    indirect=True,
+    ("mesh_device", "num_links", "device_params", "topology"),
+    [
+        pytest.param(
+            mesh_shape_request_param(),
+            1,
+            line_params,
+            ttnn.Topology.Linear,
+            id="lingbot_vae_decoder_pcc",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("num_links", [1], indirect=True)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
-)
-def test_decode_one_video_pcc(mesh_device, vae_ccl_manager):
-    # bf16 conv3d on CPU is very slow; fp32 uses fast MKL paths. Timeout disabled (pytest-timeout: 0 = no limit).
+@pytest.mark.timeout(600)
+def test_decode_one_video_pcc(mesh_device, num_links, topology, vae_ccl_manager):
+    assert num_links >= 1
+    assert topology == ttnn.Topology.Linear
     vae = AutoencoderKLWan.from_pretrained(CHECKPOINT_PATH, torch_dtype=torch.float32).to("cpu")
     vae.eval()
 
@@ -149,7 +152,6 @@ def test_decode_one_video_pcc(mesh_device, vae_ccl_manager):
     latents = torch.randn(1, vae.config.z_dim, LATENT_T, LATENT_H, LATENT_W, dtype=torch.float32)
 
     torch_out = decode_torch(vae, latents)
-    # Match TT path: decoder clamps to [-1, 1]; TT runs in bf16 — compare at bf16 precision vs fp32 ref.
     torch_out = torch_out.float().clamp(-1.0, 1.0)
 
     ttnn_out = decode_ttnn(vae, latents, mesh_device, vae_ccl_manager)
@@ -162,5 +164,4 @@ def test_decode_one_video_pcc(mesh_device, vae_ccl_manager):
     torch_cmp = torch_cmp[:, :min_c, :, :min_h, :min_w]
     ttnn_cmp = ttnn_cmp[:, :min_c, :, :min_h, :min_w]
 
-    pcc = compute_pcc(ttnn_cmp, torch_cmp)
-    assert pcc >= PCC_THRESHOLD, f"PCC {pcc:.6f} < {PCC_THRESHOLD}"
+    assert_quality(torch_cmp, ttnn_cmp, pcc=MIN_PCC, relative_rmse=MAX_RELATIVE_RMSE)
