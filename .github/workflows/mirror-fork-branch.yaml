@@ -39,6 +39,22 @@ jobs:
       (github.event.issue.pull_request && startsWith(github.event.comment.body, '/mirror'))
     runs-on: ubuntu-latest
     steps:
+      - name: Check org membership
+        if: github.event_name == 'issue_comment'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          COMMENTER="${{ github.event.comment.user.login }}"
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/orgs/tenstorrent/members/$COMMENTER")
+          if [ "$HTTP_STATUS" != "204" ]; then
+            echo "Error: $COMMENTER is not a member of tenstorrent org (status: $HTTP_STATUS)"
+            exit 1
+          fi
+          echo "$COMMENTER is a tenstorrent org member"
+
       - name: React to comment
         if: github.event_name == 'issue_comment'
         env:
