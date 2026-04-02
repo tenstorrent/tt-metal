@@ -73,6 +73,7 @@ class TTNNBailingMoEDecoderLayer(TTNNModule):
         output_router_logits=False,
         use_cache=False,
         position_embeddings=None,
+        cache_position=None,
         **kwargs,
     ):
         hs = hidden_states
@@ -89,16 +90,19 @@ class TTNNBailingMoEDecoderLayer(TTNNModule):
         # Input layernorm
         hs = self.input_layernorm(hs)
 
-        # Attention — pass position_ids as cache_position so the paged-attention
-        # decode path can derive cur_pos as a device tensor (trace-safe).
-        # The HF model does NOT forward cache_position to the decoder layer,
-        # so kwargs.get("cache_position") is always None.
+        # Attention — use cache_position (explicit kwarg) if provided,
+        # otherwise fall back to position_ids for backward compatibility.
+        # Making cache_position a named parameter allows TracedRun to
+        # pre-allocate a device buffer for it, so the paged-attention
+        # decode path receives a device tensor and avoids host→device
+        # writes during trace capture.
+        attn_cache_position = cache_position if cache_position is not None else position_ids
         attn_out, self_attn_weights, present_key_value = self.attention(
             hidden_states=hs,
             position_embeddings=position_embeddings,
             attention_mask=attention_mask,
             past_key_value=past_key_value,
-            cache_position=position_ids,
+            cache_position=attn_cache_position,
         )
 
         # Residual add ON DEVICE (replaces aten::add on CPU)
@@ -200,6 +204,7 @@ class TTNNBailingMoEDecoderLayerPadded(TTNNModule):
         output_router_logits=False,
         use_cache=False,
         position_embeddings=None,
+        cache_position=None,
         **kwargs,
     ):
         rank = len(hidden_states.shape)
@@ -230,6 +235,8 @@ class TTNNBailingMoEDecoderLayerPadded(TTNNModule):
                 sin = self._pad_dim(sin, cos_seq_dim, pad_amount, value=0.0)
                 position_embeddings = (cos, sin)
 
+        # Pass cache_position explicitly (not padded) so the inner layer's
+        # trace infrastructure can pre-allocate a device buffer for it.
         outputs = self.layer(
             hidden_states,
             attention_mask=attention_mask,
@@ -239,6 +246,7 @@ class TTNNBailingMoEDecoderLayerPadded(TTNNModule):
             output_router_logits=output_router_logits,
             use_cache=use_cache,
             position_embeddings=position_embeddings,
+            cache_position=cache_position,
             **kwargs,
         )
 
