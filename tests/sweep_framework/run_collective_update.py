@@ -3,17 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Script to update multiple op_run*.json files to share common metadata.
-Updates initiated_by, git_sha, github_pipeline_id, run_start_ts, and run_end_ts
-across all matching files, using the earliest start and latest end timestamps.
+Script to homogenize and merge multiple oprun_*.json files from parallel sweep jobs.
 
-Optimized for large files by:
-1. Extracting only metadata fields without loading full file content
-2. Using streaming JSON processing for file updates
-3. Optional support for ijson streaming parser for extremely large files
+By default the script:
+1. Extracts common metadata (earliest start, latest end, unified run_contents)
+2. Merges all oprun files into a **single** file with a concatenated ``tests`` array
+3. Removes the original per-job files so only the merged file is uploaded
 
-For extremely large files (multi-GB), install ijson for better performance:
-    pip install ijson
+This ensures that superset (or any downstream consumer) sees one run = one file,
+instead of N separate entries for N parallel jobs.
+
+Use ``--no-merge`` to fall back to the legacy behaviour of updating metadata
+in-place across separate files.
+
+Optimized for large files via streaming JSON extraction and optional ijson support.
 """
 
 import json
@@ -326,14 +329,99 @@ def extract_common_metadata(files: List[pathlib.Path], run_type: str = "nightly"
     return common_metadata
 
 
-def update_op_run_files(directory: pathlib.Path, dry_run: bool = False, run_type: str = "nightly") -> None:
+def merge_op_run_files(
+    directory: pathlib.Path,
+    common_metadata: Dict[str, Any],
+    files: List[pathlib.Path],
+    dry_run: bool = False,
+) -> Optional[pathlib.Path]:
     """
-    Update all op_run*.json files in the directory with common metadata.
+    Merge all oprun_*.json files into a single file with unified metadata.
+
+    Each oprun file has metadata fields plus a ``tests`` array.  This function
+    loads every file, concatenates all ``tests`` arrays, applies the common
+    metadata, picks non-metadata fields (host, card_type, run_type, ...) from
+    the first file, and writes a single merged oprun file.  The original
+    per-job files are removed so only the merged file is uploaded.
+
+    Returns the path to the merged file, or None on dry-run / error.
+    """
+    if len(files) <= 1:
+        # Nothing to merge — single file is already the final result.
+        if files:
+            print(f"Only one oprun file found ({files[0].name}), skipping merge.")
+        return files[0] if files else None
+
+    print(f"\nMerging {len(files)} oprun files into a single file...")
+    all_tests: List[Any] = []
+    base_data: Optional[Dict[str, Any]] = None
+    total_tests = 0
+
+    for filepath in files:
+        file_size_mb = filepath.stat().st_size / (1024 * 1024)
+        print(f"  Loading {filepath.name} ({file_size_mb:.1f}MB)...")
+        data = load_json_file(filepath)
+        tests = data.get("tests", [])
+        total_tests += len(tests)
+        all_tests.extend(tests)
+
+        if base_data is None:
+            base_data = data
+
+    if base_data is None:
+        print("Error: Could not load any oprun file for merging")
+        return None
+
+    print(f"  Total tests across all files: {total_tests}")
+
+    if dry_run:
+        print(f"  DRY RUN: Would merge {len(files)} files into 1 ({total_tests} tests)")
+        return None
+
+    # Build the merged document: base metadata + common overrides + all tests
+    merged = dict(base_data)
+    merged["tests"] = all_tests
+    merged.update(common_metadata)
+
+    # Compute an overall status from all tests
+    statuses = {t.get("status", "unknown") for t in all_tests if isinstance(t, dict)}
+    if any(s.startswith("fail") for s in statuses):
+        merged["status"] = "fail"
+    elif all(s == "pass" for s in statuses):
+        merged["status"] = "passed"
+    else:
+        merged["status"] = "passed"
+
+    # Generate a stable merged filename using the first file's name prefix
+    first_name = files[0].stem  # e.g. "oprun_abc123_def456_20260401_114814"
+    merged_path = directory / f"{first_name}_merged.json"
+
+    print(f"  Writing merged file: {merged_path.name} ({total_tests} tests)...")
+    save_json_file(merged_path, merged)
+    merged_size_mb = merged_path.stat().st_size / (1024 * 1024)
+    print(f"  Merged file size: {merged_size_mb:.1f}MB")
+
+    # Remove the original per-job files
+    for filepath in files:
+        filepath.unlink()
+        print(f"  Removed {filepath.name}")
+
+    print(f"\n✓ Merged {len(files)} files into {merged_path.name}")
+    return merged_path
+
+
+def update_op_run_files(
+    directory: pathlib.Path, dry_run: bool = False, run_type: str = "nightly", merge: bool = True
+) -> None:
+    """
+    Update all op_run*.json files in the directory with common metadata,
+    then optionally merge them into a single file.
 
     Args:
         directory: Path to the directory containing op_run*.json files
         dry_run: If True, only print what would be changed without modifying files
         run_type: Type of run - "nightly", "comprehensive", "model_traced", or "lead_models"
+        merge: If True, merge all oprun files into a single file after updating metadata
     """
     # Find all op_run*.json files
     files = find_op_run_files(directory)
@@ -363,29 +451,33 @@ def update_op_run_files(directory: pathlib.Path, dry_run: bool = False, run_type
         print("DRY RUN: No files will be modified")
         print()
 
-    # Update each file using optimized method for large files
-    for filepath in files:
-        file_size_mb = filepath.stat().st_size / (1024 * 1024)
-        print(f"Processing {filepath.name} ({file_size_mb:.1f}MB)...")
-
-        # Use optimized update function that handles large files
-        changes = update_large_json_file(filepath, common_metadata, dry_run)
-
-        if changes:
-            print(f"  Changes:")
-            for change in changes:
-                print(f"    {change}")
-
-            if not dry_run:
-                print(f"  ✓ Updated {filepath.name}")
-        else:
-            print(f"  No changes needed for {filepath.name}")
-        print()
-
-    if not dry_run:
-        print(f"Successfully updated {len(files)} files")
+    if merge and len(files) > 1:
+        # Merge mode: combine all files into one with unified metadata
+        merge_op_run_files(directory, common_metadata, files, dry_run)
     else:
-        print(f"DRY RUN complete - {len(files)} files would be updated")
+        # Legacy mode: update each file individually
+        for filepath in files:
+            file_size_mb = filepath.stat().st_size / (1024 * 1024)
+            print(f"Processing {filepath.name} ({file_size_mb:.1f}MB)...")
+
+            # Use optimized update function that handles large files
+            changes = update_large_json_file(filepath, common_metadata, dry_run)
+
+            if changes:
+                print(f"  Changes:")
+                for change in changes:
+                    print(f"    {change}")
+
+                if not dry_run:
+                    print(f"  ✓ Updated {filepath.name}")
+            else:
+                print(f"  No changes needed for {filepath.name}")
+            print()
+
+        if not dry_run:
+            print(f"Successfully updated {len(files)} files")
+        else:
+            print(f"DRY RUN complete - {len(files)} files would be updated")
 
 
 def main():
@@ -405,6 +497,11 @@ def main():
         choices=["nightly", "comprehensive", "model_traced", "lead_models"],
         default="nightly",
         help="Type of run: 'nightly', 'comprehensive', 'model_traced', or 'lead_models' (default: nightly)",
+    )
+    parser.add_argument(
+        "--no-merge",
+        action="store_true",
+        help="Skip merging oprun files into a single file (legacy behaviour: update metadata in-place only)",
     )
 
     args = parser.parse_args()
@@ -426,7 +523,7 @@ def main():
 
     # Run the update
     try:
-        update_op_run_files(args.directory, dry_run=args.dry_run, run_type=args.run_type)
+        update_op_run_files(args.directory, dry_run=args.dry_run, run_type=args.run_type, merge=not args.no_merge)
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)
