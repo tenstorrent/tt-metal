@@ -197,8 +197,8 @@ MoEGPTDeviceOperation::tensor_return_value_t MoEGPTDeviceOperation::create_outpu
 
     tt::tt_metal::MeshTensor view_mesh_tensor(
         std::move(view_mesh_buffer), output_specs[4], tilize_output_tensor.tensor_topology());
-    tt::tt_metal::DeviceStorage view_storage(tilize_output_tensor.device_storage(), std::move(view_mesh_tensor));
-    const ttnn::Tensor output_tensor(view_storage);
+    const ttnn::Tensor output_tensor(
+        tt::tt_metal::DeviceStorage(tilize_output_tensor.device_storage(), std::move(view_mesh_tensor)));
 
     return {
         create_device_tensor(output_specs[0], device),
