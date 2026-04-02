@@ -1446,14 +1446,14 @@ class ModelArgs:
                 sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
                     start_core, num_sdpa_cores, prefetcher.all_worker_cores_range_set, row_wise=True
                 ),
-                exp_approx_mode=False,
+                exp_approx_mode=True,
                 q_chunk_size=0,
                 k_chunk_size=0,
             )
         else:
             return ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
-                exp_approx_mode=False,
+                exp_approx_mode=True,
                 q_chunk_size=0,
                 k_chunk_size=0,
             )
