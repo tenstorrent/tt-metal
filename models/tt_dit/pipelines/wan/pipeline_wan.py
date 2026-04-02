@@ -7,12 +7,11 @@
 import html
 import os
 from contextlib import nullcontext
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import List, Optional, Union
 
 import ftfy
 import regex as re
 import torch
-from diffusers.callbacks import MultiPipelineCallbacks, PipelineCallback
 from diffusers.loaders import WanLoraLoaderMixin
 from diffusers.models import AutoencoderKLWan
 from diffusers.models import WanTransformer3DModel as TorchWanTransformer3DModel
@@ -94,32 +93,41 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
     implemented for all pipelines (downloading, saving, running on a particular device, etc.).
 
     Args:
-        tokenizer ([`T5Tokenizer`]):
-            Tokenizer from [T5](https://huggingface.co/docs/transformers/en/model_doc/t5#transformers.T5Tokenizer),
-            specifically the [google/umt5-xxl](https://huggingface.co/google/umt5-xxl) variant.
-        text_encoder ([`T5EncoderModel`]):
-            [T5](https://huggingface.co/docs/transformers/en/model_doc/t5#transformers.T5EncoderModel), specifically
-            the [google/umt5-xxl](https://huggingface.co/google/umt5-xxl) variant.
-        transformer ([`WanTransformer3DModel`]):
-            Conditional Transformer to denoise the input latents.
-        scheduler ([`UniPCMultistepScheduler`]):
-            A scheduler to be used in combination with `transformer` to denoise the encoded image latents.
-        vae ([`AutoencoderKLWan`]):
-            Variational Auto-Encoder (VAE) Model to encode and decode videos to and from latent representations.
-        transformer_2 ([`WanTransformer3DModel`], *optional*):
-            Conditional Transformer to denoise the input latents during the low-noise stage. If provided, enables
-            two-stage denoising where `transformer` handles high-noise stages and `transformer_2` handles low-noise
-            stages. If not provided, only `transformer` is used.
-        boundary_ratio (`float`, *optional*, defaults to `None`):
-            Ratio of total timesteps to use as the boundary for switching between transformers in two-stage denoising.
-            The actual boundary timestep is calculated as `boundary_ratio * num_train_timesteps`. When provided,
-            `transformer` handles timesteps >= boundary_timestep and `transformer_2` handles timesteps <
+        mesh_device (`ttnn.MeshDevice`):
+            The TT mesh device to run inference on.
+        parallel_config (`DiTParallelConfig`):
+            Parallelism configuration for the transformer.
+        vae_parallel_config (`VaeHWParallelConfig`):
+            Parallelism configuration for the VAE decoder.
+        encoder_parallel_config (`EncoderParallelConfig`):
+            Parallelism configuration for the text encoder.
+        num_links (`int`):
+            Number of links to use for CCL operations.
+        checkpoint_name (`str`, *optional*, defaults to `"Wan-AI/Wan2.2-T2V-A14B-Diffusers"`):
+            HuggingFace Hub repo ID to load model weights from.
+        scheduler (`FlowMatchEulerDiscreteScheduler`, *optional*):
+            Scheduler to use for denoising. Defaults to `UniPCMultistepScheduler` loaded from the checkpoint.
+        boundary_ratio (`float`, *optional*, defaults to `0.875`):
+            Ratio of total timesteps used as the boundary for switching between the two transformers in two-stage
+            denoising. `transformer` handles timesteps >= boundary_timestep and `transformer_2` handles timesteps <
             boundary_timestep. If `None`, only `transformer` is used for the entire denoising process.
+        expand_timesteps (`bool`, *optional*, defaults to `False`):
+            Whether to expand timesteps per-token for image-to-video (Wan2.2 TI2V) conditioning.
+        dynamic_load (`bool`, *optional*, defaults to `False`):
+            If `True`, model components are loaded/offloaded to device dynamically during inference.
+        topology (`ttnn.Topology`, *optional*, defaults to `ttnn.Topology.Linear`):
+            Fabric topology to use for CCL operations across devices.
+        is_fsdp (`bool`, *optional*, defaults to `True`):
+            Whether to use fully-sharded data parallelism for transformer weights.
+        model_type (`str`, *optional*, defaults to `"t2v"`):
+            Model variant identifier (e.g. `"t2v"` for text-to-video).
+        vae_dtype (`ttnn.DataType`, *optional*, defaults to `ttnn.bfloat16`):
+            Data type to use for VAE inference.
+        vae_use_cache (`bool`, *optional*, defaults to `True`):
+            Whether to cache VAE convolution programs across calls.
+        sdpa_t_fracture_w_only (`bool`, *optional*, defaults to `False`):
+            Whether to fracture SDPA only along the width dimension for temporal attention.
     """
-
-    model_cpu_offload_seq = "text_encoder->transformer->transformer_2->vae"
-    _callback_tensor_inputs = ["latents", "prompt_embeds", "negative_prompt_embeds"]
-    _optional_components = ["transformer", "transformer_2"]
 
     def __init__(
         self,
@@ -637,18 +645,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         width,
         prompt_embeds=None,
         negative_prompt_embeds=None,
-        callback_on_step_end_tensor_inputs=None,
         guidance_scale_2=None,
     ):
         if height % 16 != 0 or width % 16 != 0:
             raise ValueError(f"`height` and `width` have to be divisible by 16 but are {height} and {width}.")
-
-        if callback_on_step_end_tensor_inputs is not None and not all(
-            k in self._callback_tensor_inputs for k in callback_on_step_end_tensor_inputs
-        ):
-            raise ValueError(
-                f"`callback_on_step_end_tensor_inputs` has to be in {self._callback_tensor_inputs}, but found {[k for k in callback_on_step_end_tensor_inputs if k not in self._callback_tensor_inputs]}"
-            )
 
         if prompt is not None and prompt_embeds is not None:
             raise ValueError(
@@ -719,18 +719,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
     def num_timesteps(self):
         return self._num_timesteps
 
-    @property
-    def current_timestep(self):
-        return self._current_timestep
-
-    @property
-    def interrupt(self):
-        return self._interrupt
-
-    @property
-    def attention_kwargs(self):
-        return self._attention_kwargs
-
     @torch.no_grad()
     def __call__(
         self,
@@ -752,11 +740,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         negative_prompt_embeds: Optional[torch.Tensor] = None,
         output_type: Optional[str] = "np",
         return_dict: bool = True,
-        attention_kwargs: Optional[Dict[str, Any]] = None,
-        callback_on_step_end: Optional[
-            Union[Callable[[int, int, Dict], None], PipelineCallback, MultiPipelineCallbacks]
-        ] = None,
-        callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 512,
         traced: bool = False,
         profiler: BenchmarkProfiler = None,
@@ -805,19 +788,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 The output format of the generated image. Choose between `PIL.Image` or `np.array`.
             return_dict (`bool`, *optional*, defaults to `True`):
                 Whether or not to return a [`WanPipelineOutput`] instead of a plain tuple.
-            attention_kwargs (`dict`, *optional*):
-                A kwargs dictionary that if specified is passed along to the `AttentionProcessor` as defined under
-                `self.processor` in
-                [diffusers.models.attention_processor](https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/attention_processor.py).
-            callback_on_step_end (`Callable`, `PipelineCallback`, `MultiPipelineCallbacks`, *optional*):
-                A function or a subclass of `PipelineCallback` or `MultiPipelineCallbacks` that is called at the end of
-                each denoising step during the inference. with the following arguments: `callback_on_step_end(self:
-                DiffusionPipeline, step: int, timestep: int, callback_kwargs: Dict)`. `callback_kwargs` will include a
-                list of all tensors as specified by `callback_on_step_end_tensor_inputs`.
-            callback_on_step_end_tensor_inputs (`List`, *optional*):
-                The list of tensor inputs for the `callback_on_step_end` function. The tensors specified in the list
-                will be passed as `callback_kwargs` argument. You will only be able to include variables listed in the
-                `._callback_tensor_inputs` attribute of your pipeline class.
             max_sequence_length (`int`, defaults to `512`):
                 The maximum sequence length of the text encoder. If the prompt is longer than this, it will be
                 truncated. If the prompt is shorter, it will be padded to this length.
@@ -831,9 +801,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 indicating whether the corresponding generated image contains "not-safe-for-work" (nsfw) content.
         """
 
-        if isinstance(callback_on_step_end, (PipelineCallback, MultiPipelineCallbacks)):
-            callback_on_step_end_tensor_inputs = callback_on_step_end.tensor_inputs
-
         # 1. Check inputs. Raise error if not correct
         self.check_inputs(
             prompt,
@@ -842,7 +809,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             width,
             prompt_embeds,
             negative_prompt_embeds,
-            callback_on_step_end_tensor_inputs,
             guidance_scale_2,
         )
 
@@ -858,9 +824,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         self._guidance_scale = guidance_scale
         self._guidance_scale_2 = guidance_scale_2
-        self._attention_kwargs = attention_kwargs
-        self._current_timestep = None
-        self._interrupt = False
 
         # device = self._execution_device
         device = "cpu"
@@ -942,10 +905,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
-                if self.interrupt:
-                    continue
-
-                self._current_timestep = t
                 is_warmup = i == 1 and len(timesteps) == 2
 
                 if (boundary_timestep is None or t >= boundary_timestep) and not is_warmup:
@@ -1017,16 +976,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 # compute the previous noisy sample x_t -> x_t-1
                 permuted_latent = self.scheduler.step(permuted_noise_pred, t, permuted_latent, return_dict=False)[0]
 
-                if callback_on_step_end is not None:
-                    callback_kwargs = {}
-                    for k in callback_on_step_end_tensor_inputs:
-                        callback_kwargs[k] = locals()[k]
-                    callback_outputs = callback_on_step_end(self, i, t, callback_kwargs)
-
-                    latents = callback_outputs.pop("latents", latents)
-                    prompt_embeds = callback_outputs.pop("prompt_embeds", prompt_embeds)
-                    negative_prompt_embeds = callback_outputs.pop("negative_prompt_embeds", negative_prompt_embeds)
-
                 # call the callback, if provided
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                     progress_bar.update()
@@ -1039,8 +988,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         if profiler:
             profiler.end("denoising", profiler_iteration)
             profiler.start("vae", profiler_iteration)
-
-        self._current_timestep = None
 
         if not output_type == "latent":
             latents = latents.to(self.vae.dtype)
@@ -1090,9 +1037,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         if profiler:
             profiler.end("vae", profiler_iteration)
-
-        # Offload all models
-        # self.maybe_free_model_hooks()
 
         if not return_dict:
             return (video,)
