@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Integration test: sfpu_op with SfpuOutputPolicy::Bulk
+// Perf test: helper API hardswish = x * hardsigmoid(x)
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/sfpu_helpers.hpp"
@@ -14,11 +14,12 @@ void kernel_main() {
 
     constexpr uint32_t cb_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
-
     init_sfpu(cb_in, cb_out);
 
+    auto chain = sfpu_chain(
+        Load<cb_in, Dst::D0>{}, Load<cb_in, Dst::D1>{}, Hardsigmoid<Dst::D0>{}, SfpuMul<Dst::D0, Dst::D1, Dst::D0>{});
+
     for (uint32_t block = 0; block < per_core_block_cnt; block++) {
-        sfpu_op<cb_in, SfpuBatching::Auto, SfpuInputPolicy::WaitAndPopPerTile, SfpuOutputPolicy::Bulk>(
-            cb_out, per_core_block_dim, Exp<>{});
+        sfpu_pipeline(chain, cb_out, per_core_block_dim);
     }
 }

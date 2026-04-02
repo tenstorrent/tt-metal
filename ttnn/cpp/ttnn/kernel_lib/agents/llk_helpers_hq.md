@@ -97,19 +97,36 @@ for (uint32_t base = 0; base < total; base += dest_limit) {
 
 Per-tile streaming is the special case where chunk=1 and acquire/release wrap each tile individually.
 
-### 5. Op-type structs (for polymorphic dispatch)
+### 5. Op-type structs (CRTP base + init/call)
 
-When a helper supports multiple operations through the same API, use lightweight structs:
+When a helper supports multiple operations through the same API, use lightweight structs that inherit from a CRTP base template. The base provides `exec()` (offset arithmetic), `apply()` (init+exec), `dst_idx`, `max_dst`, and `static_assert` validation. The derived struct only defines `init()` and `call()`.
 
 ```cpp
-template </* op-specific template params */>
-struct OpName {
-    ALWI void init() const { /* call *_tile_init() */ }
-    ALWI void apply(uint32_t dst_idx) const { /* call *_tile(dst_idx) */ }
+// Base (provided by infrastructure):
+template <typename Derived, Dst Slot>
+struct UnaryOp {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static constexpr uint32_t max_dst = dst_idx;
+    static_assert(dst_idx < 8, "DEST slot exceeds capacity");
+    ALWI void exec(uint32_t offset = 0) const {
+        static_cast<const Derived*>(this)->call(dst_idx + offset);
+    }
+    ALWI void apply(uint32_t offset = 0) const {
+        static_cast<const Derived*>(this)->init(); exec(offset);
+    }
+};
+
+// Derived (what the op author writes):
+template <Dst Slot = Dst::D0>
+struct Sin : UnaryOp<Sin<Slot>, Slot> {
+    ALWI void init() const;           // *_tile_init()
+    ALWI void call(uint32_t d0) const; // *_tile(d0) — offset already applied
 };
 ```
 
-Each struct carries its configuration as template parameters and exposes a uniform `init()`/`apply()` interface. The main function is templated on `typename Op` and calls `op.init()` / `op.apply(dst_idx)`. This lets callers select the operation by passing a struct instance:
+Similarly `BinaryOp<Derived, In0, In1, Out>` and `TernaryOp<Derived, In0, In1, In2, Out>` handle multi-slot ops. `call()` receives already-offset-adjusted slot indices — the op author never touches offset arithmetic.
+
+Callers select operations by passing struct instances:
 
 ```cpp
 helper_func(cb_in, cb_out, n, Exp<>{});
@@ -145,6 +162,39 @@ Rules:
 - Some inits are mutually exclusive (e.g., `copy_tile_init` and `reduce_init` reconfigure the same hardware)
 - After a disruptive init (like `copy_tile_to_dst_init_short_with_dt`), subsequent operations may need re-initialization
 - When in doubt, verify the sequence against an existing kernel that uses the same call pattern
+
+### 9. Compile-time chain transformation
+
+When a helper supports composable chains of operations (e.g., Load → Op1 → Op2 → BinaryOp), the chain factory function should perform compile-time transformation on the user's input:
+
+1. **Compact adjacent same-resource operations**: If multiple operations consume from the same source (e.g., two Loads from the same CB), merge them into a single compound element. The compound element's `exec()` handles the shared resource lifecycle (wait before first, pop after last).
+
+2. **Annotate resource lifecycle**: For each compound element, determine at compile time whether it should wait/acquire the resource and whether it should release/pop it. This depends on whether the same resource appears elsewhere in the chain.
+
+3. **Validate constraints**: Use `static_assert` to catch illegal patterns (e.g., the same resource appearing in multiple non-adjacent groups, which would require the resource to stay alive across compute ops — a pattern that prevents init amortization and requires per-iteration fallback).
+
+The user writes the chain with simple individual elements; the infrastructure transforms it:
+```cpp
+// User writes:
+auto chain = chain_factory(LoadA{}, LoadA{}, Op1{}, Op2{}, BinaryOp{});
+// Infrastructure produces (internally):
+// CompactLoad<A, [slot0, slot1], wait=true, pop=true>, Op1, Op2, BinaryOp
+```
+
+All chain elements — both compound loads and compute ops — expose the same `init()`/`exec()`/`apply()` interface. The pipeline calls these uniformly without special-casing element types.
+
+### 10. Performance testing methodology
+
+Every helper MUST have a performance comparison against raw LLK code. Key rules:
+
+1. **Always benchmark against a hand-written raw LLK baseline** — not helper vs helper.
+2. **Use min of trimmed runs**, not average. Drop highest and lowest, take min of remainder. Average includes host jitter.
+3. **Test across a range of tile counts** (powers of 2, from 8 to 32K+). Small counts are noisy; large counts reveal true device behavior. Overhead that appears at 8 tiles but vanishes at 2K+ is fixed per-kernel cost, not a regression.
+4. **Test the full complexity spectrum**: single ops (light/moderate/heavy), multi-op chains, chains with multi-slot loads, chains with binary/ternary ops. Each exercises different pipeline code paths.
+5. **Warmup runs are mandatory** (3+ runs before measurement). First runs include JIT compilation and cache fill.
+6. **When perf numbers are ambiguous, disassemble the ELF** and count instructions in the hot loop. The `riscv-tt-elf-objdump` tool on the trisc2 ELF (SFPU math core) reveals whether the abstraction truly compiles away. Claims like "zero-cost" must be verified in generated code.
+7. **One parametric test, one table**: A single test that iterates all workloads x all tile counts and prints a formatted results table is more useful than many individual tests. The table becomes the regression baseline.
+8. **Overhead thresholds**: <2% OK, 2-5% REVIEW (re-run with larger N), >5% BLOCKER (investigate and fix).
 
 ## Creating a New Helper
 

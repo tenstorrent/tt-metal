@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-//
 // SPDX-License-Identifier: Apache-2.0
 
-// Integration test: sfpu_op with SfpuOutputPolicy::Bulk
+// Perf test: helper API tanhshrink = x - tanh(x)
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/sfpu_helpers.hpp"
@@ -14,11 +13,15 @@ void kernel_main() {
 
     constexpr uint32_t cb_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
-
     init_sfpu(cb_in, cb_out);
 
+    auto chain = sfpu_chain(
+        Load<cb_in, Dst::D0>{},
+        Load<cb_in, Dst::D1>{},
+        Tanh<Approx::Exact, Dst::D1>{},
+        SfpuSub<Dst::D0, Dst::D1, Dst::D0>{});
+
     for (uint32_t block = 0; block < per_core_block_cnt; block++) {
-        sfpu_op<cb_in, SfpuBatching::Auto, SfpuInputPolicy::WaitAndPopPerTile, SfpuOutputPolicy::Bulk>(
-            cb_out, per_core_block_dim, Exp<>{});
+        sfpu_pipeline(chain, cb_out, per_core_block_dim);
     }
 }
