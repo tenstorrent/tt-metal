@@ -164,6 +164,98 @@ def _ref_output_to_bcfhw(
     return x
 
 
+def _ttnn_input(
+    mesh_device: ttnn.MeshDevice,
+    tensor: torch.Tensor,
+    *,
+    dtype: ttnn.DataType = ttnn.bfloat16,
+) -> ttnn.Tensor:
+    """Upload host ``torch.Tensor`` for ``WanTransformer3DModel.forward`` (tile, DRAM)."""
+    return ttnn.from_torch(
+        tensor,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def _ttnn_output_to_torch_float(
+    tt_tensor: ttnn.Tensor,
+    mesh_device: ttnn.MeshDevice,
+    parallel_config: DiTParallelConfig,
+    *,
+    kind: str,
+) -> torch.Tensor:
+    """Mesh tensor → float32 torch (full tensor) for PCC vs reference.
+
+    Lingbot TT forward ends with full-width activations per device (replicated mesh storage);
+    concatenating on the channel/feature dim would double counts (e.g. 48→96). When the
+    first shard already matches the reference width, read one device tensor (same pattern
+    as ``demo.py`` / ``mesh_utils.umt5_encoder_hidden_states_to_torch``). Otherwise use a
+    mesh composer to stitch TP shards.
+    """
+    if mesh_device.get_num_devices() <= 1:
+        return ttnn.to_torch(tt_tensor, dtype=torch.float32, device=mesh_device).contiguous()
+
+    shards = ttnn.get_device_tensors(tt_tensor)
+    s0 = shards[0]
+    if kind == "video":
+        full_width = OUT_CHANNELS
+        tp_local = int(s0.shape[1])
+        tp_tensor_dim = 1
+    else:
+        full_width = ACTION_DIM
+        tp_local = int(s0.shape[2])
+        tp_tensor_dim = 2
+
+    tp_factor = int(parallel_config.tensor_parallel.factor)
+    if tp_local == full_width:
+        return ttnn.to_torch(s0, dtype=torch.float32, device=mesh_device).contiguous()
+
+    mesh_shape = tuple(mesh_device.shape)
+    if len(mesh_shape) != 2:
+        composer = ttnn.concat_mesh_to_tensor_composer(mesh_device, tp_tensor_dim)
+        return ttnn.to_torch(tt_tensor, dtype=torch.float32, mesh_composer=composer).contiguous()
+
+    sp_axis = parallel_config.sequence_parallel.mesh_axis
+    tp_axis = parallel_config.tensor_parallel.mesh_axis
+    sp_factor = int(parallel_config.sequence_parallel.factor)
+    # If SP still shards the host-visible tensor (uncommon after postprocess AG), concat N/F.
+    sp_tensor_dim = 2 if kind == "video" else 1
+
+    axis_dims: list[int | None] = [None, None]
+    used: set[int] = set()
+    for mesh_ax in (0, 1):
+        if mesh_shape[mesh_ax] <= 1:
+            continue
+        if mesh_ax == tp_axis and tp_factor > 1:
+            axis_dims[mesh_ax] = tp_tensor_dim
+            used.add(tp_tensor_dim)
+        elif mesh_ax == sp_axis and sp_factor > 1:
+            axis_dims[mesh_ax] = sp_tensor_dim
+            used.add(sp_tensor_dim)
+
+    next_dim = 0
+    rank = 5 if kind == "video" else 3
+    for mesh_ax in (0, 1):
+        if axis_dims[mesh_ax] is None:
+            while next_dim in used and next_dim < rank:
+                next_dim += 1
+            axis_dims[mesh_ax] = next_dim
+            used.add(next_dim)
+            next_dim += 1
+
+    mesh_composer = ttnn.create_mesh_composer(
+        mesh_device,
+        ttnn.MeshComposerConfig(
+            dims=[axis_dims[0], axis_dims[1]],
+            mesh_shape_override=ttnn.MeshShape(mesh_shape[0], mesh_shape[1]),
+        ),
+    )
+    return ttnn.to_torch(tt_tensor, dtype=torch.float32, mesh_composer=mesh_composer).contiguous()
+
+
 def _make_action_grid_id(
     B: int,
     F_action: int,
@@ -315,13 +407,27 @@ def test_wan_transformer_model_video_and_action(
         prompt_video.shape,
         timestep_video.shape,
     )
-    tt_video = tt_model(
-        spatial=spatial_video,
-        prompt=prompt_video,
-        timestep=timestep_video,
-        grid_id=grid_id_video,
-        action_mode=False,
-    )
+    spatial_tt = _ttnn_input(mesh_device, spatial_video)
+    prompt_tt = _ttnn_input(mesh_device, prompt_video)
+    timestep_tt = _ttnn_input(mesh_device, timestep_video, dtype=ttnn.float32)
+    grid_tt = _ttnn_input(mesh_device, grid_id_video, dtype=ttnn.float32)
+    tt_video_t = None
+    try:
+        tt_video_t = tt_model(
+            spatial=spatial_tt,
+            prompt=prompt_tt,
+            timestep=timestep_tt,
+            grid_id=grid_tt,
+            action_mode=False,
+        )
+        tt_video = _ttnn_output_to_torch_float(tt_video_t, mesh_device, parallel_config, kind="video")
+    finally:
+        ttnn.deallocate(spatial_tt)
+        ttnn.deallocate(prompt_tt)
+        ttnn.deallocate(timestep_tt)
+        ttnn.deallocate(grid_tt)
+        if tt_video_t is not None:
+            ttnn.deallocate(tt_video_t)
     assert_quality(ref_out_bcfhw, tt_video, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
     del tt_video
     del ref_out_bcfhw
@@ -333,13 +439,27 @@ def test_wan_transformer_model_video_and_action(
         prompt_action.shape,
         timestep_action.shape,
     )
-    tt_action = tt_model(
-        spatial=spatial_action,
-        prompt=prompt_action,
-        timestep=timestep_action,
-        grid_id=grid_id_action,
-        action_mode=True,
-    )
+    spatial_a_tt = _ttnn_input(mesh_device, spatial_action)
+    prompt_a_tt = _ttnn_input(mesh_device, prompt_action)
+    timestep_a_tt = _ttnn_input(mesh_device, timestep_action, dtype=ttnn.float32)
+    grid_a_tt = _ttnn_input(mesh_device, grid_id_action, dtype=ttnn.float32)
+    tt_action_t = None
+    try:
+        tt_action_t = tt_model(
+            spatial=spatial_a_tt,
+            prompt=prompt_a_tt,
+            timestep=timestep_a_tt,
+            grid_id=grid_a_tt,
+            action_mode=True,
+        )
+        tt_action = _ttnn_output_to_torch_float(tt_action_t, mesh_device, parallel_config, kind="action")
+    finally:
+        ttnn.deallocate(spatial_a_tt)
+        ttnn.deallocate(prompt_a_tt)
+        ttnn.deallocate(timestep_a_tt)
+        ttnn.deallocate(grid_a_tt)
+        if tt_action_t is not None:
+            ttnn.deallocate(tt_action_t)
     assert ref_out_action.shape == tt_action.shape, (ref_out_action.shape, tt_action.shape)
     assert_quality(ref_out_action, tt_action, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
     del tt_model

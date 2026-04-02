@@ -7,7 +7,7 @@ Aligned with ``reference.transformer_wan.WanAttention`` (PyTorch):
 
 1. **Project** inputs: ``query = to_q(q)``, ``key = to_k(k)``, ``value = to_v(v)``.
    On device we use fused ``ColParallelLinear`` (``to_qkv`` for self, ``to_q`` + ``to_kv`` for cross)
-   with the same fused weight layout as ``_prepare_torch_state``.
+   with the same fused weight layout as ``_prepare_torch_state`` (weight load only).
 2. **RMSNorm** on Q and K over full head dimension (``DistributedRMSNorm``); V is split to heads only.
 3. **RoPE** on Q and K when ``rope_cos`` / ``rope_sin`` / ``trans_mat`` are set (self-attention).
    Cross-attention passes ``rope_* = None``, matching reference ``rotary_emb=None``.
@@ -31,7 +31,6 @@ from models.tt_dit.parallel.config import DiTParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.matmul import get_matmul_config
 from models.tt_dit.utils.substate import pop_substate, rename_substate
-from models.tt_dit.utils.tensor import bf16_tensor
 
 
 class WanAttention(Module):
@@ -108,7 +107,13 @@ class WanAttention(Module):
             ccl_manager=ccl_manager,
         )
 
-        self.dummy_joint_input = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, self.head_dim)), device=mesh_device)
+        self.dummy_joint_input = ttnn.zeros(
+            (1, self.n_local_heads, 0, self.head_dim),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
         grid = mesh_device.compute_with_storage_grid_size()
         sp, tp = parallel_config.sequence_parallel.factor, parallel_config.tensor_parallel.factor
@@ -150,16 +155,6 @@ class WanAttention(Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-
-    # --- API parity with reference WanAttention (CPU KV lives on WanTransformer3DModel._attn_caches) ---
-    def clear_pred_cache(self, cache_name: str) -> None:
-        return
-
-    def clear_cache(self, cache_name: str) -> None:
-        return
-
-    def init_kv_cache(self, *args, **kwargs) -> None:
-        return
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "to_out.0", "to_out")
@@ -223,14 +218,7 @@ class WanAttention(Module):
             compute_kernel_config=compute_kernel_config or to_out.compute_config,
         )
 
-    def _maybe_all_gather_spatial(self, spatial_1BND: ttnn.Tensor) -> ttnn.Tensor:
-        if self.parallel_config.tensor_parallel.factor <= 1:
-            return spatial_1BND
-        return self.ccl_manager.all_gather_persistent_buffer(
-            spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
-        )
-
-    def _maybe_all_gather_out(self, spatial_1BND: ttnn.Tensor) -> ttnn.Tensor:
+    def _maybe_all_gather_tp_hidden(self, spatial_1BND: ttnn.Tensor) -> ttnn.Tensor:
         if self.parallel_config.tensor_parallel.factor <= 1:
             return spatial_1BND
         return self.ccl_manager.all_gather_persistent_buffer(
@@ -311,7 +299,7 @@ class WanAttention(Module):
         if rope_cos is not None:
             assert rope_sin is not None and trans_mat is not None and prompt_1BLP is None
 
-        x = self._maybe_all_gather_spatial(spatial_1BND)
+        x = self._maybe_all_gather_tp_hidden(spatial_1BND)
         mm = self.mm_compute_kernel_config
 
         if self.is_self:
@@ -340,25 +328,27 @@ class WanAttention(Module):
         )
         v_BHNE = self._split_v_heads(v_1BNF)
 
-        k_cur = v_cur = None
-        if self.is_self and return_kv:
-            k_cur, v_cur = k_BHNE, v_BHNE
-
-        if self.is_self and cached_k is not None and cached_v is not None:
-            cached_k = ttnn.to_layout(cached_k, ttnn.TILE_LAYOUT)
-            cached_v = ttnn.to_layout(cached_v, ttnn.TILE_LAYOUT)
-            k_BHNE = ttnn.concat([cached_k, k_BHNE], dim=2)
-            v_BHNE = ttnn.concat([cached_v, v_BHNE], dim=2)
+        # Segments in ``WanTransformer3DModel._attn_caches`` store **this step's** K/V only; the
+        # transformer concats segments when building the prefix. Returning post-concat tensors would
+        # duplicate the full prefix in every segment and exhaust DRAM.
+        had_kv_cache = self.is_self and cached_k is not None and cached_v is not None
+        k_append = k_BHNE
+        v_append = v_BHNE
+        if had_kv_cache:
+            ck = ttnn.to_layout(cached_k, ttnn.TILE_LAYOUT)
+            cv = ttnn.to_layout(cached_v, ttnn.TILE_LAYOUT)
+            k_BHNE = ttnn.concat([ck, k_BHNE], dim=2)
+            v_BHNE = ttnn.concat([cv, v_BHNE], dim=2)
 
         sp = self.parallel_config.sequence_parallel.factor
         use_ring = (
-            prompt_1BLP is None and sp > 1 and cached_k is None and not return_kv and self.ccl_manager is not None
+            prompt_1BLP is None and sp > 1 and not had_kv_cache and not return_kv and self.ccl_manager is not None
         )
         out_BHNE = self._run_sdpa(q_BHNE, k_BHNE, v_BHNE, N, use_ring=use_ring)
 
         out_1BND = ttnn.transformer.concatenate_heads(out_BHNE)
         out_1BND = ttnn.unsqueeze(out_1BND, 0)
-        out_1BND = self._maybe_all_gather_out(out_1BND)
+        out_1BND = self._maybe_all_gather_tp_hidden(out_1BND)
 
         if addcmul_residual is not None and addcmul_gate is not None:
             out_1BND = self._to_out_fused_addcmul(out_1BND, addcmul_residual, addcmul_gate, compute_kernel_config=mm)
@@ -366,5 +356,5 @@ class WanAttention(Module):
             out_1BND = self.to_out(out_1BND, compute_kernel_config=mm)
 
         if self.is_self and return_kv:
-            return (out_1BND, k_cur, v_cur)
+            return (out_1BND, k_append, v_append)
         return out_1BND
