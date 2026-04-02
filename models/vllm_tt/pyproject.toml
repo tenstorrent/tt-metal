@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vllm-tt"
+version = "0.1.0"
+description = "Tenstorrent hardware backend plugin for vLLM"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.entry-points."vllm.platform_plugins"]
+tt = "vllm_tt.platform:tt_platform_plugin"
+
+[project.entry-points."vllm.general_plugins"]
+tt = "vllm_tt.models:register_tt_models_plugin"
+
+[tool.setuptools.packages.find]
+include = ["vllm_tt*"]
