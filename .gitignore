@@ -153,3 +153,4 @@ models/experimental/petr/resources/*.pth
 
 *.out
 *.err
+.claude/
