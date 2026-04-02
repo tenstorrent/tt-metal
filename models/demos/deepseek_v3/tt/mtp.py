@@ -265,15 +265,19 @@ class MTP2D(AbstractModule):
 
         token_emb = Embedding2D.forward_decode(token_ids, cfg["embedding"])
 
-        hidden_norm_in = ttnn.to_memory_config(hidden_states, **cfg["hidden_norm_reshard"])
-        hidden_norm = DistributedRMSNorm.forward_decode(hidden_norm_in, cfg["hidden_norm"])
-        if _has_distinct_buffer(hidden_norm_in, hidden_states):
-            ttnn.deallocate(hidden_norm_in)
+        hidden_norm = DistributedRMSNorm.forward_decode(
+            hidden_states,
+            cfg["hidden_norm"],
+            **cfg["hidden_norm_reshard"],
+            output_memory_config=cfg["hidden_norm"]["input_memory_config"],
+        )
 
-        token_norm_in = ttnn.to_memory_config(token_emb, **cfg["token_norm_reshard"])
-        token_norm = DistributedRMSNorm.forward_decode(token_norm_in, cfg["token_norm"])
-        if _has_distinct_buffer(token_norm_in, token_emb):
-            ttnn.deallocate(token_norm_in)
+        token_norm = DistributedRMSNorm.forward_decode(
+            token_emb,
+            cfg["token_norm"],
+            **cfg["token_norm_reshard"],
+            output_memory_config=cfg["token_norm"]["input_memory_config"],
+        )
         ttnn.deallocate(token_emb)
 
         hidden_full = ttnn.experimental.all_gather_async(
@@ -315,11 +319,13 @@ class MTP2D(AbstractModule):
         )
         ttnn.deallocate(decoder_in)
 
-        head_norm_in = ttnn.to_memory_config(decoder_out, **cfg["head_norm_reshard"])
-        if _has_distinct_buffer(head_norm_in, decoder_out):
-            ttnn.deallocate(decoder_out)
-        head_norm_out = DistributedRMSNorm.forward_decode(head_norm_in, cfg["head_norm"])
-        ttnn.deallocate(head_norm_in)
+        head_norm_out = DistributedRMSNorm.forward_decode(
+            decoder_out,
+            cfg["head_norm"],
+            **cfg["head_norm_reshard"],
+            output_memory_config=cfg["head_norm"]["input_memory_config"],
+        )
+        ttnn.deallocate(decoder_out)
 
         head_full = ttnn.experimental.all_gather_async(
             head_norm_out, **ccl.populate_all_gather_runtime_args(cfg["head_all_gather"])
