@@ -716,8 +716,8 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
         sliding_window_config.input_hw.first,
         sliding_window_config.input_hw.second,
         sliding_window_config.channels,
-        slice_padding[0],  // pad_h (top)
-        slice_padding[2],  // pad_w (left)
+        slice_padding[0] + slice_padding[1],  // pad_h (top + bottom)
+        slice_padding[2] + slice_padding[3],  // pad_w (left + right)
         slice_ceil_pad[0],
         slice_ceil_pad[1],
         sliding_window_config.ceil_mode,
