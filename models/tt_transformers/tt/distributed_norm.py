@@ -99,7 +99,7 @@ class DistributedNorm(LightweightModule):
                 num_workers_per_link=self.args.model_config[self.ag_config_key]["num_workers_per_link"]
                 if self.ag_config_key and mode == "decode"
                 else 2,
-                num_buffers_per_channel=2,
+                num_buffers_per_channel=1,
                 subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )
         else:
@@ -122,7 +122,7 @@ class DistributedNorm(LightweightModule):
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 chunks_per_sync=1,
                 num_workers_per_link=1,
-                num_buffers_per_channel=2,
+                num_buffers_per_channel=1,
             )
 
         return x
