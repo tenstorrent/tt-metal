@@ -20,7 +20,7 @@ def test_perf_device_yolov8l(batch_size, expected_perf):
     subdir = "ttnn_yolov8l"
     num_iterations = 1
     margin = 0.05
-    command = f"pytest models/demos/yolov8l/tests/pcc/test_yolov8l.py::test_yolov8l_640"
+    command = f"pytest models/demos/yolov8l/tests/pcc/test_yolov8l.py::test_yolov8l_1280"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"

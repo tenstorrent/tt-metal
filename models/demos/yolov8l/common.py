@@ -7,7 +7,25 @@ import os
 import torch
 from ultralytics import YOLO
 
-YOLOV8L_L1_SMALL_SIZE = 24576
+# Baseline L1 small buffer size tuned at 640×640; scale for other resolutions via yolov8l_l1_small_size_for_res.
+_YOLOV8L_L1_SMALL_BASE_640 = 24576
+
+YOLOV8L_INPUT_H = 1280
+YOLOV8L_INPUT_W = 1280
+
+
+def yolov8l_l1_small_size_for_res(inp_h: int, inp_w: int) -> int:
+    return int(_YOLOV8L_L1_SMALL_BASE_640 * inp_h * inp_w // (640 * 640))
+
+
+YOLOV8L_L1_SMALL_SIZE = yolov8l_l1_small_size_for_res(YOLOV8L_INPUT_H, YOLOV8L_INPUT_W)
+
+# Trace capture region (bytes), scaled from 640² graph tuning.
+_YOLOV8L_TRACE_REGION_BASE_1CQ_640 = 3686400
+_YOLOV8L_TRACE_REGION_BASE_E2E_640 = 6434816
+_scale = (YOLOV8L_INPUT_H * YOLOV8L_INPUT_W) // (640 * 640)
+YOLOV8L_TRACE_REGION_SIZE_1CQ = _YOLOV8L_TRACE_REGION_BASE_1CQ_640 * _scale
+YOLOV8L_TRACE_REGION_SIZE_E2E = _YOLOV8L_TRACE_REGION_BASE_E2E_640 * _scale
 
 
 def load_torch_model(model_location_generator=None):

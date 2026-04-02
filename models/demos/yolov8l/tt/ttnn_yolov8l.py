@@ -561,7 +561,7 @@ class TtDetect:
 
 
 class TtDetectionModel:
-    def __init__(self, device, parameters, res=(640, 640), batch_size=1, reg_max=16):
+    def __init__(self, device, parameters, res=(1280, 1280), batch_size=1, reg_max=16):
         self.device = device
         self.parameters = parameters
         self.res = res
@@ -690,7 +690,13 @@ class TtDetectionModel:
         min_channels = 16
         if C < min_channels:
             channel_padding_needed = min_channels - C
-            nchw = ttnn.pad(x, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
+            # At 1280², default L1 pad output is ~50MB and OOMs; DRAM avoids exhausting L1 banks.
+            nchw = ttnn.pad(
+                x,
+                ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)),
+                value=0.0,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         else:
             nchw = x
         nhwc = ttnn.permute(nchw, (0, 2, 3, 1))  # NCHW -> NHWC
@@ -817,7 +823,7 @@ class TtDetectionModel:
 
 
 class TtYolov8lModel:
-    def __init__(self, device, parameters, res=(640, 640), batch_size=1):
+    def __init__(self, device, parameters, res=(1280, 1280), batch_size=1):
         self.device = device
         self.parameters = parameters
         self.res = res

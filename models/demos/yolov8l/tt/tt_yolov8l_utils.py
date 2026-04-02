@@ -127,7 +127,7 @@ def preprocess_parameters(state_dict, path, bias=True, bfloat8=True, mesh_mapper
         return (conv_weight, None)
 
 
-def custom_preprocessor(device, state_dict, inp_h=640, inp_w=640, mesh_mapper=None):
+def custom_preprocessor(device, state_dict, inp_h=1280, inp_w=1280, mesh_mapper=None):
     pairs = [
         ("model.0", True),
         ("model.1", True),
@@ -305,13 +305,13 @@ def custom_preprocessor(device, state_dict, inp_h=640, inp_w=640, mesh_mapper=No
     return parameters
 
 
-def create_custom_mesh_preprocessor(device, mesh_mapper=None):
+def create_custom_mesh_preprocessor(device, mesh_mapper=None, inp_h=1280, inp_w=1280):
     def custom_mesh_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
         return custom_preprocessor(
             device,
             model.state_dict(),
-            inp_h=640,
-            inp_w=640,
+            inp_h=inp_h,
+            inp_w=inp_w,
             mesh_mapper=mesh_mapper,
         )
 
