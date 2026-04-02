@@ -314,7 +314,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 #if defined(TRACY_ENABLE)
             // With tracy enabled, each device has a different program runtime ID in the launch message, so we need to
             // handle each device separately rather than grouping them.
-            for (auto& coord : device_range) {
+            for (const auto& coord : device_range) {
                 trace_node.trace_nodes.push_back(std::pair<MeshCoordinateRange, TraceNode>(
                     coord,
                     program_dispatch::create_trace_node(
@@ -1143,8 +1143,9 @@ void FDMeshCommandQueue::record_end() {
     DeviceCommand command_sequence(MetalContext::instance().hal().get_alignment(HalMemType::HOST));
     command_sequence.add_prefetch_exec_buf_end();
 
+    exec_buf_end.reserve(command_sequence.size_bytes() / sizeof(uint32_t));
     for (int i = 0; i < command_sequence.size_bytes() / sizeof(uint32_t); i++) {
-        exec_buf_end.push_back(((uint32_t*)command_sequence.data())[i]);
+        exec_buf_end.push_back(static_cast<uint32_t*>(command_sequence.data())[i]);
     }
     size_t max_trace_size = 0;
     std::set<SubDeviceId> sub_device_ids;
@@ -1332,7 +1333,7 @@ void FDMeshCommandQueue::record_end() {
 #if defined(TRACY_ENABLE)
             for (auto& [is_multicast, original_launch_msg, launch_msg] :
                  cached_program_command_sequence.launch_messages) {
-                auto device = mesh_device_->get_device(range.start_coord());
+                auto* device = mesh_device_->get_device(range.start_coord());
                 TT_ASSERT(range.start_coord() == range.end_coord());
                 launch_msg.kernel_config().host_assigned_id() =
                     tt_metal::detail::EncodePerDeviceProgramID(node.program_runtime_id, device->id());

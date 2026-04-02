@@ -109,7 +109,7 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
         outer_it++;
     }
 
-    for (auto& addr : marked_for_deletion) {
+    for (const auto& addr : marked_for_deletion) {
         auto it = regions_.find(addr);
         program_ids_memory_map_[it->second.data_type].erase(it->second.program_id);
         regions_.erase(it);
@@ -148,7 +148,7 @@ void SimpleTraceAllocator::allocate_trace_programs(const Hal& hal, std::vector<T
         program_ids_use_map[node.program->get_id()] = static_cast<uint32_t>(i);
         sub_device_ids.insert(node.sub_device_id);
     }
-    for (auto& sub_device_id : sub_device_ids) {
+    for (const auto& sub_device_id : sub_device_ids) {
         worker_region_allocator_.reset_allocator();
         active_eth_region_allocator_.reset_allocator();
         allocate_trace_programs_on_subdevice(hal, trace_nodes, sub_device_id);
@@ -179,7 +179,7 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
         node.dispatch_metadata.binary_kernel_config_addrs.resize(programmable_core_count_);
         node.dispatch_metadata.nonbinary_kernel_config_addrs.resize(programmable_core_count_);
 
-        for (auto& core_type : {HalProgrammableCoreType::TENSIX, HalProgrammableCoreType::ACTIVE_ETH}) {
+        for (const auto& core_type : {HalProgrammableCoreType::TENSIX, HalProgrammableCoreType::ACTIVE_ETH}) {
             uint32_t index = hal.get_programmable_core_type_index(core_type);
             ProgramConfig& program_config = node.program->get_program_config(index);
             uint32_t non_binary_size = core_type == HalProgrammableCoreType::TENSIX
