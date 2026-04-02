@@ -161,7 +161,7 @@ class TtLMHead(LightweightModule):
         # ========================================
         # Actually, we only care about the last logit. However, due to the matmul constraint
         # to work on tiles, we need to extract the last tile.
-        x = ttnn.narrow(x, dim=1, start=-32, length=32)
+        x = ttnn.narrow(x, dim=1, start=-ttnn.TILE_SIZE, length=ttnn.TILE_SIZE)
         logger.debug(f"[TtLMHead.forward] After narrow: x.shape={x.shape}")
 
         # ========================================
