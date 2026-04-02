@@ -1,0 +1,8 @@
+﻿ttnn.expand
+===========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.expand:
+
+.. autooperation:: ttnn.expand

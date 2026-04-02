@@ -1,0 +1,14 @@
+﻿ttnn.SoftmaxShardedMultiCoreProgramConfig
+=========================================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.SoftmaxShardedMultiCoreProgramConfig:
+
+
+.. autoclass:: ttnn.SoftmaxShardedMultiCoreProgramConfig
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :inherited-members:
+   :member-order: bysource
