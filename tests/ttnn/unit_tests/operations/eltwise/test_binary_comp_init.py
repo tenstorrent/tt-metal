@@ -277,7 +277,16 @@ def test_binary_comp_uint16_edge_cases(ttnn_function, device):
     golden = ttnn.get_golden_function(ttnn_function)(a, b).int()
     assert torch.equal(result, golden), f"Failed on zero vs max: {ttnn_function}"
 
-    # Case 4: Adjacent values (n vs n+1)
+    # Case 4: Max vs max (65535 vs 65535)
+    a = torch.full(shape, 65535, dtype=torch.int32)
+    b = torch.full(shape, 65535, dtype=torch.int32)
+    ta = ttnn.from_torch(a, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    tb = ttnn.from_torch(b, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn_function(ta, tb)).to(torch.int32)
+    golden = ttnn.get_golden_function(ttnn_function)(a, b).int()
+    assert torch.equal(result, golden), f"Failed on max vs max: {ttnn_function}"
+
+    # Case 5: Adjacent values (n vs n+1)
     a = torch.arange(0, 1024, dtype=torch.int32).reshape(shape)
     b = a + 1
     ta = ttnn.from_torch(a, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -286,7 +295,7 @@ def test_binary_comp_uint16_edge_cases(ttnn_function, device):
     golden = ttnn.get_golden_function(ttnn_function)(a, b).int()
     assert torch.equal(result, golden), f"Failed on adjacent values: {ttnn_function}"
 
-    # Case 5: Identical tensors (all equal)
+    # Case 6: Identical tensors (all equal)
     a = torch.randint(0, 65536, shape, dtype=torch.int32)
     b = a.clone()
     ta = ttnn.from_torch(a, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -294,3 +303,23 @@ def test_binary_comp_uint16_edge_cases(ttnn_function, device):
     result = ttnn.to_torch(ttnn_function(ta, tb)).to(torch.int32)
     golden = ttnn.get_golden_function(ttnn_function)(a, b).int()
     assert torch.equal(result, golden), f"Failed on identical tensors: {ttnn_function}"
+
+    # Case 7: Alternating min/max pattern (0 and 65535 interleaved)
+    a = torch.zeros(shape, dtype=torch.int32)
+    a.view(-1)[::2] = 65535  # even indices = max
+    b = torch.full(shape, 65535, dtype=torch.int32)
+    b.view(-1)[::2] = 0  # even indices = min (opposite of a)
+    ta = ttnn.from_torch(a, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    tb = ttnn.from_torch(b, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn_function(ta, tb)).to(torch.int32)
+    golden = ttnn.get_golden_function(ttnn_function)(a, b).int()
+    assert torch.equal(result, golden), f"Failed on alternating min/max: {ttnn_function}"
+
+    # Case 8: Adjacent to max (65534 vs 65535)
+    a = torch.full(shape, 65534, dtype=torch.int32)
+    b = torch.full(shape, 65535, dtype=torch.int32)
+    ta = ttnn.from_torch(a, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    tb = ttnn.from_torch(b, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn_function(ta, tb)).to(torch.int32)
+    golden = ttnn.get_golden_function(ttnn_function)(a, b).int()
+    assert torch.equal(result, golden), f"Failed on adjacent to max: {ttnn_function}"
