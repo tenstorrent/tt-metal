@@ -91,8 +91,20 @@ inline Executor& GetExecutor() {
                 // The parent's threads are gone in the child; replace with a
                 // fresh Executor.  Intentionally leak the old one -- its
                 // internal state (mutexes, threads) is invalid post-fork and
-                // destroying it would deadlock or crash.  Suppress the leak in
-                // ASan/LSan builds so it is not reported as unintentional.
+                // destroying it would deadlock or crash.  This is the canonical
+                // approach for fork-unsafe objects (same pattern used by jemalloc
+                // and glibc malloc): run a lightweight reinit in the child handler
+                // rather than invoking destructors on indeterminate state.
+                //
+                // The leak is bounded: it exists only in the child process for the
+                // child's lifetime.  The kernel reclaims all memory when the child
+                // exits.  The parent heap is unaffected -- the child's assignment to
+                // exec happens in the child's private copy-on-write address space.
+                // The Executor holds no OS resources (no FDs, no shared memory, no
+                // GPU handles), so no handles are stranded.
+                //
+                // Suppress the leak report in ASan/LSan builds so it is not
+                // flagged as unintentional.
 #ifdef TT_LSAN_ACTIVE
                 __lsan_ignore_object(exec);
 #undef TT_LSAN_ACTIVE
