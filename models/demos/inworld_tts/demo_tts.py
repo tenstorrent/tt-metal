@@ -2,14 +2,22 @@
 
 Usage:
     export TT_METAL_HOME=$(pwd) && export PYTHONPATH=$(pwd) && source python_env/bin/activate
+
+    # Zero-shot (no voice prompt):
     python models/demos/inworld_tts/demo_tts.py --text "Hello, this is a test."
 
+    # Voice cloning (with audio prompt):
+    python models/demos/inworld_tts/demo_tts.py --text "Hello world." --prompt-audio prompt.wav
+
+    # Skip LLM, test codec only:
+    python models/demos/inworld_tts/demo_tts.py --text "test" --skip-llm --num-tokens 100
+
 Pipeline:
-    1. LLM (merged_model, HuggingFace on CPU) generates <|s_N|> speech tokens
-    2. Speech token IDs are extracted as integer VQ codes
-    3. FSQ dequantizer (CPU) converts codes to 2048-dim embeddings
-    4. TTNN codec decoder (VocosBackbone on device) converts embeddings to audio
-    5. ISTFTHead (CPU) produces final waveform at 16kHz
+    1. [Optional] Encode prompt audio -> VQ codes via TTNN codec encoder
+    2. LLM generates <|s_N|> speech tokens (prompt speech IDs + new tokens)
+    3. Speech token IDs are extracted as integer VQ codes
+    4. TTNN codec decoder converts VQ codes -> audio waveform
+    5. [If voice cloning] Trim prompt audio portion from output
 """
 
 import argparse
@@ -21,14 +29,14 @@ import time
 import soundfile as sf
 import torch
 
-# Add training venv for vector_quantize_pytorch ONLY (append, don't prepend, to avoid conflicts)
+# Add training venv for vector_quantize_pytorch ONLY (append to avoid conflicts)
 TRAIN_VENV = os.path.join(os.path.dirname(__file__), "train_venv", "lib")
 for p in sorted(
     [os.path.join(TRAIN_VENV, d, "site-packages") for d in os.listdir(TRAIN_VENV) if d.startswith("python")],
     reverse=True,
 ):
     if os.path.isdir(p) and p not in sys.path:
-        sys.path.append(p)  # append to avoid overriding main env packages
+        sys.path.append(p)
 
 # ---- Constants ----
 MERGED_MODEL_DIR = os.path.join(os.path.dirname(__file__), "training", "merged_model")
@@ -41,6 +49,86 @@ SAMPLE_RATE = 16000
 TOKEN_RATE = 50  # speech tokens per second
 
 
+# ---------------------------------------------------------------------------
+# Codec loading
+# ---------------------------------------------------------------------------
+def load_codec(ckpt_path):
+    """Load the full xcodec2 codec (quantizer + encoder weights + decoder weights)."""
+    from vector_quantize_pytorch import ResidualFSQ
+
+    print(f"Loading codec from {ckpt_path}...")
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    sd = ckpt["state_dict"]
+
+    # Build FSQ quantizer
+    quantizer = ResidualFSQ(dim=2048, levels=[4, 4, 4, 4, 4, 4, 4, 4], num_quantizers=1)
+    q_sd = {k.replace("generator.quantizer.", ""): v for k, v in sd.items() if k.startswith("generator.quantizer.")}
+    quantizer.load_state_dict(q_sd, strict=False)
+    quantizer.eval()
+
+    # Extract decoder weights
+    decoder_sd = {}
+    for k, v in sd.items():
+        if k.startswith("generator.backbone."):
+            decoder_sd[k.replace("generator.", "")] = v
+        elif k.startswith("generator.head."):
+            decoder_sd[k.replace("generator.", "")] = v
+        elif k.startswith("fc_post_a."):
+            decoder_sd[k] = v
+
+    print(f"  Loaded {len(q_sd)} quantizer, {len(decoder_sd)} decoder params")
+    return quantizer, decoder_sd, sd  # return full sd for encoder
+
+
+# ---------------------------------------------------------------------------
+# Audio encoding (voice cloning prompt)
+# ---------------------------------------------------------------------------
+def encode_audio_prompt(audio_path, codec_sd, quantizer, device):
+    """Encode a prompt audio file to VQ codes using the TTNN codec encoder.
+
+    Args:
+        audio_path: path to WAV file (will be resampled to 16kHz if needed)
+        codec_sd: full codec state dict (for encoder weights)
+        quantizer: FSQ quantizer
+        device: TTNN device
+    Returns:
+        speech_ids: list of integer VQ codes
+        duration_s: duration of the prompt audio in seconds
+    """
+    import torchaudio
+
+    from models.demos.inworld_tts.tt.codec_encoder import TtCodecEncoder
+
+    print(f"Encoding prompt audio: {audio_path}")
+    t0 = time.time()
+
+    # Load and resample audio
+    waveform, sr = torchaudio.load(audio_path)
+    if sr != SAMPLE_RATE:
+        waveform = torchaudio.functional.resample(waveform, sr, SAMPLE_RATE)
+    if waveform.shape[0] > 1:
+        waveform = waveform.mean(dim=0, keepdim=True)  # mono
+    waveform = waveform.unsqueeze(0)  # [1, 1, samples]
+
+    duration_s = waveform.shape[-1] / SAMPLE_RATE
+
+    # Build encoder
+    encoder = TtCodecEncoder(device=device, state_dict=codec_sd, quantizer=quantizer)
+
+    # Encode
+    with torch.no_grad():
+        vq_codes = encoder(waveform)  # [1, 1, T]
+
+    speech_ids = vq_codes.squeeze().tolist()
+    elapsed = time.time() - t0
+
+    print(f"  Audio: {duration_s:.1f}s -> {len(speech_ids)} tokens in {elapsed:.1f}s")
+    return speech_ids, duration_s
+
+
+# ---------------------------------------------------------------------------
+# LLM
+# ---------------------------------------------------------------------------
 def load_llm(model_dir, device="cpu"):
     """Load the merged LLaMA SpeechLM model and tokenizer."""
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -53,56 +141,23 @@ def load_llm(model_dir, device="cpu"):
     return model, tokenizer
 
 
-def load_codec_decoder(ckpt_path):
-    """Load the xcodec2 codec decoder (quantizer + backbone weights)."""
-    from vector_quantize_pytorch import ResidualFSQ
+def build_prompt(text, tokenizer, prompt_speech_ids=None):
+    """Build the TTS prompt for the LLM.
 
-    print(f"Loading codec decoder from {ckpt_path}...")
-    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    sd = ckpt["state_dict"]
-
-    # Build the FSQ quantizer
-    quantizer = ResidualFSQ(
-        dim=2048,
-        levels=[4, 4, 4, 4, 4, 4, 4, 4],
-        num_quantizers=1,
-    )
-    # Load quantizer weights
-    q_sd = {}
-    for k, v in sd.items():
-        if k.startswith("generator.quantizer."):
-            q_sd[k.replace("generator.quantizer.", "")] = v
-    quantizer.load_state_dict(q_sd, strict=False)
-    quantizer.eval()
-
-    # Extract decoder weights (backbone + head + fc_post_a)
-    decoder_sd = {}
-    for k, v in sd.items():
-        if k.startswith("generator.backbone."):
-            decoder_sd[k.replace("generator.", "")] = v
-        elif k.startswith("generator.head."):
-            decoder_sd[k.replace("generator.", "")] = v
-        elif k.startswith("fc_post_a."):
-            decoder_sd[k] = v
-
-    print(f"  Loaded {len(q_sd)} quantizer params, {len(decoder_sd)} decoder params")
-    return quantizer, decoder_sd
-
-
-def build_prompt(text, tokenizer):
-    """Build the TTS prompt for the LLM using the chat template.
-
-    Uses LLaMA 3 chat format with the text as user message and
-    <|speech_start|> as the beginning of the assistant response.
-    The model continues generating <|s_N|> tokens until <|speech_end|>.
+    Follows the official Inworld prompt format:
+    - User message with text
+    - Assistant begins with <|speech_start|> followed by prompt speech tokens (if any)
+    - Model continues generating speech tokens until <|speech_end|>
     """
-    messages = [
-        {"role": "user", "content": text},
-    ]
-    # Apply chat template with generation prompt (adds assistant header)
+    messages = [{"role": "user", "content": text}]
     prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    # Append speech_start token as the beginning of assistant's speech response
     prompt += "<|speech_start|>"
+
+    # Add prompt speech tokens for voice cloning
+    if prompt_speech_ids:
+        for sid in prompt_speech_ids:
+            prompt += f"<|s_{sid}|>"
+
     return prompt
 
 
@@ -116,19 +171,18 @@ def extract_speech_ids(token_strings):
     return speech_ids
 
 
-def generate_speech_tokens(model, tokenizer, text, max_tokens=1792, temperature=0.8):
+def generate_speech_tokens(model, tokenizer, text, prompt_speech_ids=None, max_tokens=1792, temperature=0.8):
     """Generate speech tokens from text using the LLM."""
-    prompt = build_prompt(text, tokenizer)
-    inputs = tokenizer(prompt, return_tensors="pt", add_special_tokens=True)
+    prompt = build_prompt(text, tokenizer, prompt_speech_ids)
+    inputs = tokenizer(prompt, return_tensors="pt", add_special_tokens=False)
     input_ids = inputs["input_ids"].to(model.device)
 
     speech_end_id = tokenizer.convert_tokens_to_ids("<|speech_end|>")
-    # Also include eot_id as stop token to prevent runaway generation
     eot_id = tokenizer.convert_tokens_to_ids("<|eot_id|>")
     stop_ids = [speech_end_id, eot_id]
 
-    print(f"Generating speech tokens (max={max_tokens}, temp={temperature})...")
-    print(f"  speech_end_id={speech_end_id}, eot_id={eot_id}")
+    num_prompt_tokens = len(prompt_speech_ids) if prompt_speech_ids else 0
+    print(f"Generating speech tokens (max={max_tokens}, temp={temperature}, prompt_tokens={num_prompt_tokens})...")
     t0 = time.time()
 
     with torch.no_grad():
@@ -138,12 +192,14 @@ def generate_speech_tokens(model, tokenizer, text, max_tokens=1792, temperature=
             do_sample=True,
             temperature=temperature,
             top_p=1.0,
-            repetition_penalty=1.2,
+            top_k=50,
+            repetition_penalty=1.1,
+            frequency_penalty=0.3,
             eos_token_id=stop_ids,
-            pad_token_id=tokenizer.pad_token_id or eot_id,
+            pad_token_id=eot_id,
         )
 
-    generated_ids = output[0][input_ids.shape[1] :]  # strip input prefix
+    generated_ids = output[0][input_ids.shape[1] :]
     # Remove trailing stop tokens
     while len(generated_ids) > 0 and generated_ids[-1].item() in stop_ids:
         generated_ids = generated_ids[:-1]
@@ -151,13 +207,24 @@ def generate_speech_tokens(model, tokenizer, text, max_tokens=1792, temperature=
     token_strings = tokenizer.convert_ids_to_tokens(generated_ids.tolist())
     speech_ids = extract_speech_ids(token_strings)
 
+    # For voice cloning, the prompt speech IDs are part of the generation
+    # Prepend them to match the official behavior
+    if prompt_speech_ids:
+        speech_ids = prompt_speech_ids + speech_ids
+
     elapsed = time.time() - t0
-    print(f"  Generated {len(speech_ids)} speech tokens in {elapsed:.1f}s ({len(speech_ids)/elapsed:.1f} tok/s)")
-    print(f"  Duration: ~{len(speech_ids)/TOKEN_RATE:.1f}s of audio")
+    new_tokens = len(speech_ids) - num_prompt_tokens
+    print(
+        f"  Generated {new_tokens} new + {num_prompt_tokens} prompt = {len(speech_ids)} total tokens in {elapsed:.1f}s"
+    )
+    print(f"  Audio duration: ~{len(speech_ids) / TOKEN_RATE:.1f}s")
 
-    return speech_ids
+    return speech_ids, num_prompt_tokens
 
 
+# ---------------------------------------------------------------------------
+# Audio decoding
+# ---------------------------------------------------------------------------
 def decode_to_audio_ttnn(speech_ids, quantizer, decoder_sd, device):
     """Decode speech IDs to audio using TTNN codec decoder."""
     from models.demos.inworld_tts.tt.codec_decoder import TtCodecDecoder
@@ -165,7 +232,6 @@ def decode_to_audio_ttnn(speech_ids, quantizer, decoder_sd, device):
     print("Decoding speech tokens to audio via TTNN...")
     t0 = time.time()
 
-    # Build TTNN codec decoder
     decoder = TtCodecDecoder(
         device=device,
         state_dict=decoder_sd,
@@ -174,17 +240,14 @@ def decode_to_audio_ttnn(speech_ids, quantizer, decoder_sd, device):
         head_prefix="head.",
     )
 
-    # Convert speech IDs to tensor
-    vq_codes = torch.tensor(speech_ids, dtype=torch.long).unsqueeze(0)  # [1, T]
+    vq_codes = torch.tensor(speech_ids, dtype=torch.long).unsqueeze(0)
 
-    # Run decoder
     with torch.no_grad():
-        audio = decoder(vq_codes)  # [1, 1, num_samples]
+        audio = decoder(vq_codes)
 
     elapsed = time.time() - t0
     audio_np = audio.squeeze().numpy()
-    print(f"  Decoded to {len(audio_np)} samples ({len(audio_np)/SAMPLE_RATE:.2f}s) in {elapsed:.1f}s")
-
+    print(f"  Decoded to {len(audio_np)} samples ({len(audio_np) / SAMPLE_RATE:.2f}s) in {elapsed:.1f}s")
     return audio_np
 
 
@@ -199,8 +262,7 @@ def decode_to_audio_reference(speech_ids, quantizer, decoder_sd):
     print("Decoding speech tokens to audio via PyTorch reference...")
     t0 = time.time()
 
-    vq_codes = torch.tensor(speech_ids, dtype=torch.long).unsqueeze(0)  # [1, T]
-
+    vq_codes = torch.tensor(speech_ids, dtype=torch.long).unsqueeze(0)
     backbone_weights = extract_backbone_weights(decoder_sd)
     istft_weights = extract_istft_weights(decoder_sd)
 
@@ -216,56 +278,95 @@ def decode_to_audio_reference(speech_ids, quantizer, decoder_sd):
 
     elapsed = time.time() - t0
     audio_np = audio.squeeze().numpy()
-    print(f"  Decoded to {len(audio_np)} samples ({len(audio_np)/SAMPLE_RATE:.2f}s) in {elapsed:.1f}s")
-
+    print(f"  Decoded to {len(audio_np)} samples ({len(audio_np) / SAMPLE_RATE:.2f}s) in {elapsed:.1f}s")
     return audio_np
 
 
+def trim_prompt_audio(audio_np, num_prompt_tokens):
+    """Trim the prompt audio portion from the generated output.
+
+    The first num_prompt_tokens tokens correspond to the prompt audio
+    that was used for voice cloning. Remove them to get only the new speech.
+    """
+    if num_prompt_tokens <= 0:
+        return audio_np
+    samples_to_trim = int(num_prompt_tokens / TOKEN_RATE * SAMPLE_RATE)
+    if samples_to_trim >= len(audio_np):
+        return audio_np
+    return audio_np[samples_to_trim:]
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(description="Inworld TTS demo")
     parser.add_argument("--text", type=str, required=True, help="Text to synthesize")
     parser.add_argument("--output", type=str, default="/tmp/tts_output.wav", help="Output WAV path")
     parser.add_argument("--reference-output", type=str, default=None, help="Also save reference audio for comparison")
+    parser.add_argument("--prompt-audio", type=str, default=None, help="Prompt audio for voice cloning (WAV file)")
     parser.add_argument("--max-tokens", type=int, default=1792, help="Max speech tokens to generate")
     parser.add_argument("--temperature", type=float, default=0.8, help="Sampling temperature")
     parser.add_argument("--skip-llm", action="store_true", help="Use random speech IDs (skip LLM, for testing)")
     parser.add_argument("--num-tokens", type=int, default=100, help="Number of random tokens (with --skip-llm)")
+    parser.add_argument("--keep-prompt", action="store_true", help="Keep prompt audio in output (don't trim)")
     args = parser.parse_args()
 
-    # Step 1: Generate speech tokens
-    if args.skip_llm:
-        print(f"Skipping LLM, using {args.num_tokens} random speech IDs...")
-        speech_ids = torch.randint(0, 65536, (args.num_tokens,)).tolist()
-    else:
-        model, tokenizer = load_llm(MERGED_MODEL_DIR)
-        speech_ids = generate_speech_tokens(model, tokenizer, args.text, args.max_tokens, args.temperature)
-        del model  # free GPU memory
-        torch.cuda.empty_cache() if torch.cuda.is_available() else None
-
-    if len(speech_ids) == 0:
-        print("ERROR: No speech tokens generated!")
-        return
-
-    # Step 2: Decode to audio via TTNN
     import ttnn
 
     device = ttnn.open_device(device_id=0, l1_small_size=16384)
     try:
-        quantizer, decoder_sd = load_codec_decoder(CODEC_CKPT)
+        # Load codec (decoder + encoder weights)
+        quantizer, decoder_sd, codec_sd = load_codec(CODEC_CKPT)
+
+        # Step 1: Encode prompt audio (voice cloning)
+        prompt_speech_ids = None
+        num_prompt_tokens = 0
+        if args.prompt_audio:
+            prompt_speech_ids, prompt_duration = encode_audio_prompt(args.prompt_audio, codec_sd, quantizer, device)
+            num_prompt_tokens = len(prompt_speech_ids)
+            print(f"  Encoded {prompt_duration:.1f}s prompt -> {num_prompt_tokens} tokens")
+
+        # Step 2: Generate speech tokens
+        if args.skip_llm:
+            print(f"Skipping LLM, using {args.num_tokens} random speech IDs...")
+            speech_ids = torch.randint(0, 65536, (args.num_tokens,)).tolist()
+            num_prompt_tokens = 0
+        else:
+            model, tokenizer = load_llm(MERGED_MODEL_DIR)
+            speech_ids, num_prompt_tokens = generate_speech_tokens(
+                model, tokenizer, args.text, prompt_speech_ids, args.max_tokens, args.temperature
+            )
+            del model
+            torch.cuda.empty_cache() if torch.cuda.is_available() else None
+
+        if len(speech_ids) == 0:
+            print("ERROR: No speech tokens generated!")
+            return
+
+        # Step 3: Decode to audio via TTNN
         audio_ttnn = decode_to_audio_ttnn(speech_ids, quantizer, decoder_sd, device)
+
+        # Step 4: Trim prompt audio if voice cloning
+        if num_prompt_tokens > 0 and not args.keep_prompt:
+            audio_ttnn = trim_prompt_audio(audio_ttnn, num_prompt_tokens)
+            print(f"  Trimmed {num_prompt_tokens} prompt tokens, output: {len(audio_ttnn) / SAMPLE_RATE:.2f}s")
+
         sf.write(args.output, audio_ttnn, SAMPLE_RATE)
         print(f"TTNN audio saved to {args.output}")
 
-        # Optional: also run reference for comparison
+        # Optional: reference comparison
         if args.reference_output:
             audio_ref = decode_to_audio_reference(speech_ids, quantizer, decoder_sd)
+            if num_prompt_tokens > 0 and not args.keep_prompt:
+                audio_ref = trim_prompt_audio(audio_ref, num_prompt_tokens)
             sf.write(args.reference_output, audio_ref, SAMPLE_RATE)
             print(f"Reference audio saved to {args.reference_output}")
 
-            # Compare PCC
-            pcc = torch.corrcoef(torch.stack([torch.tensor(audio_ttnn).flatten(), torch.tensor(audio_ref).flatten()]))[
-                0, 1
-            ].item()
+            min_len = min(len(audio_ttnn), len(audio_ref))
+            pcc = torch.corrcoef(
+                torch.stack([torch.tensor(audio_ttnn[:min_len]).flatten(), torch.tensor(audio_ref[:min_len]).flatten()])
+            )[0, 1].item()
             print(f"TTNN vs Reference PCC: {pcc:.6f}")
     finally:
         ttnn.close_device(device)
