@@ -651,7 +651,7 @@ const MeshTensor& Tensor::mesh_tensor() const& {
 
 MeshTensor& Tensor::mesh_tensor() & {
     auto* mesh_storage = std::get_if<DeviceStorage>(&tensor_attributes->get_storage());
-    TT_FATAL(mesh_storage != nullptr, "Expected Tensor with HostStorage, got {}", this->storage_type());
+    TT_FATAL(mesh_storage != nullptr, "Expected Tensor with DeviceStorage, got {}", this->storage_type());
     return mesh_storage->get_mesh_tensor();
 }
 

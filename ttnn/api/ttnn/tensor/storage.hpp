@@ -75,8 +75,15 @@ private:
 //   - get_coords/ is_uniform_storage will be undefined (for transition, ideally they should all throw).
 //   - Calls to deallocate will have no effect.
 //
-// Right now the deallocated state is only restircted to have a nullptr to the mesh_buffer,
-// in the future we should restrict it to also cover have a non-null mesh_buffer that has a deallocated state.
+// Right now the deallocated state is only restircted to have a nullptr to the MeshTensor,
+// However, the MeshTensor could still be in a deallocated state when other owners of DeviceStorage calls deallocate.
+// This is problematic in two ways:
+// 1. This breaks the invariant that the MeshTensor is always allocated.
+// 2. The definition of deallocated state is not conforming to `DeviceStorage::is_allocated()`.
+//
+// Long term, "deallocated" and `!is_allocated()` should be synonymous. Migration is difficult: some
+// operations (e.g. move) still rely on accessing tensors in a deallocated state, and asserts do not
+// cover every intentional or accidental use of deallocated tensors.
 struct DeviceStorage {
     // Construct a DeviceStorage that is deallocated
     DeviceStorage() = default;
@@ -123,8 +130,9 @@ struct DeviceStorage {
     // Throws if the DeviceStorage is not allocated.
     distributed::MeshDevice& get_device() const;
 
-    // Returns the MeshDevice pointer if mesh_buffer exists, or nullptr otherwise.
-    // Unlike get_device(), this does NOT throw when the buffer is deallocated.
+    // Returns the MeshDevice pointer if mesh_tensor exists, or nullptr otherwise.
+    // Unlike get_device(), this does NOT throw when the mesh_tensor exist but it's mesh_buffer being in a deallocated
+    // state.
     //
     // Workaround for https://github.com/tenstorrent/tt-metal/issues/40716:
     // When a tensor's DeviceStorage is copied (e.g., by view/reshape) and the original
@@ -164,18 +172,21 @@ struct DeviceStorage {
     // Begin internal functions:
     std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer_leak_ownership() const;
     //
-    // Creates a DeviceStorage representing a view of existing device memory.
-    // `surface_mesh_tensor` could provide a different tensor configuration (TensorSpec, e.g. different layout) from the
-    // configuration of the owning_storage. This can be achived by creating the surface_mesh_tensor using an externally
-    // owned MeshBuffer.
+    // There are situations where we want to "reinterpret" an existing Tensor without modifying its underlying memory.
+    // For example, select slice ops can be done in-place, as can select reshapes. This DeviceStorage constructor
+    // addresses such cases.
+    //  - owning_storage is the original DeviceStorage object that owns the device memory
+    //  - reinterpreted_mesh_tensor is the new interpretation of the device memory
     //
-    // Ownership of the underlying device memory is shared amongs the new DeviceStorage and the owning_storage.
-    // Deallocation will affect both the new DeviceStorage and the owning_storage.
+    // Upon construction, ownership of the underlying device memory is SHARED by the new DeviceStorage and the original
+    // owning_storage.
     //
-    // This is the recommended way to reinterpret an existing Tensor.
-    // However this is considered internal function and is not part of the public API.
-    // They will be replaced with a new initiative as described in: #38093
-    DeviceStorage(const DeviceStorage& owning_storage, MeshTensor surface_mesh_tensor);
+    // Note that deallocation will affect BOTH the new DeviceStorage and the original owning_storage.
+
+    // This is currently the recommended method to reinterpret an existing Tensor.
+    // This is  internal functionality: it is not part of the public API.
+    // TODO: implement a more robust mechanism for Tensor reinterpretation (#38093)
+    DeviceStorage(const DeviceStorage& owning_storage, MeshTensor reinterpreted_mesh_tensor);
     // End internal functions.
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
