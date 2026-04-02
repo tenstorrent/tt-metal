@@ -57,7 +57,7 @@ def test_sort_standard(shape, dim, descending, device, torch_dtype, ttnn_dtype):
 
     if len(shape) == 0 or (len(shape) == 1 and shape[0] == 1):
         assert torch_sort_values == ttnn.to_torch(ttnn_sort_values)
-        assert torch_sort_indices == ttnn.to_torch(ttnn_sort_indices)
+        assert torch_sort_indices == ttnn.to_torch(ttnn_sort_indices).to(torch.int64)
     else:
         # Validate sorted values
         assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values, dtype=torch_dtype))
