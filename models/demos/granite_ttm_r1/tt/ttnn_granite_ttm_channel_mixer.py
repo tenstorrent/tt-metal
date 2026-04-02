@@ -47,15 +47,15 @@ class TtnnGraniteTTMChannelMixer:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-        # MLP: fc1 -> GELU -> fc2
+        # MLP: fc1 -> GELU (fused) -> fc2
         hidden_states = ttnn.linear(
             hidden_states,
             self._params.mlp.fc1.weight,
             bias=self._params.mlp.fc1.bias,
+            activation="gelu",
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
         )
-        hidden_states = ttnn.gelu(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
         hidden_states = ttnn.linear(
             hidden_states,
             self._params.mlp.fc2.weight,

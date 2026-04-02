@@ -8,12 +8,8 @@ from typing import Any
 
 import torch
 
-from models.demos.granite_ttm_r1.tt.common import (
-    TorchModuleFallback,
-    run_model_as_torch_fallback,
-    to_torch_tensor,
-    to_ttnn_tensor,
-)
+from models.demos.granite_ttm_r1.tt.common import TorchModuleFallback, run_model_as_torch_fallback
+from models.demos.granite_ttm_r1.tt.ttnn_granite_ttm_adaptive_block import TtnnGraniteTTMEncoderBlock
 from models.demos.granite_ttm_r1.tt.ttnn_granite_ttm_embedding import TtnnGraniteTTMEmbedding
 from models.demos.granite_ttm_r1.tt.ttnn_granite_ttm_head import TtnnGraniteTTMHead
 from models.demos.granite_ttm_r1.tt.ttnn_granite_ttm_patching import TtnnGraniteTTMPatching
@@ -39,14 +35,14 @@ class TtnnGraniteTTMModel:
     Architecture wiring (TTNN path)
     --------------------------------
     1. backbone.scaler              – called directly via torch (returns 3-tuple)
-    2. backbone.patching            – TtnnGraniteTTMPatching (torch fallback)
-    3. backbone.encoder.patcher     – TtnnGraniteTTMEmbedding (TTNN linear if params)
-    4. backbone.encoder.mlp_mixer_encoder – TorchModuleFallback
-                                      (adaptive patching reshape logic; TinyTimeMixerBlock
-                                      returns a 2-tuple, first element extracted as tensor)
-    5. decoder.adapter              – TtnnGraniteTTMEmbedding (TTNN linear if params)
-    6. decoder.decoder_block        – TorchModuleFallback
-    7. head                         – TtnnGraniteTTMHead (TTNN if params)
+    2. backbone.patching            – TtnnGraniteTTMPatching (reshape + permute)
+    3. backbone.encoder.patcher     – TtnnGraniteTTMEmbedding (TTNN linear)
+    4. backbone.encoder.mlp_mixer_encoder – TtnnGraniteTTMEncoderBlock
+                                      (adaptive patching blocks; 3 levels of
+                                      time_mixer + channel_mixer + reshape)
+    5. decoder.adapter              – TtnnGraniteTTMEmbedding (TTNN linear)
+    6. decoder.decoder_block        – TtnnGraniteTTMBlock (2 × TinyTimeMixerLayer)
+    7. head                         – TtnnGraniteTTMHead (TTNN linear + reshape)
     8. de-normalisation             – y_hat * scale + loc  (torch)
 
     Note: Steps 1-4 correspond to backbone.forward, 5-6 to decoder.forward, and
@@ -83,13 +79,18 @@ class TtnnGraniteTTMModel:
         def _get(path: str) -> torch.nn.Module | None:
             return named_modules.get(path)
 
-        # 1. Scaler (TinyTimeMixerStdScaler) – called directly via torch to
-        #    preserve the full (scaled_data, loc, scale) 3-tuple.
-        self._scaler_module = _get("backbone.scaler")
+        # 1. Scaler parameters – used by _ttnn_std_scaler in forward.
+        _scaler_mod = _get("backbone.scaler")
+        self._scaler_module = _scaler_mod  # kept for reference; TTNN path uses minimum_scale only
+        self._scaler_minimum_scale = float(getattr(_scaler_mod, "minimum_scale", 1e-5))
 
-        # 2. Patching (TinyTimeMixerPatchify) – torch fallback
-        patching_mod = _get("backbone.patching")
-        self._patching = TtnnGraniteTTMPatching(torch_module=patching_mod)
+        # 2. Patching (TinyTimeMixerPatchify) – TTNN reshape + permute.
+        #    stride == patch_length is confirmed for this model (non-overlapping).
+        self._patching = TtnnGraniteTTMPatching(
+            num_patches=config.num_patches,
+            patch_length=config.patch_length,
+            config=config,
+        )
 
         # 3. backbone.encoder.patcher – TTNN linear projection (patch_length -> d_model)
         patcher_params = _nested_attr(parameters, "backbone.encoder.patcher")
@@ -100,12 +101,25 @@ class TtnnGraniteTTMModel:
             torch_module=patcher_mod if patcher_params is None else None,
         )
 
-        # 4. backbone.encoder.mlp_mixer_encoder – TorchModuleFallback
-        #    (TinyTimeMixerAdaptivePatchingBlock contains shape-reshape ops).
-        #    TinyTimeMixerBlock.forward returns (embedding, hidden_states) — a plain 2-tuple;
-        #    TorchModuleFallback will call extract_prediction_tensor and return the first tensor.
-        encoder_block_mod = _get("backbone.encoder.mlp_mixer_encoder")
-        self._encoder_block = TorchModuleFallback(encoder_block_mod) if encoder_block_mod is not None else None
+        # 4. backbone.encoder.mlp_mixer_encoder – TtnnGraniteTTMEncoderBlock.
+        #    Implements 3 adaptive patching levels, each running 2 TinyTimeMixerLayer
+        #    blocks (time_mixer + channel_mixer) at factor-expanded patch granularity.
+        enc_params = _nested_attr(parameters, "backbone.encoder.mlp_mixer_encoder")
+        enc_mod = _get("backbone.encoder.mlp_mixer_encoder")
+        if enc_params is not None:
+            # Each adaptive level has its own factor (e.g. 4, 2, 1 for TTM-R1).
+            _factors = (
+                [getattr(enc_mod.mixers[i], "adaptive_patch_factor", 1) for i in range(len(enc_mod.mixers))]
+                if enc_mod is not None
+                else [1]
+            )
+            self._encoder_block = TtnnGraniteTTMEncoderBlock(
+                parameters=enc_params,
+                config=config,
+                adaptive_patch_factors=_factors,
+            )
+        else:
+            self._encoder_block = None
 
         # 5. decoder.adapter – TTNN linear (d_model -> decoder_d_model)
         adapter_params = _nested_attr(parameters, "decoder.adapter")
@@ -116,11 +130,15 @@ class TtnnGraniteTTMModel:
             torch_module=adapter_mod if adapter_params is None else None,
         )
 
-        # 6. decoder.decoder_block – TorchModuleFallback
-        #    (TinyTimeMixerBlock at decoder_d_model; returns a 2-tuple
-        #    (last_hidden_state, hidden_states), first element is the tensor).
-        decoder_block_mod = _get("decoder.decoder_block")
-        self._decoder_block = TorchModuleFallback(decoder_block_mod) if decoder_block_mod is not None else None
+        # 6. decoder.decoder_block – TtnnGraniteTTMBlock (2 × TinyTimeMixerLayer).
+        #    Each mixer in decoder_block.mixers is a TinyTimeMixerLayer with
+        #    patch_mixer and feature_mixer subtrees.
+        dec_block_params = _nested_attr(parameters, "decoder.decoder_block")
+        dec_block_mod = _get("decoder.decoder_block")
+        if dec_block_params is not None:
+            self._decoder_block = _TtnnDecoderBlock(parameters=dec_block_params, config=config)
+        else:
+            self._decoder_block = TorchModuleFallback(dec_block_mod) if dec_block_mod is not None else None
 
         # 7. Head (TinyTimeMixerForPredictionHead) – TTNN
         head_params = _nested_attr(parameters, "head")
@@ -159,23 +177,14 @@ class TtnnGraniteTTMModel:
     def _forward_ttnn(self, history, *, observed_mask=None, device):
         import ttnn
 
-        # Work in torch for scaler so we can keep loc/scale for de-normalisation.
-        torch_history = to_torch_tensor(history)
-
-        # 1. Scaler: [B, T, C] -> ([B, T, C], [B, 1, C], [B, 1, C])
-        if self._scaler_module is not None:
-            if observed_mask is not None:
-                torch_mask = to_torch_tensor(observed_mask)
-            else:
-                torch_mask = torch.ones_like(torch_history)
-            scaled_values, loc, scale = self._scaler_module(torch_history, torch_mask)
-        else:
-            scaled_values = torch_history
-            loc = torch.zeros(torch_history.shape[0], 1, torch_history.shape[2], dtype=torch_history.dtype)
-            scale = torch.ones(torch_history.shape[0], 1, torch_history.shape[2], dtype=torch_history.dtype)
-
-        # Convert scaled values back to ttnn for the rest of the pipeline.
-        hidden_states = to_ttnn_tensor(scaled_values, device=device, dtype=ttnn.bfloat16)
+        # 1. Scaler: [B, T, C] → scaled [B, T, C],  loc [B, 1, C],  scale [B, 1, C]
+        #    All ops stay on-device to avoid PCIe round-trips.
+        hidden_states, loc, scale = _ttnn_std_scaler(
+            history,
+            observed_mask=observed_mask,
+            minimum_scale=self._scaler_minimum_scale,
+            device=device,
+        )
 
         # 2. Patching: [B, T, C] -> [B, C, P, patch_length]
         hidden_states = self._patching(hidden_states, device=device)
@@ -183,36 +192,54 @@ class TtnnGraniteTTMModel:
         # 3. Patch embedding (patcher Linear): [B, C, P, patch_length] -> [B, C, P, d_model]
         hidden_states = self._embedding(hidden_states, device=device)
 
-        # 4. Encoder (adaptive patching mixer blocks): [B, C, P, d_model] -> [B, C, P, d_model]
-        #    TinyTimeMixerBlock.forward returns (embedding, hidden_states_list) — a 2-tuple.
-        #    TorchModuleFallback with no output_selector calls extract_prediction_tensor, which
-        #    returns the first tensor in the tuple (the embedding).
+        # 4. Encoder (3 × TtnnGraniteTTMAdaptivePatchingBlock): [B, C, P, d_model] -> [B, C, P, d_model]
         if self._encoder_block is not None:
             hidden_states = self._encoder_block(hidden_states, device=device)
 
         # 5. Decoder adapter Linear: [B, C, P, d_model] -> [B, C, P, decoder_d_model]
         hidden_states = self._decoder_adapter(hidden_states, device=device)
 
-        # 6. Decoder block (TinyTimeMixerBlock at decoder_d_model): [B, C, P, d_dec] -> [B, C, P, d_dec]
-        #    The module returns a 2-tuple; TorchModuleFallback extracts the first tensor.
+        # 6. Decoder block (2 × TinyTimeMixerLayer at decoder_d_model): [B, C, P, d_dec] -> [B, C, P, d_dec]
         if self._decoder_block is not None:
             hidden_states = self._decoder_block(hidden_states, device=device)
 
         # 7. Head: [B, C, P, d_dec] -> [B, forecast_len, C]  (scaled space)
         hidden_states = self._head(hidden_states, device=device)
 
-        # 8. De-normalise: y_hat = y_hat * scale + loc
-        #    Bring back to torch for the element-wise broadcast, then re-wrap.
-        torch_prediction = to_torch_tensor(hidden_states)
-        # loc/scale shape: [B, 1, C]; torch_prediction shape: [B, forecast_len, C]
-        torch_prediction = torch_prediction * scale + loc
-
-        return to_ttnn_tensor(torch_prediction, device=device, dtype=ttnn.bfloat16)
+        # 8. De-normalise: y_hat = y_hat * scale + loc  (on-device broadcast)
+        #    loc/scale: [B, 1, C];  hidden_states: [B, forecast_len, C]
+        hidden_states = ttnn.add(
+            ttnn.mul(hidden_states, scale, memory_config=ttnn.L1_MEMORY_CONFIG),
+            loc,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        return hidden_states
 
 
 # --------------------------------------------------------------------------- #
 # Helpers                                                                      #
 # --------------------------------------------------------------------------- #
+
+
+class _TtnnDecoderBlock:
+    """Runs all TinyTimeMixerLayer mixers in decoder.decoder_block sequentially.
+
+    decoder.decoder_block is a TinyTimeMixerBlock whose .mixers list contains
+    TinyTimeMixerLayer instances, each with a patch_mixer and feature_mixer.
+    We reuse TtnnGraniteTTMBlock to run each layer.
+    """
+
+    def __init__(self, *, parameters, config):
+        from models.demos.granite_ttm_r1.tt.ttnn_granite_ttm_block import TtnnGraniteTTMBlock
+
+        self._layers = [
+            TtnnGraniteTTMBlock(parameters=layer_params, config=config) for layer_params in parameters.mixers
+        ]
+
+    def __call__(self, hidden_states, *, device=None, **kwargs):
+        for layer in self._layers:
+            hidden_states = layer(hidden_states, device=device)
+        return hidden_states
 
 
 def _nested_attr(obj: Any, path: str) -> Any | None:
@@ -223,3 +250,61 @@ def _nested_attr(obj: Any, path: str) -> Any | None:
             return None
         obj = getattr(obj, part, None)
     return obj
+
+
+def _ttnn_std_scaler(
+    data,
+    *,
+    observed_mask=None,
+    minimum_scale: float = 1e-5,
+    device=None,
+):
+    """TTNN implementation of TinyTimeMixerStdScaler.
+
+    Input:  data  [B, T, C]  (bfloat16, on device)
+    Output: (scaled [B,T,C], loc [B,1,C], scale [B,1,C])  all on device
+
+    Computes per-channel mean and std over the T dimension, using the
+    observed_mask if provided (all-ones is the common inference case).
+    """
+    import ttnn
+
+    if observed_mask is not None:
+        mask = observed_mask
+    else:
+        mask = ttnn.ones_like(data, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    # denominator = clamp_min(sum(mask, dim=1), 1)
+    denom = ttnn.sum(mask, dim=1, keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG)
+    # Clamp denominator ≥ 1 by adding a tiny guard; for all-ones mask this is exact.
+    denom = ttnn.maximum(denom, ttnn.ones_like(denom, memory_config=ttnn.L1_MEMORY_CONFIG))
+
+    # loc = sum(data * mask, dim=1) / denom   → [B, 1, C]
+    weighted = ttnn.mul(data, mask, memory_config=ttnn.L1_MEMORY_CONFIG)
+    loc = ttnn.div(
+        ttnn.sum(weighted, dim=1, keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG),
+        denom,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    # variance = sum(((data - loc) * mask)^2, dim=1) / denom   → [B, 1, C]
+    diff = ttnn.sub(data, loc, memory_config=ttnn.L1_MEMORY_CONFIG)
+    masked_diff = ttnn.mul(diff, mask, memory_config=ttnn.L1_MEMORY_CONFIG)
+    sq = ttnn.mul(masked_diff, masked_diff, memory_config=ttnn.L1_MEMORY_CONFIG)
+    variance = ttnn.div(
+        ttnn.sum(sq, dim=1, keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG),
+        denom,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    # scale = sqrt(variance + minimum_scale)   → [B, 1, C]
+    min_scale_t = ttnn.full_like(variance, fill_value=minimum_scale, memory_config=ttnn.L1_MEMORY_CONFIG)
+    scale = ttnn.sqrt(
+        ttnn.add(variance, min_scale_t, memory_config=ttnn.L1_MEMORY_CONFIG),
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    # scaled = (data - loc) / scale   → [B, T, C]
+    scaled = ttnn.div(diff, scale, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    return scaled, loc, scale

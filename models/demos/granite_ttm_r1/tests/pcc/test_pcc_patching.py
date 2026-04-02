@@ -4,10 +4,9 @@
 
 """PCC test for the patching (TinyTimeMixerPatchify) component.
 
-The patching layer uses torch.Tensor.unfold which has no direct TTNN
-equivalent, so it is executed via TorchModuleFallback.  The only precision
-loss comes from the bfloat16 round-trip, so the expected PCC is effectively
-1.0 (we assert >= 0.99 for consistency with the rest of the suite).
+Stage 2: TinyTimeMixerPatchify is implemented as a TTNN reshape + permute
+(valid for non-overlapping patches where stride == patch_length).
+PCC is expected to be effectively 1.0 (bfloat16 round-trip only).
 """
 
 from __future__ import annotations
@@ -44,9 +43,13 @@ def test_pcc_patching(device, batch_size):
         torch_output = torch_module(x)
     # torch_output shape: [B, C, num_patches, patch_length]
 
-    # TTNN path (TorchModuleFallback)
+    # TTNN path (reshape + permute; no learnable params)
     ttnn_input = to_ttnn_tensor(x, device=device)
-    ttnn_module = TtnnGraniteTTMPatching(torch_module=torch_module)
+    ttnn_module = TtnnGraniteTTMPatching(
+        num_patches=model_config.num_patches,
+        patch_length=model_config.patch_length,
+        config=model_config,
+    )
     ttnn_output = ttnn_module(ttnn_input, device=device)
 
     result = float(pcc(to_torch_tensor(ttnn_output).float(), torch_output.float()))

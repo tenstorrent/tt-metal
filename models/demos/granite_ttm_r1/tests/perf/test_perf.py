@@ -45,9 +45,10 @@ def test_model_size():
 @pytest.mark.xfail(
     strict=False,
     reason=(
-        "Stage 1 bring-up: patching, encoder, and decoder blocks still use "
-        "TorchModuleFallback (CPU). Full TTNN kernel coverage is required to "
-        "hit the < 10 ms / >= 500 seq/s targets."
+        "Stage 2: latency < 10 ms is achieved (~8.5 ms). "
+        "Throughput >= 500 seq/s at batch=1 requires ~2 ms latency; "
+        "current ~8.5 ms gives ~117 seq/s. Further kernel fusion is needed "
+        "to reduce per-op dispatch overhead for this tiny model."
     ),
 )
 @pytest.mark.parametrize("n_warmup,n_timing", [(3, 50)])
