@@ -145,7 +145,6 @@ class TransformerBlock(LightweightModule):
             prefetcher=self.prefetcher,
             TG=args.is_galaxy,
             ag_config_key="FFN_LN_AG_CONFIG",
-            use_fused_rms=args.is_multichip and not args.is_galaxy and args.max_batch_size <= 32,
         )
         if f"layers.{layer_num}.pre_feedforward_layernorm.weight" in state_dict:
             self.pre_ff_norm = DistributedNorm(  # pre_feedforward_layernorm
@@ -259,24 +258,17 @@ class TransformerBlock(LightweightModule):
         attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
 
         if self.pre_ff_norm is None:
-            # Fused path: ff_norm does residual add + norm + all-gather in one kernel
-            if getattr(self.ff_norm, "use_fused_rms", False) and mode == Mode.DECODE:
-                ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
-                hidden_states = self.ff_norm(attn_out, mode, norm_config=ff_norm_config, residual=residual)
-                # residual is updated in-place by fused_rms_minimal
-            else:
-                hidden_states = ttnn.add(
-                    residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
-                )
-                residual = hidden_states
-                if mode == "prefill":
-                    x.deallocate(True)
-                ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
-                hidden_states = self.ff_norm(hidden_states, mode, norm_config=ff_norm_config)
+            hidden_states = ttnn.add(
+                residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
+            )
+            residual = hidden_states
+            if mode == "prefill":
+                x.deallocate(True)
         else:
             hidden_states = attn_out
-            ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
-            hidden_states = self.ff_norm(hidden_states, mode, norm_config=ff_norm_config)
+
+        ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
+        hidden_states = self.ff_norm(hidden_states, mode, norm_config=ff_norm_config)
 
         if self.pre_ff_norm is not None:
             # Mesh partition ff_norm output to match residual sharding, skip if using distributed norm, because output is already sharded

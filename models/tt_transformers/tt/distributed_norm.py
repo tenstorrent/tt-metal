@@ -9,17 +9,7 @@ from models.tt_transformers.tt.common import Mode
 
 
 class DistributedNorm(LightweightModule):
-    def __init__(
-        self,
-        norm,
-        args,
-        tt_ccl,
-        prefetcher=None,
-        TG=False,
-        ag_config_key=None,
-        enable_all_gather=True,
-        use_fused_rms=False,
-    ):
+    def __init__(self, norm, args, tt_ccl, prefetcher=None, TG=False, ag_config_key=None, enable_all_gather=True):
         self.norm = norm
         self.args = args
         self.tt_ccl = tt_ccl
@@ -28,47 +18,6 @@ class DistributedNorm(LightweightModule):
 
         # Flag to control whether all_gather is performed after distributed norm (can be disabled when output should remain sharded)
         self.enable_all_gather = enable_all_gather
-
-        # Fused RMS: combines norm + all-gather + residual add in one kernel
-        self.use_fused_rms = use_fused_rms and not TG and args.is_multichip and prefetcher is None
-        if self.use_fused_rms:
-            cluster_shape = list(args.mesh_device.shape)
-            self.fused_cluster_axis = 0 if cluster_shape[0] > 1 and cluster_shape[1] == 1 else 1
-            dim_per_device = args.dim // cluster_shape[self.fused_cluster_axis]
-            # Find core grid where dim_per_device / num_cores is tile-aligned and fits BH grid (12x10)
-            max_x, max_y = 12, 10
-            grid_x, grid_y, num_cores = 1, 1, 1
-            for n in [40, 20, 10, 8, 5, 4, 2, 1]:
-                if dim_per_device % n == 0 and (dim_per_device // n) % 32 == 0:
-                    # Find a grid that fits in max_x × max_y
-                    found = False
-                    for gy in range(1, max_y + 1):
-                        if n % gy == 0:
-                            gx = n // gy
-                            if gx <= max_x:
-                                grid_x, grid_y, num_cores = gx, gy, n
-                                found = True
-                                break
-                    if found:
-                        break
-            shard_width = dim_per_device // num_cores
-            self.fused_ln_prg_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=(grid_x, grid_y),
-                subblock_w=min(shard_width // 32, 4),
-                block_h=1,
-                block_w=shard_width // 32,
-                inplace=False,
-            )
-            self.fused_input_mem_cfg = ttnn.create_sharded_memory_config(
-                shape=(1, 1, 32, dim_per_device),
-                core_grid=ttnn.CoreGrid(y=grid_y, x=grid_x),
-                strategy=ttnn.ShardStrategy.WIDTH,
-            )
-            # Create dedicated semaphore for fused RMS (single, not a list)
-            sub_device_crs = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}
-            )
-            self.fused_semaphore = ttnn.create_global_semaphore(args.mesh_device, sub_device_crs, 0)
 
         if TG:
             core_grid_ln = (
@@ -102,30 +51,10 @@ class DistributedNorm(LightweightModule):
             )
         self.TG = TG
 
-    def forward(self, x, mode: Mode, norm_config=None, residual=None):
-        """Apply a norm, possibly gathering inputs if required.
-        If residual is provided and use_fused_rms is enabled, fuses norm + all-gather + residual add.
-        """
+    def forward(self, x, mode: Mode, norm_config=None):
+        """Apply a norm, possibly gathering inputs if required."""
 
         sharded_output_config = norm_config.get("sharded_output_config") if norm_config else None
-
-        # Fused RMS path: norm + all-gather + residual add in one kernel
-        if self.use_fused_rms and mode == Mode.DECODE and residual is not None:
-            x = ttnn.to_memory_config(x, self.fused_input_mem_cfg)
-            tt_out = ttnn.fused_rms_minimal(
-                x,
-                self.fused_ln_prg_cfg,
-                self.fused_cluster_axis,
-                self.args.mesh_device,
-                self.fused_semaphore,
-                topology=self.args.ccl_topology(),
-                residual_input_tensor=residual,
-                num_links=self.tt_ccl.get_num_links(self.fused_cluster_axis),
-                epsilon=self.norm.eps,
-                weight=self.norm.weight_distributed,
-                memory_config=sharded_output_config,
-            )
-            return tt_out
 
         if self.TG:
             if mode == Mode.DECODE:
