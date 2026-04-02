@@ -36,10 +36,26 @@
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <unordered_set>
 #include <utility>
 #include <atomic>
 
 namespace tt::tt_metal {
+
+std::mutex Tensor::live_tensor_mutex_;
+std::unordered_set<const Tensor*> Tensor::live_tensors_;
+
+void Tensor::register_live() {
+    std::lock_guard<std::mutex> lock(live_tensor_mutex_);
+    live_tensors_.insert(this);
+}
+
+void Tensor::unregister_live() {
+    std::lock_guard<std::mutex> lock(live_tensor_mutex_);
+    live_tensors_.erase(this);
+}
+
 namespace {
 std::atomic<std::uint64_t> tensor_id_counter{0};
 
@@ -106,7 +122,9 @@ Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
 Tensor::Tensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
     tensor_id(Tensor::next_tensor_id()),
     tensor_attributes(
-        std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {}
+        std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
+    register_live();
+}
 
 Tensor::Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
     tensor_id(Tensor::next_tensor_id()),
@@ -115,6 +133,7 @@ Tensor::Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology ten
     if (auto buffer = device_storage().mesh_buffer; buffer != nullptr) {
         mesh_device_ = buffer->device();
     }
+    register_live();
 }
 
 Tensor& Tensor::operator=(const Tensor& other) {
@@ -139,9 +158,24 @@ Tensor& Tensor::operator=(Tensor&& other) noexcept {
     return *this;
 }
 
-Tensor::Tensor(const Tensor& other) = default;
+Tensor::Tensor() { register_live(); }
 
-Tensor::~Tensor() { this->deallocate_impl(/*force=*/false); }
+Tensor::Tensor(const Tensor& other) :
+    tensor_id(other.tensor_id), tensor_attributes(other.tensor_attributes), mesh_device_(other.mesh_device_) {
+    register_live();
+}
+
+Tensor::Tensor(Tensor&& other) noexcept :
+    tensor_id(other.tensor_id),
+    tensor_attributes(std::move(other.tensor_attributes)),
+    mesh_device_(std::move(other.mesh_device_)) {
+    register_live();
+}
+
+Tensor::~Tensor() {
+    this->deallocate_impl(/*force=*/false);
+    unregister_live();
+}
 
 void Tensor::deallocate(bool force) { deallocate_impl(force); }
 
@@ -178,6 +212,40 @@ std::uint64_t Tensor::get_tensor_id_counter() { return tensor_id_counter.load(st
 void Tensor::set_tensor_id_counter(std::uint64_t id) { tensor_id_counter.store(id, std::memory_order_relaxed); }
 
 std::uint64_t Tensor::next_tensor_id() { return tensor_id_counter.fetch_add(1, std::memory_order_relaxed); }
+
+std::vector<Tensor::LiveTensorBufferInfo> Tensor::get_live_tensor_buffer_info(
+    const std::unordered_set<size_t>& target_ids) {
+    std::lock_guard<std::mutex> lock(live_tensor_mutex_);
+    std::vector<LiveTensorBufferInfo> results;
+    for (const Tensor* t : live_tensors_) {
+        if (!t->tensor_attributes) {
+            continue;
+        }
+        const auto& storage = t->tensor_attributes->get_storage();
+        const auto* dev_storage = std::get_if<DeviceStorage>(&storage);
+        if (!dev_storage) {
+            continue;
+        }
+        const auto& root = dev_storage->get_root_mesh_buffer();
+        if (!root) {
+            continue;
+        }
+        auto* backing = root->get_backing_buffer();
+        if (!backing) {
+            continue;
+        }
+        size_t uid = backing->unique_id();
+        if (target_ids.count(uid)) {
+            results.push_back({
+                t->tensor_id,
+                uid,
+                static_cast<long>(t->tensor_attributes.use_count()),
+                static_cast<long>(root.use_count()),
+            });
+        }
+    }
+    return results;
+}
 
 template <typename T>
 Tensor Tensor::from_span(

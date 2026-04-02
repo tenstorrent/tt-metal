@@ -10,11 +10,13 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/operators.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/unordered_set.h>
 #include <nanobind/stl/vector.h>
 
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/trace.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::trace {
 
@@ -96,10 +98,31 @@ void py_module(nb::module_& mod) {
         [](MeshDevice* device) { return ttnn::operations::trace::get_unsafe_tracked_ids(device); },
         nb::arg("mesh_device"));
     mod.def(
+        "get_unsafe_buffer_refcounts",
+        [](MeshDevice* device) { return ttnn::operations::trace::get_unsafe_buffer_refcounts(device); },
+        nb::arg("mesh_device"));
+    mod.def(
         "clear_unsafe_tracked_ids",
         [](MeshDevice* device) { ttnn::operations::trace::clear_unsafe_tracked_ids(device); },
         nb::arg("mesh_device"));
     mod.def("drain_pending_traceback_ids", []() { return ttnn::operations::trace::drain_pending_traceback_ids(); });
+
+    mod.def(
+        "get_live_tensor_buffer_info",
+        [](const std::unordered_set<size_t>& target_ids) {
+            auto results = tt::tt_metal::Tensor::get_live_tensor_buffer_info(target_ids);
+            nb::list out;
+            for (const auto& info : results) {
+                nb::dict d;
+                d["tensor_id"] = info.tensor_id;
+                d["buffer_unique_id"] = info.buffer_unique_id;
+                d["tensor_attrs_refcount"] = info.tensor_attrs_refcount;
+                d["mesh_buffer_refcount"] = info.mesh_buffer_refcount;
+                out.append(d);
+            }
+            return out;
+        },
+        nb::arg("target_ids"));
 }
 
 } // namespace ttnn::operations::trace

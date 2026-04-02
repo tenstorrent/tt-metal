@@ -8,6 +8,7 @@
 #include <tt-metalium/mesh_trace_id.hpp>
 
 #include <optional>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -31,6 +32,7 @@ bool allocations_unsafe(MeshDevice* device);
 void suppress_unsafe_allocation_warning(MeshDevice* device);
 void unsuppress_unsafe_allocation_warning(MeshDevice* device);
 std::unordered_set<size_t> get_unsafe_tracked_ids(MeshDevice* device);
+std::unordered_map<size_t, long> get_unsafe_buffer_refcounts(MeshDevice* device);
 void clear_unsafe_tracked_ids(MeshDevice* device);
 std::vector<size_t> drain_pending_traceback_ids();
 

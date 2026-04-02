@@ -405,6 +405,21 @@ std::unordered_set<size_t> AllocatorImpl::get_unsafe_tracked_ids() const {
     return unsafe_tracked_ids_;
 }
 
+std::unordered_map<size_t, long> AllocatorImpl::get_unsafe_buffer_refcounts() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::unordered_map<size_t, long> result;
+    for (Buffer* buf : allocated_buffers_) {
+        if (unsafe_tracked_ids_.count(buf->unique_id())) {
+            try {
+                result[buf->unique_id()] = buf->shared_from_this().use_count() - 1;
+            } catch (...) {
+                result[buf->unique_id()] = -1;
+            }
+        }
+    }
+    return result;
+}
+
 void AllocatorImpl::clear_unsafe_tracked_ids() {
     std::lock_guard<std::mutex> lock(mutex_);
     unsafe_tracked_ids_.clear();

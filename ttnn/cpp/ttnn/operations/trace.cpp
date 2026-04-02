@@ -51,6 +51,9 @@ bool allocations_unsafe(MeshDevice* device) {
 void suppress_unsafe_allocation_warning(MeshDevice* device) { device->suppress_unsafe_allocation_warning(); }
 void unsuppress_unsafe_allocation_warning(MeshDevice* device) { device->unsuppress_unsafe_allocation_warning(); }
 std::unordered_set<size_t> get_unsafe_tracked_ids(MeshDevice* device) { return device->get_unsafe_tracked_ids(); }
+std::unordered_map<size_t, long> get_unsafe_buffer_refcounts(MeshDevice* device) {
+    return device->get_unsafe_buffer_refcounts();
+}
 void clear_unsafe_tracked_ids(MeshDevice* device) { device->clear_unsafe_tracked_ids(); }
 std::vector<size_t> drain_pending_traceback_ids() { return MeshDevice::drain_pending_traceback_ids(); }
 
