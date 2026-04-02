@@ -140,6 +140,7 @@ public:
         }
         DPRINT << "wait_front: tc_id: " << static_cast<uint32_t>(tc_id)
                << " num_entries: " << static_cast<uint32_t>(num_entries) << ENDL();
+        DEVICE_PRINT("wait_front: tc_id: {} num_entries: {}\n", tc_id, num_entries);
         llk_wait_tiles(logical_dfb_id_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
         uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
@@ -193,6 +194,11 @@ public:
         DPRINT << "read_in: tensix_id: " << static_cast<uint32_t>(tensix_id)
                << " tc_id: " << static_cast<uint32_t>(tc_id)
                << " posted: " << static_cast<uint32_t>(fast_llk_intf_read_posted(tensix_id, tc_id)) << ENDL();
+        DEVICE_PRINT(
+            "read_in: tensix_id: {} tc_id: {} posted: {}\n",
+            tensix_id,
+            tc_id,
+            static_cast<uint32_t>(fast_llk_intf_read_posted(tensix_id, tc_id)));
         while (fast_llk_intf_read_posted(tensix_id, tc_id) < (ptxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc));
 
         // Make sure there is space for the new tile
@@ -200,6 +206,7 @@ public:
 
         // DPRINT << "issuing the read on " << static_cast<uint32_t>(local_dfb_interface_.txn_ids[ptxn_id_index_]) <<
         // ENDL();
+        // DEVICE_PRINT("issuing the read on {}\n", local_dfb_interface_.txn_ids[ptxn_id_index_]);
 
         noc.async_read<Noc::TxnIdMode::ENABLED>(src, *this, get_entry_size(), src_args, {}, NOC_UNICAST_WRITE_VC, local_dfb_interface_.txn_ids[ptxn_id_index_]);
 
@@ -234,6 +241,7 @@ public:
 
         // DPRINT << "issuing the write on " << static_cast<uint32_t>(local_dfb_interface_.txn_ids[ctxn_id_index_]) <<
         // ENDL();
+        // DEVICE_PRINT("issuing the write on {}\n", local_dfb_interface_.txn_ids[ctxn_id_index_]);
 
         noc.async_write<Noc::TxnIdMode::ENABLED>(*this, dst, get_entry_size(), {}, dst_args, NOC_UNICAST_WRITE_VC, local_dfb_interface_.txn_ids[ctxn_id_index_]);
 
@@ -261,6 +269,7 @@ public:
         // Each DM updates tile counters for the tiles it read/wrote by using its local counter
         // DPRINT << "ptiles_read: " << static_cast<uint32_t>(ptiles_read_) << " ctiles_written: " <<
         // static_cast<uint32_t>(ctiles_written_) << ENDL();
+        // DEVICE_PRINT("ptiles_read: {} ctiles_written: {}\n", ptiles_read_, ctiles_written_);
         if (ptiles_read_ > 0) {
             handle_final_credits<true>(ptiles_read_, ptxn_id_index_);
         }
@@ -389,6 +398,7 @@ private:
         uint16_t actual_slot0 = read_actual_slot0();
         // DPRINT << "actual_slot0: " << static_cast<uint32_t>(actual_slot0)
         //        << " expected_slot0: " << static_cast<uint32_t>(expected_slot0) << ENDL();
+        // DEVICE_PRINT("actual_slot0: {} expected_slot0: {}\n", actual_slot0, expected_slot0);
 
         if (actual_slot0 < expected_slot0) {
             for (uint8_t i = 0; i < N; i++) {
@@ -402,6 +412,7 @@ private:
                         // DPRINT << "inc_posted tc(" << static_cast<uint32_t>(tensix_id) << "," <<
                         // static_cast<uint32_t>(tc_id)
                         //        << ") delta: " << static_cast<uint32_t>(expected - actual) << ENDL();
+                        // DEVICE_PRINT("inc_posted tc({}, {}) delta: {}\n", tensix_id, tc_id, expected - actual);
                         fast_llk_intf_inc_posted(tensix_id, tc_id, expected - actual);
                     }
                 } else {
@@ -410,6 +421,7 @@ private:
                         // DPRINT << "inc_acked tc(" << static_cast<uint32_t>(tensix_id) << "," <<
                         // static_cast<uint32_t>(tc_id)
                         //        << ") delta: " << static_cast<uint32_t>(expected - actual) << ENDL();
+                        // DEVICE_PRINT("inc_acked tc({}, {}) delta: {}\n", tensix_id, tc_id, expected - actual);
                         fast_llk_intf_inc_acked(tensix_id, tc_id, expected - actual);
                     }
                 }
