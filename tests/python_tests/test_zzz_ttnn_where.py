@@ -5,7 +5,6 @@
 import pytest
 import torch
 from helpers.format_config import DataFormat
-from helpers.golden_generators import WhereGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, MathOperation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
@@ -15,6 +14,14 @@ from helpers.test_variant_parameters import (
     DISABLE_SRC_ZERO_FLAG,
     MATH_OP,
 )
+
+
+def generate_golden(operand1, true_value, false_value):
+    # operand1, true_value, and false_value are 1D tensors of floats
+    mask = operand1.view(32, 32) != 0
+    return torch.where(
+        mask, true_value.view(32, 32), false_value.view(32, 32)
+    ).flatten()
 
 
 # Helper check function
@@ -35,12 +42,7 @@ def torch_equal_nan(a, b):
     mathop=MathOperation.TTNNWhere,
     test_case=["mixed", "all_ones", "all_zeros"],
 )
-def test_ttnn_where(
-    formats,
-    dest_acc,
-    mathop,
-    test_case,
-):
+def test_ttnn_where(formats, dest_acc, mathop, test_case, workers_tensix_coordinates):
 
     if (
         formats.input == DataFormat.Float32 and formats.output == DataFormat.Float32
@@ -76,8 +78,7 @@ def test_ttnn_where(
         src_A = torch.zeros_like(src_A)
     # For "mixed" case, use the generated stimuli as-is
 
-    golden_generator = get_golden_generator(WhereGolden)
-    golden = golden_generator(src_A, src_B, src_C)
+    golden = generate_golden(src_A, src_B, src_C)
 
     configuration = TestConfig(
         "sources/ttnn_where_test.cpp",
@@ -102,7 +103,7 @@ def test_ttnn_where(
         compile_time_formats=True,
     )
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     res_from_L1 = res_from_L1[:1024]
     assert len(res_from_L1) == len(
@@ -146,11 +147,7 @@ def test_ttnn_where(
     width=[32],
 )
 def test_ttnn_where_mcw(
-    formats,
-    dest_acc,
-    mathop,
-    height,
-    width,
+    formats, dest_acc, mathop, height, width, workers_tensix_coordinates
 ):
     # Generate dtype dynamically based on current input format
 
@@ -172,8 +169,7 @@ def test_ttnn_where_mcw(
     T = torch.ones(height, width, dtype=format_dict[formats.input_format]) * 2
     F = torch.ones(height, width, dtype=format_dict[formats.input_format]) * 11
 
-    golden_generator = get_golden_generator(WhereGolden)
-    golden = golden_generator(C, T, F)
+    golden = generate_golden(C, T, F)
 
     configuration = TestConfig(
         "sources/ttnn_where_test.cpp",
@@ -198,7 +194,7 @@ def test_ttnn_where_mcw(
         compile_time_formats=True,
     )
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     res_from_L1 = res_from_L1[:1024]
 

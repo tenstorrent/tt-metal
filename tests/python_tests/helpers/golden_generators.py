@@ -1,12 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 import math
-import os
 import struct
-from enum import Enum
-from hashlib import sha256
-from pathlib import Path
-from typing import ClassVar, Optional
+from typing import Optional
 
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
@@ -29,7 +25,6 @@ from helpers.unpack import unpack_mxfp8p, unpack_mxfp8r
 
 from .bfp_format_utils import bfp4b_to_float16b as _bfp4b_to_float16b
 from .bfp_format_utils import bfp8b_to_float16b as _bfp8b_to_float16b
-from .logger import logger
 from .tile_shape import construct_tile_shape
 
 # Tile and face dimension constants
@@ -147,107 +142,6 @@ def get_golden_generator(cls):
     if cls not in golden_registry:
         raise KeyError(f"Golden class {cls.__name__} is not registered.")
     return golden_registry[cls]
-
-
-class DummyGoldenGenerator:
-    def __call__(*args, **kwargs):
-        return torch.zeros(1024, dtype=torch.bfloat16)
-
-    def transpose_faces_multi_tile(*args, **kwargs):
-        return torch.zeros(1024, dtype=torch.bfloat16)
-
-    def transpose_within_faces_multi_tile(*args, **kwargs):
-        return torch.zeros(1024, dtype=torch.bfloat16)
-
-
-def dummy_golden_generator(cls):
-    return DummyGoldenGenerator()
-
-
-class ProxyMode(Enum):
-    LOAD_GOLDEN = 1
-    CACHE_GOLDEN = 2
-
-
-# Proxy is used to allow test infra to only generate stimuli
-class GeneratorProxy:
-    TEMP_RESULT: ClassVar
-    MODE: ClassVar[ProxyMode]
-
-    STIMULI_CACHE_ROOT: ClassVar[Path]
-
-    def __init__(self, wrapped_generator):
-        self.wrapped_generator = wrapped_generator
-
-    def __call__(self, *args, **kwds):
-        logger.debug(f"Generator object call with mode {GeneratorProxy.MODE}")
-
-        if os.environ.get("PYTEST_CURRENT_TEST", "").startswith(
-            "test_fused"
-        ) or os.environ.get("PYTEST_CURRENT_TEST", "").startswith("test_zzz_pack"):
-            return self.wrapped_generator(*args, **kwds)
-
-        if GeneratorProxy.MODE == ProxyMode.LOAD_GOLDEN:
-            stimuli_id = sha256(
-                os.environ.get("PYTEST_CURRENT_TEST", "").encode()
-            ).hexdigest()
-            golden_path = GeneratorProxy.STIMULI_CACHE_ROOT / stimuli_id / "golden.pt"
-            result = torch.load(golden_path)
-        elif GeneratorProxy.MODE == ProxyMode.CACHE_GOLDEN:
-            result = self.wrapped_generator(*args, **kwds)
-            # We cache tensor value in TEMP_RESULT when we call Stimuli_Config.save_to_caches
-            GeneratorProxy.TEMP_RESULT = result
-        else:
-            raise ValueError("GeneratorProxy mode not set to a valid value!")
-
-        return result
-
-    def __getattr__(self, name):
-        attr = getattr(self.wrapped_generator, name)
-
-        if callable(attr):
-
-            def wrapper(*args, **kwargs):
-                logger.debug(f"Wrapper call with mode {GeneratorProxy.MODE}")
-                if os.environ.get("PYTEST_CURRENT_TEST", "").startswith(
-                    "test_fused"
-                ) or os.environ.get("PYTEST_CURRENT_TEST", "").startswith(
-                    "test_zzz_pack"
-                ):
-                    return attr(*args, **kwargs)
-
-                if GeneratorProxy.MODE == ProxyMode.LOAD_GOLDEN:
-                    stimuli_id = sha256(
-                        os.environ.get("PYTEST_CURRENT_TEST", "").encode()
-                    ).hexdigest()
-                    golden_path = (
-                        GeneratorProxy.STIMULI_CACHE_ROOT / stimuli_id / "golden.pt"
-                    )
-                    result = torch.load(golden_path)
-
-                elif GeneratorProxy.MODE == ProxyMode.CACHE_GOLDEN:
-                    result = attr(*args, **kwargs)
-                    # We cache tensor value in TEMP_RESULT when we call Stimuli_Config.save_to_caches
-                    GeneratorProxy.TEMP_RESULT = result
-
-                return result
-
-            return wrapper
-
-        return attr
-
-    def __str__(self):
-        return str(self.wrapped_generator)
-
-    def __repr__(self):
-        return repr(self.wrapped_generator)
-
-
-def get_golden_proxied(cls):
-    """Retrieve the registered golden class instance."""
-    if cls not in golden_registry:
-        raise KeyError(f"Golden class {cls.__name__} is not registered.")
-    return GeneratorProxy(golden_registry[cls])
 
 
 def quantize_mx_stimuli(
@@ -2654,13 +2548,3 @@ class TopKGolden:
         )
 
         return result
-
-
-@register_golden
-class WhereGolden:
-    def __call__(self, operand1, true_value, false_value):
-        # operand1, true_value, and false_value are 1D tensors of floats
-        mask = operand1.view(32, 32) != 0
-        return torch.where(
-            mask, true_value.view(32, 32), false_value.view(32, 32)
-        ).flatten()

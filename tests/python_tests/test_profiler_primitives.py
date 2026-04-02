@@ -7,7 +7,7 @@ import pytest
 from conftest import skip_for_blackhole, skip_for_coverage, skip_for_wormhole
 from helpers.perf import PerfConfig
 from helpers.profiler import Profiler
-from helpers.test_config import BuildMode, TestConfig
+from helpers.test_config import TestConfig, TestMode
 
 
 def assert_marker(
@@ -31,23 +31,23 @@ def assert_marker(
 @skip_for_coverage
 @skip_for_blackhole
 @skip_for_wormhole
-def test_profiler_primitives():
+def test_profiler_primitives(workers_tensix_coordinates):
 
     # This is a test of the profiler itself and doesn't use configuration.run method at all,
     # therefore it can't levarege default producer-consumer separation of compile and execute phases.
     # In order to avoid compiling the test elf twice we run it in only one of two phases - the consumer/execute phase,
     # where everything is done.
-    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+    if TestConfig.MODE == TestMode.PRODUCE:
         pytest.skip()
 
     configuration = PerfConfig("sources/profiler_primitives_test.cpp")
 
     configuration.generate_variant_hash()
     configuration.build_elfs()
-    configuration.run_elf_files()
+    configuration.run_elf_files(workers_tensix_coordinates)
 
     runtime = Profiler.get_data(
-        configuration.test_name, configuration.variant_id, TestConfig.TENSIX_LOCATION
+        configuration.test_name, configuration.variant_id, workers_tensix_coordinates
     )
 
     # Get metadata to look up marker IDs (stable across build environments)

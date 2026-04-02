@@ -61,11 +61,7 @@ def generate_input_dimensions(max_size: int) -> list[tuple[int, int]]:
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
     dimensions=generate_input_dimensions(25),
 )
-def test_fast_tilize(
-    formats,
-    dest_acc,
-    dimensions,
-):
+def test_fast_tilize(formats, dest_acc, dimensions, workers_tensix_coordinates):
 
     input_height, input_width = dimensions
 
@@ -108,7 +104,7 @@ def test_fast_tilize(
         compile_time_formats=True,
     )
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     assert len(res_from_L1) == len(golden_tensor)
 

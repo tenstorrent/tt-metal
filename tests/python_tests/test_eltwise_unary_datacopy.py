@@ -97,11 +97,7 @@ def get_valid_num_faces_datacopy(tilize):
     input_dimensions=[[64, 64], [32, 256], [128, 256]],
 )
 def test_unary_datacopy(
-    formats,
-    dest_acc,
-    num_faces,
-    tilize,
-    input_dimensions,
+    formats, dest_acc, num_faces, tilize, input_dimensions, workers_tensix_coordinates
 ):
 
     # skip if Fp8_e4m3 for wormhole
@@ -176,7 +172,7 @@ def test_unary_datacopy(
         unpack_to_dest=unpack_to_dest,
     )
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     assert len(res_from_L1) == len(golden_tensor)
 
@@ -206,11 +202,7 @@ def test_unary_datacopy(
     input_dimensions=[[32, 32], [64, 64], [32, 256], [128, 256]],
 )
 def test_unary_datacopy_bfp4_b(
-    formats,
-    dest_acc,
-    num_faces,
-    tilize,
-    input_dimensions,
+    formats, dest_acc, num_faces, tilize, input_dimensions, workers_tensix_coordinates
 ):
 
     # skip if Fp8_e4m3 for wormhole
@@ -289,7 +281,7 @@ def test_unary_datacopy_bfp4_b(
         unpack_to_dest=unpack_to_dest,
     )
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     assert len(res_from_L1) == len(golden_tensor)
 

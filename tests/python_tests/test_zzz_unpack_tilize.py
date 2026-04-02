@@ -42,10 +42,7 @@ from helpers.utils import passed_test
     ),
     num_faces=[2, 4],
 )
-def test_unpack_tilize_float(
-    formats,
-    num_faces,
-):
+def test_unpack_tilize_float(formats, num_faces, workers_tensix_coordinates):
     if (
         formats.input_format == DataFormat.Fp8_e4m3
         or formats.output_format == DataFormat.Fp8_e4m3
@@ -60,7 +57,7 @@ def test_unpack_tilize_float(
     if formats.output_format == DataFormat.Bfp8_b and num_faces != FACES_PER_TILE:
         pytest.skip("Bfp8_b output format only works with num_faces=4")
 
-    unpack_tilize(formats, num_faces=num_faces)
+    unpack_tilize(formats, workers_tensix_coordinates, num_faces=num_faces)
 
 
 @parametrize(
@@ -69,12 +66,11 @@ def test_unpack_tilize_float(
     num_faces=[2, 4],
 )
 def test_unpack_tilize_float32_lossless(
-    formats,
-    dest_acc,
-    num_faces,
+    formats, dest_acc, num_faces, workers_tensix_coordinates
 ):
     unpack_tilize(
         formats,
+        workers_tensix_coordinates,
         unpack_to_dest=True,
         validate_lossless=True,
         dest_acc=dest_acc,
@@ -86,23 +82,20 @@ def test_unpack_tilize_float32_lossless(
     formats=input_output_formats([DataFormat.Int32]),
     num_faces=[2, 4],
 )
-def test_unpack_tilize_int(
-    formats,
-    num_faces,
-):
-    unpack_tilize(formats, unpack_to_dest=True, num_faces=num_faces)
+def test_unpack_tilize_int(formats, num_faces, workers_tensix_coordinates):
+    unpack_tilize(
+        formats, workers_tensix_coordinates, unpack_to_dest=True, num_faces=num_faces
+    )
 
 
 @parametrize(
     formats=input_output_formats([DataFormat.Int8]),
     num_faces=[2, 4],
 )
-def test_unpack_tilize_int8(
-    formats,
-    num_faces,
-):
+def test_unpack_tilize_int8(formats, num_faces, workers_tensix_coordinates):
     unpack_tilize(
         formats,
+        workers_tensix_coordinates,
         unpack_to_dest=False,
         dest_acc=DestAccumulation.Yes,
         num_faces=num_faces,
@@ -111,6 +104,7 @@ def test_unpack_tilize_int8(
 
 def unpack_tilize(
     formats,
+    workers_tensix_coordinates,
     unpack_to_dest=False,
     validate_lossless=False,
     dest_acc=None,
@@ -161,7 +155,7 @@ def unpack_tilize(
         **({"dest_acc": dest_acc} if dest_acc is not None else {}),
     )
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     # When num_faces < 4, hardware returns full tiles (1024 elements each) but only
     # the first (num_faces * 256) elements per tile contain valid data

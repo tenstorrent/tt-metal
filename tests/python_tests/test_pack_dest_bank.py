@@ -92,6 +92,7 @@ def test_pack_dest_bank(
     tilize,
     dest_index,
     input_dimensions,
+    workers_tensix_coordinates,
 ):
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -154,7 +155,7 @@ def test_pack_dest_bank(
         unpack_to_dest=unpack_to_dest,
     )
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     assert len(res_from_L1) == len(golden_tensor)
 

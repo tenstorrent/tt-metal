@@ -27,9 +27,7 @@ from helpers.utils import passed_test
         ]
     ),
 )
-def test_unpack_untilize(
-    formats,
-):
+def test_unpack_untilize(formats, workers_tensix_coordinates):
     formats = formats[0]
     if formats.input_format == DataFormat.Bfp8_b:
         pytest.skip(
@@ -77,7 +75,7 @@ def test_unpack_untilize(
         dest_acc=DestAccumulation.Yes,
     )
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     assert len(res_from_L1) == len(
         golden_tensor

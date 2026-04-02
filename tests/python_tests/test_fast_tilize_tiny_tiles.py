@@ -40,9 +40,7 @@ WIDTHS = [
     dimensions=[(1, w) for w in WIDTHS],
 )
 def test_fast_tilize_tiny_tiles(
-    formats,
-    dest_acc,
-    dimensions,
+    formats, dest_acc, dimensions, workers_tensix_coordinates
 ):
 
     if (
@@ -111,7 +109,7 @@ def test_fast_tilize_tiny_tiles(
         compile_time_formats=True,
     )
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     # Verify the kernel wrote a contiguous block of tiles to L1 (no gaps
     # from incorrect bank-switch addressing). This confirms the packer's
@@ -121,7 +119,7 @@ def test_fast_tilize_tiny_tiles(
     )
     expected_bytes = tile_size_actual * tile_cnt_A
     raw_res = read_from_device(
-        TestConfig.TENSIX_LOCATION,
+        workers_tensix_coordinates,
         configuration.variant_stimuli.buf_res_addr,
         num_bytes=expected_bytes,
     )
