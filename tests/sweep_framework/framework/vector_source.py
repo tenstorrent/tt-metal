@@ -237,7 +237,7 @@ class VectorExportSource(VectorSource):
             profile = resolve_active_profile()
             logger.info(f"Using execution capability profile '{profile.name}' for vector filtering")
             return profile
-        except RuntimeError as e:
+        except Exception as e:
             logger.warning(f"Execution capability profile selection skipped: {e}")
             return None
 
