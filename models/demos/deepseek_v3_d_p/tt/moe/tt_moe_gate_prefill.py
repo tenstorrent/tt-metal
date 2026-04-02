@@ -279,16 +279,22 @@ class TtMoEGatePrefill(LightweightModule):
 
     def _device_grouped_gate(self, logits: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run deepseek_grouped_gate on device."""
-        return ttnn.experimental.deepseek_grouped_gate(
-            logits,
-            self.bias,
+        logits_f32 = ttnn.typecast(logits, ttnn.float32)
+        bias_f32 = ttnn.typecast(self.bias, ttnn.float32)
+        ttnn_scores, ttnn_top_k_experts_indices = ttnn.experimental.deepseek_prefill.moe_grouped_topk(
+            logits_f32,
+            bias_f32,
             n_groups=self.config.n_expert_groups,
             summed_experts_per_group=self.config.n_expert_groups // self.config.n_limited_groups,
             topk_groups=self.config.n_limited_groups,
             n_activated_experts=self.config.n_activated_experts,
             route_scale=self.config.route_scale,
+            stable_sort=True,
             epsilon=1e-20,
         )
+        ttnn.deallocate(logits_f32)
+        ttnn.deallocate(bias_f32)
+        return ttnn_scores, ttnn_top_k_experts_indices
 
     def _host_grouped_gate(self, host_logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Run grouped_gate_golden on host. Returns (indices, scores)."""

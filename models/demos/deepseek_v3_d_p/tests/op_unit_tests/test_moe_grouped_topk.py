@@ -48,17 +48,16 @@ def generate_distinct_sigmoid_inputs(shape, min_val=0.05, max_val=0.95, dtype=to
     num_rows = torch.tensor(shape[:-1]).prod().item()
 
     num_candidates = row_size * 4
-    candidates = torch.linspace(min_val, max_val, num_candidates, dtype=torch.float32)
-    candidates_bf16 = candidates.to(dtype)
-    unique_bf16 = candidates_bf16.unique()
+    candidates = torch.linspace(min_val, max_val, num_candidates, dtype=dtype)
+    unique = candidates.unique()
 
-    if unique_bf16.numel() < row_size:
+    if unique.numel() < row_size:
         raise ValueError(f"Cannot generate {row_size} distinct sigmoid outputs in [{min_val}, {max_val}].")
 
     all_rows = []
     for _ in range(num_rows):
-        perm = torch.randperm(unique_bf16.numel())[:row_size]
-        sigmoid_outputs = unique_bf16[perm]
+        perm = torch.randperm(unique.numel())[:row_size]
+        sigmoid_outputs = unique[perm]
         sigmoid_outputs_f32 = sigmoid_outputs.float()
         row_inputs = torch.log(sigmoid_outputs_f32 / (1 - sigmoid_outputs_f32))
         all_rows.append(row_inputs)
