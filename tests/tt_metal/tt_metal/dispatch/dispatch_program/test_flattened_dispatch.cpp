@@ -297,4 +297,54 @@ TEST_F(FlattenedRandomProgramFixture, FlattenedDispatch_RandomPrograms) {
     }
 }
 
+// Perf test: measure eager dispatch latency with and without flattened path.
+// Run with: TT_METAL_ENABLE_FLATTENED_DISPATCH=1 (or 0) and compare printed us/dispatch.
+// This measures host-side dispatch time only (kernel runtime is ~0 cycles).
+TEST_F(UnitMeshCQSingleCardProgramFixture, FlattenedDispatch_PerfMeasurement) {
+    auto& mesh_device = devices_[0];
+    CoreRange core_range({0, 0}, {1, 1});
+    Program program = Program();
+    auto [kid, l1_addr] = create_add_two_ints_program(program, mesh_device, core_range);
+    set_add_args(program, kid, core_range, 1, 2);
+
+    // Add some CBs to make it more representative
+    for (uint32_t cb_idx = 0; cb_idx < 8; cb_idx++) {
+        CircularBufferConfig config =
+            CircularBufferConfig(2048, {{cb_idx, tt::DataFormat::Float16_b}}).set_page_size(cb_idx, 64);
+        CreateCircularBuffer(program, core_range, config);
+    }
+
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range_, std::move(program));
+
+    auto& cq = mesh_device->mesh_command_queue();
+
+    // Warmup (100 dispatches — builds PCS, flattened cache, JIT compiles)
+    for (int i = 0; i < 100; i++) {
+        distributed::EnqueueMeshWorkload(cq, workload, false);
+    }
+    distributed::Finish(cq);
+
+    // Timed run (1000 dispatches)
+    constexpr int N = 1000;
+    auto start = std::chrono::high_resolution_clock::now();
+    for (int i = 0; i < N; i++) {
+        distributed::EnqueueMeshWorkload(cq, workload, false);
+    }
+    distributed::Finish(cq);
+    auto end = std::chrono::high_resolution_clock::now();
+
+    double total_us = std::chrono::duration<double, std::micro>(end - start).count();
+    double per_dispatch_us = total_us / N;
+
+    log_info(
+        tt::LogTest,
+        "Eager dispatch perf: {:.1f} us/dispatch (total {:.1f} ms for {} dispatches)",
+        per_dispatch_us,
+        total_us / 1000.0,
+        N);
+
+    // No assertion on timing — just reporting. Compare with/without TT_METAL_ENABLE_FLATTENED_DISPATCH.
+}
+
 }  // namespace tt::tt_metal
