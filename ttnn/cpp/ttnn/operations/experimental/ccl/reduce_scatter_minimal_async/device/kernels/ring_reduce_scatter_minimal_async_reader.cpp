@@ -246,22 +246,24 @@ void kernel_main() {
                             }
                         }
                         for (uint32_t j = 0; j < tiles_to_read; ++j) {
+                            auto input_tile_id = get_next_input_tile_id();
+                            auto interm_tile_id = get_next_interm_tile_id();
+                            auto output_tile_id = get_next_output_tile_id();
+
                             // input_tensor from reader -> compute or writer
-                            uint64_t noc_read_addr = input_tensor_accessor.get_noc_addr(get_next_input_tile_id());
+                            uint64_t noc_read_addr = input_tensor_accessor.get_noc_addr(input_tile_id);
                             noc_async_read(noc_read_addr, l1_write_addr, page_size);
                             l1_write_addr += page_size;
 
                             if (reduce_interm) {
                                 // interm_tensor from reader -> compute
-                                uint64_t interm_noc_read_addr =
-                                    interm_tensor_accessor.get_noc_addr(get_next_interm_tile_id());
+                                uint64_t interm_noc_read_addr = interm_tensor_accessor.get_noc_addr(interm_tile_id);
                                 noc_async_read(interm_noc_read_addr, interm_l1_write_addr, page_size);
                                 interm_l1_write_addr += page_size;
 
                                 if (reduce_output) {
                                     // output_tensor from reader -> compute
-                                    uint64_t output_noc_read_addr =
-                                        output_tensor_accessor.get_noc_addr(get_next_output_tile_id());
+                                    uint64_t output_noc_read_addr = output_tensor_accessor.get_noc_addr(output_tile_id);
                                     noc_async_read(output_noc_read_addr, interm2_l1_write_addr, page_size);
                                     interm2_l1_write_addr += page_size;
                                 }

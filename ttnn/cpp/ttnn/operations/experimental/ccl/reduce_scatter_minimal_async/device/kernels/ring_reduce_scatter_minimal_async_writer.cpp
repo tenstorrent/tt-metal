@@ -347,12 +347,14 @@ void kernel_main() {
                                     std::min(tiles_to_read - j, num_tiles_to_write_per_packet);
 
                                 for (uint32_t k = 0; k < tiles_to_put_in_current_packet; ++k) {
+                                    auto interm_tile_id = get_next_interm_tile_id();
+                                    auto output_tile_id = get_next_output_tile_id();
                                     if (write_to_interm) {
                                         remote_noc_addrs[k] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                                            interm_tensor_accessor, get_next_interm_tile_id(), 0);
+                                            interm_tensor_accessor, interm_tile_id, 0);
                                     } else {
                                         remote_noc_addrs[k] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                                            output_tensor_accessor, get_next_output_tile_id(), 0);
+                                            output_tensor_accessor, output_tile_id, 0);
                                     }
                                 }
 
@@ -374,9 +376,9 @@ void kernel_main() {
                                         l1_read_addr,
                                         NocUnicastCommandHeader{remote_noc_addrs[0]});
                                 }
+                                noc_async_writes_flushed();
                                 l1_read_addr += page_size * tiles_to_put_in_current_packet;
                                 tiles_read += tiles_to_put_in_current_packet;
-                                noc_async_writes_flushed();
                             }
                             cb_pop_front(cb_out, tile_granularity);
 
@@ -423,11 +425,13 @@ void kernel_main() {
                             cb_wait_front(cb_out, tile_granularity);
                             size_t l1_read_addr = get_read_ptr(cb_out);
                             for (uint32_t j = 0; j < tiles_to_read; ++j) {
+                                auto interm_tile_id = get_next_interm_tile_id();
+                                auto output_tile_id = get_next_output_tile_id();
                                 uint64_t local_noc_addr;
                                 if (write_to_interm) {
-                                    local_noc_addr = interm_tensor_accessor.get_noc_addr(get_next_interm_tile_id());
+                                    local_noc_addr = interm_tensor_accessor.get_noc_addr(interm_tile_id);
                                 } else {
-                                    local_noc_addr = output_tensor_accessor.get_noc_addr(get_next_output_tile_id());
+                                    local_noc_addr = output_tensor_accessor.get_noc_addr(output_tile_id);
                                 }
                                 noc_async_write(l1_read_addr, local_noc_addr, page_size);
                                 l1_read_addr += page_size;
@@ -460,6 +464,7 @@ void kernel_main() {
         }
 
         // 2. mcast half batch ready semaphore
+        // TODO wait for opposite cores as well
         uint64_t batch_ready_sem_noc_addr_in_pkt = safe_get_noc_addr(this_core_x, this_core_y, batch_ready_sem, 0);
         fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
             fabric_direction_connection,

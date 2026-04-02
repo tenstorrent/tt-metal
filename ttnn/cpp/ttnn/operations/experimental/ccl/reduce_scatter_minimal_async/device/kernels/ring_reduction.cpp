@@ -165,6 +165,6 @@ void kernel_main() {
                     is_even_chunk = !is_even_chunk;
                 }  // while tiles_read
             }  // for slice_C
-        }  // for ring_size
+        }  // for num_iters
     }  // for input_tensor_B
 }
