@@ -21,7 +21,14 @@ from models.demos.deepseek_v3_b1.demo.weight_provider import (
     SyntheticWeightProvider,
     WeightProvider,
 )
-from models.demos.deepseek_v3_b1.model import TOKEN_ID_BYTES, DecodeResult, DeepSeekV3, page_size_bytes, to_spec_input
+from models.demos.deepseek_v3_b1.model import (
+    TOKEN_ID_BYTES,
+    DecodeResult,
+    DeepSeekV3,
+    TokenType,
+    page_size_bytes,
+    to_spec_input,
+)
 
 
 class ModelPipeline:
@@ -212,6 +219,7 @@ class ModelPipeline:
             print(f"Token 0 Pos: {result.token_0_pos}, Token 1 Pos: {result.token_1_pos}")
             print(f"Token 0 Type: {result.token_0_type}, Token 1 Type: {result.token_1_type}")
             print(f"Token 0: {result.token_0}, Token 1: {result.token_1}")
+            print(f"Slot ID: {result.slot_id}")
 
             self._write_spec_pair(
                 result.token_0,

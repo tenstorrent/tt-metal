@@ -36,7 +36,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.demo.stage import ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
 
 # Token IDs are int32 over the socket; payload size per step is B * TOKEN_ID_BYTES.
 TOKEN_ID_BYTES: int = 4
@@ -84,6 +83,7 @@ class DecodeResult:
     token_1: int | None = None
     token_1_type: int | None = None
     token_1_pos: int | None = None
+    slot_id: int | None = None
 
 
 def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
@@ -96,6 +96,7 @@ def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
         token_1=int(raw[OutputField.TOKEN_1].item()),
         token_1_type=int(raw[OutputField.TOKEN_1_TYPE].item()),
         token_1_pos=int(raw[OutputField.TOKEN_1_POS].item()),
+        slot_id=int(raw[InputField.USER_ID].item()),
     )
 
 
@@ -105,7 +106,7 @@ def to_spec_input(
     """Build a PCIe-aligned input page carrying (token_id, user_id, position_id)."""
     torch_padded = torch.zeros(1, page_size_datums, dtype=torch.int32)
     torch_padded[0, InputField.TOKEN_ID] = token_id
-    torch_padded[0, InputField.TOKEN_TYPE] = token_type.value
+    torch_padded[0, InputField.TOKEN_TYPE] = token_type
     torch_padded[0, InputField.USER_ID] = user_id
     torch_padded[0, InputField.POSITION_ID] = position_id
     return ttnn.from_torch(torch_padded, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -177,7 +178,7 @@ class DeepSeekV3:
         self._tensor_size_bytes: int = align_up(payload_bytes, PCIE_PAGE_ALIGNMENT_BYTES)
         self._page_size_datums: int = self._tensor_size_bytes // TOKEN_ID_BYTES
         self._position: int = 0
-        self._output_buffer: ttnn.Tensor = create_output_buffer(ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES // 4)
+        self._output_buffer: ttnn.Tensor = create_output_buffer(self._page_size_datums)
         logger.debug(f"Creating DeepSeekV3 model with batch size {batch_size}")
 
     def prefill(self, prompt_tokens: list[ttnn.Tensor]) -> list[DecodeResult]:
@@ -254,7 +255,7 @@ class DeepSeekV3:
 
     def write_input(self, token_id: int, user_id: int, position_id: int, token_type: TokenType) -> None:
         """Write a single spec-decode input page (token_id, user_id, position_id) to the pipeline."""
-        input_tensor = to_spec_input(token_id, user_id, position_id, self._page_size_datums)
+        input_tensor = to_spec_input(token_id, user_id, position_id, self._page_size_datums, token_type)
         self._write_fn(input_tensor)
 
     def read_result(self) -> DecodeResult:

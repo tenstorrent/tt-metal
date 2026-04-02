@@ -510,15 +510,7 @@ def create_decoder_block_tensors(
     sdpa_mem = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_input_output_shard_spec
     )
-    ttnn_sdpa_output = ttnn.from_torch(
-        torch.zeros((SDPA_INPUT_NUM_CORES * HEADS_PER_ROW, QNOPE_OUT_DIM), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=sdpa_mem,
-        mesh_mapper=mesh_mapper,
-        tile=sdpa_tile,
-    )
+    ttnn_sdpa_output = None
 
     # ── Post-SDPA tensors ──
     a_tile = ttnn.Tile([M, 32])
@@ -543,15 +535,7 @@ def create_decoder_block_tensors(
         memory_config=output_mem_config,
         mesh_mapper=shard_mesh_mapper,
     )
-    attn_ref_output = ttnn.from_torch(
-        mesh_output_torch,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=output_mem_config,
-        mesh_mapper=shard_mesh_mapper,
-    )
+    attn_ref_output = None
 
     # ── SDPA worker/forwarder tensors ──
     sdpa_output_cores = FlashMLADecode.ProgramConfig.grid.output_cores(0, NUM_SDPA_WORKERS)

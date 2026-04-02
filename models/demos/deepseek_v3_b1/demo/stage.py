@@ -27,6 +27,7 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     DeepSeekV3MTPWeights,
 )
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import build_broadcast_test_inputs
+from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
 
 # Global constants used by multiple stage kinds (and exported to pipeline/cli)
 TOKEN_PAGE_SIZE_BYTES = 64
@@ -848,7 +849,7 @@ class BaseLMHeadStage(StageKind):
         # MTP output tensor allocation
         ttnn_mtp_output = None
         if self._enable_mtp:
-            compute_cores = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+            compute_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, ttnn.NOC.NOC_0)
             compute_core_grid = ttnn.CoreRangeSet(
                 [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in compute_cores]
             )

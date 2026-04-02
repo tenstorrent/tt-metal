@@ -268,9 +268,11 @@ def create_sp4_pipeline_configuration(
     fwd_payload = PassthroughPayload.ACTIVATION_W_TOKEN_META if enable_mtp else PassthroughPayload.TOKEN
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
-        return EmbeddingStage(
-            weight_provider.load_embedding(device, True),
-            d2h_page_size=ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES if enable_mtp else None,
+        return SpecLMHeadWithEmbeddingStage(
+            weights=weight_provider.load_lm_head(device),
+            embedding_weights=weight_provider.load_embedding(device),
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
         )
 
     def stage_62(device: ttnn.MeshDevice) -> StageKind:
@@ -281,6 +283,7 @@ def create_sp4_pipeline_configuration(
             persistent_mode=persistent_mode,
             mtp_weights=mtp_weights,
             send_mtp_output_downstream=enable_mtp,
+            embedding_weights=weight_provider.load_embedding(device),
         )
 
     def _dense_stage(layer_id: int):
@@ -307,7 +310,7 @@ def create_sp4_pipeline_configuration(
         3: _dense_stage(dense_ids[2]),
         **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 62)},
         62: stage_62,
-        63: lambda d: PassthroughStage(fwd_payload),
+        63: _decoder_stage(61),
     }
     return PipelineConfiguration(stage_factories)
 
@@ -495,7 +498,7 @@ def create_single_pod_spec_decode_pipeline_configuration(
             persistent_mode=persistent_mode,
         )
 
-    def stage_15(device: ttnn.MeshDevice) -> StageKind:
+    def stage_14(device: ttnn.MeshDevice) -> StageKind:
         mtp_weights = weight_provider.load_mtp(device) if enable_mtp else None
         return BaseLMHeadStage(
             weights=weight_provider.load_lm_head(device),
@@ -525,7 +528,11 @@ def create_single_pod_spec_decode_pipeline_configuration(
 
     stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]] = {
         0: stage_0,
-        **{i: lambda d: PassthroughStage(fwd_payload) for i in range(1, 15)},
-        15: stage_15,
+        1: _dense_stage(dense_ids[0]),
+        2: _dense_stage(dense_ids[1]),
+        3: _dense_stage(dense_ids[2]),
+        **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 14)},
+        14: stage_14,
+        15: _decoder_stage(61),
     }
     return PipelineConfiguration(stage_factories)
