@@ -12,6 +12,8 @@ Unlike TtSharedExpert, this module:
 - Each device holds weights for `experts_per_chip` local experts
 """
 
+from typing import Optional
+
 import torch
 from loguru import logger
 from tracy import signpost
@@ -246,20 +248,29 @@ class TtRoutedExpert(LightweightModule):
         return tt_weight
 
     def _expert_ffn(
-        self, x: ttnn.Tensor, gate_proj: ttnn.Tensor, up_proj: ttnn.Tensor, down_proj: ttnn.Tensor, out: ttnn.Tensor
+        self,
+        x: ttnn.Tensor,
+        gate_proj: ttnn.Tensor,
+        up_proj: ttnn.Tensor,
+        down_proj: ttnn.Tensor,
+        out: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
         Single expert FFN computation.
 
         Args:
-            x: Input tensor (1, tokens, emb_dim)
+            x: Input tensor. Shape is (1, tokens, emb_dim) for the Blackhole path
+                (after ttnn.narrow) or (tokens, emb_dim) for the Wormhole path
+                (after tensor indexing).
             gate_proj: Gate projection weight (emb_dim, hidden_dim)
             up_proj: Up projection weight (emb_dim, hidden_dim)
             down_proj: Down projection weight (hidden_dim, emb_dim)
-            out: Output tensor for matmul result (1, tokens, emb_dim)
+            out: Optional pre-allocated output tensor for in-place matmul result.
+                When provided, the final matmul writes directly into this buffer.
+                When None, a new tensor is allocated for the output.
 
         Returns:
-            Output tensor (1, tokens, emb_dim)
+            Output tensor matching the shape of ``x``.
         """
         # gate_out = x @ gate_proj
         gate_out = ttnn.matmul(
@@ -280,7 +291,7 @@ class TtRoutedExpert(LightweightModule):
             down_proj,
             program_config=self.down_program_config,
             compute_kernel_config=self.compute_kernel_config,
-            optional_output_tensor=out,
+            **({"optional_output_tensor": out} if out is not None else {}),
         )
 
         return output
@@ -323,7 +334,7 @@ class TtRoutedExpert(LightweightModule):
             signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
 
             # Extract tokens for this expert
-            # Shape: (max_tokens, emb_dim)
+            # Shape: (1, max_tokens, emb_dim)
             tokens = ttnn.narrow(dispatched_buffer, dim=0, start=local_expert, length=1)
             logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
 
