@@ -132,7 +132,7 @@ def test_kv_chunk_address_table(mesh_device):
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("seq_len", [2 * 1024, 100 * 1024], ids=["seq2k", "seq100k"])
+@pytest.mark.parametrize("seq_len", [3 * 1024, 100 * 1024], ids=["seq3k", "seq100k"])
 def test_kv_cache_address_table(mesh_device, seq_len):
     sp_axis = 0
     kvpe_cache_head_dim = 576
@@ -228,20 +228,6 @@ def test_kv_cache_address_table(mesh_device, seq_len):
             f"Token positions for device group index: {device_group_idx_per_row[row]} are {device_position_indices_low_strip[row]} and {device_position_indices_high_strip[row]}"
         )
 
-    # this is a hypotetical representation of noc address diffs between same page on different dram banks
-    # eg. page 0 would be base + 0x0000000, page 1 would be base + 0x10000000, etc. Page 8 would wrap around to base + page_size_in_bytes +  0x0000000, etc
-    # would need something like tensor.get_page_noc_addr(page_idx) ?
-    hypothetical_bank_offsets = [
-        0x00000000,  # Bank 0
-        0x10000000,  # Bank 1
-        0x20000000,  # Bank 2
-        0x30000000,  # Bank 3
-        0x40000000,  # Bank 4
-        0x50000000,  # Bank 5
-        0x60000000,  # Bank 6
-        0x70000000,  # Bank 7
-    ]
-
     layer = 0
     slot = 0
     current_position = 0  # Must be chunk-aligned
@@ -261,7 +247,8 @@ def test_kv_cache_address_table(mesh_device, seq_len):
         for chunk in range(chunks_per_device_group):
             location = ttnn.experimental.disaggregation.KvCacheLocation()
 
-            noc_addr = dram_bank_0_addr + hypothetical_bank_offsets[curr_bank_id] + curr_bank_offset
+            # This needs proper handling in KvCacheLocation(), just add it up atm
+            noc_addr = dram_bank_0_addr + curr_bank_id + curr_bank_offset
             location.noc_addr = noc_addr
             location.size_bytes = CHUNK_SIZE_BYTES
             location.device_group_index = group_idx
