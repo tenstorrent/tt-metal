@@ -182,8 +182,8 @@ The following metrics are automatically computed from raw counters. Each metric 
 
 *Pipeline Efficiency*
 
-- **Packer Efficiency (%)**: Fraction of packer busy cycles where the destination register read was available. 100% means the packer never waited for data from the math unit.
-- **Math-to-Pack Handoff Efficiency (%)**: How quickly math results reach the packer. Values >100% indicate math completes faster than the packer consumes.
+- **Packer Efficiency (%)**: On Wormhole: fraction of packer busy cycles where dest data was available (``PACKER_DEST_READ_AVAILABLE / PACKER_BUSY``). On Blackhole: fraction of dest read requests that were granted (``DEST_READ_GRANTED_1 / PACKER_DEST_READ_AVAILABLE``). 100% means the packer never waited for data.
+- **Math-to-Pack Handoff Efficiency (%)**: On Wormhole: how quickly math results reach the packer (``AVAILABLE_MATH / PACKER_BUSY``). On Blackhole: fraction of cycles the math pipeline was not stalled by the scoreboard (``AVAILABLE_MATH / ref_cnt``), since ``PACKER_BUSY`` is inactive.
 - **Unpacker-to-Math Data Flow (%)**: Ratio of source register write availability to unpacker busy time. Higher means data flows smoothly from unpack to math.
 
 *Thread Analysis*
@@ -210,7 +210,7 @@ The following metrics are automatically computed from raw counters. Each metric 
 - **Fidelity Phase Overhead (%)**: Cycles spent on HiFi fidelity phases. Higher fidelity = higher accuracy but more overhead.
 - **SrcA Write Port Blocked Rate (%)**: Cycles where DMA to srcA was blocked by overwrite protection.
 - **Dest Read Backpressure (%)**: Cycles where destination register read was requested but not granted.
-- **Math Dest Write Port Stall Rate (%)**: Cycles where math was stalled by destination register write port contention.
+- **Math Dest Write Port Stall Rate (%)**: Cycles where math was stalled by destination register write port contention. Wormhole only — on Blackhole, ``MATH_NOT_STALLED_DEST_WR_PORT`` is inactive and this metric is hidden.
 - **Math Scoreboard Stall Rate (%)**: Cycles where math was stalled by FPU data hazard scoreboard.
 
 *Instruction Availability*
@@ -239,7 +239,7 @@ The following metrics are automatically computed from raw counters. Each metric 
 *L1 Backpressure*
 
 - **NOC Ring 0/1 Outgoing/Incoming Backpressure (%)**: Fraction of NOC transaction cycles where L1 was not ready. Higher = more contention.
-- **L1 Unpacker/Packer Port Backpressure (%)**: L1 port contention for unpacker and packer.
+- **L1 Unpacker/Packer Port Backpressure (%)**: L1 port contention for unpacker and packer. On Blackhole, unpacker backpressure may be suppressed if the req/grant counter semantics differ (grant > req on some cores).
 
 *L1 Composite Metrics*
 
@@ -256,7 +256,7 @@ The following metrics are automatically computed from raw counters. Each metric 
 
 These metrics depend on hardware signals inactive on Blackhole and are automatically hidden from BH output.
 
-- **Math Pipeline Utilization (%)**: Math instruction flow efficiency (MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE).
+- **Math Pipeline Utilization (%)**: Math instruction flow efficiency (MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE). On Blackhole, falls back to ``FIDELITY_PHASE_STALLS / ref_cnt`` since ``MATH_INSTRN_STARTED`` is inactive.
 - **Math Src Data Ready Rate (%)**: Cycles where math was not blocked by source data.
 - **SrcB Write Actual Efficiency (%)**: Fraction of srcB write attempts that succeeded.
 - **HiFi2/LoFi/HiFi4 Instrn Rate (%)**: Fraction of math instructions at each fidelity level.
@@ -270,7 +270,7 @@ These metrics depend on hardware signals inactive on Blackhole and are automatic
 
 **Architecture Differences**
 
-Wormhole collects 172 raw counters and computes 86 derived metrics. Blackhole collects 190 raw counters (126 Tensix + 64 ERISC) and computes 74 derived metrics. The difference is due to TDMA signals that are inactive on Blackhole (``PACK_COUNT=1``, ``o_math_instrnbuf_rden`` tied off). Metrics that depend on dead signals are automatically hidden from the Blackhole output. Blackhole has additional L1 mux positions (3 extra for Tensix, 3 for Ethernet) providing deeper memory visibility.
+Wormhole collects 172 raw counters and computes 86 derived metrics. Blackhole collects 140 raw counters (after filtering 15 RTL-dead signals) and computes 74 derived metrics. The difference is due to TDMA signals inactive on Blackhole (``PACK_COUNT=1``, ``o_math_instrnbuf_rden`` tied off). Metrics that depend on dead signals are automatically hidden from BH output; three metrics (Packer Efficiency, Math Pipeline Utilization, Math-to-Pack Handoff) use BH-specific fallback formulas. Blackhole has additional L1 mux positions (3 extra for Tensix, 3 for Ethernet) providing deeper memory visibility.
 
 For detailed hardware counter documentation including register maps and signal definitions, see ``tech_reports/PerfCounters/perf-counters.md``.
 

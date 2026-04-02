@@ -1061,9 +1061,10 @@ def _enrich_ops_from_device_logs(
 
         # Check if perf counters data is available
         risc_data = device_data["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]
+        device_arch = device_data["deviceInfo"].get("arch", "")
         perf_counter_df = None
         if "events" in risc_data and "perf_counter_data" in risc_data["events"]:
-            perf_counter_df = extract_perf_counters(risc_data["events"]["perf_counter_data"])
+            perf_counter_df = extract_perf_counters(risc_data["events"]["perf_counter_data"], arch=device_arch)
 
             # Print statistics for captured counter data
             if perf_counter_df is not None and not perf_counter_df.empty:
@@ -1262,11 +1263,50 @@ def _enrich_ops_from_device_logs(
             # Calculate per-core efficiency metrics
             unpack0_eff = (srca_write / unpack0_busy * 100).replace([float("inf"), -float("inf")], nan)
             unpack1_eff = (srcb_write / unpack1_busy * 100).replace([float("inf"), -float("inf")], nan)
-            pack_eff = (packer_dest_read / packer_busy * 100).replace([float("inf"), -float("inf")], nan)
-            math_pipe_util = (math_instrn_started / math_instrn_available * 100).replace(
-                [float("inf"), -float("inf")], nan
-            )
-            math_pack_eff = (available_math / packer_busy * 100).clip(upper=100).replace([float("inf"), -float("inf")], nan)
+
+            # Packer Efficiency: On WH, PACKER_DEST_READ_AVAILABLE / PACKER_BUSY.
+            # On BH, PACKER_BUSY is always 0 (packer completes within gated clock window).
+            # Fallback: use DEST_READ_GRANTED_1 / PACKER_DEST_READ_AVAILABLE which measures
+            # what fraction of dest read requests were granted (same signal on silicon,
+            # confirmed both read 3968 on matmul = 0% backpressure = 100% efficiency).
+            if packer_busy is not None and packer_busy.sum() > 0:
+                pack_eff = (packer_dest_read / packer_busy * 100).replace([float("inf"), -float("inf")], nan)
+            elif has_counter("DEST_READ_GRANTED_1"):
+                dest_granted_1 = get_counter_series("DEST_READ_GRANTED_1")
+                pack_eff = (dest_granted_1 / packer_dest_read * 100).replace([float("inf"), -float("inf")], nan)
+            else:
+                pack_eff = pd.Series(dtype=float)
+
+            # Math Pipeline Utilization: On BH, MATH_INSTRN_STARTED is always 0 (RTL dead).
+            # Fall back to FIDELITY_PHASE_STALLS / ref_cnt (compute_util_metric) which measures
+            # what % of time the math pipeline was actively executing (including HiFi phases).
+            if math_instrn_started is not None and math_instrn_started.sum() > 0:
+                math_pipe_util = (math_instrn_started / math_instrn_available * 100).replace(
+                    [float("inf"), -float("inf")], nan
+                )
+            else:
+                # Use FIDELITY_PHASE_STALLS as a proxy: it counts cycles where
+                # math_instrn_valid & fidelity_phases_ongoing, i.e. math pipeline active.
+                fidelity = get_counter_series("FIDELITY_PHASE_STALLS") if has_counter("FIDELITY_PHASE_STALLS") else None
+                fidelity_ref = get_counter_ref_cnt("FIDELITY_PHASE_STALLS") if has_counter("FIDELITY_PHASE_STALLS") else None
+                if fidelity is not None and fidelity_ref is not None:
+                    math_pipe_util = (fidelity / fidelity_ref * 100).replace([float("inf"), -float("inf")], nan)
+                else:
+                    math_pipe_util = pd.Series(dtype=float)
+
+            # Math-to-Pack Handoff Efficiency: On BH, PACKER_BUSY is always 0.
+            # Fall back to AVAILABLE_MATH / ref_cnt (% of time math not stalled by scoreboard).
+            if packer_busy is not None and packer_busy.sum() > 0:
+                math_pack_eff = (available_math / packer_busy * 100).replace([float("inf"), -float("inf")], nan)
+            elif available_math is not None:
+                avail_ref = get_counter_ref_cnt("AVAILABLE_MATH") if has_counter("AVAILABLE_MATH") else None
+                if avail_ref is not None:
+                    math_pack_eff = (available_math / avail_ref * 100).replace([float("inf"), -float("inf")], nan)
+                else:
+                    math_pack_eff = pd.Series(dtype=float)
+            else:
+                math_pack_eff = pd.Series(dtype=float)
+
             unpack_math_flow = (
                 ((srca_write_avail + srcb_write_avail) / 2) / ((unpack0_busy + unpack1_busy) / 2) * 100
             ).replace([float("inf"), -float("inf")], nan)
@@ -1472,9 +1512,10 @@ def _enrich_ops_from_device_logs(
 
             # Dest read backpressure
             dest_bp = {}
-            if has_counter("PACKER_DEST_READ_AVAILABLE") and has_counter("DEST_READ_GRANTED_0"):
+            dest_grant_name = "DEST_READ_GRANTED_1" if has_counter("DEST_READ_GRANTED_1") else "DEST_READ_GRANTED_0"
+            if has_counter("PACKER_DEST_READ_AVAILABLE") and has_counter(dest_grant_name):
                 req = get_counter_series("PACKER_DEST_READ_AVAILABLE")
-                grant = get_counter_series("DEST_READ_GRANTED_0")
+                grant = get_counter_series(dest_grant_name)
                 ratio = ((req - grant) / req * 100).replace([float("inf"), -float("inf")], nan)
                 grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
                 dest_bp = {
@@ -1488,16 +1529,19 @@ def _enrich_ops_from_device_logs(
             math_dest_wr_stall = {}
             math_scoreboard_stall = {}
             if has_counter("MATH_INSTRN_AVAILABLE") and has_counter("MATH_NOT_STALLED_DEST_WR_PORT"):
-                avail = get_counter_series("MATH_INSTRN_AVAILABLE")
                 unstalled = get_counter_series("MATH_NOT_STALLED_DEST_WR_PORT")
-                ratio = ((avail - unstalled) / avail * 100).replace([float("inf"), -float("inf")], nan)
-                grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
-                math_dest_wr_stall = {
-                    "min": grouped.min().to_dict(),
-                    "median": grouped.median().to_dict(),
-                    "max": grouped.max().to_dict(),
-                    "avg": grouped.mean().to_dict(),
-                }
+                # On BH, MATH_NOT_STALLED_DEST_WR_PORT is always 0 (RTL dead), producing
+                # a bogus 100% stall rate. Only compute when the counter has real data.
+                if unstalled.sum() > 0:
+                    avail = get_counter_series("MATH_INSTRN_AVAILABLE")
+                    ratio = ((avail - unstalled) / avail * 100).replace([float("inf"), -float("inf")], nan)
+                    grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+                    math_dest_wr_stall = {
+                        "min": grouped.min().to_dict(),
+                        "median": grouped.median().to_dict(),
+                        "max": grouped.max().to_dict(),
+                        "avg": grouped.mean().to_dict(),
+                    }
             if has_counter("MATH_INSTRN_AVAILABLE") and has_counter("AVAILABLE_MATH"):
                 avail = get_counter_series("MATH_INSTRN_AVAILABLE")
                 unstalled = get_counter_series("AVAILABLE_MATH")
@@ -1552,14 +1596,24 @@ def _enrich_ops_from_device_logs(
             if has_counter("L1_0_UNPACKER_0") and has_counter("L1_0_UNPACKER_0_GRANT"):
                 req = get_counter_series("L1_0_UNPACKER_0")
                 grant = get_counter_series("L1_0_UNPACKER_0_GRANT")
-                ratio = ((req - grant) / req * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
-                grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
-                l1_unpacker_bp = {
-                    "min": grouped.min().to_dict(),
-                    "median": grouped.median().to_dict(),
-                    "max": grouped.max().to_dict(),
-                    "avg": grouped.mean().to_dict(),
-                }
+                # On BH, the L1 unpacker grant counter measures a different event than
+                # the req counter (grant ~25-45 while req ~8000+, and grant > req on some
+                # cores). The resulting 96-100% backpressure is an artifact of signal
+                # mismatch, not real L1 contention. Only compute when the median
+                # grant/req ratio is reasonable (>10%), indicating the counters track
+                # related events.
+                valid = req[req > 0]
+                grant_valid = grant[req > 0]
+                median_ratio = (grant_valid / valid).median() if len(valid) > 0 else 0
+                if median_ratio > 0.1:
+                    ratio = ((req - grant) / req * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
+                    grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+                    l1_unpacker_bp = {
+                        "min": grouped.min().to_dict(),
+                        "median": grouped.median().to_dict(),
+                        "max": grouped.max().to_dict(),
+                        "avg": grouped.mean().to_dict(),
+                    }
             if has_counter("L1_0_UNIFIED_PACKER") and has_counter("L1_0_PORT1_GRANT"):
                 req = get_counter_series("L1_0_UNIFIED_PACKER")
                 grant = get_counter_series("L1_0_PORT1_GRANT")
@@ -2124,11 +2178,12 @@ def get_device_data_generate_report(
         freq = deviceData["deviceInfo"]["freq"]
 
         # Calculate efficiency metrics for all devices (device-only mode)
+        device_arch = deviceData["deviceInfo"].get("arch", "")
         device_efficiency_metrics = {}
         for device in deviceData["devices"]:
             risc_data = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]
             if "events" in risc_data and "perf_counter_data" in risc_data["events"]:
-                perf_counter_df = extract_perf_counters(risc_data["events"]["perf_counter_data"])
+                perf_counter_df = extract_perf_counters(risc_data["events"]["perf_counter_data"], arch=device_arch)
 
                 if perf_counter_df is not None and not perf_counter_df.empty:
                     # Print statistics for captured counter data
@@ -2199,28 +2254,55 @@ def get_device_data_generate_report(
                         eff_pivot["Unpacker1 Write Efficiency"] = eff_pivot.apply(
                             lambda x: safe_div(x.get("value_SRCB_WRITE", 0), x.get("value_UNPACK1_BUSY_THREAD0", 0)), axis=1
                         )
-                    eff_pivot["Packer Efficiency"] = eff_pivot.apply(
-                        lambda x: safe_div(x.get("value_PACKER_DEST_READ_AVAILABLE", 0), x.get("value_PACKER_BUSY", 0)),
-                        axis=1,
-                    )
-                    if "value_MATH_INSTRN_STARTED" in eff_pivot.columns:
+                    # Packer Efficiency: On WH, PACKER_DEST_READ_AVAILABLE / PACKER_BUSY.
+                    # On BH, PACKER_BUSY is always 0. Fallback: DEST_READ_GRANTED_1 / PACKER_DEST_READ_AVAILABLE
+                    # (grant rate for dest reads — both signals track the same event on BH silicon).
+                    has_packer_busy = "value_PACKER_BUSY" in eff_pivot.columns and eff_pivot["value_PACKER_BUSY"].sum() > 0
+                    if has_packer_busy:
+                        eff_pivot["Packer Efficiency"] = eff_pivot.apply(
+                            lambda x: safe_div(x.get("value_PACKER_DEST_READ_AVAILABLE", 0), x.get("value_PACKER_BUSY", 0)),
+                            axis=1,
+                        )
+                    elif "value_DEST_READ_GRANTED_1" in eff_pivot.columns:
+                        eff_pivot["Packer Efficiency"] = eff_pivot.apply(
+                            lambda x: safe_div(x.get("value_DEST_READ_GRANTED_1", 0), x.get("value_PACKER_DEST_READ_AVAILABLE", 0)),
+                            axis=1,
+                        )
+
+                    # Math Pipeline Utilization: On BH, MATH_INSTRN_STARTED is always 0.
+                    # Fall back to FIDELITY_PHASE_STALLS / ref_cnt.
+                    if "value_MATH_INSTRN_STARTED" in eff_pivot.columns and eff_pivot["value_MATH_INSTRN_STARTED"].sum() > 0:
                         eff_pivot["Math Pipeline Utilization"] = eff_pivot.apply(
                             lambda x: safe_div(
                                 x.get("value_MATH_INSTRN_STARTED", 0), x.get("value_MATH_INSTRN_AVAILABLE", 0)
                             ),
                             axis=1,
                         )
-                    eff_pivot["Math-to-Pack Handoff Efficiency"] = eff_pivot.apply(
-                        lambda x: min(100.0, safe_div(x.get("value_AVAILABLE_MATH", 0), x.get("value_PACKER_BUSY", 0))), axis=1
-                    )
-                    if "value_SRCB_WRITE_AVAILABLE" in eff_pivot.columns:
-                        eff_pivot["Unpacker-to-Math Data Flow"] = eff_pivot.apply(
+                    elif "value_FIDELITY_PHASE_STALLS" in eff_pivot.columns:
+                        eff_pivot["Math Pipeline Utilization"] = eff_pivot.apply(
                             lambda x: safe_div(
-                                (x.get("value_SRCA_WRITE_AVAILABLE", 0) + x.get("value_SRCB_WRITE_AVAILABLE", 0)) / 2,
-                                (x.get("value_UNPACK0_BUSY_THREAD0", 0) + x.get("value_UNPACK1_BUSY_THREAD0", 0)) / 2,
+                                x.get("value_FIDELITY_PHASE_STALLS", 0), x.get("ref_cnt_FIDELITY_PHASE_STALLS", 0)
                             ),
                             axis=1,
                         )
+
+                    # Math-to-Pack Handoff: On BH, PACKER_BUSY is always 0.
+                    # Fall back to AVAILABLE_MATH / ref_cnt.
+                    if has_packer_busy:
+                        eff_pivot["Math-to-Pack Handoff Efficiency"] = eff_pivot.apply(
+                            lambda x: safe_div(x.get("value_AVAILABLE_MATH", 0), x.get("value_PACKER_BUSY", 0)), axis=1
+                        )
+                    elif "ref_cnt_AVAILABLE_MATH" in eff_pivot.columns:
+                        eff_pivot["Math-to-Pack Handoff Efficiency"] = eff_pivot.apply(
+                            lambda x: safe_div(x.get("value_AVAILABLE_MATH", 0), x.get("ref_cnt_AVAILABLE_MATH", 0)), axis=1
+                        )
+                    eff_pivot["Unpacker-to-Math Data Flow"] = eff_pivot.apply(
+                        lambda x: safe_div(
+                            (x.get("value_SRCA_WRITE_AVAILABLE", 0) + x.get("value_SRCB_WRITE_AVAILABLE", 0)) / 2,
+                            (x.get("value_UNPACK0_BUSY_THREAD0", 0) + x.get("value_UNPACK1_BUSY_THREAD0", 0)) / 2,
+                        ),
+                        axis=1,
+                    )
                     if "Unpacker0 Write Efficiency" in eff_pivot.columns:
                         eff_pivot["Unpacker Write Efficiency"] = eff_pivot[
                             ["Unpacker0 Write Efficiency", "Unpacker1 Write Efficiency"]
@@ -2395,10 +2477,18 @@ def get_device_data_generate_report(
 
                         return fn
 
-                    eff_pivot["L1 Unpacker Backpressure"] = eff_pivot.apply(
-                        safe_single_bp("value_L1_0_UNPACKER_0", "value_L1_0_UNPACKER_0_GRANT"),
-                        axis=1,
-                    )
+                    # On BH, L1 unpacker grant counter has different signal semantics
+                    # (grant ~25-45 while req ~8000+). Only compute when median grant/req > 10%.
+                    _unp_req = eff_pivot.get("value_L1_0_UNPACKER_0", pd.Series(dtype=float))
+                    _unp_gnt = eff_pivot.get("value_L1_0_UNPACKER_0_GRANT", pd.Series(dtype=float))
+                    _valid = _unp_req[_unp_req > 0]
+                    _gnt_valid = _unp_gnt[_unp_req > 0]
+                    _median_ratio = (_gnt_valid / _valid).median() if len(_valid) > 0 else 0
+                    if _median_ratio > 0.1:
+                        eff_pivot["L1 Unpacker Backpressure"] = eff_pivot.apply(
+                            safe_single_bp("value_L1_0_UNPACKER_0", "value_L1_0_UNPACKER_0_GRANT"),
+                            axis=1,
+                        )
                     # L1 Packer Port: BH uses L1_0_UNIFIED_PACKER, WH uses L1_0_UNPACKER_1_ECC_PACK1
                     packer_req_key = (
                         "value_L1_0_UNIFIED_PACKER"
@@ -2460,18 +2550,14 @@ def get_device_data_generate_report(
                         safe_ratio("value_WAITING_FOR_SFPU_IDLE_1", "value_THREAD_STALLS_1"), axis=1)
 
                     # Write port blocking
-                    if "value_SRCA_WRITE_NOT_BLOCKED_OVR" in eff_pivot.columns:
-                        eff_pivot["SrcA Write Port Blocked Rate"] = eff_pivot.apply(
-                            safe_complement("value_SRCA_WRITE_NOT_BLOCKED_OVR", "value_SRCA_WRITE_AVAILABLE"), axis=1)
-                    if "value_SRCB_WRITE_AVAILABLE" in eff_pivot.columns:
-                        eff_pivot["SrcB Write Port Blocked Rate"] = eff_pivot.apply(
-                            safe_complement("value_SRCB_WRITE_NOT_BLOCKED_PORT", "value_SRCB_WRITE_AVAILABLE"), axis=1)
-                    if "value_SRCA_WRITE_ACTUAL" in eff_pivot.columns:
-                        eff_pivot["SrcA Write Actual Efficiency"] = eff_pivot.apply(
-                            safe_ratio("value_SRCA_WRITE_ACTUAL", "value_SRCA_WRITE_AVAILABLE"), axis=1)
-                    if "value_SRCB_WRITE_ACTUAL" in eff_pivot.columns:
-                        eff_pivot["SrcB Write Actual Efficiency"] = eff_pivot.apply(
-                            safe_ratio("value_SRCB_WRITE_ACTUAL", "value_SRCB_WRITE_AVAILABLE"), axis=1)
+                    eff_pivot["SrcA Write Port Blocked Rate"] = eff_pivot.apply(
+                        safe_complement("value_SRCA_WRITE_NOT_BLOCKED_OVR", "value_SRCA_WRITE_AVAILABLE"), axis=1)
+                    eff_pivot["SrcB Write Port Blocked Rate"] = eff_pivot.apply(
+                        safe_complement("value_SRCB_WRITE_NOT_BLOCKED_PORT", "value_SRCB_WRITE_AVAILABLE"), axis=1)
+                    eff_pivot["SrcA Write Actual Efficiency"] = eff_pivot.apply(
+                        safe_ratio("value_SRCA_WRITE_ACTUAL", "value_SRCA_WRITE_AVAILABLE"), axis=1)
+                    eff_pivot["SrcB Write Actual Efficiency"] = eff_pivot.apply(
+                        safe_ratio("value_SRCB_WRITE_ACTUAL", "value_SRCB_WRITE_AVAILABLE"), axis=1)
 
                     # Dest read and math stall metrics
                     def safe_bp_single(req_key, grant_key):
@@ -2480,13 +2566,16 @@ def get_device_data_generate_report(
                             g = x.get(grant_key, 0)
                             return max(0.0, (r - g) / r * 100) if r > 0 else nan
                         return fn
+                    # BH uses DEST_READ_GRANTED_1 (268), WH uses DEST_READ_GRANTED_0 (267)
+                    dest_grant_col = "value_DEST_READ_GRANTED_1" if "value_DEST_READ_GRANTED_1" in eff_pivot.columns \
+                        else "value_DEST_READ_GRANTED_0"
                     eff_pivot["Dest Read Backpressure"] = eff_pivot.apply(
-                        safe_bp_single("value_PACKER_DEST_READ_AVAILABLE", "value_DEST_READ_GRANTED_0"), axis=1)
-                    if "value_MATH_INSTRN_AVAILABLE" in eff_pivot.columns:
+                        safe_bp_single("value_PACKER_DEST_READ_AVAILABLE", dest_grant_col), axis=1)
+                    if "value_MATH_NOT_STALLED_DEST_WR_PORT" in eff_pivot.columns and eff_pivot["value_MATH_NOT_STALLED_DEST_WR_PORT"].sum() > 0:
                         eff_pivot["Math Dest Write Port Stall Rate"] = eff_pivot.apply(
                             safe_complement("value_MATH_NOT_STALLED_DEST_WR_PORT", "value_MATH_INSTRN_AVAILABLE"), axis=1)
-                        eff_pivot["Math Scoreboard Stall Rate"] = eff_pivot.apply(
-                            safe_complement("value_AVAILABLE_MATH", "value_MATH_INSTRN_AVAILABLE"), axis=1)
+                    eff_pivot["Math Scoreboard Stall Rate"] = eff_pivot.apply(
+                        safe_complement("value_AVAILABLE_MATH", "value_MATH_INSTRN_AVAILABLE"), axis=1)
 
                     # Instruction issue rates (per cycle, not %)
                     eff_pivot["Unpack Instrn Issue Rate T0"] = eff_pivot.apply(

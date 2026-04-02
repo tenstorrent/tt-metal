@@ -186,6 +186,8 @@ enum PerfCounterType : uint16_t {
     DEST_READ_GRANTED_3,           // Dest register 3 read granted (grant 270)
     MATH_NOT_STALLED_DEST_WR_PORT,  // Math not stalled by dest write port (grant 271)
     // Note: AVAILABLE_MATH (existing, counter_sel 272) = math not stalled by scoreboard (grant 272)
+    PACK_BANK6_GRANT,   // PACK bank 6 grant (counter_sel 273) — tied to 0 in RTL (2'b00)
+    PACK_BANK7_GRANT,   // PACK bank 7 grant (counter_sel 274) — tied to 0 in RTL (2'b00)
     // L1 Bank 4 (BH only, MUX_CTRL[6:4] = 4, monitors misc ports 32-39)
     L1_4_MISC_PORT_0,  // Port 32: misc interface 0
     L1_4_MISC_PORT_1,  // Port 33: misc interface 1
@@ -348,10 +350,11 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 3> fpu_counters = {
     {{PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257}}};
 constexpr size_t NUM_FPU_COUNTERS = 3;
 #if defined(ARCH_BLACKHOLE)
-// BH TDMA_UNPACK: expose ALL 22 counter_sels to verify which are live.
-// BH RTL doc shows different grant signal mapping from WH — need empirical verification.
-// Req counters (0-10): same signals as WH per doc
-// Grant counters (256-266): BH doc shows different ordering than WH
+// BH TDMA_UNPACK: 11 banks, 22 counter_sels (11 req + 11 grant).
+// RTL-confirmed dead (o_math_instrnbuf_rden inactive on BH):
+//   3(MATH_INSTRN_STARTED), 256(MATH_INSTRN_NOT_BLOCKED_SRC),
+//   257(INSTRN_2_HF_CYCLES), 258(INSTRN_1_HF_CYCLE)
+// All other 18 counter_sels are LIVE (verified on silicon).
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
      {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
@@ -364,7 +367,6 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters =
      {PerfCounterType::UNPACK1_BUSY_THREAD0, 8},
      {PerfCounterType::UNPACK0_BUSY_THREAD1, 9},
      {PerfCounterType::UNPACK1_BUSY_THREAD1, 10},
-     // Grant counters — using WH enum names, will rename after verifying BH mapping
      {PerfCounterType::MATH_INSTRN_NOT_BLOCKED_SRC, 256},
      {PerfCounterType::INSTRN_2_HF_CYCLES, 257},
      {PerfCounterType::INSTRN_1_HF_CYCLE, 258},
@@ -405,42 +407,52 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters =
 constexpr size_t NUM_UNPACK_COUNTERS = 22;
 #endif
 #if defined(ARCH_BLACKHOLE)
-// BH TDMA_PACK: expose ALL 14 counter_sels to verify which are live.
-// BH doc says PACK_COUNT=1 (counter_sel 12-17 tied to 0), but need verification.
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 14> pack_counters = {
+// BH TDMA_PACK: 8 banks, 16 counter_sels (8 req + 8 grant).
+// Empirically verified across 8 diverse workloads on BH silicon:
+//   LIVE:  11(DEST_READ_AVAIL), 12(DEST_READ_1*), 267(GRANTED_0), 268(GRANTED_1*),
+//          272(AVAILABLE_MATH), 273(BANK6_GRANT*)   (*RTL shows tied-to-0 but silicon disagrees)
+//   DEAD:  13-14(DEST_READ_2/3), 15-17(BUSY_0/1/2), 18(BUSY), 269-270(GRANTED_2/3), 274(BANK7)
+//   RTL-predicted-live but empirically dead: 18(PACKER_BUSY), 271(MATH_NOT_STALLED_DEST_WR_PORT)
+// 15 RTL-confirmed dead counters are filtered out in perf_counter_analysis.py.
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> pack_counters = {
     {{PerfCounterType::PACKER_DEST_READ_AVAILABLE, 11},
-     {PerfCounterType::PACKER_BUSY, 18},
      {PerfCounterType::PACKER_DEST_READ_1, 12},
      {PerfCounterType::PACKER_DEST_READ_2, 13},
      {PerfCounterType::PACKER_DEST_READ_3, 14},
      {PerfCounterType::PACKER_BUSY_0, 15},
      {PerfCounterType::PACKER_BUSY_1, 16},
      {PerfCounterType::PACKER_BUSY_2, 17},
+     {PerfCounterType::PACKER_BUSY, 18},
      {PerfCounterType::DEST_READ_GRANTED_0, 267},
      {PerfCounterType::DEST_READ_GRANTED_1, 268},
      {PerfCounterType::DEST_READ_GRANTED_2, 269},
      {PerfCounterType::DEST_READ_GRANTED_3, 270},
      {PerfCounterType::MATH_NOT_STALLED_DEST_WR_PORT, 271},
-     {PerfCounterType::AVAILABLE_MATH, 272}}};
-constexpr size_t NUM_PACK_COUNTERS = 14;
+     {PerfCounterType::AVAILABLE_MATH, 272},
+     {PerfCounterType::PACK_BANK6_GRANT, 273},
+     {PerfCounterType::PACK_BANK7_GRANT, 274}}};
+constexpr size_t NUM_PACK_COUNTERS = 16;
 #else
-// WH: PACK_COUNT=4, all 14 counters active
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 14> pack_counters = {
+// WH: PACK_COUNT=4, all 16 counter_sels (8 req + 8 grant). Banks 6-7 grants
+// are tied to 2'b00 in RTL, so counter_sels 273-274 always read 0.
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> pack_counters = {
     {{PerfCounterType::PACKER_DEST_READ_AVAILABLE, 11},
-     {PerfCounterType::PACKER_BUSY, 18},
      {PerfCounterType::PACKER_DEST_READ_1, 12},
      {PerfCounterType::PACKER_DEST_READ_2, 13},
      {PerfCounterType::PACKER_DEST_READ_3, 14},
      {PerfCounterType::PACKER_BUSY_0, 15},
      {PerfCounterType::PACKER_BUSY_1, 16},
      {PerfCounterType::PACKER_BUSY_2, 17},
+     {PerfCounterType::PACKER_BUSY, 18},
      {PerfCounterType::DEST_READ_GRANTED_0, 267},
      {PerfCounterType::DEST_READ_GRANTED_1, 268},
      {PerfCounterType::DEST_READ_GRANTED_2, 269},
      {PerfCounterType::DEST_READ_GRANTED_3, 270},
      {PerfCounterType::MATH_NOT_STALLED_DEST_WR_PORT, 271},
-     {PerfCounterType::AVAILABLE_MATH, 272}}};
-constexpr size_t NUM_PACK_COUNTERS = 14;
+     {PerfCounterType::AVAILABLE_MATH, 272},
+     {PerfCounterType::PACK_BANK6_GRANT, 273},
+     {PerfCounterType::PACK_BANK7_GRANT, 274}}};
+constexpr size_t NUM_PACK_COUNTERS = 16;
 #endif
 
 // L1 bank 0 counters — port mapping differs between Tensix and Ethernet cores

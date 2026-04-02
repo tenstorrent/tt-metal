@@ -14,6 +14,32 @@ from loguru import logger
 OpDict = Dict[str, Any]
 DeviceOpsDict = Dict[int, List[OpDict]]
 
+# BH RTL-confirmed dead counters: signals tied to constant 0 in Blackhole RTL.
+# These never produce useful data on BH silicon (verified across 8 diverse workloads).
+# - PACK banks 2-3 req/grant: tied to 1'b0 (PACK_COUNT=1, only 1 packer engine)
+# - PACKER_BUSY_0/1/2: individual packer engine busy, tied to 1'b0 (PACK_COUNT=1)
+# - PACK_BANK7_GRANT: bank 7 grant tied to 0 from 2'b00
+# - MATH_INSTRN_STARTED: o_math_instrnbuf_rden inactive on BH
+# - HF cycle counters: gated by o_math_instrnbuf_rden (inactive on BH)
+# - SFPU_IDLE counters: slice indices 58-60 are out of bounds (RTL has 58 slices: 0-57)
+BH_RTL_DEAD_COUNTERS = frozenset({
+    "PACKER_DEST_READ_2",
+    "PACKER_DEST_READ_3",
+    "PACKER_BUSY_0",
+    "PACKER_BUSY_1",
+    "PACKER_BUSY_2",
+    "DEST_READ_GRANTED_2",
+    "DEST_READ_GRANTED_3",
+    "PACK_BANK7_GRANT",
+    "MATH_INSTRN_STARTED",
+    "MATH_INSTRN_NOT_BLOCKED_SRC",
+    "INSTRN_2_HF_CYCLES",
+    "INSTRN_1_HF_CYCLE",
+    "WAITING_FOR_SFPU_IDLE_0",
+    "WAITING_FOR_SFPU_IDLE_1",
+    "WAITING_FOR_SFPU_IDLE_2",
+})
+
 # Counter type enum from perf_counters.hpp — auto-generated, must match C++ enum order
 COUNTER_TYPE_NAMES = {
     0: "UNDEF",
@@ -313,13 +339,15 @@ COUNTER_TYPE_NAMES = {
 }
 
 
-def extract_perf_counters(events: List[Any]) -> Optional[pd.DataFrame]:
+def extract_perf_counters(events: List[Any], arch: str = "") -> Optional[pd.DataFrame]:
     # If perf counter data exists, extract relevant columns and return as a dataframe
     EVENT_METADATA_IDX = 0
     EVENT_TIMESTAMP_IDX = 1
     EVENT_RISC_TYPE_IDX = 3
     EVENT_CORE_COORDS_IDX = 4
     PERF_COUNTER_ID = 9090
+
+    hide_dead = arch.lower() == "blackhole" if arch else False
 
     try:
         # Process events: extract metadata, add timestamp and coords
@@ -336,6 +364,10 @@ def extract_perf_counters(events: List[Any]) -> Optional[pd.DataFrame]:
                     counter_type_name = counter_type_raw
                 else:
                     counter_type_name = COUNTER_TYPE_NAMES.get(counter_type_raw, f"UNKNOWN_{counter_type_raw}")
+
+                # Skip BH RTL-confirmed dead counters (signals tied to 0 in silicon)
+                if hide_dead and counter_type_name in BH_RTL_DEAD_COUNTERS:
+                    continue
 
                 perf_counter_events.append(
                     {

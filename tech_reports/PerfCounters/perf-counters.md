@@ -43,11 +43,11 @@ The `TT_METAL_PROFILE_PERF_COUNTERS` value selects which counter banks to enable
 
 | | Wormhole | Blackhole |
 |---|---|---|
-| Tensix raw counters | 172 | 126 |
+| Tensix raw counters | 172 | 140 (15 RTL-dead filtered) |
 | ERISC raw counters | 16 | 64 |
 | Derived metrics | 86 | 74 |
 
-Blackhole has fewer TDMA counters (6 signals inactive due to `PACK_COUNT=1` and `o_math_instrnbuf_rden` tied off) but more L1 mux positions (5 vs 2 for Tensix, 4 vs 1 for Ethernet).
+Blackhole has fewer active TDMA counters due to `PACK_COUNT=1` (single packer engine) and `o_math_instrnbuf_rden` being inactive. 15 RTL-confirmed dead counters are automatically filtered from BH output in `perf_counter_analysis.py`. Three metrics (Packer Efficiency, Math Pipeline Utilization, Math-to-Pack Handoff) use BH-specific fallback formulas since their WH denominators (`PACKER_BUSY`, `MATH_INSTRN_STARTED`) are always 0 on BH. Blackhole has more L1 mux positions (5 vs 2 for Tensix, 4 vs 1 for Ethernet).
 
 ---
 
@@ -131,10 +131,13 @@ Measures how often the packer has valid destination data available when it's bus
 | **Counter group** | PACK |
 
 ```
-Packer Efficiency = PACKER_DEST_READ_AVAILABLE / PACKER_BUSY * 100
+WH:  Packer Efficiency = PACKER_DEST_READ_AVAILABLE / PACKER_BUSY * 100
+BH:  Packer Efficiency = DEST_READ_GRANTED_1 / PACKER_DEST_READ_AVAILABLE * 100
 ```
 
-- **High value (100%)**: Packer always has data when busy (no stalls). This is the normal case on BH with PACK_COUNT=1.
+On Blackhole, `PACKER_BUSY` is always 0 (the packer completes within its gated clock window and the OR of per-thread busy bits never stays high long enough for the ungated perf counter to sample). The BH fallback uses `DEST_READ_GRANTED_1` (counter_sel 268) which tracks the same dest-read-request event as `PACKER_DEST_READ_AVAILABLE` (counter_sel 11) — both read 3968 on matmul, confirming they measure the same signal. The ratio is the grant rate: 100% = every request granted, <100% = packer waited for dest data.
+
+- **High value (100%)**: Packer always has data when busy (no stalls). This is the normal case on BH.
 - **Low value (<80%)**: Packer is busy but waiting for destination register data from math stage.
 
 **Use case:** Detects destination register stalls indicating the math stage is not keeping up with the packer.
@@ -151,11 +154,15 @@ Measures pipeline balance between math output and packer consumption. Capped at 
 | **Counter group** | PACK |
 
 ```
-Math-to-Pack Handoff = min(100, AVAILABLE_MATH / PACKER_BUSY * 100)
+WH:  Math-to-Pack Handoff = AVAILABLE_MATH / PACKER_BUSY * 100
+BH:  Math-to-Pack Handoff = AVAILABLE_MATH / ref_cnt * 100
 ```
 
-- **High value (100%)**: Math produces output as fast or faster than packer consumes. Good pipeline balance.
-- **Low value (<50%)**: Packer is busy but math output isn't ready (math is bottleneck).
+On Blackhole, `PACKER_BUSY` is always 0. The BH fallback measures what fraction of cycles the math pipeline was not stalled by the scoreboard — a direct measure of math availability to the pack stage.
+
+- **WH high value (>100%)**: Math produces output faster than packer consumes.
+- **BH high value (>25%)**: Math unit is available (not scoreboard-stalled) for a significant fraction of cycles.
+- **Low value**: Math is frequently stalled, limiting pack throughput.
 
 **Use case:** Identifies whether math is keeping up with the packer. Low values indicate math is the bottleneck.
 
@@ -438,6 +445,8 @@ Math Dest Write Port Stall = (MATH_INSTRN_AVAILABLE - MATH_NOT_STALLED_DEST_WR_P
 - **High value (>10%)**: Math is stalled waiting for write port to destination register.
 - **Low value (~0%)**: No write port stalls.
 
+**Not available on Blackhole**: `MATH_NOT_STALLED_DEST_WR_PORT` is always 0 on BH (empirically verified), which would produce a bogus 100% stall rate. The metric is automatically hidden on BH.
+
 **Use case:** Detects destination register write contention from the math side.
 
 ---
@@ -705,6 +714,8 @@ L1 Packer Port BP = (L1_0_PORT1 - L1_0_PORT1_GRANT) / L1_0_PORT1 * 100
 - **L1 Unpacker BP high (>80%)**: L1 is almost always busy when unpacker wants access. Values of 75-100% are common across all ops.
 - **L1 Packer Port BP low (<5%)**: Packer port has low contention. Normal.
 
+**Blackhole note:** On BH, the L1 unpacker grant counter can exceed the request counter on some cores (different signal semantics). When this happens, the backpressure metric is suppressed rather than showing meaningless values.
+
 **Use case:** High unpacker BP is expected (unpacker competes with other ports). Investigate only if combined with high Thread 0 stall rate.
 
 ---
@@ -897,15 +908,17 @@ Measures math instruction flow efficiency through the pipeline.
 | **Counter group** | UNPACK |
 
 ```
-Math Pipeline Utilization = MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE * 100
+WH:  Math Pipeline Utilization = MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE * 100
+BH:  Math Pipeline Utilization = FIDELITY_PHASE_STALLS / ref_cnt * 100
 ```
 
-- **High value (>80%)**: Math pipeline efficiently moves instructions (no pipe stalls).
-- **Low value (<30%)**: Instructions in pipe but not starting (pipeline stalled).
+On Blackhole, `MATH_INSTRN_STARTED` is inactive. The BH fallback uses `FIDELITY_PHASE_STALLS` which counts cycles where `math_instrn_valid & fidelity_phases_ongoing` — a proxy for math pipeline activity that includes HiFi phase cycles.
 
-**Not available on Blackhole**: `MATH_INSTRN_STARTED` (`o_math_instrnbuf_rden`) is inactive on BH.
+- **WH high value (>80%)**: Math pipeline efficiently moves instructions.
+- **BH high value (>20%)**: Math pipeline is active (executing fidelity phases). Matmul shows 30%.
+- **Low value**: Math pipeline is mostly idle or stalled.
 
-**Use case:** Detects math pipeline stalls. Values consistently near 100% indicate excellent pipeline health.
+**Use case:** Detects math pipeline stalls. On BH, compare with Fidelity Phase Overhead to distinguish active compute from fidelity overhead.
 
 ---
 
@@ -1052,10 +1065,47 @@ FPU Execution Efficiency = FPU_COUNTER / FPU_INSTRN_AVAILABLE_1 * 100
 
 ### Dead Signals on Blackhole
 
-| Signal | Counter_sel | Reason |
-|--------|------------|--------|
-| `o_math_instrnbuf_rden` | 3, 256-259 | Math instruction buffer read signal inactive |
-| `PACKER_BUSY_0/1/2` | 15-17 | `PACK_COUNT=1`, per-engine busy signals don't exist |
-| `PACKER_DEST_READ_1/2/3` | 12-14 | Single packer engine, no multi-register access |
-| `DEST_READ_GRANTED_1/2/3` | 268-270 | Same reason |
+Empirically verified across 8 diverse workloads (matmul, eltwise binary, reduce sum, tilize, relu, sqrt, silu, concat). 15 counters are RTL-confirmed dead and filtered from BH output.
+
+| Signal | Counter_sel | Reason | Status |
+|--------|------------|--------|--------|
+| `MATH_INSTRN_STARTED` | 3 | `o_math_instrnbuf_rden` inactive on BH | RTL dead, filtered |
+| `MATH_INSTRN_NOT_BLOCKED_SRC` | 256 | Gated by `o_math_instrnbuf_rden` | RTL dead, filtered |
+| `INSTRN_2_HF_CYCLES` | 257 | Gated by `o_math_instrnbuf_rden` | RTL dead, filtered |
+| `INSTRN_1_HF_CYCLE` | 258 | Gated by `o_math_instrnbuf_rden` | RTL dead, filtered |
+| `PACKER_DEST_READ_2` | 13 | `PACK_COUNT=1`, bank 2 req tied to 0 | RTL dead, filtered |
+| `PACKER_DEST_READ_3` | 14 | `PACK_COUNT=1`, bank 3 req tied to 0 | RTL dead, filtered |
+| `PACKER_BUSY_0` | 15 | `PACK_COUNT=1`, per-engine busy tied to 0 | RTL dead, filtered |
+| `PACKER_BUSY_1` | 16 | Same | RTL dead, filtered |
+| `PACKER_BUSY_2` | 17 | Same | RTL dead, filtered |
+| `DEST_READ_GRANTED_2` | 269 | `PACK_COUNT=1`, bank 2 grant tied to 0 | RTL dead, filtered |
+| `DEST_READ_GRANTED_3` | 270 | `PACK_COUNT=1`, bank 3 grant tied to 0 | RTL dead, filtered |
+| `PACK_BANK7_GRANT` | 274 | Bank 7 grant from `2'b00` in RTL | RTL dead, filtered |
+| `WAITING_FOR_SFPU_IDLE_0` | 58 | Out of bounds (RTL has 58 slices: 0-57) | RTL dead, filtered |
+| `WAITING_FOR_SFPU_IDLE_1` | 59 | Same | RTL dead, filtered |
+| `WAITING_FOR_SFPU_IDLE_2` | 60 | Same | RTL dead, filtered |
+
+#### RTL-predicted-dead but silicon-live (3 counters)
+
+These counter_sels show `1'b0` or `2'b00` in the `blackhole_rtl` branch but return nonzero values on actual BH silicon:
+
+| Signal | Counter_sel | RTL shows | Silicon shows |
+|--------|------------|-----------|---------------|
+| `PACKER_DEST_READ_1` | 12 | `1'b0` (bank 1 req) | Nonzero in 6/8 tests (max 29216) |
+| `DEST_READ_GRANTED_1` | 268 | `1'b0` (bank 1 grant) | Nonzero in 6/8 tests (max 29216) |
+| `PACK_BANK6_GRANT` | 273 | `2'b00` (bank 6 grant) | Nonzero in 8/8 tests (max 16861) |
+
+These are kept in the counter set and reported normally.
+
+#### Empirically dead but not RTL-confirmed (34 counters)
+
+These counters have real hardware signals but were always 0 across all 8 test workloads. They may be active with different workloads (e.g. multi-thread operations, specific data patterns). Examples:
+
+- `PACKER_BUSY` (sel 18): RTL has `|tdma_pack_busy` but never fires empirically
+- `MATH_NOT_STALLED_DEST_WR_PORT` (sel 271): RTL has `math_valid & ~dest_wr_port_stall` but always 0
+- `UNPACK1_BUSY_THREAD1` (sel 10): Second unpacker on thread 1 unused in tested workloads
+- `THREAD_STALLS_1/2`: Math and pack threads don't stall in tested workloads
+- Various `INSTRN_AVAILABLE` counters for instructions that issue immediately
+
+These are kept in the counter set and reported normally — they may become active with different workloads.
 
