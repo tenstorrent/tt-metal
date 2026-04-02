@@ -130,40 +130,13 @@ void kernel_main() {
                             }
                             tile_regs_release();  // release lock on DST by PACK thread
                             cb_push_back(cb_compute_output_id, tile_granularity);
-
-                            /*// based on ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/compute.cpp
-                            for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
-                                tile_regs_acquire(); // acquire DST registers for MATH thread, resets DST to 0
-                                if (reduce_output) {
-                                    copy_tile_init(cb_interm2_id);
-                                    //copy_tile_to_dst_init_short(cb_interm2_id);
-                                    copy_tile(cb_interm2_id, 0, 0);  // load DST
-                                    add_tiles_init(cb_input_id, cb_interm_id, true);  // DST = srcA + srcB + DST
-                                } else {
-                                    add_tiles_init(cb_input_id, cb_interm_id, false);  // DST = srcA + srcB
-                                }
-                                add_tiles(cb_input_id, cb_interm_id, 0, 0, 0);
-                                tile_regs_commit();  // release lock on DST by MATH thread, signal the PACK thread
-
-                                if (reduce_output) {
-                                    cb_pop_front(cb_interm2_id, 1);
-                                }
-                                cb_pop_front(cb_input_id, 1);
-                                cb_pop_front(cb_interm_id, 1);
-
-                                cb_reserve_back(cb_compute_output_id, 1);
-                                tile_regs_wait();  // acquire lock on DST for PACK thread
-                                pack_tile(0, cb_compute_output_id);  // pack results from DST registers to output
-                            circular buffers tile_regs_release();  // release lock on DST by PACK thread
-                                cb_push_back(cb_compute_output_id, 1);
-                            }*/
                         }
                         tiles_read += tiles_to_read;
 
                     }  // if skip or process
 
                     is_even_chunk = !is_even_chunk;
-                }  // while tiles_read
+                }  // while total_tiles_to_read
             }  // for slice_C
         }  // for num_iters
     }  // for input_tensor_B
