@@ -305,11 +305,13 @@ class HostInterface:
             cb_descriptors.append(packet_header_cb_desc)
         return cb_descriptors
 
-    def run(self):
-        dummy_tensor = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh_device
-        )
+    def _build_programs(self):
+        """Build host IO programs and return (device_coord, program) pairs without dispatching.
 
+        This enables multiple HostInterface instances to have their programs merged
+        and dispatched together in a single generic_op call (e.g. for multi-channel
+        parallel pipelines where N HostInterface instances target the same device).
+        """
         h2d_fabric_node_id = None
         d2h_fabric_node_id = None
         my_downstream_fabric_node_id = None
@@ -328,6 +330,8 @@ class HostInterface:
         h2d_cb_descriptors = None
         d2h_kernel = None
         d2h_cb_descriptors = None
+        h2d_uses_fabric = False
+        d2h_uses_fabric = False
 
         if self.h2d_socket:
             h2d_kernel = self._create_h2d_kernel()
@@ -399,6 +403,12 @@ class HostInterface:
                         h2d_program,
                         self.h2d_mesh_core_coord.core_coord,
                     )
+                    print(
+                        f"  HostInterface: h2d setup_fabric_connection idx={idx} "
+                        f"src_node={h2d_fabric_node_id} dst_node={my_downstream_fabric_node_id} "
+                        f"core={self.h2d_mesh_core_coord.core_coord} "
+                        f"returned eth_ch={fwd_fabric_args[0]} args={list(fwd_fabric_args)}"
+                    )
                     h2d_rt_args_ref.extend(fwd_fabric_args)
 
         if self.d2h_socket and d2h_program is not None:
@@ -419,25 +429,43 @@ class HostInterface:
                         d2h_program,
                         self.d2h_mesh_core_coord.core_coord,
                     )
+                    print(
+                        f"  HostInterface: d2h setup_fabric_connection idx={idx} "
+                        f"src_node={d2h_fabric_node_id} dst_node={my_upstream_fabric_node_id} "
+                        f"core={self.d2h_mesh_core_coord.core_coord} "
+                        f"returned eth_ch={bwd_fabric_args[0]} args={list(bwd_fabric_args)}"
+                    )
                     d2h_rt_args_ref.extend(bwd_fabric_args)
 
-        mesh_program_descriptor = ttnn.MeshProgramDescriptor()
+        entries = []
         if self.h2d_socket and h2d_program is not None:
-            mesh_program_descriptor[
-                ttnn.MeshCoordinateRange(self.h2d_mesh_core_coord.device_coord, self.h2d_mesh_core_coord.device_coord)
-            ] = h2d_program
-
+            entries.append((self.h2d_mesh_core_coord.device_coord, h2d_program))
+            print(
+                f"  HostInterface._build_programs: h2d device={self.h2d_mesh_core_coord.device_coord} "
+                f"core={self.h2d_mesh_core_coord.core_coord} uses_fabric={h2d_uses_fabric} "
+                f"same_device={same_device}"
+            )
         if self.d2h_socket and d2h_program is not None and not same_device:
-            mesh_program_descriptor[
-                ttnn.MeshCoordinateRange(self.d2h_mesh_core_coord.device_coord, self.d2h_mesh_core_coord.device_coord)
-            ] = d2h_program
+            entries.append((self.d2h_mesh_core_coord.device_coord, d2h_program))
+            print(
+                f"  HostInterface._build_programs: d2h device={self.d2h_mesh_core_coord.device_coord} "
+                f"core={self.d2h_mesh_core_coord.core_coord} uses_fabric={d2h_uses_fabric}"
+            )
+        print(f"  HostInterface._build_programs: {len(entries)} entries, same_device={same_device}")
+        return entries
 
-        io_tensors = [
-            dummy_tensor,
-            dummy_tensor,
-        ]
+    def run(self):
+        entries = self._build_programs()
 
-        return ttnn.generic_op(io_tensors, mesh_program_descriptor)
+        dummy_tensor = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh_device
+        )
+
+        mesh_program_descriptor = ttnn.MeshProgramDescriptor()
+        for device_coord, program in entries:
+            mesh_program_descriptor[ttnn.MeshCoordinateRange(device_coord, device_coord)] = program
+
+        return ttnn.generic_op([dummy_tensor, dummy_tensor], mesh_program_descriptor)
 
     def get_downstream_socket(self):
         if self.downstream_socket_pair is not None:
