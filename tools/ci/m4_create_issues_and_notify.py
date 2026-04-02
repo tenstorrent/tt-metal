@@ -1344,7 +1344,6 @@ def main() -> int:
             )
         slack_ts = post_slack_message(slack_token=slack_token, channel_id=SLACK_CHANNEL_TEST, text=slack_text)
         recent_slack_messages.insert(0, {"ts": slack_ts, "user": "m4-auto-triage", "text": slack_text})
-        recent_slack_context = build_recent_slack_context(recent_slack_messages)
         open_issue_context = build_open_issue_context(open_issues)
         created.append(
             {
