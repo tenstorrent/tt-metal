@@ -18,7 +18,6 @@ repetitions<=2) are unused and can be removed to reduce file size.
 
 import argparse
 import json
-import sys
 
 
 def trim_benchmarks(data):
