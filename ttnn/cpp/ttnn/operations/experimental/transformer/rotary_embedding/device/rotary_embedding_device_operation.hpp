@@ -6,7 +6,7 @@
 
 #include "ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_device_operation_types.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_program_factory.hpp"
-#include "ttnn/decorators.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::experimental::prim {
 

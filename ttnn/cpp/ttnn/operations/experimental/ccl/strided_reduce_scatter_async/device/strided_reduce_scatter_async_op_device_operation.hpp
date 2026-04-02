@@ -7,9 +7,6 @@
 #include "ttnn/operations/experimental/ccl/strided_reduce_scatter_async/device/strided_reduce_scatter_async_op_device_operation_types.hpp"
 #include "ttnn/operations/experimental/ccl/strided_reduce_scatter_async/device/strided_reduce_scatter_ring_program_factory.hpp"
 
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
-
 namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail {
 
 struct StridedReduceScatterAsyncDeviceOperation {

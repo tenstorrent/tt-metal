@@ -7,10 +7,9 @@
 #include "sort_program_factory.hpp"
 #include "sort_device_operation_types.hpp"
 
-#include "ttnn/decorators.hpp"
-
 #include <cstdint>
 #include <optional>
+#include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 

@@ -8,7 +8,6 @@
 #include "tt-metalium/bfloat16.hpp"
 #include "tt-metalium/shape.hpp"
 #include <tt_stl/small_vector.hpp>
-#include "ttnn/decorators.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
