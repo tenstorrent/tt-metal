@@ -22,7 +22,6 @@ Optional:
     --factory-descriptor-path <path>        Path to pregenerated factory system descriptor (FSD) file (.textproto)
                                             (if provided, cabling and deployment descriptors are ignored)
     --output <directory>                    Output directory for log files (default: validation_output)
-    --rerun-on-retrain                      Rerun validation when Ethernet links are retrained
     --help                                  Display this help message and exit
 
 Example:
@@ -41,7 +40,6 @@ ITERATIONS=50
 
 FACTORY_DESCRIPTOR_PATH=""
 OUTPUT_DIR="validation_output"
-RERUN_ON_RETRAIN=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -104,14 +102,6 @@ while [[ $# -gt 0 ]]; do
             fi
             OUTPUT_DIR="$2"
             shift 2
-            ;;
-        --rerun-on-retrain)
-            if [[ -n "$2" ]] && [[ "$2" != --* ]]; then
-                echo "Error: --rerun-on-retrain does not accept a value"
-                exit 1
-            fi
-            RERUN_ON_RETRAIN=true
-            shift
             ;;
         --help)
             show_help
@@ -206,27 +196,6 @@ for ((i=1; i<=ITERATIONS; i++)); do
         echo "Iteration $i completed at $(date)"
         echo "=========================================="
     } 2>&1 | tee "$LOG_FILE"
-
-    if [[ "$RERUN_ON_RETRAIN" == true ]] && grep -q "Ethernet Links were Retrained" "$LOG_FILE"; then
-        OUTPUT_DIR_RETRY="${OUTPUT_DIR}_retry"
-
-        mkdir -p "$OUTPUT_DIR_RETRY"
-
-        LOG_FILE_RETRY="$OUTPUT_DIR_RETRY/cluster_validation_iteration_${i}_retry.log"
-
-        {
-            echo "=========================================="
-            echo "Iteration: $i - retry due to retrained links"
-            echo "Timestamp: $(date)"
-            echo "=========================================="
-            echo ""
-
-            echo "Re-running cluster validation..."
-            run_cluster_validation
-            echo "Iteration $i retry completed at $(date)"
-            echo "=========================================="
-        } 2>&1 | tee "$LOG_FILE_RETRY"
-    fi
 
     echo "Iteration $i logged to $LOG_FILE"
     echo ""
