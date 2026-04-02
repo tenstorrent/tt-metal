@@ -814,6 +814,7 @@ def main() -> None:
         stop_at_eos=bool(args.stop_at_eos),
         checkpoint_jsonl=args.checkpoint_jsonl,
         enable_mtp=(args.mtp == "on"),
+        repeat_batches=args.repeat_batches,
     )
 
     saved_output_path = _resolve_saved_output_path(prompts_file_path, args.output_path)
