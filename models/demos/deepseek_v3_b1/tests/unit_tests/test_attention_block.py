@@ -95,7 +95,7 @@ def test_attention_block(
     skip_ccl = False
     # skip_ccl is not supported in this test
     num_links_bcast = 1
-    num_links_allreduce = 1
+    num_links_allreduce = 2
 
     # Validate mesh size
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:

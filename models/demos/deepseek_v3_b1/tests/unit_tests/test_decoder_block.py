@@ -1005,7 +1005,7 @@ def test_decoder(
     ttnn.synchronize_device(submesh)
 
     num_links_bcast = 1
-    num_links_allreduce = 1
+    num_links_allreduce = 2
     attn_semaphores = AttentionBlock.create_semaphores(
         submesh, num_links_bcast=num_links_bcast, num_links_allreduce=num_links_allreduce
     )
@@ -1472,7 +1472,7 @@ def test_decoder_mlp(
     ttnn.synchronize_device(submesh)
 
     num_links_bcast = 1
-    num_links_allreduce = 1
+    num_links_allreduce = 2
     attn_semaphores = AttentionBlock.create_semaphores(
         submesh, num_links_bcast=num_links_bcast, num_links_allreduce=num_links_allreduce
     )
