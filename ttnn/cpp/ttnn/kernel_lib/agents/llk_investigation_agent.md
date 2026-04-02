@@ -1,76 +1,133 @@
 ---
-name: LLK Investigation Agent Prompt (Coordinator)
-description: Stage 2 coordinator. Splits investigation into 3 parallel sub-agents (device-side, host-side, usage patterns). This file documents the sub-agents and how to invoke them.
+name: LLK Investigation Agent
+description: "Phase 1 agent. Analyzes a group of ops across device, host, and usage dimensions. One instance per group, all run in parallel. Replaces the previous 3-agent split (device/host/usage)."
 type: reference
 ---
 
-## Overview
+## Usage
 
-Investigation is split into 3 parallel sub-agents that each produce structured tables. The orchestrator launches all 3 in parallel, then consolidates their outputs.
+Invoke with `subagent_type: Explore`. One instance per functional group, all in parallel.
 
-| Sub-Agent | File | What it does |
-|-----------|------|-------------|
-| Device-side | `llk_investigation_device_agent.md` | Wrapper signatures, LLK/ckernel impl, init state, parameter semantics |
-| Host-side | `llk_investigation_host_agent.md` | Code generation, program factory, CB layout, parameter flow, derived param opportunities |
-| Usage patterns | `llk_investigation_usage_agent.md` | ALL kernel call sites, boilerplate patterns, hardware constraints, chaining patterns |
+Replace placeholders:
+- `{{GROUP_NAME}}` — functional sub-group (e.g. Activations, Trigonometry)
+- `{{LLK_CATEGORY}}` — operation category (e.g. elementwise unary)
+- `{{OPS_LIST}}` — comma-separated operation names assigned to this group
+- `{{LOCATOR_RESULTS}}` — locator table from Phase 0 (op -> file paths)
+- `{{CODEGEN_FILE}}` — path to op_utils (e.g. `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp`)
+- `{{FOCUS}}` — optional role-based focus directive to scope the analysis
 
-## Prerequisites
+## Prompt Template
 
-- Stage 1 (Discovery + Locate) must have run first. The device-side and host-side agents use the Stage 1 Locator Results (Phase 4 output) to avoid wasting time searching for files.
-- If Stage 1 was skipped (ops list was already known), run Stage 1 Phase 4 (locate) to generate the Locator Results table before launching these agents.
+```
+Investigate the {{GROUP_NAME}} group of {{LLK_CATEGORY}} operations: {{OPS_LIST}}.
 
-## How to invoke
+{{FOCUS}}
 
-```python
-# Stage 0.5 must have produced locator_results (a table of file paths per op)
+Use the locator results below to find files without searching:
+{{LOCATOR_RESULTS}}
 
-# Launch all 3 in parallel
-Agent(subagent_type="Explore", run_in_background=True,
-    prompt=device_template
-        .replace("{{GROUP_NAME}}", group_name)
-        .replace("{{LLK_CATEGORY}}", "elementwise unary")
-        .replace("{{OPS_LIST}}", ops_list)
-        .replace("{{LOCATOR_RESULTS}}", locator_results))
+Log breadcrumbs to agent_logs/. See tt_metal/third_party/tt-agents/scripts/logging/ for format.
 
-Agent(subagent_type="Explore", run_in_background=True,
-    prompt=host_template
-        .replace("{{GROUP_NAME}}", group_name)
-        .replace("{{LLK_CATEGORY}}", "elementwise unary")
-        .replace("{{OPS_LIST}}", ops_list)
-        .replace("{{CODEGEN_FILE}}", "ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp")
-        .replace("{{LOCATOR_RESULTS}}", locator_results))
+For EACH operation in the group, analyze three dimensions:
 
-Agent(subagent_type="Explore", run_in_background=True,
-    prompt=usage_template
-        .replace("{{GROUP_NAME}}", group_name)
-        .replace("{{LLK_CATEGORY}}", "elementwise unary")
-        .replace("{{OPS_LIST}}", ops_list))
+═══ DIMENSION 1: DEVICE-SIDE ═══
+
+Read the compute API wrapper header and LLK/ckernel implementation.
+
+Produce these tables:
+
+### Wrapper Signatures
+| Op | Init Signature | Exec Signature | Template Params | Runtime Params |
+|---|---|---|---|---|
+
+### Init State Compatibility
+| Op | Configures HW Resource | Disruptive? | Can Coexist With |
+|---|---|---|---|
+
+### DEST Batching Limits
+| Op | Max Tiles Per DEST Batch | FP32 Accumulation Required? |
+|---|---|---|
+
+═══ DIMENSION 2: HOST-SIDE ═══
+
+Read the codegen/op_utils file ({{CODEGEN_FILE}}) and program factory.
+
+Produce these tables:
+
+### Code Generation
+| Op | Generated Init Call | Generated Exec Call | In Section |
+|---|---|---|---|
+
+### Parameter Encoding Reference
+| Op | User API Param | Host Transform | Kernel Receives | Could Kernel Compute? |
+|---|---|---|---|---|
+
+### Program Factory Layout
+| Op | CB Layout | Runtime Args Order | Factory Sharing |
+|---|---|---|---|
+
+═══ DIMENSION 3: USAGE PATTERNS ═══
+
+Search ALL kernel call sites across the codebase.
+
+Search directories:
+- ttnn/cpp/ttnn/operations/**/kernels/compute/*.cpp
+- tt_metal/kernels/compute/*.cpp
+- tests/**/test_kernels/compute/*.cpp
+
+Produce these tables:
+
+### Call Sites
+| Op | File:Line | Pattern | Init Placement | Batching |
+|---|---|---|---|---|
+
+### Init/Exec Pairing Rules
+| Op | Rule | Evidence |
+|---|---|---|
+
+### Init Mutual Exclusion
+| Op A Init | Op B Init | Compatible? | Evidence |
+|---|---|---|---|
+
+### Chaining Patterns
+| Pattern | Ops Involved | File:Line | Description |
+|---|---|---|---|
+
+### Parameter Usage Matrix
+For each op with non-trivial params, record observed parameter values:
+
+| Param | Type | Observed Values | Call Sites |
+|---|---|---|---|
+
+Include: template args, runtime args, input/output dtypes, math_fidelity, DEST mode.
+
+═══ OUTPUT ═══
+
+Save to: agent_logs/{{CATEGORY_SLUG}}_{{GROUP_SLUG}}_investigation.md
+
+The orchestrator will consolidate per-group outputs into {category}_investigation.md.
 ```
 
-## Trust-the-Output Protocol
+## Focus Directives
 
-Once the 3 sub-agents complete, the orchestrator MUST:
-1. Read and consolidate their structured table outputs
-2. NOT re-read the same source files the agents read
-3. If an agent's output is unclear or suspicious, ask it for clarification via SendMessage rather than re-reading source
+When the category or situation calls for emphasizing one dimension over others, include a focus directive:
 
-The orchestrator's job is to make JUDGMENT CALLS (grouping, design decisions) using the agent-provided data, not to re-do the agents' research.
+**Compute-heavy category** (SFPU, matmul):
+```
+Focus on: Device dimension (wrapper signatures, init state, batching limits) and
+Usage dimension (chaining patterns, init mutual exclusion). De-emphasize Host
+dimension — program factory details are less critical when the helper wraps
+only the compute kernel.
+```
 
-## Output Consolidation
+**Data-movement category** (tilize, untilize):
+```
+Focus on: Host dimension (CB layout, parameter encoding, factory sharing) and
+Usage dimension (call sites, boilerplate patterns). De-emphasize Device
+dimension — the LLK implementations are simpler for data movement ops.
+```
 
-The orchestrator writes `{category}_investigation.md` by combining the 3 sub-agent outputs:
-- Device-side tables (wrapper sigs, init state, params, ckernel functions)
-- Host-side tables (codegen, program factory, param flow, derived param opportunities)
-- Usage tables (call sites, boilerplate, hardware constraints, chaining)
-
-## Placeholders
-
-- `{{LLK_CATEGORY}}` — operation category (e.g. elementwise unary)
-- `{{GROUP_NAME}}` — functional sub-group (e.g. Activations)
-- `{{OPS_LIST}}` — comma-separated operation names
-- `{{LOCATOR_RESULTS}}` — table from Stage 0.5 Locator agent
-- `{{CODEGEN_FILE}}` — path to the op_utils file for this category
-
-## Known groups
-
-Groups are category-specific. The Stage 1a Catalog agent discovers groups for each category using naming patterns or `{{KNOWN_GROUPS}}` seed data from this HQ. Do not hardcode group assignments here — they belong in the catalog output and are passed as `{{KNOWN_GROUPS}}` to the catalog agent when available from prior runs.
+**New/unknown category**:
+```
+Equal emphasis on all three dimensions. Flag any surprising findings.
+```
