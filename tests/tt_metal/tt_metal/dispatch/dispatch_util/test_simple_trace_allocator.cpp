@@ -148,8 +148,8 @@ TEST_F(SimpleTraceAllocatorFixture, CurrentNodeEvictionPenalty) {
     // Use wide spacing to isolate the penalty from stall-avoidance costs.
     constexpr uint32_t spacing = 100;
     extra_data_.resize(3 * spacing);
-    extra_data_[0].next_use_idx[ExtraData::kNonBinary] = 2 * spacing;            // Next use IS the current allocation.
-    extra_data_[spacing].next_use_idx[ExtraData::kNonBinary] = 3 * spacing - 1;  // Far away (low Belady cost).
+    extra_data_[0].next_use_idx[ExtraData::kNonBinary] = 2 * spacing;  // Next use IS the current allocation.
+    extra_data_[spacing].next_use_idx[ExtraData::kNonBinary] = (3 * spacing) - 1;  // Far away (low Belady cost).
 
     auto alloc = make_allocator(200);
 
@@ -303,9 +303,9 @@ TEST_F(SimpleTraceAllocatorFixture, BeladyEvictsLowestCostRegion) {
     extra_data_.resize(4 * spacing);
 
     // Regions at indices 0, spacing, 2*spacing. Future uses at different distances from 3*spacing.
-    extra_data_[0].next_use_idx[ExtraData::kNonBinary] = 3 * spacing + 2;            // distance 2 (high cost)
-    extra_data_[spacing].next_use_idx[ExtraData::kNonBinary] = 3 * spacing + 1;      // distance 1 (highest cost)
-    extra_data_[2 * spacing].next_use_idx[ExtraData::kNonBinary] = 3 * spacing + 3;  // distance 3 (lowest cost)
+    extra_data_[0].next_use_idx[ExtraData::kNonBinary] = (3 * spacing) + 2;            // distance 2 (high cost)
+    extra_data_[spacing].next_use_idx[ExtraData::kNonBinary] = (3 * spacing) + 1;      // distance 1 (highest cost)
+    extra_data_[2 * spacing].next_use_idx[ExtraData::kNonBinary] = (3 * spacing) + 3;  // distance 3 (lowest cost)
 
     auto alloc = make_allocator(300);
 
