@@ -80,7 +80,7 @@ python models/experimental/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py \
   --prompt "Summarize" \
   --simulate-context-len 128 \
   --min-cache-tokens 256 \
-  --max-new-tokens 32 \
+  --max-new-tokens 128 \
   --batch-size 1 \
   --mesh-rows 4 --mesh-cols 8 \
   --kv-cache-dtype bf8 \
