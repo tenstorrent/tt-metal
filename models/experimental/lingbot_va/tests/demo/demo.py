@@ -564,24 +564,41 @@ def _get_t5_prompt_embeds(models, prompt, num_videos_per_prompt=1, max_sequence_
     return prompt_embeds.to(device)
 
 
-def _get_t5_prompt_embeds_ttnn(models, text_inputs, num_videos_per_prompt=1, max_sequence_length=512):
+def _get_t5_prompt_embeds_ttnn(models, tt_input, tt_mask, num_videos_per_prompt=1, max_sequence_length=512):
     """TTNN text-encoder pass using TTNN pre-tokenized inputs, returns TTNN tensor."""
-    _ = (num_videos_per_prompt, max_sequence_length)
+    _ = max_sequence_length
     text_encoder = models["text_encoder"]
-
-    tt_input = text_inputs["input_ids"]
-    tt_mask = text_inputs["attention_mask"]
 
     mesh_device = text_encoder.mesh_device
     tt_outputs = text_encoder(tt_input, attention_mask=tt_mask)
-    last_hidden = tt_outputs[-1]
+    prompt_embeds = tt_outputs[-1]
 
+    # Keep this helper TTNN-only: normalize to [B, L, D], zero-out padded tokens with attention mask,
+    # and apply num_videos_per_prompt expansion in TTNN.
+    while len(prompt_embeds.shape) > 3:
+        prompt_embeds = ttnn.squeeze(prompt_embeds, 0)
+    if tt_mask.dtype != prompt_embeds.dtype:
+        tt_mask = ttnn.typecast(tt_mask, prompt_embeds.dtype)
+    tt_mask_3d = ttnn.unsqueeze(tt_mask, -1)
+    prompt_embeds = ttnn.multiply(prompt_embeds, tt_mask_3d)
+    if num_videos_per_prompt > 1:
+        batch_size, seq_len, hidden_dim = prompt_embeds.shape
+        prompt_embeds = ttnn.unsqueeze(prompt_embeds, 1)
+        prompt_embeds = ttnn.repeat(prompt_embeds, (1, num_videos_per_prompt, 1, 1))
+        prompt_embeds = ttnn.reshape(prompt_embeds, (batch_size * num_videos_per_prompt, seq_len, hidden_dim))
     try:
         ttnn.synchronize_device(mesh_device)
     except Exception as e:
         logger.warning("synchronize_device failed after text encoder pass: %s", e)
-
-    return last_hidden
+    try:
+        ttnn.deallocate(tt_input)
+    except Exception as e:
+        logger.warning("Failed to deallocate tt_input: %s", e)
+    try:
+        ttnn.deallocate(tt_mask)
+    except Exception as e:
+        logger.warning("Failed to deallocate tt_mask: %s", e)
+    return prompt_embeds
 
 
 def _encode_prompt(models, _state, prompt, do_classifier_free_guidance=True, max_sequence_length=512):
@@ -606,7 +623,8 @@ def _encode_prompt(models, _state, prompt, do_classifier_free_guidance=True, max
 
 def _encode_prompt_ttnn(
     models,
-    prompt_tokenized_inputs,
+    tt_input,
+    tt_mask,
     negative_prompt_tokenized_inputs=None,
     do_classifier_free_guidance=True,
     max_sequence_length=512,
@@ -614,7 +632,8 @@ def _encode_prompt_ttnn(
     """Encode prompt embeddings via TTNN text encoder using pre-tokenized inputs."""
     prompt_embeds = _get_t5_prompt_embeds_ttnn(
         models,
-        prompt_tokenized_inputs,
+        tt_input,
+        tt_mask,
         num_videos_per_prompt=1,
         max_sequence_length=max_sequence_length,
     )
@@ -623,7 +642,8 @@ def _encode_prompt_ttnn(
     if do_classifier_free_guidance and negative_prompt_tokenized_inputs is not None:
         negative_prompt_embeds = _get_t5_prompt_embeds_ttnn(
             models,
-            negative_prompt_tokenized_inputs,
+            tt_input,
+            tt_mask,
             num_videos_per_prompt=1,
             max_sequence_length=max_sequence_length,
         )
@@ -657,6 +677,10 @@ def _repeat_input_for_cfg(models, state, input_dict):
     prompt_embeds = state["prompt_embeds"]
     negative_prompt_embeds = state["negative_prompt_embeds"]
     dtype = models["dtype"]
+    if isinstance(prompt_embeds, ttnn.Tensor):
+        prompt_embeds = ttnn.to_torch(prompt_embeds)
+    if isinstance(negative_prompt_embeds, ttnn.Tensor):
+        negative_prompt_embeds = ttnn.to_torch(negative_prompt_embeds)
 
     if use_cfg:
         input_dict["noisy_latents"] = input_dict["noisy_latents"].repeat(2, 1, 1, 1, 1)
@@ -686,6 +710,8 @@ def _prepare_latent_input(
     device = models["device"]
     dtype = models["dtype"]
     prompt_embeds = state["prompt_embeds"]
+    if isinstance(prompt_embeds, ttnn.Tensor):
+        prompt_embeds = ttnn.to_torch(prompt_embeds)
     action_mask = state["action_mask"]
 
     input_dict = {}
@@ -1291,10 +1317,27 @@ def run_generate(
     state = {}
     prompt_list = [prompt] if isinstance(prompt, str) else prompt
     _load_text_encoder_into_models(models, config)
-    prompt_embeds, neg_embeds = _encode_prompt(
-        models,
-        state,
+    tokenizer = models["tokenizer"]
+    text_encoder = models["text_encoder"]
+    text_inputs = tokenizer(
         prompt,
+        padding="max_length",
+        max_length=512,
+        truncation=True,
+        add_special_tokens=True,
+        return_attention_mask=True,
+        return_tensors="pt",
+    )
+    text_input_ids, mask = text_inputs.input_ids, text_inputs.attention_mask
+    seq_lens = mask.gt(0).sum(dim=1).long()
+
+    mesh_device = text_encoder.mesh_device
+    tt_input = ttnn.from_torch(text_input_ids, dtype=ttnn.uint32, device=mesh_device)
+    tt_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat16, device=mesh_device)
+    prompt_embeds, neg_embeds = _encode_prompt_ttnn(
+        models,
+        tt_input,
+        tt_mask,
         do_classifier_free_guidance=(config.guidance_scale > 1),
         max_sequence_length=512,
     )
@@ -1369,13 +1412,15 @@ def run_generate(
     models["ccl_manager"] = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
 
     _load_tt_vae_decoder_into_models(models, config)
+    decoded_video = None
     if getattr(config, "enable_offload", True):
         models["vae"] = models["vae"].to(models["device"]).to(models["dtype"])
         decoded_video = _decode_one_video(models, pred_latent, "np")[0]
         _free_tt_vae_decoder_from_models(models)
         if models.get("vae_decoder_tt") is not None:
             _free_tt_vae_decoder_from_models(models)
-    export_to_video(decoded_video, os.path.join(config.save_root, "demo.mp4"), fps=10)
+    if decoded_video is not None:
+        export_to_video(decoded_video, os.path.join(config.save_root, "demo.mp4"), fps=10)
     _close_lingbot_mesh_stack(models)
     return str(Path(save_dir) / "demo.mp4")
 
