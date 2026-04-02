@@ -94,7 +94,12 @@ def normalize_hardware_group(board_type, device_series, card_count) -> Tuple[str
     """Normalize hardware metadata to the canonical suffix-compatible tuple."""
     board = _sanitize_suffix_token(board_type)
     series = _sanitize_suffix_token(device_series)
-    cards = 0 if card_count is None else int(card_count)
+    cards = 0
+    if card_count is not None:
+        try:
+            cards = int(card_count)
+        except (TypeError, ValueError):
+            logger.debug("Invalid card_count %r; defaulting to 0", card_count)
     return (board, series, cards)
 
 
