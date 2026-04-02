@@ -257,6 +257,8 @@ public:
         return create_tensor<T>(sharded_xtensor_views, layout, pad_value, buffer_pin, tensor_dims);
     }
 
+    const MeshMapperConfig& config() const { return config_; }
+
 private:
     template <typename T>
     Tensor create_tensor(
@@ -544,6 +546,8 @@ MeshToTensor MeshToTensor::create(const MeshDevice& mesh_device, const MeshCompo
         config));
 }
 
+const MeshMapperConfig& TensorToMesh::config() const { return impl_->config(); }
+
 std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_device) {
     return std::make_unique<TensorToMesh>(TensorToMesh::create(
         mesh_device,
@@ -639,7 +643,7 @@ Tensor create_distributed_tensor(
 
 #define INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(TYPE)                    \
     template Tensor create_distributed_tensor<TYPE>(                   \
-        ttsl::Span<TYPE> buffer,                                    \
+        ttsl::Span<TYPE> buffer,                                       \
         const ttnn::Shape& global_shape,                               \
         const tt::tt_metal::MemoryPin& buffer_pin,                     \
         const tt::tt_metal::TensorLayout& shard_layout,                \
@@ -648,7 +652,7 @@ Tensor create_distributed_tensor(
         std::optional<ttnn::QueueId> cq_id,                            \
         TYPE pad_value);                                               \
     template Tensor create_distributed_tensor<TYPE>(                   \
-        ttsl::Span<const TYPE> buffer,                              \
+        ttsl::Span<const TYPE> buffer,                                 \
         const ttnn::Shape& global_shape,                               \
         const tt::tt_metal::TensorLayout& shard_layout,                \
         const TensorToMesh& mapper,                                    \

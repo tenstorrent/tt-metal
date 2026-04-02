@@ -186,7 +186,8 @@ def run_test_rotary_embedding_llama(
                 device, batch * 2, head_dim, max_seq_len, rope_theta=10000, rope_scaling=None
             )
             tt_model.transformation_mat = rope_setup_decode.transformation_mat
-            cos, sin = rope_setup_decode.get_rot_mats(position_ids.repeat(2))
+            with device.cache_entries_counter.measure():
+                cos, sin = rope_setup_decode.get_rot_mats(position_ids.repeat(2))
 
             assert (
                 batch % 8 == 0 or batch == 1
@@ -257,7 +258,8 @@ def run_test_rotary_embedding_llama(
         tt_inp = [inp[0], inp[1], cos, sin]
         tt_inp = [ttnn.from_torch(i, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT) for i in tt_inp]
 
-    tt_out = tt_model(*tt_inp)
+    with device.cache_entries_counter.measure():
+        tt_out = tt_model(*tt_inp)
     tt_out = [ttnn.to_torch(tt_out_tensor) for tt_out_tensor in tt_out]
 
     if mode == "decode":
