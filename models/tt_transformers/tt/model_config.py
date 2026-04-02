@@ -965,9 +965,7 @@ class ModelArgs:
             self.num_all_gather_links = (
                 2 if self.is_galaxy else 1
             )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
-            # Use bfloat16 for CCL to avoid typecast overhead on P150x8
-            # bfloat8_b halves CCL data but adds typecast before/after each all-reduce
-            self.ccl_dtype = ttnn.bfloat16 if not self.is_galaxy else ttnn.bfloat8_b
+            self.ccl_dtype = ttnn.bfloat8_b
 
             # model specific CCL configs
             default_ln_ag = {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2}
