@@ -123,11 +123,9 @@ def _completion_batched_impl(ctx: InferenceCtx, prompt_tokens_np, pad_lengths: L
     B, N = ctx._B, ctx._N
     assert prompt_tokens_np.shape == (B, N)
     assert len(pad_lengths) == B
+    assert B % ctx.total_devices == 0
 
-    B_local = B
-    if ctx.dp_mapper is not None:
-        device = ttml.autograd.AutoContext.get_instance().get_device()
-        B_local = B // device.shape[0]  # batch per device
+    B_local = B // ctx.total_devices  # batch per device
 
     V = len(ctx.tokenizer)
     padded_V = round_up(ctx, V)
