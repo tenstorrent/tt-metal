@@ -16,6 +16,7 @@ from typing import Optional
 
 import torch
 from loguru import logger
+from tqdm import tqdm
 from tracy import signpost
 
 import ttnn
@@ -124,7 +125,7 @@ class TtRoutedExpert(LightweightModule):
             # Create per-device weights: for each local expert index, stack weights from all devices
             # then shard across devices so each device gets its own expert's weights
             mesh_rows, mesh_cols = self.mesh_device.shape
-            for local_expert_idx in range(experts_per_chip):
+            for local_expert_idx in tqdm(range(experts_per_chip), desc="Torch->TTNN weights per local expert"):
                 gate_weights, up_weights, down_weights = ExpertMapping.gather_weights_for_mesh_distribution(
                     torch_weights,
                     local_expert_idx,
@@ -144,7 +145,7 @@ class TtRoutedExpert(LightweightModule):
                 )
         else:
             logger.debug("Creating random weights (replicated across devices)")
-            for i in range(experts_per_chip):
+            for i in tqdm(range(experts_per_chip), desc="Creating random TTNN weights per chip"):
                 self.gate_projs.append(self._create_random_weight((emb_dim, hidden_dim), name=f"expert_{i}_gate"))
                 self.up_projs.append(self._create_random_weight((emb_dim, hidden_dim), name=f"expert_{i}_up"))
                 self.down_projs.append(self._create_random_weight((hidden_dim, emb_dim), name=f"expert_{i}_down"))
@@ -169,12 +170,6 @@ class TtRoutedExpert(LightweightModule):
         mesh_rows, mesh_cols = self.mesh_device.shape
         in_features, out_features = stacked.shape[1], stacked.shape[2]
         stacked = stacked.reshape(mesh_rows, mesh_cols, in_features, out_features)
-
-        logger.debug(
-            f"Creating per-device weight {name}: "
-            f"per-device HF shape {torch_weights_per_device[0].shape} -> "
-            f"stacked shape {stacked.shape}"
-        )
 
         mesh_mapper = ExpertMapping.get_weights_mesh_mapper(self.mesh_device)
 

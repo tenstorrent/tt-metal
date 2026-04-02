@@ -150,8 +150,16 @@ void kernel_main() {
             i, experts_tok_counter_addr_gen, counter_base_addr + i * aligned_experts_tok_counter_page_size);
     }
     noc_async_read_barrier();
+
+    // Expert token counts are laid out as [n_dispatch_groups, experts_per_dispatch_group]
+    // where each dispatch group is a mesh column (all rows in that column).
+    // Row-major linearization: linearized_mesh_coord = mesh_row * mesh_cols + mesh_col
+    constexpr uint32_t mesh_row = linearized_mesh_coord / mesh_cols;  // position within dispatch group
+    constexpr uint32_t mesh_col = linearized_mesh_coord % mesh_cols;  // which dispatch group
+    constexpr uint32_t experts_per_dispatch_group = experts_per_chip * mesh_rows;
+    constexpr uint32_t offset = mesh_col * experts_per_dispatch_group + mesh_row * experts_per_chip;
     volatile tt_l1_ptr uint32_t* experts_tok_counter_l1 =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_base_addr);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_base_addr) + offset;
 
     // Set up scratch buffers for batched reads
     constexpr uint32_t read_batch_size = 8;

@@ -35,8 +35,9 @@ void CombineDeviceOperation::validate_on_program_cache_miss(
         "Dispatched metadata must be INT32, got {}",
         tensor_args.dispatched_metadata.dtype());
     TT_FATAL(
-        tensor_args.expert_token_counts.dtype() == DataType::INT32,
-        "Experts token counter must be INT32, got {}",
+        tensor_args.expert_token_counts.dtype() == DataType::INT32 ||
+            tensor_args.expert_token_counts.dtype() == DataType::UINT32,
+        "Experts token counter must be INT32 or UINT32, got {}",
         tensor_args.expert_token_counts.dtype());
 
     // Validate output memory config
@@ -46,7 +47,7 @@ void CombineDeviceOperation::validate_on_program_cache_miss(
 
     // Validate tensor shapes are compatible
     // Dispatch outputs are 5D: (per_device_batch, 1, experts_per_chip, max_dispatched_tokens, hidden_dim/metadata_len)
-    // Counter is 2D: (per_device_batch, experts_per_chip)
+    // Counter is 3D: (num_dispatch_groups, per_device_batch, num_routed_experts)
     auto dispatched_shape = tensor_args.dispatched_buffer.tensor_spec().logical_shape();
     auto metadata_shape = tensor_args.dispatched_metadata.tensor_spec().logical_shape();
     auto counter_shape = tensor_args.expert_token_counts.tensor_spec().logical_shape();
@@ -55,11 +56,15 @@ void CombineDeviceOperation::validate_on_program_cache_miss(
         dispatched_shape[0] == metadata_shape[0] && dispatched_shape[0] == counter_shape[0],
         "First dimension (per_device_batch) must match across all input tensors");
     TT_FATAL(
-        dispatched_shape[2] == metadata_shape[2] && dispatched_shape[2] == counter_shape[2],
-        "experts_per_chip dimension must match: dispatched[2]={}, metadata[2]={}, counter[2]={}",
+        dispatched_shape[2] == metadata_shape[2],
+        "experts_per_chip must match: dispatched[2]={} vs metadata[2]={}",
         dispatched_shape[2],
-        metadata_shape[2],
-        counter_shape[2]);
+        metadata_shape[2]);
+    TT_FATAL(
+        counter_shape[-1] % operation_attributes.experts_per_chip == 0,
+        "counter last dim (num_routed_experts={}) must be divisible by experts_per_chip={}",
+        counter_shape[-1],
+        operation_attributes.experts_per_chip);
 }
 
 void CombineDeviceOperation::validate_on_program_cache_hit(

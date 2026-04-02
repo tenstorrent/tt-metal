@@ -138,7 +138,7 @@ void kernel_main() {
         noc_async_read_page(i, offsets_addr_gen, offsets_base_addr + i * aligned_offsets_page_size);
     }
     noc_async_read_barrier();
-    int32_t* offsets = (int32_t*)offsets_base_addr;
+    uint32_t* offsets = (uint32_t*)offsets_base_addr;
 
     // Read dispatch table into local scratch
     const auto dispatch_table_addr_gen =

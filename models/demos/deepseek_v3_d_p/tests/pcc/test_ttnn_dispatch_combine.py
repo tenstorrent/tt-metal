@@ -25,16 +25,18 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     extract_mesh_config,
     get_dispatch_input_mesh_mapper,
     get_ep_mesh_composer,
-    get_ep_mesh_mapper,
     get_gate_outputs,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
+    compare_exact,
     log_combine_mismatch_details,
     validate_combine_output,
+    validate_composed,
     validate_roundtrip_output,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
@@ -168,7 +170,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             },
             1,
             ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-4x2"),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
             id="mesh-2x2",
         ),
         pytest.param(
@@ -190,7 +192,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             },
             1,
             ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-4x2"),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="mesh-2x4",
         ),
         pytest.param(
@@ -313,16 +315,6 @@ def test_ttnn_dispatch_combine(
         topology=topology,
     )
 
-    # Compute gate outputs (offsets and token counts) before dispatch
-    expert_offsets, expert_token_counts, _ = get_gate_outputs(
-        indices,
-        dispatch_group_size,
-        num_routed_experts,
-        experts_per_chip,
-        seq_len_per_chip,
-        num_experts_per_tok,
-    )
-
     # Create expert dispatch table
     expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
@@ -336,9 +328,63 @@ def test_ttnn_dispatch_combine(
         num_routed_experts=num_routed_experts,
     )
 
+    # Run TtMoERoutingSetup for TTNN execution path
+    tt_moe_routing_setup = TtMoERoutingSetup(
+        mesh_device=mesh_device, expert_dispatch_table=expert_dispatch_table, num_links=num_links
+    )
+    tt_dispatch_offsets, tt_expert_token_counts, _ = tt_moe_routing_setup(
+        ttnn_top_k_experts_indices=indices,
+        num_routed_experts=num_routed_experts,
+        seq_len_per_chip=seq_len_per_chip,
+        num_experts_per_tok=num_experts_per_tok,
+    )
+
+    # Compute gate outputs (offsets and token counts) for torch reference path
+    expert_offsets, expert_token_counts, _ = get_gate_outputs(
+        indices,
+        dispatch_group_size,
+        num_routed_experts,
+        experts_per_chip,
+        seq_len_per_chip,
+        num_experts_per_tok,
+        expert_dispatch_table=expert_dispatch_table,
+    )
+
+    # Validate routing setup outputs against torch reference
+    ep_composer = get_ep_mesh_composer(mesh_device)
+    host_offsets = ttnn.to_torch(ttnn.unsqueeze_to_4D(tt_dispatch_offsets), mesh_composer=ep_composer).squeeze(2)
+    host_token_counts = ttnn.to_torch(ttnn.unsqueeze_to_4D(tt_expert_token_counts), mesh_composer=ep_composer).squeeze(
+        2
+    )
+
+    offsets_result = validate_composed(
+        host_offsets.int(),
+        expert_offsets.int(),
+        num_dispatch_groups,
+        dispatch_group_size,
+        compare_exact,
+        name="expert_offsets",
+    )
+    counts_result = validate_composed(
+        host_token_counts.int(),
+        expert_token_counts.int(),
+        num_dispatch_groups,
+        dispatch_group_size,
+        compare_exact,
+        name="expert_token_counts",
+    )
+    log_validation_results(
+        results=[offsets_result, counts_result],
+        num_dispatch_groups=num_dispatch_groups,
+        dispatch_group_size=dispatch_group_size,
+        title="Routing Setup Validation",
+    )
+    offsets_result.assert_passed("Dispatch offsets mismatch before dispatch")
+    counts_result.assert_passed("Expert token counts mismatch before dispatch")
+
     # Run TTNN dispatch
     logger.debug("Running TTNN dispatch...")
-    tt_expert_offsets = TtDispatchModule.shard_expert_offsets(mesh_device, expert_offsets)
+    tt_expert_offsets = tt_dispatch_offsets
     tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, expert_dispatch_table, sp_axis)
     tt_dispatched_buffer, tt_metadata = tt_dispatch_module(
         tt_x, tt_weights, tt_indices, tt_expert_offsets, tt_expert_dispatch_table
@@ -372,16 +418,6 @@ def test_ttnn_dispatch_combine(
 
     torch_output = torch_combine_module(torch_dispatched_buffer, torch_dispatched_metadata, expert_token_counts)
 
-    # Convert counter to TTNN tensor for combine module
-    mesh_mapper_combine_counter = get_ep_mesh_mapper(mesh_device)
-    tt_expert_token_counts = ttnn.from_torch(
-        expert_token_counts,
-        mesh_mapper=mesh_mapper_combine_counter,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
-        dtype=ttnn.int32,
-    )
-
     # Initialize TTNN combine module
     tt_combine_module = TtCombineModule(
         mesh_device=mesh_device,
@@ -399,12 +435,11 @@ def test_ttnn_dispatch_combine(
     # Run TTNN combine
     logger.debug("Running TTNN combine...")
     tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts)
+    ttnn.synchronize_device(mesh_device)
     logger.debug("Combine complete!")
 
     # Convert TTNN output back to torch
-    mesh_composer = get_ep_mesh_composer(mesh_device)
-
-    y = ttnn.to_torch(tt_output, mesh_composer=mesh_composer, dtype=torch.bfloat16)
+    y = ttnn.to_torch(tt_output, mesh_composer=ep_composer, dtype=torch.bfloat16)
 
     # Host-side reduction: remove extra dimension added for 2D mesh composition
     y = y.squeeze(-4)
