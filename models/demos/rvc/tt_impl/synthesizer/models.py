@@ -541,6 +541,7 @@ class GeneratorNSF:
             source_features = noise_convs(harmonic_source)
             x = ttnn.add(x, source_features, output_tensor=x)
             resblock_sum = self.resblocks[i * self.num_kernels](x)
+            ttnn.deallocate(source_features)
             for j in range(i * self.num_kernels + 1, (i + 1) * self.num_kernels):
                 resblock_sum = ttnn.add(resblock_sum, self.resblocks[j](x), output_tensor=resblock_sum)
             x = ttnn.multiply(resblock_sum, 1.0 / self.num_kernels, output_tensor=resblock_sum)
@@ -627,6 +628,8 @@ class SynthesizerTrnMsNSF:
             * 0.66666
         )
         latent_flow = self.flow(latent, conditioning)
+        # up until this part, the computation is in l1
+        # now up scaling has to be inside dram since it is getting to large when getting closer to audio dims
         latent_flow = ttnn.to_memory_config(latent_flow, ttnn.DRAM_MEMORY_CONFIG)
         out = self.dec(latent_flow, nsf_f0, conditioning)
         return out

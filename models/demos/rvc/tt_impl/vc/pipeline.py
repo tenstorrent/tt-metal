@@ -273,14 +273,14 @@ class Pipeline:
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.tt_device,
-                # memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             pitchf = ttnn.from_torch(
                 pitchf,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.tt_device,
-                # memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             if protect < 0.5:
                 pitchff = protect + (1 - protect) * (pitchf >= 1)

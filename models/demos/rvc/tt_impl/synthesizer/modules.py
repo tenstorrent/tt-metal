@@ -97,7 +97,7 @@ class WN:
                 ttnn.tanh(t_activation, output_tensor=t_activation),
                 output_tensor=s_activation,
             )
-            # gates_activations = ttnn.to_memory_config(gates_activations, ttnn.L1_MEMORY_CONFIG)
+            gates_activations = ttnn.to_memory_config(gates_activations, ttnn.L1_MEMORY_CONFIG)
             res_skip_out = res_skip_layer(gates_activations)
             if i < self.num_layers - 1:
                 residual_out, skip_out = ttnn.chunk(res_skip_out, 2, dim=-1)

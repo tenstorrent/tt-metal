@@ -56,11 +56,12 @@ class MultiheadSelfAttention:
         key_proj = self.k_proj(query)
         value_proj = self.v_proj(query)
 
-        qkv_proj = ttnn.concat([query_proj, key_proj, value_proj], dim=-1)
+        qkv_proj = ttnn.concat([query_proj, key_proj, value_proj], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
         query_heads, key_heads, value_heads = ttnn.transformer.split_query_key_value_and_split_heads(
             qkv_proj,
             num_heads=self.num_heads,
             transpose_key=False,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(qkv_proj)
 
@@ -73,6 +74,7 @@ class MultiheadSelfAttention:
             key_heads,
             value_heads,
             is_causal=False,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         ttnn.deallocate(query_heads)
