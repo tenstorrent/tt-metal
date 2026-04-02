@@ -68,6 +68,7 @@ public:
 TEST_F(DevicePrintFormatUpdatesFixture, PrintSimpleString) {
     std::vector<std::string_view> messages = {
         "Hello world!\n"sv,
+        "First line.\nSecond line.\n"sv,
     };
 
     TestFormatUpdate(
@@ -174,4 +175,43 @@ TEST_F(DevicePrintFormatUpdatesFixture, PrintAllArgumentSizes) {
 
     TestFormatUpdate(
         "tests/tt_metal/tt_metal/test_kernels/device_print/print_all_argument_sizes.cpp", ttsl::make_span(messages));
+}
+
+// Enum arguments are serialized as their base type on device, with the format string updated to contain
+// /e_<base_type_char>_<fully_qualified_enum_type_name> as the type specifier.
+// The '#' alternate form flag encodes "print full enum type name including value name" on the host side.
+TEST_F(DevicePrintFormatUpdatesFixture, PrintEnumValue) {
+    std::vector<std::string_view> messages = {
+        "Enum1 value: {0,/e_I_test::deep::Enum1}\n"sv,
+        "Enum1 full name value: {0,/e_I_test::deep::Enum1:#}\n"sv,
+        "Enum1 value: {0,/e_I_test::deep::Enum1}\n"sv,
+        "Enum1 full name value: {0,/e_I_test::deep::Enum1:#}\n"sv,
+        "Enum1 unrecognized value: {0,/e_I_test::deep::Enum1}\n"sv,
+        "Enum1 full name unrecognized value: {0,/e_I_test::deep::Enum1:#}\n"sv,
+        "Enum2 value: {0,/e_I_test_shallow::Enum2}\n"sv,
+        "Enum2 full name value: {0,/e_I_test_shallow::Enum2:#}\n"sv,
+        "EnumClass value: {0,/e_B_EnumClass}\n"sv,
+        "EnumClass full name value: {0,/e_B_EnumClass:#}\n"sv,
+        "BitEnum value: {0,/E_I_flags::BitEnum}\n"sv,
+        "BitEnum full name value: {0,/E_I_flags::BitEnum:#}\n"sv,
+    };
+
+    TestFormatUpdate(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_enum_value.cpp", ttsl::make_span(messages));
+}
+
+TEST_F(DevicePrintFormatUpdatesFixture, PrintBuiltinTypes) {
+    std::vector<std::string_view> messages = {
+        "i={0,i}\n"sv,
+        "unknown={0,i}\n"sv,
+        "u={0,I}\n"sv,
+        "ll={0,q}\n"sv,
+        "ull={0,Q}\n"sv,
+        "s={0,h}\n"sv,
+        "us={0,H}\n"sv,
+        "cvllu={0,Q}\n"sv,
+    };
+
+    TestFormatUpdate(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_builtin_types.cpp", ttsl::make_span(messages));
 }

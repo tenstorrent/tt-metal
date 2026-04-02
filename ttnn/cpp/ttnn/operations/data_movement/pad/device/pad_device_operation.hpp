@@ -10,7 +10,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operation.hpp"
-#include "ttnn/decorators.hpp"
 
 #include "ttnn/operations/data_movement/pad/device/pad_device_operation_types.hpp"
 
@@ -21,6 +20,7 @@
 #include "ttnn/operations/data_movement/pad/device/pad_rm_sharded_width_only_program_factory.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_tile_multicore_program_factory.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_tile_program_factory.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 struct PadDeviceOperation {

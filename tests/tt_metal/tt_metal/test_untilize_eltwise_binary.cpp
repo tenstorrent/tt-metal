@@ -180,6 +180,9 @@ TEST_F(MeshDeviceSingleCardFixture, UntilizeEltwiseBinary) {
                 .compile_args = reader_compile_time_args});
 
         std::vector<uint32_t> writer_compile_time_args;
+        if (multibank) {
+            writer_compile_time_args.emplace_back(ouput_cb_index);
+        }
         tt::tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_time_args);
         auto unary_writer_kernel = tt_metal::CreateKernel(
             program,

@@ -53,6 +53,8 @@ void bind_sort_operation(nb::module_& mod) {
                   - TILE
                 * - UINT16
                   - TILE
+                * - FLOAT32
+                  - TILE
 
             Supported dtypes and layout for index tensor values:
 
