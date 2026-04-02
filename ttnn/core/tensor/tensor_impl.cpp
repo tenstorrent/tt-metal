@@ -669,8 +669,8 @@ void copy_to_host(
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-Tensor copy_as_replicate_tensor_on_1x1_mesh(
-    const Tensor& host_tensor, const Tensor& device_tensor, distributed::MeshCommandQueue& command_queue) {
+void copy_as_replicate_tensor_on_1x1_mesh(
+    const Tensor& host_tensor, Tensor& device_tensor, distributed::MeshCommandQueue& command_queue) {
     const auto host_buffer = host_tensor.host_storage().buffer().get_shard(distributed::MeshCoordinate(0, 0));
     auto data_to_write = host_buffer->view_bytes();
     const auto expected_packed_buffer_size_bytes = device_tensor.tensor_spec().compute_packed_buffer_size_bytes();
@@ -688,11 +688,11 @@ Tensor copy_as_replicate_tensor_on_1x1_mesh(
     auto topology = TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape);
     MeshTensor mesh_tensor(
         mesh_buffer, host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()), topology);
-    return Tensor(std::move(mesh_tensor));
+    device_tensor = Tensor(std::move(mesh_tensor));
 }
 
-Tensor copy_as_distributed_tensor(
-    const Tensor& host_tensor, const Tensor& device_tensor, distributed::MeshCommandQueue& command_queue) {
+void copy_as_distributed_tensor(
+    const Tensor& host_tensor, Tensor& device_tensor, distributed::MeshCommandQueue& command_queue) {
     auto mesh_buffer = device_tensor.device_storage().get_mesh_buffer_leak_ownership();
     command_queue.enqueue_write(mesh_buffer, host_tensor.host_storage().buffer(), /*blocking=*/false);
 
@@ -708,7 +708,7 @@ Tensor copy_as_distributed_tensor(
         mesh_buffer,
         host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()),
         host_tensor.tensor_topology());
-    return Tensor(DeviceStorage(std::move(mesh_tensor), std::move(coords)));
+    device_tensor = Tensor(DeviceStorage(std::move(mesh_tensor), std::move(coords)));
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -734,8 +734,7 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
     // Special case of replicating tensors on 1x1 mesh across the entire mesh device.
     if (host_storage_shape.mesh_size() < mesh_device_shape.mesh_size() &&
         host_storage_shape == distributed::MeshShape(1, 1)) {
-        device_tensor =
-            CMAKE_UNIQUE_NAMESPACE::copy_as_replicate_tensor_on_1x1_mesh(host_tensor, device_tensor, command_queue);
+        CMAKE_UNIQUE_NAMESPACE::copy_as_replicate_tensor_on_1x1_mesh(host_tensor, device_tensor, command_queue);
         return;
     }
 
@@ -745,7 +744,7 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
         host_storage_shape,
         mesh_device_shape);
 
-    device_tensor = CMAKE_UNIQUE_NAMESPACE::copy_as_distributed_tensor(host_tensor, device_tensor, command_queue);
+    CMAKE_UNIQUE_NAMESPACE::copy_as_distributed_tensor(host_tensor, device_tensor, command_queue);
 }
 
 void copy_to_device(
