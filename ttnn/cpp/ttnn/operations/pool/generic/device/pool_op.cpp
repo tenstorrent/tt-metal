@@ -157,10 +157,13 @@ ttsl::hash::hash_t Pool2D::compute_program_hash(const operation_attributes_t& op
     return tt::tt_metal::operation::hash_operation<Pool2D>(
         op_attr.sliding_window_config_.get_hash(),
         op_attr.pool_type_,
+        op_attr.output_layout_,
         op_attr.memory_config_,
+        op_attr.compute_kernel_config_,
         op_attr.divisor_override_,
         op_attr.count_include_pad_,
         op_attr.return_indices_,
+        op_attr.config_tensor_in_dram,
         input_mem_config,
         in_dtype,
         out_dtype);

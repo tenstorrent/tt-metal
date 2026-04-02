@@ -181,6 +181,24 @@ static std::vector<Tensor> pool2d_L1(
         .ceil_mode = ceil_mode,
     };
     auto output_shape = sliding_window_config.get_output_shape();
+    TT_FATAL(
+        output_shape[1] > 0 && output_shape[2] > 0,
+        "Pool2D: Computed output dimensions must be positive, got {}x{} "
+        "(input={}x{}, kernel={}x{}, stride={}x{}, dilation={}x{}, padding=[{},{},{},{}])",
+        output_shape[1],
+        output_shape[2],
+        input_h,
+        input_w,
+        kernel_size[0],
+        kernel_size[1],
+        stride[0],
+        stride[1],
+        dilation_h,
+        dilation_w,
+        padding_4d[0],
+        padding_4d[1],
+        padding_4d[2],
+        padding_4d[3]);
     const bool is_input_tensor_in_dram = input_tensor.memory_config().is_dram();
     sliding_window::ParallelConfig parallel_config;
     MemoryConfig out_memory_config = input_tensor.memory_config();

@@ -540,7 +540,9 @@ void validate_input_params(
         dilation_h,
         dilation_w);
 
-    // check that padding is not excessive (should not be more than half the kernel size)
+    // Check that padding is not excessive (should not be more than half the kernel size).
+    // pad_right is intentionally excluded: DRAM slicing with TILE output can inflate it
+    // via width rounding in Pool2dSliceAttr::get_input_slice_and_padding.
     TT_FATAL(
         pad_top <= kernel_size[0] / 2 && pad_bottom <= kernel_size[0] / 2 && pad_left <= kernel_size[1] / 2,
         "Pool2D: Padding ({}, {}, {}) should not exceed half of kernel size ({}, {})",
