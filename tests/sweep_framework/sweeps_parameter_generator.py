@@ -29,6 +29,7 @@ SWEEP_SOURCES_DIR = SWEEPS_DIR / "sweeps"
 SHUFFLE_SEED = None
 DO_RANDOMIZE = False
 VECTOR_GROUPING_MODE = "mesh"
+GENERATION_MANIFEST_FILENAME = "generation_manifest.json"
 
 
 def get_mesh_shape_from_vector(vector):
@@ -317,6 +318,36 @@ def _backup_corrupted_json_file(path: pathlib.Path) -> None:
         logger.warning(f"Backed up corrupted JSON file from {path} to {backup_path}")
     except OSError as e:
         logger.warning(f"Failed to back up corrupted JSON file {path}: {e}")
+
+
+def write_generation_manifest(module_name, model_traced, suite_name):
+    """Write vector-generation metadata consumed by matrix computation."""
+    export_dir = SWEEPS_DIR / "vectors_export"
+    manifest_path = export_dir / GENERATION_MANIFEST_FILENAME
+
+    try:
+        export_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        logger.warning(f"Could not create vectors export directory for manifest: {e}")
+        return
+
+    manifest = {
+        "generated_at_utc": datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "vector_grouping_mode": VECTOR_GROUPING_MODE,
+        "module_name": module_name,
+        "model_traced": model_traced,
+        "suite_name": suite_name,
+    }
+
+    try:
+        with open(manifest_path, "w", encoding="utf-8") as file:
+            json.dump(manifest, file, indent=2)
+            file.write("\n")
+    except OSError as e:
+        logger.warning(f"Failed to write generation manifest {manifest_path}: {e}")
+        return
+
+    logger.info(f"Wrote generation manifest: {manifest_path}")
 
 
 def validate_exported_vectors(export_path, module_name, suite_name):
@@ -705,4 +736,5 @@ if __name__ == "__main__":
         MasterConfigLoader.set_master_file_path(resolved)
         logger.info(f"Master trace override: {resolved}")
 
+    write_generation_manifest(args.module_name, args.model_traced, args.suite_name)
     generate_tests(args.module_name, args.skip_modules, args.model_traced, args.suite_name)
