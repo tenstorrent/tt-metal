@@ -44,6 +44,8 @@ public:
         const tt::tt_metal::TensorLayout& layout,
         T pad_value = 0) const;
 
+    const MeshMapperConfig& get_config() const;
+
 private:
     class Impl;
 
