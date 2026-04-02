@@ -43,6 +43,7 @@ void kernel_main() {
                 // OUTPUT reconfig needed: packer was configured for cb_output/cb_acc by startup/reduce
                 compute_kernel_lib::sfpu_op<
                     cb_input,
+                    compute_kernel_lib::SfpuBatching::Disabled,
                     compute_kernel_lib::SfpuInputPolicy::WaitAndPopPerTile,
                     compute_kernel_lib::SfpuOutputPolicy::PerTile,
                     compute_kernel_lib::SfpuDataFormatReconfig::OUTPUT>(cb_ineg, 1, compute_kernel_lib::Neg<>{});

@@ -42,8 +42,11 @@ void kernel_main() {
                 Log1p<Approx::Fast, Dst::D0>{},
                 Tanh<Approx::Exact, Dst::D0>{},
                 SfpuMul<Dst::D0, Dst::D1, Dst::D0>{});
-            sfpu_pipeline<SfpuInputPolicy::WaitAndPopPerTile, SfpuOutputPolicy::Bulk, SfpuDataFormatReconfig::NONE>(
-                chain, cb_output, per_core_block_dim);
+            sfpu_pipeline<
+                SfpuBatching::Auto,
+                SfpuInputPolicy::WaitAndPopPerTile,
+                SfpuOutputPolicy::Bulk,
+                SfpuDataFormatReconfig::NONE>(chain, cb_output, per_core_block_dim);
         } else {
             auto chain = sfpu_chain(
                 Load<cb_input, Dst::D0>{},
@@ -52,8 +55,11 @@ void kernel_main() {
                 Log1p<Approx::Exact, Dst::D0>{},
                 Tanh<Approx::Exact, Dst::D0>{},
                 SfpuMul<Dst::D0, Dst::D1, Dst::D0>{});
-            sfpu_pipeline<SfpuInputPolicy::WaitAndPopPerTile, SfpuOutputPolicy::Bulk, SfpuDataFormatReconfig::NONE>(
-                chain, cb_output, per_core_block_dim);
+            sfpu_pipeline<
+                SfpuBatching::Auto,
+                SfpuInputPolicy::WaitAndPopPerTile,
+                SfpuOutputPolicy::Bulk,
+                SfpuDataFormatReconfig::NONE>(chain, cb_output, per_core_block_dim);
         }
     }
 #endif
