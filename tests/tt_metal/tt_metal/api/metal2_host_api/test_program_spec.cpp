@@ -102,19 +102,14 @@ TEST_F(ProgramSpecTestQuasar, DuplicateWorkerNameFails) {
     ProgramSpec spec;
     spec.program_id = "test_program";
 
-    // Kernel spans both nodes
-    auto kernel = MakeMinimalDMKernel("kernel", NodeRangeSet(std::set<NodeRange>{NodeRange{node0, node1}}));
-    auto dfb0 = MakeMinimalDFB("dfb_0", node0);
-    auto dfb1 = MakeMinimalDFB("dfb_1", node1);
-    BindDFBToKernel(kernel, "dfb_0", "accessor0", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(kernel, "dfb_1", "accessor1", KernelSpec::DFBEndpointType::CONSUMER);
-
-    spec.kernels = {kernel};
-    spec.dataflow_buffers = {dfb0, dfb1};
+    // Two kernels on different nodes
+    auto kernel0 = MakeMinimalDMKernel("kernel0", node0);
+    auto kernel1 = MakeMinimalDMKernel("kernel1", node1);
+    spec.kernels = {kernel0, kernel1};
 
     // Two workers with the same unique_id!
-    auto worker0 = MakeMinimalWorker("same_name", node0, {"kernel"}, {"dfb_0"});
-    auto worker1 = MakeMinimalWorker("same_name", node1, {"kernel"}, {"dfb_1"});  // Duplicate!
+    auto worker0 = MakeMinimalWorker("same_name", node0, {"kernel0"});
+    auto worker1 = MakeMinimalWorker("same_name", node1, {"kernel1"});  // Duplicate!
     spec.workers = std::vector<WorkerSpec>{worker0, worker1};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));

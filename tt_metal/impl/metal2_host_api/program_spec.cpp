@@ -25,7 +25,7 @@ namespace tt::tt_metal::experimental::metal2_host_api {
 static constexpr uint32_t QUASAR_DM_CORES_PER_NODE = 8;
 static constexpr uint32_t QUASAR_RESERVED_DM_CORES_PER_NODE = 2;  // DM0 and DM1 reserved for internal use
 static constexpr uint32_t QUASAR_USER_DM_CORES_PER_NODE = QUASAR_DM_CORES_PER_NODE - QUASAR_RESERVED_DM_CORES_PER_NODE;
-static constexpr uint32_t QUASAR_TENSIX_CORES_PER_NODE = 4;
+static constexpr uint32_t QUASAR_TENSIX_ENGINES_PER_NODE = 4;
 
 // ============================================================================
 // Type Definitions
@@ -80,7 +80,7 @@ struct ProcessorMask {
 };
 
 using DMProcessorMask = ProcessorMask<QUASAR_DM_CORES_PER_NODE>;
-using ComputeEngineMask = ProcessorMask<QUASAR_TENSIX_CORES_PER_NODE>;
+using ComputeEngineMask = ProcessorMask<QUASAR_TENSIX_ENGINES_PER_NODE>;
 
 // Kernel -> ProcessorMask maps
 using DMProcessorMaskMap = std::unordered_map<const KernelSpec*, DMProcessorMask>;
@@ -317,10 +317,10 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         TT_FATAL(kernel.num_threads > 0, "KernelSpec '{}' has no threads!", kernel.unique_id);
         if (kernel.is_compute_kernel()) {
             TT_FATAL(
-                kernel.num_threads <= QUASAR_TENSIX_CORES_PER_NODE,
+                kernel.num_threads <= QUASAR_TENSIX_ENGINES_PER_NODE,
                 "KernelSpec '{}' has too many threads. The architecture supports up to {} for compute kernels.",
                 kernel.unique_id,
-                QUASAR_TENSIX_CORES_PER_NODE);
+                QUASAR_TENSIX_ENGINES_PER_NODE);
         }
         if (kernel.is_dm_kernel()) {
             TT_FATAL(
@@ -497,11 +497,11 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             }
         }
         TT_FATAL(
-            compute_cores_needed <= QUASAR_TENSIX_CORES_PER_NODE,
+            compute_cores_needed <= QUASAR_TENSIX_ENGINES_PER_NODE,
             "WorkerSpec '{}' needs {} compute cores, but only {} are available",
             worker.unique_id,
             compute_cores_needed,
-            QUASAR_TENSIX_CORES_PER_NODE);
+            QUASAR_TENSIX_ENGINES_PER_NODE);
         TT_FATAL(
             dm_cores_needed <= QUASAR_USER_DM_CORES_PER_NODE,
             "WorkerSpec '{}' requests {} data movement cores. This exceeds the permitted maximum of {}.",
@@ -669,7 +669,7 @@ std::pair<DMProcessorMask, DMProcessorMask> ReserveDMProcessors(
 
 // Assign compute processor mask for a kernel.
 ComputeEngineMask AssignComputeProcessors(const KernelSpec* kernel_spec, const KernelSpecName& kernel_name) {
-    auto reserved = ReserveProcessors(kernel_spec->num_threads, CreateMask<QUASAR_TENSIX_CORES_PER_NODE>(0x00));
+    auto reserved = ReserveProcessors(kernel_spec->num_threads, CreateMask<QUASAR_TENSIX_ENGINES_PER_NODE>(0x00));
     TT_FATAL(
         reserved.has_value(),
         "Compute kernel '{}' reservation failed. Condition should be unreachable after validation.",
@@ -1053,7 +1053,7 @@ std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(Co
     constexpr uint8_t PROCESSORS_PER_ENGINE = experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE;
 
     std::set<QuasarComputeProcessor> processors;
-    for (uint8_t engine = 0; engine < QUASAR_TENSIX_CORES_PER_NODE; ++engine) {
+    for (uint8_t engine = 0; engine < QUASAR_TENSIX_ENGINES_PER_NODE; ++engine) {
         if (mask.is_idx_in_use(engine)) {
             // Add all 4 compute processors for this engine
             for (uint8_t proc = 0; proc < PROCESSORS_PER_ENGINE; ++proc) {

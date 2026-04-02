@@ -453,20 +453,15 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_MultiNodeKernel) {
     consumer.runtime_arguments_schema.num_runtime_args_per_node = {{node0, 0}, {node1, 0}};
     consumer.runtime_arguments_schema.num_common_runtime_args = 0;
 
-    // DFB is per-node (current limitation)
-    auto dfb0 = MakeMinimalDFB("dfb0", node0);
-    auto dfb1 = MakeMinimalDFB("dfb1", node1);
+    // Single DFB spanning all nodes
+    auto dfb = MakeMinimalDFB("dfb", all_nodes);
 
-    BindDFBToKernel(producer, "dfb0", "out0", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(producer, "dfb1", "out1", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb0", "in0", KernelSpec::DFBEndpointType::CONSUMER);
-    BindDFBToKernel(consumer, "dfb1", "in1", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
-    spec.dataflow_buffers = {dfb0, dfb1};
-    spec.workers = std::vector<WorkerSpec>{
-        MakeMinimalWorker("worker0", node0, {"producer", "consumer"}, {"dfb0"}),
-        MakeMinimalWorker("worker1", node1, {"producer", "consumer"}, {"dfb1"})};
+    spec.dataflow_buffers = {dfb};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", all_nodes, {"producer", "consumer"}, {"dfb"})};
 
     Program program = MakeProgramFromSpec(spec);
 
@@ -505,19 +500,15 @@ TEST_F(ProgramRunParamsTestQuasar, MultiNode_MissingOneNodeFails) {
     consumer.runtime_arguments_schema.num_runtime_args_per_node = {{node0, 0}, {node1, 0}};
     consumer.runtime_arguments_schema.num_common_runtime_args = 0;
 
-    auto dfb0 = MakeMinimalDFB("dfb0", node0);
-    auto dfb1 = MakeMinimalDFB("dfb1", node1);
+    // Single DFB spanning all nodes
+    auto dfb = MakeMinimalDFB("dfb", all_nodes);
 
-    BindDFBToKernel(producer, "dfb0", "out0", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(producer, "dfb1", "out1", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb0", "in0", KernelSpec::DFBEndpointType::CONSUMER);
-    BindDFBToKernel(consumer, "dfb1", "in1", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
-    spec.dataflow_buffers = {dfb0, dfb1};
-    spec.workers = std::vector<WorkerSpec>{
-        MakeMinimalWorker("worker0", node0, {"producer", "consumer"}, {"dfb0"}),
-        MakeMinimalWorker("worker1", node1, {"producer", "consumer"}, {"dfb1"})};
+    spec.dataflow_buffers = {dfb};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", all_nodes, {"producer", "consumer"}, {"dfb"})};
 
     Program program = MakeProgramFromSpec(spec);
 

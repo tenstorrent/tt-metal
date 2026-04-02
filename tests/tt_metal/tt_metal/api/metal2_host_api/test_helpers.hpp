@@ -23,8 +23,7 @@ namespace tt::tt_metal::experimental::metal2_host_api::test_helpers {
 // ============================================================================
 
 // Minimal valid kernel source code for testing
-inline constexpr const char* MINIMAL_DM_KERNEL_SOURCE = "void kernel_main() {}";
-inline constexpr const char* MINIMAL_COMPUTE_KERNEL_SOURCE = "void kernel_main() {}";
+inline constexpr const char* MINIMAL_KERNEL_SOURCE = "void kernel_main() {}";
 
 // ============================================================================
 // Spec Creation Helpers
@@ -35,7 +34,7 @@ inline KernelSpec MakeMinimalDMKernel(
     const std::string& name, const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes, uint8_t num_threads = 1) {
     return KernelSpec{
         .unique_id = name,
-        .source = MINIMAL_DM_KERNEL_SOURCE,
+        .source = MINIMAL_KERNEL_SOURCE,
         .source_type = KernelSpec::SourceType::SOURCE_CODE,
         .target_nodes = nodes,
         .num_threads = num_threads,
@@ -51,7 +50,7 @@ inline KernelSpec MakeMinimalComputeKernel(
     const std::string& name, const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes, uint8_t num_threads = 1) {
     return KernelSpec{
         .unique_id = name,
-        .source = MINIMAL_COMPUTE_KERNEL_SOURCE,
+        .source = MINIMAL_KERNEL_SOURCE,
         .source_type = KernelSpec::SourceType::SOURCE_CODE,
         .target_nodes = nodes,
         .num_threads = num_threads,
