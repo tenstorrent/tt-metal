@@ -190,12 +190,17 @@ TransposeWHShardedRMProgramFactory::cached_program_t TransposeWHShardedRMProgram
     std::map<std::string, std::string> compute_defines;
     compute_defines["SHARDED"] = "1";
 
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (src0_cb_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[im_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    }
     CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh_rm.cpp",
         all_cores,
         ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .compile_args = compute_compile_time_args,
             .defines = compute_defines});
 
