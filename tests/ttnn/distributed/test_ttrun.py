@@ -22,10 +22,13 @@ from ttnn.distributed.ttrun import (
     RankfileSyntax,
     build_rankfile_args,
     detect_rankfile_syntax,
+    mpi_args_specify_bind_to,
     normalize_rankfile_mpi_args,
     inject_rankfile_mpi_args,
     get_generate_rank_bindings_output_paths,
     build_generate_rank_bindings_mpi_cmd,
+    host_csv_needs_oversubscribe,
+    ensure_oversubscribe_for_multi_proc_per_host,
     run_phase1_generate_rank_bindings,
     find_generate_rank_bindings_executable,
     compute_phase1_cache_id,
@@ -298,6 +301,23 @@ class TestPhase2Helpers:
         assert "--output-dir" in cmd
         assert str(output_dir.resolve()) in cmd
 
+    def test_build_generate_rank_bindings_mpi_cmd_duplicate_hosts_adds_oversubscribe(self, temp_dir):
+        """Phase 1: same hostname listed more than once requires --oversubscribe."""
+        executable = temp_dir / "generate_rank_bindings"
+        executable.touch()
+        mgd_path = temp_dir / "mesh.textproto"
+        mgd_path.touch()
+        output_dir = temp_dir / "output"
+        hosts = ["node1", "node1", "node2", "node2"]
+
+        cmd = build_generate_rank_bindings_mpi_cmd(executable, mgd_path, hosts, output_dir)
+
+        assert "--oversubscribe" in cmd
+        hosts_idx = cmd.index("--host")
+        assert cmd[hosts_idx + 1] == "node1,node1,node2,node2"
+        np_idx = cmd.index("-np")
+        assert cmd[np_idx + 1] == "4"
+
     def test_build_generate_rank_bindings_mpi_cmd_no_hosts_no_mock(self, temp_dir):
         """Test build_generate_rank_bindings_mpi_cmd raises ValueError if neither hosts nor mock provided."""
         executable = temp_dir / "generate_rank_bindings"
@@ -397,6 +417,30 @@ class TestEnvironmentVariables:
         assert env["GLOBAL_VAR"] == "global_value"  # From global_env
 
 
+class TestOversubscribeHelpers:
+    """--oversubscribe when multiple processes map to one host."""
+
+    def test_host_csv_needs_oversubscribe_bare_duplicates(self):
+        assert host_csv_needs_oversubscribe("a,b,c") is False
+        assert host_csv_needs_oversubscribe("a,a,b") is True
+
+    def test_host_csv_ignores_explicit_slots(self):
+        assert host_csv_needs_oversubscribe("a:4,b:4") is False
+
+    def test_ensure_oversubscribe_prepends_from_host_csv(self):
+        args = ["--mca", "btl", "self,tcp", "--host", "h,h", "-np", "2"]
+        out = ensure_oversubscribe_for_multi_proc_per_host(args)
+        assert out[0] == "--oversubscribe"
+        assert "--oversubscribe" not in out[1:] or out.count("--oversubscribe") == 1
+
+    def test_ensure_oversubscribe_rankfile_hint(self, temp_dir):
+        rf = temp_dir / "rf"
+        rf.write_text("rank 0=host0 slot=0\nrank 1=host0 slot=1\n")
+        args = ["--bind-to", "hwt"]
+        out = ensure_oversubscribe_for_multi_proc_per_host(args, rankfile_hint=rf)
+        assert out[0] == "--oversubscribe"
+
+
 class TestMPICommandBuilding:
     """Test MPI command building."""
 
@@ -410,6 +454,17 @@ class TestMPICommandBuilding:
         assert "mpirun" in cmd[0] or cmd[0].endswith("mpirun")
         assert "--tag-output" in cmd
         assert "--bind-to" in cmd
+
+    def test_build_mpi_command_skips_bind_to_none_with_rankfile(self, sample_rank_binding_yaml, temp_dir):
+        """Rankfile / map-by rankfile must not get default --bind-to none (Open MPI 5 + PRRTE conflict)."""
+        config = parse_binding_config(sample_rank_binding_yaml)
+        program = ["echo", "hello"]
+        rankfile = temp_dir / "rf"
+        rankfile.write_text("rank 0=h slot=0\n")
+        mpi_args = ["--rankfile", str(rankfile)]
+        cmd = build_mpi_command(config, program, mpi_args, rankfile_syntax=RankfileSyntax.RANKFILE)
+        pairs = list(zip(cmd, cmd[1:]))
+        assert ("--bind-to", "none") not in pairs
 
 
 class TestLegacyFlow:
@@ -560,11 +615,39 @@ class TestRankfileInjection:
 
 
 class TestDetectRankfileSyntax:
-    """Default portable rankfile form is ``--rankfile``."""
+    """Rankfile CLI form follows detected Open MPI version."""
 
-    def test_detect_rankfile_syntax_default_is_rankfile(self):
-        assert detect_rankfile_syntax("mpirun") == RankfileSyntax.RANKFILE
-        assert detect_rankfile_syntax("/usr/bin/mpirun-ulfm") == RankfileSyntax.RANKFILE
+    def test_detect_rankfile_syntax_ompi4_uses_rankfile(self):
+        def _fake_run(cmd, **kwargs):
+            return type("R", (), {"stdout": "mpirun (Open MPI) 4.1.4\n", "stderr": ""})()
+
+        assert detect_rankfile_syntax("mpirun", _subprocess_run=_fake_run) == RankfileSyntax.RANKFILE
+
+    def test_detect_rankfile_syntax_ompi5_uses_map_by(self):
+        def _fake_run(cmd, **kwargs):
+            return type("R", (), {"stdout": "mpirun (Open MPI) 5.0.0\n", "stderr": ""})()
+
+        assert detect_rankfile_syntax("mpirun", _subprocess_run=_fake_run) == RankfileSyntax.MAP_BY_RANKFILE_FILE
+
+    def test_detect_rankfile_syntax_unknown_falls_back_to_rankfile(self):
+        def _fake_run(cmd, **kwargs):
+            return type("R", (), {"stdout": "not open mpi\n", "stderr": ""})()
+
+        assert detect_rankfile_syntax("mpirun", _subprocess_run=_fake_run) == RankfileSyntax.RANKFILE
+
+    def test_detect_rankfile_syntax_explicit_path(self):
+        def _fake_run(cmd, **kwargs):
+            assert cmd[0] == "/usr/bin/mpirun"
+            return type("R", (), {"stdout": "mpirun (Open MPI) 4.1.0\n", "stderr": ""})()
+
+        assert detect_rankfile_syntax("/usr/bin/mpirun", _subprocess_run=_fake_run) == RankfileSyntax.RANKFILE
+
+    def test_mpi_args_specify_bind_to(self):
+        assert mpi_args_specify_bind_to(None) is False
+        assert mpi_args_specify_bind_to([]) is False
+        assert mpi_args_specify_bind_to(["--bind-to", "hwt:overload-allowed"]) is True
+        assert mpi_args_specify_bind_to(["-bind-to", "core"]) is True
+        assert mpi_args_specify_bind_to(["--bind-to=socket"]) is True
 
     def test_normalize_map_by_rankfile_file_becomes_rankfile(self, temp_dir):
         rf = temp_dir / "rankfile"
