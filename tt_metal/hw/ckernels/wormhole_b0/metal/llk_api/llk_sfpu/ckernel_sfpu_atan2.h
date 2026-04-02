@@ -88,13 +88,11 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
     v_if(x < 0.0f) { r = pi - r; }
     v_endif;
 
-    r = sfpi::setsgn(r, y);
-
     if constexpr (!is_fp32_dest_acc_en) {
         r = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(r, 0));
     }
 
-    return r;
+    return sfpi::setsgn(r, y);
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
