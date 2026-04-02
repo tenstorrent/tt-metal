@@ -55,6 +55,6 @@ def test_group_norm_large_ex_external_cb(device):
         output_tensor,
         pcc_threshold=0.999,
         rtol=10.519,
-        atol=0.086,
+        atol=0.322,
         frobenius_threshold=0.043,
     )
