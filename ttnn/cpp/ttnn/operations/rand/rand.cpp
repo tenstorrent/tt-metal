@@ -107,7 +107,7 @@ Tensor rand(
         }
 
         tt::tt_metal::TensorTopology topology(mesh_shape, config.placements, coords);
-        tensor.update_tensor_topology(std::move(topology));
+        tensor.update_tensor_topology(topology);
     }
 
     return tensor;
