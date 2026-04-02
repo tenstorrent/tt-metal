@@ -541,6 +541,7 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 @pytest.mark.parametrize("shard_dim", [0])
 @pytest.mark.parametrize("experts", [256])
 @pytest.mark.parametrize("select_experts_k", [8])
+@pytest.mark.parametrize("dispatch_persistent_buffers", [False, True])
 @pytest.mark.parametrize("seq", [1])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize("matmul_N", [2048])
@@ -623,7 +624,9 @@ def test_optimized_moe_decode_block(
     # NOTE: these don't have to be double buffered
     # - there is a global sync in combine after reading all dispatch output (can't loop around on dispatch semaphore)
     # - there is a global sync at the end of dispatch (can't loop around on combine semaphore)
-    dispatch_global_semaphore = ttnn.create_global_semaphore(mesh_device, worker_cores, 0)
+    dispatch_global_semaphore = (
+        ttnn.create_global_semaphore(mesh_device, worker_cores, 0) if dispatch_persistent_buffers else None
+    )
     combine_global_semaphore = ttnn.create_global_semaphore(mesh_device, worker_cores, 0)
 
     ############################################
@@ -922,9 +925,13 @@ def test_optimized_moe_decode_block(
 
     # NOTE: these don't have to be double buffered, as there is a global sync in combine after reading all dispatch output
     tt_dispatch_preallocated_output_tensors = (
-        tt_preallocated_dispatch_output_sparse_buffer,
-        tt_preallocated_dispatch_output_expert_indices,
-        tt_preallocated_dispatch_output_expert_scores,
+        (
+            tt_preallocated_dispatch_output_sparse_buffer,
+            tt_preallocated_dispatch_output_expert_indices,
+            tt_preallocated_dispatch_output_expert_scores,
+        )
+        if dispatch_persistent_buffers
+        else None
     )
 
     logger.info(f"Done creating persistent dispatch output tensors")
@@ -932,7 +939,18 @@ def test_optimized_moe_decode_block(
     ############################################
     # set post combine memory configs
     ############################################
-    tilized_combine_output_memory_config = ttnn.L1_MEMORY_CONFIG
+    post_combine_tilize_output_memory_config = ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.L1,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=[32, 1024],
+            grid=ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 7)),
+                }
+            ),
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
 
     scaled_output_memory_config = ttnn.L1_MEMORY_CONFIG
 
@@ -1013,7 +1031,9 @@ def test_optimized_moe_decode_block(
             tt_expert_mapping,
             cluster_axis=cluster_axis,
             num_links=4,
-            drain_sync_tilizer_core=None,
+            drain_sync_tilizer_core=None
+            if dispatch_persistent_buffers
+            else (compute_tilize_drain_core.x, compute_tilize_drain_core.y),
             worker_mode=ttnn.WorkerMode.DIRECT,
             dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
             output_tensors=tt_dispatch_preallocated_output_tensors,
@@ -1067,13 +1087,14 @@ def test_optimized_moe_decode_block(
             optional_cross_device_semaphore=combine_global_semaphore,
         )
 
-        tt_tilized_compute_output = ttnn.to_layout(
-            tt_combine_output, layout=ttnn.TILE_LAYOUT, memory_config=tilized_combine_output_memory_config
-        )
-
         # unsqueeze
         # [select_experts_k, tokens_per_device, hidden_size] -> [select_experts_k, 1, tokens_per_device, hidden_size]
-        tt_unsqueezed_output = ttnn.unsqueeze(tt_tilized_compute_output, dim=1)
+        tt_unsqueezed_output = ttnn.unsqueeze(tt_combine_output, dim=1)
+
+        tt_tilized_compute_output = ttnn.experimental.deepseek_moe_post_combine_tilize(
+            tt_unsqueezed_output,
+            output_memory_config=post_combine_tilize_output_memory_config,
+        )
 
         # scale with scores
         # [tokens_per_device, 1, seq, select_experts_k] -> [select_experts_k, 1, tokens_per_device, seq]
@@ -1084,7 +1105,7 @@ def test_optimized_moe_decode_block(
             topk_experts_weights, layout=ttnn.TILE_LAYOUT, memory_config=scaled_output_memory_config
         )
         tt_scaled_output = ttnn.mul(
-            tt_unsqueezed_output, topk_experts_weights, memory_config=scaled_output_memory_config
+            tt_tilized_compute_output, topk_experts_weights, memory_config=scaled_output_memory_config
         )
 
         tt_fast_reduce_output_tensors = ttnn.experimental.deepseek_moe_fast_reduce_nc(
