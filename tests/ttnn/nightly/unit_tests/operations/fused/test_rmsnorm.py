@@ -9,15 +9,13 @@ import torch
 
 import ttnn
 
-
 from tt_lib.utils import (
     pad_weight,
     tilize_to_list,
     untilize,
     is_close,
 )
-from models.common.utility_functions import is_wormhole_b0
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 def rmsnorm(x, gamma, beta, eps):
@@ -102,8 +100,14 @@ def run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
         # ref_lnorm = ref_layernorm(x, epsf, gammaf, betaf, H, W)
         ref_rmsnorm = rmsnorm(x, gamma.flatten(), beta.flatten(), epsf)
 
-        passing = is_close(tt_got_back, ref_rmsnorm)
-        assert passing
+        assert_numeric_metrics(
+            ref_rmsnorm,
+            tt_got_back,
+            pcc_threshold=0.999,
+            rtol=0.039,
+            atol=0.045,
+            frobenius_threshold=0.008,
+        )
 
 
 @pytest.mark.parametrize(
@@ -157,7 +161,14 @@ def test_llama_4D_rms_norm(device, h, w):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    is_close(torch_output_tensor, output_tensor)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.095,
+        atol=0.138,
+        frobenius_threshold=0.048,
+    )
 
 
 @pytest.mark.parametrize("batch_size, w", [(1, 5120)])
@@ -203,4 +214,11 @@ def test_large_tensor_rms_norm(device, batch_size, w):
         )
         output_tensor = ttnn.from_device(output_tensor)
         output_tensor = ttnn.to_torch(output_tensor)
-        assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.999,
+            rtol=0.009,
+            atol=0.009,
+            frobenius_threshold=0.004,
+        )

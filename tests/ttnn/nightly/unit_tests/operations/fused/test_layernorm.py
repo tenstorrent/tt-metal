@@ -2,15 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
-
 import pytest
 import torch
 
 import ttnn
 
-
-from models.common.utility_functions import pad_by_zero, torch2tt_tensor, comp_pcc
+from models.common.utility_functions import pad_by_zero, torch2tt_tensor
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 def ref_layernorm(x, gamma, beta, eps):
@@ -160,9 +158,14 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
 
         ref_lnorm = ref_fn(pt_in, gamma.flatten(), beta.flatten(), epsf)
 
-        passing, output = comp_pcc(ref_lnorm, tt_got_back)
-
-        assert passing, output
+        assert_numeric_metrics(
+            ref_lnorm,
+            tt_got_back,
+            pcc_threshold=0.999,
+            rtol=3.266,
+            atol=0.098,
+            frobenius_threshold=0.016,
+        )
 
 
 @pytest.mark.parametrize(
@@ -241,5 +244,11 @@ def test_layer_norm_4D_llama(device, h, w, num_chunks):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    passing, output = comp_pcc(torch_output_tensor, output_tensor)
-    assert passing, output
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.006,
+        atol=0.018,
+        frobenius_threshold=0.003,
+    )

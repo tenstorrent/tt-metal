@@ -9,14 +9,7 @@ import math
 
 import ttnn
 
-from tt_lib.utils import (
-    pad_weight,
-    tilize_to_list,
-    untilize,
-    is_close,
-)
-from models.common.utility_functions import print_diff_argmax, comp_pcc
-from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
@@ -84,12 +77,14 @@ def test_softmax_causal_mask(device, in_dtype, in0_mem_config):
     golden_output_tensor = input_tensor * scale + attention_mask
     golden_output_tensor = torch.softmax(golden_output_tensor, dim=-1)
 
-    allclose, output = comp_pcc(
-        tt_output_tensor,
+    assert_numeric_metrics(
         golden_output_tensor,
+        tt_output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.091,
+        atol=0.001,
+        frobenius_threshold=0.025,
     )
-    logger.info(output)
-    assert allclose, f"FAILED: {output}"
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
@@ -136,7 +131,7 @@ def test_softmax(device, in_dtype, in0_mem_config, causal_mask):
         # attention_mask = torch.zeros(1, 1, 1, 384 * batch)
         attention_mask = torch.rand(batch, 1, 1, 384)
         attention_mask = (attention_mask > 0.5).float()
-        attention_mask32 = pad_weight(attention_mask)
+        # attention_mask32 = pad_weight(attention_mask)
         attention_mask_t = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     else:
         attention_mask = torch.rand(batch, 1, 384, 384)
@@ -177,12 +172,14 @@ def test_softmax(device, in_dtype, in0_mem_config, causal_mask):
     golden_output_tensor = input_tensor * scale + attention_mask
     golden_output_tensor = torch.softmax(golden_output_tensor, dim=-1)
 
-    allclose, output = comp_pcc(
+    assert_numeric_metrics(
         tt_output_tensor,
         golden_output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.091,
+        atol=0.001,
+        frobenius_threshold=0.025,
     )
-    logger.info(output)
-    assert allclose, f"FAILED: {output}"
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
@@ -271,12 +268,14 @@ def test_scale_mask_softmax_rm(device, in_dtype, in0_mem_config, causal_mask):
     golden_output_tensor = input_tensor * scale + attention_mask
     golden_output_tensor = torch.softmax(golden_output_tensor, dim=-1)
 
-    allclose, output = comp_pcc(
-        tt_output_tensor,
+    assert_numeric_metrics(
         golden_output_tensor,
+        tt_output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.089,
+        atol=0.001,
+        frobenius_threshold=0.025,
     )
-    logger.info(output)
-    assert allclose, f"FAILED: {output}"
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
@@ -346,9 +345,11 @@ def test_softmax_with_sharded_mask(device, in_dtype, in0_mem_config, shard_orien
     golden_output_tensor = input_tensor * scale + attention_mask
     golden_output_tensor = torch.softmax(golden_output_tensor, dim=-1)
 
-    allclose, output = comp_pcc(
-        tt_output_tensor,
+    assert_numeric_metrics(
         golden_output_tensor,
+        tt_output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.085,
+        atol=0.001,
+        frobenius_threshold=0.028,
     )
-    logger.info(output)
-    assert allclose, f"FAILED: {output}"

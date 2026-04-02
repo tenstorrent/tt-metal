@@ -2,21 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
 import torch
 import pytest
 import math
 
 import ttnn
 
-from tt_lib.utils import (
-    pad_weight,
-    tilize_to_list,
-    untilize,
-    is_close,
-)
-from models.common.utility_functions import print_diff_argmax, comp_pcc
-from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
+from tt_lib.utils import pad_weight
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from models.common.utility_functions import print_diff_argmax
 
 
 @pytest.mark.parametrize(
@@ -59,9 +53,14 @@ def test_softmax(device, inplace, dtype):
         golden_output_tensor = torch.softmax(input_tensor, dim=-1)
         print_diff_argmax(tt_output_tensor, golden_output_tensor)
 
-        allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
-        logger.info(output)
-        assert allclose, f"FAILED: {output}"
+        assert_numeric_metrics(
+            golden_output_tensor,
+            tt_output_tensor,
+            pcc_threshold=0.999,
+            rtol=0.042,
+            atol=0.005,
+            frobenius_threshold=0.007,
+        )
 
 
 @pytest.mark.parametrize("inplace", [True, False])
@@ -83,8 +82,14 @@ def test_softmax_with_program_cache(device, inplace):
         golden_output_tensor = torch.softmax(input_tensor, dim=-1)
         print_diff_argmax(tt_output_tensor, golden_output_tensor)
 
-        allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
-        assert allclose, f"FAILED: {output}"
+        assert_numeric_metrics(
+            golden_output_tensor,
+            tt_output_tensor,
+            pcc_threshold=0.999,
+            rtol=0.108,
+            atol=0.022,
+            frobenius_threshold=0.030,
+        )
 
 
 @pytest.mark.parametrize(
@@ -111,8 +116,14 @@ def test_softmax_mix_precision(device, inplace, in_dtype):
         golden_output_tensor = torch.softmax(input_tensor, dim=-1)
         print_diff_argmax(tt_output_tensor, golden_output_tensor)
 
-        allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
-        assert allclose, f"FAILED: {output}"
+        assert_numeric_metrics(
+            golden_output_tensor,
+            tt_output_tensor,
+            pcc_threshold=0.999,
+            rtol=1.186,
+            atol=0.026,
+            frobenius_threshold=0.032,
+        )
 
 
 @pytest.mark.parametrize(
@@ -207,12 +218,14 @@ def test_scale_mask_softmax_inplace(device, in_dtype, in0_mem_config, causal_mas
         golden_output_tensor = input_tensor[i] * scale + attention_mask[i]
         golden_output_tensor = torch.softmax(golden_output_tensor, dim=-1)
 
-        allclose, output = comp_pcc(
-            tt_output_tensor[i],
+        assert_numeric_metrics(
             golden_output_tensor,
+            tt_output_tensor[i],
+            pcc_threshold=0.999,
+            rtol=0.071,
+            atol=0.002,
+            frobenius_threshold=0.018,
         )
-        logger.info(output)
-        assert allclose, f"FAILED: {output}"
 
 
 @pytest.mark.parametrize(
@@ -262,9 +275,11 @@ def test_scale_mask_softmax(device, in_dtype, in0_mem_config):
         golden_output_tensor = input_tensor[i] * scale + attention_mask_ref[i]
         golden_output_tensor = torch.softmax(golden_output_tensor, dim=-1)
 
-        allclose, output = comp_pcc(
-            tt_output_tensor[i],
+        assert_numeric_metrics(
             golden_output_tensor,
+            tt_output_tensor[i],
+            pcc_threshold=0.999,
+            rtol=0.071,
+            atol=0.002,
+            frobenius_threshold=0.025,
         )
-        logger.info(output)
-        assert allclose, f"FAILED: {output}"

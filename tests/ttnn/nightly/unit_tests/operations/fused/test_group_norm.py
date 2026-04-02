@@ -5,7 +5,7 @@
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 def test_group_norm_large_ex_external_cb(device):
@@ -50,4 +50,11 @@ def test_group_norm_large_ex_external_cb(device):
         num_out_blocks=-1,
     )
     output_tensor = ttnn.to_torch(output_tensor_tt)
-    assert_with_pcc(golden, output_tensor)
+    assert_numeric_metrics(
+        golden,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=10.519,
+        atol=0.086,
+        frobenius_threshold=0.043,
+    )

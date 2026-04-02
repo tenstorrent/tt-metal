@@ -2,18 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
-
 import ttnn
 import pytest
 import torch
 import math
 
-
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_pcc,
-)
 from models.common.utility_functions import torch2tt_tensor
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 def rms_norm(x, dim, gamma, beta, eps):
@@ -273,9 +268,14 @@ def test_layernorm_sharded_mix_precision_rm(
         ref_fn = rms_norm
     ref_lnorm = ref_fn(pt_in, in0.shape[-1:], gamma.flatten(), beta.flatten(), epsf)
 
-    passing, output = comp_pcc(tt_got_back, ref_lnorm, 0.999)
-    logger.info(output)
-    assert passing
+    assert_numeric_metrics(
+        ref_lnorm,
+        tt_got_back,
+        pcc_threshold=0.999,
+        rtol=3.293,
+        atol=0.101,
+        frobenius_threshold=0.030,
+    )
 
 
 @pytest.mark.parametrize(
@@ -546,6 +546,11 @@ def test_layernorm_1d_sharded_mix_precision_rm(
         ref_fn = rms_norm
     ref_lnorm = ref_fn(pt_in, in0.shape[-1:], gamma.flatten(), beta.flatten(), epsf)
 
-    passing, output = comp_pcc(tt_got_back, ref_lnorm, 0.999)
-    logger.info(output)
-    assert passing
+    assert_numeric_metrics(
+        ref_lnorm,
+        tt_got_back,
+        pcc_threshold=0.999,
+        rtol=3.158,
+        atol=0.087,
+        frobenius_threshold=0.016,
+    )

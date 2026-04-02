@@ -4,15 +4,6 @@
 
 import pytest
 
-import torch
-
-from loguru import logger
-
-import ttnn
-
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import is_blackhole
-
 import tests.ttnn.unit_tests.operations.fused.test_group_norm_DRAM as base
 
 
