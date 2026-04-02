@@ -220,6 +220,59 @@ class ModelOptimizations:
         inst.__name__ = "performance"
         return inst
 
+    @classmethod
+    def max_performance(cls, model_name):
+        """Configuration for maximum throughput: BFP4 all MLP weights, HiFi2 for FF2 accumulation.
+
+        Uses BFP4 for FF2 down_proj (saves ~19% DRAM reads vs performance preset)
+        but keeps HiFi2 math fidelity for FF2 to maintain numerical stability.
+        FF1/FF3 use LoFi (same as performance preset).
+        """
+        inst = cls(
+            {
+                "TensorPrecision": {
+                    TensorGroup.FF1_FF3: PrecisionSetting.BFP4,
+                    TensorGroup.FF2: PrecisionSetting.BFP4,
+                },
+                "OpFidelity": {
+                    OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
+                    OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
+                },
+            }
+        )
+        inst.__name__ = "max_performance"
+        return inst
+
+    @classmethod
+    def ultra_performance(cls, model_name):
+        """Maximum throughput: BFP4 all MLP + BFP8 attention + LoFi QKV/O decode.
+
+        Builds on max_performance by also reducing attention weight precision
+        from BF16 to BFP8 (~50% less DRAM reads for WQKV and WO) and using
+        LoFi math for QKV and O decode matmuls.
+        """
+        inst = cls(
+            {
+                "TensorPrecision": {
+                    TensorGroup.FF1_FF3: PrecisionSetting.BFP4,
+                    TensorGroup.FF2: PrecisionSetting.BFP4,
+                    TensorGroup.WQKV: PrecisionSetting.BFP8,
+                    TensorGroup.WO: PrecisionSetting.BFP8,
+                    TensorGroup.KV_CACHE: PrecisionSetting.BFP4,
+                    TensorGroup.ACTIVATION: PrecisionSetting.BFP8,
+                },
+                "OpFidelity": {
+                    OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
+                    OpGroup.LI_FF2: MathFidelitySetting.LOFI,
+                    OpGroup.LI_QKV_DECODE: MathFidelitySetting.LOFI,
+                    OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
+                    OpGroup.SDPA_DECODE: MathFidelitySetting.LOFI,
+                },
+            }
+        )
+        inst.__name__ = "ultra_performance"
+        return inst
+
     def __init__(self, settings: dict = None):
         if settings:
             self._validate_settings(settings)
@@ -646,7 +699,7 @@ class ModelArgs:
             # NOTE: Fused all gather matmul only supports a core grid of size num_devices x 1
             # TODO: #26657 refactor ACTUAL_DEVICE environment variable usage
             self._use_fused_all_gather_matmul = (
-                self.num_devices == 8
+                self.num_devices >= 4
                 and os.getenv("ACTUAL_DEVICE", "") != "TG"
                 and (self.dim // ttnn.TILE_SIZE // self.num_devices) % self.num_devices == 0
                 and self.num_devices > 1
@@ -996,15 +1049,16 @@ class ModelArgs:
             self.set_tg_attention_config()
 
             self.is_multichip = self.num_devices > 1
-            self.num_reduce_scatter_links = 1
+            self.is_p300 = self.device_name == "P300"
+            self.num_reduce_scatter_links = 2 if (self.is_galaxy or self.is_p300) else 1
             self.num_all_gather_links = (
-                2 if self.is_galaxy else 1
+                2 if (self.is_galaxy or self.is_p300) else 1
             )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
             self.ccl_dtype = ttnn.bfloat8_b
 
             # model specific CCL configs
-            default_ln_ag = {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2}
-            default_agmm = {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2}
+            default_ln_ag = {"num_links": self.num_all_gather_links, "chunks_per_sync": 10, "num_workers_per_link": 2}
+            default_agmm = {"num_links": self.num_all_gather_links, "chunks_per_sync": 10, "num_workers_per_link": 2}
             default_mlp_rs = {
                 "num_links": self.num_reduce_scatter_links,
                 "chunks_per_sync": 10,
@@ -1013,7 +1067,7 @@ class ModelArgs:
             }
             default_sampling_force_argmax = {
                 "allow_force_argmax": False,
-                "num_links": 1,
+                "num_links": self.num_all_gather_links,
                 "chunks_per_sync": 10,
                 "num_workers_per_link": 2,
                 "topology": ttnn.Topology.Linear,
@@ -1038,6 +1092,17 @@ class ModelArgs:
                     },
                 }
             }
+            # P300-specific CCL tuning: reduce fabric mux overhead for small decode tensors
+            # num_workers_per_link=1 bypasses fabric mux (proven by Llama-8B team, commit 70cc1aec3f)
+            # chunks_per_sync=1 reduces sync overhead for tiny payloads
+            if self.is_p300:
+                default_ln_ag["num_workers_per_link"] = 1
+                default_ln_ag["chunks_per_sync"] = 2
+                default_agmm["num_workers_per_link"] = 1
+                default_agmm["chunks_per_sync"] = 1
+                default_mlp_rs["num_workers_per_link"] = 1
+                default_mlp_rs["chunks_per_sync"] = 1
+
             # Model-specific CCL configs are tuned for Galaxy (TG) with 4 links
             # Only apply them on Galaxy, otherwise use defaults
             executed_on_galaxy = ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
@@ -1236,6 +1301,21 @@ class ModelArgs:
                 if not self.is_galaxy
                 else None,
             )
+
+    @lru_cache(maxsize=None)
+    def get_mlp_ff1_3_fused_prg_config(self, mode: Mode, seq_len: int = 1):
+        """Program config for fused W1|W3 matmul (doubled output width)."""
+        if mode == Mode.DECODE:
+            fused_n = 2 * self.hidden_dim // self.cluster_shape[1]
+            fused_grid = self.dram_shard_core_grid_for_k_and_n(self.dim, fused_n)
+            return self.dram_matmul_config(
+                m=self.tile_padded_batch_rows,
+                k=self.dim,
+                n=fused_n,
+                num_cores=fused_grid.num_cores,
+            )
+        else:
+            return None
 
     @lru_cache(maxsize=None)
     def get_mlp_ff2_prg_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
@@ -1823,15 +1903,20 @@ class ModelArgs:
                 )
             else:
                 if self.use_fused_all_gather_matmul:
-                    do_core_grid_size = (8, 1)
+                    do_core_grid_size = (self.num_devices, 1)
+                    # K dimension is the gathered heads: n_heads * head_dim (not dim)
+                    gathered_k = self.n_heads * self.head_dim
                     do_per_core_N = (
                         self.dim // self.num_devices // ttnn.TILE_SIZE // (do_core_grid_size[0] * do_core_grid_size[1])
                     )
+                    # Cap in0_block_w to 32 to avoid L1 overflow
+                    in0_block_w = min(
+                        gathered_k // ttnn.TILE_SIZE // (do_core_grid_size[0] * do_core_grid_size[1]),
+                        32,
+                    )
                     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                         compute_with_storage_grid_size=do_core_grid_size,
-                        in0_block_w=self.dim
-                        // ttnn.TILE_SIZE
-                        // (do_core_grid_size[0] * do_core_grid_size[1]),  # [32 x 8k] x [8k x 1k] = [32 x 1k]
+                        in0_block_w=in0_block_w,
                         out_subblock_h=1,
                         out_subblock_w=get_out_subblock_w(
                             do_per_core_N, out_subblock_h=1
@@ -4178,9 +4263,13 @@ class DecodersPrecision:
             return cls.performance
         elif optimizations == "accuracy":
             return cls.accuracy
+        elif optimizations == "max_performance":
+            return cls.max_performance
+        elif optimizations == "ultra_performance":
+            return cls.ultra_performance
         else:
             raise ValueError(
-                f"Invalid optimization configuration: {optimizations}. Allowed values are 'performance' or 'accuracy'"
+                f"Invalid optimization configuration: {optimizations}. Allowed values are 'performance', 'accuracy', 'max_performance', or 'ultra_performance'"
             )
 
     @classmethod
@@ -4193,6 +4282,18 @@ class DecodersPrecision:
     def performance(cls, num_decoders, model_name):
         inst = cls._precision_factory(num_decoders, model_name, ModelOptimizations.performance)
         inst.__name__ = "performance"
+        return inst
+
+    @classmethod
+    def max_performance(cls, num_decoders, model_name):
+        inst = cls._precision_factory(num_decoders, model_name, ModelOptimizations.max_performance)
+        inst.__name__ = "max_performance"
+        return inst
+
+    @classmethod
+    def ultra_performance(cls, num_decoders, model_name):
+        inst = cls._precision_factory(num_decoders, model_name, ModelOptimizations.ultra_performance)
+        inst.__name__ = "ultra_performance"
         return inst
 
     def __init__(self, num_decoders, model_name, decoder_conf: dict = None):
@@ -4277,14 +4378,21 @@ class DecodersPrecision:
                 decoder_config_filename = ACCURACY_DECODER_CONFIG_FILENAME
             case ModelOptimizations.performance:
                 decoder_config_filename = PERFORMANCE_DECODER_CONFIG_FILENAME
+            case ModelOptimizations.max_performance:
+                decoder_config_filename = None  # No JSON config; use ModelOptimizations.max_performance directly
+            case ModelOptimizations.ultra_performance:
+                decoder_config_filename = None  # No JSON config; use ModelOptimizations.ultra_performance directly
             case _:
                 raise ValueError(f"optimization_level ({optimization_level}) not implemented")
 
         # check if decoder config exists, if it exists load it else use optimization_level
         model_params_dir = Path(__file__).parent.parent
-        decoder_config_path = model_params_dir / "model_params" / model_name / decoder_config_filename
         inst = None
-        if decoder_config_path.exists():
+        if decoder_config_filename is not None:
+            decoder_config_path = model_params_dir / "model_params" / model_name / decoder_config_filename
+        else:
+            decoder_config_path = None
+        if decoder_config_path is not None and decoder_config_path.exists():
             inst = parse_decoder_json(decoder_config_path, default_optimization=optimization_level)
             logger.info(
                 f"Model {model_name} requires specific TensorPrecision and OpFidelity configuration, using {decoder_config_path}"
