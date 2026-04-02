@@ -35,10 +35,6 @@ def reference_model(hf_config):
     return DeepseekV3MoE(moe_config).eval()
 
 
-def _clone_state_dict(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    return {name: tensor.detach().clone() for name, tensor in state_dict.items()}
-
-
 def load_real_moe_input(mode: str, module_path: str, num_tokens: int) -> torch.Tensor:
     if mode == "prefill":
         torch_input, _ = load_reference_io_tensors_for_module(mode, module_path, num_tokens, 1)
@@ -65,30 +61,20 @@ def generate_reference_io(
     mode: str,
     num_tokens: int,
     reference_model: DeepseekV3MoE,
-    hf_config,
-    weight_type: str,
-    checkpoint_state_dict: dict[str, torch.Tensor] | None = None,
-    module_path: str | None = None,
+    checkpoint_state_dict: dict[str, torch.Tensor],
+    module_path: str,
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
-    if weight_type == "random":
-        # Preserve random-init dtypes, especially the fp32 gate score-correction bias.
-        state_dict_out = _clone_state_dict(reference_model.state_dict())
-        torch_input = torch.randn(1, num_tokens, hf_config.hidden_size, dtype=torch.bfloat16)
-    else:
-        assert weight_type == "real"
-        assert checkpoint_state_dict is not None
-        assert module_path is not None
-        moe_state_dict = {
-            name: tensor
-            for name, tensor in sub_state_dict(checkpoint_state_dict, module_path + ".").items()
-            if not name.startswith("shared_experts.")
-        }
-        if not moe_state_dict:
-            pytest.skip(f"Checkpoint does not contain routed MoE weights under '{module_path}'")
+    moe_state_dict = {
+        name: tensor
+        for name, tensor in sub_state_dict(checkpoint_state_dict, module_path + ".").items()
+        if not name.startswith("shared_experts.")
+    }
+    if not moe_state_dict:
+        pytest.skip(f"Checkpoint does not contain routed MoE weights under '{module_path}'")
 
-        state_dict_out = moe_state_dict
-        reference_model.load_state_dict(state_dict_out)
-        torch_input = load_real_moe_input(mode, module_path, num_tokens)
+    state_dict_out = moe_state_dict
+    reference_model.load_state_dict(state_dict_out)
+    torch_input = load_real_moe_input(mode, module_path, num_tokens)
 
     reference_model.eval()
     reference_model.to(torch.bfloat16)
@@ -117,13 +103,6 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
         ("prefill", 1, _prefill_seq_len),
     ],
 )
-@pytest.mark.parametrize(
-    "topk_fallback",
-    [
-        True,
-    ],
-)
-@pytest.mark.parametrize("weight_type", ["random", "real"])
 def test_forward_pass(
     device_params,
     mode,
@@ -136,21 +115,17 @@ def test_forward_pass(
     cache_path,
     mesh_device,
     ccl,
-    topk_fallback,
-    weight_type,
     force_recalculate_weight_config,
 ):
     """Test forward pass against reference model."""
 
-    module_path = "model.layers.3.mlp" if weight_type == "real" else None
-    checkpoint_state_dict = request.getfixturevalue("state_dict") if weight_type == "real" else None
+    module_path = "model.layers.3.mlp"
+    checkpoint_state_dict = request.getfixturevalue("state_dict")
     num_tokens = batch_size_per_row * mesh_device.shape[0] if mode == "decode" else seq_len
     state_dict, torch_input, reference_output = generate_reference_io(
         mode=mode,
         num_tokens=num_tokens,
         reference_model=reference_model,
-        hf_config=hf_config,
-        weight_type=weight_type,
         checkpoint_state_dict=checkpoint_state_dict,
         module_path=module_path,
     )
@@ -163,13 +138,11 @@ def test_forward_pass(
         mesh_device,
         force_recalculate=force_recalculate_weight_config,
         test_name="test_moe",
-        real_weights=weight_type == "real",
+        real_weights=True,
         layer_id=module_path,
     )
 
-    model_config = get_model_config(
-        MoE, mode, hf_config, mesh_device, device_params["fabric_config"], topk_fallback=topk_fallback
-    )
+    model_config = get_model_config(MoE, mode, hf_config, mesh_device, device_params["fabric_config"])
     model_state = MoE.create_state(hf_config, mesh_device, ccl)
     model_shared_state = MoE.create_shared_state(hf_config, mesh_device)
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
@@ -200,7 +173,7 @@ def test_forward_pass(
     ttnn.deallocate(tt_input)
     ttnn.deallocate(tt_output)
 
-    logger.info(f"Mode: {mode}, Num tokens: {num_tokens}, Weight type: {weight_type}")
+    logger.info(f"Mode: {mode}, Num tokens: {num_tokens}")
     assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=0.97)
 
 

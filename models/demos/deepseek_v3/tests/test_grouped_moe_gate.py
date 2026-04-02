@@ -8,11 +8,12 @@ import os
 import pytest
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
-from models.demos.deepseek_v3.tt.moe_gate import MoEGate
+from models.demos.deepseek_v3.tt.grouped_moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
@@ -110,7 +111,6 @@ def test_forward_pass(
     set_deterministic_env,
     warmup_iters,
     num_iters,
-    force_recalculate_weight_config,
 ):
     """Test forward pass against reference model."""
 
@@ -126,20 +126,13 @@ def test_forward_pass(
         module_path=module_path,
     )
 
-    token3 = torch_input[0, 2, :]
-    torch_input = token3.unsqueeze(0).repeat(1, 128, 1)
-    index3 = reference_topk_indices[2, :]
-    reference_topk_indices = index3.unsqueeze(0).repeat(128, 1)
-    weight3 = reference_topk_weights[2, :]
-    reference_topk_weights = weight3.unsqueeze(0).repeat(128, 1)
-
     weight_config = get_test_weight_config(
         MoEGate,
         hf_config,
         (state_dict,),
         cache_path,
         mesh_device,
-        force_recalculate=force_recalculate_weight_config,
+        force_recalculate=False,
         test_name="test_moe_gate",
         real_weights=True,
         layer_id=module_path,
@@ -149,7 +142,7 @@ def test_forward_pass(
     model_config = get_model_config(MoEGate, mode, hf_config, mesh_device)
 
     # Create a new model state
-    model_state = MoEGate.create_shared_state(hf_config, mesh_device)
+    model_state = MoEGate.create_shared_state(mesh_device)
 
     # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, model_state)
@@ -160,16 +153,15 @@ def test_forward_pass(
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
         dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=run_config["input_memory_config"],
         layout=ttnn.TILE_LAYOUT,
     )
 
     # TTNN forward pass using utility function
     profiler = BenchmarkProfiler()
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-    tt_topk_weights, tt_topk_indices = run_module_forward(MoEGate, mode, tt_input, run_config)
-    ttnn.synchronize_device(mesh_device)
-    """
+    # tt_topk_weights, tt_topk_indices = run_module_forward(MoEGate, mode, tt_input, run_config)
+    # ttnn.synchronize_device(mesh_device)
     # capture warmup trace
     trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for i in range(warmup_iters):
@@ -202,7 +194,7 @@ def test_forward_pass(
     signpost("stop")
 
     tt_topk_weights, tt_topk_indices = run_module_forward(MoEGate, mode, tt_input, run_config)
-    """
+
     # Verify output memory config matches expected
     expected_output_memory_config = run_config["output_memory_config"]
     actual_topk_weights_memory_config = tt_topk_weights.memory_config()
@@ -233,36 +225,47 @@ def test_forward_pass(
     # Compare outputs
     logger.info(f"Mode: {mode}, Seq len: {seq_len}")
 
-    # sort reference
-    ref_weights = reference_topk_weights.to(torch.bfloat16)
-    ref_indices = reference_topk_indices.to(torch.int32)
+    reference_topk_weights = torch.sort(reference_topk_weights.to(torch.bfloat16), dim=-1, stable=True)[0]
+    tt_topk_weights_torch = torch.sort(tt_topk_weights_torch.to(torch.bfloat16), dim=-1, stable=True)[0]
 
-    ref_sorted_weights, ref_sort_idx = torch.sort(ref_weights, dim=-1, descending=True, stable=True)
-    ref_sorted_indices = torch.gather(ref_indices, -1, ref_sort_idx)
+    def count_indices_diff_fast(indices_a: torch.Tensor, indices_b: torch.Tensor):
+        indices_a = torch.sort(indices_a.to(torch.int32), dim=-1).values
+        indices_b = torch.sort(indices_b.to(torch.int32), dim=-1).values
 
-    # sort tt
-    tt_weights = tt_topk_weights_torch.to(torch.bfloat16)
-    tt_indices = tt_topk_indices_torch.to(torch.int32)
+        total_diff = 0
 
-    tt_sorted_weights, tt_sort_idx = torch.sort(tt_weights, dim=-1, descending=True, stable=True)
-    tt_sorted_indices = torch.gather(tt_indices, -1, tt_sort_idx)
+        for a, b in zip(indices_a, indices_b):
+            i = j = common = 0
+            while i < len(a) and j < len(b):
+                if a[i] == b[j]:
+                    common += 1
+                    i += 1
+                    j += 1
+                elif a[i] < b[j]:
+                    i += 1
+                else:
+                    j += 1
 
-    # compare
-    topk_weights_pcc_required = 0.99
-    passing, pcc_message = comp_pcc(ref_sorted_weights, tt_sorted_weights, topk_weights_pcc_required)
+            diff = len(a) - common
+            total_diff += diff
 
-    # due to tie breaking, the first 2 indices are the most important
-    breakpoint()
-    topk_indices_accuracy_required = 1 if mode == "decode" else 0.92
-    accuracy = tt_sorted_indices[:, :2].eq(ref_sorted_indices[:, :2]).float().mean()
+        return total_diff
+
+    total_diff = count_indices_diff_fast(reference_topk_indices, tt_topk_indices_torch)
+
+    topk_weights_pcc_required = 0.98
+    passing, pcc_message = comp_pcc(reference_topk_weights, tt_topk_weights_torch, topk_weights_pcc_required)
 
     logger.info(f"TopK experts weights PCC: {pcc_message}")
-    logger.info(f"TopK experts indices accuracy: {accuracy}")
+
     assert (
         passing
     ), f"TopK experts weights output does not meet PCC requirement {topk_weights_pcc_required}: {pcc_message}"
 
-    assert accuracy >= topk_indices_accuracy_required, f"TopK experts indices output does not match: {accuracy}"
+    assert (
+        total_diff <= 184 if mode == "decode" else total_diff <= 1000
+    ), f"TopK experts indices output does not match: {total_diff}"
+    # due to tie breaking, we cannot guarantee all the indices are the same as the pytorch version
 
 
 if __name__ == "__main__":

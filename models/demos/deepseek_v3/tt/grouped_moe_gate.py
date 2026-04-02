@@ -8,7 +8,6 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.deepseek_moe_gate.op import DeepseekMoeGateOp
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
     BinaryOpConfig,
@@ -40,7 +39,6 @@ class MoEGate(AbstractModule):
     @classmethod
     def convert_weights(
         cls,
-        hf_config: PretrainedConfig,
         state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
         output_path: Path,
         mesh_device: ttnn.Device,
@@ -51,22 +49,6 @@ class MoEGate(AbstractModule):
         gate_weight = get_dequantized_tensor(state_dict, f"{prefix}weight")
         score_correction_bias = get_dequantized_tensor(
             state_dict, f"{prefix}e_score_correction_bias", dtype=torch.float32
-        )
-        grid = mesh_device.compute_with_storage_grid_size()
-        num_device_cores = grid.x * grid.y
-        core_grid = ttnn.num_cores_to_corerangeset(
-            num_device_cores,
-            ttnn.CoreCoord(grid.x, grid.y),
-            row_wise=True,
-        )
-        input_output_shard_shape = (32, 32)
-        input_output_shard_spec = ttnn.ShardSpec(
-            core_grid,
-            input_output_shard_shape,
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        input_output_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_output_shard_spec
         )
         return {
             "gate_proj": {
@@ -83,17 +65,12 @@ class MoEGate(AbstractModule):
             "add_score_correction_bias": {
                 "input_tensor_b": shard_and_save(
                     output_path / f"e_score_correction_bias.input_tensor_b",
-                    score_correction_bias.unsqueeze(0)
-                    .unsqueeze(0)
-                    .unsqueeze(0)
-                    .reshape(1, 16, 16)
-                    .transpose(1, 2)
-                    .repeat(num_device_cores, 1, 1),
+                    score_correction_bias.unsqueeze(0).unsqueeze(0).unsqueeze(0),
                     shard_dims=(None, None),
                     mesh_device=mesh_device,
                     dtype=ttnn.float32,
-                    memory_config=input_output_mem_config,
-                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
             },
         }
@@ -101,71 +78,42 @@ class MoEGate(AbstractModule):
     @classmethod
     def create_shared_state(
         cls,
-        hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
     ) -> ModelState:
         """Create input_indices, output_indices and output_tensor for each MoE layer
 
         Args:
-            hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device the model will be placed later on
         Returns:
             ModelState containing input_indices, output_indices and output_tensor for each MoE layer
         """
-        grid = mesh_device.compute_with_storage_grid_size()
-        num_device_cores = grid.x * grid.y
-        core_grid = ttnn.num_cores_to_corerangeset(
-            num_device_cores,
-            ttnn.CoreCoord(grid.x, grid.y),
-            row_wise=True,
-        )
-        input_output_shard_shape = (32, 32)
-        input_output_shard_spec = ttnn.ShardSpec(
-            core_grid,
-            input_output_shard_shape,
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        input_output_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_output_shard_spec
-        )
-
         ttnn_output_tensor = ttnn.zeros(
             shape=(1, 32, 32),
             dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        ttnn_output_tensor = ttnn.repeat(ttnn_output_tensor, (num_device_cores, 1, 1))
-        ttnn_output_tensor = ttnn.to_memory_config(ttnn_output_tensor, memory_config=input_output_mem_config)
-
         ttnn_output_indices = ttnn.zeros(
             shape=(1, 32, 32),
             dtype=ttnn.uint16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        ttnn_output_indices = ttnn.repeat(ttnn_output_indices, (num_device_cores, 1, 1))
-        ttnn_output_indices = ttnn.to_memory_config(ttnn_output_indices, memory_config=input_output_mem_config)
-
         ttnn_input_indices = ttnn.arange(
             start=0,
             end=16 * 16,
             step=1,
             dtype=ttnn.int32,
             device=mesh_device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
         )
         ttnn_input_indices = ttnn.unsqueeze(ttnn_input_indices, dim=0)
         ttnn_input_indices = ttnn.reshape(ttnn_input_indices, (1, 16, 16))
         ttnn_input_indices = ttnn.transpose(ttnn_input_indices, dim1=-2, dim2=-1)
         ttnn_input_indices = ttnn.typecast(ttnn_input_indices, dtype=ttnn.uint16)
-        ttnn_input_indices = ttnn.to_layout(ttnn_input_indices, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn_input_indices = ttnn.repeat(ttnn_input_indices, (num_device_cores, 1, 1))
-        ttnn_input_indices = ttnn.to_layout(ttnn_input_indices, ttnn.TILE_LAYOUT, memory_config=input_output_mem_config)
-
         return {
             "gate_routing": {
                 "ttnn_output_tensor": ttnn_output_tensor,
@@ -219,7 +167,6 @@ class MoEGate(AbstractModule):
                 "routed_scaling_factor": hf_config.routed_scaling_factor,
                 "eps": 1e-20,
                 "enable_sigmoid": True,
-                "mode": mode,
             }
         else:
             memory_config = ttnn.DRAM_MEMORY_CONFIG
@@ -248,7 +195,6 @@ class MoEGate(AbstractModule):
                 "routed_scaling_factor": hf_config.routed_scaling_factor,
                 "eps": 1e-20,
                 "enable_sigmoid": True,
-                "mode": mode,
             }
 
     @classmethod
@@ -278,134 +224,31 @@ class MoEGate(AbstractModule):
             logits = ttnn.linear(x, **cfg["gate_proj"])
 
         mesh_device = cfg["mesh_device"]
-        total_batch_size = logits.shape[2]
+        num_experts = cfg["add_score_correction_bias"].input_tensor_b.shape[3]
+        assert num_experts == 256, "num_experts should be 256"
+        total_batch_size_per_device = logits.shape[2]
 
-        # create the shard spec and memory config for the input, logits and output
-        grid = mesh_device.compute_with_storage_grid_size()
-        num_device_cores = grid.x * grid.y
-        start_index = 0
-        eps = cfg["eps"]
-        scaling_factor = cfg["routed_scaling_factor"]
-        enable_sigmoid = cfg["enable_sigmoid"]
-        if cfg["mode"] == "decode":
-            assert (
-                total_batch_size <= num_device_cores
-            ), "total_batch_size should be less than or equal to num_device_cores for decode mode"
-        # in order to save time, we need to reuse bias, input_tensor, output indices and output tensor
-        # we pad the logits to make the shape of above three are always the same
-        num_iters = (total_batch_size + num_device_cores - 1) // num_device_cores
-        padding_shape = (num_iters - (total_batch_size % num_iters)) % num_iters
-        batch_size_per_iter = (total_batch_size + padding_shape) // num_iters
-        if padding_shape != 0:
-            logits = ttnn.pad(logits, [(0, 0), (0, 0), (0, padding_shape), (0, 0)], 0)
-        core_grid = ttnn.num_cores_to_corerangeset(
-            batch_size_per_iter,
-            ttnn.CoreCoord(grid.x, grid.y),
-            row_wise=True,
+        # create the bias
+        scores_correction_bias = ttnn.typecast(cfg["add_score_correction_bias"]["input_tensor_b"], ttnn.bfloat16)
+        scores_correction_bias = ttnn.repeat(scores_correction_bias, ttnn.Shape((total_batch_size_per_device, 1)))
+        scores_correction_bias = ttnn.to_memory_config(
+            scores_correction_bias, memory_config=cfg["add_score_correction_bias"]["memory_config"]
         )
-        input_output_shard_shape = cfg["input_output_shard_shape"]
-        reshaped_input_shape = (batch_size_per_iter, *cfg["token_shape"])
-        # currently we cannot convert the tile size of logits and input indices to 16*16 which is required by the original op,
-        # but the memory layout is the same since the length is 256
-        input_output_shard_spec = ttnn.ShardSpec(
-            core_grid,
-            input_output_shard_shape,
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        input_output_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_output_shard_spec
-        )
+        scores_correction_bias = ttnn.to_layout(scores_correction_bias, ttnn.TILE_LAYOUT)
+        eps = 1e-20
 
-        ### load logits
-        logits_loaded = torch.load("/work/logits.pt")
-        logits = logits_loaded.unsqueeze(0)
-        logits = logits.repeat(batch_size_per_iter, 1)
-        logits = torch.reshape(logits, (batch_size_per_iter, *cfg["token_shape"]))
-        logits = ttnn.from_torch(
+        topk_experts_scores_normalized, topk_experts_indices = ttnn.experimental.deepseek_grouped_gate(
             logits,
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        logits = ttnn.to_memory_config(logits, memory_config=input_output_mem_config)
-
-        ### load scores_correction_bias
-        scores_correction_bias_loaded = torch.load("/work/scores_correction_bias.pt")
-        scores_correction_bias = scores_correction_bias_loaded.unsqueeze(0)
-        scores_correction_bias = scores_correction_bias.repeat(batch_size_per_iter, 1)
-        scores_correction_bias = torch.reshape(scores_correction_bias, (batch_size_per_iter, *cfg["token_shape"]))
-        scores_correction_bias = torch.transpose(scores_correction_bias, -2, -1)
-        scores_correction_bias = ttnn.from_torch(
             scores_correction_bias,
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
+            n_groups=8,
+            summed_experts_per_group=2,
+            topk_groups=4,
+            n_activated_experts=8,
+            route_scale=torch.rand(1).item() + 0.1,
+            epsilon=eps,
         )
-        scores_correction_bias = ttnn.to_memory_config(scores_correction_bias, memory_config=input_output_mem_config)
 
-        # create the bias tensor
-        # scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
-        # scores_correction_bias = scores_correction_bias[:batch_size_per_iter, :, :]
-
-        # get the output tensor, input indices and output indices
-        ttnn_output_tensor = cfg["gate_routing"]["ttnn_output_tensor"]
-        ttnn_output_tensor = ttnn_output_tensor[:batch_size_per_iter, :, :]
-
-        ttnn_input_indices = cfg["gate_routing"]["ttnn_input_indices"]
-        ttnn_input_indices = ttnn_input_indices[:batch_size_per_iter, :, :]
-
-        ttnn_output_indices = cfg["gate_routing"]["ttnn_output_indices"]
-        ttnn_output_indices = ttnn_output_indices[:batch_size_per_iter, :, :]
-
-        # we can only have one token per core at a time
-        # this loop is designed to handle the huge batch size (4096)
-        topk_experts_weights_list = []
-        topk_experts_indices_list = []
-        for start_index in range(0, total_batch_size + padding_shape, batch_size_per_iter):
-            # cur_logits = logits[:, :, start_index : start_index + batch_size_per_iter, :]
-            # cur_logits = ttnn.reshape(cur_logits, reshaped_input_shape)  # maybe remove this
-            # cur_logits = ttnn.to_memory_config(cur_logits, memory_config=input_output_mem_config)
-            cur_logits = logits
-            topk_experts_weights, topk_experts_indices = DeepseekMoeGateOp.op(
-                cur_logits,
-                scores_correction_bias,
-                ttnn_output_tensor,
-                ttnn_input_indices,
-                ttnn_output_indices,
-                eps,
-                scaling_factor,
-                enable_sigmoid,
-            )
-            if cfg["mode"] == "prefill":
-                topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.int32)
-            topk_experts_weights = ttnn.to_memory_config(topk_experts_weights, memory_config=ttnn.L1_MEMORY_CONFIG)
-            # once MoE compute is in, we can get rid of below line for decode mode (maybe)
-            topk_experts_indices = ttnn.to_memory_config(topk_experts_indices, memory_config=ttnn.L1_MEMORY_CONFIG)
-            if cfg["mode"] == "prefill":
-                topk_experts_indices = ttnn.to_layout(topk_experts_indices, ttnn.TILE_LAYOUT)
-                topk_experts_weights = ttnn.to_layout(topk_experts_weights, ttnn.TILE_LAYOUT)
-                topk_experts_weights_list.append(topk_experts_weights)
-                topk_experts_indices_list.append(topk_experts_indices)
-            ttnn.deallocate(cur_logits)
-
-        ttnn.deallocate(logits)
-
-        if cfg["mode"] == "prefill":
-            topk_experts_weights = ttnn.concat(topk_experts_weights_list, dim=0)
-            topk_experts_indices = ttnn.concat(topk_experts_indices_list, dim=0)
-            topk_experts_weights = ttnn.to_layout(topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT)
-        # here we only take the 1x8  out of 32x32
-        topk_experts_weights = topk_experts_weights[:total_batch_size, 0, :8]
-        topk_experts_indices = topk_experts_indices[:total_batch_size, 0, :8]
-        topk_experts_weights = ttnn.view(topk_experts_weights, (1, 1, total_batch_size, 8))
-        topk_experts_indices = ttnn.view(topk_experts_indices, (1, 1, total_batch_size, 8))
-        if cfg["mode"] == "prefill":
-            topk_experts_indices = ttnn.to_layout(topk_experts_indices, ttnn.TILE_LAYOUT)
-            topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.uint16)
-
-        return topk_experts_weights, topk_experts_indices
+        return topk_experts_scores_normalized, topk_experts_indices
 
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
