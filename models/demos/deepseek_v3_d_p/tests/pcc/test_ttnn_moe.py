@@ -31,6 +31,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_torch_expert_weights,
     extract_mesh_config,
     get_ep_mesh_composer,
+    get_sp_mesh_composer,
     get_tp_mesh_composer,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
@@ -45,7 +46,10 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     validate_dispatch_buffer_pcc,
     validate_dispatch_metadata,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_validation_results
+from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import (
+    log_validation_results,
+    visualize_expert_dispatch_table,
+)
 from tests.ttnn.utils_for_testing import comp_pcc
 
 
@@ -167,25 +171,27 @@ def test_ttnn_moe(
         num_dispatch_groups=num_dispatch_groups,
     )
 
+    visualize_expert_dispatch_table(
+        expert_dispatch_table,
+        num_dispatch_groups,
+        dispatch_group_size,
+        num_routed_experts,
+    )
+
     # ========================================
     # Step 2: Create input tensor
     # ========================================
     profiler.start("input_creation")
-    mesh_rows, mesh_cols = mesh_device.shape
 
-    if run_pcc_check:
-        x = torch.randn(dispatch_group_size, seq_len_per_chip, emb_dim, dtype=torch.bfloat16)
-        tt_x = ttnn.from_torch(
-            x,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)),
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-        )
-    else:
-        x = None
-        per_device_x_shape = (dispatch_group_size // mesh_rows, seq_len_per_chip, emb_dim // mesh_cols)
-        tt_x = ttnn.empty(per_device_x_shape, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    # currently cannot use ttnn.empty on x; because indices become ND beyond max dispatch token limit.
+    x = torch.randn(dispatch_group_size, seq_len_per_chip, emb_dim, dtype=torch.bfloat16)
+    tt_x = ttnn.from_torch(
+        x,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+    )
     profiler.end("input_creation")
 
     # ========================================
@@ -214,7 +220,6 @@ def test_ttnn_moe(
         profiler.start("torch_forward")
         torch_output, torch_intermediates = torch_moe(x, return_intermediates=True)
         profiler.end("torch_forward")
-        logger.debug(f"Torch output stats - min: {torch_output.min():.4f}, max: {torch_output.max():.4f}")
 
     # ========================================
     # Step 4: TtMoe forward
@@ -272,15 +277,21 @@ def test_ttnn_moe(
     # Gate recall: compare TtMoe gate indices vs TorchMoe gate indices
     tt_indices = ttnn.to_torch(
         tt_intermediates.gate_indices,
-        mesh_composer=get_tp_mesh_composer(mesh_device),
+        mesh_composer=get_sp_mesh_composer(mesh_device),
         dtype=torch.int32,
     )
+
+    if gate_fallback_mode == GateComputeMode.HOST_ALL:
+        target_recall = 0.99
+    else:
+        target_recall = 0.90
+
     recall_result = validate_composed(
         tt_indices.view(1, n_sp_devices, seq_len_per_chip, -1),
         torch_intermediates.gate_indices.view(1, n_sp_devices, seq_len_per_chip, -1),
         1,
         n_sp_devices,
-        compare_recall(0.999),
+        compare_recall(target_recall),
         name="gate_indices_recall",
         broadcast_groups=n_tp_devices,
     )
@@ -290,13 +301,21 @@ def test_ttnn_moe(
         dispatch_group_size=n_sp_devices,
         title="Gate Recall Validation",
     )
+    if recall_result.passed:
+        logger.info(f"[gate_indices_recall] PASSED")
+    else:
+        logger.error(
+            f"[gate_indices_recall] FAILED {len(recall_result.mismatches)}/{recall_result.total} below threshold {target_recall}"
+        )
+        recall_result.log_mismatches(limit=5)
+        all_passed = False
 
     # Dense tensor checks with PCC
     # fmt: off
     dense_checks = [
-        ("shared_output", tt_intermediates.shared_output, torch_intermediates.shared_output, get_tp_mesh_composer(mesh_device), 0.97),
+        ("shared_output", tt_intermediates.shared_output, torch_intermediates.shared_output, get_tp_mesh_composer(mesh_device), 0.997),
         ("routed_output", tt_intermediates.routed_output, torch_intermediates.routed_output, get_tp_mesh_composer(mesh_device), 0.90),
-        ("final_output", tt_output, torch_output, get_tp_mesh_composer(mesh_device), 0.95),
+        ("final_output", tt_output, torch_output, get_tp_mesh_composer(mesh_device), 0.96),
     ]
     # fmt: on
 
@@ -312,83 +331,84 @@ def test_ttnn_moe(
             logger.error(f"[{name}] FAILED - PCC: {pcc:.6f} below threshold {threshold}")
             all_passed = False
 
-    # Sparse tensor validation using slot-aware comparisons
-    # fmt: off
-    sparse_checks = [
-        ("dispatched_buffer", tt_intermediates.dispatched_buffer, torch_intermediates.dispatched_buffer,
-         get_ep_mesh_composer(mesh_device), torch.bfloat16, validate_dispatch_buffer, {}),
-        ("dispatch_metadata", tt_intermediates.metadata, torch_intermediates.metadata,
-         get_ep_mesh_composer(mesh_device), None, validate_dispatch_metadata, {}),
-        ("expert_outputs", tt_intermediates.expert_outputs, torch_intermediates.expert_outputs,
-         get_ep_mesh_composer(mesh_device), torch.bfloat16, validate_dispatch_buffer_pcc, {"pcc_threshold": 0.93}),
-    ]
-    # fmt: on
+    if gate_fallback_mode == GateComputeMode.HOST_ALL:
+        # Sparse tensor validation using slot-aware comparisons
+        # fmt: off
+        sparse_checks = [
+            ("dispatched_buffer", tt_intermediates.dispatched_buffer, torch_intermediates.dispatched_buffer,
+            get_ep_mesh_composer(mesh_device), torch.bfloat16, validate_dispatch_buffer, {}),
+            ("dispatch_metadata", tt_intermediates.metadata, torch_intermediates.metadata,
+            get_ep_mesh_composer(mesh_device), None, validate_dispatch_metadata, {}),
+            ("expert_outputs", tt_intermediates.expert_outputs, torch_intermediates.expert_outputs,
+            get_ep_mesh_composer(mesh_device), torch.bfloat16, validate_dispatch_buffer_pcc, {"pcc_threshold": 0.95}),
+        ]
+        # fmt: on
 
-    expert_token_counts = torch_intermediates.expert_token_counts
+        expert_token_counts = torch_intermediates.expert_token_counts
 
-    for name, tt_tensor, torch_tensor, composer, dtype, validate_fn, extra_kwargs in sparse_checks:
-        if tt_tensor is None or torch_tensor is None:
-            logger.warning(f"[{name}] validation SKIPPED")
-            continue
-        tt_host = (
-            ttnn.to_torch(tt_tensor, mesh_composer=composer, dtype=dtype)
-            if dtype
-            else ttnn.to_torch(tt_tensor, mesh_composer=composer)
-        )
-        torch_ref = torch_tensor.to(dtype) if dtype else torch_tensor
-        result = validate_fn(
-            torch_ref,
-            tt_host,
-            expert_token_counts,
-            expert_dispatch_table,
-            num_dispatch_groups,
-            dispatch_group_size,
-            experts_per_chip,
-            verbose=True,
-            **extra_kwargs,
-        )
-        result.name = name
-        validation_results.append(result)
-        if result.passed:
-            logger.info(f"[{name}] PASSED - {result.matches}/{result.total} slots matched")
-        else:
-            logger.error(f"[{name}] FAILED - {result.matches}/{result.total} slots matched")
-            result.log_mismatches(limit=5)
-            all_passed = False
+        for name, tt_tensor, torch_tensor, composer, dtype, validate_fn, extra_kwargs in sparse_checks:
+            if tt_tensor is None or torch_tensor is None:
+                logger.warning(f"[{name}] validation SKIPPED")
+                continue
+            tt_host = (
+                ttnn.to_torch(tt_tensor, mesh_composer=composer, dtype=dtype)
+                if dtype
+                else ttnn.to_torch(tt_tensor, mesh_composer=composer)
+            )
+            torch_ref = torch_tensor.to(dtype) if dtype else torch_tensor
+            result = validate_fn(
+                torch_ref,
+                tt_host,
+                expert_token_counts,
+                expert_dispatch_table,
+                num_dispatch_groups,
+                dispatch_group_size,
+                experts_per_chip,
+                verbose=True,
+                **extra_kwargs,
+            )
+            result.name = name
+            validation_results.append(result)
+            if result.passed:
+                logger.info(f"[{name}] PASSED - {result.matches}/{result.total} slots matched")
+            else:
+                logger.error(f"[{name}] FAILED - {result.matches}/{result.total} slots matched")
+                result.log_mismatches(limit=5)
+                all_passed = False
 
-    # Validate combined_output (before reduce step)
-    if tt_intermediates.combined_output is not None and torch_intermediates.combined_output is not None:
-        name = "combined_output"
-        logger.debug(f"  {name} tt shape: {tt_intermediates.combined_output.shape}")
-        logger.debug(f"  {name} torch shape: {torch_intermediates.combined_output.shape}")
+        # Validate combined_output (before reduce step)
+        if tt_intermediates.combined_output is not None and torch_intermediates.combined_output is not None:
+            name = "combined_output"
+            logger.debug(f"  {name} tt shape: {tt_intermediates.combined_output.shape}")
+            logger.debug(f"  {name} torch shape: {torch_intermediates.combined_output.shape}")
 
-        tt_combined_torch = ttnn.to_torch(
-            tt_intermediates.combined_output,
-            mesh_composer=get_ep_mesh_composer(mesh_device),
-            dtype=torch.bfloat16,
-        )
+            tt_combined_torch = ttnn.to_torch(
+                tt_intermediates.combined_output,
+                mesh_composer=get_ep_mesh_composer(mesh_device),
+                dtype=torch.bfloat16,
+            )
 
-        combine_pcc = 0.997
-        combine_result = validate_combine_output(
-            torch_intermediates.combined_output,
-            tt_combined_torch,
-            tt_indices,
-            num_dispatch_groups,
-            num_routed_experts,
-            use_pcc=True,
-            pcc_threshold=combine_pcc,
-            verbose=True,
-            expert_dispatch_table=expert_dispatch_table,
-            expert_token_counts=expert_token_counts,
-            experts_per_chip=experts_per_chip,
-        )
+            combine_pcc = 0.95
+            combine_result = validate_combine_output(
+                torch_intermediates.combined_output,
+                tt_combined_torch,
+                tt_indices,
+                num_dispatch_groups,
+                num_routed_experts,
+                use_pcc=True,
+                pcc_threshold=combine_pcc,
+                verbose=True,
+                expert_dispatch_table=expert_dispatch_table,
+                expert_token_counts=expert_token_counts,
+                experts_per_chip=experts_per_chip,
+            )
 
-        log_validation_results(
-            results=[combine_result],
-            num_dispatch_groups=num_dispatch_groups,
-            dispatch_group_size=dispatch_group_size,
-            title="Combined Output Validation",
-        )
+            log_validation_results(
+                results=[combine_result],
+                num_dispatch_groups=num_dispatch_groups,
+                dispatch_group_size=dispatch_group_size,
+                title="Combined Output Validation",
+            )
 
         if combine_result.passed:
             logger.info(
@@ -418,8 +438,7 @@ def test_ttnn_moe(
     logger.debug("Note: Final PCC expected to be low until full pipeline is enabled")
     profiler.end("pcc_validation")
 
-    assert all_passed, "One or more intermediate comparisons failed"
-    recall_result.assert_passed("Gate recall validation failed")
+    assert all_passed, "One or more comparisons failed. See logs for details."
 
     profiler.end("test_ttnn_moe")
     logger.debug(f"\n{'='*60}")

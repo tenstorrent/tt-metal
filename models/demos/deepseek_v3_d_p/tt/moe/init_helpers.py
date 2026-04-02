@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 import torch
 from loguru import logger
+from tqdm import tqdm
 
 import ttnn
 
@@ -583,7 +584,7 @@ def get_sp_mesh_composer(mesh_device):
     """
     Create mesh composer for tensors replicated across TP columns.
 
-    Composes along SP axis (rows) only, taking column 0 from each row.
+    Composes along SP axis (column) only, taking column 0 from each row.
     Use for gate outputs that are replicated across TP after all_reduce_async
     (e.g., logits, topk_indices, topk_weights).
     """
@@ -651,7 +652,7 @@ def create_torch_expert_weights(
     """
     torch.manual_seed(seed)
     weights_list = []
-    for _ in range(num_experts):
+    for e in tqdm(range(num_experts), desc="Creating expert weights"):
         weights = {
             "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
             "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
