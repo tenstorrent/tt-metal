@@ -12,9 +12,6 @@ on:
       build-artifact-name:
         required: true
         type: string
-      enabled-skus:
-        required: true
-        type: string
       model:
         required: false
         type: string
@@ -51,7 +48,7 @@ jobs:
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
+            ALL_SKUS_IN_TESTS
             ./.github/sku_config.yaml
       - name: Apply model filter
         id: apply-model-filter
