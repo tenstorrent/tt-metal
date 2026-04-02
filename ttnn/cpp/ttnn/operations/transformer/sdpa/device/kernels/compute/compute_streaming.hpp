@@ -90,6 +90,30 @@ ALWI bool configure_row_pack_width(uint32_t cb, uint32_t pack_width) {
     return use_blocked_pack_width;
 }
 
+#if defined(TRISC_MATH) && defined(ARCH_WORMHOLE)
+ALWI void recip_tile_first_column_wh_idst0_direct() {
+    // WH SDPA normalize always operates on DST tile 0. The generic unary-SFPU
+    // launcher around recip_tile_first_column() records a larger replay program
+    // than this path needs. Keep the first-column reciprocal math identical,
+    // but inline only the VectorMode::C traversal so the replay stays within
+    // the SFPU replay slots and does not overwrite the no-mop matmul region.
+    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+    math::set_addr_mod_base();
+
+#pragma GCC unroll 0
+    for (int face = 0; face < 2; face++) {
+        calculate_recip_first_column();
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+    }
+
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::WAIT_SFPU);
+    math::clear_addr_mod_base();
+}
+#endif
+
 // Packs row slices into absolute CB positions with a fixed row stride.
 // Use this for out-of-order/output-indexed writes where each row starts at
 // row_base * row_stride + col_base and spans pack_width consecutive tiles. On
@@ -486,7 +510,7 @@ void normalize_row_streaming(
             MATH((recip_tile<false>(0, (int)VectorMode::C)));
 #else
             recip_tile_init();
-            MATH((recip_tile_first_column(0)));
+            MATH((recip_tile_first_column_wh_idst0_direct()));
 #endif
             tile_regs_commit();
 
@@ -993,18 +1017,7 @@ static void sdpa_inner_loop_step(
                 if constexpr (!uniform_unpack_format) {
                     reconfig_data_format(out_cb, cb_v_in, out_cb, cb_qkt_im);
                 }
-                const bool needs_strong_phase2_reinit = is_last_iter && (q_subblock > 1);
-#if defined(ARCH_WORMHOLE)
-                if (needs_strong_phase2_reinit) {
-                    // WH row normalization runs reciprocal on the math pipe during the final K chunk.
-                    // Later phase-2 QKTV row groups in that same q-chunk re-enter no-mop matmul on
-                    // the same pipe, so rebuild the matmul program before the next row-group matmul.
-                    mm_no_mop_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, active_Sk);
-                } else
-#endif
-                {
-                    mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, active_Sk);
-                }
+                mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, active_Sk);
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                     blocked_matmul_and_pack<false, vDHt, vDHt>(
                         cb_qkt_im,
