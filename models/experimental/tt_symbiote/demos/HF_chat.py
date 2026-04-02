@@ -103,6 +103,30 @@ def create_paged_kv_cache(model_config, device, batch_size=1):
     ).to_device(device)
 
 
+def preprocess_generation_inputs(inputs, model_config, paged_cache, max_new_tokens, device):
+    """Strip unused fields, enforce prompt length vs model/KV budget, then move tensors to device."""
+    out = {k: v for k, v in inputs.items() if k != "token_type_ids"}
+
+    kv_max = paged_cache.config.max_seq_length
+    model_max = getattr(model_config, "max_position_embeddings", kv_max)
+    max_total = min(model_max, kv_max)
+    reserve = max(1, max_new_tokens)
+    max_prompt_len = max(1, max_total - reserve)
+
+    input_ids = out["input_ids"]
+    seq_len = input_ids.shape[-1]
+    if seq_len > max_prompt_len:
+        print(
+            f"Warning: prompt truncated from {seq_len} to {max_prompt_len} tokens "
+            f"(context {max_total}, reserving {reserve} for generation)."
+        )
+        for key, value in list(out.items()):
+            if isinstance(value, torch.Tensor) and value.shape[-1] == seq_len:
+                out[key] = value[..., -max_prompt_len:]
+
+    return {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in out.items()}
+
+
 def load_model(mesh_device, model_name="inclusionAI/Ling-mini-2.0"):
     print(f"Loading {model_name}...")
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
@@ -195,9 +219,14 @@ def chat_loop(model, tokenizer, paged_cache, mesh_device, max_new_tokens=256):
             tokenize=True,
             return_dict=True,
             return_tensors="pt",
-        ).to(model.device)
-        if "token_type_ids" in inputs:
-            del inputs["token_type_ids"]
+        )
+        inputs = preprocess_generation_inputs(
+            inputs,
+            model.config,
+            paged_cache,
+            max_new_tokens,
+            model.device,
+        )
 
         # Reset KV cache values in-place (preserves device buffer addresses so
         # decode traces remain valid) and release only prefill traces (different
