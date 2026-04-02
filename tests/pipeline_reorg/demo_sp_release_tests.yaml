@@ -86,49 +86,41 @@
 
 - name: bh_p150_DeepSeek_B1_Full_Unit_Tests_SlowDispatch
   cmd: |
-    TT_METAL_SLOW_DISPATCH_MODE=1 pytest models/demos/deepseek_v3_b1/tests/unit_tests/ \
-      -m "not skip_post_commit" \
-      -vvv --tb=short --timeout 1200
+    TT_METAL_SLOW_DISPATCH_MODE=1 pytest --timeout 600 -m "not skip_post_commit" models/demos/deepseek_v3_b1/tests/unit_tests/
   model: deepseek_decode
   skus:
     bh_p150:
-      timeout: 90
+      timeout: 20
   owner_id: U03HY7MK4BT
   team: models
 
 - name: bh_p150_DeepSeek_B1_Full_Unit_Tests_FastDispatch
   cmd: |
-    pytest models/demos/deepseek_v3_b1/tests/unit_tests/ \
-      -m "not skip_post_commit" \
-      -vvv --tb=short --timeout 1200
+    pytest --timeout 600 -m "not skip_post_commit" models/demos/deepseek_v3_b1/tests/unit_tests/
   model: deepseek_decode
   skus:
     bh_p150:
-      timeout: 90
+      timeout: 20
   owner_id: U03HY7MK4BT
   team: models
 
 - name: bh_p100_DeepSeek_B1_Full_Unit_Tests_SlowDispatch
   cmd: |
-    TT_METAL_SLOW_DISPATCH_MODE=1 pytest models/demos/deepseek_v3_b1/tests/unit_tests/ \
-      -m "not skip_post_commit" \
-      -vvv --tb=short --timeout 1200
+    TT_METAL_SLOW_DISPATCH_MODE=1 pytest --timeout 600 -m "not skip_post_commit" models/demos/deepseek_v3_b1/tests/unit_tests/
   model: deepseek_decode
   skus:
     bh_p100:
-      timeout: 90
+      timeout: 20
   owner_id: U03HY7MK4BT
   team: models
 
 - name: bh_p100_DeepSeek_B1_Full_Unit_Tests_FastDispatch
   cmd: |
-    pytest models/demos/deepseek_v3_b1/tests/unit_tests/ \
-      -m "not skip_post_commit" \
-      -vvv --tb=short --timeout 1200
+    pytest --timeout 600 -m "not skip_post_commit" models/demos/deepseek_v3_b1/tests/unit_tests/
   model: deepseek_decode
   skus:
     bh_p100:
-      timeout: 90
+      timeout: 20
   owner_id: U03HY7MK4BT
   team: models
 
