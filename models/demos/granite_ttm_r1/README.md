@@ -71,8 +71,7 @@ models/demos/granite_ttm_r1/
 
 ```bash
 # Install dependencies (requires Python 3.10+ with TT-Metal env active)
-pip install "granite-tsfm @ git+https://github.com/ibm-granite/granite-tsfm.git" \
-    --ignore-requires-python --no-deps
+pip install granite-tsfm
 
 # Download ETTh1 for accuracy tests (optional)
 python models/demos/granite_ttm_r1/scripts/prepare_assets.py --datasets etthi
