@@ -167,7 +167,6 @@ def test_eltwise_unary_sfpu_float(
     fast_mode: FastMode,
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
-    workers_tensix_coordinates: str,
 ):
     if TestConfig.WITH_COVERAGE and mathop in [
         MathOperation.Acosh,
@@ -234,7 +233,6 @@ def test_eltwise_unary_sfpu_float(
         mathop,
         fast_mode,
         input_dimensions,
-        workers_tensix_coordinates,
     )
 
 
@@ -285,7 +283,6 @@ def test_eltwise_unary_sfpu_float_bfp4_b(
     fast_mode: FastMode,
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
-    workers_tensix_coordinates: str,
 ):
     if TestConfig.WITH_COVERAGE and mathop in [
         MathOperation.Acosh,
@@ -346,7 +343,6 @@ def test_eltwise_unary_sfpu_float_bfp4_b(
         mathop,
         fast_mode,
         input_dimensions,
-        workers_tensix_coordinates,
     )
 
 
@@ -368,7 +364,6 @@ def test_eltwise_unary_sfpu_int(
     fast_mode: FastMode,
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
-    workers_tensix_coordinates: str,
 ):
     if formats.input_format == DataFormat.Int32:
         pytest.skip(reason=f"Int32 tests break fast tilize, tracked in #495")
@@ -381,7 +376,6 @@ def test_eltwise_unary_sfpu_int(
         mathop,
         fast_mode,
         input_dimensions,
-        workers_tensix_coordinates,
     )
 
 
@@ -393,7 +387,6 @@ def eltwise_unary_sfpu(
     mathop,
     fast_mode: FastMode,
     input_dimensions: list[int],
-    workers_tensix_coordinates,
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -456,7 +449,7 @@ def eltwise_unary_sfpu(
         ),
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     # res_from_L1 = res_from_L1[:1024]
     # golden_tensor = golden_tensor[:1024]
@@ -474,10 +467,7 @@ def eltwise_unary_sfpu(
 
 # Test exponential with APPROX_MODE=true, FAST_MODE=true, and CLAMP_NEGATIVE=true/false
 @pytest.mark.parametrize("clamp_negative", [True, False])
-def test_exponential_clamp_negative(
-    clamp_negative: bool,
-    workers_tensix_coordinates: str,
-):
+def test_exponential_clamp_negative(clamp_negative: bool):
     torch.manual_seed(0)
     input_dimensions = [32, 32]
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
@@ -545,7 +535,7 @@ def test_exponential_clamp_negative(
         unpack_to_dest=False,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
         golden_tensor

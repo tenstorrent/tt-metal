@@ -16,7 +16,6 @@ from typing import Any, ClassVar, List
 
 import numpy as np
 import pytest
-import torch
 from filelock import FileLock
 from ttexalens.tt_exalens_lib import (
     TTException,
@@ -53,6 +52,12 @@ from .format_config import (
     DataFormat,
     InputOutputFormat,
 )
+from .golden_generators import (
+    GeneratorProxy,
+    ProxyMode,
+    dummy_golden_generator,
+    get_golden_proxied,
+)
 from .llk_params import (
     BriscCmd,
     DestAccumulation,
@@ -84,25 +89,16 @@ class CoverageBuild(Enum):
     No = "false"
 
 
-class TestMode(Enum):
-    DEFAULT = "Compile and consume sequentially"
-    PRODUCE = "Just compile tests without executing them"
-    CONSUME = "Just execute pre-compiled elfs"
+class BuildMode(Enum):
+    DEFAULT = 0  # compile + execute
+    PRODUCE = 1  # compile only
+    CONSUME = 2  # execute only
 
 
-class DummyGoldenGenerator:
-    def __call__(*args, **kwargs):
-        return torch.zeros(1024, dtype=torch.bfloat16)
-
-    def transpose_faces_multi_tile(*args, **kwargs):
-        return torch.zeros(1024, dtype=torch.bfloat16)
-
-    def transpose_within_faces_multi_tile(*args, **kwargs):
-        return torch.zeros(1024, dtype=torch.bfloat16)
-
-
-def dummy_golden_generator(cls):
-    return DummyGoldenGenerator()
+class StimuliMode(Enum):
+    INLINE = 0  # compute during test (default)
+    GENERATE_ONLY = 1  # compute + save to disk, skip execution
+    LOAD_CACHED = 2  # load from disk, skip computation
 
 
 @dataclass
@@ -132,6 +128,7 @@ class TestConfig:
     COVERAGE_INFO_DIR: ClassVar[str]
     SYNC_DIR: ClassVar[Path]
     PERF_DATA_DIR: ClassVar[Path]
+    DEFAULT_STIMULI_CACHE_FOLDER: ClassVar[Path]
 
     # Sources directories
     LLK_ROOT: ClassVar[Path]
@@ -167,12 +164,18 @@ class TestConfig:
 
     # === Runtime static variables, for keeping context of multiple test runs
     CURRENT_LOADED_CONFIG: ClassVar[str] = "uninitialised"
-    MODE: ClassVar[TestMode] = TestMode.DEFAULT
+    BUILD_MODE: ClassVar[BuildMode] = BuildMode.DEFAULT
+    STIMULI_MODE: ClassVar[StimuliMode] = StimuliMode.INLINE
     SKIP_JUST_FOR_COMPILE_MARKER: ClassVar[str] = "SKIPPED_JUST_FOR_COMPILE"
+    SKIP_JUST_FOR_STIMULI_MARKER: ClassVar[str] = "SKIPPED_JUST_FOR_STIMULI"
     _BUILD_DIRS_CREATED: ClassVar[bool] = False
     SPEED_OF_LIGHT: ClassVar[bool] = (
         False  # Should everything be converted to compile-time arguments?
     )
+
+    WORKER_ID: ClassVar[str] = "master"
+    TENSIX_LOCATION: ClassVar[str] = "0,0"
+    STIMULI_ADDRESS_MAP: ClassVar[dict[str, int]] = {}
 
     # When the infrastructure itself needs to be tested, some functionality like compiling the artefacts and writing them
     # to tmpfs can be skipped (eg. object, elf and coverage data files etc.). This flag is used to skip such code to enable fast execution of infra tests.
@@ -263,6 +266,8 @@ class TestConfig:
 
     @staticmethod
     def setup_paths(sources_path: Path):
+        TestConfig.ARTEFACTS_DIR = TestConfig.DEFAULT_ARTEFACTS_PATH
+
         TestConfig.LLK_ROOT = sources_path
         TestConfig.TESTS_WORKING_DIR = TestConfig.LLK_ROOT / "tests"
         TestConfig.TOOL_PATH = TestConfig.LLK_ROOT / "tests/sfpi/compiler/bin"
@@ -298,6 +303,9 @@ class TestConfig:
         TestConfig.PROFILER_META = TestConfig.ARTEFACTS_DIR / "profiler_meta"
         TestConfig.SYNC_DIR = TestConfig.ARTEFACTS_DIR / "sync_primitives"
         TestConfig.PERF_DATA_DIR = TestConfig.ARTEFACTS_DIR / "temp_perf_data"
+        TestConfig.DEFAULT_STIMULI_CACHE_FOLDER = (
+            TestConfig.ARTEFACTS_DIR / "temp_stimuli"
+        )
 
     @staticmethod
     def create_build_directories():
@@ -378,25 +386,65 @@ class TestConfig:
         )
 
     @staticmethod
-    def setup_mode(compile_consumer: bool = False, compile_producer: bool = False):
+    def setup_mode(
+        worker_id: str,
+        compile_consumer: bool,
+        compile_producer: bool,
+        stimuli_only: str = None,
+        use_stimuli: str = None,
+    ):
+
+        TestConfig.WORKER_ID = worker_id
+
+        if worker_id != "master":
+            row, col = divmod(int(worker_id[2:]), 8)
+            TestConfig.TENSIX_LOCATION = f"{row},{col}"
+        else:
+            TestConfig.TENSIX_LOCATION = "0,0"
 
         if compile_consumer and compile_producer:
-            raise ValueError(
-                "Pytest can be configured to be either compilation producer or compilation consumer, not both"
+            raise RuntimeError(
+                "Pytest can be configured to be either compilation producer, compilation consumer, or both by not setting any arguments. Both arguments at the same time are invalid."
             )
 
-        TestConfig.ARTEFACTS_DIR = TestConfig.DEFAULT_ARTEFACTS_PATH
-        TestConfig.MODE = TestMode.DEFAULT
+        if stimuli_only and use_stimuli:
+            raise RuntimeError(
+                "Pytest can be configured to compute stimuli only (and store it to a file), consume pre-computed stimuli (from a file), or to lazily calculate stimuli during execution (without any files in between). Both arguments at the same time are invalid."
+            )
 
         if compile_producer:
-            TestConfig.MODE = TestMode.PRODUCE
+            TestConfig.BUILD_MODE = BuildMode.PRODUCE
             golden_generators_module.get_golden_generator = dummy_golden_generator
 
         if compile_consumer:
-            TestConfig.MODE = TestMode.CONSUME
+            TestConfig.BUILD_MODE = BuildMode.CONSUME
+
+        if stimuli_only:
+            TestConfig.STIMULI_MODE = StimuliMode.GENERATE_ONLY
+            GeneratorProxy.MODE = ProxyMode.CACHE_GOLDEN
+            StimuliConfig.initialize_cache(
+                (
+                    stimuli_only
+                    if stimuli_only != "_USE_DEFAULT_PATH"
+                    else TestConfig.DEFAULT_STIMULI_CACHE_FOLDER
+                )
+            )
+            golden_generators_module.get_golden_generator = get_golden_proxied
+
+        if use_stimuli:
+            TestConfig.STIMULI_MODE = StimuliMode.LOAD_CACHED
+            GeneratorProxy.MODE = ProxyMode.LOAD_GOLDEN
+            StimuliConfig.initialize_cache(
+                (
+                    use_stimuli
+                    if use_stimuli != "_USE_DEFAULT_PATH"
+                    else TestConfig.DEFAULT_STIMULI_CACHE_FOLDER
+                )
+            )
+            golden_generators_module.get_golden_generator = get_golden_proxied
 
         # Always have a fresh build when compiling
-        if TestConfig.MODE != TestMode.CONSUME:
+        if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
             shutil.rmtree(TestConfig.ARTEFACTS_DIR.absolute(), ignore_errors=True)
 
     # === Instance fields and methods ===
@@ -571,7 +619,7 @@ class TestConfig:
 
         self.runtime_arguments_struct = lines
 
-    def write_runtimes_to_L1(self, location: str = "0,0"):
+    def write_runtimes_to_L1(self):
         if TestConfig.SPEED_OF_LIGHT:
             return
 
@@ -621,11 +669,15 @@ class TestConfig:
         if len(serialised_data) != 0:
             if TestConfig.WITH_COVERAGE:
                 write_to_device(
-                    location, TestConfig.RUNTIME_ADDRESS_COVERAGE, serialised_data
+                    TestConfig.TENSIX_LOCATION,
+                    TestConfig.RUNTIME_ADDRESS_COVERAGE,
+                    serialised_data,
                 )
             else:
                 write_to_device(
-                    location, TestConfig.RUNTIME_ADDRESS_NON_COVERAGE, serialised_data
+                    TestConfig.TENSIX_LOCATION,
+                    TestConfig.RUNTIME_ADDRESS_NON_COVERAGE,
+                    serialised_data,
                 )
 
     def collect_hash(self):
@@ -923,7 +975,7 @@ class TestConfig:
 
             if self.variant_stimuli:
                 header_content.extend(
-                    self.variant_stimuli.generate_stimuli_header_addresses()
+                    self.variant_stimuli.generate_stimuli_ONLY_header_addresses()
                 )
 
         for parameter in self.templates:
@@ -1046,7 +1098,7 @@ class TestConfig:
             # Mark build as complete so other processes know they can use the artefacts
             done_marker.touch()
 
-    def read_coverage_data_from_device(self, location="0,0"):
+    def read_coverage_data_from_device(self):
         VARIANT_DIR = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
         # Extracting coverage stream from device, for all kernel parts, for all their compilation units
         coverage_stream = b""
@@ -1057,9 +1109,11 @@ class TestConfig:
                 raise TTException(
                     f"__coverage_start not found in variant's {trisc_name}.elf"
                 )
-            length = read_word_from_device(location, addr=coverage_start)
+            length = read_word_from_device(
+                TestConfig.TENSIX_LOCATION, addr=coverage_start
+            )
             coverage_stream += read_from_device(
-                location, coverage_start + 4, num_bytes=length - 4
+                TestConfig.TENSIX_LOCATION, coverage_start + 4, num_bytes=length - 4
             )
 
         if len(self.runtimes) == 0:
@@ -1078,7 +1132,7 @@ class TestConfig:
     BRISC_ELF_LOADED: ClassVar[bool] = False
     LAST_LOADED_ELFS: ClassVar[Path] = Path()
 
-    def run_elf_files(self, location="0,0") -> list:
+    def run_elf_files(self) -> list:
         boot_mode = (
             CHIP_DEFAULT_BOOT_MODES[TestConfig.CHIP_ARCH]
             if self.boot_mode == BootMode.DEFAULT
@@ -1093,19 +1147,19 @@ class TestConfig:
 
         if boot_mode == BootMode.BRISC:
             if not TestConfig.BRISC_ELF_LOADED:
-                set_tensix_soft_reset(1, location=location)
+                set_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
                 TestConfig.BRISC_ELF_LOADED = True
                 load_elf(
                     elf_file=str((TestConfig.SHARED_ELF_DIR / "brisc.elf").absolute()),
-                    location=location,
+                    location=TestConfig.TENSIX_LOCATION,
                     risc_name="brisc",
                     verify_write=False,
                 )
-                set_tensix_soft_reset(0, [RiscCore.BRISC], location)
+                set_tensix_soft_reset(0, [RiscCore.BRISC], TestConfig.TENSIX_LOCATION)
             if get_chip_architecture() != ChipArchitecture.QUASAR:
-                commit_brisc_command(location, BriscCmd.RESET_TRISCS)
+                commit_brisc_command(TestConfig.TENSIX_LOCATION, BriscCmd.RESET_TRISCS)
         else:
-            set_tensix_soft_reset(1, location=location)
+            set_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
 
         VARIANT_ELF_DIR = (
             TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
@@ -1123,18 +1177,20 @@ class TestConfig:
                 if TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE:
                     start_address = load_elf(
                         elf_file=elf_file_path,
-                        location=location,
+                        location=TestConfig.TENSIX_LOCATION,
                         risc_name=f"trisc{i}",
                         return_start_address=True,
                         verify_write=False,
                     )
                     write_words_to_device(
-                        location, TestConfig.TRISC_START_ADDRS[i], [start_address]
+                        TestConfig.TENSIX_LOCATION,
+                        TestConfig.TRISC_START_ADDRS[i],
+                        [start_address],
                     )
                 else:
                     load_elf(
                         elf_file=elf_file_path,
-                        location=location,
+                        location=TestConfig.TENSIX_LOCATION,
                         risc_name=f"trisc{i}",
                         neo_id=(
                             0
@@ -1150,24 +1206,24 @@ class TestConfig:
             ):
                 # Instruct Brisc to update it's start addresses cache before it releases T[0-2] from reset
                 commit_brisc_command(
-                    location, BriscCmd.UPDATE_START_ADDR_CACHE_AND_START
+                    TestConfig.TENSIX_LOCATION,
+                    BriscCmd.UPDATE_START_ADDR_CACHE_AND_START,
                 )
                 return
 
         match boot_mode:
             case BootMode.BRISC:
-                commit_brisc_command(location, BriscCmd.START_TRISCS)
+                commit_brisc_command(TestConfig.TENSIX_LOCATION, BriscCmd.START_TRISCS)
             case BootMode.TRISC:
-                # Reset all mailboxes here to ensure that emu/sim see correct test completion state
-                reset_mailboxes(location)
-                set_tensix_soft_reset(0, [RiscCore.TRISC0], location)
+                reset_mailboxes(TestConfig.TENSIX_LOCATION)
+                set_tensix_soft_reset(0, [RiscCore.TRISC0], TestConfig.TENSIX_LOCATION)
             case BootMode.EXALENS:
-                exalens_device_setup(TestConfig.CHIP_ARCH, location)
-                set_tensix_soft_reset(0, TRISC_CORES, location)
+                exalens_device_setup(TestConfig.CHIP_ARCH, TestConfig.TENSIX_LOCATION)
+                set_tensix_soft_reset(0, TRISC_CORES, TestConfig.TENSIX_LOCATION)
 
         return
 
-    def wait_for_tensix_operations_finished(self, core_loc="0,0", timeout=2):
+    def wait_for_tensix_operations_finished(self, timeout=2):
         """
         Args:
             elfs: List of ELF file paths (used for assert diagnostics).
@@ -1181,17 +1237,20 @@ class TestConfig:
                 device_module.Mailboxes.BriscCommand0,
                 device_module.Mailboxes.BriscCommand1,
                 device_module.Mailboxes.BriscCounter,
+                device_module.Mailboxes.BriscBread0,
+                device_module.Mailboxes.BriscBread1,
             }
         test_target = TestTargetConfig()
         timeout = 600 if test_target.run_simulator else timeout
-
-        time.sleep(0.001)
 
         completed = set()
         end_time = time.time() + timeout
         while time.time() < end_time:
             for mailbox in mailboxes - completed:
-                if read_word_from_device(core_loc, mailbox.value) == KERNEL_COMPLETE:
+                if (
+                    read_word_from_device(TestConfig.TENSIX_LOCATION, mailbox.value)
+                    == KERNEL_COMPLETE
+                ):
                     completed.add(mailbox)
 
             if completed == mailboxes:
@@ -1199,7 +1258,7 @@ class TestConfig:
 
         handle_if_assert_hit(
             self.temp_elfs,
-            core_loc=core_loc,
+            core_loc=TestConfig.TENSIX_LOCATION,
         )
 
         trisc_hangs = [mailbox.name for mailbox in (mailboxes - completed)]
@@ -1207,15 +1266,16 @@ class TestConfig:
             f"Timeout reached: waited {timeout} seconds for {', '.join(trisc_hangs)}"
         )
 
-    def run(self, location="0,0"):
+    def run(self):
         self.generate_variant_hash()
+
         logger.debug(
             "Running variant={} | location={}",
             self.variant_id[:12],
-            location,
+            TestConfig.TENSIX_LOCATION,
         )
 
-        if TestConfig.MODE in [TestMode.PRODUCE, TestMode.DEFAULT]:
+        if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
             self.build_elfs()
 
         logger.debug(
@@ -1223,23 +1283,29 @@ class TestConfig:
             TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf",
         )
 
-        if TestConfig.MODE == TestMode.PRODUCE:
+        if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
             pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
 
-        self.write_runtimes_to_L1(location)
+        self.write_runtimes_to_L1()
 
         if self.variant_stimuli:
-            self.variant_stimuli.write(location)
+            if TestConfig.STIMULI_MODE == StimuliMode.GENERATE_ONLY:
+                self.variant_stimuli.save_to_cache()
+                pytest.skip(TestConfig.SKIP_JUST_FOR_STIMULI_MARKER)
+            elif TestConfig.STIMULI_MODE == StimuliMode.LOAD_CACHED:
+                self.variant_stimuli.load_from_cache()
 
-        self.run_elf_files(location)
-        self.wait_for_tensix_operations_finished(location)
+            self.variant_stimuli.write(TestConfig.TENSIX_LOCATION)
+
+        self.run_elf_files()
+        self.wait_for_tensix_operations_finished()
 
         if self.coverage_build == CoverageBuild.Yes:
-            self.read_coverage_data_from_device(location)
+            self.read_coverage_data_from_device()
 
         return TestOutcome(
             result=(
-                self.variant_stimuli.collect_results(location)
+                self.variant_stimuli.collect_results(TestConfig.TENSIX_LOCATION)
                 if self.variant_stimuli
                 else None
             ),

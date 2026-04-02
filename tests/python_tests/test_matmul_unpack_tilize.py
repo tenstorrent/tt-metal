@@ -35,7 +35,9 @@ from helpers.utils import passed_test
     ],
 )
 def test_matmul_unpack_tilize(
-    formats, dest_acc, math_fidelity, workers_tensix_coordinates
+    formats,
+    dest_acc,
+    math_fidelity,
 ):
 
     torch_format = format_dict[formats.output_format]
@@ -86,7 +88,7 @@ def test_matmul_unpack_tilize(
         L1_to_L1_iterations=L1_to_L1_iterations,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
         golden_tensor

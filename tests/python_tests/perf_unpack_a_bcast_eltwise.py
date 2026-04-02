@@ -46,7 +46,6 @@ def test_perf_col_tile_sdpa(
     math_fidelity,
     input_dimensions,
     srca_reuse_count,
-    workers_tensix_coordinates,
 ):
 
     # MathFidelity is only used for Elwmul
@@ -79,8 +78,4 @@ def test_perf_col_tile_sdpa(
         dest_acc=dest_acc,
     )
 
-    configuration.run(
-        perf_report,
-        run_count=10,
-        location=workers_tensix_coordinates,
-    )
+    configuration.run(perf_report, run_count=10)
