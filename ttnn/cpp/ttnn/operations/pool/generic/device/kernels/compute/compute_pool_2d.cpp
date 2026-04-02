@@ -71,6 +71,14 @@ void kernel_main() {
     constexpr uint32_t partial_iter_output_tiles =
         in_ntiles_c % MAX_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : in_ntiles_c % MAX_TILES_PER_REDUCTION;
 
+    // DST batching: when in_nblocks_c == 1 and in_ntiles_c < MAX_TILES_PER_REDUCTION, we can process
+    // multiple output sticks per tile_regs_acquire/release cycle, utilizing the full DST register width.
+    // E.g., with C=64 (2 tiles) and MAX_TILES=8, we batch 4 sticks per cycle (4*2=8 DST tiles).
+    constexpr uint32_t dst_batch_size = (in_nblocks_c == 1 && max_tiles_per_iter < MAX_TILES_PER_REDUCTION &&
+                                         MAX_TILES_PER_REDUCTION / max_tiles_per_iter >= 4)
+                                            ? MAX_TILES_PER_REDUCTION / max_tiles_per_iter
+                                            : 1;
+
     static_assert(REDUCE_OP == PoolType::MAX || REDUCE_OP == PoolType::SUM, "Only supports REDUCE_OP = MAX or Sum");
     constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
     constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::SUM) ? true : false;
@@ -105,126 +113,255 @@ void kernel_main() {
 
     uint32_t tilize_stick_counter = 0;
     uint32_t tilize_stick_total = 0;
-    for (uint32_t n = 0; n < num_out_sticks_this_core; ++n) {
-        const bool reader0 = !(use_split_reader && (n & 0x1));
-        const uint32_t curr_scalar_cb_id = (!reader0 && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
-        const uint32_t curr_in_cb_id = !reader0 ? in_cb_id_1 : in_cb_id_0;
-        if constexpr (!one_scalar_per_core) {
-            cb_wait_front(curr_scalar_cb_id, 1);
-        }
-        if (is_output_tiled && !tilize_stick_counter) {
-            cb_reserve_back(out_cb_id, in_ntiles_c);
-        }
-        for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
-            const bool last_c_block = c_i == in_nblocks_c - 1;
-            const bool first_c_block = c_i == 0;
-            const uint32_t tiles_to_reduce =
-                tilize_reconfig ? (last_c_block ? partial_iter_output_tiles : max_tiles_per_iter) : max_tiles_per_iter;
-            const uint32_t number_of_tiles = last_c_block ? partial_iter_output_tiles : max_tiles_per_iter;
-            const uint32_t output_faces =
-                (last_tile_is_partial && last_c_block)
-                    ? (number_of_tiles - 1) * num_faces_in_output_tile + num_faces_in_last_output_tile
-                    : number_of_tiles * num_faces_in_output_tile;
-            if constexpr (!is_output_tiled) {
+
+    if constexpr (dst_batch_size > 1) {
+        // ==================== DST-BATCHED PATH ====================
+        // Process multiple output sticks per tile_regs_acquire/release cycle.
+        // This utilizes the full DST register width (e.g., 8 tiles for bf16 half-sync).
+        // Each stick's reduction result is placed at DST offset [s * in_ntiles_c].
+        constexpr uint32_t output_faces =
+            last_tile_is_partial ? (in_ntiles_c - 1) * num_faces_in_output_tile + num_faces_in_last_output_tile
+                                 : in_ntiles_c * num_faces_in_output_tile;
+
+        for (uint32_t n = 0; n < num_out_sticks_this_core; n += dst_batch_size) {
+            const uint32_t current_batch =
+                (n + dst_batch_size <= num_out_sticks_this_core) ? dst_batch_size : num_out_sticks_this_core - n;
+
+            if constexpr (is_output_tiled) {
+                if (!tilize_stick_counter) {
+                    cb_reserve_back(out_cb_id, in_ntiles_c);
+                }
+            } else {
+                // Pre-reserve output CB for the first stick BEFORE acquiring DST,
+                // so it overlaps with previous iteration's packer activity.
                 cb_reserve_back(out_cb_id, output_faces);
             }
-            if constexpr (tilize_reconfig) {
-                if (first_c_block || last_c_block) {
-                    UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                        in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce, num_faces_in_input_tile, face_r_dim, 1)));
-                }
-            }
+
+            // --- Reduce phase: accumulate all sticks in this batch into DST ---
             tile_regs_acquire();
-            for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
-                cb_wait_front(curr_in_cb_id, 1);
-                unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                    curr_in_cb_id,
-                    curr_scalar_cb_id,
-                    tiles_to_reduce,
-                    0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
-                    num_faces_in_input_tile,
-                    face_r_dim);
-                for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
-                    reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
+            for (uint32_t s = 0; s < current_batch; ++s) {
+                const uint32_t stick_idx = n + s;
+                const bool reader0 = !(use_split_reader && (stick_idx & 0x1));
+                const uint32_t curr_scalar_cb_id =
+                    (!reader0 && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
+                const uint32_t curr_in_cb_id = !reader0 ? in_cb_id_1 : in_cb_id_0;
+
+                if constexpr (!one_scalar_per_core) {
+                    cb_wait_front(curr_scalar_cb_id, 1);
                 }
-                cb_pop_front(curr_in_cb_id, 1);
+
+                const uint32_t dst_base = s * in_ntiles_c;
+                for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
+                    cb_wait_front(curr_in_cb_id, 1);
+                    unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+                        curr_in_cb_id,
+                        curr_scalar_cb_id,
+                        in_ntiles_c,
+                        0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
+                        num_faces_in_input_tile,
+                        face_r_dim);
+                    for (uint32_t t = 0; t < in_ntiles_c; ++t) {
+                        reduce_tile_math(dst_base + t, num_faces_in_input_tile);
+                    }
+                    cb_pop_front(curr_in_cb_id, 1);
+                }
+
+                if constexpr (!one_scalar_per_core) {
+                    cb_pop_front(curr_scalar_cb_id, 1);
+                }
             }
             tile_regs_commit();
             tile_regs_wait();
-            if constexpr (is_output_tiled) {
-                // TILED output: accumulate sticks and perform tilization when needed
-                if (last_c_block) {
-                    pack_untilize_dest<partial_iter_output_tiles>(
-                        pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                    cb_push_back(pre_tilize_cb_id, partial_iter_output_tiles);
+
+            // --- Pack phase: pack each stick's result from DST ---
+            for (uint32_t s = 0; s < current_batch; ++s) {
+                if constexpr (is_output_tiled) {
+                    pack_untilize_dest<in_ntiles_c>(
+                        pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile, s * in_ntiles_c);
+                    cb_push_back(pre_tilize_cb_id, in_ntiles_c);
                     tilize_stick_counter++;
                     tilize_stick_total++;
-                } else {
-                    pack_untilize_dest<max_tiles_per_iter>(
-                        pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                    cb_push_back(pre_tilize_cb_id, max_tiles_per_iter);
-                }
-                tile_regs_release();
 
-                bool last_tile = num_out_sticks_this_core - tilize_stick_total < last_tile_height;
-                if (tilize_stick_counter == TILE_HEIGHT || (last_tile && tilize_stick_counter == last_tile_height)) {
-                    if (last_tile && last_tile_height != TILE_HEIGHT) {
-                        cb_wait_front(pre_tilize_cb_id, last_tile_height * in_ntiles_c);
-                        // if the last tile is not whole we won't have pushed enough sticks, so we need to
-                        // push some filler sticks to reach TILE_HEIGHT to make sure the CB pointers are correct
-                        // before calling tilize
-                        uint32_t filler_stick_tiles =
-                            (TILE_HEIGHT - last_tile_height) *
-                            ((in_nblocks_c - 1) * max_tiles_per_iter + partial_iter_output_tiles);
-                        cb_push_back(pre_tilize_cb_id, filler_stick_tiles);
-                    }
-                    cb_wait_front(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
-                    PACK((pack_untilize_uninit(pre_tilize_cb_id)));
+                    bool last_tile = num_out_sticks_this_core - tilize_stick_total < last_tile_height;
+                    if (tilize_stick_counter == TILE_HEIGHT ||
+                        (last_tile && tilize_stick_counter == last_tile_height)) {
+                        if (last_tile && last_tile_height != TILE_HEIGHT) {
+                            cb_wait_front(pre_tilize_cb_id, last_tile_height * in_ntiles_c);
+                            uint32_t filler_stick_tiles = (TILE_HEIGHT - last_tile_height) * in_ntiles_c;
+                            cb_push_back(pre_tilize_cb_id, filler_stick_tiles);
+                        }
+                        cb_wait_front(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
+                        PACK((pack_untilize_uninit(pre_tilize_cb_id)));
 
-                    unpack_tilizeA_B_uninit(curr_in_cb_id);
-                    pack_reconfig_data_format(out_cb_id);
+                        unpack_tilizeA_B_uninit(in_cb_id_0);
+                        pack_reconfig_data_format(out_cb_id);
 
-                    fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
-                    fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
-                    fast_tilize_uninit(pre_tilize_cb_id, out_cb_id);
+                        fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
+                        fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
+                        fast_tilize_uninit(pre_tilize_cb_id, out_cb_id);
 
-                    cb_push_back(out_cb_id, in_ntiles_c);
-                    cb_pop_front(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
-                    cb_reserve_back(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
+                        cb_push_back(out_cb_id, in_ntiles_c);
+                        cb_pop_front(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
+                        cb_reserve_back(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
 
-                    tilize_stick_counter = 0;
+                        tilize_stick_counter = 0;
 
-                    UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                        in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce, num_faces_in_input_tile, face_r_dim, 1)));
-                    // init math for reduction again since FPU gets reprogrammed by tilize
-                    MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
+                        UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+                            in_cb_id_0, in_scalar_cb_id_0, in_ntiles_c, num_faces_in_input_tile, face_r_dim, 1)));
+                        MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
 #ifdef ARCH_BLACKHOLE
-                    // need this on BH to set swizzle bit before pack untilize dest
-                    MATH((llk_math_reconfig_remap(true)));
+                        MATH((llk_math_reconfig_remap(true)));
+#endif
+                        constexpr uint32_t PACKER_FACE_R_DIM_STICK = 1;
+                        if constexpr (is_output_block_format) {
+                            PACK((llk_pack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE, false>(
+                                pre_tilize_cb_id, PACKER_FACE_R_DIM_STICK, num_faces_in_output_tile)));
+                        }
+                        PACK((llk_pack_untilize_init<in_ntiles_c, in_ntiles_c, false, false, TILE_C_DIM>(
+                            pre_tilize_cb_id, PACKER_FACE_R_DIM_STICK, num_faces_in_output_tile)));
+
+                        // Reserve out_cb for next tile row if there are more sticks
+                        if (tilize_stick_total < num_out_sticks_this_core) {
+                            cb_reserve_back(out_cb_id, in_ntiles_c);
+                        }
+                    }
+                } else {
+                    // ROW_MAJOR output: first stick's space was pre-reserved; reserve for subsequent sticks
+                    if (s > 0) {
+                        cb_reserve_back(out_cb_id, output_faces);
+                    }
+                    pack_untilize_dest<in_ntiles_c>(
+                        out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile, s * in_ntiles_c);
+                    cb_push_back(out_cb_id, output_faces);
+                }
+            }
+            tile_regs_release();
+        }
+    } else {
+        // ==================== ORIGINAL (NON-BATCHED) PATH ====================
+        for (uint32_t n = 0; n < num_out_sticks_this_core; ++n) {
+            const bool reader0 = !(use_split_reader && (n & 0x1));
+            const uint32_t curr_scalar_cb_id =
+                (!reader0 && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
+            const uint32_t curr_in_cb_id = !reader0 ? in_cb_id_1 : in_cb_id_0;
+            if constexpr (!one_scalar_per_core) {
+                cb_wait_front(curr_scalar_cb_id, 1);
+            }
+            if (is_output_tiled && !tilize_stick_counter) {
+                cb_reserve_back(out_cb_id, in_ntiles_c);
+            }
+            for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
+                const bool last_c_block = c_i == in_nblocks_c - 1;
+                const bool first_c_block = c_i == 0;
+                const uint32_t tiles_to_reduce = tilize_reconfig
+                                                     ? (last_c_block ? partial_iter_output_tiles : max_tiles_per_iter)
+                                                     : max_tiles_per_iter;
+                const uint32_t number_of_tiles = last_c_block ? partial_iter_output_tiles : max_tiles_per_iter;
+                const uint32_t output_faces =
+                    (last_tile_is_partial && last_c_block)
+                        ? (number_of_tiles - 1) * num_faces_in_output_tile + num_faces_in_last_output_tile
+                        : number_of_tiles * num_faces_in_output_tile;
+                if constexpr (!is_output_tiled) {
+                    cb_reserve_back(out_cb_id, output_faces);
+                }
+                if constexpr (tilize_reconfig) {
+                    if (first_c_block || last_c_block) {
+                        UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+                            in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce, num_faces_in_input_tile, face_r_dim, 1)));
+                    }
+                }
+                tile_regs_acquire();
+                for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
+                    cb_wait_front(curr_in_cb_id, 1);
+                    unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+                        curr_in_cb_id,
+                        curr_scalar_cb_id,
+                        tiles_to_reduce,
+                        0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
+                        num_faces_in_input_tile,
+                        face_r_dim);
+                    for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
+                        reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
+                    }
+                    cb_pop_front(curr_in_cb_id, 1);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                if constexpr (is_output_tiled) {
+                    // TILED output: accumulate sticks and perform tilization when needed
+                    if (last_c_block) {
+                        pack_untilize_dest<partial_iter_output_tiles>(
+                            pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                        cb_push_back(pre_tilize_cb_id, partial_iter_output_tiles);
+                        tilize_stick_counter++;
+                        tilize_stick_total++;
+                    } else {
+                        pack_untilize_dest<max_tiles_per_iter>(
+                            pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                        cb_push_back(pre_tilize_cb_id, max_tiles_per_iter);
+                    }
+                    tile_regs_release();
+
+                    bool last_tile = num_out_sticks_this_core - tilize_stick_total < last_tile_height;
+                    if (tilize_stick_counter == TILE_HEIGHT ||
+                        (last_tile && tilize_stick_counter == last_tile_height)) {
+                        if (last_tile && last_tile_height != TILE_HEIGHT) {
+                            cb_wait_front(pre_tilize_cb_id, last_tile_height * in_ntiles_c);
+                            uint32_t filler_stick_tiles =
+                                (TILE_HEIGHT - last_tile_height) *
+                                ((in_nblocks_c - 1) * max_tiles_per_iter + partial_iter_output_tiles);
+                            cb_push_back(pre_tilize_cb_id, filler_stick_tiles);
+                        }
+                        cb_wait_front(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
+                        PACK((pack_untilize_uninit(pre_tilize_cb_id)));
+
+                        unpack_tilizeA_B_uninit(curr_in_cb_id);
+                        pack_reconfig_data_format(out_cb_id);
+
+                        fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
+                        fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
+                        fast_tilize_uninit(pre_tilize_cb_id, out_cb_id);
+
+                        cb_push_back(out_cb_id, in_ntiles_c);
+                        cb_pop_front(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
+                        cb_reserve_back(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
+
+                        tilize_stick_counter = 0;
+
+                        UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+                            in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce, num_faces_in_input_tile, face_r_dim, 1)));
+                        // init math for reduction again since FPU gets reprogrammed by tilize
+                        MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
+#ifdef ARCH_BLACKHOLE
+                        // need this on BH to set swizzle bit before pack untilize dest
+                        MATH((llk_math_reconfig_remap(true)));
 #endif
 
-                    constexpr uint32_t PACKER_FACE_R_DIM_STICK = 1;  // face_r_dim = 1 => one-row faces (stick packing)
-                    if constexpr (is_output_block_format) {
-                        PACK((llk_pack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE, false /*untilize*/>(
+                        constexpr uint32_t PACKER_FACE_R_DIM_STICK =
+                            1;  // face_r_dim = 1 => one-row faces (stick packing)
+                        if constexpr (is_output_block_format) {
+                            PACK((llk_pack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE, false /*untilize*/>(
+                                pre_tilize_cb_id, PACKER_FACE_R_DIM_STICK, num_faces_in_output_tile)));
+                        }
+                        PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, false, TILE_C_DIM>(
                             pre_tilize_cb_id, PACKER_FACE_R_DIM_STICK, num_faces_in_output_tile)));
                     }
-                    PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, false, TILE_C_DIM>(
-                        pre_tilize_cb_id, PACKER_FACE_R_DIM_STICK, num_faces_in_output_tile)));
-                }
-            } else {
-                // ROW_MAJOR output: pack directly to output CB
-                if (last_c_block) {
-                    pack_untilize_dest<partial_iter_output_tiles>(
-                        out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
                 } else {
-                    pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                    // ROW_MAJOR output: pack directly to output CB
+                    if (last_c_block) {
+                        pack_untilize_dest<partial_iter_output_tiles>(
+                            out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                    } else {
+                        pack_untilize_dest<max_tiles_per_iter>(
+                            out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                    }
+                    cb_push_back(out_cb_id, output_faces);
+                    tile_regs_release();
                 }
-                cb_push_back(out_cb_id, output_faces);
-                tile_regs_release();
             }
-        }
-        if constexpr (!one_scalar_per_core) {
-            cb_pop_front(curr_scalar_cb_id, 1);
+            if constexpr (!one_scalar_per_core) {
+                cb_pop_front(curr_scalar_cb_id, 1);
+            }
         }
     }
 }
