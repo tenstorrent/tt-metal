@@ -15,6 +15,7 @@ from pathlib import Path
 
 import torch
 import ttnn
+from models.experimental.lingbot_va.tests.demo import demo as lingbot_demo
 
 
 class TtLingbotVA:
@@ -49,7 +50,6 @@ class TtLingbotVA:
             save_dir: ``config.save_root`` for caches.
             num_inference_steps / action_num_inference_steps / frame_chunk_size: same as ``run_inference``.
         """
-        from models.experimental.lingbot_va.tests.demo import demo as lingbot_demo
 
         checkpoint_path = Path(checkpoint_path).resolve()
         if not checkpoint_path.is_dir():
@@ -97,7 +97,7 @@ class TtLingbotVA:
         lingbot_demo._load_transformer_into_models(models, config)
 
         instance = cls(models, state, message)
-        instance.single_run_inputs = instance._prepare_single_run_inputs()
+        # instance.single_run_inputs = instance._prepare_single_run_inputs()
         return instance
 
     def _prepare_single_run_inputs(self) -> dict:
@@ -149,22 +149,23 @@ class TtLingbotVA:
 
     def forward_reset_and_infer(self) -> ttnn.Tensor:
         """Run one preprocessed WanTransformer forward with ``single_run=True``."""
-        if self.single_run_inputs is None:
-            self.single_run_inputs = self._prepare_single_run_inputs()
+        # if self.single_run_inputs is None:
+        #     self.single_run_inputs = self._prepare_single_run_inputs()
 
-        transformer = self.models["transformer"]
-        tt_transformer = getattr(transformer, "_tt_model", transformer)
-        return tt_transformer.forward(
-            spatial=self.single_run_inputs["spatial_1BND"],
-            prompt=self.single_run_inputs["prompt_1BLP"],
-            timestep=self.single_run_inputs["temb"],
-            grid_id=self.single_run_inputs["metadata"],
-            action_mode=False,
-            update_cache=0,
-            cache_name="pos",
-            timestep_per_frame=self.single_run_inputs["block_temb"],
-            single_run=True,
-        )
+        # transformer = self.models["transformer"]
+        # tt_transformer = getattr(transformer, "_tt_model", transformer)
+        # return tt_transformer.forward(
+        #     spatial=self.single_run_inputs["spatial_1BND"],
+        #     prompt=self.single_run_inputs["prompt_1BLP"],
+        #     timestep=self.single_run_inputs["temb"],
+        #     grid_id=self.single_run_inputs["metadata"],
+        #     action_mode=False,
+        #     update_cache=0,
+        #     cache_name="pos",
+        #     timestep_per_frame=self.single_run_inputs["block_temb"],
+        #     single_run=True,
+        # )
+        return lingbot_demo._infer_impl(self.models, self.state, self.message, frame_st_id=self.state["frame_st_id"])
 
     def __call__(self, l1_input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Pipeline entrypoint: runs one Lingbot chunk."""

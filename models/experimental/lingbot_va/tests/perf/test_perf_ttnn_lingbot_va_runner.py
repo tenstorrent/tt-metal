@@ -26,7 +26,9 @@ class LingbotVaInferenceConfig:
 
     num_inference_steps: int = 1
     action_num_inference_steps: int = 1
-    frame_chunk_size: int = 1
+    # Match ``VA_CONFIGS["robotwin"].frame_chunk_size`` (6). ``frame_chunk_size=1`` hits a fragile
+    # per-token timestep concat path on device; CLI ``demo.py`` uses the same default when kwargs omitted.
+    frame_chunk_size: int = 6
     prompt: str = "Lift the cup from the table"
     obs_seed: int = 42
     obs_h: int = 256
@@ -88,6 +90,7 @@ def _run_lingbot_va_ttnn_forward() -> None:
         **kw,
     )
 
+    assert isinstance(out, dict), "run_inference returns {'action': ndarray}"
     assert "action" in out, "Expected 'action' in run_inference output"
     assert out["action"] is not None
     assert getattr(out["action"], "size", 0) > 0
