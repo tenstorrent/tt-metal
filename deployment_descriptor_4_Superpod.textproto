@@ -1,0 +1,128 @@
+hosts {
+  hall: "120"
+  aisle: "A"
+  rack: 2
+  shelf_u: 2
+  node_type: "BH_GALAXY_REV_C"
+  host: "bh-glx-a02u02"
+}
+hosts {
+  hall: "120"
+  aisle: "A"
+  rack: 2
+  shelf_u: 8
+  node_type: "BH_GALAXY_REV_C"
+  host: "bh-glx-a02u08"
+}
+hosts {
+  hall: "120"
+  aisle: "A"
+  rack: 3
+  shelf_u: 2
+  node_type: "BH_GALAXY_REV_C"
+  host: "bh-glx-a03u02"
+}
+hosts {
+  hall: "120"
+  aisle: "A"
+  rack: 3
+  shelf_u: 8
+  node_type: "BH_GALAXY_REV_C"
+  host: "bh-glx-a03u08"
+}
+hosts {
+  hall: "120"
+  aisle: "A"
+  rack: 4
+  shelf_u: 2
+  node_type: "BH_GALAXY_REV_C"
+  host: "bh-glx-a04u02"
+}
+hosts {
+  hall: "120"
+  aisle: "A"
+  rack: 4
+  shelf_u: 8
+  node_type: "BH_GALAXY_REV_C"
+  host: "bh-glx-a04u08"
+}
+hosts {
+  hall: "120"
+  aisle: "A"
+  rack: 5
+  shelf_u: 2
+  node_type: "BH_GALAXY_REV_C"
+  host: "bh-glx-a05u02"
+}
+hosts {
+  hall: "120"
+  aisle: "A"
+  rack: 5
+  shelf_u: 8
+  node_type: "BH_GALAXY_REV_C"
+  host: "bh-glx-a05u08"
+}
+hosts {
+  hall: "120"
+  aisle: "A"
+  rack: 6
+  shelf_u: 2
+  node_type: "BH_GALAXY_REV_C"
+  host: "bh-glx-a06u02"
+}
+hosts {
+  hall: "120"
+  aisle: "A"
+  rack: 6
+  shelf_u: 8
+  node_type: "BH_GALAXY_REV_C"
+  host: "bh-glx-a06u08"
+}
+hosts {
+  hall: "120"
+  aisle: "A"
+  rack: 7
+  shelf_u: 2
+  node_type: "BH_GALAXY_REV_C"
+  host: "bh-glx-a07u02"
+}
+hosts {
+  hall: "120"
+  aisle: "A"
+  rack: 7
+  shelf_u: 8
+  node_type: "BH_GALAXY_REV_C"
+  host: "bh-glx-a07u08"
+}
+hosts {
+  hall: "120"
+  aisle: "A"
+  rack: 8
+  shelf_u: 2
+  node_type: "BH_GALAXY_REV_C"
+  host: "bh-glx-a08u02"
+}
+hosts {
+  hall: "120"
+  aisle: "A"
+  rack: 8
+  shelf_u: 8
+  node_type: "BH_GALAXY_REV_C"
+  host: "bh-glx-a08u08"
+}
+hosts {
+  hall: "120"
+  aisle: "A"
+  rack: 9
+  shelf_u: 2
+  node_type: "BH_GALAXY_REV_C"
+  host: "bh-glx-a09u02"
+}
+hosts {
+  hall: "120"
+  aisle: "A"
+  rack: 9
+  shelf_u: 8
+  node_type: "BH_GALAXY_REV_C"
+  host: "bh-glx-a09u08"
+}
