@@ -81,10 +81,12 @@ void kernel_main() {
     constexpr uint32_t output_tensor_data_format_size =
         get_tile_size(output_tensor_cb_index) / get_tile_hw(input_tensor_cb_index);
 
-    uint32_t current_index_tile_id = core_id;
-
     for (uint32_t h = 0; h < Ht; h++) {
         for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
+            const uint32_t current_index_tile_id = core_id + core_loop * total_number_of_cores;
+            if (current_index_tile_id >= Wt_index) {
+                break;
+            }
             // Read index data
             cb_reserve_back(input_index_tensor_cb_index, one_tile);
 
@@ -150,7 +152,6 @@ void kernel_main() {
             }  // wi loop
             cb_push_back(output_tensor_cb_index, one_tile);
             cb_pop_front(input_index_tensor_cb_index, one_tile);
-            current_index_tile_id += total_number_of_cores;
         }  // core_loop_count loop
     }  // h loop
 }

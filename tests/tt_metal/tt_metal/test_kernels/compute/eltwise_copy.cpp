@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/common.h"
+#include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #ifdef ARCH_QUASAR
@@ -24,6 +25,14 @@ void kernel_main() {
     experimental::CircularBuffer cb0(tt::CBIndex::c_0);
     experimental::CircularBuffer cb16(tt::CBIndex::c_16);
     unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
+#endif
+
+#ifdef PACK_RELU
+#ifdef ARCH_QUASAR
+    pack_relu_config(ReluConfig::from_packed(get_arg_val<uint32_t>(0)));
+#else
+    pack_relu_config(get_arg_val<uint32_t>(0));
+#endif
 #endif
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {

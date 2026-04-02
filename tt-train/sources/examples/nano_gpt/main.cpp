@@ -494,6 +494,10 @@ int main(int argc, char **argv) {
                     ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
                         std::get<std::string>(data_source), sequence_length);
 
+                if (!tokenizer) {
+                    throw std::runtime_error("Failed to create CharTokenizer");
+                }
+
                 std::visit(
                     [&](auto &&arg) { arg.vocab_size = tokenizer->get_vocab_size(); }, model_config.transformer_config);
 
@@ -847,6 +851,15 @@ int main(int argc, char **argv) {
 
                 ttml::autograd::ctx().get_profiler().read_results(device, fmt::format("iteration_{}", global_step));
 
+                auto end_timer = std::chrono::high_resolution_clock::now();
+                auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
+                if (needs_to_call_loss) {
+                    fmt::print(
+                        "Full step time {} ms, cache entries: {}\n",
+                        (double)duration / 1000,
+                        device->num_program_cache_entries());
+                }
+
                 if (global_step >= training_config.max_steps) {
                     break;
                 }
@@ -862,14 +875,6 @@ int main(int argc, char **argv) {
                         ttml::utils::MemoryUsageTracker::clear();
                     }
                 }
-            }
-            auto end_timer = std::chrono::high_resolution_clock::now();
-            auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
-            if (needs_to_call_loss) {
-                fmt::print(
-                    "Full step time {} ms, cache entries: {}\n",
-                    (double)duration / 1000,
-                    device->num_program_cache_entries());
             }
         }
         if (optimizer->get_steps() >= training_config.max_steps) {

@@ -272,6 +272,9 @@ class RunTimeOptions {
     // feature flag to enable 2-erisc mode on Blackhole (general, not fabric-specific)
     bool enable_2_erisc_mode = true;
 
+    // Feature flag to register Blackhole DRAM programmable cores in the HAL on silicon.
+    bool enable_blackhole_dram_programmable_cores = false;
+
     // Log kernels compilation commands
     bool log_kernels_compilation_commands = false;
 
@@ -314,6 +317,9 @@ class RunTimeOptions {
 
     // Force JIT compile even if dependencies are up to date
     bool force_jit_compile = false;
+
+    // Store command queues in device DRAM
+    bool dram_backed_cq = false;
 
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
@@ -646,6 +652,8 @@ public:
 
     void set_enable_2_erisc_mode(bool enable) { enable_2_erisc_mode = enable; }
 
+    bool get_enable_blackhole_dram_programmable_cores() const { return enable_blackhole_dram_programmable_cores; }
+
     bool is_custom_fabric_mesh_graph_desc_path_specified() const { return is_custom_fabric_mesh_graph_desc_path_set; }
     std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
 
@@ -733,6 +741,8 @@ public:
     void set_force_jit_compile(bool enable) { force_jit_compile = enable; }
 
     bool get_numa_based_affinity() const { return numa_based_affinity; }
+
+    bool get_dram_backed_cq() const { return dram_backed_cq; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 

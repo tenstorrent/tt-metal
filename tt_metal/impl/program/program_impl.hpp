@@ -220,6 +220,7 @@ public:
     void allocate_circular_buffers(const IDevice* device);
     void allocate_dataflow_buffers(const IDevice* device);
     bool is_finalized() const;
+    bool is_compiled() const { return !compiled_.empty(); }
     void set_finalized();
     void allocate_kernel_bin_buf_on_device(IDevice* device);
     bool is_cached() const { return this->cached_device_hash_.has_value(); }

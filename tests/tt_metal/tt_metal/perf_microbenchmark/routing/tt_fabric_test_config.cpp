@@ -881,11 +881,19 @@ void CmdlineParser::print_help() {
         "built_tests.yaml.");
     log_info(LogTest, "  --filter <testname>           Specify a filter for the test suite");
     log_info(LogTest, "");
+    log_info(LogTest, "Display Options:");
+    log_info(
+        LogTest,
+        "  --show-workers                               Log active senders/receivers per device before each test.");
+    log_info(LogTest, "");
     log_info(LogTest, "Progress Monitoring Options:");
     log_info(LogTest, "  --show-progress                              Enable real-time progress monitoring.");
     log_info(LogTest, "  --progress-interval <seconds>                Poll interval (default: 2).");
     log_info(LogTest, "  --hung-threshold <seconds>                   Hung detection threshold (default: 30).");
 }
+
+// Display methods
+bool CmdlineParser::show_workers() { return test_args::has_command_option(input_args_, "--show-workers"); }
 
 // Progress monitoring methods
 bool CmdlineParser::show_progress() { return test_args::has_command_option(input_args_, "--show-progress"); }
@@ -2157,18 +2165,19 @@ void TestConfigBuilder::split_senders_by_direction_for_benchmark(ParsedTestConfi
 }
 
 bool TestConfigBuilder::expand_link_duplicates(ParsedTestConfig& test) {
-    // If num_links is 1, no duplication needed
-    if (test.fabric_setup.num_links <= 1) {
-        return true;  // Success - no expansion needed
-    }
-
     uint32_t num_links = test.fabric_setup.num_links;
-    log_debug(LogTest, "Expanding link duplicates for test '{}' with {} links", test.name, num_links);
-
     // Validate that num_links doesn't exceed available routing planes for any device
     if (!route_manager_.validate_num_links_supported(num_links)) {
         return false;  // Indicate test should be skipped
     }
+
+    // If num_links is 1, no duplication needed
+    if (num_links <= 1) {
+        return true;  // Success - no expansion needed
+    }
+
+    log_debug(LogTest, "Expanding link duplicates for test '{}' with {} links", test.name, num_links);
+
 
     std::vector<ParsedSenderConfig> new_senders;
     new_senders.reserve(test.senders.size() * num_links);

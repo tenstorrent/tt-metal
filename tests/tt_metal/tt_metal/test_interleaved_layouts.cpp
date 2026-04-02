@@ -466,7 +466,7 @@ bool test_interleaved_l1_datacopy(
             .noc = tt_metal::NOC::RISCV_1_default,
             .compile_args = reader_compile_time_args});
 
-    std::vector<uint32_t> writer_compile_time_args;
+    std::vector<uint32_t> writer_compile_time_args = {tt::CBIndex::c_16};
     tt::tt_metal::TensorAccessorArgs(dst).append_to(writer_compile_time_args);
     auto unary_writer_kernel = tt_metal::CreateKernel(
         program,

@@ -57,6 +57,14 @@ struct Core {
         get_named_compile_time_arg_val("is_argmax_mesh_sender_core") == 1;
     static constexpr bool is_rmsnorm_core = get_named_compile_time_arg_val("is_rmsnorm_core") == 1;
     static constexpr bool persistent_mode = get_named_compile_time_arg_val("persistent_mode") == 1;
+    static constexpr uint32_t fabric_gate_bcast_turn_semaphore_id =
+        get_named_compile_time_arg_val("fabric_gate_bcast_turn_semaphore_id");
+    static constexpr uint32_t fabric_gate_argmax_turn_semaphore_id =
+        get_named_compile_time_arg_val("fabric_gate_argmax_turn_semaphore_id");
+    static constexpr uint32_t fabric_gate_bcast_noc_x = get_named_compile_time_arg_val("fabric_gate_bcast_noc_x");
+    static constexpr uint32_t fabric_gate_bcast_noc_y = get_named_compile_time_arg_val("fabric_gate_bcast_noc_y");
+    static constexpr uint32_t fabric_gate_argmax_noc_x = get_named_compile_time_arg_val("fabric_gate_argmax_noc_x");
+    static constexpr uint32_t fabric_gate_argmax_noc_y = get_named_compile_time_arg_val("fabric_gate_argmax_noc_y");
     static constexpr uint32_t mesh_row = get_named_compile_time_arg_val("mesh_row");
     static constexpr uint32_t mesh_col = get_named_compile_time_arg_val("mesh_col");
     static_assert(input_socket_mode != 1, "lm_head_sampling input socket mode=1 is invalid");
@@ -322,13 +330,22 @@ void kernel_main() {
         // Phase 0: broadcast_rms-style combined path.
         // ====================================================================
 #if defined(COMPILE_FOR_BRISC) && !defined(SKIP_CCL)
-        // Persistent-mode sender/input core waits for host signal before each iteration.
         constexpr bool is_root = get_named_compile_time_arg_val("bcast_is_root") == 1;
         if constexpr (Core::persistent_mode && is_root && Core::is_input_core) {
             auto next_iteration_semaphore =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_global_sem_addr);
             noc_semaphore_wait(next_iteration_semaphore, 1);
             noc_semaphore_set(next_iteration_semaphore, 0);
+        }
+#endif
+
+#if defined(COMPILE_FOR_NCRISC)
+        // Device-local fabric gate (pre-bcast acquire).
+        if constexpr (Core::is_input_core && !Core::skip_ccl) {
+            auto* bcast_turn_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                get_semaphore(Core::fabric_gate_bcast_turn_semaphore_id));
+            noc_semaphore_wait(bcast_turn_sem, 1);
+            noc_semaphore_set(bcast_turn_sem, 0);
         }
 #endif
 
@@ -341,6 +358,18 @@ void kernel_main() {
                 DeviceZoneScopedN("CCL_BROADCAST");
                 bcast(bcast_args);
             }
+        }
+#endif
+
+#if defined(COMPILE_FOR_NCRISC)
+        // Device-local fabric gate (post-bcast release to argmax side).
+        if constexpr (Core::is_input_core && !Core::skip_ccl) {
+            auto argmax_turn_sem_noc_addr = get_noc_addr(
+                Core::fabric_gate_argmax_noc_x,
+                Core::fabric_gate_argmax_noc_y,
+                get_semaphore(Core::fabric_gate_argmax_turn_semaphore_id));
+            noc_semaphore_inc(argmax_turn_sem_noc_addr, 1);
+            noc_async_atomic_barrier();
         }
 #endif
 
@@ -369,14 +398,36 @@ void kernel_main() {
             matmul(matmul_args);
         }
 
+#if defined(COMPILE_FOR_BRISC)
+        // Device-local fabric gate (pre-sampling acquire on argmax final core).
+        if constexpr (Core::is_argmax_final_core && !Core::skip_ccl) {
+            auto* argmax_turn_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                get_semaphore(Core::fabric_gate_argmax_turn_semaphore_id));
+            noc_semaphore_wait(argmax_turn_sem, 1);
+            noc_semaphore_set(argmax_turn_sem, 0);
+        }
+#endif
+
         {
             DeviceZoneScopedN("ARGMAX");
             sampling_op(sampling_args);
         }
 
+#if defined(COMPILE_FOR_BRISC)
+        // Device-local fabric gate (post-sampling release back to bcast side).
+        if constexpr (Core::is_argmax_final_core && !Core::skip_ccl) {
+            auto bcast_turn_sem_noc_addr = get_noc_addr(
+                Core::fabric_gate_bcast_noc_x,
+                Core::fabric_gate_bcast_noc_y,
+                get_semaphore(Core::fabric_gate_bcast_turn_semaphore_id));
+            noc_semaphore_inc(bcast_turn_sem_noc_addr, 1);
+            noc_async_atomic_barrier();
+        }
+#endif
+
         if constexpr (!Core::persistent_mode) {
             break;
         }
     }
-    mcast.teardown();
+    mcast.teardown(mcast_args);
 }

@@ -23,6 +23,7 @@
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
 #include "ops/multi_head_utils.hpp"
+#include "ops/polynorm_op.hpp"
 #include "ops/rand_op.hpp"
 #include "ops/randn_op.hpp"
 #include "ops/reshape_op.hpp"
@@ -30,6 +31,7 @@
 #include "ops/rope_op.hpp"
 #include "ops/sampling_op.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
+#include "ops/swiglu_op.hpp"
 #include "ops/unary_ops.hpp"
 
 namespace ttml::nanobind::ops {
@@ -58,6 +60,7 @@ void py_module_types(nb::module_& m) {
     m.def_submodule("reshape");
     m.def_submodule("rmsnorm");
     m.def_submodule("sample");
+    m.def_submodule("swiglu");
     m.def_submodule("unary");
 }
 
@@ -369,9 +372,9 @@ void py_module(nb::module_& m) {
         "rand",
         &ttml::ops::rand,
         nb::arg("shape"),
+        nb::arg("a") = 0.0f,
+        nb::arg("b") = 1.0f,
         nb::kw_only(),
-        nb::arg("low") = 0.0f,
-        nb::arg("high") = 1.0f,
         nb::arg("seed") = std::nullopt,
         nb::arg("dtype") = tt::tt_metal::DataType::BFLOAT16,
         nb::arg("layout") = tt::tt_metal::Layout::TILE);
@@ -380,9 +383,9 @@ void py_module(nb::module_& m) {
         "randn",
         &ttml::ops::randn,
         nb::arg("shape"),
-        nb::kw_only(),
         nb::arg("mean") = 0.0f,
         nb::arg("std") = 1.0f,
+        nb::kw_only(),
         nb::arg("seed") = std::nullopt,
         nb::arg("dtype") = tt::tt_metal::DataType::BFLOAT16,
         nb::arg("layout") = tt::tt_metal::Layout::TILE);
@@ -399,10 +402,30 @@ void py_module(nb::module_& m) {
     }
 
     {
+        auto py_swiglu = static_cast<nb::module_>(m.attr("swiglu"));
+        py_swiglu.def(
+            "swiglu",
+            &ttml::ops::swiglu,
+            nb::arg("tensor"),
+            nb::arg("w1"),
+            nb::arg("w2"),
+            nb::arg("w3"),
+            nb::arg("dropout_prob") = 0.0F,
+            nb::arg("use_per_device_seed") = true);
+    }
+
+    {
         auto py_unary = static_cast<nb::module_>(m.attr("unary"));
         py_unary.def("relu", &ttml::ops::relu, nb::arg("tensor"));
         py_unary.def("gelu", &ttml::ops::gelu, nb::arg("tensor"));
         py_unary.def("silu", &ttml::ops::silu, nb::arg("tensor"), nb::arg("use_composite_bw") = false);
+        py_unary.def(
+            "polynorm3",
+            &ttml::ops::polynorm3,
+            nb::arg("tensor"),
+            nb::arg("weight"),
+            nb::arg("bias"),
+            nb::arg("epsilon") = 1e-5F);
         py_unary.def("mean", &ttml::ops::mean, nb::arg("tensor"));
         // py_unary.def("sum", &ttml::ops::sum,
         //              nb::arg("tensor"));

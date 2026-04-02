@@ -1,11 +1,9 @@
 name: 📊 Collect Test Durations
 
 on:
-  # TODO(llk-ci-wire-up): Restore these triggers when wiring up to automation:
-  # schedule:
-  #   # Run every Sunday at 2AM UTC to collect fresh duration data
-  #   - cron: '0 2 * * 0'
-  #
+  schedule:
+    # Run every Sunday at 2AM UTC to collect fresh duration data
+    - cron: '0 2 * * 0'
   workflow_dispatch:
 
 permissions:

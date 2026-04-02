@@ -726,7 +726,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                         // KernelGroup to hold value of number of dfbs
                         auto local_dfb_val = per_core_num_dfbs_.find(core);
                         if (local_dfb_val != per_core_num_dfbs_.end()) {
-                            num_dfbs += local_dfb_val->second;
+                            num_dfbs = local_dfb_val->second;
                         }
                     }
                 }
@@ -2034,7 +2034,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         size_t max_size = get_ringbuffer_size(device, programmable_core_type);
 
         TT_FATAL(
-            state.offset < max_size,
+            state.offset <= max_size,
             "Program size ({}) too large for kernel config buffer ({}) on {}",
             state.offset,
             max_size,
@@ -2050,11 +2050,16 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         program->set_program_attrs_across_core_types(device);
     }
 
-    // determine max program size across all programs
+    // Determine the DRAM kernel binary size per program and the max across all programs.
+    // populate_dispatch_data (called above via set_program_attrs_across_core_types) packs all
+    // kernel binaries from every core type into program_transfer_info.binary_data, so its size
+    // reflects the full unpadded binary payload the prefetcher must cache.
     uint32_t max_program_sizeB = 0;
     for (auto& program : programs) {
-        program->kernel_bins_sizeB = state.kernel_text_size;
-        max_program_sizeB = std::max(max_program_sizeB, state.kernel_text_size);
+        uint32_t binary_sizeB =
+            static_cast<uint32_t>(program->get_program_transfer_info().binary_data.size() * sizeof(uint32_t));
+        program->kernel_bins_sizeB = binary_sizeB;
+        max_program_sizeB = std::max(max_program_sizeB, binary_sizeB);
     }
     return max_program_sizeB;
 }

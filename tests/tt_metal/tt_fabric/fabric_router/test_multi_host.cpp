@@ -23,6 +23,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "tests/tt_metal/tt_fabric/common/utils.hpp"
 using tt::tt_fabric::fabric_router_tests::check_asic_mapping_against_golden;
+using tt::tt_fabric::fabric_router_tests::expect_galaxy_corner_folding_check;
 
 namespace tt::tt_fabric::multi_host_tests {
 
@@ -98,6 +99,8 @@ TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 
+    expect_galaxy_corner_folding_check(*control_plane);
+
     check_asic_mapping_against_golden("TestDualGalaxyControlPlaneInit");
 }
 
@@ -114,6 +117,8 @@ TEST(MultiHost, TestDualGalaxyControlPlaneInitFlipped) {
         tt::tt_fabric::FabricConfig::FABRIC_2D,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+
+    expect_galaxy_corner_folding_check(*control_plane);
 
     check_asic_mapping_against_golden("TestDualGalaxyControlPlaneInitFlipped");
 }
@@ -485,6 +490,9 @@ TEST(MultiHost, Test32x4QuadGalaxyControlPlaneInit) {
         tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
 
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+    expect_galaxy_corner_folding_check(*control_plane);
+
     check_asic_mapping_against_golden("Test32x4QuadGalaxyControlPlaneInit");
 }
 
@@ -648,6 +656,8 @@ TEST(MultiHost, TestQuadGalaxyControlPlaneInit) {
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+
+    expect_galaxy_corner_folding_check(*control_plane);
 
     check_asic_mapping_against_golden("TestQuadGalaxyControlPlaneInit");
 }
@@ -1231,26 +1241,7 @@ TEST(MultiHost, TestTriplePod16x8QuadBHGalaxyControlPlaneInit) {
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 
-    // In-code verification that fabric node corners 0 and 127 for each mesh are assigned to valid tray positions
-    // (tray 1-4, asic_location 1)
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled()) {
-        const auto& psd = control_plane->get_physical_system_descriptor();
-        for (uint32_t mesh_id = 0; mesh_id < 3; ++mesh_id) {
-            for (uint32_t chip_id : {0u, 127u}) {
-                FabricNodeId fn_id(MeshId{mesh_id}, chip_id);
-                auto asic_id = control_plane->get_asic_id_from_fabric_node_id(fn_id);
-                auto tray_id = psd.get_tray_id(asic_id);
-                auto asic_location = psd.get_asic_location(asic_id);
-
-                EXPECT_GE(*tray_id, 1u) << "Fabric node (mesh=" << mesh_id << ", chip=" << chip_id
-                                        << ") tray_id should be >= 1";
-                EXPECT_LE(*tray_id, 4u) << "Fabric node (mesh=" << mesh_id << ", chip=" << chip_id
-                                        << ") tray_id should be <= 4";
-                EXPECT_EQ(*asic_location, 1u)
-                    << "Fabric node (mesh=" << mesh_id << ", chip=" << chip_id << ") asic_location should be 1";
-            }
-        }
-    }
+    expect_galaxy_corner_folding_check(*control_plane);
 
     check_asic_mapping_against_golden("TestTriplePod16x8QuadBHGalaxyControlPlaneInit");
 }
