@@ -99,7 +99,7 @@ def train_grpo(yaml_config_path, checkpoint_interval):
                 adv_slice = advantages_np[i * grpo_cfg.micro_batch_size : i * grpo_cfg.micro_batch_size + B]
 
                 adv_tt = ttml.autograd.Tensor.from_numpy(
-                    adv_slice.reshape((B, 1)), ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16
+                    adv_slice.reshape((B, 1)), ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16, ctx.dp_mapper
                 )
                 adv_tt.set_requires_grad(False)
 
@@ -107,12 +107,23 @@ def train_grpo(yaml_config_path, checkpoint_interval):
                 nlog_probs_new, mask_new, _ = compute_nlog_probs(ctx, p, c)
 
                 loss = compute_grpo_loss(
-                    nlog_old, nlog_probs_new, mask_old, adv_tt, B, Tp, len(prompts_batch), grpo_cfg.clip_eps
+                    nlog_old,
+                    nlog_probs_new,
+                    mask_old,
+                    adv_tt,
+                    B,
+                    Tp,
+                    len(prompts_batch),
+                    grpo_cfg.clip_eps,
+                    ctx.dp_composer,
                 )
                 loss.backward(retain_graph=False)
                 deallocate_tensors([nlog_probs_new, mask_new, adv_tt, loss])
 
+            if ctx.dp_mapper is not None:
+                ttml.core.distributed.synchronize_gradients(ctx.tt_model.parameters())
             optimizer.step()
+
             num_steps += 1
             run.logger.info(f"optimizer.step() called, {num_steps=}")
 

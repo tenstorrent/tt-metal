@@ -2,13 +2,14 @@ from dataclasses import dataclass
 from transformers import AutoTokenizer
 from huggingface_hub import snapshot_download
 from ttml.common.utils import initialize_device, set_seed, get_tt_metal_runtime_root
-from ttml.common.config import TransformerConfig, load_config
+from ttml.common.config import TransformerConfig, DeviceConfig, load_config
 from ttml.optimizers import create_optimizer
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
 from .llama_overrides import LlamaCompositeKV
 import logging
 import os
+import ttml
 
 
 @dataclass
@@ -22,6 +23,8 @@ class InferenceCtx:
     tile_size: int = 32
     group_size: int = 1
     sample_seed: int = 42
+    dp_mapper: object = None
+    dp_composer: object = None
     _kv_cache: object = None
     _B: int = None
     _N: int = None
@@ -61,6 +64,7 @@ class TrainingCtx:
 
 def setup_inference(yaml_config_path, hf_model_id, load_pretrained, setup_optimizer=False) -> InferenceCtx:
     yaml_config = load_config(yaml_config_path, get_tt_metal_runtime_root())
+    device_config = DeviceConfig(yaml_config)
 
     # training_config -> model_config path
     model_config = load_config(yaml_config["training_config"]["model_config"])
@@ -119,6 +123,16 @@ def setup_inference(yaml_config_path, hf_model_id, load_pretrained, setup_optimi
         )
         load_from_safetensors(tt_model, model_repo_path, llama_cfg)
 
+    use_ddp = device_config.enable_ddp
+    dp_mapper = None
+    dp_composer = None
+    if use_ddp:
+        autograd_ctx = ttml.autograd.AutoContext.get_instance()
+        autograd_ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=True, enable_tp=False))
+        device = autograd_ctx.get_device()
+        dp_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
+        dp_composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
+
     ctx = InferenceCtx(
         tt_model=tt_model,
         tokenizer=tokenizer,
@@ -129,6 +143,8 @@ def setup_inference(yaml_config_path, hf_model_id, load_pretrained, setup_optimi
         group_size=group_size,
         tile_size=32,
         sample_seed=42,
+        dp_mapper=dp_mapper,
+        dp_composer=dp_composer,
     )
 
     return ctx
