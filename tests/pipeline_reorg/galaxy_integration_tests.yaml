@@ -55,14 +55,14 @@
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: ttnn
 
-- name: Galaxy mochi integration tests
-  cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model mochi
-  model: mochi
-  skus:
-    wh_galaxy:
-      timeout: 80
-  owner_id: U09ELB03XRU # Stephen Osborne
-  team: ttnn
+# - name: Galaxy mochi integration tests #issue #41146
+#   cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model mochi
+#   model: mochi
+#   skus:
+#     wh_galaxy:
+#       timeout: 80
+#   owner_id: U09ELB03XRU # Stephen Osborne
+#   team: ttnn
 
 - name: Galaxy Flux.1 integration tests
   cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model flux1
