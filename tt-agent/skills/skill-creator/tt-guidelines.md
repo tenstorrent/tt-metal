@@ -8,15 +8,15 @@ progressive load table layout, description optimization, evals).
 
 ## Layer Placement
 
-Every skill belongs to exactly one layer, declared via `layer:` in YAML frontmatter.
+Every skill belongs to exactly one layer, declared via `metadata.layer` in YAML frontmatter.
 Skills are flat under `skills/<name>/` — layers are metadata, not directories.
 
 | Layer | Frontmatter value | Decision rule |
 |---|---|---|
-| Orchestration | `layer: orchestration` | Routes work to other skills? |
-| Workflow | `layer: workflow` | Runs until a goal is met? |
-| Tool | `layer: tool` | Does one concrete thing? |
-| Meta | `layer: meta` | Builds or introspects tt-agent? |
+| Orchestration | `metadata: { layer: orchestration }` | Routes work to other skills? |
+| Workflow | `metadata: { layer: workflow }` | Runs until a goal is met? |
+| Tool | `metadata: { layer: tool }` | Does one concrete thing? |
+| Meta | `metadata: { layer: meta }` | Builds or introspects tt-agent? |
 
 ---
 

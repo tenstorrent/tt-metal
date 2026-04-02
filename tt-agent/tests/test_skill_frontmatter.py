@@ -42,6 +42,22 @@ def test_skill_has_valid_frontmatter(skill_file):
     ), f"{skill_file}: 'description' must be a non-empty string"
 
 
+VALID_LAYERS = {"orchestration", "workflow", "tool", "meta"}
+
+
+@pytest.mark.parametrize("skill_file", find_skill_files())
+def test_skill_has_valid_layer(skill_file):
+    """Skill layer must be declared in metadata.layer with a valid value."""
+    content = skill_file.read_text()
+    end = content.find("\n---\n", 4)
+    frontmatter = yaml.safe_load(content[4:end])
+    metadata = frontmatter.get("metadata", {})
+    assert "layer" in metadata, f"{skill_file}: missing 'metadata.layer' — use metadata: {{ layer: <value> }}"
+    assert (
+        metadata["layer"] in VALID_LAYERS
+    ), f"{skill_file}: metadata.layer '{metadata['layer']}' not in {VALID_LAYERS}"
+
+
 @pytest.mark.parametrize("skill_file", find_skill_files())
 def test_skill_name_matches_directory(skill_file):
     """Skill name in frontmatter must match the parent directory name."""

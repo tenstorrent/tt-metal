@@ -2,7 +2,7 @@
 
 ## Adding a New Skill
 
-1. **Decide the layer.** Set the `layer:` field in YAML frontmatter:
+1. **Decide the layer.** Set `metadata.layer` in YAML frontmatter:
    - `orchestration` — routes and dispatches requests
    - `workflow` — autonomous loops with convergence criteria
    - `tool` — single-purpose capabilities used during execution

@@ -1,7 +1,8 @@
 ---
 name: orchestrator
-layer: orchestration
 description: "Route, plan, and decompose high-level Tenstorrent hardware development requests — new kernels, ops, models, CI failures, regressions, optimizations — into sequenced skill dispatches with tracked plans"
+metadata:
+  layer: orchestration
 ---
 
 # TT Orchestrator

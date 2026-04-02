@@ -1,7 +1,8 @@
 ---
 name: skill-creator
-layer: meta
 description: "Design and build skills for the tt-agent system — guides through rigorous design alignment before writing, then applies TT conventions. Use when creating, improving, or reviewing tt-agent skills"
+metadata:
+  layer: meta
 ---
 
 # TT Skill Creator
