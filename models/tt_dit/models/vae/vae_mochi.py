@@ -13,16 +13,6 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 
 
-def _debug_stats(label, tt_tensor):
-    """Print shape and statistics of a ttnn tensor for debugging."""
-    t = ttnn.to_torch(ttnn.get_device_tensors(tt_tensor)[0]).float()
-    logger.info(
-        f"[DEBUG] {label}: shape={list(tt_tensor.shape)} layout={tt_tensor.layout} "
-        f"mean={t.mean().item():.6f} std={t.std().item():.6f} "
-        f"min={t.min().item():.6f} max={t.max().item():.6f}"
-    )
-
-
 def _get_shard_dims(parallel_config):
     """Compute ConcatMesh2dToTensor dims from parallel config (same logic as test helper)."""
     dims = [0, 1]
@@ -441,28 +431,30 @@ class ResBlock(Module):
 
         if w_factor > 1:
             # Phase 2: W-gather.
-            # Shape as (N*T*H_full, 1, W, C) so W is the tile-row dim.
-            # tilize_with_zero_padding pads W → W_pad = ceil_32(W).
+            # Flatten W*C into dim=3 (always tile-aligned since C%32==0).
+            # tilize_with_zero_padding pads nt_h (dim=2) if needed; padding
+            # rows are at the end (not interleaved) and sliced off after gather.
             nt_h = N * T * H_full
-            assert C % 32 == 0, f"C={C} must be a multiple of 32"
-            x_flat = ttnn.reshape(x_rm, [nt_h, 1, W, C])
+            per_device_wc = W * C
+            assert per_device_wc % 32 == 0, f"W*C={per_device_wc} must be a multiple of 32; W={W}, C={C}"
+            x_flat = ttnn.reshape(x_rm, [1, 1, nt_h, per_device_wc])
             ttnn.deallocate(x_rm)
             x_tiled = ttnn.tilize_with_zero_padding(x_flat, use_multicore=True)
             ttnn.deallocate(x_flat)
-            W_pad = x_tiled.shape[2]  # ceil_32(W), may equal W
+            nt_h_pad = x_tiled.shape[2]  # ceil_32(nt_h), may equal nt_h
             x_tiled = vae_all_gather(
                 self.ccl_manager,
                 x_tiled,
                 cluster_axis=self.parallel_config.w_parallel.mesh_axis,
-                dim=2,
+                dim=3,
                 reshape=False,
             )
             x_rm = ttnn.to_layout(x_tiled, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(x_tiled)
-            if W_pad != W:
-                # Strip tile-padding from each device's chunk
-                x_rm = ttnn.reshape(x_rm, [nt_h, w_factor, W_pad, C])
-                x_rm = ttnn.slice(x_rm, [0, 0, 0, 0], [nt_h, w_factor, W, C])
+            if nt_h_pad != nt_h:
+                # Strip tile-padding rows from the end
+                x_rm = ttnn.reshape(x_rm, [nt_h_pad, W_full, C])
+                x_rm = ttnn.slice(x_rm, [0, 0, 0], [nt_h, W_full, C])
                 x_rm = ttnn.reshape(x_rm, [N * T, H_full, W_full, C])
             else:
                 x_rm = ttnn.reshape(x_rm, [N * T, H_full, W_full, C])
@@ -574,9 +566,6 @@ class ResBlock(Module):
         """
         needs_h_unpad = logical_h > 0 and H_full > logical_h
         needs_w_unpad = logical_w > 0 and W_full > logical_w
-        norm_name = "norm1" if norm is self.norm1 else "norm2"
-
-        _debug_stats(f"{norm_name}: input (all-gathered)", x_4d_rm)
 
         x_rm = x_4d_rm
         if needs_h_unpad or needs_w_unpad:
@@ -584,15 +573,12 @@ class ResBlock(Module):
             norm_w = logical_w if needs_w_unpad else W_full
             x_rm = x_rm[:, :norm_h, :norm_w, :]
             ttnn.deallocate(x_4d_rm)
-            _debug_stats(f"{norm_name}: after slice to ({norm_h},{norm_w})", x_rm)
         else:
             norm_h, norm_w = H_full, W_full
 
         x_tiled = ttnn.reshape(x_rm, [N * T, 1, norm_h * norm_w, C])
         ttnn.deallocate(x_rm)
         x_tiled = ttnn.tilize_with_zero_padding(x_tiled, use_multicore=True)
-
-        _debug_stats(f"{norm_name}: pre-norm (reshaped+tilized)", x_tiled)
 
         HW = norm_h * norm_w
         num_out_blocks = self.num_out_blocks_map.get(C, {}).get(
@@ -601,11 +587,7 @@ class ResBlock(Module):
         dump_tag = ("01" if norm is self.norm1 else "03") if dump_dir else None
         x_tiled = self._run_norm(norm, x_tiled, N * T, HW, num_out_blocks, dump_dir=dump_dir, dump_tag=dump_tag)
 
-        _debug_stats(f"{norm_name}: post-norm", x_tiled)
-
         x_tiled = ttnn.silu(x_tiled, output_tensor=x_tiled)
-
-        _debug_stats(f"{norm_name}: post-silu", x_tiled)
 
         x_rm = ttnn.to_layout(x_tiled, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(x_tiled)
@@ -637,7 +619,6 @@ class ResBlock(Module):
             if pad_h > 0:
                 last_row = x_rm[:, norm_h - 1 : norm_h, :, :]
                 x_rm = ttnn.concat([x_rm] + [last_row] * pad_h, dim=1)
-            _debug_stats(f"{norm_name}: after re-pad to ({H_full},{W_full})", x_rm)
         return ttnn.reshape(x_rm, [N, T, H_full, W_full, C])
 
     def forward(
@@ -914,16 +895,9 @@ class CausalUpsampleBlock(Module):
         N, T, H, W, C = x_NTHWC.shape
         for i, block in enumerate(self.resnets):
             x_NTHWC = block(x_NTHWC, logical_h, logical_w)
-            _debug_stats(f"upsample: post-resblock-{i}", x_NTHWC)
         x_NTHWO = self.proj(x_NTHWC)
-        _debug_stats("upsample: post-proj", x_NTHWO)
         x_NTHWC = self.depth_to_spacetime(x_NTHWO)
         ttnn.deallocate(x_NTHWO)
-        _debug_stats("upsample: post-d2s (pre-reallocate)", x_NTHWC)
-        # DEBUG: Force contiguous allocation after d2s to test if
-        # permute→reshape left data non-contiguous
-        x_NTHWC = ttnn.reallocate(x_NTHWC)
-        _debug_stats("upsample: post-d2s (post-reallocate)", x_NTHWC)
         x_NTHWC = self.reshard_output(x_NTHWC)
         return x_NTHWC
 
