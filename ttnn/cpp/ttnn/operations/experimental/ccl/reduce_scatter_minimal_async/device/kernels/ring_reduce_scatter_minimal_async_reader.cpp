@@ -221,7 +221,7 @@ void kernel_main() {
 
                         // Wait for intermediate_tensor data to be available
                         if (reduce_interm) {
-                            if (chunk_count % chunks_per_sync == 0) {  // TODO remove the %, similar to writer
+                            if (chunk_count == 0) {
                                 noc_semaphore_wait_min(
                                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
                                 ++sem_target;
@@ -232,7 +232,7 @@ void kernel_main() {
                                     ++sem2_target;
                                 }
                             }
-                            ++chunk_count;
+                            chunk_count = (chunk_count == chunks_per_sync - 1) ? 0 : (chunk_count + 1);
                         }
 
                         cb_reserve_back(cb_in, tile_granularity);
