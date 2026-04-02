@@ -59,7 +59,6 @@ public:
     //
     // TODO(#40348): Remove this.
     [[nodiscard]] Tensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
-    [[nodiscard]] Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
 
     [[nodiscard]] explicit Tensor(DeviceStorage storage);
 
