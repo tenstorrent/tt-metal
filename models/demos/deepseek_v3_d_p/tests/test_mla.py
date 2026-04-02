@@ -216,6 +216,9 @@ def test_mla(
             logger.info(f"✓ Loaded cached reference results")
             logger.info(f"  Output shape: {ref_output.shape}")
         else:
+            assert not (
+                (is_ci_env or is_ci_v2_env) and not scale_down_sl
+            ), "We should not execute CPU computation in the CI for max sl, output cache is missing"
             # Create position IDs
             position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, seq_len)
 
