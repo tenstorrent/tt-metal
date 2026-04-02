@@ -26,6 +26,7 @@ from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
 from models.demos.deepseek_v3.utils.config_helpers import (
+    DEFAULT_MAX_SEQ_LEN,
     DEFAULT_SAMPLING_TEMPERATURE,
     DEFAULT_SAMPLING_TOP_K,
     DEFAULT_SAMPLING_TOP_P,
@@ -37,8 +38,6 @@ from models.demos.deepseek_v3.utils.debug_utils import dump_ttnn_meminfo
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
-
-DEFAULT_MAX_SEQ_LEN = 2048
 
 
 def _build_verify_alias_page_table_host(

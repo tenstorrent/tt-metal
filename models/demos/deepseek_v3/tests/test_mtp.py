@@ -20,18 +20,14 @@ from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d import DecoderBlock2D
 from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_2d import MoEDecoderBlock2D
 from models.demos.deepseek_v3.tt.embedding.embedding2d import Embedding2D
-from models.demos.deepseek_v3.tt.generator import (
-    DEFAULT_MAX_SEQ_LEN,
-    DeepseekGenerator,
-    _build_verify_alias_page_table_host,
-)
+from models.demos.deepseek_v3.tt.generator import DeepseekGenerator, _build_verify_alias_page_table_host
 from models.demos.deepseek_v3.tt.lm_head1d import LMHead1D
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel, get_fabric_config
 from models.demos.deepseek_v3.tt.mtp import MTP2D
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.tt.rope import RotarySetup
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div
+from models.demos.deepseek_v3.utils.config_helpers import DEFAULT_MAX_SEQ_LEN, USERS_PER_ROW, even_int_div
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import load_state_dict
 from models.demos.deepseek_v3.utils.weight_config import _try_load_cached_config, get_weight_config

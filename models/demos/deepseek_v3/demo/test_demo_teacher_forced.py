@@ -11,8 +11,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.demo.demo import run_demo
 from models.demos.deepseek_v3.demo.token_accuracy import TokenAccuracy
-from models.demos.deepseek_v3.tt.generator import MAX_SEQ_LEN as GENERATOR_MAX_SEQ_LEN
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
+from models.demos.deepseek_v3.utils.config_helpers import DEFAULT_MAX_SEQ_LEN, USERS_PER_ROW
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
@@ -181,10 +180,10 @@ def test_demo_teacher_forcing_accuracy(
     # Teacher forcing only needs enough configured context for the prompt plus the
     # number of forced decode steps under test.
     configured_max_seq_len = _tile_align(tf_prompt_len + max_new_tokens)
-    if configured_max_seq_len > GENERATOR_MAX_SEQ_LEN:
+    if configured_max_seq_len > DEFAULT_MAX_SEQ_LEN:
         pytest.skip(
             f"Requested teacher-forced context requires max_seq_len={configured_max_seq_len}, "
-            f"which exceeds generator capacity {GENERATOR_MAX_SEQ_LEN}."
+            f"which exceeds the default demo max_seq_len {DEFAULT_MAX_SEQ_LEN}."
         )
 
     logger.info("=== Phase 2: Run teacher forcing ===")
