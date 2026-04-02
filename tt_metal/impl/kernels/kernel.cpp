@@ -144,10 +144,12 @@ Kernel::Kernel(
 }
 
 void Kernel::register_kernel_with_watcher() {
-    // Watcher server may not exist yet if MetalContext hasn't been fully initialized
-    // (e.g., during mock device testing)
     auto& watcher = MetalContext::instance().watcher_server();
     if (!watcher) {
+        // Watcher server should always be available... unless the target is a mock device
+        TT_FATAL(
+            MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock,
+            "Watcher server is unavailable, and the target is not a mock device");
         this->watcher_kernel_id_ = -1;
         return;
     }
