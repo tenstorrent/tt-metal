@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 from models.common.utility_functions import torch_random
 
 from loguru import logger
@@ -284,127 +284,28 @@ def test_multigammaln(device, h, w):
     run_math_unary_test_range(device, h, w, ttnn.multigammaln, pcc=0.999)
 
 
-def _float_to_bf16_bits(f: float) -> int:
-    """Convert float to BFloat16 bit representation."""
-    import struct
-
-    f32_bits = struct.unpack(">I", struct.pack(">f", f))[0]
-    return f32_bits >> 16
-
-
-def _bf16_bits_to_float(bits: int) -> float:
-    """Convert BFloat16 bits to float."""
-    import struct
-
-    f32_bits = bits << 16
-    return struct.unpack(">f", struct.pack(">I", f32_bits))[0]
-
-
-def _bf16_daz_normalize(bits: int) -> int:
-    """Apply DAZ (Denormals-Are-Zero) normalization to BF16 bits."""
-    exp = (bits >> 7) & 0xFF
-    mantissa = bits & 0x7F
-    if (exp == 0) and (mantissa != 0):
-        return 0x0000
-    if bits == 0x8000:
-        return 0x0000
-    return bits
-
-
-def _bf16_value_order_index_daz(bits: int) -> int:
-    """Calculate the value order index for a BFloat16 value with DAZ."""
-    bits = _bf16_daz_normalize(bits)
-    exp = (bits >> 7) & 0xFF
-    mantissa = bits & 0x7F
-    if exp == 0xFF and mantissa != 0:
-        return -1  # NaN
-    if bits == 0x7F80:
-        return 65281  # +inf
-    if bits == 0xFF80:
-        return -1  # -inf
-    if bits == 0x0000:
-        return 32640  # Zero
-    if bits & 0x8000:
-        magnitude = bits & 0x7FFF
-        return 0x7F7F - magnitude
-    else:
-        return 32640 + bits - 0x007F
-
-
-def _ulp_distance_bf16_daz(a: float, b: float) -> int:
-    """Calculate ULP distance with DAZ+FTZ model."""
-    a_bits = _bf16_daz_normalize(_float_to_bf16_bits(a))
-    b_bits = _bf16_daz_normalize(_float_to_bf16_bits(b))
-    a_exp = (a_bits >> 7) & 0xFF
-    b_exp = (b_bits >> 7) & 0xFF
-    if (a_exp == 0xFF and (a_bits & 0x7F) != 0) or (b_exp == 0xFF and (b_bits & 0x7F) != 0):
-        return -1
-    idx_a = _bf16_value_order_index_daz(a_bits)
-    idx_b = _bf16_value_order_index_daz(b_bits)
-    if idx_a < 0 or idx_b < 0:
-        return -1
-    return abs(idx_a - idx_b)
-
-
-def run_math_test_polygamma_ulp(device, h, w, scalar, ttnn_function, max_ulp=1):
+def run_math_test_polygamma(device, h, w, scalar, ttnn_function, ulp=1):
     torch.manual_seed(0)
 
     low = 1
     high = 10
 
     torch_input_tensor = torch_random((h, w), low, high, dtype=torch.bfloat16)
-
-    # High-precision reference using float64
-    ref_f64 = torch.special.polygamma(scalar, torch_input_tensor.to(torch.float64))
+    golden_function = ttnn.get_golden_function(ttnn_function)
+    torch_output_tensor = golden_function(torch_input_tensor, scalar)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn_function(input_tensor, scalar)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    # Compute per-element ULP errors
-    result_flat = output_tensor.flatten()
-    ref_flat = ref_f64.flatten()
-
-    worst_ulp = 0
-    worst_idx = 0
-    ulp_errors = []
-
-    for i in range(len(result_flat)):
-        res_val = result_flat[i].item()
-        ref_val = ref_flat[i].item()
-        if not torch.isfinite(torch.tensor(res_val)) or not torch.isfinite(torch.tensor(ref_val)):
-            continue
-        # Convert reference to bf16 (round-to-nearest) for fair comparison
-        ref_bf16 = torch.tensor(ref_val, dtype=torch.bfloat16).item()
-        ulp = _ulp_distance_bf16_daz(res_val, ref_bf16)
-        if ulp < 0:
-            continue
-        ulp_errors.append(ulp)
-        if ulp > worst_ulp:
-            worst_ulp = ulp
-            worst_idx = i
-
-    import numpy as np
-
-    ulp_arr = np.array(ulp_errors)
-    logger.info(
-        f"polygamma(n={scalar}) ULP stats — max: {worst_ulp}, "
-        f"mean: {np.mean(ulp_arr):.2f}, p99: {np.percentile(ulp_arr, 99):.1f}, "
-        f"p50: {np.percentile(ulp_arr, 50):.1f}"
-    )
-
-    assert worst_ulp <= max_ulp, (
-        f"polygamma(n={scalar}) max ULP {worst_ulp} exceeds threshold {max_ulp} "
-        f"at index {worst_idx}: got {result_flat[worst_idx].item()}, "
-        f"expected {ref_flat[worst_idx].item():.6e}"
-    )
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp)
 
 
 @pytest.mark.parametrize("scalar", [1, 2, 5, 10])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_polygamma(device, h, w, scalar):
-    run_math_test_polygamma_ulp(device, h, w, scalar, ttnn.polygamma, max_ulp=1)
+    run_math_test_polygamma(device, h, w, scalar, ttnn.polygamma, ulp=1)
 
 
 @pytest.mark.parametrize("h", [64])
