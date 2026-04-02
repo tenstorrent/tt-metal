@@ -20,7 +20,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlappedTensorSpec, overlap_tensors
+from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlapEntry, OverlappedTensorSpec, overlap_tensors
 
 OverlappedTensor = ttnn.OverlappedTensor
 
@@ -611,7 +611,7 @@ class BlitzDecodeWeights:
         return overlap_tensors(
             [
                 [
-                    (
+                    OverlapEntry(
                         "q_a_proj",
                         q_a_packed,
                         OverlappedTensorSpec(
@@ -620,7 +620,7 @@ class BlitzDecodeWeights:
                             dtype=dtype,
                         ),
                     ),
-                    (
+                    OverlapEntry(
                         "q_b_proj",
                         q_b_preprocessed,
                         OverlappedTensorSpec(
@@ -632,7 +632,7 @@ class BlitzDecodeWeights:
                     ),
                 ],
                 [
-                    (
+                    OverlapEntry(
                         "kv_a_proj",
                         kv_reordered,
                         OverlappedTensorSpec(
@@ -690,19 +690,19 @@ class BlitzDecodeWeights:
         return overlap_tensors(
             [
                 [
-                    (
+                    OverlapEntry(
                         "o_proj",
                         o_proj_weights,
                         replace(cfg.o_proj, raw_tensor_shape=tuple(o_proj_weights.shape), dtype=o_proj_dtype),
                     )
                 ],
-                [("gate_mm", gate_mm_weights, cfg.gate_mm)],
+                [OverlapEntry("gate_mm", gate_mm_weights, cfg.gate_mm)],
                 [
-                    ("attn_norm", attn_norm, cfg.attn_norm),
-                    ("q_norm", q_norm, cfg.q_norm),
-                    ("ffn_norm", ffn_norm, cfg.ffn_norm),
+                    OverlapEntry("attn_norm", attn_norm, cfg.attn_norm),
+                    OverlapEntry("q_norm", q_norm, cfg.q_norm),
+                    OverlapEntry("ffn_norm", ffn_norm, cfg.ffn_norm),
                 ],
-                [("kv_norm", kv_norm, cfg.kv_norm)],
+                [OverlapEntry("kv_norm", kv_norm, cfg.kv_norm)],
             ],
             device=self._device,
             move_to_device=move_to_device,
@@ -766,7 +766,7 @@ class BlitzDecodeWeights:
         return overlap_tensors(
             [
                 [
-                    (
+                    OverlapEntry(
                         "kv_b1_proj",
                         kv_b1_proj_weights,
                         OverlappedTensorSpec(
@@ -779,7 +779,7 @@ class BlitzDecodeWeights:
                     ),
                 ],
                 [
-                    (
+                    OverlapEntry(
                         "kv_b2_proj",
                         kv_b2_preprocessed,
                         OverlappedTensorSpec(
@@ -901,7 +901,7 @@ class BlitzDecodeWeights:
         gate_up_dict = overlap_tensors(
             [
                 [
-                    (
+                    OverlapEntry(
                         "gate_proj",
                         gate_preprocessed,
                         OverlappedTensorSpec(
@@ -915,7 +915,7 @@ class BlitzDecodeWeights:
                     ),
                 ],
                 [
-                    (
+                    OverlapEntry(
                         "up_proj",
                         up_preprocessed,
                         OverlappedTensorSpec(

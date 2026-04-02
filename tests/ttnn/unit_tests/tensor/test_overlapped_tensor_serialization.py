@@ -17,7 +17,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlappedTensorSpec, overlap_tensors
+from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlapEntry, OverlappedTensorSpec, overlap_tensors
 
 OverlappedTensor = ttnn.OverlappedTensor
 
@@ -64,7 +64,7 @@ def test_overlapped_tensor_roundtrip_single_lane(tmp_path, device, dtype):
     spec1 = OverlappedTensorSpec(core_range_set=crs, raw_tensor_shape=(512, 512), dtype=dtype)
     spec2 = OverlappedTensorSpec(core_range_set=crs, raw_tensor_shape=(256, 512), dtype=dtype)
 
-    views = overlap_tensors([[("t1", t1, spec1), ("t2", t2, spec2)]], device=device)
+    views = overlap_tensors([[OverlapEntry("t1", t1, spec1), OverlapEntry("t2", t2, spec2)]], device=device)
     assert len(views) == 2
 
     file_name = str(tmp_path / "single_lane.overlappedtensorbin")
@@ -98,7 +98,7 @@ def test_overlapped_tensor_roundtrip_multi_lane(tmp_path, device, dtype):
     spec_bf16 = OverlappedTensorSpec(core_range_set=crs_b, raw_tensor_shape=(128, 128), dtype=dtype)
 
     views = overlap_tensors(
-        [[("primary", t_primary, spec_primary)], [("bf16", t_bf16, spec_bf16)]],
+        [[OverlapEntry("primary", t_primary, spec_primary)], [OverlapEntry("bf16", t_bf16, spec_bf16)]],
         device=device,
     )
     assert len(views) == 2
@@ -127,7 +127,7 @@ def test_overlapped_tensor_roundtrip_to_device(tmp_path, device, dtype):
     t1 = torch.randn(256, 512, dtype=torch.bfloat16)
     spec1 = OverlappedTensorSpec(core_range_set=crs, raw_tensor_shape=(256, 512), dtype=dtype)
 
-    views = overlap_tensors([[("t1", t1, spec1)]], device=device)
+    views = overlap_tensors([[OverlapEntry("t1", t1, spec1)]], device=device)
 
     file_name = str(tmp_path / "to_device.overlappedtensorbin")
     ttnn._ttnn.tensor.dump_overlapped_tensors(file_name, views)
@@ -157,7 +157,7 @@ def test_overlapped_tensor_roundtrip_height_sharded(tmp_path, device, dtype):
         sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     )
 
-    views = overlap_tensors([[("t1", t1, spec1)]], device=device)
+    views = overlap_tensors([[OverlapEntry("t1", t1, spec1)]], device=device)
 
     file_name = str(tmp_path / "height_sharded.overlappedtensorbin")
     ttnn._ttnn.tensor.dump_overlapped_tensors(file_name, views)
@@ -192,7 +192,7 @@ def test_overlapped_tensor_roundtrip_mixed_tiles(tmp_path, device, dtype):
     )
 
     views = overlap_tensors(
-        [[("main", t_main, spec_main)], [("gamma", t_gamma, spec_gamma)]],
+        [[OverlapEntry("main", t_main, spec_main)], [OverlapEntry("gamma", t_gamma, spec_gamma)]],
         device=device,
     )
     assert len(views) == 2
@@ -250,7 +250,7 @@ def test_overlapped_tensor_roundtrip_tp_4x2(tmp_path, bh_2d_mesh_device, dtype):
         tp_dim=(None, 1),
     )
 
-    views = overlap_tensors([[("t1", t1, spec1), ("t2", t2, spec2)]], device=submesh)
+    views = overlap_tensors([[OverlapEntry("t1", t1, spec1), OverlapEntry("t2", t2, spec2)]], device=submesh)
     assert len(views) == 2
 
     file_name = str(tmp_path / "tp_4x2.overlappedtensorbin")
