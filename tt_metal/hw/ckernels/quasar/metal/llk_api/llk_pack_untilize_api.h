@@ -44,7 +44,7 @@ inline void llk_pack_untilize_hw_configure_disaggregated(std::uint32_t pack_outp
     ckernel::trisc::_configure_buf_desc_table_(output_id, bd_val);
 
     // Configure the dst register format
-    tdma_descriptor_t td_val;
+    tdma_descriptor_t td_val{};
     td_val.reg_data_format = static_cast<std::uint8_t>(pack_src_format[output_id]);
     _llk_pack_hw_configure_<p_pacr::PACK0>(td_val);
 }

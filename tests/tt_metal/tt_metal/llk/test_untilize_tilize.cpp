@@ -517,14 +517,15 @@ static void run_quasar_pack_untilize_test(IDevice* dev, uint32_t num_tiles_r, ui
     EXPECT_EQ(golden, result_vec);
 }
 
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize) {
+    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 1, 1);
+}
+
 /**************************************
 Following tests are for pack untilize
 ***************************************/
+
 TEST_F(MeshDeviceFixture, TensixComputePackUntilize) {
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 1, 1);
-        return;
-    }
     vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}, {10, 10}, {2, 40}};
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {

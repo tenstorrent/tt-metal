@@ -16,6 +16,7 @@
 #include "llk_pack_common.h"
 #include "llk_pack_untilize.h"
 #include "experimental/dataflow_buffer.h"
+#include "llk_pack_untilize_api.h"
 
 /*************************************************************************
  * LLK PACK
@@ -257,5 +258,3 @@ inline void llk_pack_reduce_mask_config() {
  *
  **/
 inline void llk_pack_reduce_mask_clear() { _llk_pack_reduce_mask_clear_(); }
-
-#include "llk_pack_untilize_api.h"

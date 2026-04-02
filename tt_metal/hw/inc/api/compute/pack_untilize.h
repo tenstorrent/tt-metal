@@ -76,15 +76,12 @@ ALWI void pack_untilize_dest_init(
 #ifdef ARCH_QUASAR
     PACK((llk_pack_untilize_hw_configure_disaggregated(ocb)));
     PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim>(ocb)));
+    PACK((llk_init_packer_dest_offset_registers()));
 #else
     PACK(
         (llk_pack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE, false /*untilize*/>(ocb, face_r_dim, num_faces)));
     PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, false, narrow_row, row_num_datums, dense>(
         ocb, face_r_dim, num_faces)));
-#endif
-#ifdef ARCH_QUASAR
-    PACK((llk_init_packer_dest_offset_registers()));
-#else
     PACK((llk_init_packer_dest_offset_registers<true, false>()));
 #endif
 }
@@ -177,14 +174,11 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
 
 #ifdef ARCH_QUASAR
         MATH((llk_math_dest_section_done()));
-#else
-        MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
-#endif
-
         PACK((llk_packer_wait_for_math_done()));
-#ifdef ARCH_QUASAR
         PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, block_c_index)));
 #else
+        MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+        PACK((llk_packer_wait_for_math_done()));
         PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, FACE_R_DIM, 4, block_c_index)));
 #endif
         PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
@@ -265,17 +259,13 @@ ALWI void pack_untilize_dest(
  */
 // clang-format on
 ALWI void pack_untilize_uninit(uint32_t ocb) {
-#ifdef ARCH_QUASAR
-    PACK((llk_init_packer_dest_offset_registers()));
-#else
-    PACK((llk_init_packer_dest_offset_registers<false>()));
-#endif
-
     // Reconfigure data format to match the initial configuration, before calling init.
     // Init is called to ensure special untilize init overrides are cleaned up.
 #ifdef ARCH_QUASAR
+    PACK((llk_init_packer_dest_offset_registers()));
     PACK((llk_pack_reconfig_data_format(ocb)));
 #else
+    PACK((llk_init_packer_dest_offset_registers<false>()));
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(ocb)));
 #endif
     PACK((llk_pack_init(ocb)));
