@@ -223,8 +223,8 @@ def write_export_manifest():
             file.flush()
             try:
                 os.fsync(file.fileno())
-            except OSError:
-                pass
+            except OSError as e:
+                logger.warning("Failed to fsync export manifest temp file %s: %s", tmp_path, e)
         os.replace(tmp_path, EXPORT_MANIFEST_PATH)
     except (IOError, OSError) as e:
         raise RuntimeError(f"Failed to write export manifest to {EXPORT_MANIFEST_PATH}: {e}") from e
