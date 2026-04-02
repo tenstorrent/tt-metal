@@ -131,22 +131,65 @@ void main_func(..., PostOp post_op = {});
 
 `NoOp` from `common_types.hpp` compiles away entirely.
 
-## 8. Function signatures
+## 8. Validation (mandatory)
+
+Every helper MUST include runtime and compile-time validation at the top of its main function. This is not optional — every existing helper follows this pattern.
+
+### Runtime asserts (`ASSERT()` from `api/debug/assert.h`)
+
+```cpp
+// Dimension validity — all tile counts must be positive
+ASSERT(rows > 0);
+ASSERT(cols > 0);
+
+// DEST capacity — output must fit in DEST registers
+ASSERT(output_tiles <= DEST_AUTO_LIMIT);
+
+// CB index bounds
+ASSERT(input_cb < NUM_CIRCULAR_BUFFERS);
+ASSERT(output_cb < NUM_CIRCULAR_BUFFERS);
+
+// CB uniqueness (where applicable)
+ASSERT(input_cb != output_cb);
+
+// CB capacity — use PACK() or UNPACK() guard since cb metadata is per-TRISC
+PACK(ASSERT(get_cb_num_pages(output_cb) >= needed_tiles));
+UNPACK(ASSERT(get_cb_num_pages(input_cb) >= needed_tiles));
+```
+
+`get_cb_num_pages()` is in `cb_helpers.hpp`. Include it.
+
+### Compile-time asserts (`static_assert`)
+
+Use for template parameters that can be checked at compile time:
+
+```cpp
+static_assert(input_cb < 32, "CB index out of range");
+static_assert(input_cb != output_cb, "input and output CBs must differ");
+```
+
+### CB shared memory protection
+
+When an intermediate CB and output CB share L1 memory (common in matmul), the helper MUST `cb_reserve_back(out_cb, ...)` on the first K-block to prevent intermediate writes from corrupting the output region. Document this in the helper's comments.
+
+## 9. Function signatures
 
 - Use `ALWI` (always inline) on all functions
+- Include `api/debug/assert.h` and `cb_helpers.hpp` for validation
 - Template params: operation config first, then policies, then PostOp/Accumulate
 - Function params: input CBs, output CB, shape/count, then optional PostOp/Accumulate
 
-## 9. LLK Sequence Rules
+## 10. LLK Sequence Rules
 
 **Critical**: Each helper internally calls LLK init and exec functions. These sequences MUST match patterns found in existing kernels.
 
 - Each `*_tile_init()` must immediately precede its corresponding `*_tile()` calls
+- **Never batch inits across different op types.** SFPU `*_tile_init()` calls reconfigure shared hardware — calling `tanh_tile_init()` after `exp_tile_init()` invalidates the exp configuration. Correct pattern: `init(); exec(0); exec(stride); exec(2*stride);` — one init followed by multiple execs of the SAME op. Wrong pattern: `init_A(); init_B(); exec_A(); exec_B();`
 - Some inits are mutually exclusive (reconfigure the same hardware)
 - After a disruptive init, subsequent operations may need re-initialization
 - When in doubt, verify against an existing kernel with the same call pattern
 
-## 10. Performance testing methodology
+## 11. Performance testing methodology
 
 Every helper MUST have a performance comparison against raw LLK code:
 

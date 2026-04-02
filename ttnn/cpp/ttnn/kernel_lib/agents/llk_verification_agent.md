@@ -99,6 +99,18 @@ INIT PAIRING CLAIMS — Verify that a proposed init→exec sequence actually app
 - Verify mutual-exclusion claims by searching for counterexamples (any kernel that uses both inits)
 - For ordering claims, read the kernel and confirm the exact init→exec sequence
 
+ENCAPSULATION CLAIMS — Verify claims from the encapsulation analysis:
+- Cross-iteration state: Confirm that a variable IS actually mutated in one iteration
+  and read in a subsequent iteration. Check if there's any path where the state is
+  reset each iteration (which would invalidate the "cross-iteration" classification).
+- Feature flag classification: Confirm that a #ifdef flag DOES affect the core loop body
+  (not just a pre/post phase). Read the actual #ifdef blocks and trace the code paths.
+- Side-effect operations: Confirm that removing a side-effect operation (e.g., shared
+  memory guard) WOULD cause data corruption. Check if out_cb and interm_cb actually
+  share L1 space (look at CB config in the host test/factory).
+- Parameter independence: Confirm that a "derivable" parameter IS actually always equal
+  to the claimed formula. Search for counterexamples where it's set to a different value.
+
 OUTPUT FORMAT (strict — one block per claim, then summary):
 
 ## Verification Results

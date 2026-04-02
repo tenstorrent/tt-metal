@@ -70,8 +70,9 @@ For multi-op helpers, see the op-type-trait struct pattern in the Reference sect
 A helper exists to:
 1. ABSORB BOILERPLATE — the CB management (wait_front, pop_front, reserve_back, push_back), tile register lifecycle (acquire, copy, compute, commit, wait, pack, release), and init/uninit sequencing that every kernel repeats identically.
 2. DETECT AND WORK AROUND HARDWARE LIMITATIONS — DEST register capacity, block sizes that exceed hardware limits, FP32 accumulation mode, tile count batching. The caller should NEVER need to know about these constraints. Example: untilize_helpers auto-splits blocks when width > DEST capacity. Your helper must do the same kind of thing for its domain.
-3. COMPUTE DERIVED PARAMETERS INTERNALLY — if the investigation shows that callers always pass (alpha, 1/alpha) or (beta, 1/beta, threshold), the helper should accept just (alpha) or (beta, threshold) and compute the reciprocal internally. The investigation's "parameter semantics" section tells you exactly which derived values to absorb.
+3. COMPUTE DERIVED PARAMETERS INTERNALLY — if the investigation shows that callers always pass (alpha, 1/alpha) or (beta, 1/beta, threshold), the helper should accept just (alpha) or (beta, threshold) and compute the reciprocal internally. The investigation's "parameter semantics" section tells you exactly which derived values to absorb. The investigation's "parameter independence analysis" table tells you which parameters are derivable — expose ONLY the independent set.
 4. GROUP GENUINELY SIMILAR OPS — ops that share the SAME calling pattern, SAME CB management, SAME hardware constraints, and differ ONLY in which *_tile() function they call, belong in one helper. Ops that differ in any of these dimensions are SEPARATE helpers.
+5. ENCAPSULATE TARGET KERNEL COMPLEXITY — `#ifdef` blocks, cross-iteration state, shared-memory guards, and hardware config toggles in target kernels are NOT reasons to exclude functionality. They are the SPECIFICATION of what the helper must hide. The investigation's "encapsulation analysis" section tells you exactly what the template parameters and internal logic need to be.
 
 ## What a Helper Does NOT Do
 
@@ -150,7 +151,33 @@ Two ops belong in DIFFERENT helper functions if:
 
 Note: Different param counts do NOT require different helper functions. The op struct carries its own params and the helper just calls `op.compute(dst)` regardless of how many fields the struct has.
 
-### Step 3: Design Each Helper
+### Step 3: Apply Encapsulation Analysis
+
+Before designing signatures, consult the investigation's encapsulation analysis:
+
+**3a. Loop ownership** — Check the "cross-iteration state analysis" table. If ANY variable
+carries state across iterations of a loop, the helper MUST own that entire loop. Do not
+split it into caller-managed pieces. This is a hard rule — cross-iteration state leaked
+to the caller is a design failure.
+
+**3b. Feature flags → template params** — Check the "compile-time feature matrix" table.
+Every flag classified as "loop-internal" becomes a template bool on the helper. Do not
+exclude these as "too complex" — they define the helper's template parameter space.
+Flags classified as "adjacent operation" become callback hooks (PreKBlockFn, PostComputeFn).
+
+**3c. Side-effect preservation** — Check the "side-effect operations" table. Every operation
+marked as a correctness requirement must be preserved in the helper's implementation.
+Do not drop them during simplification.
+
+**3d. Parameter minimization** — Check the "parameter independence analysis" table. The helper
+API exposes ONLY parameters marked as "Independent". All others are computed internally.
+If this means the helper takes 5 params instead of 11, that is correct.
+
+**3e. CB param strategy** — Check the "CB compile-time analysis" table. CBs that are constexpr
+in all call sites become template params (enables static_assert). CBs that vary at runtime
+become runtime params.
+
+### Step 4: Design Each Helper
 
 For each helper function:
 a. Write the CALLER'S code FIRST (how the kernel author uses it)
@@ -158,7 +185,7 @@ b. Compare against the raw API it replaces
 c. Verify the helper is simpler
 d. Then design the internals
 
-### Step 4: Name everything deliberately
+### Step 5: Name everything deliberately
 
 Names communicate contracts. Test each name: would a new contributor understand it without reading the implementation?
 
@@ -168,7 +195,7 @@ Names communicate contracts. Test each name: would a new contributor understand 
 - For optional sentinel types (`NoOp`, `NoAccumulation`), use `explicit` default constructors — this prevents silent `{}` brace-initialization at call sites and forces the caller to write `NoAccumulation{}` which is self-documenting
 - Rename when the current name misleads; add a backward-compat alias to avoid breaking existing call sites
 
-### Step 5: Document state contracts
+### Step 6: Document state contracts
 
 For every helper that interacts with persistent state (CB contents, SFPU register state, reduce init), document the contract explicitly in the function comment:
 - What state must be true at entry (preconditions the caller must guarantee)
@@ -176,11 +203,11 @@ For every helper that interacts with persistent state (CB contents, SFPU registe
 
 Example: reduce scaler tile stays in its CB after `reduce()` completes — the helper never pops it. This is a postcondition the caller relies on for multi-phase kernels. If it's not documented, it becomes a silent landmine.
 
-### Step 6: Validate LLK Call Sequences
+### Step 7: Validate LLK Call Sequences
 
 For each proposed helper, write out the internal LLK call sequence it will emit (init and exec calls in order). Cross-reference against the investigation's Init/Exec Pairing Rules, Init Mutual Exclusion, and Init Ordering Sequences tables. Every sequence must have a codebase precedent. See the "LLK Sequence Validation" section above.
 
-### Step 7: Validate with Before/After Examples
+### Step 8: Validate with Before/After Examples
 
 For EVERY proposed helper, show:
 
@@ -231,6 +258,17 @@ AFTER (with helper):
 - [boilerplate it handles internally]
 - [hardware limitations it detects and works around]
 - [derived parameters it computes from caller-provided values]
+- [feature flags it exposes as template bools — from compile-time feature matrix]
+- [cross-iteration state it manages — from state analysis]
+- [side-effect operations it preserves — from side-effect table]
+
+#### Loop Ownership Justification
+- [which loops the helper owns and why — cite cross-iteration state variables]
+- [if caller manages any loop, justify why no cross-iteration state exists]
+
+#### Parameter Independence
+- [list of independent params (the API surface)]
+- [list of derived params (computed internally) — cite derivation formula]
 
 #### State Contracts
 - **Entry preconditions**: [what the caller must guarantee before calling — e.g., "scaler CB must already contain one tile"]
@@ -393,6 +431,10 @@ These are FAILURES. If your proposal contains any of these, start over:
 11. **One enum encoding multiple orthogonal behaviors** — an enum like `ReduceInputMode { STREAMING, PRELOADED, PERSISTENT }` hides that "when to wait" and "whether to pop" are independent choices. Prefer policy structs with named members: `struct StreamingPolicy { static constexpr WaitMode wait = PER_TILE; static constexpr PopMode pop = POP; }`. These are self-documenting, extensible, and still resolve via `if constexpr` with zero overhead.
 12. **Runtime dispatch where `if constexpr` works** — for pattern selection based on template parameters (REDUCE_SCALAR vs REDUCE_ROW loop structure, op with/without approx mode), always use `if constexpr`. Never select via runtime branching on a template parameter value. The generated code for the unused branch must be zero bytes.
 13. **Novel LLK call sequences with no codebase precedent** — if the helper's internal init→exec ordering does not match any existing kernel in the codebase, the sequence is unproven. LLK init functions configure shared hardware state (unpack pipelines, SFPU registers, ADDR_MOD). Calling them in an untested order can silently produce wrong results, hangs, or data corruption. Every sequence the helper emits must have a codebase exemplar. See LLK Sequence Validation.
+14. **Excluding kernel complexity instead of encapsulating it** — if the target kernel has `#ifdef` feature flags (e.g., PACKER_L1_ACC, PACK_RELU), cross-iteration state (e.g., enable_reload), or shared-memory guards (e.g., cb_reserve_back on non-pack CB), these are the SPECIFICATION of what the helper must handle internally — not reasons to simplify the design or exclude functionality. A helper that only handles the "easy path" and defers all complexity to the caller has failed its purpose.
+15. **Exposing derivable parameters** — if a parameter can be computed from other parameters (e.g., `in0_block_num_tiles = out_subblock_h * block_w * in0_num_subblocks`), do NOT include it in the helper's API surface. Compute it internally. The investigation's parameter independence analysis tells you exactly which params are derivable. Violating this makes the API verbose, error-prone, and forces the caller to understand internal indexing math.
+16. **Splitting loops with cross-iteration state** — if a loop carries state across iterations (enable_reload flag, out_num_tiles_to_wait counter, throttle_mop_status), the helper MUST own that loop. Splitting it into per-iteration helper calls and letting the caller manage the inter-iteration state is worse than no helper at all — it exposes internal invariants the caller shouldn't know about. Check the investigation's "cross-iteration state analysis" table.
+17. **Pattern-matching against the wrong existing helper** — do NOT blindly copy the structure of an existing helper (e.g., binary_op's layered decomposition) if the target operation has fundamentally different characteristics (stateful loops, block-level operations, compile-time CBs). Compare the target's characteristics against MULTIPLE existing helpers and pick the closest match, or justify divergence explicitly.
 
 ## Reference: How Existing Helpers Work
 

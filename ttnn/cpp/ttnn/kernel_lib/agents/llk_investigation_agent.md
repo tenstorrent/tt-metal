@@ -101,6 +101,69 @@ For each op with non-trivial params, record observed parameter values:
 
 Include: template args, runtime args, input/output dtypes, math_fidelity, DEST mode.
 
+═══ DIMENSION 4: ENCAPSULATION ANALYSIS ═══
+
+This dimension determines what the helper MUST encapsulate. Complexity in target
+kernels is not a reason to exclude — it is the specification of what the helper hides.
+
+### Compile-Time Feature Matrix
+
+Examine ALL `#ifdef` / `#if defined` blocks in the target kernels. For each:
+
+| Feature Flag | Affects Core Loop? | Classification | Should Become |
+|---|---|---|---|
+(example: PACKER_L1_ACC | Yes — changes pack path and reload logic | Loop-internal | Template bool param)
+(example: FUSE_BIAS | No — post-loop phase | Adjacent operation | Separate helper or callback)
+
+Classifications:
+- **Loop-internal**: Flag changes behavior INSIDE the main compute/pack loop → must be a template param on the helper
+- **Adjacent operation**: Flag enables a separate phase before/after the loop → callback hook or separate helper
+- **Orthogonal**: Flag controls unrelated behavior (e.g., early return, reader mode) → out of scope
+
+### Cross-Iteration State Analysis
+
+Examine all variables in the target loop. For each that carries state across iterations:
+
+| Variable | Loop Level | Mutated When | Read When | Implication |
+|---|---|---|---|---|
+(example: enable_reload | K-block loop | Set true after block 0 | Checked at subblock start | Helper must own K-loop)
+
+**Rule**: If ANY cross-iteration state exists in a loop, the helper must own that loop.
+Splitting it into caller-managed pieces leaks the state management to the caller.
+
+### Side-Effect Operations
+
+Any CB operation targeting a buffer OTHER than the one being packed to, or any
+hardware configuration call that serves a non-obvious purpose:
+
+| Operation | Target | Purpose | Correctness Requirement? |
+|---|---|---|---|
+(example: cb_reserve_back(out_cb, ...) on block 0 when packing to interm_cb | out_cb | Shared memory guard — prevents interm from overwriting output space | Yes — data corruption without it)
+
+These are correctness requirements the helper must preserve, not optional complexity.
+
+### Parameter Independence Analysis
+
+For each parameter used in the target kernel body:
+
+| Param | Used In | Derivable From | Independent? |
+|---|---|---|---|
+(example: in0_block_num_tiles | cb_wait_front, cb_pop_front | out_subblock_h × block_w × in0_num_subblocks | No — derive internally)
+
+**Rule**: The helper API should expose ONLY independent parameters.
+Everything derivable must be computed internally.
+
+### CB Compile-Time Analysis
+
+For each CB index used in target kernels:
+
+| CB | Declared As | Varies at Runtime? | Recommendation |
+|---|---|---|---|
+(example: in0_cb | constexpr uint32_t | No — always compile-time | Template param — enables static_assert)
+
+**Rule**: If a CB is constexpr in ALL call sites → template param.
+If it varies at runtime → runtime param.
+
 ═══ OUTPUT ═══
 
 Save to: agent_logs/{{CATEGORY_SLUG}}_{{GROUP_SLUG}}_investigation.md
@@ -110,24 +173,26 @@ The orchestrator will consolidate per-group outputs into {category}_investigatio
 
 ## Focus Directives
 
-When the category or situation calls for emphasizing one dimension over others, include a focus directive:
+When the category or situation calls for emphasizing one dimension over others, include a focus directive. The Encapsulation dimension is ALWAYS required — never skip it.
 
 **Compute-heavy category** (SFPU, matmul):
 ```
-Focus on: Device dimension (wrapper signatures, init state, batching limits) and
-Usage dimension (chaining patterns, init mutual exclusion). De-emphasize Host
-dimension — program factory details are less critical when the helper wraps
-only the compute kernel.
+Focus on: Device dimension (wrapper signatures, init state, batching limits),
+Usage dimension (chaining patterns, init mutual exclusion), and
+Encapsulation dimension (feature flags, cross-iteration state, parameter independence).
+De-emphasize Host dimension — program factory details are less critical when the
+helper wraps only the compute kernel.
 ```
 
 **Data-movement category** (tilize, untilize):
 ```
-Focus on: Host dimension (CB layout, parameter encoding, factory sharing) and
-Usage dimension (call sites, boilerplate patterns). De-emphasize Device
-dimension — the LLK implementations are simpler for data movement ops.
+Focus on: Host dimension (CB layout, parameter encoding, factory sharing),
+Usage dimension (call sites, boilerplate patterns), and
+Encapsulation dimension (feature flags, cross-iteration state, parameter independence).
+De-emphasize Device dimension — the LLK implementations are simpler for data movement ops.
 ```
 
 **New/unknown category**:
 ```
-Equal emphasis on all three dimensions. Flag any surprising findings.
+Equal emphasis on all four dimensions. Flag any surprising findings.
 ```

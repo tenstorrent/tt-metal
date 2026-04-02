@@ -58,7 +58,7 @@ All agents log breadcrumbs to `agent_logs/{category_slug}/`. See `tt_metal/third
 
 ## Phase 1: Investigation
 
-**Goal**: Deep analysis of each op group's device behavior, host parameter flow, and usage patterns.
+**Goal**: Deep analysis of each op group's device behavior, host parameter flow, usage patterns, **encapsulation requirements**, and **parameter independence**.
 
 **Agent**: `llk_investigation_agent.md` (subagent_type: Explore)
 
@@ -69,8 +69,11 @@ Launch ONE investigation agent per functional group, all in parallel. Each agent
 | **Device** | Wrapper signatures (init + exec), init state compatibility, DEST batching limits, FP32 accumulation requirements, disruptive inits list |
 | **Host** | Code generation table, program factory layout, parameter encoding reference (user API value -> host transform -> kernel receives) |
 | **Usage** | All kernel call sites, init/exec pairing rules, init mutual exclusion, chaining patterns, parameter usage matrix per LLK |
+| **Encapsulation** | Compile-time feature matrix, cross-iteration state analysis, side-effect operations, parameter independence analysis |
+| **CB Management** | Every `cb_reserve_back`/`cb_push_back`/`cb_wait_front`/`cb_pop_front` in the production kernel with purpose annotation. Flag reserves that don't pair with an obvious push (shared memory protection), reserves used for flow control, and any CB overlap assumptions (e.g., out_cb and interm_cb sharing L1). Document which CBs share memory and what ordering constraints that creates. |
+| **Existing Helpers** | Grep all `.inl` files in `ttnn/cpp/ttnn/kernel_lib/` for `ASSERT`, `static_assert`, CB validation, DEST limit checks, and policy enum patterns. Produce a table of mandatory validation patterns that the new helper must include. Also note any reusable infrastructure (e.g., `get_cb_num_pages` from `cb_helpers.hpp`, `DEST_AUTO_LIMIT` from `dest_helpers.hpp`). |
 
-All three focus areas are covered by a single agent per group. The agent's prompt specifies which focus areas to prioritize based on the category.
+All six focus areas are covered by a single agent per group. The agent's prompt specifies which focus areas to prioritize based on the category.
 
 **Output**: `{category}_investigation.md` (orchestrator consolidates per-group outputs)
 
@@ -105,10 +108,15 @@ INCORRECT verdicts are high-value — they directly change the helper design.
 - Parameter encoding reference -> op struct field design
 - Init mutual exclusion -> validates grouping decisions
 - Chaining patterns -> multi-op helper design
+- Compile-time feature matrix -> template bool parameters
+- Cross-iteration state analysis -> loop ownership decisions
+- Parameter independence analysis -> minimal API surface
+- Side-effect operations -> correctness requirements to preserve
+- CB compile-time analysis -> template vs runtime param decisions
 
 **Output**: `{category}_helper_proposal.md`
 
-**Checkpoint**: Review proposal before proceeding. Check LLK sequence validation table, before/after examples, tier assignments.
+**Checkpoint**: Review proposal before proceeding. Check LLK sequence validation table, before/after examples, tier assignments, loop ownership justification, parameter independence analysis.
 
 ---
 
@@ -148,6 +156,10 @@ Write test kernels using the ACTUAL helper API (.hpp). Test:
 4. Runtime arg variation (at least 2 values)
 5. Policy variation (at least 2 input policies)
 6. Chain composition (combine new op with another in a chain)
+7. Feature flag matrix — for every template bool from the compile-time feature matrix,
+   test both true and false. Combinatorial testing is required when flags interact
+   (e.g., PACKER_L1_ACC × PACK_RELU × FUSE_BIAS). Use the investigation's
+   compile-time feature matrix to enumerate the combinations.
 
 - Helper fails but raw passed -> bug in .hpp/.inl, fix and re-run 4c only
 
