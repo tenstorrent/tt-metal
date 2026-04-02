@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "llk_unpack_unary_operand.h"
 #include "llk_unpack_common_api.h"
+#include "llk_unpack_unary_operand_api.h"
 #include "experimental/dataflow_buffer.h"
 
 /*************************************************************************
@@ -24,9 +24,7 @@
  */
 template <bool TRANSPOSE_EN, bool IS_32b_DEST_EN>
 inline void llk_unpack_A_init(const std::uint32_t operand) {
-    const std::uint32_t operand_id = get_operand_id(operand);
-
-    _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, TRANSPOSE_EN, IS_32b_DEST_EN>(operand_id);
+    llk_unpack_unary_operand_init<p_unpacr::UNP_A, TRANSPOSE_EN, IS_32b_DEST_EN>(operand);
 }
 
 /**
@@ -39,13 +37,8 @@ inline void llk_unpack_A_init(const std::uint32_t operand) {
  * This function unpacks a single operand from the input circular buffer to srcA/dest register.
  */
 inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
-    const std::uint32_t operand_id = get_operand_id(operand);
-    // Number of tiles the read pointer has advanced from DFB base
-    const std::uint32_t l1_tile_index =
-        g_dfb_interface[operand_id].tc_slots[g_dfb_interface[operand_id].tc_idx].rd_entry_idx + tile_index;
-
     WAYPOINT("UPAW");
-    _llk_unpack_unary_operand_<p_unpacr::UNP_A>(l1_tile_index);
+    llk_unpack_unary_operand_tile<p_unpacr::UNP_A>(operand, tile_index);
     WAYPOINT("UPAD");
 }
 
@@ -62,15 +55,9 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
 // TODO: AM; Optimize block calls by using ntiles per unpack, issue #40798
 inline void llk_unpack_A_block(
     const std::uint32_t operand, const std::uint32_t start_tile_index, const std::uint32_t ntiles) {
-    const std::uint32_t operand_id = get_operand_id(operand);
-    const LocalDFBInterface& local_dfb_interface = g_dfb_interface[operand_id];
-    std::uint32_t l1_tile_index =
-        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx + start_tile_index;
-
     for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         WAYPOINT("UPAW");
-        _llk_unpack_unary_operand_<p_unpacr::UNP_A>(l1_tile_index);
-        l1_tile_index += 1;
+        llk_unpack_unary_operand_tile<p_unpacr::UNP_A>(operand, tile_index);
         WAYPOINT("UPAD");
     }
 }

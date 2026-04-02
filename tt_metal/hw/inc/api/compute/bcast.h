@@ -17,17 +17,16 @@
 #include "llk_unpack_common_api.h"
 #include "llk_unpack_AB_api.h"
 #include "llk_unpack_A_api.h"
-#include "llk_unpack_common_api.h"
 #endif
 #ifdef TRISC_PACK
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #endif
 #if defined(TRISC_UNPACK) && defined(ARCH_QUASAR)
-#include "llk_unpack_unary_broadcast_operands.h"
+#include "llk_unpack_unary_broadcast_operands_api.h"
 #endif
 #if defined(TRISC_MATH) && defined(ARCH_QUASAR)
-#include "llk_math_unary_broadcast.h"
+#include "llk_math_unary_broadcast_api.h"
 #endif
 
 namespace ckernel {
@@ -74,17 +73,17 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
     UNPACK((llk_unpack_hw_configure(icb)));
     if constexpr (bcast_type == BroadcastType::NONE) {
         if (enable_unpack_to_dest_u) {
-            UNPACK((_llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false, DST_ACCUM_MODE>(operand_id_u, 1)));
+            UNPACK((llk_unpack_unary_operand_init<p_unpacr::UNP_A, false, DST_ACCUM_MODE>(icb, 1)));
         } else {
-            UNPACK((_llk_unpack_unary_operand_init_<p_unpacr::UNP_B, false, DST_ACCUM_MODE>(operand_id_u, 1)));
+            UNPACK((llk_unpack_unary_operand_init<p_unpacr::UNP_B, false, DST_ACCUM_MODE>(icb, 1)));
         }
     } else {
         if (enable_unpack_to_dest_u) {
             UNPACK((
-                _llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_A, bcast_type, true, false>(operand_id_u, 1)));
+                llk_unpack_unary_broadcast_operands_init<p_unpacr::UNP_A, bcast_type, true, false>(icb, 1)));
         } else {
-            UNPACK((_llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, bcast_type, false, DST_ACCUM_MODE>(
-                operand_id_u, 1)));
+            UNPACK((llk_unpack_unary_broadcast_operands_init<p_unpacr::UNP_B, bcast_type, false, DST_ACCUM_MODE>(
+                icb, 1)));
         }
     }
 #endif
@@ -103,13 +102,7 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
             MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::B2D, DST_ACCUM_MODE>(icb)));
         }
     } else if (!enable_unpack_to_dest_m) {
-        const TileShape tile_shape{
-            .num_faces = get_operand_num_faces(operand_id_m),
-            .face_r_dim = get_operand_face_r_dim(operand_id_m),
-            .face_c_dim = static_cast<std::uint32_t>(ckernel::trisc::FACE_C_DIM),
-            .narrow_tile = get_operand_narrow_tile(operand_id_m) != 0,
-        };
-        MATH((_llk_math_eltwise_unary_broadcast_init_<bcast_type, false, DST_ACCUM_MODE>(tile_shape)));
+        MATH((llk_math_eltwise_unary_broadcast_init<bcast_type, false, DST_ACCUM_MODE>(icb)));
     }
     MATH((llk_math_pack_sync_init()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
@@ -147,19 +140,18 @@ ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_in
     const bool enable_unpack_to_dest_u = (dst_format_u == static_cast<std::uint32_t>(DataFormat::Float32)) ||
                                          (dst_format_u == static_cast<std::uint32_t>(DataFormat::UInt32)) ||
                                          (dst_format_u == static_cast<std::uint32_t>(DataFormat::Int32));
-    const std::uint32_t l1_tile_index = g_dfb_interface[operand_id_u].rd_entry_idx + in_tile_index;
 
     if constexpr (bcast_type == BroadcastType::NONE) {
         if (enable_unpack_to_dest_u) {
-            UNPACK((_llk_unpack_unary_operand_<p_unpacr::UNP_A>(l1_tile_index)));
+            UNPACK((llk_unpack_unary_operand_tile<p_unpacr::UNP_A>(icb, in_tile_index)));
         } else {
-            UNPACK((_llk_unpack_unary_operand_<p_unpacr::UNP_B>(l1_tile_index)));
+            UNPACK((llk_unpack_unary_operand_tile<p_unpacr::UNP_B>(icb, in_tile_index)));
         }
     } else {
         if (enable_unpack_to_dest_u) {
-            UNPACK((_llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_A, true>(l1_tile_index)));
+            UNPACK((llk_unpack_unary_broadcast_operands<p_unpacr::UNP_A, true>(icb, in_tile_index)));
         } else {
-            UNPACK((_llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_B, false>(l1_tile_index)));
+            UNPACK((llk_unpack_unary_broadcast_operands<p_unpacr::UNP_B, false>(icb, in_tile_index)));
         }
     }
 #endif
@@ -174,13 +166,7 @@ ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_in
     if constexpr (bcast_type == BroadcastType::NONE) {
         MATH((llk_math_eltwise_unary_datacopy(dst_tile_index, icb)));
     } else if (!enable_unpack_to_dest_m) {
-        const TileShape tile_shape{
-            .num_faces = get_operand_num_faces(operand_id_m),
-            .face_r_dim = get_operand_face_r_dim(operand_id_m),
-            .face_c_dim = static_cast<std::uint32_t>(ckernel::trisc::FACE_C_DIM),
-            .narrow_tile = get_operand_narrow_tile(operand_id_m) != 0,
-        };
-        MATH((_llk_math_eltwise_unary_broadcast_<bcast_type, false, DST_ACCUM_MODE>(dst_tile_index, tile_shape)));
+        MATH((llk_math_eltwise_unary_broadcast<bcast_type, false, DST_ACCUM_MODE>(dst_tile_index, icb)));
     }
 #endif
 #endif
@@ -260,18 +246,18 @@ void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_oc
     if (unpacker_src_format_change || unpacker_dst_format_change || bcast_type_change) {
         if constexpr (new_bcast_type == BroadcastType::NONE) {
             if (enable_unpack_to_dest) {
-                UNPACK((_llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false, DST_ACCUM_MODE>(new_operand_id, 1)));
+                UNPACK((llk_unpack_unary_operand_init<p_unpacr::UNP_A, false, DST_ACCUM_MODE>(new_icb, 1)));
             } else {
-                UNPACK((_llk_unpack_unary_operand_init_<p_unpacr::UNP_B, false, DST_ACCUM_MODE>(new_operand_id, 1)));
+                UNPACK((llk_unpack_unary_operand_init<p_unpacr::UNP_B, false, DST_ACCUM_MODE>(new_icb, 1)));
             }
         } else {
             if (enable_unpack_to_dest) {
-                UNPACK((_llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_A, new_bcast_type, true, false>(
-                    new_operand_id, 1)));
+                UNPACK((llk_unpack_unary_broadcast_operands_init<p_unpacr::UNP_A, new_bcast_type, true, false>(
+                    new_icb, 1)));
             } else {
                 UNPACK(
-                    (_llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, new_bcast_type, false, DST_ACCUM_MODE>(
-                        new_operand_id, 1)));
+                    (llk_unpack_unary_broadcast_operands_init<p_unpacr::UNP_B, new_bcast_type, false, DST_ACCUM_MODE>(
+                        new_icb, 1)));
             }
         }
     }
@@ -299,13 +285,7 @@ void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_oc
                 MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::B2D, DST_ACCUM_MODE>(new_icb)));
             }
         } else if (!enable_unpack_to_dest) {
-            const TileShape tile_shape{
-                .num_faces = get_operand_num_faces(new_operand_id),
-                .face_r_dim = get_operand_face_r_dim(new_operand_id),
-                .face_c_dim = static_cast<std::uint32_t>(ckernel::trisc::FACE_C_DIM),
-                .narrow_tile = get_operand_narrow_tile(new_operand_id) != 0,
-            };
-            MATH((_llk_math_eltwise_unary_broadcast_init_<new_bcast_type, false, DST_ACCUM_MODE>(tile_shape)));
+            MATH((llk_math_eltwise_unary_broadcast_init<new_bcast_type, false, DST_ACCUM_MODE>(new_icb)));
         }
     }
 #endif
