@@ -325,7 +325,7 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
     )
 
     M = 1
-    K = 7168
+    K = _EMBED_HIDDEN
     num_matmul_cores = 101
     n_per_core = 160
     n_total = num_matmul_cores * n_per_core
@@ -607,7 +607,7 @@ def test_single_device(
     )
 
     M = 1
-    K = 7168
+    K = _EMBED_HIDDEN
     num_matmul_cores = 101
     n_per_core = 160
     n_total = num_matmul_cores * n_per_core
@@ -761,7 +761,7 @@ def test_single_device_d2h(
     )
 
     M = 1
-    K = 7168
+    K = _EMBED_HIDDEN
     num_matmul_cores = 101
     n_per_core = 160
     n_total = num_matmul_cores * n_per_core
@@ -1180,7 +1180,7 @@ def test_d2h(
     )
 
     M = 1
-    K = 7168
+    K = _EMBED_HIDDEN
     num_matmul_cores = 101
     n_per_core = 160
     n_total = num_matmul_cores * n_per_core
@@ -1426,7 +1426,7 @@ def test_d2d_to_d2h_pipeline(
     )
 
     M = 1
-    K = 7168
+    K = _EMBED_HIDDEN
     num_matmul_cores = 101
     n_per_core = 160
     n_total = num_matmul_cores * n_per_core
@@ -1743,7 +1743,7 @@ def test_4stage_galaxy_1_iteration(
     )
 
     M = 1
-    K = 7168
+    K = _EMBED_HIDDEN
     num_matmul_cores = 101
     n_per_core = 160
     n_total = num_matmul_cores * n_per_core

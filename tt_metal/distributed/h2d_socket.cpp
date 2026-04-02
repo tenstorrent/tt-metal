@@ -235,6 +235,7 @@ H2DSocket::H2DSocket(
     init_config_buffer(mesh_device);
     init_data_buffer(mesh_device, pcie_alignment);
     write_socket_metadata(mesh_device, bytes_acked_info, data_info);
+    // fill out get_tlb_window()
     init_receiver_tlb(mesh_device);
 
     config_buffer_address_ = config_buffer_->address();
