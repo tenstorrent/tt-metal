@@ -89,6 +89,6 @@ endif()
 
 target_include_directories(distributed SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
 
-if(TT_METAL_EMULATION)
-    target_compile_definitions(distributed PRIVATE TT_METAL_EMULATION=1)
+if(TT_METAL_USE_EMULE)
+    target_compile_definitions(distributed PRIVATE TT_METAL_USE_EMULE=1)
 endif()

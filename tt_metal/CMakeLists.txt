@@ -128,8 +128,8 @@ target_include_directories(
 )
 target_compile_options(tt_metal PUBLIC -Wno-int-to-pointer-cast)
 
-if(TT_METAL_EMULATION)
-    target_compile_definitions(tt_metal PRIVATE TT_METAL_EMULATION=1)
+if(TT_METAL_USE_EMULE)
+    target_compile_definitions(tt_metal PRIVATE TT_METAL_USE_EMULE=1)
     target_link_options(tt_metal PUBLIC -rdynamic)
 endif()
 

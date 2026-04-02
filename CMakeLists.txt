@@ -291,7 +291,7 @@ endif()
 include(helper_functions)
 add_subdirectory(tt_stl)
 
-if(NOT TT_METAL_USE_TT_EMULE)
+if(NOT TT_METAL_USE_EMULE)
     add_subdirectory(tools)
     add_subdirectory(tt_metal)
     add_subdirectory(ttnn)
@@ -315,7 +315,7 @@ endif()
 # For top level install: cmake --build build --target install  or  make/ninja install -C build
 ############################################################################################################################
 # Install for build artifacts that will upload build/lib
-if(NOT TT_METAL_USE_TT_EMULE)
+if(NOT TT_METAL_USE_EMULE)
     install(
         TARGETS
             tt_metal

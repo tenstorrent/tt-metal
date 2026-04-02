@@ -42,7 +42,7 @@ bool is_mock_mode_registered();
 std::optional<std::string> get_mock_cluster_desc();
 
 // Configure emulated mode — like mock mode, but with real memory-backed I/O
-// and JIT kernel execution. Requires TT_METAL_EMULATION=ON at build time.
+// and JIT kernel execution. Requires TT_METAL_USE_EMULE=ON at build time.
 void configure_emulated_mode(tt::ARCH arch, uint32_t num_chips = 1);
 
 // Disable emulated mode

@@ -64,7 +64,7 @@
 #include <experimental/fabric/control_plane.hpp>
 #include "impl/buffers/circular_buffer.hpp"
 
-#ifdef TT_METAL_EMULATION
+#ifdef TT_METAL_USE_EMULE
 #include "impl/emulation/emulated_program_runner.hpp"
 #endif
 
@@ -865,7 +865,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
 
         auto device_id = device->id();
 
-#ifdef TT_METAL_EMULATION
+#ifdef TT_METAL_USE_EMULE
         if (MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emulated) {
             // JIT-compile kernels to x86 and execute synchronously.
             // No firmware go-signals or mailbox polling needed.
@@ -953,7 +953,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
     program.impl().validate_dataflow_buffer_region(validation_device);
 
     bool is_emulated = false;
-#ifdef TT_METAL_EMULATION
+#ifdef TT_METAL_USE_EMULE
     is_emulated = MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emulated;
 #endif
 
