@@ -11,6 +11,7 @@ import numpy as np
 import torch
 
 import ttnn
+from models.common.modules.tt_ccl import get_tt_ccl
 from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 from models.experimental.glm4_moe_lite.tt.layer_weights import MoELayerTTWeights
 
@@ -154,6 +155,150 @@ def _make_sparse_matmul_program_config(
         fused_activation=None,
         mcast_in0=True,
     )
+
+
+def _detect_galaxy_ccl(device: Any) -> tuple[int, ttnn.Topology]:
+    """Auto-detect safe CCL settings from the Galaxy hardware type.
+
+    Follows the Llama 70B Galaxy convention:
+    - 6U Galaxy (32 PCIe devices): num_links=4, Ring
+    - 4U Galaxy (<32 PCIe devices): num_links=3, Linear
+    - Non-Galaxy multi-device: num_links=1, Linear
+    """
+    try:
+        num_pcie = ttnn.GetNumPCIeDevices()
+    except Exception:
+        num_pcie = -1
+    num_devices = _get_num_devices(device)
+    if num_devices == 32:
+        if num_pcie == 32:
+            links, topo = 4, ttnn.Topology.Ring
+            galaxy_type = "6U"
+        else:
+            links, topo = 3, ttnn.Topology.Linear
+            galaxy_type = "4U"
+        print(
+            f"[MoE CCL] Detected {galaxy_type} Galaxy ({num_pcie} PCIe devices) "
+            f"→ hw_links={links}, hw_topology={'Ring' if topo == ttnn.Topology.Ring else 'Linear'}"
+        )
+        return links, topo
+    if num_devices > 1:
+        return 1, ttnn.Topology.Linear
+    return 0, ttnn.Topology.Linear
+
+
+_GALAXY_CCL_CACHE: dict[int, tuple[int, ttnn.Topology]] = {}
+
+
+def _get_galaxy_ccl(device: Any) -> tuple[int, ttnn.Topology]:
+    """Cached per-device auto-detection of Galaxy CCL settings."""
+    dev_id = id(device)
+    if dev_id not in _GALAXY_CCL_CACHE:
+        _GALAXY_CCL_CACHE[dev_id] = _detect_galaxy_ccl(device)
+    return _GALAXY_CCL_CACHE[dev_id]
+
+
+def _all_gather_reduce_single_axis(
+    tensor: ttnn.Tensor,
+    *,
+    device: Any,
+    axis: int,
+    num_links: int,
+    topology: ttnn.Topology,
+    memory_config: ttnn.MemoryConfig,
+    tt_ccl: Any,
+) -> ttnn.Tensor:
+    """All-reduce along one mesh axis via all_gather + fast_reduce_nc.
+
+    This is the same pattern used by ``tt_transformers`` (``tt_all_reduce``)
+    for all Galaxy (TG) models including Llama 70B.  It avoids the
+    ``ttnn.all_reduce`` / ``all_reduce_async`` code path entirely.
+    """
+    gathered = ttnn.experimental.all_gather_async(
+        tensor,
+        persistent_output_buffer=None,
+        dim=0,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(axis),
+        num_links=num_links,
+        cluster_axis=axis,
+        topology=topology,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(axis),
+        chunks_per_sync=10,
+        num_workers_per_link=2,
+        num_buffers_per_channel=2,
+    )
+    ttnn.deallocate(tensor, force=False)
+
+    reduced = ttnn.experimental.fast_reduce_nc(
+        gathered,
+        dims=[0],
+        output=None,
+        compute_kernel_config=None,
+        memory_config=memory_config,
+    )
+    gathered.deallocate(True)
+    return reduced
+
+
+def _moe_all_reduce_across_mesh(
+    tensor: ttnn.Tensor,
+    *,
+    device: Any,
+    num_links: int,
+    topology: ttnn.Topology,
+    memory_config: ttnn.MemoryConfig,
+) -> ttnn.Tensor:
+    """All-reduce expert output across ALL devices in the mesh.
+
+    Uses ``all_gather_async`` + ``fast_reduce_nc`` (the same pattern as
+    ``tt_transformers.tt.ccl.tt_all_reduce`` for TG/Galaxy) instead of
+    ``ttnn.all_reduce``.  The ``all_reduce`` / ``all_reduce_async`` code
+    paths produce data corruption with ``num_links >= 4`` and Ring topology
+    on Galaxy meshes — no production Galaxy model uses them.
+
+    On a 2D mesh (e.g. 4x8 Galaxy), reduces along each axis sequentially
+    with explicit ``cluster_axis``.  On single-device or 1D meshes, falls
+    back to a single ``ttnn.all_reduce`` call.
+    """
+    mesh_shape = _get_mesh_shape(device)
+    num_devices = _get_num_devices(device)
+    if num_devices <= 1:
+        return tensor
+
+    is_mesh = device.__class__.__name__ == "MeshDevice"
+    if not is_mesh:
+        return tensor
+
+    hw_links, hw_topology = _get_galaxy_ccl(device)
+    safe_links = min(num_links, hw_links) if hw_links > 0 else num_links
+    safe_topology = hw_topology if topology == ttnn.Topology.Ring and hw_topology == ttnn.Topology.Linear else topology
+
+    tt_ccl = get_tt_ccl(device)
+
+    if mesh_shape[0] > 1 and mesh_shape[1] > 1:
+        for axis in range(2):
+            if mesh_shape[axis] <= 1:
+                continue
+            tensor = _all_gather_reduce_single_axis(
+                tensor,
+                device=device,
+                axis=axis,
+                num_links=safe_links,
+                topology=safe_topology,
+                memory_config=memory_config,
+                tt_ccl=tt_ccl,
+            )
+        return tensor
+
+    reduced = ttnn.all_reduce(
+        tensor,
+        num_links=safe_links,
+        topology=safe_topology,
+        memory_config=memory_config,
+    )
+    ttnn.deallocate(tensor, force=False)
+    return reduced
 
 
 @dataclass(frozen=True)
@@ -495,6 +640,7 @@ def moe_dense_experts_forward_decode_tt(
     memory_config: ttnn.MemoryConfig,
     compute_kernel_config: Any | None = None,
     skip_defensive_clones: bool = False,
+    rt: Glm4MoeLiteMoERuntime | None = None,
 ) -> ttnn.Tensor:
     """Correctness-first dense expert execution for decode (seq_len=1).
 
@@ -636,21 +782,23 @@ def moe_dense_experts_forward_decode_tt(
         ttnn.deallocate(weighted, force=False)
 
         # Sum contributions across devices (experts are sharded across the mesh).
-        _nl = int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
+        _nl = rt.num_links if rt is not None else int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
         _topo = (
-            ttnn.Topology.Ring
-            if os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower() == "ring"
-            else ttnn.Topology.Linear
-        )
-        out_full = out_local
-        if num_devices > 1:
-            out_full = ttnn.all_reduce(
-                out_local,
-                num_links=_nl,
-                topology=_topo,
-                memory_config=memory_config,
+            rt.topology
+            if rt is not None
+            else (
+                ttnn.Topology.Ring
+                if os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower() == "ring"
+                else ttnn.Topology.Linear
             )
-            ttnn.deallocate(out_local, force=False)
+        )
+        out_full = _moe_all_reduce_across_mesh(
+            out_local,
+            device=device,
+            num_links=_nl,
+            topology=_topo,
+            memory_config=memory_config,
+        )
 
         ttnn.deallocate(hidden_states, force=False)
         return out_full
@@ -738,6 +886,7 @@ def moe_dense_experts_forward_prefill_tt(
     memory_config: ttnn.MemoryConfig,
     compute_kernel_config: Any | None = None,
     skip_defensive_clones: bool = False,
+    rt: Glm4MoeLiteMoERuntime | None = None,
 ) -> ttnn.Tensor:
     """Dense batched expert execution for prefill (multi-token).
 
@@ -907,23 +1056,23 @@ def moe_dense_experts_forward_prefill_tt(
     ttnn.deallocate(weighted, force=False)
 
     # All-reduce across devices (experts sharded across mesh).
-    _nl = int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
+    _nl = rt.num_links if rt is not None else int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
     _topo = (
-        ttnn.Topology.Ring
-        if os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower() == "ring"
-        else ttnn.Topology.Linear
-    )
-    if num_devices > 1:
-        out_full = ttnn.all_reduce(
-            out_local,
-            num_links=_nl,
-            topology=_topo,
-            memory_config=memory_config,
+        rt.topology
+        if rt is not None
+        else (
+            ttnn.Topology.Ring
+            if os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower() == "ring"
+            else ttnn.Topology.Linear
         )
-        ttnn.deallocate(out_local, force=False)
-        return out_full
-
-    return out_local
+    )
+    return _moe_all_reduce_across_mesh(
+        out_local,
+        device=device,
+        num_links=_nl,
+        topology=_topo,
+        memory_config=memory_config,
+    )
 
 
 def moe_packed_experts_forward_prefill_tt(
@@ -938,6 +1087,7 @@ def moe_packed_experts_forward_prefill_tt(
     compute_kernel_config: Any | None = None,
     skip_defensive_clones: bool = False,
     capacity_factor: float = 1.5,
+    rt: Glm4MoeLiteMoERuntime | None = None,
 ) -> ttnn.Tensor:
     """Token-packing MoE prefill: only compute needed expert-token pairs.
 
@@ -1222,23 +1372,23 @@ def moe_packed_experts_forward_prefill_tt(
     # out_accum: [1, 1, T, H] — local expert contribution
 
     # All-reduce across devices (experts sharded across mesh).
-    _nl = int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
+    _nl = rt.num_links if rt is not None else int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
     _topo = (
-        ttnn.Topology.Ring
-        if os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower() == "ring"
-        else ttnn.Topology.Linear
-    )
-    if num_devices > 1:
-        out_full = ttnn.all_reduce(
-            out_accum,
-            num_links=_nl,
-            topology=_topo,
-            memory_config=memory_config,
+        rt.topology
+        if rt is not None
+        else (
+            ttnn.Topology.Ring
+            if os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower() == "ring"
+            else ttnn.Topology.Linear
         )
-        ttnn.deallocate(out_accum, force=False)
-        return out_full
-
-    return out_accum
+    )
+    return _moe_all_reduce_across_mesh(
+        out_accum,
+        device=device,
+        num_links=_nl,
+        topology=_topo,
+        memory_config=memory_config,
+    )
 
 
 def moe_sparse_experts_forward_tt(
@@ -1801,14 +1951,13 @@ def moe_sparse_experts_forward_tt(
 
     # Sum contributions across devices (experts are sharded across the mesh).
     if num_devices > 1 and not skip_final_reduce:
-        output_all_reduced = ttnn.all_reduce(
+        output = _moe_all_reduce_across_mesh(
             output,
+            device=device,
             num_links=rt.num_links,
             topology=rt.topology,
             memory_config=memory_config,
         )
-        ttnn.deallocate(output, force=False)
-        output = output_all_reduced
 
     # If we padded tokens for block-aligned sparse kernels, slice back to the original size.
     if unpadded_total_tokens != total_tokens:

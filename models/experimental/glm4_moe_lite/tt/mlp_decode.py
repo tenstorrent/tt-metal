@@ -228,6 +228,7 @@ def moe_mlp_forward(
         if int(x.shape[2]) > 1:
             routed_out = moe_dense_experts_forward_prefill_tt(
                 **expert_kwargs,
+                hparams=hparams,
                 rt=moe_runtime,
                 compute_kernel_config=mlp_compute_kernel_config,
                 skip_defensive_clones=cfg.skip_defensive_clones,
@@ -236,6 +237,7 @@ def moe_mlp_forward(
             routed_out = moe_dense_experts_forward_decode_tt(
                 **expert_kwargs,
                 hparams=hparams,
+                rt=moe_runtime,
                 compute_kernel_config=mlp_compute_kernel_config,
                 skip_defensive_clones=cfg.skip_defensive_clones,
             )
@@ -243,6 +245,7 @@ def moe_mlp_forward(
         routed_out = moe_packed_experts_forward_prefill_tt(
             **expert_kwargs,
             hparams=hparams,
+            rt=moe_runtime,
             compute_kernel_config=mlp_compute_kernel_config,
             skip_defensive_clones=cfg.skip_defensive_clones,
         )
@@ -250,6 +253,7 @@ def moe_mlp_forward(
         routed_out = moe_dense_experts_forward_prefill_tt(
             **expert_kwargs,
             hparams=hparams,
+            rt=moe_runtime,
             compute_kernel_config=mlp_compute_kernel_config,
             skip_defensive_clones=cfg.skip_defensive_clones,
         )
