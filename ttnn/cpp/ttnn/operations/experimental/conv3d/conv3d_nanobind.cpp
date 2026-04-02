@@ -72,7 +72,7 @@ void bind_conv3d(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("weight_tensor"),
         nb::arg("groups") = 1u,
-        nb::arg("C_in_block") = 0u,
+        nb::arg("C_in_block") = tt::constants::TILE_WIDTH,
         nb::arg("alignment") = 32u,
         nb::arg("device") = nb::none());
 
