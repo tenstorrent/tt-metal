@@ -137,6 +137,7 @@ target_sources(
         core/core.cpp
         core/device.cpp
         core/device_operation_detail.cpp
+        cpp/tools/profiler/op_profiler_json.cpp
         core/distributed/api.cpp
         core/distributed/distributed_tensor.cpp
         core/distributed/distribution_mode.cpp
@@ -551,6 +552,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_SOURCE_DIR}/cpp
         FILES
             api/tools/profiler/op_profiler.hpp
+            api/tools/profiler/op_profiler_serialize.hpp
             api/ttnn/async_runtime.hpp
             api/ttnn/cluster.hpp
             api/ttnn/common/constants.hpp
