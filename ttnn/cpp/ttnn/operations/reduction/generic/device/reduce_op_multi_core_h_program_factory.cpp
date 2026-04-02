@@ -204,8 +204,8 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     };
 
     const std::string compute_kernel =
-        std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h") +
-        (operation_attributes.negate ? "_neg" : "") + ".cpp";
+        std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +
+        (operation_attributes.negate ? "_h_neg" : "") + ".cpp";
 
     tt_metal::CreateKernel(
         program,

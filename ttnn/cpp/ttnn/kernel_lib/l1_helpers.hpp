@@ -3,6 +3,9 @@
 
 #pragma once
 
+#include "experimental/noc.h"
+#include "experimental/endpoints.h"
+
 namespace dataflow_kernel_lib {
 
 // Face size in uint32 (128 u32 = 256 bf16 = 16x16 face)
@@ -35,14 +38,25 @@ FORCE_INLINE void zero_faces(uint32_t write_addr) {
     constexpr uint32_t bytes_to_zero = num_faces * face_size_u32 * sizeof(uint32_t);
     constexpr uint32_t num_zeros_reads = bytes_to_zero / MEM_ZEROS_SIZE;
 
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    noc_async_read_one_packet_set_state(zeros_noc_addr, MEM_ZEROS_SIZE);
+    experimental::Noc noc;
+    experimental::UnicastEndpoint zeros_src;
+    experimental::UnicastEndpoint local_dst;
+    uint32_t noc_x = my_x[noc_index];
+    uint32_t noc_y = my_y[noc_index];
+
+    noc.set_async_read_state<experimental::Noc::VcSelection::DEFAULT, MEM_ZEROS_SIZE>(
+        zeros_src, MEM_ZEROS_SIZE, {.noc_x = noc_x, .noc_y = noc_y, .addr = MEM_ZEROS_BASE});
 
     for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        noc_async_read_one_packet_with_state(zeros_noc_addr, write_addr);
+        noc.async_read_with_state<experimental::Noc::VcSelection::DEFAULT, MEM_ZEROS_SIZE>(
+            zeros_src,
+            local_dst,
+            MEM_ZEROS_SIZE,
+            {.noc_x = noc_x, .noc_y = noc_y, .addr = MEM_ZEROS_BASE},
+            {.noc_x = noc_x, .noc_y = noc_y, .addr = write_addr});
         write_addr += MEM_ZEROS_SIZE;
     }
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }
 
 }  // namespace dataflow_kernel_lib

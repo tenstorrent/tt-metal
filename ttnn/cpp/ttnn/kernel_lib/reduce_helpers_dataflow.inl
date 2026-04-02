@@ -6,6 +6,9 @@
 
 #include <cmath>
 #include "llk_defs.h"
+#include "experimental/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_common.hpp"
 
 namespace dataflow_kernel_lib {
 
@@ -229,12 +232,12 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f) {
         "prepare_reduce_scaler only supports Float16_b (bfloat16) and Float32 formats");
 
     // Matmul-based reduce uses col-0 fill; reduce LLK uses row-0 fill
-    constexpr bool use_matmul = !force_reduce_llk
-                                && (pool_type == PoolType::SUM || pool_type == PoolType::AVG)
-                                && reduce_dim == ReduceDim::REDUCE_ROW;
+    constexpr bool use_matmul = !force_reduce_llk && reduce_uses_matmul<pool_type, reduce_dim>();
 
-    cb_reserve_back(cb_id, 1);
-    uint32_t write_addr = get_write_ptr(cb_id);
+    experimental::CircularBuffer cb(cb_id);
+
+    cb.reserve_back(1);
+    uint32_t write_addr = cb.get_write_ptr();
 
     zero_faces<data_format, half_tile>(write_addr);
 
@@ -260,7 +263,7 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f) {
         }
     }
 
-    cb_push_back(cb_id, 1);
+    cb.push_back(1);
 }
 
 // =============================================================================

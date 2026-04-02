@@ -122,8 +122,8 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     };
 
     const std::string compute_kernel =
-        std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_hw") +
-        (operation_attributes.negate ? "_neg" : "") + ".cpp";
+        std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +
+        (operation_attributes.negate ? "_hw_neg" : "") + ".cpp";
 
     tt_metal::CreateKernel(
         program,
