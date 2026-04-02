@@ -332,6 +332,9 @@ public:
     bool has_help_option();
     void print_help();
 
+    // Display options
+    bool show_workers();
+
     // Progress monitoring options
     bool show_progress();
     uint32_t get_progress_interval();
