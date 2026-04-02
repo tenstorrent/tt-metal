@@ -61,10 +61,15 @@ class PI0Config:
 
     @classmethod
     def from_json(cls, json_path: Union[str, Path]) -> "PI0Config":
-        """Load config from JSON file."""
+        """Load config from JSON file (ignores unknown fields)."""
+        import dataclasses
+
         with open(json_path, "r") as f:
             data = json.load(f)
-        return cls(**data)
+        # Filter to only known fields
+        known_fields = {f.name for f in dataclasses.fields(cls)}
+        filtered = {k: v for k, v in data.items() if k in known_fields}
+        return cls(**filtered)
 
 
 def load_pi0_state_dict(
@@ -135,6 +140,9 @@ def categorize_weights(state_dict: Dict[str, torch.Tensor]) -> Dict[str, Dict[st
         if key.startswith("action_in_proj") or key.startswith("action_out_proj"):
             categorized["pi0_projections"][key] = value
         elif key.startswith("action_time_mlp"):
+            categorized["pi0_projections"][key] = value
+        elif key.startswith("time_mlp"):
+            # Pi0.5: separate time MLP (not fused with action)
             categorized["pi0_projections"][key] = value
         elif key.startswith("state_proj"):
             categorized["pi0_projections"][key] = value

@@ -115,16 +115,17 @@ class PI0Model:
     ) -> torch.Tensor:
         """Forward pass for denoising (predicts velocity)."""
         # Embed suffix
-        suffix_embs, _, _, _ = self.suffix_embedding.embed_suffix(
+        suffix_embs, _, _, adarms_cond = self.suffix_embedding.embed_suffix(
             state,
             noisy_actions,
             timestep,
         )
 
-        # Forward through expert
+        # Forward through expert (pass adarms_cond for Pi0.5)
         expert_output, _ = self.backbone.forward_expert(
             suffix_embs,
             past_key_values=kv_cache,
+            adarms_cond=adarms_cond,
         )
 
         # Project back to action dimension (skip state token if PI0)

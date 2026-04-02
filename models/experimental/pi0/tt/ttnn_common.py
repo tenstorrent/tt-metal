@@ -102,8 +102,7 @@ def create_sinusoidal_pos_embedding_ttnn(
     # Concatenate to get [batch, dimension]
     embeddings = ttnn.concat([sin_emb, cos_emb], dim=-1)
 
-    # Clean up
-    ttnn.deallocate(indices)
+    # Clean up intermediates (but NOT indices — it's externally owned and reused)
     ttnn.deallocate(fraction)
     ttnn.deallocate(exponent)
     ttnn.deallocate(period_ratio)

@@ -55,6 +55,54 @@ def rms_norm(
     return x_normalized * (weight + 1.0)
 
 
+def adarms_norm(
+    x: torch.Tensor,
+    dense_weight: torch.Tensor,
+    dense_bias: torch.Tensor,
+    cond: torch.Tensor,
+    eps: float = 1e-6,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Adaptive RMSNorm (Pi0.5) conditioned on time embedding.
+
+    Projects conditioning vector to (scale, shift, gate) and applies:
+        normed = x / RMS(x) * (1 + scale) + shift
+    Returns (normed, gate) where gate is used for gated residual.
+
+    Args:
+        x: Input tensor (batch_size, seq_len, hidden_dim)
+        dense_weight: Projection weight (hidden_dim * 3, cond_dim)
+        dense_bias: Projection bias (hidden_dim * 3,)
+        cond: Conditioning vector (batch_size, cond_dim)
+        eps: Epsilon for numerical stability
+
+    Returns:
+        Tuple of (normed output, gate tensor)
+    """
+    dtype = x.dtype
+    # RMS normalize
+    variance = x.float().pow(2).mean(dim=-1, keepdim=True)
+    normed = x * torch.rsqrt(variance + eps)
+
+    # Project conditioning to scale, shift, gate
+    dense_weight = dense_weight.to(cond.dtype)
+    dense_bias = dense_bias.to(cond.dtype)
+    modulation = F.linear(cond, dense_weight, dense_bias)  # (B, hidden_dim * 3)
+    if len(x.shape) == 3:
+        modulation = modulation.unsqueeze(1)  # (B, 1, hidden_dim * 3) broadcast over seq
+    scale, shift, gate = modulation.chunk(3, dim=-1)
+
+    normed = normed * (1.0 + scale.float()) + shift.float()
+    return normed.to(dtype), gate.to(dtype)
+
+
+def _gated_residual(x: torch.Tensor, y: torch.Tensor, gate: Optional[torch.Tensor]) -> torch.Tensor:
+    """Gated residual connection: x + y * gate (Pi0.5) or x + y (Pi0)."""
+    if gate is None:
+        return x + y
+    return x + y * gate
+
+
 # ============================================================================
 # Rotary Position Embeddings
 # ============================================================================
@@ -356,9 +404,18 @@ class GemmaBlock:
         """
         self.config = config
         self.layer_idx = layer_idx
+        self.use_adarms = config.use_adarms
 
-        self.input_layernorm_weight = weights["input_layernorm.weight"]
-        self.post_attention_layernorm_weight = weights["post_attention_layernorm.weight"]
+        if self.use_adarms:
+            # Pi0.5: adaRMS with dense projection
+            self.input_ln_dense_weight = weights["input_layernorm.dense.weight"]
+            self.input_ln_dense_bias = weights["input_layernorm.dense.bias"]
+            self.post_attn_ln_dense_weight = weights["post_attention_layernorm.dense.weight"]
+            self.post_attn_ln_dense_bias = weights["post_attention_layernorm.dense.bias"]
+        else:
+            # Pi0: standard RMSNorm with learnable weight
+            self.input_layernorm_weight = weights["input_layernorm.weight"]
+            self.post_attention_layernorm_weight = weights["post_attention_layernorm.weight"]
 
         self.attention = GemmaAttention(config, weights, layer_idx)
         self.mlp = GemmaMLP(config, weights)
@@ -372,6 +429,7 @@ class GemmaBlock:
         position_ids: Optional[torch.Tensor] = None,
         past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         use_cache: bool = False,
+        adarms_cond: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
         """
         Forward pass through transformer block.
@@ -383,18 +441,29 @@ class GemmaBlock:
             position_ids: Position indices
             past_key_value: Cached KV
             use_cache: Whether to return cache
+            adarms_cond: Pi0.5 time conditioning vector (batch_size, cond_dim)
 
         Returns:
             Tuple of (output, optional_cache)
         """
         # Pre-attention norm
-        normed = rms_norm(
-            hidden_states,
-            self.input_layernorm_weight,
-            self.config.rms_norm_eps,
-        )
+        if self.use_adarms and adarms_cond is not None:
+            normed, attn_gate = adarms_norm(
+                hidden_states,
+                self.input_ln_dense_weight,
+                self.input_ln_dense_bias,
+                adarms_cond,
+                self.config.rms_norm_eps,
+            )
+        else:
+            normed = rms_norm(
+                hidden_states,
+                self.input_layernorm_weight,
+                self.config.rms_norm_eps,
+            )
+            attn_gate = None
 
-        # Attention with residual
+        # Attention with gated residual
         attn_output, new_cache = self.attention.forward(
             normed,
             cos,
@@ -404,17 +473,27 @@ class GemmaBlock:
             past_key_value,
             use_cache,
         )
-        hidden_states = hidden_states + attn_output
+        hidden_states = _gated_residual(hidden_states, attn_output, attn_gate)
 
         # Pre-MLP norm
-        normed = rms_norm(
-            hidden_states,
-            self.post_attention_layernorm_weight,
-            self.config.rms_norm_eps,
-        )
+        if self.use_adarms and adarms_cond is not None:
+            normed, mlp_gate = adarms_norm(
+                hidden_states,
+                self.post_attn_ln_dense_weight,
+                self.post_attn_ln_dense_bias,
+                adarms_cond,
+                self.config.rms_norm_eps,
+            )
+        else:
+            normed = rms_norm(
+                hidden_states,
+                self.post_attention_layernorm_weight,
+                self.config.rms_norm_eps,
+            )
+            mlp_gate = None
 
-        # MLP with residual
+        # MLP with gated residual
         mlp_output = self.mlp.forward(normed)
-        hidden_states = hidden_states + mlp_output
+        hidden_states = _gated_residual(hidden_states, mlp_output, mlp_gate)
 
         return hidden_states, new_cache

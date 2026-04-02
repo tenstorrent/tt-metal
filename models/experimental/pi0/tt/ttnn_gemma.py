@@ -64,6 +64,87 @@ def rms_norm_ttnn(
     )
 
 
+def adarms_norm_ttnn(
+    x: ttnn.Tensor,
+    dense_weight: ttnn.Tensor,
+    dense_bias: ttnn.Tensor,
+    cond: ttnn.Tensor,
+    eps: float = 1e-6,
+    device: ttnn.Device = None,
+    ones_weight: Optional[ttnn.Tensor] = None,
+) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+    """
+    Adaptive RMSNorm (Pi0.5) using TTNN operations.
+
+    Projects conditioning vector to (scale, shift, gate) and applies:
+        normed = x / RMS(x) * (1 + scale) + shift
+    Returns (normed, gate) where gate is used for gated residual.
+
+    Args:
+        x: TTNN tensor (batch_size, seq_len, hidden_dim)
+        dense_weight: Projection weight (cond_dim, hidden_dim * 3) — transposed for TTNN
+        dense_bias: Projection bias (1, hidden_dim * 3)
+        cond: Conditioning vector (batch_size, cond_dim)
+        eps: Epsilon for numerical stability
+        device: TTNN device
+
+    Returns:
+        Tuple of (normed output, gate tensor)
+    """
+    batch_size = x.shape[0]
+    seq_len = x.shape[1]
+    hidden_dim = x.shape[2]
+
+    # RMS normalize (no learnable weight — scale/shift come from conditioning)
+    if ones_weight is None:
+        ones_weight = ttnn.ones((1, hidden_dim), device=device, dtype=ttnn.bfloat16)
+        ones_weight = ttnn.to_layout(ones_weight, ttnn.TILE_LAYOUT)
+        normed = ttnn.rms_norm(x, weight=ones_weight, epsilon=eps, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(ones_weight)
+    else:
+        normed = ttnn.rms_norm(x, weight=ones_weight, epsilon=eps, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    # Project conditioning: cond (B, cond_dim) -> modulation (B, hidden_dim * 3)
+    cond_2d = ttnn.reshape(cond, (batch_size, 1, -1)) if len(cond.shape) == 2 else cond
+    modulation = ttnn.linear(
+        cond_2d,
+        dense_weight,
+        bias=dense_bias,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    # modulation shape: (B, 1, hidden_dim * 3)
+
+    # Split into scale, shift, gate — each (B, 1, hidden_dim)
+    scale = ttnn.slice(modulation, [0, 0, 0], [batch_size, 1, hidden_dim])
+    shift = ttnn.slice(modulation, [0, 0, hidden_dim], [batch_size, 1, hidden_dim * 2])
+    gate = ttnn.slice(modulation, [0, 0, hidden_dim * 2], [batch_size, 1, hidden_dim * 3])
+    ttnn.deallocate(modulation)
+
+    # Apply: normed = normed * (1 + scale) + shift
+    # TTNN handles broadcasting (B, 1, hidden) with (B, seq, hidden) automatically
+    scale_plus_one = ttnn.add(scale, 1.0)
+    ttnn.deallocate(scale)
+    normed = ttnn.mul(normed, scale_plus_one)
+    ttnn.deallocate(scale_plus_one)
+    normed = ttnn.add(normed, shift, memory_config=ttnn.L1_MEMORY_CONFIG)
+    ttnn.deallocate(shift)
+
+    return normed, gate
+
+
+def gated_residual_ttnn(
+    x: ttnn.Tensor,
+    y: ttnn.Tensor,
+    gate: Optional[ttnn.Tensor],
+) -> ttnn.Tensor:
+    """Gated residual: x + y * gate (Pi0.5) or x + y (Pi0)."""
+    if gate is None:
+        return ttnn.add(x, y)
+    # TTNN multiply supports broadcasting (B, 1, hidden) * (B, seq, hidden)
+    gated = ttnn.mul(y, gate, memory_config=ttnn.L1_MEMORY_CONFIG)
+    return ttnn.add(x, gated, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+
 # ============================================================================
 # Rotary Position Embeddings (TTNN Meta Format)
 # ============================================================================
@@ -205,21 +286,7 @@ class GemmaAttentionTTNN:
         self.cos_meta = cos_meta
         self.sin_meta = sin_meta
 
-        # Compute kernel config for attention (HiFi4 for precision-critical ops)
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-
-        # HiFi2 config for projections (faster, less precision needed)
-        self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
+        # Note: compute_kernel_config removed for Blackhole compatibility
 
     def forward(
         self,
@@ -261,17 +328,13 @@ class GemmaAttentionTTNN:
         # OPTIMIZATION 1: Single fused QKV linear (instead of 3 separate)
         # Output: [batch, 1, seq, Q_dim + K_dim + V_dim]
 
-        # Use WIDTH_SHARDED L1 memory config
+        # QKV linear (use L1 interleaved for Blackhole compatibility)
         xqkv = ttnn.linear(
             hidden_states,
             self.wqkv,
             dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-
-        # Convert back to interleaved for nlp_create_qkv_heads
-        xqkv = ttnn.to_memory_config(xqkv, ttnn.L1_MEMORY_CONFIG)
 
         # OPTIMIZATION 2: Native TTNN head splitting (no PyTorch transfers!)
         # This splits the fused QKV into separate Q, K, V with proper head layout
@@ -339,7 +402,6 @@ class GemmaAttentionTTNN:
             self.o_proj,
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
         )
 
         # Reshape back to 3D: [batch, 1, seq, hidden] -> [batch, seq, hidden]
@@ -385,19 +447,36 @@ class GemmaMLPTTNN:
         self.device = device
 
         # Convert weights to TTNN if they're PyTorch tensors
+        # Use bfloat8_b for MLP weights to reduce memory and improve throughput
+        mlp_dtype = ttnn.bfloat8_b if config.width <= 1024 else ttnn.bfloat16
+
         def to_ttnn(w):
             if isinstance(w, torch.Tensor):
                 return ttnn.from_torch(
                     w.T.contiguous(),  # Transpose for linear
-                    dtype=ttnn.bfloat16,
+                    dtype=mlp_dtype,
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
                 )
             return w
 
-        self.gate_proj = to_ttnn(weights["mlp.gate_proj.weight"])
-        self.up_proj = to_ttnn(weights["mlp.up_proj.weight"])
+        # Fuse gate+up weights for single matmul: [hidden, 2*mlp_dim]
+        gate_w = weights["mlp.gate_proj.weight"]
+        up_w = weights["mlp.up_proj.weight"]
+        if isinstance(gate_w, torch.Tensor) and isinstance(up_w, torch.Tensor):
+            fused = torch.cat([gate_w, up_w], dim=0)  # [2*mlp_dim, hidden]
+            self.fused_gate_up = ttnn.from_torch(
+                fused.T.contiguous(),  # [hidden, 2*mlp_dim]
+                dtype=mlp_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+            )
+        else:
+            self.fused_gate_up = None
+        self.gate_proj = to_ttnn(gate_w)
+        self.up_proj = to_ttnn(up_w)
         self.down_proj = to_ttnn(weights["mlp.down_proj.weight"])
+        self.mlp_dim = config.mlp_dim
 
         # Chunk size must be tile-aligned (multiple of 32)
         # 256 = 32 × 8, optimal for 64-core auto-sharding (4 tokens/core)
@@ -407,13 +486,7 @@ class GemmaMLPTTNN:
 
     def forward(self, x) -> ttnn.Tensor:
         """
-        Forward pass using chunked processing with auto L1 sharding.
-
-        Strategy:
-        1. Chunk input along sequence dimension (e.g., 544 → 3 chunks of 256)
-        2. Let matmul auto-compute sharding (typically WIDTH or BLOCK in L1)
-        3. Subsequent ops inherit sharding from matmul output
-        4. Accumulate results in L1, concatenate at end
+        Forward pass with fast path for small sequences and chunked for large.
 
         Args:
             x: Input tensor [batch, seq, hidden] or [batch, 1, seq, hidden] (PyTorch or TTNN)
@@ -434,6 +507,30 @@ class GemmaMLPTTNN:
         batch_size = x.shape[0]
         was_3d = len(x.shape) == 3
 
+        # Fast path: small sequences (e.g., expert with ~50 tokens) — no chunking
+        seq_dim = x.shape[1] if was_3d else x.shape[2]
+        if seq_dim <= self.chunk_size:
+            if self.fused_gate_up is not None:
+                # Fused gate+up: single matmul instead of 2
+                gate_up = ttnn.linear(x, self.fused_gate_up, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+                gate = ttnn.slice(gate_up, [0, 0, 0], [gate_up.shape[0], gate_up.shape[1], self.mlp_dim])
+                up = ttnn.slice(gate_up, [0, 0, self.mlp_dim], [gate_up.shape[0], gate_up.shape[1], self.mlp_dim * 2])
+                ttnn.deallocate(gate_up)
+            else:
+                gate = ttnn.linear(x, self.gate_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+                up = ttnn.linear(x, self.up_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+            gate_activated = ttnn.gelu(gate)
+            ttnn.deallocate(gate)
+            hidden_out = ttnn.multiply(gate_activated, up)
+            ttnn.deallocate(gate_activated)
+            ttnn.deallocate(up)
+            output = ttnn.linear(hidden_out, self.down_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(hidden_out)
+            if was_torch:
+                output = ttnn.to_torch(output)
+            return output
+
+        # Chunked path for large sequences (VLM with 544 tokens)
         # Always work with 4D tensors (ttnn.slice requires 4D coordinates)
         if was_3d:
             x = ttnn.reshape(x, [batch_size, 1, x.shape[1], x.shape[2]])
@@ -551,9 +648,20 @@ class GemmaBlockTTNN:
         self.config = config
         self.layer_idx = layer_idx
         self.device = device
+        self.use_adarms = config.use_adarms
 
-        self.input_layernorm_weight = weights["input_layernorm.weight"]
-        self.post_attention_layernorm_weight = weights["post_attention_layernorm.weight"]
+        if self.use_adarms:
+            # Pi0.5: adaRMS dense projection weights
+            self.input_ln_dense_weight = weights["input_layernorm.dense.weight"]
+            self.input_ln_dense_bias = weights["input_layernorm.dense.bias"]
+            self.post_attn_ln_dense_weight = weights["post_attention_layernorm.dense.weight"]
+            self.post_attn_ln_dense_bias = weights["post_attention_layernorm.dense.bias"]
+            # Pre-allocate ones weight for adaRMS (avoids allocation per call)
+            self._adarms_ones = ttnn.ones((1, config.width), device=device, dtype=ttnn.bfloat16)
+            self._adarms_ones = ttnn.to_layout(self._adarms_ones, ttnn.TILE_LAYOUT)
+        else:
+            self.input_layernorm_weight = weights["input_layernorm.weight"]
+            self.post_attention_layernorm_weight = weights["post_attention_layernorm.weight"]
 
         self.attention = GemmaAttentionTTNN(config, weights, layer_idx, device, cos_meta, sin_meta)
         self.mlp = GemmaMLPTTNN(config, weights, device)
@@ -567,6 +675,7 @@ class GemmaBlockTTNN:
         position_ids: Optional[ttnn.Tensor] = None,
         past_key_value: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
         use_cache: bool = False,
+        adarms_cond: Optional[ttnn.Tensor] = None,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         Forward pass using TTNN operations.
@@ -578,18 +687,31 @@ class GemmaBlockTTNN:
             position_ids: Position indices
             past_key_value: Cached KV
             use_cache: Whether to return cache
+            adarms_cond: Pi0.5 time conditioning vector (TTNN tensor)
 
         Returns:
             Tuple of (output, optional_cache)
         """
         # Pre-attention norm
-        normed = rms_norm_ttnn(
-            hidden_states,
-            self.input_layernorm_weight,
-            self.config.rms_norm_eps,
-        )
+        if self.use_adarms and adarms_cond is not None:
+            normed, attn_gate = adarms_norm_ttnn(
+                hidden_states,
+                self.input_ln_dense_weight,
+                self.input_ln_dense_bias,
+                adarms_cond,
+                self.config.rms_norm_eps,
+                self.device,
+                ones_weight=self._adarms_ones,
+            )
+        else:
+            normed = rms_norm_ttnn(
+                hidden_states,
+                self.input_layernorm_weight,
+                self.config.rms_norm_eps,
+            )
+            attn_gate = None
 
-        # Attention with residual
+        # Attention with gated residual
         attn_output, new_cache = self.attention.forward(
             normed,
             cos,
@@ -599,27 +721,38 @@ class GemmaBlockTTNN:
             past_key_value,
             use_cache,
         )
-        hidden_states = ttnn.add(hidden_states, attn_output)
+        hidden_states = gated_residual_ttnn(hidden_states, attn_output, attn_gate)
         ttnn.deallocate(attn_output)
-        ttnn.ReadDeviceProfiler(
-            self.device
-        )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
+        if attn_gate is not None:
+            ttnn.deallocate(attn_gate)
 
         # Pre-MLP norm
-        normed = rms_norm_ttnn(
-            hidden_states,
-            self.post_attention_layernorm_weight,
-            self.config.rms_norm_eps,
-        )
+        if self.use_adarms and adarms_cond is not None:
+            normed, mlp_gate = adarms_norm_ttnn(
+                hidden_states,
+                self.post_attn_ln_dense_weight,
+                self.post_attn_ln_dense_bias,
+                adarms_cond,
+                self.config.rms_norm_eps,
+                self.device,
+                ones_weight=self._adarms_ones,
+            )
+        else:
+            normed = rms_norm_ttnn(
+                hidden_states,
+                self.post_attention_layernorm_weight,
+                self.config.rms_norm_eps,
+            )
+            mlp_gate = None
 
-        # MLP with residual
+        # MLP with gated residual
         mlp_output = self.mlp.forward(normed)
         ttnn.deallocate(normed)
-        hidden_states = ttnn.add(hidden_states, mlp_output)
+        hidden_states = gated_residual_ttnn(hidden_states, mlp_output, mlp_gate)
         ttnn.deallocate(mlp_output)
-        ttnn.ReadDeviceProfiler(
-            self.device
-        )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
+        if mlp_gate is not None:
+            ttnn.deallocate(mlp_gate)
+        # ReadDeviceProfiler removed for performance
 
         return hidden_states, new_cache
 
