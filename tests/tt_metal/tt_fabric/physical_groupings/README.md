@@ -2,7 +2,7 @@
 
 ## Overview
 
-In replacement of the rankfile and rank_bindings file as needed for running tt-run on multi-host systems, we will be introducing a cluster physical groupings file deployed with each machine cluster specifying the valid physical groupings for each cluster of machines. This file is provided by the cluster administrator and is used by FM to understand which subsets of ASICs can be used as candidate physical meshes for a given logical mesh in the MGD.
+In replacement of the rankfile and rank_bindings file as needed for running **`tt-run`** on multi-host systems, we will be introducing a cluster physical groupings file deployed with each machine cluster specifying the valid physical groupings for each cluster of machines. This file is provided by the cluster administrator and is used by FM to understand which subsets of ASICs can be used as candidate physical meshes for a given logical mesh in the MGD. (Today, `tt-run` can **auto-generate** rank bindings and rankfiles from an MGD via **`generate_rank_bindings`**; see [README_ttrun.md](../../../../ttnn/ttnn/distributed/README_ttrun.md) and [README_generate_rank_bindings.md](../../../../tools/scaleout/README_generate_rank_bindings.md).)
 
 The Physical Groupings file defines the hierarchical structure of physical resources (meshes, pods, superpods, clusters) in the cluster. This file uses a **declarative approach** that defines groupings in terms of ASIC locations and other groupings without requiring explicit ASIC IDs. The actual ASIC IDs are derived at runtime from the Physical System Descriptor (PSD).
 
