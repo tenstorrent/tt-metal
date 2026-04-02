@@ -48,8 +48,7 @@ def iter_micro_batch(prompts, answers, completions, micro_batch_size=16):
         yield prompts[start:end], answers[start:end], completions[start:end]
 
 
-def train_grpo(yaml_config_path, checkpoint_interval):
-    run = setup_training_run()
+def train_grpo(run, yaml_config_path, checkpoint_interval):
     metrics = TrainingMetricsTracker(run.output_dir)
 
     ctx = setup_inference(
@@ -164,4 +163,7 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint-interval", type=int, default=50)
     args, _ = parser.parse_known_args()
 
-    train_grpo(args.yaml_path, args.checkpoint_interval)
+    run = setup_training_run()
+    run.logger.info(f"args: {vars(args)}")
+
+    train_grpo(run, args.yaml_path, args.checkpoint_interval)
