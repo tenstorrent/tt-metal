@@ -762,6 +762,24 @@ class DeepseekMinimalAllReduce:
         return num_links + 1
 
     @staticmethod
+    def create_semaphores(mesh_device, num_links=1):
+        """Create global semaphores required by the all-reduce operation.
+
+        Args:
+            mesh_device: TT mesh device or submesh.
+            num_links: Number of fabric links (default 1).
+
+        Returns:
+            List of global semaphore objects (length ``get_num_semaphores(num_links)``).
+        """
+        num_semaphores = DeepseekMinimalAllReduce.get_num_semaphores(num_links=num_links)
+        device_grid_size = mesh_device.compute_with_storage_grid_size()
+        available_cores = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+        )
+        return [ttnn.create_global_semaphore(mesh_device, available_cores, 0) for _ in range(num_semaphores)]
+
+    @staticmethod
     def configure(
         mesh_device,
         intermediate_tensor=None,

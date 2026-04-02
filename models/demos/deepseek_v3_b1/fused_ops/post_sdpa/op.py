@@ -136,6 +136,37 @@ class PostSDPA:
 
         return result
 
+    SDPA_NUM_GLOBAL_SEMAPHORES = 2  # SdpaReduceToAll recv semaphores (r1, r2)
+
+    @staticmethod
+    def get_num_semaphores(num_links=1):
+        """Return the total number of global semaphores required by PostSDPA.
+
+        The flat list contains CCL all-reduce semaphores followed by SDPA
+        reduce-to-all semaphores.  The count is fixed regardless of whether
+        CCL or SDPA are actually enabled at runtime.
+        """
+        return DeepseekMinimalAllReduce.get_num_semaphores(num_links=num_links) + PostSDPA.SDPA_NUM_GLOBAL_SEMAPHORES
+
+    @staticmethod
+    def create_semaphores(mesh_device, num_links=1):
+        """Create all global semaphores required by PostSDPA.
+
+        Args:
+            mesh_device: TT mesh device or submesh.
+            num_links: Number of fabric links (default 1).
+
+        Returns:
+            Flat list of global semaphore objects (CCL semaphores followed by
+            SDPA semaphores).
+        """
+        num_semaphores = PostSDPA.get_num_semaphores(num_links=num_links)
+        device_grid_size = mesh_device.compute_with_storage_grid_size()
+        available_cores = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+        )
+        return [ttnn.create_global_semaphore(mesh_device, available_cores, 0) for _ in range(num_semaphores)]
+
     @staticmethod
     def get_program_context(
         input_tensor_mesh,
@@ -158,7 +189,6 @@ class PostSDPA:
         sdpa_output_l_mesh=None,
         sdpa_intermediate_recv_mesh=None,
         sdpa_forwarder_scratch_mesh=None,
-        sdpa_semaphores=None,
         sdpa_scale_fp32=1.0,
         sdpa_cluster_axis=0,
         sdpa_position_id_tensor_mesh=None,
@@ -166,6 +196,12 @@ class PostSDPA:
     ):
         """
         Compute per-device program context for the post_sdpa fused operation.
+
+        Args:
+            semaphores: Flat list of global semaphores created by
+                ``PostSDPA.create_semaphores()``.  The list is split internally
+                into CCL semaphores (first ``DeepseekMinimalAllReduce.get_num_semaphores``
+                entries) followed by SDPA semaphores (next 2 entries).
 
         Returns:
             Tuple of (full_device_grid, per_device_contexts) where:
@@ -191,14 +227,24 @@ class PostSDPA:
         ccl_num_links = int(ccl_num_links)
         if ccl_num_links < 1:
             raise ValueError(f"ccl_num_links must be >= 1, got {ccl_num_links}")
+
+        # Validate and split the flat semaphore list (always required, like AttentionBlock)
+        expected_num_sems = PostSDPA.get_num_semaphores(num_links=ccl_num_links)
+        assert semaphores is not None and len(semaphores) == expected_num_sems, (
+            f"Expected exactly {expected_num_sems} semaphores "
+            f"(from PostSDPA.get_num_semaphores(num_links={ccl_num_links})), "
+            f"got {len(semaphores) if semaphores is not None else 0}"
+        )
+
+        semaphore_index = 0
+        ccl_num_sems = DeepseekMinimalAllReduce.get_num_semaphores(num_links=ccl_num_links)
+        ccl_semaphores = semaphores[semaphore_index : semaphore_index + ccl_num_sems]
+        semaphore_index += ccl_num_sems
+        sdpa_semaphores = semaphores[semaphore_index : semaphore_index + PostSDPA.SDPA_NUM_GLOBAL_SEMAPHORES]
+        semaphore_index += PostSDPA.SDPA_NUM_GLOBAL_SEMAPHORES
+        assert semaphore_index == len(semaphores), "Unexpected PostSDPA semaphore consumption"
+
         if ccl_enabled:
-            if semaphores is None:
-                raise ValueError("Expected `semaphores` when ccl_enabled=True")
-            if len(semaphores) < ccl_num_links:
-                raise ValueError(
-                    f"Expected at least ccl_num_links semaphores, got len(semaphores)={len(semaphores)} "
-                    f"< ccl_num_links={ccl_num_links}"
-                )
             intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor)
             output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
             residual_tensors_per_device = (
@@ -373,12 +419,9 @@ class PostSDPA:
             sdpa_bwd_r1_sem_id = 10
             sdpa_bwd_r2_sem_id = 11
 
-            # SDPA global semaphores
-            if sdpa_semaphores is not None:
-                sdpa_semaphore1 = sdpa_semaphores[0]
-                sdpa_semaphore2 = sdpa_semaphores[1]
-                sdpa_semaphore1_addr = ttnn.get_global_semaphore_address(sdpa_semaphore1)
-                sdpa_semaphore2_addr = ttnn.get_global_semaphore_address(sdpa_semaphore2)
+            # SDPA global semaphores (sliced from flat semaphore list)
+            sdpa_semaphore1_addr = ttnn.get_global_semaphore_address(sdpa_semaphores[0])
+            sdpa_semaphore2_addr = ttnn.get_global_semaphore_address(sdpa_semaphores[1])
 
             # Convert scale to FP32 bits
             import struct
@@ -460,7 +503,7 @@ class PostSDPA:
             mesh_device=mesh_device,
             intermediate_tensor=None,
             output_tensor=output_tensor,
-            semaphores=semaphores,
+            semaphores=ccl_semaphores,
             cluster_axis=cluster_axis,
             num_links=ccl_num_links,
             chunk_num_tiles=None,
@@ -1442,7 +1485,6 @@ class PostSDPA:
         sdpa_output_l_mesh=None,
         sdpa_intermediate_recv_mesh=None,
         sdpa_forwarder_scratch_mesh=None,
-        sdpa_semaphores=None,
         sdpa_scale_fp32=1.0,
         sdpa_cluster_axis=0,
         sdpa_position_id_tensor_mesh=None,
@@ -1450,6 +1492,9 @@ class PostSDPA:
     ):
         """
         Execute post_sdpa fused operation with optional SDPA reduce-to-all and CCL all-reduce.
+
+        Args:
+            semaphores: Flat list from ``PostSDPA.create_semaphores()``.
 
         Returns:
             When ccl_enabled=True: output_tensor mesh with all-reduced result
@@ -1480,7 +1525,6 @@ class PostSDPA:
             sdpa_output_l_mesh=sdpa_output_l_mesh,
             sdpa_intermediate_recv_mesh=sdpa_intermediate_recv_mesh,
             sdpa_forwarder_scratch_mesh=sdpa_forwarder_scratch_mesh,
-            sdpa_semaphores=sdpa_semaphores,
             sdpa_scale_fp32=sdpa_scale_fp32,
             sdpa_cluster_axis=sdpa_cluster_axis,
             sdpa_position_id_tensor_mesh=sdpa_position_id_tensor_mesh,

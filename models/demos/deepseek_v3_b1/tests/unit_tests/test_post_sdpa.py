@@ -46,13 +46,7 @@ from models.demos.deepseek_v3_b1.blitz_decode_weights import (
 from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import PostSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import SdpaReduceToAll
-
-
-def create_fabric_router_config(max_payload_size):
-    """Helper to create FabricRouterConfig with custom max payload size."""
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
 
 
 def _round_up(value: int, alignment: int) -> int:
@@ -158,7 +152,7 @@ def test_post_sdpa(
 
     # Create submesh - fabric requires opening full system mesh first
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
-    ccl_num_links = 1
+    ccl_num_links = 2
 
     # Set up sub-device
     compute_grid_size = submesh.compute_with_storage_grid_size()
@@ -382,7 +376,10 @@ def test_post_sdpa(
     ttnn_ccl_intermediate = None
     ttnn_output = None
     ttnn_residual = None
-    semaphores = None
+
+    # Global semaphores (always created, like AttentionBlock)
+    semaphores = PostSDPA.create_semaphores(submesh, num_links=ccl_num_links)
+    logger.info(f"Created {len(semaphores)} global semaphores for PostSDPA")
 
     if ccl_enabled:
         # CCL intermediate tensor (1x32 tiles to match gather2 output format)
@@ -448,14 +445,6 @@ def test_post_sdpa(
                 mesh_mapper=mesh_mapper,
             )
             logger.info(f"Created residual tensor: {output_shard_shape} on gather core per device")
-
-        # Global semaphores for CCL
-        num_cores = compute_grid_size.x * compute_grid_size.y
-        available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
-        semaphore1 = ttnn.create_global_semaphore(submesh, available_cores, 0)
-        semaphore2 = ttnn.create_global_semaphore(submesh, available_cores, 0)
-        semaphores = [semaphore1, semaphore2]
-        logger.info("Created global semaphores for CCL synchronization")
 
     # ========================================================================
     # SDPA KV Cache tensor for CB overlap
@@ -943,12 +932,8 @@ def test_post_sdpa_with_sdpa_phase(
         )
 
     # Global semaphores for CCL
-    num_cores = compute_grid_size.x * compute_grid_size.y
-    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
-    semaphore1 = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    semaphore2 = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    semaphores = [semaphore1, semaphore2]
-    ccl_num_links = 1
+    ccl_num_links = 2
+    semaphores = PostSDPA.create_semaphores(submesh, num_links=ccl_num_links)
 
     # ========================================================================
     # Create SDPA tensors
@@ -1063,11 +1048,6 @@ def test_post_sdpa_with_sdpa_phase(
         f"Created SDPA forwarder scratch buffer: {sdpa_fwd_buffer_bytes} bytes total, {sdpa_fwd_per_forwarder} elements per forwarder"
     )
 
-    # SDPA global semaphores - must be created on the SDPA worker grid (like original SDPA op)
-    sdpa_semaphore1 = ttnn.create_global_semaphore(submesh, sdpa_worker_grid, 0)
-    sdpa_semaphore2 = ttnn.create_global_semaphore(submesh, sdpa_worker_grid, 0)
-    sdpa_semaphores = [sdpa_semaphore1, sdpa_semaphore2]
-
     # ========================================================================
     # Create position_id tensor mesh for SDPA position validity
     # HEIGHT_SHARDED int32 [1,1] per SDPA worker core, replicated across mesh
@@ -1109,7 +1089,6 @@ def test_post_sdpa_with_sdpa_phase(
         sdpa_output_l_mesh=ttnn_sdpa_output_l,
         sdpa_intermediate_recv_mesh=ttnn_sdpa_intermediate_recv,
         sdpa_forwarder_scratch_mesh=ttnn_sdpa_forwarder_scratch,
-        sdpa_semaphores=sdpa_semaphores,
         sdpa_scale_fp32=1.0,
         sdpa_cluster_axis=0,  # SDPA reduces on axis 0 (rows), TP reduces on axis 1 (cols)
         sdpa_position_id_tensor_mesh=position_id_tensor_mesh,
