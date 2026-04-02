@@ -271,20 +271,8 @@ class TtMSDeformableAttention3D:
             sampling_offsets = ttnn.to_layout(sampling_offsets, ttnn.TILE_LAYOUT)
             offset_normalizer_xy = ttnn.to_layout(offset_normalizer_xy, ttnn.TILE_LAYOUT)
 
-            sampling_offsets_reshaped = ttnn.reshape(
-                sampling_offsets, [sampling_offsets.shape[0], -1, sampling_offsets.shape[4], sampling_offsets.shape[5]]
-            )
-            offset_normalizer_xy_reshaped = ttnn.reshape(
-                offset_normalizer_xy,
-                [offset_normalizer_xy.shape[0], -1, offset_normalizer_xy.shape[4], offset_normalizer_xy.shape[5]],
-            )
-
-            sampling_locations = ttnn.div(sampling_offsets_reshaped, offset_normalizer_xy_reshaped)
-            ttnn.deallocate(sampling_offsets_reshaped)
-            ttnn.deallocate(offset_normalizer_xy_reshaped)
+            sampling_locations = ttnn.div(sampling_offsets, offset_normalizer_xy)
             ttnn.deallocate(offset_normalizer_xy)
-
-            sampling_locations = ttnn.reshape(sampling_locations, sampling_offsets.shape)
 
             bs, num_query, num_heads, num_levels, num_all_points, xy = sampling_locations.shape
             sampling_locations = ttnn.reshape(
