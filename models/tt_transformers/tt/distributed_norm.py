@@ -9,7 +9,17 @@ from models.tt_transformers.tt.common import Mode
 
 
 class DistributedNorm(LightweightModule):
-    def __init__(self, norm, args, tt_ccl, prefetcher=None, TG=False, ag_config_key=None, enable_all_gather=True):
+    def __init__(
+        self,
+        norm,
+        args,
+        tt_ccl,
+        prefetcher=None,
+        TG=False,
+        ag_config_key=None,
+        enable_all_gather=True,
+        use_fused_rms=False,
+    ):
         self.norm = norm
         self.args = args
         self.tt_ccl = tt_ccl
@@ -18,6 +28,80 @@ class DistributedNorm(LightweightModule):
 
         # Flag to control whether all_gather is performed after distributed norm (can be disabled when output should remain sharded)
         self.enable_all_gather = enable_all_gather
+
+        # Fused RMS: norm + all-gather + residual add in one kernel (batch=32 only, non-TG)
+        self.use_fused_rms = use_fused_rms and not TG and args.is_multichip and prefetcher is None
+        if self.use_fused_rms:
+            import torch
+
+            cluster_shape = list(args.mesh_device.shape)
+            self.fused_cluster_axis = 1  # gather on axis=1 for (2,4) mesh
+            num_devices_on_axis = cluster_shape[self.fused_cluster_axis]
+            dim_per_device = args.dim // num_devices_on_axis
+
+            # Find valid core grid (must fit BH 12x10 and shard_width must be tile-aligned)
+            max_x, max_y = 12, 10
+            grid_x, grid_y, num_cores = 1, 1, 1
+            for n in [40, 20, 10, 8, 5, 4, 2, 1]:
+                if dim_per_device % n == 0 and (dim_per_device // n) % 32 == 0:
+                    found = False
+                    for gy in range(1, max_y + 1):
+                        if n % gy == 0 and n // gy <= max_x:
+                            grid_x, grid_y, num_cores = n // gy, gy, n
+                            found = True
+                            break
+                    if found:
+                        break
+
+            shard_width = dim_per_device // num_cores
+            self.fused_ln_prg_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=(grid_x, grid_y),
+                subblock_w=min(shard_width // 32, 4),
+                block_h=1,
+                block_w=shard_width // 32,
+                inplace=False,
+            )
+            self.fused_input_mem_cfg = ttnn.create_sharded_memory_config(
+                shape=(32, shard_width),
+                core_grid=ttnn.CoreGrid(y=grid_y, x=grid_x),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            # Output: full dim gathered, sharded across output_cores
+            output_grid = args.dram_shard_core_grid_for_k(args.dim // args.num_devices)
+            output_shard_w = (args.dim // args.num_devices) // output_grid.num_cores
+            self.fused_output_mem_cfg = ttnn.create_sharded_memory_config(
+                shape=(32, output_shard_w),
+                core_grid=output_grid,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            # Stats: pre-allocated persistent buffer [1,1,32, num_devices_on_axis], single core
+            stats_shape = [1, 1, 32, 32 * num_devices_on_axis]
+            ag_mem_cfg = ttnn.create_sharded_memory_config(
+                shape=(32, 32 * num_devices_on_axis),
+                core_grid=ttnn.CoreGrid(y=1, x=1),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            self.fused_stats = ttnn.from_torch(
+                torch.zeros(stats_shape, dtype=torch.bfloat16),
+                device=args.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=ag_mem_cfg,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    args.mesh_device,
+                    dims=(3, None),
+                    mesh_shape=cluster_shape,
+                ),
+            )
+            # Semaphore
+            sub_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))})
+            self.fused_semaphore = ttnn.create_global_semaphore(args.mesh_device, sub_crs, 0)
 
         if TG:
             core_grid_ln = (
@@ -51,10 +135,29 @@ class DistributedNorm(LightweightModule):
             )
         self.TG = TG
 
-    def forward(self, x, mode: Mode, norm_config=None):
+    def forward(self, x, mode: Mode, norm_config=None, residual=None):
         """Apply a norm, possibly gathering inputs if required."""
 
         sharded_output_config = norm_config.get("sharded_output_config") if norm_config else None
+
+        # Fused RMS path: norm + all-gather + residual add in one kernel
+        if self.use_fused_rms and mode == Mode.DECODE and residual is not None:
+            x = ttnn.to_memory_config(x, self.fused_input_mem_cfg)
+            tt_out = ttnn.fused_rms_minimal(
+                x,
+                self.fused_ln_prg_cfg,
+                self.fused_cluster_axis,
+                self.args.mesh_device,
+                self.fused_semaphore,
+                topology=self.args.ccl_topology(),
+                residual_input_tensor=residual,
+                num_links=self.tt_ccl.get_num_links(self.fused_cluster_axis),
+                epsilon=self.norm.eps,
+                weight=self.norm.weight_distributed,
+                stats=self.fused_stats,
+                memory_config=self.fused_output_mem_cfg,
+            )
+            return tt_out
 
         if self.TG:
             if mode == Mode.DECODE:
