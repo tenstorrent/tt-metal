@@ -44,12 +44,16 @@ inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
     // Precompute Bernoulli-related coefficients for asymptotic tail
     // B_2 = 1/6 → coeff = (n+1)/12  (from B_2/(2!) * s*(s-1)... but simplified)
     // B_4 = -1/30 → coeff = -(n+1)(n+2)(n+3)/720
+    // B_6 = 1/42  → coeff = (n+1)(n+2)(n+3)(n+4)(n+5)/30240
     float n1 = static_cast<float>(n + 1);
     float n2 = static_cast<float>(n + 2);
     float n3 = static_cast<float>(n + 3);
+    float n4 = static_cast<float>(n + 4);
+    float n5 = static_cast<float>(n + 5);
     float nf = static_cast<float>(n);
-    float c_b2 = n1 / 12.0f;                // B_2 term coefficient
-    float c_b4 = -(n1 * n2 * n3) / 720.0f;  // B_4 term coefficient
+    float c_b2 = n1 / 12.0f;                           // B_2 term coefficient
+    float c_b4 = -(n1 * n2 * n3) / 720.0f;             // B_4 term coefficient
+    float c_b6 = (n1 * n2 * n3 * n4 * n5) / 30240.0f;  // B_6 term coefficient
 
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
@@ -98,6 +102,10 @@ inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
         // B_4 Bernoulli correction: -(n+1)(n+2)(n+3)/(720 * z^(n+4))
         sfpi::vFloat inv_z_np4 = inv_z_np2 * inv_z2;
         tail = tail + inv_z_np4 * c_b4;
+
+        // B_6 Bernoulli correction: (n+1)(n+2)(n+3)(n+4)(n+5)/(30240 * z^(n+6))
+        sfpi::vFloat inv_z_np6 = inv_z_np4 * inv_z2;
+        tail = tail + inv_z_np6 * c_b6;
 
         sum = sum + tail;
 
