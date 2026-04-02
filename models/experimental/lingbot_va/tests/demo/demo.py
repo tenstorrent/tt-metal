@@ -32,7 +32,6 @@ if os.path.isdir(_TT_METAL_ROOT) and _TT_METAL_ROOT not in sys.path:
 
 import torch
 import torch.nn.functional as F
-from diffusers.pipelines.wan.pipeline_wan import prompt_clean
 from diffusers.utils import export_to_video
 from diffusers.video_processor import VideoProcessor
 from einops import rearrange
@@ -121,8 +120,21 @@ def _release_ttnn_runtime_configs(obj, _visited: set[int] | None = None) -> None
                 logger.debug("Could not clear %s on %s", name, type(obj).__name__, exc_info=True)
 
 
+def _ttnn_tensor_to_torch(out: ttnn.Tensor | torch.Tensor) -> torch.Tensor:
+    """Bridge mesh output to host torch for schedulers / einops (outside :class:`_TTTransformerAdapter`)."""
+    if isinstance(out, torch.Tensor):
+        return out.float()
+    try:
+        return ttnn.to_torch(out).float()
+    except Exception:
+        dev = ttnn.get_device_tensors(out)
+        if dev:
+            return ttnn.to_torch(dev[0]).float()
+        raise
+
+
 class _TTTransformerAdapter:
-    """Wraps TTNN WanTransformer3DModel to match the PyTorch transformer call interface used in _infer_impl."""
+    """Wraps TTNN ``WanTransformer3DModel``: ``input_dict`` fields are ``ttnn.Tensor`` only; returns ``ttnn.Tensor``."""
 
     def __init__(self, tt_model):
         self._tt_model = tt_model
@@ -166,24 +178,31 @@ class _TTTransformerAdapter:
         prompt = input_dict["text_emb"]
         timesteps = input_dict["timesteps"]
         grid_id = input_dict["grid_id"]
-        B = spatial.shape[0]
-        device = spatial.device
-        ts = timesteps.detach().to(device=device, dtype=torch.float32)
-        if ts.dim() == 2:
-            timestep_per_frame = ts.clone()
-            timestep = timestep_per_frame[:, 0].contiguous()
-        elif ts.dim() == 1:
-            F_frames = ts.shape[0]
-            timestep_per_frame = ts.unsqueeze(0).expand(B, F_frames).contiguous()
-            timestep = timestep_per_frame[:, 0].contiguous()
-        else:
-            t0 = ts.reshape(-1)[0]
-            F_spatial = spatial.shape[2]
-            timestep_per_frame = t0.view(1, 1).expand(B, F_spatial).contiguous()
-            timestep = t0.unsqueeze(0).expand(B).contiguous()
+        for name, t in (
+            ("noisy_latents", spatial),
+            ("text_emb", prompt),
+            ("timesteps", timesteps),
+            ("grid_id", grid_id),
+        ):
+            if not isinstance(t, ttnn.Tensor):
+                raise TypeError(f"_TTTransformerAdapter expects {name} to be ttnn.Tensor, got {type(t).__name__}")
 
-        if timestep.dim() == 0:
-            timestep = timestep.unsqueeze(0)
+        ts = timesteps
+        B = int(spatial.shape[0])
+        nd = len(ts.shape)
+        if nd == 2:
+            timestep_per_frame = ts
+            timestep = ttnn.squeeze(ttnn.slice(ts, [0, 0], [B, 1]), dim=1)
+        elif nd == 1:
+            ts_1f = ttnn.unsqueeze(ts, 0)
+            timestep_per_frame = ttnn.repeat(ts_1f, (B, 1))
+            timestep = ttnn.squeeze(ttnn.slice(timestep_per_frame, [0, 0], [B, 1]), dim=1)
+        else:
+            raise ValueError(
+                f"timesteps must be 1D [F] or 2D [B, F] on mesh, got shape {tuple(int(x) for x in ts.shape)}"
+            )
+        if len(timestep.shape) == 0:
+            timestep = ttnn.unsqueeze(timestep, 0)
 
         return self._tt_model(
             spatial=spatial,
@@ -505,65 +524,6 @@ def _load_transformer_into_models(models: dict, config) -> None:
     models["transformer"] = _TTTransformerAdapter(transformer)
 
 
-def _get_t5_prompt_embeds(models, prompt, num_videos_per_prompt=1, max_sequence_length=512):
-    device = models["device"]
-    dtype = models["dtype"]
-    tokenizer = models["tokenizer"]
-    text_encoder = models["text_encoder"]
-
-    prompt = [prompt] if isinstance(prompt, str) else prompt
-    prompt = [prompt_clean(u) for u in prompt]
-    batch_size = len(prompt)
-
-    text_inputs = tokenizer(
-        prompt,
-        padding="max_length",
-        max_length=max_sequence_length,
-        truncation=True,
-        add_special_tokens=True,
-        return_attention_mask=True,
-        return_tensors="pt",
-    )
-    text_input_ids, mask = text_inputs.input_ids, text_inputs.attention_mask
-    seq_lens = mask.gt(0).sum(dim=1).long()
-
-    # TTNN text encoder.
-    mesh_device = text_encoder.mesh_device
-    tt_input = ttnn.from_torch(text_input_ids, dtype=ttnn.uint32, device=mesh_device)
-    tt_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat16, device=mesh_device)
-    tt_outputs = text_encoder(tt_input, attention_mask=tt_mask)
-    last_hidden = tt_outputs[-1]
-    prompt_embeds = ttnn.to_torch(last_hidden).float()
-    try:
-        ttnn.synchronize_device(mesh_device)
-    except Exception as e:
-        logger.warning("synchronize_device failed after text encoder pass: %s", e)
-    try:
-        ttnn.deallocate(tt_input)
-    except Exception as e:
-        logger.warning("Failed to deallocate tt_input: %s", e)
-    try:
-        ttnn.deallocate(tt_mask)
-    except Exception as e:
-        logger.warning("Failed to deallocate tt_mask: %s", e)
-    try:
-        ttnn.deallocate(last_hidden)
-    except Exception as e:
-        logger.warning("Failed to deallocate text encoder output: %s", e)
-    while prompt_embeds.dim() > 3:
-        prompt_embeds = prompt_embeds.squeeze(0)
-    prompt_embeds = prompt_embeds.to(device=device, dtype=dtype)
-    prompt_embeds = [u[:v] for u, v in zip(prompt_embeds, seq_lens)]
-    prompt_embeds = torch.stack(
-        [torch.cat([u, u.new_zeros(max_sequence_length - u.size(0), u.size(1))]) for u in prompt_embeds],
-        dim=0,
-    )
-    _, seq_len, _ = prompt_embeds.shape
-    prompt_embeds = prompt_embeds.repeat(1, num_videos_per_prompt, 1)
-    prompt_embeds = prompt_embeds.view(batch_size * num_videos_per_prompt, seq_len, -1)
-    return prompt_embeds.to(device)
-
-
 def _get_t5_prompt_embeds_ttnn(models, tt_input, tt_mask, num_videos_per_prompt=1, max_sequence_length=512):
     """TTNN text-encoder pass using TTNN pre-tokenized inputs, returns TTNN tensor."""
     _ = max_sequence_length
@@ -601,26 +561,6 @@ def _get_t5_prompt_embeds_ttnn(models, tt_input, tt_mask, num_videos_per_prompt=
     return prompt_embeds
 
 
-def _encode_prompt(models, _state, prompt, do_classifier_free_guidance=True, max_sequence_length=512):
-    prompt = [prompt] if isinstance(prompt, str) else prompt
-    batch_size = len(prompt)
-
-    if "text_encoder" not in models:
-        raise RuntimeError("Text encoder was freed before prompt encoding.")
-    prompt_embeds = _get_t5_prompt_embeds(
-        models, prompt=prompt, num_videos_per_prompt=1, max_sequence_length=max_sequence_length
-    )
-
-    negative_prompt_embeds = None
-    if do_classifier_free_guidance:
-        negative_prompt = batch_size * [""]
-        negative_prompt_embeds = _get_t5_prompt_embeds(
-            models, prompt=negative_prompt, num_videos_per_prompt=1, max_sequence_length=max_sequence_length
-        )
-
-    return prompt_embeds, negative_prompt_embeds
-
-
 def _encode_prompt_ttnn(
     models,
     tt_input,
@@ -650,16 +590,20 @@ def _encode_prompt_ttnn(
     return prompt_embeds, negative_prompt_embeds
 
 
-def _normalize_latents(latents, latents_mean, latents_std):
-    latents_mean = latents_mean.view(1, -1, 1, 1, 1).to(device=latents.device)
-    latents_std = latents_std.view(1, -1, 1, 1, 1).to(device=latents.device)
-    return ((latents.float() - latents_mean) * latents_std).to(latents.dtype)
+# def _normalize_latents(latents, latents_mean, latents_std):
+#     latents_mean = latents_mean.view(1, -1, 1, 1, 1).to(device=latents.device)
+#     latents_std = latents_std.view(1, -1, 1, 1, 1).to(device=latents.device)
+#     return ((latents.float() - latents_mean) * latents_std).to(latents.dtype)
 
 
 def _postprocess_action(models, state, action):
     config = models["config"]
     actions_q01 = state["actions_q01"]
     actions_q99 = state["actions_q99"]
+    if isinstance(actions_q01, ttnn.Tensor):
+        actions_q01 = ttnn.to_torch(actions_q01).float()
+    if isinstance(actions_q99, ttnn.Tensor):
+        actions_q99 = ttnn.to_torch(actions_q99).float()
     action_norm_method = state["action_norm_method"]
 
     action = action.cpu()
@@ -672,145 +616,228 @@ def _postprocess_action(models, state, action):
     return action[config.used_action_channel_ids]
 
 
-def _repeat_input_for_cfg(models, state, input_dict):
+def _repeat_input_for_cfg_ttnn(models, state, input_dict):
+    """Classifier-free guidance repeat for TTNN tensors (matches :func:`_repeat_input_for_cfg`)."""
     use_cfg = state["use_cfg"]
     prompt_embeds = state["prompt_embeds"]
     negative_prompt_embeds = state["negative_prompt_embeds"]
-    dtype = models["dtype"]
-    if isinstance(prompt_embeds, ttnn.Tensor):
-        prompt_embeds = ttnn.to_torch(prompt_embeds)
-    if isinstance(negative_prompt_embeds, ttnn.Tensor):
-        negative_prompt_embeds = ttnn.to_torch(negative_prompt_embeds)
-
     if use_cfg:
-        input_dict["noisy_latents"] = input_dict["noisy_latents"].repeat(2, 1, 1, 1, 1)
-        input_dict["text_emb"] = torch.cat(
-            [prompt_embeds.to(dtype).clone(), negative_prompt_embeds.to(dtype).clone()], dim=0
-        )
-        input_dict["grid_id"] = input_dict["grid_id"][None].repeat(2, 1, 1)
-        input_dict["timesteps"] = input_dict["timesteps"][None].repeat(2, 1)
+        if negative_prompt_embeds is None:
+            raise ValueError("use_cfg requires state['negative_prompt_embeds']")
+        if not isinstance(prompt_embeds, ttnn.Tensor) or not isinstance(negative_prompt_embeds, ttnn.Tensor):
+            raise TypeError("_repeat_input_for_cfg_ttnn expects prompt and negative prompt as ttnn.Tensor when use_cfg")
+        input_dict["noisy_latents"] = ttnn.repeat(input_dict["noisy_latents"], (2, 1, 1, 1, 1))
+        input_dict["text_emb"] = ttnn.concat([prompt_embeds, negative_prompt_embeds], dim=0)
+        g = ttnn.unsqueeze(input_dict["grid_id"], 0)
+        input_dict["grid_id"] = ttnn.repeat(g, (2, 1, 1))
+        ts = ttnn.unsqueeze(input_dict["timesteps"], 0)
+        input_dict["timesteps"] = ttnn.repeat(ts, (2, 1))
     else:
-        input_dict["grid_id"] = input_dict["grid_id"][None]
-        input_dict["timesteps"] = input_dict["timesteps"][None]
+        input_dict["grid_id"] = ttnn.unsqueeze(input_dict["grid_id"], 0)
+        input_dict["timesteps"] = ttnn.unsqueeze(input_dict["timesteps"], 0)
     return input_dict
 
 
-def _prepare_latent_input(
+def _get_mesh_id_ttnn(
+    mesh_device,
+    f: int,
+    h: int,
+    w: int,
+    t: int,
+    f_w: int = 1,
+    f_shift: int = 0,
+    *,
+    action: bool = False,
+) -> ttnn.Tensor:
+    """Same grid as :func:`get_mesh_id`, uploaded to the mesh as TTNN (host bridge via ``from_torch``)."""
+    grid = get_mesh_id(f, h, w, t, f_w, f_shift, action=action).float().contiguous()
+    return ttnn.from_torch(
+        grid,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.float32,
+        device=mesh_device,
+    )
+
+
+def _timesteps_1d_ttnn(mesh_device, num_frames: int, t_val: float, *, zero_first: bool = False) -> ttnn.Tensor:
+    """1-D timestep vector of length ``num_frames`` (matches torch ``ones([F]) * t``); optionally zero first slot."""
+    if num_frames < 1:
+        raise ValueError("num_frames must be >= 1")
+    if zero_first:
+        if num_frames == 1:
+            return ttnn.full(
+                (1,),
+                0.0,
+                dtype=ttnn.float32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+            )
+        first = ttnn.full(
+            (1,),
+            0.0,
+            dtype=ttnn.float32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+        )
+        rest = ttnn.full(
+            (num_frames - 1,),
+            float(t_val),
+            dtype=ttnn.float32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+        )
+        return ttnn.concat([first, rest], dim=0)
+    return ttnn.full(
+        (num_frames,),
+        float(t_val),
+        dtype=ttnn.float32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+    )
+
+
+def _action_channel_mask_ttnn(mesh_device, num_channels: int, action_mask: torch.Tensor | ttnn.Tensor) -> ttnn.Tensor:
+    """Broadcast mask ``[C]`` (torch bool or TTNN 0/1) to ``[1, C, 1, 1, 1]`` float TTNN (1 = keep, 0 = zero)."""
+    if isinstance(action_mask, ttnn.Tensor):
+        am = ttnn.to_torch(action_mask).detach().cpu().numpy().squeeze() > 0.5
+    else:
+        am = action_mask.detach().cpu().numpy().astype(bool)
+    m = np.ones((1, num_channels, 1, 1, 1), dtype=np.float32)
+    m[0, ~am, 0, 0, 0] = 0.0
+    return ttnn.from_torch(
+        torch.from_numpy(m),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.float32,
+        device=mesh_device,
+    )
+
+
+def _prepare_latent_input_ttnn(
     models,
     state,
-    latent_model_input,
-    action_model_input,
-    latent_t=0,
-    action_t=0,
-    latent_cond=None,
-    action_cond=None,
-    frame_st_id=0,
-    patch_size=(1, 2, 2),
-):
-    device = models["device"]
-    dtype = models["dtype"]
-    prompt_embeds = state["prompt_embeds"]
-    if isinstance(prompt_embeds, ttnn.Tensor):
-        prompt_embeds = ttnn.to_torch(prompt_embeds)
-    action_mask = state["action_mask"]
+    latent_model_input: ttnn.Tensor | None,
+    action_model_input: ttnn.Tensor | None,
+    latent_t: float = 0.0,
+    action_t: float = 0.0,
+    latent_cond: ttnn.Tensor | None = None,
+    action_cond: ttnn.Tensor | None = None,
+    frame_st_id: int = 0,
+    patch_size: tuple[int, int, int] = (1, 2, 2),
+) -> dict:
+    """
+    TTNN-native analogue of :func:`_prepare_latent_input`: all activations are ``ttnn.Tensor`` on ``mesh_device``.
 
-    input_dict = {}
+    Expects ``state['prompt_embeds']`` to be a ``ttnn.Tensor``. Does not call :func:`torch.ones` / ``.to`` on
+    activations; timestep lines use :func:`ttnn.full` / :func:`ttnn.concat`. Grid ids use :func:`_get_mesh_id_ttnn`
+    (reference :func:`get_mesh_id` then device upload).
+
+    Callers use :func:`_ttnn_tensor_to_torch` on the adapter output when feeding torch schedulers or einops.
+    """
+    mesh_device = models["mesh_device"]
+    action_mask = state["action_mask"]
+    prompt_embeds = state["prompt_embeds"]
+    if not isinstance(prompt_embeds, ttnn.Tensor):
+        raise TypeError("_prepare_latent_input_ttnn expects state['prompt_embeds'] to be a ttnn.Tensor")
+
+    input_dict: dict = {}
     if latent_model_input is not None:
-        input_dict["latent_res_lst"] = {
-            "noisy_latents": latent_model_input,
-            "timesteps": torch.ones([latent_model_input.shape[2]], dtype=torch.float32, device=device) * latent_t,
-            "grid_id": get_mesh_id(
-                latent_model_input.shape[-3] // patch_size[0],
-                latent_model_input.shape[-2] // patch_size[1],
-                latent_model_input.shape[-1] // patch_size[2],
-                0,
-                1,
-                frame_st_id,
-            ).to(device),
-            "text_emb": prompt_embeds.to(dtype).clone(),
-        }
+        noisy = latent_model_input
+        f = int(noisy.shape[-3]) // patch_size[0]
+        h = int(noisy.shape[-2]) // patch_size[1]
+        w = int(noisy.shape[-1]) // patch_size[2]
+        num_frames = int(noisy.shape[2])
+        ts = _timesteps_1d_ttnn(mesh_device, num_frames, latent_t, zero_first=(latent_cond is not None))
+        grid_id = _get_mesh_id_ttnn(mesh_device, f, h, w, 0, 1, frame_st_id, action=False)
         if latent_cond is not None:
-            input_dict["latent_res_lst"]["noisy_latents"][:, :, 0:1] = latent_cond[:, :, 0:1]
-            input_dict["latent_res_lst"]["timesteps"][0:1] *= 0
+            if num_frames > 1:
+                tail = noisy[:, :, 1:, :, :]
+                noisy = ttnn.concat([latent_cond, tail], dim=2)
+            else:
+                noisy = latent_cond
+        input_dict["latent_res_lst"] = {
+            "noisy_latents": noisy,
+            "timesteps": ts,
+            "grid_id": grid_id,
+            "text_emb": prompt_embeds,
+        }
 
     if action_model_input is not None:
-        input_dict["action_res_lst"] = {
-            "noisy_latents": action_model_input,
-            "timesteps": torch.ones([action_model_input.shape[2]], dtype=torch.float32, device=device) * action_t,
-            "grid_id": get_mesh_id(
-                action_model_input.shape[-3],
-                action_model_input.shape[-2],
-                action_model_input.shape[-1],
-                1,
-                1,
-                frame_st_id,
-                action=True,
-            ).to(device),
-            "text_emb": prompt_embeds.to(dtype).clone(),
-        }
+        noisy_a = action_model_input
+        num_frames_a = int(noisy_a.shape[2])
+        ts_a = _timesteps_1d_ttnn(mesh_device, num_frames_a, action_t, zero_first=(action_cond is not None))
+        grid_id_a = _get_mesh_id_ttnn(
+            mesh_device,
+            int(noisy_a.shape[-3]),
+            int(noisy_a.shape[-2]),
+            int(noisy_a.shape[-1]),
+            0,
+            1,
+            frame_st_id,
+            action=True,
+        )
         if action_cond is not None:
-            input_dict["action_res_lst"]["noisy_latents"][:, :, 0:1] = action_cond[:, :, 0:1]
-            input_dict["action_res_lst"]["timesteps"][0:1] *= 0
-        input_dict["action_res_lst"]["noisy_latents"][:, ~action_mask] *= 0
+            if num_frames_a > 1:
+                tail_a = noisy_a[:, :, 1:, :, :]
+                noisy_a = ttnn.concat([action_cond, tail_a], dim=2)
+            else:
+                noisy_a = action_cond
+        ch_mask = _action_channel_mask_ttnn(mesh_device, int(noisy_a.shape[1]), action_mask)
+        noisy_a = ttnn.multiply(noisy_a, ch_mask)
+        input_dict["action_res_lst"] = {
+            "noisy_latents": noisy_a,
+            "timesteps": ts_a,
+            "grid_id": grid_id_a,
+            "text_emb": prompt_embeds,
+        }
+
     return input_dict
 
 
-def _encode_obs(models, state, obs):
-    config = models["config"]
-    device = models["device"]
+def _randn_ttnn(mesh_device, shape: tuple[int, ...], *, torch_dtype: torch.dtype) -> ttnn.Tensor:
+    """Gaussian samples on mesh via host ``torch.randn`` and :func:`ttnn.from_torch`."""
+    host = torch.randn(shape, dtype=torch.float32).to(torch_dtype)
+    tt_dtype = ttnn.bfloat16 if torch_dtype == torch.bfloat16 else ttnn.float32
+    return ttnn.from_torch(
+        host.contiguous(),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=tt_dtype,
+    )
+
+
+def _ensure_prompt_embeds_ttnn(models, state) -> None:
+    """Ensure ``state['prompt_embeds']`` (and negative when CFG) are TTNN for :func:`_prepare_latent_input_ttnn`."""
+    mesh_device = models["mesh_device"]
     dtype = models["dtype"]
-
-    env_type = models["env_type"]
-    height = state["height"]
-    width = state["width"]
-    streaming_vae = models["streaming_vae"]
-    vae = models["vae"]
-
-    images = obs["obs"]
-    if not isinstance(images, list):
-        images = [images]
-    if len(images) < 1:
-        return None
-
-    videos = []
-    for k_i, k in enumerate(config.obs_cam_keys):
-        if env_type == "robotwin_tshape":
-            height_i, width_i = (height, width) if k_i == 0 else (height // 2, width // 2)
-        else:
-            height_i, width_i = height, width
-        history_video_k = torch.from_numpy(np.stack([each[k] for each in images])).float().permute(3, 0, 1, 2)
-        history_video_k = F.interpolate(
-            history_video_k, size=(height_i, width_i), mode="bilinear", align_corners=False
-        ).unsqueeze(0)
-        videos.append(history_video_k)
-
-    if env_type == "robotwin_tshape":
-        videos_high = videos[0] / 255.0 * 2.0 - 1.0
-        videos_left_and_right = torch.cat(videos[1:], dim=0) / 255.0 * 2.0 - 1.0
-        vae_device = next(streaming_vae.vae.parameters()).device
-        enc_out_high = streaming_vae.encode_chunk(videos_high.to(vae_device).to(dtype))
-        encode_lr = streaming_vae
-        enc_out_left_and_right = encode_lr.encode_chunk(videos_left_and_right.to(vae_device).to(dtype))
-        enc_out = torch.cat(
-            [
-                torch.cat(enc_out_left_and_right.split(1, dim=0), dim=-1),
-                enc_out_high,
-            ],
-            dim=-2,
+    tt_dtype = ttnn.bfloat16 if dtype == torch.bfloat16 else ttnn.float32
+    pe = state.get("prompt_embeds")
+    if pe is None:
+        raise RuntimeError("TTNN latent prepare requires encoded prompt embeddings; set prompt before infer.")
+    if isinstance(pe, ttnn.Tensor):
+        if state.get("use_cfg") and state.get("negative_prompt_embeds") is not None:
+            neg = state["negative_prompt_embeds"]
+            if not isinstance(neg, ttnn.Tensor):
+                state["negative_prompt_embeds"] = ttnn.from_torch(
+                    neg.to(dtype).contiguous(),
+                    device=mesh_device,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    dtype=tt_dtype,
+                )
+        return
+    state["prompt_embeds"] = ttnn.from_torch(
+        pe.to(dtype).contiguous(),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=tt_dtype,
+    )
+    neg = state.get("negative_prompt_embeds")
+    if state.get("use_cfg") and neg is not None and not isinstance(neg, ttnn.Tensor):
+        state["negative_prompt_embeds"] = ttnn.from_torch(
+            neg.to(dtype).contiguous(),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=tt_dtype,
         )
-    else:
-        videos = torch.cat(videos, dim=0) / 255.0 * 2.0 - 1.0
-        vae_device = next(streaming_vae.vae.parameters()).device
-        enc_out = streaming_vae.encode_chunk(videos.to(vae_device).to(dtype))
-
-    mu, _ = torch.chunk(enc_out, 2, dim=1)
-    latents_mean = torch.tensor(vae.config.latents_mean).to(mu.device)
-    latents_std = torch.tensor(vae.config.latents_std).to(mu.device)
-    mu_norm = _normalize_latents(mu, latents_mean, 1.0 / latents_std)
-    video_latent = torch.cat(mu_norm.split(1, dim=0), dim=-1)
-    video_latent = video_latent.to(device)
-
-    return video_latent
 
 
 def _encode_obs_ttnn(models, state, obs):
@@ -919,11 +946,43 @@ def _encode_obs_ttnn(models, state, obs):
     return ttnn.concat(list(parts), dim=-1)
 
 
+def _ttnn_action_channel_mask_vector(mesh_device, action_dim: int, used_channel_ids) -> ttnn.Tensor:
+    """1D float mask on mesh: ``1.0`` at ``used_channel_ids``, else ``0.0`` (ttnn only).
+
+    Row-major ``typecast`` requires the last dimension to be a multiple of 32; we build on a
+    padded length then ``slice`` back to ``action_dim``.
+    """
+    pad_to = ((action_dim + 31) // 32) * 32
+    kw = dict(device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.float32)
+    ar = ttnn.arange(start=0, end=pad_to, step=1, **kw)
+    acc = ttnn.zeros((pad_to,), **kw)
+    for idx in sorted(set(int(i) for i in used_channel_ids)):
+        if idx < 0 or idx >= action_dim:
+            continue
+        c = ttnn.full((pad_to,), float(idx), **kw)
+        hit = ttnn.eq(ar, c)
+        acc = ttnn.add(acc, ttnn.typecast(hit, ttnn.float32))
+    return ttnn.slice(acc, [0], [action_dim])
+
+
+def _ttnn_quantile_table_c11(mesh_device, values) -> ttnn.Tensor:
+    """``(len(values), 1, 1)`` float32 on mesh from a Python iterable (ttnn ``full`` + ``concat``)."""
+    fv = [float(x) for x in values]
+    if not fv:
+        raise ValueError("_ttnn_quantile_table_c11: values must be non-empty")
+    kw = dict(device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.float32)
+    out = ttnn.full((1, 1, 1), fv[0], **kw)
+    for v in fv[1:]:
+        out = ttnn.concat([out, ttnn.full((1, 1, 1), v, **kw)], dim=0)
+    return out
+
+
 def _reset_state(models, state, prompt):
     config = models["config"]
     transformer = models["transformer"]
     streaming_vae = models["streaming_vae"]
     device = models["device"]
+    mesh_device = models["mesh_device"]
     dtype = models["dtype"]
     cache_name = models["cache_name"]
 
@@ -961,10 +1020,11 @@ def _reset_state(models, state, prompt):
         batch_size=2 if state["use_cfg"] else 1,
     )
 
-    state["action_mask"] = torch.zeros([config.action_dim], dtype=torch.bool, device=device)
-    state["action_mask"][config.used_action_channel_ids] = True
-    state["actions_q01"] = torch.tensor(config.norm_stat["q01"], dtype=torch.float32).reshape(-1, 1, 1)
-    state["actions_q99"] = torch.tensor(config.norm_stat["q99"], dtype=torch.float32).reshape(-1, 1, 1)
+    state["action_mask"] = _ttnn_action_channel_mask_vector(
+        mesh_device, config.action_dim, config.used_action_channel_ids
+    )
+    state["actions_q01"] = _ttnn_quantile_table_c11(mesh_device, config.norm_stat["q01"])
+    state["actions_q99"] = _ttnn_quantile_table_c11(mesh_device, config.norm_stat["q99"])
     state["action_norm_method"] = config.action_norm_method
 
     if prompt is None:
@@ -974,10 +1034,10 @@ def _reset_state(models, state, prompt):
     else:
         prompt_list = [prompt] if isinstance(prompt, str) else prompt
         if state.get("_prompt_embeds_prompt") != prompt_list or "prompt_embeds" not in state:
-            prompt_embeds, negative_prompt_embeds = _encode_prompt(
+            prompt_embeds, negative_prompt_embeds = _encode_prompt_ttnn(
                 models,
-                state,
-                prompt,
+                tt_input,
+                tt_mask,
                 do_classifier_free_guidance=(config.guidance_scale > 1),
                 max_sequence_length=512,
             )
@@ -988,7 +1048,6 @@ def _reset_state(models, state, prompt):
 
 def _infer_impl(models, state, obs, frame_st_id=0):
     config = models["config"]
-    device = models["device"]
     dtype = models["dtype"]
     cache_name = models["cache_name"]
     transformer = models["transformer"]
@@ -1005,16 +1064,20 @@ def _infer_impl(models, state, obs, frame_st_id=0):
         init_latent = _encode_obs_ttnn(models, state, obs)
         state["init_latent"] = init_latent
 
+    mesh_device = models["mesh_device"]
+    tt_dtype = ttnn.bfloat16 if dtype == torch.bfloat16 else ttnn.float32
+    _ensure_prompt_embeds_ttnn(models, state)
+
     _set_seed()
-    latents = torch.randn(1, 48, frame_chunk_size, latent_height, latent_width, device=device, dtype=dtype)
-    actions = torch.randn(
-        1,
-        config.action_dim,
-        frame_chunk_size,
-        action_per_frame,
-        1,
-        device=device,
-        dtype=dtype,
+    latents_tt = _randn_ttnn(
+        mesh_device,
+        (1, 48, frame_chunk_size, latent_height, latent_width),
+        torch_dtype=dtype,
+    )
+    actions_tt = _randn_ttnn(
+        mesh_device,
+        (1, config.action_dim, frame_chunk_size, action_per_frame, 1),
+        torch_dtype=dtype,
     )
 
     video_inference_step = config.num_inference_steps
@@ -1032,36 +1095,38 @@ def _infer_impl(models, state, obs, frame_st_id=0):
 
     use_cfg = state["use_cfg"]
     init_latent = state.get("init_latent")
-    if init_latent is not None and isinstance(init_latent, ttnn.Tensor):
-        init_latent = ttnn.to_torch(init_latent).to(dtype)
-        state["init_latent"] = init_latent
     patch_size = config.patch_size
 
     with torch.no_grad():
         for i, t in enumerate(tqdm(timesteps)):
             last_step = i == len(timesteps) - 1
-            latent_cond = init_latent[:, :, 0:1].to(dtype) if frame_st_id == 0 else None
-            input_dict = _prepare_latent_input(
+            t_scalar = t.item() if isinstance(t, torch.Tensor) else float(t)
+            latent_cond_tt = None
+            if frame_st_id == 0 and init_latent is not None:
+                latent_cond_tt = init_latent[:, :, 0:1, :, :]
+            input_dict = _prepare_latent_input_ttnn(
                 models,
                 state,
-                latents,
+                latents_tt,
                 None,
-                latent_t=t,
-                action_t=t,
-                latent_cond=latent_cond,
+                latent_t=t_scalar,
+                action_t=t_scalar,
+                latent_cond=latent_cond_tt,
                 action_cond=None,
                 frame_st_id=frame_st_id,
                 patch_size=patch_size,
             )
             video_noise_pred = transformer(
-                _repeat_input_for_cfg(models, state, input_dict["latent_res_lst"]),
+                _repeat_input_for_cfg_ttnn(models, state, input_dict["latent_res_lst"]),
                 update_cache=1 if last_step else 0,
                 cache_name=cache_name,
                 action_mode=False,
                 dump_iter=None,
             )
+            video_noise_pred = _ttnn_tensor_to_torch(video_noise_pred)
             if models.get("transformer_is_tt", False) and video_noise_pred.dtype != torch.float32:
                 video_noise_pred = video_noise_pred.float()
+            latents_torch = ttnn.to_torch(latents_tt).to(dtype)
             if not last_step or video_step != -1:
                 if not models.get("transformer_is_tt", False):
                     video_noise_pred = data_seq_to_patch(
@@ -1078,43 +1143,60 @@ def _infer_impl(models, state, obs, frame_st_id=0):
                     )
                 else:
                     video_noise_pred = video_noise_pred[:1]
-                latents = scheduler.step(video_noise_pred, t, latents, return_dict=False)
-            latents[:, :, 0:1] = latent_cond if frame_st_id == 0 else latents[:, :, 0:1]
+                latents_torch = scheduler.step(video_noise_pred, t, latents_torch, return_dict=False)
+            if frame_st_id == 0 and init_latent is not None:
+                latents_torch[:, :, 0:1] = ttnn.to_torch(init_latent[:, :, 0:1, :, :]).to(dtype)
+            latents_tt = ttnn.from_torch(
+                latents_torch.contiguous(),
+                device=mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=tt_dtype,
+            )
 
         for i, t in enumerate(tqdm(action_timesteps)):
             last_step = i == len(action_timesteps) - 1
-            action_cond = (
-                torch.zeros(
-                    [1, config.action_dim, 1, action_per_frame, 1],
-                    device=device,
-                    dtype=dtype,
+            t_scalar = t.item() if isinstance(t, torch.Tensor) else float(t)
+            action_cond_tt = None
+            if frame_st_id == 0:
+                action_cond_tt = ttnn.from_torch(
+                    torch.zeros(
+                        1,
+                        config.action_dim,
+                        1,
+                        action_per_frame,
+                        1,
+                        dtype=dtype,
+                        device=torch.device("cpu"),
+                    ).contiguous(),
+                    device=mesh_device,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    dtype=tt_dtype,
                 )
-                if frame_st_id == 0
-                else None
-            )
-            input_dict = _prepare_latent_input(
+            input_dict = _prepare_latent_input_ttnn(
                 models,
                 state,
                 None,
-                actions,
-                latent_t=t,
-                action_t=t,
+                actions_tt,
+                latent_t=t_scalar,
+                action_t=t_scalar,
                 latent_cond=None,
-                action_cond=action_cond,
+                action_cond=action_cond_tt,
                 frame_st_id=frame_st_id,
                 patch_size=patch_size,
             )
             action_noise_pred = transformer(
-                _repeat_input_for_cfg(models, state, input_dict["action_res_lst"]),
+                _repeat_input_for_cfg_ttnn(models, state, input_dict["action_res_lst"]),
                 update_cache=1 if last_step else 0,
                 cache_name=cache_name,
                 action_mode=True,
                 dump_iter=None,
             )
+            action_noise_pred = _ttnn_tensor_to_torch(action_noise_pred)
             if models.get("transformer_is_tt", False):
                 if action_noise_pred.dtype != torch.float32:
                     action_noise_pred = action_noise_pred.float()
                 action_noise_pred = action_noise_pred.contiguous()
+            actions_torch = ttnn.to_torch(actions_tt).to(dtype)
             if not last_step:
                 action_noise_pred = rearrange(action_noise_pred, "b (f n) c -> b c f n 1", f=frame_chunk_size)
                 if config.action_guidance_scale > 1:
@@ -1123,12 +1205,26 @@ def _infer_impl(models, state, obs, frame_st_id=0):
                     )
                 else:
                     action_noise_pred = action_noise_pred[:1]
-                actions = action_scheduler.step(action_noise_pred, t, actions, return_dict=False)
-            actions[:, :, 0:1] = action_cond if frame_st_id == 0 else actions[:, :, 0:1]
+                actions_torch = action_scheduler.step(action_noise_pred, t, actions_torch, return_dict=False)
+            if frame_st_id == 0:
+                actions_torch[:, :, 0:1] = 0
+            actions_tt = ttnn.from_torch(
+                actions_torch.contiguous(),
+                device=mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=tt_dtype,
+            )
 
-    actions[:, ~action_mask] *= 0
-    actions_out = _postprocess_action(models, state, actions)
-    return actions_out, latents
+    actions_torch = ttnn.to_torch(actions_tt).to(dtype)
+    am = action_mask
+    if isinstance(am, ttnn.Tensor):
+        am_bool = ttnn.to_torch(am).detach().float().squeeze().numpy() > 0.5
+    else:
+        am_bool = am.detach().cpu().numpy().astype(bool)
+    actions_torch[:, ~am_bool] *= 0
+    actions_out = _postprocess_action(models, state, actions_torch)
+    latents_out = ttnn.to_torch(latents_tt).to(dtype)
+    return actions_out, latents_out
 
 
 def _infer_entry(models, state, obs):
@@ -1329,7 +1425,6 @@ def run_generate(
         return_tensors="pt",
     )
     text_input_ids, mask = text_inputs.input_ids, text_inputs.attention_mask
-    seq_lens = mask.gt(0).sum(dim=1).long()
 
     mesh_device = text_encoder.mesh_device
     tt_input = ttnn.from_torch(text_input_ids, dtype=ttnn.uint32, device=mesh_device)
@@ -1402,7 +1497,6 @@ def run_generate(
         del models["streaming_vae"]
     models.pop("text_encoder", None)
     _release_ttnn_runtime_configs(models)
-    gc.collect()
     gc.collect()
     _close_lingbot_mesh_stack(models)
     opened_mesh = _open_lingbot_mesh_device()
