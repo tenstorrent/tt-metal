@@ -36,6 +36,27 @@ void KSplitGramMatmulDeviceOperation::validate_on_program_cache_miss(
     const auto device_grid = input.device()->compute_with_storage_grid_size();
     const uint32_t grid_dim = static_cast<uint32_t>(std::min(device_grid.x - 1, device_grid.y));
     TT_FATAL(grid_dim >= 3, "Device grid too small for gram matmul (need at least 4x3 compute grid)");
+
+    if (tensor_args.preallocated_output.has_value()) {
+        const auto& output = tensor_args.preallocated_output.value();
+        const uint32_t M = input.logical_shape()[-2];
+        TT_FATAL(output.storage_type() == tt::tt_metal::StorageType::DEVICE, "Preallocated output must be on device");
+        TT_FATAL(output.buffer() != nullptr, "Preallocated output must be allocated on device");
+        TT_FATAL(
+            output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "Preallocated output must be in DRAM");
+        TT_FATAL(output.layout() == tt::tt_metal::Layout::TILE, "Preallocated output must have TILE layout");
+        TT_FATAL(output.dtype() == ttnn::DataType::BFLOAT16, "Preallocated output must be BFLOAT16");
+        TT_FATAL(
+            output.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+            "Preallocated output must use INTERLEAVED memory layout");
+        TT_FATAL(
+            output.logical_shape()[-2] == M && output.logical_shape()[-1] == M,
+            "Preallocated output shape must be [{}, {}], got [{}, {}]",
+            M,
+            M,
+            output.logical_shape()[-2],
+            output.logical_shape()[-1]);
+    }
 }
 
 KSplitGramMatmulDeviceOperation::spec_return_value_t KSplitGramMatmulDeviceOperation::compute_output_specs(
