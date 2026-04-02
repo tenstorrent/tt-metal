@@ -10,7 +10,6 @@
 #include <string>
 // #include <tt-metalium/operation.hpp>
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
 #include "device/all_gather_minimal_matmul_async_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
