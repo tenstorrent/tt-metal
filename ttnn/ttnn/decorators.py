@@ -467,6 +467,8 @@ class FastOperation:
             input_tensors = get_all_tensors((function_args, function_kwargs))
             set_tensor_id(input_tensors)
 
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+
         try:
             if cq_id is None:
                 result = self.function(*function_args, **function_kwargs)
@@ -478,6 +480,9 @@ class FastOperation:
             if enhanced_msg:
                 raise TypeError(enhanced_msg) from e
             raise
+        finally:
+            if tracking:
+                ttnn.graph.track_function_end()
 
 
         if recording:

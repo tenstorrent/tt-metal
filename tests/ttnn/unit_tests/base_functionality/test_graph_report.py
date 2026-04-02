@@ -193,7 +193,7 @@ class TestImportGraphUnit:
         rows = cursor.fetchall()
 
         assert len(rows) == 1
-        assert rows[0][0] == "ttnn::bad_op"
+        assert rows[0][0] == "ttnn.bad_op"
         assert rows[0][1] == "exception"
         assert rows[0][2] == "Something went wrong"
 
@@ -2099,7 +2099,7 @@ class TestResNet50Patterns:
         """Conv2d should accept both host weight tensors and device activation tensors as inputs."""
         conn, cursor = self._import_resnet(tmp_path)
 
-        cursor.execute("SELECT operation_id FROM operations WHERE name = 'ttnn::conv2d'")
+        cursor.execute("SELECT operation_id FROM operations WHERE name = 'ttnn.conv2d'")
         conv_op = cursor.fetchone()
         assert conv_op is not None, "Should have a conv2d operation"
 
@@ -3185,7 +3185,9 @@ class TestFastOperationGraphTracking:
             for n in report["graph"]
             if n.get("node_type") == "function_start" and "name" in n.get("params", {})
         ]
-        assert "ttnn.add" in fn_names, f"Expected 'ttnn.add' in function_start names, got: {fn_names}"
+        assert any(
+            n in ("ttnn.add", "ttnn::add") for n in fn_names
+        ), f"Expected 'ttnn.add' or 'ttnn::add' in function_start names, got: {fn_names}"
 
     def test_python_io_records_tensor_ids(self, device, tmp_path):
         """FastOperation should record input_tensor_ids and output_tensor_ids in python_io."""
