@@ -159,12 +159,16 @@ class TrainingMetricsTracker:
         self._file.close()
 
 
-def setup_accuracy_run() -> RunContext:
+def setup_accuracy_run(output_dir: str | None) -> RunContext:
     args = _parse_args(default_run_name="grpo_model_accuracy")
     repo_root = get_tt_metal_runtime_root()
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    output_dir = os.path.join(repo_root, "generated/tt-train/grpo_model_accuracy_runs", f"{args.run_name}_{timestamp}")
+    if output_dir is None:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        output_dir = os.path.join(
+            repo_root, "generated/tt-train/grpo_model_accuracy_runs", f"{args.run_name}_{timestamp}"
+        )
+
     os.makedirs(output_dir, exist_ok=True)
 
     _archive_configs(output_dir, repo_root)
