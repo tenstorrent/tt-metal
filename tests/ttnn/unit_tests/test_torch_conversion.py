@@ -963,6 +963,78 @@ def test_from_torch_row_major_sharded_non_tile_aligned_shard_shape(mesh_device, 
 
 
 @pytest.mark.parametrize(
+    "ttnn_dtype,torch_dtype,ttnn_layout",
+    [
+        (ttnn.bfloat16, torch.bfloat16, ttnn.TILE_LAYOUT),
+        (ttnn.bfloat16, torch.float32, ttnn.TILE_LAYOUT),
+        (ttnn.float32, torch.float32, ttnn.TILE_LAYOUT),
+        (ttnn.bfloat16, torch.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.float32, torch.float32, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.bfloat8_b, torch.float32, ttnn.TILE_LAYOUT),
+        (ttnn.int32, torch.int32, ttnn.TILE_LAYOUT),
+        (ttnn.int32, torch.int32, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "memory_config",
+    [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+    ids=["DRAM", "L1"],
+)
+def test_from_torch_with_sub_devices(device, ttnn_dtype, torch_dtype, ttnn_layout, memory_config):
+    """
+    Verify that from_torch produces correct results when sub-devices are loaded
+    on the device.
+
+    When num_sub_devices() > 0, the on-device fast path in
+    can_construct_on_device (py_to_tt_tensor.cpp) is disabled and the tensor
+    must be constructed on the host before being sent to the device. This test
+    ensures that the fallback host-side path still yields correct data for
+    various dtype / layout / memory_config combinations.
+    """
+    grid = device.compute_with_storage_grid_size()
+    cols, rows = grid.x, grid.y
+
+    worker_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cols - 1, rows - 1))})
+    worker_sub_device = ttnn.SubDevice([worker_crs])
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+
+    sub_device_manager = device.create_sub_device_manager([worker_sub_device], 0)
+    device.load_sub_device_manager(sub_device_manager)
+    device.set_sub_device_stall_group([worker_sub_device_id])
+
+    try:
+        shape = (1, 1, 32, 64)
+        torch.manual_seed(42)
+
+        if torch_dtype in TORCH_FLOAT_TYPES:
+            torch_tensor = torch.rand(shape, dtype=torch_dtype)
+        else:
+            torch_tensor = torch.randint(0, 100, shape, dtype=torch_dtype)
+
+        ttnn_tensor = ttnn.from_torch(
+            torch_tensor,
+            dtype=ttnn_dtype,
+            layout=ttnn_layout,
+            device=device,
+            memory_config=memory_config,
+        )
+
+        assert ttnn_tensor.dtype == ttnn_dtype
+        assert ttnn_tensor.layout == ttnn_layout
+
+        result = ttnn.to_torch(ttnn_tensor)
+        assert_with_pcc(
+            expected_pytorch_result=torch_tensor,
+            actual_pytorch_result=result,
+            pcc=get_expected_conversion_pcc(ttnn_dtype, torch_dtype),
+        )
+    finally:
+        device.reset_sub_device_stall_group()
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(sub_device_manager)
+
+
+@pytest.mark.parametrize(
     "torch_dtype,ttnn_dtype,shape",
     [
         (torch.float32, ttnn.bfloat16, (8, 32, 2, 7000)),
