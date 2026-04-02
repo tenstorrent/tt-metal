@@ -71,6 +71,7 @@ Tensor mac(
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 // TTS: a * b + scalar
+// TODO: Add sub_core_grids parameter — both binary and ternary infra support worker grids.
 Tensor mac(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -78,6 +79,7 @@ Tensor mac(
     const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
 // TST: a * scalar + c
+// TODO: Add sub_core_grids parameter — both binary and ternary infra support worker grids.
 Tensor mac(
     const Tensor& input_tensor_a,
     float value,

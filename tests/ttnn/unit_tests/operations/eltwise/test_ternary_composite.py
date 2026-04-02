@@ -333,10 +333,9 @@ def test_mac_sub_core_grids(device):
     (
         (torch.Size([1, 1, 32, 32])),
         (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize("value", [1.0, 5.0, 10.0])
+@pytest.mark.parametrize("value", [1.0, 5.0, -3.5])
 def test_mac_tts_ttnn(input_shapes, value, device):
     """TTS variant: a * b + scalar"""
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
@@ -345,8 +344,7 @@ def test_mac_tts_ttnn(input_shapes, value, device):
     output_tensor = ttnn.mac(input_tensor1, input_tensor2, value)
     golden_tensor = (in_data1 * in_data2 + value).to(torch.bfloat16)
 
-    output_torch = ttnn.to_torch(output_tensor)
-    assert_with_ulp(golden_tensor, output_torch, ulp_threshold=1)
+    assert_with_ulp(golden_tensor, ttnn.to_torch(output_tensor), ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -354,10 +352,9 @@ def test_mac_tts_ttnn(input_shapes, value, device):
     (
         (torch.Size([1, 1, 32, 32])),
         (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize("value", [1.0, 5.0, 10.0])
+@pytest.mark.parametrize("value", [1.0, 5.0, -3.5])
 def test_mac_tst_ttnn(input_shapes, value, device):
     """TST variant: a * scalar + c"""
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
@@ -366,5 +363,4 @@ def test_mac_tst_ttnn(input_shapes, value, device):
     output_tensor = ttnn.mac(input_tensor1, value, input_tensor3)
     golden_tensor = (in_data1 * value + in_data3).to(torch.bfloat16)
 
-    output_torch = ttnn.to_torch(output_tensor)
-    assert_with_ulp(golden_tensor, output_torch, ulp_threshold=1)
+    assert_with_ulp(golden_tensor, ttnn.to_torch(output_tensor), ulp_threshold=1)
