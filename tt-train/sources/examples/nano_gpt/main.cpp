@@ -849,7 +849,8 @@ int main(int argc, char **argv) {
                     }
                 }
 
-                ttml::autograd::ctx().get_profiler().read_results(device, fmt::format("iteration_{}", global_step));
+                ttml::autograd::ctx().get_profiler().read_results(
+                    device, fmt::format("iteration_{}", global_step), /* dump_results */ true);
 
                 auto end_timer = std::chrono::high_resolution_clock::now();
                 auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
@@ -905,7 +906,7 @@ int main(int argc, char **argv) {
         fmt::print("Rank {}: Finalizing MPI context\n", distributed_ctx->rank());
     }
 
-    ttml::autograd::ctx().get_profiler().read_results(device, "before close device", 0);
+    ttml::autograd::ctx().get_profiler().read_results(device, "before close device", 0, /* dump_results */ true);
     ttml::autograd::ctx().close_device();
     ttml::autograd::ctx().close_profiler();
     return 0;

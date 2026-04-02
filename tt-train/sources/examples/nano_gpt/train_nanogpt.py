@@ -396,6 +396,8 @@ def train_step(
                 False,  # error_if_nonfinite - set False to avoid errors on NaN
             )
 
+        profiler_marker(None, "gradient_sync_done")
+
         # Optimizer step
         optimizer.step()
 
@@ -1388,7 +1390,7 @@ def main():
                         if memory_guard:
                             memory_guard.release()
 
-                    profiler_marker(None, f"iteration_{global_step}")
+                    profiler_marker(None, f"iteration_{global_step}", dump_results=True)
                     if global_step == start_step + 1:
                         profiler_marker(None, "compilation_finished")
 

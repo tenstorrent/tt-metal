@@ -251,11 +251,16 @@ void py_module(nb::module_& m) {
             "read_results",
             [](const ttml::core::TTProfiler& self,
                ttnn::distributed::MeshDevice& device,
-               const std::string& noop_identifier) { self.read_results(&device, noop_identifier); },
+               const std::string& noop_identifier,
+               bool dump_results) {
+                self.read_results(&device, noop_identifier, dump_results, 5U, tt::tt_metal::ProfilerReadState::NORMAL);
+            },
             nb::arg("device"),
             nb::arg("noop_identifier") = "noop_identifier",
+            nb::arg("dump_results") = false,
             "Insert a profiler marker. Synchronizes device and emits a timestamp (naive mode) "
-            "or inserts noop markers for Tracy profiling.");
+            "or inserts noop markers for Tracy profiling. "
+            "When dump_results is True, also flushes device profiling data to disk.");
     }
 
     // MemoryUsageTracker bindings under core.utils

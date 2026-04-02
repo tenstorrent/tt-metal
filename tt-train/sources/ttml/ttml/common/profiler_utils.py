@@ -38,8 +38,9 @@ class _BackwardMarker(ttml.autograd.Function):
     """Pass-through autograd node that emits a profiler marker during backward."""
 
     @staticmethod
-    def forward(ctx, x, marker_name):
+    def forward(ctx, x, marker_name, dump_results):
         ctx.marker_name = marker_name
+        ctx.dump_results = dump_results
         return x.get_value()
 
     @staticmethod
@@ -47,11 +48,11 @@ class _BackwardMarker(ttml.autograd.Function):
         autograd_ctx = ttml.autograd.AutoContext.get_instance()
         profiler = autograd_ctx.get_profiler()
         device = autograd_ctx.get_device()
-        profiler.read_results(device, f"[BWD] {ctx.marker_name}")
+        profiler.read_results(device, f"[BWD] {ctx.marker_name}", dump_results=ctx.dump_results)
         return grad_output
 
 
-def profiler_marker(x, name):
+def profiler_marker(x, name, dump_results=False):
     """Insert a profiler marker that fires in both forward and backward.
 
     Forward: always emits ``[FWD] <name>`` via profiler.read_results.
@@ -69,6 +70,9 @@ def profiler_marker(x, name):
         x: autograd tensor to pass through unchanged, or ``None`` for a
            forward-only marker.
         name: marker name (automatically prefixed with [FWD]/[BWD]).
+        dump_results: if True, flush device profiling data to disk at this
+            marker.  Expensive — use sparingly to prevent device-memory
+            overflow on long profiling sessions.
 
     Returns:
         The same tensor value (potentially wrapped in a new autograd node),
@@ -77,14 +81,15 @@ def profiler_marker(x, name):
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
     profiler = autograd_ctx.get_profiler()
     device = autograd_ctx.get_device()
-    profiler.read_results(device, f"[FWD] {name}")
 
     if x is None:
+        profiler.read_results(device, name, dump_results=dump_results)
         return None
 
-    if profiler.is_enabled() or profiler.get_naive_profiling():
-        # Integer tensors (e.g. UINT32 token IDs) don't carry gradients;
-        # inserting a backward node would crash in zeros_like during backward.
-        if x.get_value().dtype in _FLOAT_DTYPES:
-            return _BackwardMarker.apply(x, name)
+    profiler.read_results(device, f"[FWD] {name}", dump_results=dump_results)
+
+    # Integer tensors (e.g. UINT32 token IDs) don't carry gradients;
+    # inserting a backward node would crash in zeros_like during backward.
+    if x.get_value().dtype in _FLOAT_DTYPES:
+        return _BackwardMarker.apply(x, name, dump_results)
     return x
