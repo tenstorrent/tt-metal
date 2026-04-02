@@ -36,6 +36,7 @@ namespace detail {
 // Note: no default argument here — redefinition of default argument is ill-formed when tt_metal.hpp is also included.
 // Callers in this header always pass all three arguments explicitly.
 uint32_t EncodePerDeviceProgramID(uint32_t base_program_id, uint32_t device_id, bool is_host_fallback_op);
+bool ShouldProfileChip(uint32_t device_id);
 }  // namespace detail
 }  // namespace tt::tt_metal
 
@@ -417,8 +418,11 @@ inline std::string op_meta_data_serialized_json(
                 if (!(mesh_device)->is_local(coord)) {                                                                \
                     continue;                                                                                         \
                 }                                                                                                     \
-                ZoneScopedN("TT_DNN_DEVICE_OP");                                                                      \
                 auto device_id = (mesh_device)->get_device(coord)->id();                                              \
+                if (!tt::tt_metal::detail::ShouldProfileChip(device_id)) {                                            \
+                    continue;                                                                                         \
+                }                                                                                                     \
+                ZoneScopedN("TT_DNN_DEVICE_OP");                                                                      \
                 auto op_id = tt::tt_metal::detail::EncodePerDeviceProgramID(base_program_id, device_id, false);       \
                 std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(                     \
                     operation,                                                                                        \

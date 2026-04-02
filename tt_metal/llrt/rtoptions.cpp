@@ -127,6 +127,7 @@ enum class EnvVarID {
     TT_METAL_TRACY_MID_RUN_PUSH,                   // Force Tracy mid-run pushes
     TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES,       // Disable dumping collected device data to files
     TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY,       // Disable pushing collected device data to Tracy GUI
+    TT_METAL_PROFILER_FILTER_CHIPS,                // Filter profiler to specific chip IDs
     TT_METAL_GTEST_NUM_HW_CQS,                     // Number of HW command queues in tests
     TT_METAL_ARC_DEBUG_BUFFER_SIZE,                // ARC processor debug buffer size
     TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
@@ -262,6 +263,28 @@ IntType parse_int_token(const std::string& token, const std::string& context) {
 }
 
 bool equals_all(const std::string& token) { return to_lower_copy(trim_copy(token)) == "all"; }
+
+// Parse TT_METAL_PROFILER_FILTER_CHIPS value: comma-separated chip IDs (e.g. "0,2,3")
+std::optional<std::set<uint32_t>> parseProfilerFilterChips(const char* value) {
+    if (!value || value[0] == '\0') {
+        return std::nullopt;
+    }
+    std::set<uint32_t> chips;
+    std::string str(value);
+    std::istringstream ss(str);
+    std::string token;
+    while (std::getline(ss, token, ',')) {
+        token = trim_copy(token);
+        if (token.empty()) {
+            continue;
+        }
+        chips.insert(parse_int_token<uint32_t>(token, "TT_METAL_PROFILER_FILTER_CHIPS"));
+    }
+    if (chips.empty()) {
+        return std::nullopt;
+    }
+    return chips;
+}
 
 }  // namespace
 
@@ -902,6 +925,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             // Only disable pushing to Tracy GUI if device profiler is also enabled
             if (this->profiler_enabled && is_env_enabled(value)) {
                 this->profiler_disable_push_to_tracy = true;
+            }
+            break;
+        }
+
+        // TT_METAL_PROFILER_FILTER_CHIPS
+        // Filter profiler to specific chip IDs (physical).
+        // Default: disabled (all chips)
+        // Usage: export TT_METAL_PROFILER_FILTER_CHIPS="0" or "0,2,3"
+        case EnvVarID::TT_METAL_PROFILER_FILTER_CHIPS: {
+            if (this->profiler_enabled) {
+                this->profiler_filter_chips = parseProfilerFilterChips(value);
             }
             break;
         }

@@ -93,5 +93,16 @@ void SetDeviceProfilerDir(const std::string& output_dir = "");
  * */
 void FreshProfilerDeviceLog();
 
+/**
+ * Check if a chip should be profiled based on TT_METAL_PROFILER_FILTER_CHIPS.
+ *
+ * Return value: bool - true if the chip should be profiled (no filter set, or chip is in filter).
+ *
+ * | Argument      | Description              | Type     | Valid Range | Required |
+ * |---------------|--------------------------|----------|-------------|----------|
+ * | device_id     | Physical chip ID         | uint32_t |             | Yes      |
+ * */
+bool ShouldProfileChip(uint32_t device_id);
+
 }  // namespace detail
 }  // namespace tt::tt_metal
