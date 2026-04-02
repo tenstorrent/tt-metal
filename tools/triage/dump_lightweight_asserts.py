@@ -199,30 +199,44 @@ def dump_lightweight_asserts(
         )
         arguments_and_locals = None
         assert_code = "?"
-        if callstack_data.kernel_callstack_with_message.callstack[0] is not None:
+        callstack = callstack_data.kernel_callstack_with_message.callstack
+        # Try to extract the ASSERT macro from frame #0. If frame #0 is a helper like
+        # llk_assert_break() that doesn't contain the ASSERT itself, fall back to
+        # frame #1 (the actual caller). Whichever frame contains the ASSERT is used
+        # to display template parameters, runtime arguments, and locals.
+        if callstack[0] is not None:
             assert_code = extract_assert_code(
-                callstack_data.kernel_callstack_with_message.callstack[0].file,
-                callstack_data.kernel_callstack_with_message.callstack[0].line,
-                callstack_data.kernel_callstack_with_message.callstack[0].column,
+                callstack[0].file,
+                callstack[0].line,
+                callstack[0].column,
             )
+            assert_frame = callstack[0]
+            if "ASSERT() not found" in assert_code and len(callstack) > 1 and callstack[1] is not None:
+                fallback_code = extract_assert_code(
+                    callstack[1].file,
+                    callstack[1].line,
+                    callstack[1].column,
+                )
+                if "ASSERT() not found" not in fallback_code:
+                    assert_code = fallback_code
+                    assert_frame = callstack[1]
             arguments_and_locals = ""
-            top_frame = callstack_data.kernel_callstack_with_message.callstack[0]
-            if len(top_frame.template_parameters) > 0:
+            if len(assert_frame.template_parameters) > 0:
                 arguments_and_locals += "\nTemplate parameters:\n"
-                arguments_and_locals += serialize_variables(top_frame.template_parameters, assert_code)
-                for var in top_frame.template_parameters:
+                arguments_and_locals += serialize_variables(assert_frame.template_parameters, assert_code)
+                for var in assert_frame.template_parameters:
                     if var.name is not None:
                         assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
-            if len(top_frame.arguments) > 0:
+            if len(assert_frame.arguments) > 0:
                 arguments_and_locals += "\nRuntime arguments:\n"
-                arguments_and_locals += serialize_variables(top_frame.arguments, assert_code)
-                for var in top_frame.arguments:
+                arguments_and_locals += serialize_variables(assert_frame.arguments, assert_code)
+                for var in assert_frame.arguments:
                     if var.name is not None:
                         assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
-            if len(top_frame.locals) > 0:
+            if len(assert_frame.locals) > 0:
                 arguments_and_locals += "\nLocals:\n"
-                arguments_and_locals += serialize_variables(top_frame.locals, assert_code)
-                for var in top_frame.locals:
+                arguments_and_locals += serialize_variables(assert_frame.locals, assert_code)
+                for var in assert_frame.locals:
                     if var.name is not None:
                         assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
         return LightweightAssertInfo(
