@@ -806,7 +806,12 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
 
     // Core range depends on whether dprint_all_cores flag is set.
     std::vector<umd::CoreDescriptor> print_cores_sanitized;
-    for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    std::vector<CoreType> core_types_to_check = {CoreType::WORKER, CoreType::ETH};
+    if (hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        core_types_to_check.push_back(CoreType::DRAM);
+    }
+    for (CoreType core_type : core_types_to_check) {
         if (rtoptions.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type) ==
             tt::llrt::RunTimeDebugClassAll) {
             // Print from all cores of the given type, cores returned here are guaranteed to be valid.

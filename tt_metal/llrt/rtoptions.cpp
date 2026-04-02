@@ -177,6 +177,7 @@ enum class EnvVarID {
     // ========================================
     TT_METAL_DPRINT_CORES,                     // Worker cores for debug printing
     TT_METAL_DPRINT_ETH_CORES,                 // Ethernet cores for debug printing
+    TT_METAL_DPRINT_DRAM_CORES,                // DRAM cores for debug printing
     TT_METAL_DPRINT_CHIPS,                     // Chip IDs for debug printing
     TT_METAL_DPRINT_NODES,                     // Fabric node IDs for debug printing
     TT_METAL_DPRINT_MESH_COORDS,               // Global system mesh (row,col) coordinates for debug printing
@@ -1277,6 +1278,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             // Handled by ParseFeatureEnv() - this is for documentation
             break;
 
+        // TT_METAL_DPRINT_DRAM_CORES
+        // Specifies DRAM programmable cores (Blackhole DRISC) for debug printing. Same syntax as DPRINT_CORES.
+        // Default: disabled (no debug printing on DRAM cores)
+        // Usage: export TT_METAL_DPRINT_DRAM_CORES=all
+        case EnvVarID::TT_METAL_DPRINT_DRAM_CORES:
+            // Handled by ParseFeatureEnv() - this is for documentation
+            break;
+
         // TT_METAL_DPRINT_CHIPS
         // Specifies chip IDs for debug printing. Supports 'all' or comma-separated list of chip IDs.
         // Mutually exclusive with TT_METAL_DPRINT_NODES and TT_METAL_DPRINT_MESH_COORDS.
@@ -1623,6 +1632,7 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_meta
 
     ParseFeatureCoreRange(feature, feature_env_prefix + "_CORES", CoreType::WORKER);
     ParseFeatureCoreRange(feature, feature_env_prefix + "_ETH_CORES", CoreType::ETH);
+    ParseFeatureCoreRange(feature, feature_env_prefix + "_DRAM_CORES", CoreType::DRAM);
     bool chips_specified = ParseFeatureChipIds(feature, feature_env_prefix + "_CHIPS");
     bool nodes_specified = ParseFeatureNodeIds(feature, feature_env_prefix + "_NODES");
     bool mesh_coords_specified = ParseFeatureMeshCoords(feature, feature_env_prefix + "_MESH_COORDS");
