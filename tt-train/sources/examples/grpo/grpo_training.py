@@ -66,6 +66,10 @@ def train_grpo(run, yaml_config_path, checkpoint_interval):
     num_batches = 0
     num_steps = 0
 
+    run.logger.info(
+        f"optimizer.step() will called {grpo_cfg.prompts_to_train // grpo_cfg.completions_batch_size * grpo_cfg.num_mini_epochs} times during training"
+    )
+
     for prompts_batch, answers_batch, completions_batch in iter_batched_completions(
         ctx, run, prompts, answers, batch_size=grpo_cfg.completions_batch_size
     ):
