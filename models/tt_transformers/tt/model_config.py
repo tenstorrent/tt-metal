@@ -206,32 +206,9 @@ class ModelOptimizations:
                     },
                 }
             )
-        elif base_model_name in ["gemma-3-4b", "gemma-3-27b"]:
-            # BFP8 attention + long autoregressive decode causes logits to collapse (repetitive tokens).
-            # Same mitigation as Qwen2.5-7B: keep BFP4/LOFI MLP path but raise attention/KV to BF16 + HiFi4 SDPA.
-            logger.info(
-                f"Model {model_name} uses BF16 attention and KV in performance mode for stable decode "
-                f"(see Qwen2.5-7B performance path; standard BFP8 attention degrades over many steps)."
-            )
-            inst = cls(
-                {
-                    "TensorPrecision": {
-                        TensorGroup.FF1_FF3: PrecisionSetting.BFP4,
-                        TensorGroup.WQKV: PrecisionSetting.BF16,
-                        TensorGroup.KV_CACHE: PrecisionSetting.BF16,
-                        TensorGroup.WO: PrecisionSetting.BF16,
-                    },
-                    "OpFidelity": {
-                        OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
-                        OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI4,
-                        OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI4,
-                        OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4,
-                        OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
-                        OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI4,
-                        OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI4,
-                    },
-                }
-            )
+        # Gemma3 (gemma-3-4b / gemma-3-27b): performance overrides live in
+        # models/demos/multimodal/gemma3/decoder_configs/ and gemma3_performance_optimizations() in
+        # models/demos/multimodal/gemma3/tt/model_config.py (Gemma3 text_demo / vision_demo).
         else:
             settings = {
                 "TensorPrecision": {TensorGroup.FF1_FF3: PrecisionSetting.BFP4},
