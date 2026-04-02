@@ -59,12 +59,20 @@ InterleavedToShardedDeviceOperation::spec_return_value_t InterleavedToShardedDev
     }
 
     const auto& input_tensor = tensor_args.input_tensor;
-    return tt::tt_metal::TensorSpec(
+    return TensorSpec(
         input_tensor.logical_shape(),
-        tt::tt_metal::TensorLayout(
+        TensorLayout::fromPaddedShape(
             operation_attributes.output_dtype,
-            tt::tt_metal::PageConfig(input_tensor.layout()),
-            operation_attributes.output_mem_config));
+            PageConfig(input_tensor.layout()),
+            operation_attributes.output_mem_config,
+            input_tensor.logical_shape(),
+            input_tensor.padded_shape()));
+    // return tt::tt_metal::TensorSpec(
+    //     input_tensor.logical_shape(),
+    //     tt::tt_metal::TensorLayout(
+    //         operation_attributes.output_dtype,
+    //         tt::tt_metal::PageConfig(input_tensor.layout()),
+    //         operation_attributes.output_mem_config));
 }
 
 InterleavedToShardedDeviceOperation::tensor_return_value_t InterleavedToShardedDeviceOperation::create_output_tensors(
