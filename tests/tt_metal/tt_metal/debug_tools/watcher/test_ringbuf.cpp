@@ -233,6 +233,7 @@ class WatcherRingBufferTest : public MeshWatcherFixture, public ::testing::WithP
 TEST_P(WatcherRingBufferTest, TestWatcherRingBuffer) {
     const auto& params = GetParam();
     const auto& hal = MetalContext::instance().hal();
+    bool is_quasar = (hal.get_arch() == tt::ARCH::QUASAR);
 
     // Skip if processor type not available on this architecture
     uint32_t core_type_index = hal.get_programmable_core_type_index(params.processor.core_type);
@@ -245,12 +246,11 @@ TEST_P(WatcherRingBufferTest, TestWatcherRingBuffer) {
     }
 
     // Multi-threaded test is Quasar-only
-    if (params.multi_threaded && hal.get_arch() != tt::ARCH::QUASAR) {
+    if (params.multi_threaded && !is_quasar) {
         GTEST_SKIP() << "Multi-threaded test is Quasar-only";
     }
 
     // Quasar and IDLE_ETH require slow dispatch
-    bool is_quasar = (hal.get_arch() == tt::ARCH::QUASAR);
     bool is_idle_eth = (params.processor.core_type == HalProgrammableCoreType::IDLE_ETH);
     if ((is_quasar || is_idle_eth) && !this->IsSlowDispatch()) {
         GTEST_SKIP() << "Quasar and IDLE_ETH require Slow Dispatch";
