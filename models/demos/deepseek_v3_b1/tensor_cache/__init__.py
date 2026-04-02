@@ -4,6 +4,8 @@
 
 """Content-addressed tensor cache for preprocessed weight artifacts."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 from models.demos.deepseek_v3_b1.tensor_cache.cache import EphemeralTensorCache, TensorCache

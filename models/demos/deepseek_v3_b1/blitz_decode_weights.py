@@ -1553,7 +1553,8 @@ class BlitzDecodeWeights:
         expert as ``base_addr + expert_idx * expert_size_bytes`` using the first tensor's
         ``buffer_address()`` as ``base_addr``. The inner ``upload()`` loop allocates all
         experts of one projection before the next, which guarantees contiguity. Any code
-        that loads these weights from cache (e.g. ``load_moe_routed_experts``) must use the
+        that loads these weights from cache (e.g. ``prepare_routed_expert_weights`` or
+        ``CacheWeightProvider.load_moe_layer``) must use the
         same per-projection allocation order (all gates, then all ups, then all downs).
         """
         device = self._device
