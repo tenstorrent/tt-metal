@@ -186,10 +186,6 @@ TensorSpec ReshardDeviceOperation::compute_output_specs(
             args.output_mem_config,
             input_tensor.logical_shape(),
             input_tensor.padded_shape()));
-    //     return tt::tt_metal::TensorSpec(
-    //         input_tensor.logical_shape(),
-    //         tt::tt_metal::TensorLayout(
-    //             input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), args.output_mem_config));
 }
 
 Tensor ReshardDeviceOperation::create_output_tensors(
