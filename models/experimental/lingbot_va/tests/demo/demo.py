@@ -1301,6 +1301,23 @@ def _load_init_obs(config, input_img_path):
     return {"obs": [imf_dict]}
 
 
+def _normalize_infer_obs_for_encode(message_obs: dict) -> dict:
+    """Adapt ``message['obs']`` for :func:`_encode_obs_ttnn`.
+
+    * ``build_infer_message`` / server style: a **single** frame dict (camera keys, ``task``, …) with no
+      top-level ``obs`` / ``obs_ttnn`` — wrap as ``{"obs": [frame_dict]}``.
+    * ``_load_init_obs`` style: already ``{"obs": [ ... ]}`` — returned unchanged.
+    * Device path: ``{"obs_ttnn": ...}`` — returned unchanged.
+    """
+    if not isinstance(message_obs, dict):
+        raise TypeError(f"message['obs'] must be a dict, got {type(message_obs)}")
+    if message_obs.get("obs_ttnn") is not None:
+        return message_obs
+    if "obs" in message_obs:
+        return message_obs
+    return {"obs": [message_obs]}
+
+
 def run_inference(
     message: dict,
     checkpoint_path: str | Path,
@@ -1330,6 +1347,10 @@ def run_inference(
     config.local_rank = 0
     config.rank = 0
     config.world_size = 1
+    config.save_root = str(save_dir)
+    config.num_chunks_to_infer = 1
+    # Do not assign None over VA_CONFIGS defaults; ``apply_robotwin_inference_overrides`` applies
+    # non-None kwargs and optional LINGBOT_VA_* env vars only.
     apply_robotwin_inference_overrides(
         config,
         num_inference_steps=num_inference_steps,
@@ -1346,10 +1367,26 @@ def run_inference(
     prompt = message.get("prompt", "")
     prompt_list = [prompt] if isinstance(prompt, str) else prompt
     _load_text_encoder_into_models(models, config)
-    prompt_embeds, neg_embeds = _encode_prompt(
-        models,
-        state,
+    tokenizer = models["tokenizer"]
+    text_encoder = models["text_encoder"]
+    text_inputs = tokenizer(
         prompt,
+        padding="max_length",
+        max_length=512,
+        truncation=True,
+        add_special_tokens=True,
+        return_attention_mask=True,
+        return_tensors="pt",
+    )
+    text_input_ids, mask = text_inputs.input_ids, text_inputs.attention_mask
+
+    mesh_device = text_encoder.mesh_device
+    tt_input = ttnn.from_torch(text_input_ids, dtype=ttnn.uint32, device=mesh_device)
+    tt_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat16, device=mesh_device)
+    prompt_embeds, neg_embeds = _encode_prompt_ttnn(
+        models,
+        tt_input,
+        tt_mask,
         do_classifier_free_guidance=(config.guidance_scale > 1),
         max_sequence_length=512,
     )
@@ -1360,17 +1397,17 @@ def run_inference(
 
     # Phase 2: load only TT VAE encoder; run _encode_obs, then free.
     _prepare_state_for_vae_encode(state, config)
+    init_obs = _normalize_infer_obs_for_encode(message["obs"])
     _load_tt_vae_into_models(models)
-    state["init_latent"] = _encode_obs_ttnn(models, state, message)
+    state["init_latent"] = _encode_obs_ttnn(models, state, init_obs)
     _free_tt_vae_from_models(models)
 
-    # Phase 3: load TT transformer and run inference.
+    # Phase 3: load TT transformer and run generation.
     _load_transformer_into_models(models, config)
 
-    reset_message = build_reset_message(prompt)
-    _infer_entry(models, state, reset_message)
-    result = _infer_entry(models, state, message)
-    return result
+    _reset_state(models, state, prompt)
+    action, _ = _infer_impl(models, state, init_obs, frame_st_id=state["frame_st_id"])
+    return {"action": action}
 
 
 def run_generate(
