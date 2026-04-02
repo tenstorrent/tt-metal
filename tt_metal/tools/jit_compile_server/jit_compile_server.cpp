@@ -50,10 +50,22 @@ std::atomic<int> g_outstanding_compiles{0};
 
 constexpr const char* kEndpointEnv = "TT_METAL_JIT_SERVER_ENDPOINT";
 constexpr const char* kDefaultEndpoint = "0.0.0.0:9876";
-constexpr const char* kServerCacheRoot = "/tmp/tt-metal-cache/";
+constexpr const char* kServerCacheRootEnv = "TT_METAL_JIT_SERVER_CACHE_ROOT";
+constexpr const char* kDefaultServerCacheRoot = "/tmp/tt-metal-cache/";
+std::string g_server_cache_root = kDefaultServerCacheRoot;
+
+std::string normalize_cache_root(std::string cache_root) {
+    if (cache_root.empty()) {
+        return std::string(kDefaultServerCacheRoot);
+    }
+    if (cache_root.back() != '/') {
+        cache_root.push_back('/');
+    }
+    return cache_root;
+}
 
 std::string kernel_cache_dir(std::uint64_t build_key, const std::string& kernel_name) {
-    return std::string(kServerCacheRoot) + std::to_string(build_key) + "/kernels/" + kernel_name;
+    return g_server_cache_root + std::to_string(build_key) + "/kernels/" + kernel_name;
 }
 
 std::string target_cache_dir(std::uint64_t build_key, const std::string& kernel_name, const std::string& target_name) {
@@ -63,11 +75,11 @@ std::string target_cache_dir(std::uint64_t build_key, const std::string& kernel_
 void handle_signal(int /*signal*/) { g_keep_running.store(false); }
 
 std::string firmware_cache_dir(std::uint64_t build_key, const std::string& target_name) {
-    return std::string(kServerCacheRoot) + std::to_string(build_key) + "/firmware/" + target_name + "/";
+    return g_server_cache_root + std::to_string(build_key) + "/firmware/" + target_name + "/";
 }
 
 // Resolve firmware path from the server cache populated by uploadFirmware RPC.
-// PoC limitation: uploaded firmware is assumed durable in kServerCacheRoot.
+// PoC limitation: uploaded firmware is assumed durable in the configured server cache root.
 // If the server cache is cleared after upload, compile will fail until the client re-uploads.
 fs::path resolve_uploaded_firmware_path(std::uint64_t build_key, const tt::tt_metal::jit_server::TargetRecipe& target) {
     if (target.weakened_firmware_name.empty()) {
@@ -397,6 +409,8 @@ tt::tt_metal::jit_server::UploadFirmwareResponse upload_firmware_callback(
 int main() {
     const char* endpoint_env = std::getenv(kEndpointEnv);
     const std::string endpoint = endpoint_env != nullptr ? endpoint_env : kDefaultEndpoint;
+    const char* cache_root_env = std::getenv(kServerCacheRootEnv);
+    g_server_cache_root = normalize_cache_root(cache_root_env != nullptr ? cache_root_env : kDefaultServerCacheRoot);
 
     std::signal(SIGINT, handle_signal);
     std::signal(SIGTERM, handle_signal);
@@ -404,6 +418,7 @@ int main() {
     tt::tt_metal::jit_server::JitCompileServerController server(compile_callback, upload_firmware_callback);
     server.start(endpoint);
     log_info(tt::LogMetal, "JIT compile server listening on {}", endpoint);
+    log_info(tt::LogMetal, "JIT compile server cache root: {}", g_server_cache_root);
 
     while (g_keep_running.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
