@@ -949,3 +949,196 @@ def build_encoder_attention_mask(
         masks.append(mask_i)
     masks = torch.stack(masks).to(x.device).expand(-1, n_heads, -1, -1)
     return masks
+
+
+# Mutable context for targeted decode-path verification (set by Generator.decode_forward).
+decode_verify_ctx = {"active": False, "step": 0}
+
+
+def set_decode_verify_context(active: bool, step: int) -> None:
+    decode_verify_ctx["active"] = bool(active)
+    decode_verify_ctx["step"] = int(step)
+
+
+# -----------------------------------------------------------------------------
+# Decode module diagnostics (tensor stats) — isolate where activations go bad.
+#
+# Enable:  TT_DECODE_MODULE_DIAG=1
+# Requires enable_trace=False on decode_forward (device reads forbidden during trace capture).
+#
+# Optional:
+#   TT_DECODE_DIAG_LAYERS — comma-separated layer indices for per-layer probes (default: 0,17,33).
+#   TT_DECODE_DIAG_STEPS  — comma-separated decode step indices (1-based, from Generator after
+#                           reset_decode_verify_counters; ≈ demo_iteration + 1). Default: 1,2,3,46,47,48,49,50,51
+#
+# Decode tensors are often [1, 1, 32, H] (only batch index 0 is the real user; rest is tile padding).
+# Stats default to batch 0 only so mean/std are not dominated by padding garbage.
+#
+# Tags in logs: [DECODE_DIAG] attn_post_sdpa_concat | attn_out_post_wo | mlp_out | block_residual_out |
+#               pre_lm_head_norm | lm_head_out
+# -----------------------------------------------------------------------------
+
+decode_module_diag_ctx = {"enabled": False, "step": 0, "allow_reads": False}
+
+
+def set_decode_module_diag(enabled: bool, step: int, allow_reads: bool) -> None:
+    decode_module_diag_ctx["enabled"] = bool(enabled)
+    decode_module_diag_ctx["step"] = int(step)
+    decode_module_diag_ctx["allow_reads"] = bool(allow_reads)
+
+
+def _decode_diag_int_set(env_key: str, default_csv: str) -> set:
+    raw = os.environ.get(env_key, default_csv).strip()
+    if not raw:
+        return set()
+    out = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if part:
+            out.add(int(part))
+    return out
+
+
+def decode_module_diag_log(tag: str, tt_tensor: ttnn.Tensor, *, layer_num: Optional[int] = None) -> None:
+    """Host read + log stats; no-op unless TT_DECODE_MODULE_DIAG=1 and allow_reads (no trace capture)."""
+    if not decode_module_diag_ctx["enabled"] or not decode_module_diag_ctx["allow_reads"]:
+        return
+    step = decode_module_diag_ctx["step"]
+    steps = _decode_diag_int_set("TT_DECODE_DIAG_STEPS", "1,2,3,46,47,48,49,50,51")
+    if step not in steps:
+        return
+    layers = _decode_diag_int_set("TT_DECODE_DIAG_LAYERS", "0,17,33")
+    if layer_num is not None and layer_num not in layers:
+        return
+
+    try:
+        th = ttnn.to_torch(tt_tensor)
+    except Exception as exc:
+        logger.warning(f"[DECODE_DIAG] step={step} layer={layer_num} tag={tag} to_torch failed: {exc}")
+        return
+
+    thf = th.detach().float()
+    # Prefer real user row for decode (avoid padded batch lanes in 32-wide tile layout)
+    if (
+        thf.dim() == 4
+        and thf.shape[0] == 1
+        and thf.shape[1] == 1
+        and thf.shape[2] > 1
+        and os.environ.get("TT_DECODE_DIAG_ALL_BATCH", "").lower() not in ("1", "true", "yes")
+    ):
+        t_stats = thf[0, 0, 0, :].reshape(-1)
+        t_all = thf.reshape(-1)
+        n_nan_all = int(torch.isnan(t_all).sum().item())
+        n_inf_all = int(torch.isinf(t_all).sum().item())
+    else:
+        t_stats = thf.reshape(-1)
+        t_all = t_stats
+        n_nan_all = int(torch.isnan(t_all).sum().item())
+        n_inf_all = int(torch.isinf(t_all).sum().item())
+
+    if t_stats.numel() == 0:
+        logger.info(f"[DECODE_DIAG] step={step} layer={layer_num} tag={tag} empty tensor")
+        return
+
+    n_nan_b0 = int(torch.isnan(t_stats).sum().item())
+    n_inf_b0 = int(torch.isinf(t_stats).sum().item())
+    finite = t_stats[torch.isfinite(t_stats)]
+    if finite.numel() == 0:
+        logger.info(
+            f"[DECODE_DIAG] step={step} layer={layer_num} tag={tag} shape={tuple(th.shape)} "
+            f"b0_nan={n_nan_b0} b0_inf={n_inf_b0} (no finite values on user batch row) "
+            f"all_tensor_nan={n_nan_all} all_tensor_inf={n_inf_all}"
+        )
+        return
+
+    logger.info(
+        f"[DECODE_DIAG] step={step} layer={layer_num} tag={tag} shape={tuple(th.shape)} "
+        f"b0_mean={float(finite.mean()):.5f} b0_std={float(finite.std(unbiased=False)):.5f} "
+        f"b0_min={float(finite.min()):.5f} b0_max={float(finite.max()):.5f} "
+        f"b0_nan={n_nan_b0} b0_inf={n_inf_b0} "
+        f"all_nan={n_nan_all} all_inf={n_inf_all}"
+    )
+
+
+# -----------------------------------------------------------------------------
+# Decode HF reference dump — save TT tensors for offline compare vs Hugging Face.
+#
+# Enable: TT_DECODE_HF_REF=1 (same trace rules as DECODE_DIAG: reads need enable_trace=False)
+# Output directory: TT_DECODE_HF_REF_OUT (default: decode_hf_ref_dump)
+#
+# Generator also writes meta_stepNNNN.pt with {step, tokens, start_pos} per decode_forward.
+#
+# Optional:
+#   TT_DECODE_HF_REF_STEPS — default: same as TT_DECODE_DIAG_STEPS if set, else 1,2,3,46,47,48,49,50,51
+#   TT_DECODE_HF_REF_LAYERS — comma-separated layers for attn tags (default: 0)
+#   TT_DECODE_HF_REF_LM_HEAD=1 — also dump lm_head_out (large; off by default)
+# -----------------------------------------------------------------------------
+
+decode_hf_ref_ctx = {"enabled": False, "step": 0, "allow_reads": False}
+
+
+def set_decode_hf_ref_compare(enabled: bool, step: int, allow_reads: bool) -> None:
+    decode_hf_ref_ctx["enabled"] = bool(enabled)
+    decode_hf_ref_ctx["step"] = int(step)
+    decode_hf_ref_ctx["allow_reads"] = bool(allow_reads)
+
+
+def _decode_hf_ref_steps_set() -> set:
+    env_steps = os.environ.get("TT_DECODE_HF_REF_STEPS", "").strip()
+    if env_steps:
+        return _decode_diag_int_set("TT_DECODE_HF_REF_STEPS", env_steps)
+    diag = os.environ.get("TT_DECODE_DIAG_STEPS", "").strip()
+    if diag:
+        return _decode_diag_int_set("TT_DECODE_DIAG_STEPS", diag)
+    return _decode_diag_int_set("", "1,2,3,46,47,48,49,50,51")
+
+
+def _decode_hf_ref_tensor_b0_cpu(tt_tensor: ttnn.Tensor) -> torch.Tensor:
+    th = ttnn.to_torch(tt_tensor).detach().float()
+    if (
+        th.dim() == 4
+        and th.shape[0] == 1
+        and th.shape[1] == 1
+        and th.shape[2] > 1
+        and os.environ.get("TT_DECODE_DIAG_ALL_BATCH", "").lower() not in ("1", "true", "yes")
+    ):
+        return th[0, 0, 0, :].reshape(-1).cpu().clone()
+    return th.reshape(-1).cpu().clone()
+
+
+def decode_hf_ref_dump(tag: str, tt_tensor: ttnn.Tensor, *, layer_num: Optional[int] = None) -> None:
+    """Save user-batch row to TT_DECODE_HF_REF_OUT for compare_decode_hf_ref.py."""
+    if not decode_hf_ref_ctx["enabled"] or not decode_hf_ref_ctx["allow_reads"]:
+        return
+    step = decode_hf_ref_ctx["step"]
+    if step not in _decode_hf_ref_steps_set():
+        return
+    if tag == "lm_head_out":
+        if os.environ.get("TT_DECODE_HF_REF_LM_HEAD", "").lower() not in ("1", "true", "yes"):
+            return
+    elif layer_num is None:
+        return
+    else:
+        raw_layers = os.environ.get("TT_DECODE_HF_REF_LAYERS", "").strip()
+        layers = {0} if not raw_layers else _decode_diag_int_set("TT_DECODE_HF_REF_LAYERS", raw_layers)
+        if layer_num not in layers:
+            return
+
+    out_dir = os.environ.get("TT_DECODE_HF_REF_OUT", "decode_hf_ref_dump")
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+        vec = _decode_hf_ref_tensor_b0_cpu(tt_tensor)
+        layer_slug = "NA" if layer_num is None else str(int(layer_num))
+        path = os.path.join(out_dir, f"tt_step_{step:04d}_layer{layer_slug}_{tag}.pt")
+        torch.save(
+            {
+                "step": step,
+                "layer": layer_num,
+                "tag": tag,
+                "tensor_b0": vec,
+            },
+            path,
+        )
+        logger.info(f"[HF_REF] wrote {path} (numel={vec.numel()})")
+    except Exception as exc:
+        logger.warning(f"[HF_REF] dump failed tag={tag} layer={layer_num}: {exc}")

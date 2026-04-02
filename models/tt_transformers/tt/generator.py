@@ -28,10 +28,14 @@ from models.common.warmup import WarmupForwardMixin
 from models.tt_transformers.tt.common import (
     Mode,
     copy_host_to_device,
+    decode_verify_ctx,
     get_block_size,
     get_max_prefill_chunk_size,
     get_padded_prefill_len,
     num_blocks_in_seq,
+    set_decode_hf_ref_compare,
+    set_decode_module_diag,
+    set_decode_verify_context,
 )
 
 # Maximum total sequence length for batched prefill (batch_size * per_user_seq_len)
@@ -919,6 +923,10 @@ class Generator(WarmupForwardMixin):
             )
             return tt_logits
 
+    def reset_decode_verify_counters(self) -> None:
+        """Reset per-run decode step so [VERIFY] decode_step matches demo loop (after warmup)."""
+        self._verify_decode_step = 0
+
     # Note: This function is called by vLLM
     def decode_forward(
         self,
@@ -933,6 +941,45 @@ class Generator(WarmupForwardMixin):
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
     ):
+        set_decode_verify_context(False, 0)
+        self._verify_decode_step = getattr(self, "_verify_decode_step", 0) + 1
+        step = self._verify_decode_step
+        in_verify_window = step <= 12 or (44 <= step <= 58)
+        # Trace capture runs a full decode compile; ttnn reads (e.g. VERIFY H2D / ATTN) then hit:
+        # TT_FATAL: Reads are not supported during trace capture.
+        self._verify_decode_active = in_verify_window and not enable_trace
+        set_decode_verify_context(self._verify_decode_active, step)
+        if in_verify_window:
+            logger.info(
+                f"[VERIFY GEN] step={step} trace={enable_trace} device_reads={'off' if enable_trace else 'on'} "
+                f"tokens_in={tokens.detach().cpu().flatten()[:8].tolist()} "
+                f"start_pos_in={start_pos.detach().cpu().flatten()[:8].tolist()}"
+            )
+
+        _mod_diag = os.environ.get("TT_DECODE_MODULE_DIAG", "").lower() in ("1", "true", "yes")
+        set_decode_module_diag(_mod_diag, step, _mod_diag and not enable_trace)
+        _hf_ref = os.environ.get("TT_DECODE_HF_REF", "").lower() in ("1", "true", "yes")
+        set_decode_hf_ref_compare(_hf_ref, step, _hf_ref and not enable_trace)
+        if _hf_ref and step == 1:
+            logger.info(
+                "[HF_REF] TT_DECODE_HF_REF=1: dumping meta_stepNNNN.pt and tt tensors to "
+                f"{os.environ.get('TT_DECODE_HF_REF_OUT', 'decode_hf_ref_dump')!r}. "
+                "Run: python models/demos/multimodal/gemma3/scripts/compare_decode_hf_ref.py --dump-dir <that dir> --prompt <same as demo>"
+            )
+        if _mod_diag and step == 1:
+            logger.info(
+                "[DECODE_DIAG] Active. Grep log for '[DECODE_DIAG]'. "
+                f"LAYERS={os.environ.get('TT_DECODE_DIAG_LAYERS', '0,17,33')!r} "
+                f"STEPS={os.environ.get('TT_DECODE_DIAG_STEPS', '1,2,3,46,47,48,49,50,51')!r}. "
+                "Step ≈ demo_iteration+1 after reset. "
+                "Read order per layer: attn_post_sdpa_concat → attn_out_post_wo → mlp_out → block_residual_out; "
+                "then pre_lm_head_norm → lm_head_out. "
+                "Stats use b0_* (user batch row only) for [1,1,32,H] tensors; set TT_DECODE_DIAG_ALL_BATCH=1 for full tensor. "
+                "If sdpa_concat collapses first (b0_std→0, weird b0_min/max) → paged SDPA/KV; "
+                "if sdpa OK but post_wo bad → output proj; mlp_out bad alone → MLP; "
+                "blocks OK but pre_lm_head bad → norm; lm_head bad with good pre_lm → lm_head."
+            )
+
         mode_switched = False
         if self.mode != Mode.DECODE:
             self.mode = Mode.DECODE
@@ -947,6 +994,19 @@ class Generator(WarmupForwardMixin):
         self._set_sampling_trace_mode(split_sampling_enabled)
 
         B = tokens.shape[0]
+
+        if _hf_ref and not enable_trace:
+            out_dir = os.environ.get("TT_DECODE_HF_REF_OUT", "decode_hf_ref_dump")
+            os.makedirs(out_dir, exist_ok=True)
+            meta_path = os.path.join(out_dir, f"meta_step{step:04d}.pt")
+            torch.save(
+                {
+                    "step": int(step),
+                    "tokens": tokens.detach().cpu(),
+                    "start_pos": start_pos.detach().cpu(),
+                },
+                meta_path,
+            )
 
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
@@ -1019,7 +1079,14 @@ class Generator(WarmupForwardMixin):
 
         if read_from_device:
             to_host = self.read_decode_output(tt_decode_output)
-            return self.process_decode_output_host(to_host, is_tokens=(sampling_params is not None))
+            out = self.process_decode_output_host(to_host, is_tokens=(sampling_params is not None))
+            set_decode_verify_context(False, 0)
+            set_decode_module_diag(False, 0, False)
+            set_decode_hf_ref_compare(False, 0, False)
+            return out
+        set_decode_verify_context(False, 0)
+        set_decode_module_diag(False, 0, False)
+        set_decode_hf_ref_compare(False, 0, False)
         return tt_decode_output
 
     def _decode_forward_no_trace_text(
@@ -1052,6 +1119,22 @@ class Generator(WarmupForwardMixin):
             tt_current_pos.append(tt_current_pos_i)
             tt_rot_mat_idxs.append(tt_rot_mat_idxs_i)
             tt_page_table.append(tt_page_table_i)
+
+            if decode_verify_ctx["active"] and i == 0:
+                exp_tok = int(tokens[i].flatten()[0].item())
+                exp_pos = int(current_pos[i].flatten()[0].item())
+                dev_tok = int(ttnn.to_torch(tt_tokens_i).flatten()[0].item())
+                dev_pos = int(ttnn.to_torch(tt_current_pos_i).flatten()[0].item())
+                ok_t = exp_tok == dev_tok
+                ok_p = exp_pos == dev_pos
+                logger.info(
+                    f"[VERIFY H2D] step={decode_verify_ctx['step']} "
+                    f"token_expected={exp_tok} token_on_device={dev_tok} ok={ok_t}"
+                )
+                logger.info(
+                    f"[VERIFY H2D] step={decode_verify_ctx['step']} "
+                    f"pos_expected={exp_pos} pos_on_device={dev_pos} ok={ok_p}"
+                )
 
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
@@ -1159,10 +1242,25 @@ class Generator(WarmupForwardMixin):
                 user_page_table = page_table[i] if page_table is not None else None
                 host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
 
+                if decode_verify_ctx["active"]:
+                    logger.info(
+                        f"[VERIFY TRACE] step={decode_verify_ctx['step']} dp={i} "
+                        f"host_tokens={tokens[i].detach().cpu().flatten()[:4].tolist()} "
+                        f"host_pos={current_pos[i].detach().cpu().flatten()[:4].tolist()}"
+                    )
+
                 copy_host_to_device(
                     host_tensors=host_inputs_i,
                     device_tensors=self.trace_inputs_decode[sampling_on_device][i],
                 )
+
+                if decode_verify_ctx["active"]:
+                    device_tokens = self.trace_inputs_decode[sampling_on_device][i][0]
+                    tokens_readback = ttnn.to_torch(device_tokens).flatten()[:8].tolist()
+                    logger.info(
+                        f"[VERIFY TRACE] step={decode_verify_ctx['step']} dp={i} device_tokens[:8]={tokens_readback}"
+                    )
+
         for i, trace_id in self.trace_ids_decode[sampling_on_device].items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
         outputs = self.trace_output_decode[sampling_on_device]
@@ -1563,7 +1661,19 @@ class Generator(WarmupForwardMixin):
                 log_probs.append(torch.ones(logits_i.shape))
             else:
                 raise ValueError(f"Invalid type of tt_out: {type(tt_out[i])}")
-        return (torch.cat(logits, 0), torch.cat(log_probs, 0))
+
+        result = (torch.cat(logits, 0), torch.cat(log_probs, 0))
+
+        if getattr(self, "_verify_decode_active", False) and not is_tokens:
+            lg = result[0]
+            argmax_ids = lg.argmax(dim=-1).detach().cpu().flatten().tolist()
+            logger.info(
+                f"[VERIFY OUT] step={getattr(self, '_verify_decode_step', 0)} "
+                f"logits_shape={tuple(lg.shape)} argmax_per_row={argmax_ids} "
+                f"logit_max={float(lg.max())} logit_min={float(lg.min())}"
+            )
+
+        return result
 
     def _decode_forward_no_trace(
         self,

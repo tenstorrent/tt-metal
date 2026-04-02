@@ -11,7 +11,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
-from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.common import Mode, decode_hf_ref_dump, decode_module_diag_log, decode_verify_ctx
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup, num_to_corerange
 
 
@@ -32,6 +32,7 @@ class Attention(LightweightModule):
         prefetcher=None,
     ):
         super().__init__()
+        self.layer_num = layer_num
         self.args = args
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
@@ -700,6 +701,15 @@ class Attention(LightweightModule):
         # v_heads [seqlen, n_kv_heads, bsz, head_dim]
         # keys, [max_batch_size, n_kv_heads // configuration.num_devices, max_seq_len, head_dim]
 
+        if decode_verify_ctx["active"] and self.layer_num == 0:
+            from loguru import logger
+
+            cp = ttnn.to_torch(current_pos).flatten()[:8]
+            logger.info(
+                f"[VERIFY ATTN L0] step={decode_verify_ctx['step']} "
+                f"paged_kv_update_idxs[:8]={cp.tolist()} (must match host current_pos for this decode step)"
+            )
+
         if self.use_qk_fused:
             ttnn.experimental.paged_fused_update_cache(
                 keys, k_heads_1BKD, values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
@@ -760,6 +770,9 @@ class Attention(LightweightModule):
         ttnn.deallocate(attn_output_11BH)
         ttnn.deallocate(attn_output_1G4D)
 
+        decode_module_diag_log("attn_post_sdpa_concat", attn_output_cat, layer_num=self.layer_num)
+        decode_hf_ref_dump("attn_post_sdpa_concat", attn_output_cat, layer_num=self.layer_num)
+
         if self.use_fused_all_gather_matmul or self.prefetcher is not None:
             attn_output_cat = ttnn.to_memory_config(
                 attn_output_cat,
@@ -816,6 +829,8 @@ class Attention(LightweightModule):
                 dense_out_sharded,
                 self.args.get_attn_dense_output_mem_config(Mode.DECODE, self.prefetcher),
             )
+            decode_module_diag_log("attn_out_post_wo", dense_out_sharded, layer_num=self.layer_num)
+            decode_hf_ref_dump("attn_out_post_wo", dense_out_sharded, layer_num=self.layer_num)
             return dense_out_sharded
 
         else:
@@ -881,6 +896,8 @@ class Attention(LightweightModule):
                     dense_out_reduced, self.args.get_attn_dense_output_mem_config(Mode.DECODE, None)
                 )
 
+            decode_module_diag_log("attn_out_post_wo", dense_out_reduced, layer_num=self.layer_num)
+            decode_hf_ref_dump("attn_out_post_wo", dense_out_reduced, layer_num=self.layer_num)
             return dense_out_reduced
 
     def forward_prefill(

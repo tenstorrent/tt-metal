@@ -6,7 +6,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.attention import Attention as DefaultAttention
-from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.common import Mode, decode_module_diag_log
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
 from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
@@ -294,6 +294,8 @@ class TransformerBlock(LightweightModule):
         # MLP takes replicated inputs and produces fractured outputs
 
         hidden_states = self.feed_forward.forward(hidden_states, mode)
+        if mode == Mode.DECODE:
+            decode_module_diag_log("mlp_out", hidden_states, layer_num=self.layer_num)
 
         activation_dtype = self.args.decoders_optimizations.get_tensor_dtype(
             decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
@@ -318,5 +320,8 @@ class TransformerBlock(LightweightModule):
             if TG and not self.args.is_distributed_norm(mode)
             else activation_dtype or ttnn.bfloat16,
         )
+
+        if mode == Mode.DECODE:
+            decode_module_diag_log("block_residual_out", out, layer_num=self.layer_num)
 
         return out  # fractured across devices

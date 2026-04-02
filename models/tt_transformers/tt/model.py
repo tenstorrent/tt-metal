@@ -11,7 +11,13 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.sampling.generator import SamplingGenerator
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import Mode, copy_host_to_device
+from models.tt_transformers.tt.common import (
+    Mode,
+    copy_host_to_device,
+    decode_hf_ref_dump,
+    decode_module_diag_log,
+    decode_verify_ctx,
+)
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
@@ -422,8 +428,25 @@ class Transformer(LightweightModule):
             B == self.args.max_batch_size
         ), f"Batch size {B} must be equal to max_batch_size {self.args.max_batch_size}"
 
+        if decode_verify_ctx["active"]:
+            from loguru import logger
+
+            logger.info(
+                f"[VERIFY PREP] step={decode_verify_ctx['step']} "
+                f"torch_tokens={tokens.detach().cpu().tolist()} torch_pos={current_pos.detach().cpu().tolist()}"
+            )
+
         # Necessary padding to be full tile sized when on device
         tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens)), "constant", 0)
+
+        if decode_verify_ctx["active"]:
+            from loguru import logger
+
+            logger.info(
+                f"[VERIFY PREP] step={decode_verify_ctx['step']} "
+                f"after_pad_first8={tokens[:8].detach().cpu().tolist()}"
+            )
+
         tokens = ttnn.from_torch(
             tokens,
             device=None,
@@ -436,6 +459,12 @@ class Transformer(LightweightModule):
             current_pos, torch.tensor(0, dtype=torch.int64)
         )  # Ensure position indices are non-negative
         rope_idxs = self.rope_setup.get_rot_idxs(rot_current_pos, on_host=True)
+
+        if decode_verify_ctx["active"]:
+            from loguru import logger
+
+            ri = rope_idxs.tolist() if hasattr(rope_idxs, "tolist") else rope_idxs
+            logger.info(f"[VERIFY PREP] step={decode_verify_ctx['step']} rope_idxs={ri}")
 
         current_pos_tt = ttnn.from_torch(
             current_pos,
@@ -601,6 +630,14 @@ class Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        if decode_verify_ctx["active"]:
+            from loguru import logger
+
+            logger.info(
+                f"[VERIFY DECODER] step={decode_verify_ctx['step']} "
+                f"ttnn_decode_forward: embed+{len(self.layers)} transformer blocks+lm_head"
+            )
+
         rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs)
         rot_mats_local = self.rope_local_setup.get_rot_mats(rot_mat_idxs) if hasattr(self, "rope_local_setup") else None
 
@@ -724,6 +761,8 @@ class Transformer(LightweightModule):
 
         # Output norm
         x = self.norm(x, mode=mode, norm_config=self.args.get_norm_config("lm_head", mode, self.prefetcher))
+        if mode == Mode.DECODE:
+            decode_module_diag_log("pre_lm_head_norm", x, layer_num=None)
 
         lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config(
             mode, None if mode == Mode.PREFILL else self.prefetcher
@@ -734,6 +773,9 @@ class Transformer(LightweightModule):
             x = ttnn.to_memory_config(x, self.args.get_lm_head_input_mem_config(mode, self.prefetcher))
 
         x = self.lm_head(x)
+        if mode == Mode.DECODE:
+            decode_module_diag_log("lm_head_out", x, layer_num=None)
+            decode_hf_ref_dump("lm_head_out", x, layer_num=None)
         if mode == Mode.PREFILL:
             x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 

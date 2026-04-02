@@ -219,13 +219,17 @@ def create_tt_page_table(global_batch_size, data_parallel, paged_attention_confi
     page_table = None
 
     if paged_attention_config:
-        # Implied shuffling of blocks
-        permutation = torch.randperm(paged_attention_config.max_num_blocks)
-        # Page table which maps virtual blocks to physical
-        reverse_permutation = torch.argsort(permutation).repeat(data_parallel)
-        page_table = reverse_permutation.reshape(
-            global_batch_size, paged_attention_config.max_num_blocks // (global_batch_size // data_parallel)
-        )
+        n_blocks = paged_attention_config.max_num_blocks
+        cols = n_blocks // (global_batch_size // data_parallel)
+        # Use identity logical→physical mapping (slot i holds logical block i). Random
+        # permutation is valid for stress but can mask or trigger paged-KV path bugs.
+        # Set GEMMA3_SHUFFLE_PAGE_TABLE=1 to restore the previous randomized layout.
+        if os.environ.get("GEMMA3_SHUFFLE_PAGE_TABLE", "").lower() in ("1", "true", "yes"):
+            permutation = torch.randperm(n_blocks)
+            reverse_permutation = torch.argsort(permutation)
+        else:
+            reverse_permutation = torch.arange(n_blocks, dtype=torch.int64)
+        page_table = reverse_permutation.repeat(data_parallel).reshape(global_batch_size, cols)
     return page_table
 
 
@@ -744,7 +748,9 @@ def test_demo_text(
     batch_size = request.config.getoption("--batch_size") or batch_size
     max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
     data_parallel = request.config.getoption("--data_parallel") or data_parallel
-    paged_attention = request.config.getoption("--paged_attention") or paged_attention
+    _paged = request.config.getoption("--paged_attention")
+    if _paged is not None:
+        paged_attention = _paged
     page_params = request.config.getoption("--page_params") or page_params
     if isinstance(page_params, str):  # Required for proper load of a dictionary from the override command
         page_params = json.loads(page_params)
@@ -757,8 +763,36 @@ def test_demo_text(
         enable_trace and token_accuracy
     ), "Cannot run token accuracy with tracing. Set either enable_trace or token_accuracy to False."
 
+    # Layer-by-layer decode stats: export TT_DECODE_MODULE_DIAG=1 then grep DECODE_DIAG in the log.
+    # Trace must be off during capture; we force that here so one env var is enough.
+    if os.environ.get("TT_DECODE_MODULE_DIAG", "").lower() in ("1", "true", "yes"):
+        if enable_trace:
+            logger.warning(
+                "[DECODE_DIAG] TT_DECODE_MODULE_DIAG=1 → forcing enable_trace=False "
+                "(device readbacks are not allowed during trace capture)."
+            )
+        enable_trace = False
+
+    # HF reference dumps (TT_DECODE_HF_REF=1) need the same no-trace rule as DECODE_DIAG.
+    if os.environ.get("TT_DECODE_HF_REF", "").lower() in ("1", "true", "yes"):
+        if enable_trace:
+            logger.warning(
+                "[HF_REF] TT_DECODE_HF_REF=1 → forcing enable_trace=False "
+                "(device readbacks are not allowed during trace capture)."
+            )
+        enable_trace = False
+
     if stress_test and token_accuracy:
         pytest.skip("Stress test cannot be run with token accuracy mode")
+
+    # Non-paged decode compiles a different SDPA path that currently exhausts L1 on Wormhole
+    # (circular-buffer clash in program.cpp). Paged decode is the supported demo path.
+    if not paged_attention:
+        pytest.skip(
+            "Gemma3 text_demo: non-paged KV decode is not supported on Wormhole (L1 limits in "
+            "scaled_dot_product_attention_decode). Use default paged_attention=True; do not pass "
+            "--paged_attention false. Parametrized rows long-context-16k / long-context-1k also skip here."
+        )
 
     if json_config_file:
         optimizations = parse_decoder_json(json_config_file)
@@ -846,7 +880,12 @@ def test_demo_text(
     # Note: Gemma3 on-device sampling disabled because vocab_size/num_devices > 64k
     # https://github.com/tenstorrent/tt-metal/issues/32249
     logger.info("Warming up model...")
-    num_blocks = page_params["page_max_num_blocks_per_dp"] // (global_batch_size // data_parallel) if page_params else 0
+    # Must match paged_attention: non-paged KV uses a single logical block; decode warmup cannot use a 1024-wide page table.
+    num_blocks = (
+        page_params["page_max_num_blocks_per_dp"] // (global_batch_size // data_parallel)
+        if paged_attention and page_params
+        else 0
+    )
     generator.warmup_model_prefill(
         kv_cache=tt_kv_cache,
         enable_trace=enable_trace,
@@ -910,6 +949,11 @@ def test_demo_text(
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
 
+        logger.info(
+            f"[VERIFY PREFILL_CTX] prompt_tokens_shape={tuple(input_tokens_prefill_pt.shape)} "
+            f"page_table_shape={tuple(page_table.shape) if page_table is not None else None}"
+        )
+
         logger.info(f"Starting prefill...")
         profiler.start(f"inference_prefill", iteration=batch_idx)
         logits = generator.prefill_forward_text(
@@ -920,6 +964,9 @@ def test_demo_text(
             warmup_prefill=False,
         )
         prefilled_token = torch.argmax(logits, dim=-1)
+        logger.info(
+            f"[VERIFY PREFILL] logits_shape={tuple(logits.shape)} argmax_first={prefilled_token.flatten()[:4].tolist()}"
+        )
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
 
@@ -952,6 +999,8 @@ def test_demo_text(
 
         out_tok = prefilled_token
 
+        generator.reset_decode_verify_counters()
+
         logger.info(f"Starting decode loop...")
 
         profiler.start(f"inference_decode", iteration=batch_idx)
@@ -960,6 +1009,13 @@ def test_demo_text(
             # below the collect method also applies teacher forcing which is necessary for exact token matching
             if token_accuracy:
                 out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
+
+            _verify_demo = iteration < 12 or (44 <= iteration <= 58)
+            if _verify_demo:
+                logger.info(
+                    f"[VERIFY DEMO] iter={iteration} expect_decode_step={iteration + 1} "
+                    f"token_in={out_tok[0].item()} current_pos_before_forward={current_pos[0].item()}"
+                )
 
             # Run decode forward
             logits, _ = generator.decode_forward(
@@ -970,6 +1026,12 @@ def test_demo_text(
                 kv_cache=tt_kv_cache,
                 sampling_params=device_sampling_params,
             )
+
+            if _verify_demo:
+                top_5_logits, top_5_indices = torch.topk(logits[0, 0, :], k=5)
+                logger.info(
+                    f"[VERIFY DEMO] iter={iteration} top5_idx={top_5_indices.tolist()} top5_logit={top_5_logits.tolist()}"
+                )
 
             # Get the next token
             if device_sampling_params is not None:
@@ -984,6 +1046,12 @@ def test_demo_text(
                     on_host=True,
                 )
 
+            if _verify_demo:
+                logger.info(
+                    f"[VERIFY DEMO] iter={iteration} sampled_token={out_tok[0].item()} "
+                    f"decoded={tokenizer.decode([out_tok[0].item()])!r}"
+                )
+
             profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
             decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
@@ -995,6 +1063,9 @@ def test_demo_text(
 
             if not stress_test:  # During stress test runs we will iterate over the same position for X iterations
                 current_pos += 1
+
+            if _verify_demo:
+                logger.info(f"[VERIFY DEMO] iter={iteration} current_pos_after_increment={current_pos.tolist()}")
             # Save output token to print out later
             for user in range(global_batch_size):
                 user_tok = out_tok[user].item()
