@@ -4,8 +4,11 @@
 #include <benchmark/benchmark.h>
 
 #include <chrono>
+#include <cstdio>
+#include <functional>
 #include <iomanip>
 #include <iostream>
+#include <string>
 #include <vector>
 
 #include "core/compute_kernel_config.hpp"
