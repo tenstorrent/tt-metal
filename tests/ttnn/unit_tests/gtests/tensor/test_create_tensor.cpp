@@ -268,7 +268,7 @@ TEST_F(TensorFromDeallocatedStorageTest, ConstructingTensorFromDeallocatedStorag
     // Step 2: Copy the DeviceStorage (simulating what view() does internally)
     // This creates a separate DeviceStorage with a copy of the shared_ptr<MeshBuffer>
     auto storage_copy = tensor_a.device_storage();  // Makes a copy, not a reference
-    Tensor tensor_b = Tensor(storage_copy, tensor_spec, TensorTopology{});
+    Tensor tensor_b = Tensor(storage_copy);
 
     ASSERT_NE(tensor_b.device(), nullptr) << "Tensor B should have valid device";
     ASSERT_TRUE(tensor_b.is_allocated()) << "Tensor B should be allocated";
@@ -288,7 +288,7 @@ TEST_F(TensorFromDeallocatedStorageTest, ConstructingTensorFromDeallocatedStorag
     // Step 4: Create tensor C from B's storage (simulating another view() call)
     // This is where the bug manifests - if Tensor constructor uses is_allocated(),
     // mesh_device_ won't be set because is_allocated() returns false
-    Tensor tensor_c = Tensor(storage_b, tensor_spec, TensorTopology{});
+    Tensor tensor_c = Tensor(storage_b);
 
     // THE KEY ASSERTION: tensor C must have valid device pointer
     // This is the workaround - without it, device() returns nullptr and causes segfaults

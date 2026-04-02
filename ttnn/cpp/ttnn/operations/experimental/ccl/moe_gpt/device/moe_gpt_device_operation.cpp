@@ -188,10 +188,17 @@ MoEGPTDeviceOperation::tensor_return_value_t MoEGPTDeviceOperation::create_outpu
     const auto tilize_output_tensor = create_device_tensor(output_specs[3], device);
 
     // Re-perceive tilize output tensor as RM for output[4] (same buffer, different layout view)
-    const auto& output_storage = tilize_output_tensor.device_storage();
-    const auto& output_spec = output_specs[4];
-    const auto& output_topology = tilize_output_tensor.tensor_attributes->get_tensor_topology();
-    const ttnn::Tensor output_tensor(output_storage, output_spec, output_topology);
+    const auto& original_mesh_buffer = tilize_output_tensor.mesh_buffer();
+    auto view_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
+        original_mesh_buffer.global_config(),
+        original_mesh_buffer.device_local_config(),
+        original_mesh_buffer.device(),
+        original_mesh_buffer.address());
+
+    tt::tt_metal::MeshTensor view_mesh_tensor(
+        std::move(view_mesh_buffer), output_specs[4], tilize_output_tensor.tensor_topology());
+    tt::tt_metal::DeviceStorage view_storage(tilize_output_tensor.device_storage(), std::move(view_mesh_tensor));
+    const ttnn::Tensor output_tensor(view_storage);
 
     return {
         create_device_tensor(output_specs[0], device),

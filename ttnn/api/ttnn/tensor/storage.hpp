@@ -164,11 +164,15 @@ struct DeviceStorage {
     std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer_leak_ownership() const;
     //
     // Creates a DeviceStorage representing a view of existing device memory.
-    // `surface_buffer` could provide a different buffer configuration (e.g., sharding parameters) from the
-    // configuration of the owning_storage. Ownership of the underlying device memory is shared amongs the new
-    // DeviceStorage and the owning_storage. Deallocation will affect both the new DeviceStorage and the owning_storage.
+    // `surface_mesh_tensor` could provide a different tensor configuration (TensorSpec, e.g. different layout) from the
+    // configuration of the owning_storage. This can be achived by creating the surface_mesh_tensor using an externally
+    // owned MeshBuffer.
     //
-    // These are considered internal functions and are not part of the public API.
+    // Ownership of the underlying device memory is shared amongs the new DeviceStorage and the owning_storage.
+    // Deallocation will affect both the new DeviceStorage and the owning_storage.
+    //
+    // This is the recommended way to reinterpret an existing Tensor.
+    // However this is considered internal function and is not part of the public API.
     // They will be replaced with a new initiative as described in: #38093
     DeviceStorage(const DeviceStorage& owning_storage, MeshTensor surface_mesh_tensor);
     // End internal functions.
