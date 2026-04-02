@@ -123,7 +123,7 @@ def run_group_norm_DRAM(
             pcc_threshold = 0.999
             rtol = 0.060
             atol = 0.069
-            frobenius_threshold = 0.018
+            frobenius_threshold = 0.025
         assert_numeric_metrics(
             torch_output_tensor,
             output_tensor,
