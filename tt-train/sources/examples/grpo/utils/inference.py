@@ -81,11 +81,7 @@ def create_causal_mask(
 
     assert mask_4d.shape == (B, 1, padded_q, padded_w)
 
-    return ttml.autograd.Tensor.from_numpy(
-        mask_4d,
-        ttnn.Layout.TILE,
-        ttnn.DataType.BFLOAT16,
-    )
+    return ttml.autograd.Tensor.from_numpy(mask_4d, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, ctx.dp_mapper)
 
 
 def tokens_to_tensor(ctx: InferenceCtx, tokens_np, B) -> ttml.autograd.Tensor:
@@ -96,7 +92,7 @@ def tokens_to_tensor(ctx: InferenceCtx, tokens_np, B) -> ttml.autograd.Tensor:
     padded[:, : tokens_np.shape[1]] = tokens_np
 
     return ttml.autograd.Tensor.from_numpy(
-        padded.reshape(B, 1, 1, padded_len), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32
+        padded.reshape(B, 1, 1, padded_len), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, ctx.dp_mapper
     )
 
 
@@ -128,10 +124,15 @@ def _completion_batched_impl(ctx: InferenceCtx, prompt_tokens_np, pad_lengths: L
     assert prompt_tokens_np.shape == (B, N)
     assert len(pad_lengths) == B
 
+    B_local = B
+    if ctx.dp_mapper is not None:
+        device = ttml.autograd.AutoContext.get_instance().get_device()
+        B_local = B // device.shape[0]  # batch per device
+
     V = len(ctx.tokenizer)
     padded_V = round_up(ctx, V)
 
-    kv_cache = _get_kv_cache(ctx, B)
+    kv_cache = _get_kv_cache(ctx, B_local)
 
     logits_mask_tensor = build_logits_mask(V, padded_V) if padded_V != V else None
 
@@ -152,7 +153,7 @@ def _completion_batched_impl(ctx: InferenceCtx, prompt_tokens_np, pad_lengths: L
     def to_np(column_list):
         arr = np.empty((B, len(column_list)), dtype=np.int32)
         for j, column in enumerate(column_list):
-            arr[:, j] = column.to_numpy().reshape(
+            arr[:, j] = column.to_numpy(ctx.dp_composer).reshape(
                 B,
             )
 
@@ -184,8 +185,8 @@ def _completion_batched_impl(ctx: InferenceCtx, prompt_tokens_np, pad_lengths: L
         last_token_column = ttnn.slice(
             next_token_tensor.get_value(),
             [0, 0, new_tokens - 1, 0],
-            [B, 1, new_tokens, 1],
-        )  # B 1 1 1
+            [B_local, 1, new_tokens, 1],
+        )  # B_local 1 1 1 per device = after composing its B 1 1 1
 
         generated_columns.append(last_token_column)
         chunk_columns.append(last_token_column)

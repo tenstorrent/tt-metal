@@ -42,6 +42,8 @@ def compute_grpo_loss(
     Tp: int,
     completions_batch_len: int,
     eps: float,
+    dp_mapper: object,
+    dp_composer: object,
 ) -> Tuple[ttml.autograd.Tensor, list]:
     ratio = Exp.apply(nlog_probs_old - nlog_probs_new)
     clipped_ratio = Clip.apply(ratio, 1.0 - eps, 1.0 + eps)
@@ -50,10 +52,10 @@ def compute_grpo_loss(
     surr2 = clipped_ratio * adv_tt
     surr = Min.apply(surr1, surr2)
 
-    mask_np = mask.to_numpy()
+    mask_np = mask.to_numpy(composer=dp_composer)
     tokens_per_completion = np.maximum(mask_np.sum(axis=1, keepdims=True), 1.0)
     weight_np = (mask_np / tokens_per_completion).astype(np.float32)
-    weight_tt = ttml.autograd.Tensor.from_numpy(weight_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16)
+    weight_tt = ttml.autograd.Tensor.from_numpy(weight_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16, dp_mapper)
 
     weighted_surr = surr * weight_tt
     weighted_surr_4d = ttml.ops.reshape.reshape(weighted_surr, [1, 1, B, Tp])
@@ -130,7 +132,9 @@ def compute_nlog_probs(
     targets_pad = np.full((B, Tp), ctx.pad_token, dtype=np.uint32)
     targets_pad[:, :T] = targets_np  # or align however your sequence axis is arranged
 
-    targets_tt = ttml.autograd.Tensor.from_numpy(targets_pad, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
+    targets_tt = ttml.autograd.Tensor.from_numpy(
+        targets_pad, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, ctx.dp_mapper
+    )
 
     nlog = ttml.ops.loss.cross_entropy_loss(logits, targets_tt, ttml.ops.ReduceType.NONE)
     nlog = ttml.ops.reshape.reshape(nlog, [B, Tp])
@@ -138,7 +142,9 @@ def compute_nlog_probs(
     loss_mask_pad = np.zeros((B, Tp), dtype=np.float32)
     loss_mask_pad[:, :T] = loss_mask_np
 
-    loss_mask_tt = ttml.autograd.Tensor.from_numpy(loss_mask_pad, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16)
+    loss_mask_tt = ttml.autograd.Tensor.from_numpy(
+        loss_mask_pad, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16, ctx.dp_mapper
+    )
 
     assert nlog.shape() == [B, Tp]
     assert loss_mask_tt.shape() == [B, Tp]
