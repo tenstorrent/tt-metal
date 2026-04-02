@@ -9,7 +9,6 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import skip_for_simulator
 
 pytestmark = pytest.mark.use_module_device
 
@@ -34,7 +33,6 @@ def test_rms_norm(device, batch_size, h, w):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
 
 
-@skip_for_simulator("Skipping due to CI failure - issue #41286")
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("h", [128])
 @pytest.mark.parametrize("w", [32, 4096])
