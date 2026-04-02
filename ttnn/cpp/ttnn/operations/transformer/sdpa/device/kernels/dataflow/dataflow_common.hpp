@@ -357,18 +357,88 @@ void fill_vertical_tile_bf16(uint32_t cb_id, uint32_t tile_id, uint32_t unpad_co
 }
 
 /**
+ * Fill a bf16 tile with the standard causal diagonal mask pattern:
+ * row r, col c: 0 if c <= r, -inf if c > r.
+ *
+ * bf16 tile layout: 4 faces of 16x16.
+ * Face 0 (rows 0-15, cols 0-15): diagonal — row r has cols 0..r valid, r+1..15 masked
+ * Face 1 (rows 0-15, cols 16-31): entirely -inf (cols > rows for these rows)
+ * Face 2 (rows 16-31, cols 0-15): entirely zero (cols < rows for these rows)
+ * Face 3 (rows 16-31, cols 16-31): same diagonal pattern as face 0 (shifted by 16 in both dims)
+ */
+template <uint32_t tile_bytes>
+void fill_causal_diagonal_tile_bf16(uint32_t cb_id, uint32_t tile_id) {
+    // Start with all zeros
+    fill_tile_zeros<tile_bytes>(cb_id, tile_id);
+
+    constexpr uint32_t NEGINF_PAIR = 0xFF80FF80;
+    constexpr uint32_t bf16_per_uint32 = 2;
+    constexpr uint32_t uint32_per_face_row = tt::constants::FACE_WIDTH / bf16_per_uint32;  // 8
+    constexpr uint32_t uint32_per_face = tt::constants::FACE_HW / bf16_per_uint32;         // 128
+
+    volatile tt_l1_ptr uint32_t* ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+
+    // Face offsets in uint32 words
+    constexpr uint32_t face_offsets[4] = {
+        0,                    // Face 0: rows[0:16], cols[0:16]
+        uint32_per_face,      // Face 1: rows[0:16], cols[16:32]
+        2 * uint32_per_face,  // Face 2: rows[16:32], cols[0:16]
+        3 * uint32_per_face   // Face 3: rows[16:32], cols[16:32]
+    };
+
+    // Face 1: entirely -inf (cols 16-31 > rows 0-15)
+    for (uint32_t i = 0; i < uint32_per_face; i++) {
+        ptr[face_offsets[1] + i] = NEGINF_PAIR;
+    }
+
+    // Face 2: entirely zero — already done by fill_tile_zeros
+
+    // Face 0 and Face 3: diagonal pattern (identical — both have local row r with cols 0..r valid, r+1..15 masked)
+    constexpr uint32_t diag_faces[2] = {0, 3};
+    for (uint32_t f = 0; f < 2; f++) {
+        uint32_t face_base = face_offsets[diag_faces[f]];
+        for (uint32_t row = 0; row < tt::constants::FACE_HEIGHT; row++) {
+            // First masked column in this row: row + 1
+            uint32_t first_masked = row + 1;
+            if (first_masked >= tt::constants::FACE_WIDTH) {
+                continue;  // Row 15: all cols 0-15 are valid
+            }
+
+            uint32_t row_base = face_base + row * uint32_per_face_row;
+            uint32_t boundary_word = first_masked / bf16_per_uint32;
+            uint32_t boundary_pos = first_masked % bf16_per_uint32;
+
+            // Boundary word: low bf16 may be valid (col = first_masked - 1 = row)
+            if (boundary_pos != 0) {
+                // Low 16 bits = col row (valid, 0), high 16 bits = col row+1 (masked, -inf)
+                ptr[row_base + boundary_word] = 0xFF800000;
+                boundary_word++;
+            }
+
+            // Remaining words: all -inf
+            for (uint32_t w = boundary_word; w < uint32_per_face_row; w++) {
+                ptr[row_base + w] = NEGINF_PAIR;
+            }
+        }
+    }
+}
+
+/**
  * Generate lightweight mask tiles into a single CB for ring joint SDPA.
- * Layout: [neginf_tile(0)] [global_n_partial_tile?(1)] [joint_l_partial_tile?(1 or 2)]
+ * Layout: [neginf_tile(0)] [causal_diag_tile?(1)] [global_n_partial_tile?] [joint_l_partial_tile?]
  * Tiles are pushed once and stay permanently fronted for the entire kernel lifetime.
  *
  * @tparam global_n_partial_col  Column within tile where global_n padding starts (0 = tile-aligned, no partial)
  * @tparam joint_l_partial_col   Column within tile where joint_l padding starts (0 = tile-aligned, no partial)
  * @tparam cb_mask_in            CB to generate mask tiles into (must be constexpr for get_tile_size)
+ * @tparam is_causal_lw          Whether to include the causal diagonal tile
  */
-template <uint32_t global_n_partial_col, uint32_t joint_l_partial_col, uint32_t cb_mask_in>
+template <uint32_t global_n_partial_col, uint32_t joint_l_partial_col, uint32_t cb_mask_in, bool is_causal_lw = false>
 void generate_lightweight_mask_tiles() {
     constexpr uint32_t partial_mask_tiles = (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
-    constexpr uint32_t total_mask_tiles = 1 + partial_mask_tiles;
+    constexpr uint32_t causal_diag_tiles = is_causal_lw ? 1 : 0;
+    constexpr uint32_t total_mask_tiles = 1 + causal_diag_tiles + partial_mask_tiles;
     constexpr uint32_t mask_tile_size_bytes = get_tile_size(cb_mask_in);
 
     cb_reserve_back(cb_mask_in, total_mask_tiles);
@@ -376,9 +446,15 @@ void generate_lightweight_mask_tiles() {
     // Tile 0: neginf tile
     fill_neginf_tile<mask_tile_size_bytes>(cb_mask_in, 0);
 
+    uint32_t tile_idx = 1;
+
+    // Tile 1 (if causal): causal diagonal tile
+    if constexpr (is_causal_lw) {
+        fill_causal_diagonal_tile_bf16<mask_tile_size_bytes>(cb_mask_in, tile_idx++);
+    }
+
     // Subsequent tiles: partial mask tiles for boundary conditions
     if constexpr (partial_mask_tiles > 0) {
-        uint32_t tile_idx = 1;  // Start after the neginf tile
         if constexpr (global_n_partial_col > 0) {
             fill_vertical_tile_bf16<mask_tile_size_bytes>(cb_mask_in, tile_idx++, global_n_partial_col);
         }

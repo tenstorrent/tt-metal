@@ -1326,6 +1326,31 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
  * @param num_cols   Total K tiles per row (Sk_chunk_t)
  * @param num_rows   Q tiles per chunk (Sq_chunk_t)
  */
+/**
+ * Batch-stamp a single tile onto a range of positions in out_cb using L1 accumulate.
+ * Caller must have already called copy_tile_to_dst_init_short and llk_pack_reconfig_l1_acc(1).
+ *
+ * @tparam dst_batch  Max tiles per DST cycle (DST register capacity, typically 8 for fp16b half-sync).
+ */
+template <uint32_t dst_batch>
+void stamp_tile_range_l1_acc(
+    uint32_t src_cb, uint32_t src_tile_idx, uint32_t out_cb, uint32_t out_offset, uint32_t count) {
+    for (uint32_t base = 0; base < count; base += dst_batch) {
+        uint32_t batch = (count - base < dst_batch) ? (count - base) : dst_batch;
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < batch; i++) {
+            copy_tile(src_cb, src_tile_idx, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < batch; i++) {
+            pack_tile<true>(i, out_cb, out_offset + base + i);
+        }
+        tile_regs_release();
+    }
+}
+
+template <uint32_t dst_batch>
 void apply_padded_mask_lightweight_runtime(
     uint32_t neginf_cb,
     uint32_t neginf_tile_idx,
@@ -1338,22 +1363,8 @@ void apply_padded_mask_lightweight_runtime(
     copy_tile_to_dst_init_short(neginf_cb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
-    constexpr uint32_t DST_BATCH = 8;
     for (uint32_t row = 0; row < num_rows; row++) {
-        uint32_t row_offset = row * num_cols;
-        for (uint32_t base = start; base < num_cols; base += DST_BATCH) {
-            uint32_t batch = (num_cols - base < DST_BATCH) ? (num_cols - base) : DST_BATCH;
-            tile_regs_acquire();
-            for (uint32_t i = 0; i < batch; i++) {
-                copy_tile(neginf_cb, neginf_tile_idx, i);  // Index into the single CB
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t i = 0; i < batch; i++) {
-                pack_tile<true>(i, out_cb, row_offset + base + i);
-            }
-            tile_regs_release();
-        }
+        stamp_tile_range_l1_acc<dst_batch>(neginf_cb, neginf_tile_idx, out_cb, row * num_cols + start, num_padded);
     }
 
     PACK((llk_pack_reconfig_l1_acc(0)));
@@ -1393,12 +1404,65 @@ void apply_partial_mask_lightweight(
 }
 
 /**
+ * Lightweight causal mask: stamps neginf and diagonal tiles onto QKT using L1 accumulate.
+ *
+ * For Q tile-row i (0..num_rows-1) processing K chunk starting at k_low_idx:
+ *   diag_col = q_low_idx + i - k_low_idx
+ *   - diag_col < 0:           entire row above diagonal -> stamp neginf on all num_cols tiles
+ *   - 0 <= diag_col < num_cols: diagonal tile at col diag_col, neginf at cols diag_col+1..num_cols-1
+ *   - diag_col >= num_cols:     entire row below diagonal -> no mask needed
+ */
+template <uint32_t dst_batch>
+void apply_causal_mask_lightweight(
+    uint32_t mask_cb,
+    uint32_t neginf_idx,
+    uint32_t diag_idx,
+    uint32_t out_cb,
+    uint32_t q_low_idx,
+    uint32_t k_low_idx,
+    uint32_t num_rows,
+    uint32_t num_cols) {
+    copy_tile_to_dst_init_short(mask_cb);
+    PACK((llk_pack_reconfig_l1_acc(1)));
+
+    for (uint32_t row = 0; row < num_rows; row++) {
+        int32_t diag_col = (int32_t)(q_low_idx + row) - (int32_t)k_low_idx;
+        uint32_t row_offset = row * num_cols;
+
+        if (diag_col < 0) {
+            // Entire row above diagonal -> stamp all neginf
+            stamp_tile_range_l1_acc<dst_batch>(mask_cb, neginf_idx, out_cb, row_offset, num_cols);
+        } else if ((uint32_t)diag_col < num_cols) {
+            // Stamp the diagonal tile
+            tile_regs_acquire();
+            copy_tile(mask_cb, diag_idx, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile<true>(0, out_cb, row_offset + (uint32_t)diag_col);
+            tile_regs_release();
+
+            // Stamp neginf tiles to the right of diagonal
+            uint32_t neginf_start = (uint32_t)diag_col + 1;
+            if (neginf_start < num_cols) {
+                stamp_tile_range_l1_acc<dst_batch>(
+                    mask_cb, neginf_idx, out_cb, row_offset + neginf_start, num_cols - neginf_start);
+            }
+        }
+        // else: diag_col >= num_cols -> entire row below diagonal, no mask needed
+    }
+
+    PACK((llk_pack_reconfig_l1_acc(0)));
+}
+
+/**
  * Context for lightweight mask application in ring joint SDPA.
  * All mask tiles reside in a single CB. A default-constructed instance disables lightweight masking.
  */
 struct LightweightMaskContext {
     bool enabled = false;
+    bool is_causal = false;                  // True only on ring_iter 0 for causal configs
     uint32_t neginf_tile_idx = 0;            // Index of -inf tile in the mask CB
+    uint32_t causal_diag_tile_idx = 0;       // Index of causal diagonal tile in the mask CB
     uint32_t global_n_padded_tiles = 0;      // Fully padded K tile columns for global_n chunk
     uint32_t local_n_padded_tiles = 0;       // Fully padded K tile columns for local_n chunk
     uint32_t joint_n_padded_tiles = 0;       // Fully padded K tile columns for joint_l chunk
@@ -1447,7 +1511,13 @@ struct LightweightMaskContext {
 
     /**
      * Apply the lightweight mask for a given K chunk (non-streaming path).
+     * When is_causal: applies causal stamp, then also applies padding stamp if this K chunk has padding.
+     * When !is_causal: applies padding stamp only.
+     * L1-accumulate stamps are additive, so applying both is safe (-inf + -inf = -inf, -inf + 0 = -inf).
+     *
+     * @tparam dst_size  DST register capacity (8 for fp16b half-sync, 4 for fp32_dest_acc).
      */
+    template <uint32_t dst_size>
     void apply(
         uint32_t cb_mask_in,
         uint32_t cb_qk_im,
@@ -1460,7 +1530,22 @@ struct LightweightMaskContext {
         bool local_n_needs_masking,
         uint32_t global_n_mask_chunk_id,
         uint32_t local_n_mask_chunk_id,
-        uint32_t joint_n_mask_chunk_id) const {
+        uint32_t joint_n_mask_chunk_id,
+        uint32_t q_low_idx = 0) const {
+        if (is_causal) {
+            uint32_t k_low_idx = k_chunk * Sk_chunk_t;
+            apply_causal_mask_lightweight<dst_size>(
+                cb_mask_in,
+                neginf_tile_idx,
+                causal_diag_tile_idx,
+                cb_qk_im,
+                q_low_idx,
+                k_low_idx,
+                Sq_chunk_t,
+                Sk_chunk_t);
+        }
+
+        // Apply padding stamp (also when is_causal — the causal stamp doesn't handle K padding).
         uint32_t num_padded, boundary_col, partial_tile_idx;
         bool has_partial;
         resolve_for_chunk(
@@ -1483,7 +1568,7 @@ struct LightweightMaskContext {
                 cb_mask_in, partial_tile_idx, cb_qk_im, boundary_col, Sk_chunk_t, Sq_chunk_t);
         }
         if (num_padded > 0) {
-            apply_padded_mask_lightweight_runtime(
+            apply_padded_mask_lightweight_runtime<dst_size>(
                 cb_mask_in, neginf_tile_idx, cb_qk_im, num_padded, Sk_chunk_t, Sq_chunk_t);
         }
     }
@@ -1765,20 +1850,18 @@ void sdpa_inner_loop(
              */
 
             bool apply_mask = false;
+            bool needs_padding_mask =
+                (sdpa_type == RING) &&
+                ((ring_iter_needs_global_n_mask && k_chunk == global_n_mask_chunk_id) ||
+                 (local_n_needs_masking && k_chunk == local_n_mask_chunk_id) ||
+                 (ring_iter_needs_joint_n_mask && (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id));
             if (sdpa_type == RING && !is_causal) {
-                apply_mask = (ring_iter_needs_global_n_mask && k_chunk == global_n_mask_chunk_id) ||
-                             (local_n_needs_masking && k_chunk == local_n_mask_chunk_id) ||
-                             (ring_iter_needs_joint_n_mask && (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id);
+                apply_mask = needs_padding_mask;
             } else if (is_causal || sliding_window_size > 0) {
-                // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
-                // Q-range = [q_low, q_high)
-                // K-range = [k_low, k_high)
-                // does_overlap = not (q_low >= k_high or k_low >= q_high)
-                // Due to loop bounds, we should never have k_low >= q_high.
                 const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
                 const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
-                // Apply mask if causal overlap or sliding window is active
-                apply_mask = (q_low_idx < k_high_idx) || (sliding_window_size > 0);
+                // Apply mask if causal overlap, sliding window, or this K chunk has padding
+                apply_mask = (q_low_idx < k_high_idx) || (sliding_window_size > 0) || needs_padding_mask;
             } else if constexpr (use_provided_mask) {
                 apply_mask = true;
             } else if constexpr (use_padded_mask) {
@@ -1793,7 +1876,9 @@ void sdpa_inner_loop(
                 /* QK += MASK */
                 reconfig_data_format(cb_qk_im, cb_mask_in);
                 if (lw_mask.enabled) {
-                    lw_mask.apply(
+                    // TODO: pick up dst_size from dest_helper once available.
+                    constexpr uint32_t dst_size = 8;
+                    lw_mask.template apply<dst_size>(
                         cb_mask_in,
                         cb_qk_im,
                         Sk_chunk_t,
@@ -1805,7 +1890,8 @@ void sdpa_inner_loop(
                         local_n_needs_masking,
                         global_n_mask_chunk_id,
                         local_n_mask_chunk_id,
-                        joint_n_mask_chunk_id);
+                        joint_n_mask_chunk_id,
+                        q_low_idx);
                 } else {
                     add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
                 }
