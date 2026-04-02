@@ -329,6 +329,11 @@ private:
     size_t total_pinned_memory_size_{};
     bool has_tile_counter_registers_{};
     bool supports_implicit_dfb_sync_{};
+    uint32_t num_tile_counters_{};
+    uint32_t overlay_tile_counters_base_addr_{};
+    uint32_t overlay_tile_counters_base_size_{};
+    uint32_t overlay_tile_counters_read_posted_offset_{};
+    uint32_t overlay_tile_counters_read_acked_offset_{};
 
     float eps_ = 0.0f;
     float nan_ = 0.0f;
@@ -401,6 +406,11 @@ public:
     bool has_stream_registers() const { return has_stream_registers_; }
     bool has_tile_counter_registers() const { return has_tile_counter_registers_; }
     bool supports_implicit_dfb_sync() const { return supports_implicit_dfb_sync_; }
+    uint32_t get_num_tile_counters() const { return num_tile_counters_; }
+    uint32_t get_overlay_tile_counters_base_addr() const { return overlay_tile_counters_base_addr_; }
+    uint32_t get_overlay_tile_counters_base_size() const { return overlay_tile_counters_base_size_; }
+    uint32_t get_overlay_tile_counters_read_posted_offset() const { return overlay_tile_counters_read_posted_offset_; }
+    uint32_t get_overlay_tile_counters_read_acked_offset() const { return overlay_tile_counters_read_acked_offset_; }
 
     float get_eps() const { return eps_; }
     float get_nan() const { return nan_; }

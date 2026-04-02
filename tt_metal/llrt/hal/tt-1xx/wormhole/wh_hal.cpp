@@ -358,6 +358,12 @@ void Hal::initialize_wh(
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
     this->has_tile_counter_registers_ = false;
     this->supports_implicit_dfb_sync_ = false;
+    // These don't exist on WH
+    this->num_tile_counters_ = 0;
+    this->overlay_tile_counters_base_addr_ = 0;
+    this->overlay_tile_counters_base_size_ = 0;
+    this->overlay_tile_counters_read_posted_offset_ = 0;
+    this->overlay_tile_counters_read_acked_offset_ = 0;
 
     this->eps_ = EPS_WHB0;
     this->nan_ = NAN_WHB0;

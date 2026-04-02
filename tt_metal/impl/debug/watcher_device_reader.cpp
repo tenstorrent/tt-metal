@@ -1083,28 +1083,51 @@ void WatcherDeviceReader::Core::DumpWaypoints(bool to_stdout) const {
 void WatcherDeviceReader::Core::DumpSyncRegs() const {
     const auto& hal = reader_.env.get_hal();
 
-    if (!hal.has_stream_registers()) {
-        return;
+    if (hal.has_stream_registers()) {
+        uint32_t operand_start_stream = hal.get_operand_start_stream();
+        uint32_t max_cbs = hal.get_arch_num_circular_buffers();
+
+        // Read back all of the stream state, most of it is unused
+        std::vector<uint32_t> data;
+        for (uint32_t operand = 0; operand < max_cbs; operand++) {
+            uint32_t base = NOC_OVERLAY_START_ADDR + ((operand_start_stream + operand) * NOC_STREAM_REG_SPACE_SIZE);
+
+            uint32_t rcvd_addr = base + (STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX * sizeof(uint32_t));
+            data = reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, rcvd_addr, sizeof(uint32_t));
+            uint32_t rcvd = data[0];
+
+            uint32_t ackd_addr = base + (STREAM_REMOTE_DEST_BUF_START_REG_INDEX * sizeof(uint32_t));
+            data = reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, ackd_addr, sizeof(uint32_t));
+            uint32_t ackd = data[0];
+
+            if (rcvd != ackd) {
+                fprintf(reader_.f, "cb[%d](rcv %d!=ack %d) ", operand, rcvd, ackd);
+            }
+        }
     }
 
-    uint32_t operand_start_stream = hal.get_operand_start_stream();
-    uint32_t max_cbs = hal.get_arch_num_circular_buffers();
+    if (hal.has_tile_counter_registers()) {
+        uint32_t overlay_tile_counters_base_addr = hal.get_overlay_tile_counters_base_addr();
+        uint32_t overlay_tile_counters_base_size = hal.get_overlay_tile_counters_base_size();
+        uint32_t overlay_tile_counters_read_posted_offset = hal.get_overlay_tile_counters_read_posted_offset();
+        uint32_t overlay_tile_counters_read_acked_offset = hal.get_overlay_tile_counters_read_acked_offset();
 
-    // Read back all of the stream state, most of it is unused
-    std::vector<uint32_t> data;
-    for (uint32_t operand = 0; operand < max_cbs; operand++) {
-        uint32_t base = NOC_OVERLAY_START_ADDR + ((operand_start_stream + operand) * NOC_STREAM_REG_SPACE_SIZE);
+        std::vector<uint32_t> data;
+        for (uint32_t i = 0; i < hal.get_num_tile_counters(); i++) {
+            uint32_t tile_base_addr = overlay_tile_counters_base_addr + overlay_tile_counters_base_size * i;
 
-        uint32_t rcvd_addr = base + (STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX * sizeof(uint32_t));
-        data = reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, rcvd_addr, sizeof(uint32_t));
-        uint32_t rcvd = data[0];
+            uint32_t posted_addr = tile_base_addr + overlay_tile_counters_read_posted_offset;
+            data =
+                reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, posted_addr, sizeof(uint32_t));
+            uint32_t posted = data[0];
 
-        uint32_t ackd_addr = base + (STREAM_REMOTE_DEST_BUF_START_REG_INDEX * sizeof(uint32_t));
-        data = reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, ackd_addr, sizeof(uint32_t));
-        uint32_t ackd = data[0];
+            uint32_t ackd_addr = tile_base_addr + overlay_tile_counters_read_acked_offset;
+            data = reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, ackd_addr, sizeof(uint32_t));
+            uint32_t ackd = data[0];
 
-        if (rcvd != ackd) {
-            fprintf(reader_.f, "cb[%d](rcv %d!=ack %d) ", operand, rcvd, ackd);
+            if (posted != ackd) {
+                fprintf(reader_.f, "\n  TC[%d]: posted=%d acked=%d (stalled) ", i, posted, ackd);
+            }
         }
     }
 }

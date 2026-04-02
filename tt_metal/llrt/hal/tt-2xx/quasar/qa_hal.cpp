@@ -13,9 +13,11 @@
 #include "eth_fw_api.h"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
+#include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
 #include "tensix.h"
 #include "hal_2xx_common.hpp"
+#include "overlay/meta/registers/overlay_reg_defines_core.h"
 
 namespace {
 
@@ -488,6 +490,15 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
     this->has_tile_counter_registers_ = true;
     this->supports_implicit_dfb_sync_ = true;
+    this->num_tile_counters_ = NOC_NUM_TILE_COUNTERS;
+    this->overlay_tile_counters_base_addr_ =
+        TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_0__REG_FILE_BASE_ADDR;
+    this->overlay_tile_counters_base_size_ =
+        TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_0__REG_FILE_SIZE;
+    this->overlay_tile_counters_read_posted_offset_ =
+        TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_0__READ_POSTED_REG_OFFSET;
+    this->overlay_tile_counters_read_acked_offset_ =
+        TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_0__READ_ACKED_REG_OFFSET;
 
     this->eps_ = EPS_QA;
     this->nan_ = NAN_QA;
