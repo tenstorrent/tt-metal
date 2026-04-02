@@ -14,7 +14,7 @@ from tests.ttnn.nightly.unit_tests.operations.matmul.test_matmul_1d_gather_in0 i
     num_cores_to_rectangle_grid,
     round_up,
 )
-from tests.tests_common.cache_entries_counter import CacheEntriesCounter
+
 from models.demos.llama3_70b_galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
@@ -182,87 +182,85 @@ def run_all_reduce_impl(
     ##### Run the op
     ##################################
 
-    cache_entries_counter = CacheEntriesCounter(mesh_device)
-
     def run_op(n_iters, store_all_results=True):
         outs = []
-        for i in range(n_iters):
-            if i % loopback_size == 0:
-                tt_input = tt_input_tensor
+        with mesh_device.cache_entries_counter.measure():
+            for i in range(n_iters):
+                if i % loopback_size == 0:
+                    tt_input = tt_input_tensor
 
-            out = ttnn.experimental.all_reduce_async(
-                tt_input,
-                tt_intermediate_tensors[i % num_buffers],
-                cluster_axis=cluster_axis,
-                mesh_device=mesh_device,
-                multi_device_global_semaphore=ccl_semaphore_handles[i % num_buffers],
-                memory_config=output_mem_config,
-                dtype=output_dtype,
-                topology=all_reduce_topology,
-                num_links=num_links,
-                subdevice_id=worker_sub_device_id,
-            )
-            if not trace_mode:
-                ttnn.synchronize_device(mesh_device)
+                out = ttnn.experimental.all_reduce_async(
+                    tt_input,
+                    tt_intermediate_tensors[i % num_buffers],
+                    cluster_axis=cluster_axis,
+                    mesh_device=mesh_device,
+                    multi_device_global_semaphore=ccl_semaphore_handles[i % num_buffers],
+                    memory_config=output_mem_config,
+                    dtype=output_dtype,
+                    topology=all_reduce_topology,
+                    num_links=num_links,
+                    subdevice_id=worker_sub_device_id,
+                )
+                if not trace_mode:
+                    ttnn.synchronize_device(mesh_device)
+                if store_all_results:
+                    outs.append(out)
+
+                # Loop back the output to the input
+                if loopback_size != 1:
+                    tt_input = ttnn.reshard(out, input_mem_config)
+
             if store_all_results:
-                outs.append(out)
+                return outs
+            else:
+                return [out]
 
-            # Loop back the output to the input
-            if loopback_size != 1:
-                tt_input = ttnn.reshard(out, input_mem_config)
+    if trace_mode:
+        ##### Compile Model #####
+        logger.info("Compiling model")
+        tt_outs = run_op(num_iters, store_all_results=validate_all)
 
-        if store_all_results:
-            return outs
-        else:
-            return [out]
-
-    with cache_entries_counter.measure():
-        if trace_mode:
-            ##### Compile Model #####
-            logger.info("Compiling model")
-            tt_outs = run_op(num_iters, store_all_results=validate_all)
-
-            ##### Capture Trace #####
-            logger.info("Capturing trace")
-            if warmup_iters > 0:
-                trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-                tt_outs = run_op(warmup_iters, store_all_results=validate_all)
-                ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
-                ttnn.synchronize_device(mesh_device)
-
-            trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-            tt_outs = run_op(num_iters, store_all_results=validate_all)
-            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ##### Capture Trace #####
+        logger.info("Capturing trace")
+        if warmup_iters > 0:
+            trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            tt_outs = run_op(warmup_iters, store_all_results=validate_all)
+            ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
             ttnn.synchronize_device(mesh_device)
 
-            ##### Run Trace #####
-            logger.info("Starting Trace perf test...")
-            profiler.start("all-reduce-async-trace-warmup")
-            if warmup_iters > 0:
-                ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
-                ttnn.release_trace(mesh_device, trace_id_warmup)
-                ttnn.synchronize_device(mesh_device)
-            profiler.end("all-reduce-async-trace-warmup")
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        tt_outs = run_op(num_iters, store_all_results=validate_all)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
 
-            signpost("start")
-            profiler.start("all-reduce-async-trace")
-            ttnn.execute_trace(mesh_device, trace_id, blocking=False)
-            ttnn.release_trace(mesh_device, trace_id)
+        ##### Run Trace #####
+        logger.info("Starting Trace perf test...")
+        profiler.start("all-reduce-async-trace-warmup")
+        if warmup_iters > 0:
+            ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
+            ttnn.release_trace(mesh_device, trace_id_warmup)
             ttnn.synchronize_device(mesh_device)
-            profiler.end("all-reduce-async-trace")
-            signpost("stop")
-            time_taken = profiler.get_duration("all-reduce-async-trace") - profiler.get_duration(
-                "all-reduce-async-trace-warmup"
-            )
-            effective_iter = num_iters - warmup_iters
-            logger.info(f"Time taken e2e: {time_taken} s")
-            logger.info(f"Time per iter e2e: {time_taken / effective_iter} s")
-            logger.info(f"Time per iter e2e: {time_taken / effective_iter * 1e6} us")
+        profiler.end("all-reduce-async-trace-warmup")
 
-        else:
-            signpost("start")
-            tt_outs = run_op(num_iters, store_all_results=validate_all)
-            signpost("stop")
+        signpost("start")
+        profiler.start("all-reduce-async-trace")
+        ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+        ttnn.release_trace(mesh_device, trace_id)
+        ttnn.synchronize_device(mesh_device)
+        profiler.end("all-reduce-async-trace")
+        signpost("stop")
+        time_taken = profiler.get_duration("all-reduce-async-trace") - profiler.get_duration(
+            "all-reduce-async-trace-warmup"
+        )
+        effective_iter = num_iters - warmup_iters
+        logger.info(f"Time taken e2e: {time_taken} s")
+        logger.info(f"Time per iter e2e: {time_taken / effective_iter} s")
+        logger.info(f"Time per iter e2e: {time_taken / effective_iter * 1e6} us")
+
+    else:
+        signpost("start")
+        tt_outs = run_op(num_iters, store_all_results=validate_all)
+        signpost("stop")
 
     ##################################
     ##### Validation
@@ -297,8 +295,9 @@ def run_all_reduce_impl(
 
     reshard_op_cnt = 1 if loopback_size > 1 else 0
     assert (
-        cache_entries_counter.total == 1 + reshard_op_cnt or cache_entries_counter.total == num_iters + reshard_op_cnt
-    ), f"Device has {cache_entries_counter.total} program cache entries"
+        mesh_device.cache_entries_counter.total == 1 + reshard_op_cnt
+        or mesh_device.cache_entries_counter.total == num_iters + reshard_op_cnt
+    ), f"Device has {mesh_device.cache_entries_counter.total} program cache entries"
 
     mesh_device.reset_sub_device_stall_group()
 
