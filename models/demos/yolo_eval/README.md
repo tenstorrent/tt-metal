@@ -3,6 +3,7 @@
 - Dataset used: `coco-2017` validation dataset.
 - Loading the dataset using `fiftyone` package.
 - The number of samples is set to 500.
+- **SAHI + Ultralytics (sliced inference):** setup and run instructions are in [README_SAHI.md](README_SAHI.md), including bootstrapping `pip` when it is missing, headless OpenCV, and NumPy/OpenCV pins compatible with **ttnn**.
 
 ### The below observations are for ttnn_model vs dataset(ground truth data):
 

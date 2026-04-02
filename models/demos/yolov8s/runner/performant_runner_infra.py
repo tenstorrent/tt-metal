@@ -40,6 +40,7 @@ class YOLOv8sPerformanceRunnerInfra:
         input_shape = (self.batch_size, 3, 640, 640)
         inp_h, inp_w = input_shape[2], input_shape[3]
         parameters = preprocess_model_parameters(
+            model_name="demos/yolov8s",
             initialize_model=lambda: torch_model,
             custom_preprocessor=create_custom_mesh_preprocessor(device, self.weights_mesh_mapper),
             device=device,

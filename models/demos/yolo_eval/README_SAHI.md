@@ -4,7 +4,17 @@ This adds a lightweight test harness to evaluate whether sliced inference with S
 
 ## 1) Install dependencies
 
-From repo root:
+From repo root, use the same Python interpreter you use for TT Metal / demos (for example `tt-metal/python_env/bin/python`).
+
+### If `pip` is missing (`No module named pip`)
+
+Bootstrap and upgrade `pip`:
+
+```bash
+python -m ensurepip --upgrade && python -m pip install -U pip
+```
+
+### Core packages
 
 ```bash
 python -m pip install -U ultralytics sahi
@@ -15,6 +25,40 @@ If your environment already uses `tt-metal/tt_metal/python_env/requirements-dev.
 ```bash
 python -m pip install -U sahi
 ```
+
+### Headless OpenCV (servers / no GUI)
+
+Prefer the headless OpenCV wheel. After installing SAHI, remove the full `opencv-python` package if it is present, then install `opencv-python-headless`:
+
+```bash
+python -m pip install -U sahi && python -m pip uninstall -y opencv-python || true
+python -m pip install -U opencv-python-headless
+```
+
+### ttnn / NumPy / OpenCV pins
+
+Upgrading `opencv-python-headless` without a cap can pull **NumPy 2.x**, which conflicts with **ttnn** (`numpy<2`) and common **Ultralytics** pins. If you hit that, constrain NumPy and OpenCV:
+
+```bash
+python -m pip install -U "numpy>=1.24.4,<2" "opencv-python-headless<=4.11.0.86"
+```
+
+### Example: explicit `python_env` path
+
+Replace `/path/to/tt-metal` with your checkout (for example `/home/you/tt-metal`):
+
+```bash
+"/path/to/tt-metal/python_env/bin/python" -m ensurepip --upgrade && \
+"/path/to/tt-metal/python_env/bin/python" -m pip install -U pip
+
+"/path/to/tt-metal/python_env/bin/python" -m pip install -U sahi && \
+"/path/to/tt-metal/python_env/bin/python" -m pip uninstall -y opencv-python || true
+"/path/to/tt-metal/python_env/bin/python" -m pip install -U opencv-python-headless
+
+"/path/to/tt-metal/python_env/bin/python" -m pip install -U "numpy>=1.24.4,<2" "opencv-python-headless<=4.11.0.86"
+```
+
+Pip may warn that some packages list a dependency on the `opencv-python` *distribution*; `opencv-python-headless` still provides `cv2` and is the right choice for headless machines.
 
 ## 2) Run baseline vs sliced inference
 
@@ -81,6 +125,41 @@ python models/demos/yolo_eval/sahi_ultralytics_eval.py \
   --save-visuals \
   --save-slice-grid-overlay
 ```
+
+**Multi-chip / Ethernet dispatch:** On systems such as T3K (1×8), you may want dispatch on Ethernet cores (same idea as metal unit tests). Either export before Python:
+
+```bash
+export TT_METAL_GTEST_ETH_DISPATCH=1
+```
+
+or pass the script flag (sets the variable before `ttnn` loads):
+
+```bash
+python models/demos/yolo_eval/sahi_ultralytics_eval.py --tt-eth-dispatch --backend tt ...
+```
+
+**One slice per wormhole (SAHI merge):** To run up to **N different** 640×640 SAHI tiles in **one** TT forward—batch dim 0 sharded so **each chip gets one slice**—set **`--tt-slice-parallel-devices N`**. The script opens a dedicated **1×N** mesh (first N devices in row-major order), not a submesh off a larger parent mesh—avoiding Metal teardown errors from shared command queues between parent and child meshes. SAHI still slices and merges predictions on the host. Example for four 640×640 quadrants on four chips:
+
+```bash
+python models/demos/yolo_eval/sahi_ultralytics_eval.py \
+  --backend tt \
+  --tt-model yolov8s \
+  --tt-slice-parallel-devices 4 \
+  --tt-eth-dispatch \
+  --input /path/to/image.jpg \
+  --pre-resize-to 1280 1280 \
+  --slice-height 640 \
+  --slice-width 640 \
+  --overlap-height-ratio 0 \
+  --overlap-width-ratio 0 \
+  --postprocess-type GREEDYNMM \
+  --postprocess-match-metric IOS \
+  --postprocess-match-threshold 0.1 \
+  --confidence-threshold 0.55 \
+  --save-visuals
+```
+
+If the last batch has fewer than N slices, the remainder is padded with black images; padded slots are not merged into SAHI output. Omit **`--tt-slice-parallel-devices`** to keep the previous behavior (each slice replicated across the full mesh per forward).
 
 ## 3) Outputs
 

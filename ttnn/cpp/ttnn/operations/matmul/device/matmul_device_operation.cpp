@@ -163,7 +163,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             attributes.output_mem_config.buffer_type());
         if (attributes.output_mem_config.shard_spec().has_value() &&
             output_tensor_spec.memory_config() != attributes.output_mem_config) {
-            log_warning(
+            log_debug(
                 tt::LogOp,
                 "Mismatch between computed {} and provided {} mem config. Using computed config.",
                 output_tensor_spec.memory_config(),

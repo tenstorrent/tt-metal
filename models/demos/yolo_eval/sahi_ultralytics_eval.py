@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import os
 import shutil
+import sys
 import tempfile
 import time
 from pathlib import Path
 
+# Ethernet dispatch must be selected before ttnn/metal runtime reads env (common_demo_utils imports ttnn).
+if __name__ == "__main__" and "--tt-eth-dispatch" in sys.argv:
+    os.environ.setdefault("TT_METAL_GTEST_ETH_DISPATCH", "1")
+
 import cv2
+import numpy as np
 import torch
 from PIL import Image, ImageDraw, UnidentifiedImageError
 from sahi import AutoDetectionModel
@@ -14,10 +21,104 @@ from sahi.postprocess.combine import GreedyNMMPostprocess, LSNMSPostprocess, NMM
 from sahi.predict import get_prediction, get_sliced_prediction
 from sahi.prediction import ObjectPrediction, PredictionResult
 from sahi.slicing import slice_image
+from sahi.utils.cv import read_image_as_pil
 
-from models.demos.utils.common_demo_utils import load_coco_class_names, postprocess, preprocess
+from models.demos.utils.common_demo_utils import get_mesh_mappers, load_coco_class_names, postprocess, preprocess
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+
+def load_image_bgr_sahi(image_path) -> np.ndarray:
+    """BGR uint8 image matching SAHI / PIL (EXIF orientation applied). OpenCV imread does not rotate by EXIF."""
+    pil = read_image_as_pil(str(image_path), exif_fix=True)
+    rgb = np.asarray(pil.convert("RGB"), dtype=np.uint8)
+    return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+
+
+def parallel_slice_chunk_bounds(num_slices: int, parallel: int):
+    """Yield (start_index, num_valid_in_chunk) for batching SAHI slices across `parallel` devices."""
+    i = 0
+    while i < num_slices:
+        n_valid = min(parallel, num_slices - i)
+        yield i, n_valid
+        i += parallel
+
+
+def _tt_device_open_kwargs(args):
+    return {
+        "l1_small_size": args.tt_l1_small_size,
+        "trace_region_size": args.tt_trace_region_size,
+        "num_command_queues": 2,
+    }
+
+
+def _system_or_configured_mesh_device_count(ttnn, args) -> int:
+    """Upper bound on devices we can use (from --tt-mesh-shape or system descriptor)."""
+    if args.tt_mesh_shape is not None:
+        rows, cols = args.tt_mesh_shape
+        return int(rows) * int(cols)
+    sys_shape = tuple(ttnn._ttnn.multi_device.SystemMeshDescriptor().shape())
+    if len(sys_shape) != 2:
+        raise RuntimeError(f"Unexpected system mesh shape tuple: {sys_shape}")
+    return int(sys_shape[0]) * int(sys_shape[1])
+
+
+def _open_tt_yolo_device(ttnn, args):
+    """
+    Open a mesh device when multiple chips are available (e.g. T3K 1x8); otherwise open_device.
+    Matches models/demos/yolov8s/demo/demo.py (test_demo vs test_demo_dp).
+
+    Uses SystemMeshDescriptor for single-vs-multi detection instead of ttnn.get_num_devices():
+    GetNumAvailableDevices() can block for minutes and then throw (e.g. arc core start timeout)
+    on a bad driver state after an unclean process exit.
+    """
+    kwargs = _tt_device_open_kwargs(args)
+    if getattr(args, "tt_force_single_device", False):
+        return ttnn.open_device(device_id=args.tt_device_id, **kwargs), False
+
+    if args.tt_mesh_shape is not None:
+        rows, cols = args.tt_mesh_shape
+        mesh_shape = ttnn.MeshShape(int(rows), int(cols))
+        return ttnn.open_mesh_device(mesh_shape=mesh_shape, **kwargs), True
+
+    sys_shape = tuple(ttnn._ttnn.multi_device.SystemMeshDescriptor().shape())
+    if len(sys_shape) != 2:
+        raise RuntimeError(f"Unexpected system mesh shape tuple: {sys_shape}")
+    mesh_rows, mesh_cols = int(sys_shape[0]), int(sys_shape[1])
+    if mesh_rows * mesh_cols <= 1:
+        return ttnn.open_device(device_id=args.tt_device_id, **kwargs), False
+
+    mesh_shape = ttnn.MeshShape(mesh_rows, mesh_cols)
+    return ttnn.open_mesh_device(mesh_shape=mesh_shape, **kwargs), True
+
+
+def _open_tt_slice_parallel_device(ttnn, args, n_par: int):
+    """
+    Open exactly n_par chips as a 1×n row mesh (or open_device when n_par==1).
+
+    Do not use create_submesh() off a larger parent mesh: closing the child can fail with
+    "MeshDevice cq ID ... is in use by parent mesh ..." because parent and submesh share CQs.
+    """
+    kwargs = _tt_device_open_kwargs(args)
+    if getattr(args, "tt_force_single_device", False):
+        if n_par != 1:
+            raise ValueError("--tt-force-single-device is incompatible with --tt-slice-parallel-devices > 1")
+        return ttnn.open_device(device_id=args.tt_device_id, **kwargs), False
+
+    max_devices = _system_or_configured_mesh_device_count(ttnn, args)
+    if n_par > max_devices:
+        raise ValueError(
+            f"--tt-slice-parallel-devices {n_par} exceeds available mesh devices ({max_devices}); "
+            "adjust --tt-mesh-shape or hardware."
+        )
+    if n_par < 1:
+        raise ValueError("--tt-slice-parallel-devices must be >= 1")
+
+    if n_par == 1:
+        return ttnn.open_device(device_id=args.tt_device_id, **kwargs), False
+
+    mesh_shape = ttnn.MeshShape(1, n_par)
+    return ttnn.open_mesh_device(mesh_shape=mesh_shape, **kwargs), True
 
 
 def parse_args() -> argparse.Namespace:
@@ -61,6 +162,35 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=6434816,
         help="TT device trace_region_size (YOLOv8s demo uses 6434816; override if your device requires it).",
+    )
+    parser.add_argument(
+        "--tt-mesh-shape",
+        type=int,
+        nargs=2,
+        metavar=("ROWS", "COLS"),
+        default=None,
+        help="TT mesh shape for multi-chip systems (e.g. 1 8 for T3K). Default: system mesh from SystemMeshDescriptor. "
+        "Use this if device open fails (e.g. arc core timeout) so shape is explicit.",
+    )
+    parser.add_argument(
+        "--tt-force-single-device",
+        action="store_true",
+        help="Use open_device(device_id) even when multiple chips exist (may fail on mesh-only setups).",
+    )
+    parser.add_argument(
+        "--tt-eth-dispatch",
+        action="store_true",
+        help="Set TT_METAL_GTEST_ETH_DISPATCH=1 before device init (Ethernet cores for dispatch; useful on multi-chip). "
+        "Equivalent: export TT_METAL_GTEST_ETH_DISPATCH=1 before python.",
+    )
+    parser.add_argument(
+        "--tt-slice-parallel-devices",
+        type=int,
+        default=None,
+        metavar="N",
+        help="TT mesh width for SAHI sliced mode: use a 1×N submesh so each of N simultaneous 640×640 inputs is sharded "
+        "to one wormhole chip (data parallel on batch dim). Requires a parent mesh with ≥N devices (e.g. T3K 1×8 with "
+        "N=4). Omit for legacy behavior (full parent mesh, same slice replicated on all devices per forward).",
     )
     parser.add_argument(
         "--confidence-threshold",
@@ -198,36 +328,86 @@ class TTYoloBackend:
 
         self.ttnn = ttnn
         self.tt_model_name = args.tt_model
-        self.device = ttnn.open_device(
-            device_id=args.tt_device_id,
-            l1_small_size=args.tt_l1_small_size,
-            trace_region_size=args.tt_trace_region_size,
-            num_command_queues=2,
-        )
+
+        n_par = getattr(args, "tt_slice_parallel_devices", None)
+        if n_par is not None:
+            n_par = int(n_par)
+            max_devices = _system_or_configured_mesh_device_count(ttnn, args)
+            if n_par > 1 and max_devices <= 1:
+                raise ValueError(
+                    "--tt-slice-parallel-devices > 1 requires a multi-chip system (or set --tt-mesh-shape to a multi-device shape)."
+                )
+            self.device, self._is_mesh_device = _open_tt_slice_parallel_device(ttnn, args, n_par)
+        else:
+            self.device, self._is_mesh_device = _open_tt_yolo_device(ttnn, args)
+
+        self.num_devices = self.device.get_num_devices()
+        inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(self.device)
+        self.output_mesh_composer = output_mesh_composer
+        batch_size = self.num_devices
+
         if args.tt_model == "yolov8s":
-            self.runner = YOLOv8sPerformantRunner(self.device, device_batch_size=1)
+            self.runner = YOLOv8sPerformantRunner(
+                self.device,
+                device_batch_size=batch_size,
+                mesh_mapper=inputs_mesh_mapper,
+                mesh_composer=output_mesh_composer,
+                weights_mesh_mapper=weights_mesh_mapper,
+            )
         elif args.tt_model == "yolov8x":
-            self.runner = YOLOv8xPerformantRunner(self.device, device_batch_size=1)
+            self.runner = YOLOv8xPerformantRunner(
+                self.device,
+                device_batch_size=batch_size,
+                inputs_mesh_mapper=inputs_mesh_mapper,
+                weights_mesh_mapper=weights_mesh_mapper,
+                outputs_mesh_composer=output_mesh_composer,
+            )
         else:
             raise ValueError(f"Unsupported --tt-model: {args.tt_model}")
         self.names = load_coco_class_names()
         self.confidence_threshold = args.confidence_threshold
+        self.slice_parallel_devices = getattr(args, "tt_slice_parallel_devices", None)
 
     def close(self):
         try:
             self.runner.release()
         finally:
-            self.ttnn.close_device(self.device)
+            try:
+                self.ttnn.synchronize_device(self.device)
+            except Exception:
+                pass
+            if self._is_mesh_device:
+                self.ttnn.close_mesh_device(self.device)
+            else:
+                self.ttnn.close_device(self.device)
+
+    def _forward_preprocessed_batch(self, im_tensor: torch.Tensor, orig_imgs: list, paths: tuple):
+        """im_tensor shape (num_devices, 3, H, W); orig_imgs length num_devices."""
+        preds = self.runner.run(im_tensor)
+        if isinstance(preds, (list, tuple)):
+            preds = preds[0]
+        preds = self.ttnn.to_torch(preds, dtype=torch.float32, mesh_composer=self.output_mesh_composer)
+        return postprocess(preds, im_tensor, orig_imgs, paths, self.names)
 
     def infer_bgr_image(self, image_bgr, image_id: str):
         im_tensor = preprocess([image_bgr], res=self._TT_INPUT_RES)
-        preds = self.runner.run(im_tensor)
-        # YOLOv8x performant runner returns a single tensor; YOLOv8s returns a list (use primary head).
-        if isinstance(preds, (list, tuple)):
-            preds = preds[0]
-        preds = self.ttnn.to_torch(preds, dtype=torch.float32)
-        results = postprocess(preds, im_tensor, [image_bgr], ([image_id],), self.names)
+        if self.num_devices > 1:
+            im_tensor = im_tensor.repeat(self.num_devices, 1, 1, 1)
+        orig_imgs = [image_bgr] * self.num_devices
+        paths = ([image_id] * self.num_devices,)
+        results = self._forward_preprocessed_batch(im_tensor, orig_imgs, paths)
         return results[0]
+
+    def infer_bgr_images_distinct(self, images_bgr: list, image_id: str):
+        """
+        One 640×640 (letterboxed) input per mesh device; batch dim is sharded so each chip runs a different slice.
+        """
+        if len(images_bgr) != self.num_devices:
+            raise ValueError(f"Expected {self.num_devices} images, got {len(images_bgr)}")
+        parts = [preprocess([im], res=self._TT_INPUT_RES) for im in images_bgr]
+        im_tensor = torch.cat(parts, dim=0)
+        paths = ([f"{image_id}#slot{i}" for i in range(self.num_devices)],)
+        return self._forward_preprocessed_batch(im_tensor, images_bgr, paths)
 
 
 def result_to_object_predictions(result_dict, shift_xy=(0, 0), full_shape=None, confidence_threshold=0.25):
@@ -268,9 +448,10 @@ def build_postprocess(postprocess_type: str, match_metric: str, match_threshold:
 
 def run_tt_full_prediction(tt_backend: TTYoloBackend, image_path: Path):
     start = time.perf_counter()
-    image_bgr = cv2.imread(str(image_path))
-    if image_bgr is None:
-        raise ValueError(f"Failed to read image: {image_path}")
+    try:
+        image_bgr = load_image_bgr_sahi(image_path)
+    except Exception as e:
+        raise ValueError(f"Failed to read image: {image_path}") from e
     result_dict = tt_backend.infer_bgr_image(image_bgr, str(image_path))
     obj_preds = result_to_object_predictions(
         result_dict,
@@ -306,17 +487,47 @@ def run_tt_sliced_prediction(
     print(f"Performing prediction on {len(slice_result.images)} slices.")
     all_obj_preds = []
     full_shape = [slice_result.original_image_height, slice_result.original_image_width]
-    for (start_x, start_y), slice_img in zip(slice_result.starting_pixels, slice_result.images):
-        slice_bgr = cv2.cvtColor(slice_img, cv2.COLOR_RGB2BGR)
-        result_dict = tt_backend.infer_bgr_image(slice_bgr, str(image_path))
-        all_obj_preds.extend(
-            result_to_object_predictions(
-                result_dict,
-                shift_xy=(start_x, start_y),
-                full_shape=full_shape,
-                confidence_threshold=tt_backend.confidence_threshold,
+    use_distinct_slice_batch = tt_backend.slice_parallel_devices is not None
+    parallel = tt_backend.num_devices if use_distinct_slice_batch else 1
+    black_bgr = np.zeros((TTYoloBackend._TT_INPUT_RES[1], TTYoloBackend._TT_INPUT_RES[0], 3), dtype=np.uint8)
+
+    slice_entries = list(zip(slice_result.starting_pixels, slice_result.images))
+    if not use_distinct_slice_batch:
+        for (start_x, start_y), slice_img in slice_entries:
+            slice_bgr = cv2.cvtColor(slice_img, cv2.COLOR_RGB2BGR)
+            result_dict = tt_backend.infer_bgr_image(slice_bgr, str(image_path))
+            all_obj_preds.extend(
+                result_to_object_predictions(
+                    result_dict,
+                    shift_xy=(start_x, start_y),
+                    full_shape=full_shape,
+                    confidence_threshold=tt_backend.confidence_threshold,
+                )
             )
-        )
+    else:
+        for idx, n_valid in parallel_slice_chunk_bounds(len(slice_entries), parallel):
+            chunk = slice_entries[idx : idx + n_valid]
+            shifts = []
+            batch_bgr = []
+            for (start_x, start_y), slice_img in chunk:
+                shifts.append((start_x, start_y))
+                batch_bgr.append(cv2.cvtColor(slice_img, cv2.COLOR_RGB2BGR))
+            for _ in range(parallel - len(chunk)):
+                shifts.append((0, 0))
+                batch_bgr.append(black_bgr.copy())
+            batch_results = tt_backend.infer_bgr_images_distinct(batch_bgr, str(image_path))
+            for j in range(n_valid):
+                all_obj_preds.extend(
+                    result_to_object_predictions(
+                        batch_results[j],
+                        shift_xy=shifts[j],
+                        full_shape=full_shape,
+                        confidence_threshold=tt_backend.confidence_threshold,
+                    )
+                )
+    # Match sahi.predict.get_sliced_prediction: shift each slice to full-image coords before NMS/NMM.
+    # Running postprocess on slice-local boxes breaks overlap logic and merges (wrong unions / missed suppressions).
+    all_obj_preds = [p.get_shifted_object_prediction() for p in all_obj_preds]
     postprocess = build_postprocess(
         postprocess_type=postprocess_type,
         match_metric=postprocess_match_metric,
@@ -324,8 +535,6 @@ def run_tt_sliced_prediction(
         class_agnostic=postprocess_class_agnostic,
     )
     merged_obj_preds = postprocess(all_obj_preds)
-    # Normalize merged predictions to global coordinates before visualization/export.
-    merged_obj_preds = [pred.get_shifted_object_prediction() for pred in merged_obj_preds]
     elapsed = time.perf_counter() - start
     return PredictionResult(object_prediction_list=merged_obj_preds, image=str(image_path)), elapsed
 
@@ -448,8 +657,9 @@ def main():
         except Exception as e:
             raise RuntimeError(
                 "Failed to initialize TT YOLO backend. "
-                "This is often due to an API/runtime mismatch between current tt-metal and the demo runner. "
-                "Verify the matching PCC test first, e.g. "
+                "If the cause mentions arc core timeout or Ethernet flush, reset the board (e.g. `tt-smi -r`) "
+                "after an unclean exit, or pass an explicit mesh, e.g. `--tt-mesh-shape 1 8`. "
+                "Otherwise this may be an API/runtime mismatch: run "
                 "`pytest --disable-warnings models/demos/yolov8s/tests/pcc/test_yolov8s.py::test_yolov8s_640` "
                 "or `pytest --disable-warnings models/demos/yolov8x/tests/pcc/test_yolov8x.py::test_yolov8x_640`."
             ) from e
@@ -531,6 +741,8 @@ def main():
             "model": args.model if args.backend == "ultralytics" else args.tt_model,
             "backend": args.backend,
             "tt_model": args.tt_model if args.backend == "tt" else None,
+            "tt_slice_parallel_devices": args.tt_slice_parallel_devices if args.backend == "tt" else None,
+            "tt_mesh_shape": list(args.tt_mesh_shape) if args.backend == "tt" and args.tt_mesh_shape else None,
             "confidence_threshold": args.confidence_threshold,
             "device": args.device if args.backend == "ultralytics" else f"tt:{args.tt_device_id}",
             "slice_height": args.slice_height,

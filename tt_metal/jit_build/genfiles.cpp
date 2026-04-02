@@ -180,7 +180,8 @@ void jit_build_genfiles_triscs_src(
     if (simplified) {
         log_trace(tt::LogBuildKernels, "Detected simplified compute kernel syntax (kernel_main)");
     } else {
-        log_warning(
+        // Legacy syntax still works; migration is ongoing across many kernels — debug avoids log spam per JIT compile.
+        log_debug(
             tt::LogBuildKernels,
             "Compute kernel '{}' uses deprecated 'namespace NAMESPACE {{ void MAIN {{ }} }}' syntax. "
             "Please migrate to simplified 'void kernel_main() {{ }}' syntax.",
