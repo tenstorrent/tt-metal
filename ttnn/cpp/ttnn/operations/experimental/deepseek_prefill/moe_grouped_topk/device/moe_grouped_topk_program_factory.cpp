@@ -256,6 +256,7 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
         {"cb_normalized_scores", cb_normalized_scores},
         {"cb_reciprocal_sums", cb_reciprocal_sums},
         {"cb_gathered_sigmoid", cb_gathered_sigmoid},
+        {"stable_sort", static_cast<uint32_t>(operation_attributes.stable_sort)},
     };
 
     std::vector<uint32_t> compute_compile_time_args = {};

@@ -6,7 +6,6 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
-#include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk {
 
@@ -18,6 +17,7 @@ struct MoeGroupedTopkDeviceOperation {
         uint32_t n_activated_experts;
         float route_scale;
         float epsilon;
+        bool stable_sort;
         MemoryConfig output_mem_config;
     };
 
@@ -77,6 +77,7 @@ moe_grouped_topk(
     uint32_t n_activated_experts,
     float route_scale,
     float epsilon,
+    bool stable_sort = false,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 }  // namespace ttnn::prim

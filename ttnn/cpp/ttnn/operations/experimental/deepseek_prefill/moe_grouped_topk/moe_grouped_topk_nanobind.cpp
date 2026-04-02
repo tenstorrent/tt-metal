@@ -27,6 +27,7 @@ void bind_moe_grouped_topk(nb::module_& mod) {
                 summed_experts_per_group (int): Number of experts per group to sum prior to ranking groups. Right now this number must be 2.
                 topk_groups (int): Number of top groups to select from. Right now this number must be 4.
                 n_activated_experts (int): Number of final experts to select per token. Right now this number must be 8.
+                stable_sort (bool): Use stable sorting in topk to maintain relative order of equal-valued elements. Defaults to False.
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. Defaults to None, which results in auto-selection.
 
             Returns:
@@ -42,6 +43,7 @@ void bind_moe_grouped_topk(nb::module_& mod) {
         nb::arg("n_activated_experts") = 8,
         nb::arg("route_scale") = 1.0f,
         nb::arg("epsilon") = 1e-20f,
+        nb::arg("stable_sort") = false,
         nb::arg("memory_config") = nb::none());
 }
 

@@ -16,6 +16,7 @@ std::array<Tensor, 2> moe_grouped_topk(
     uint32_t n_activated_experts,
     float route_scale,
     float epsilon,
+    bool stable_sort,
     const std::optional<MemoryConfig>& output_mem_config) {
     return ttnn::prim::moe_grouped_topk(
         scores,
@@ -26,6 +27,7 @@ std::array<Tensor, 2> moe_grouped_topk(
         n_activated_experts,
         route_scale,
         epsilon,
+        stable_sort,
         output_mem_config);
 }
 

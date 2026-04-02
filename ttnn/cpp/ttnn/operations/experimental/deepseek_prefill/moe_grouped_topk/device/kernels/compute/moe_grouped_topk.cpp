@@ -22,7 +22,7 @@
 namespace blocks {
 void sigmoid(uint32_t cb_in_scores, uint32_t cb_sigmoid_scores, uint32_t width_tiles) {
     // Perform sigmoid on scores
-    // Reconfigure pack/unpack for bfloat16 after topk operations used UInt16
+    // Reconfigure pack/unpack for float32 after topk operations used UInt16
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
         cb_wait_front(cb_in_scores, 1);
         tile_regs_acquire();
@@ -65,6 +65,7 @@ void add_bias(uint32_t cb_sigmoid_scores, uint32_t cb_in_bias, uint32_t cb_biase
     }
 }
 
+template <bool stable_sort = false>
 void process_and_sort_tiles(
     uint32_t cb_biased_scores,
     uint32_t cb_expert_index_template,
@@ -93,7 +94,7 @@ void process_and_sort_tiles(
         transpose_wh_tile(cb_expert_index_template, wt + 1, 3);
 
         // llk_topk_sort -> inplace
-        ckernel::topk_local_sort(0, (int)ascending, end_phase);
+        ckernel::topk_local_sort<stable_sort>(0, (int)ascending, end_phase);
 
         // pack sorted score tiles
         pack_reconfig_data_format(cb_sorted_group_scores);
@@ -145,6 +146,7 @@ void sum_top_experts_per_group(
     cb_pop_front(cb_top_experts_per_group, summed_experts_per_group);
 }
 
+template <bool stable_sort = false>
 void topk_group_scores(
     const uint32_t cb_group_summed_scores,
     const uint32_t cb_group_index_template,
@@ -168,7 +170,7 @@ void topk_group_scores(
     copy_tile(cb_group_index_template, 0, 2);
 
     // llk_topk_sort -> inplace
-    ckernel::topk_local_sort(0, (int)ascending, log_topk_groups);
+    ckernel::topk_local_sort<stable_sort>(0, (int)ascending, log_topk_groups);
 
     // pack index tile into cb_sorted_group_order
     pack_reconfig_data_format(cb_sorted_group_order);
@@ -201,6 +203,7 @@ void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_
     }
 }
 
+template <bool stable_sort = false>
 void topk(
     const uint32_t cb_winning_group_scores,
     const uint32_t cb_winning_group_indices,
@@ -232,8 +235,8 @@ void topk(
     transpose_wh_tile(cb_winning_group_indices, 0, 2);
     transpose_wh_tile(cb_winning_group_indices, 1, 3);
     // llk_topk_sort -> inplace
-    ckernel::topk_local_sort(0, (int)ascending, 4);
-    ckernel::topk_merge(0, 0, 32);
+    ckernel::topk_local_sort<stable_sort>(0, (int)ascending, 4);
+    ckernel::topk_merge<false, stable_sort>(0, 0, 32);
 
     // Use insertion sort; discard lower half and keep upper half
     // Compare upper half with the next tile; insert into correct position
@@ -246,10 +249,10 @@ void topk(
         transpose_wh_init_short(cb_winning_group_indices);
         transpose_wh_tile(cb_winning_group_indices, j, 3);
 
-        ckernel::topk_local_sort(0, (int)ascending, 4);
-        ckernel::topk_merge(0, 0, 32);
+        ckernel::topk_local_sort<stable_sort>(0, (int)ascending, 4);
+        ckernel::topk_merge<false, stable_sort>(0, 0, 32);
     }
-    ckernel::topk_rebuild(0, (int)ascending, 0, 32, 5, true);
+    ckernel::topk_rebuild<stable_sort>(0, (int)ascending, 0, 32, 5, true);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -398,6 +401,7 @@ void kernel_main() {
 
     constexpr uint32_t n_groups = get_named_compile_time_arg_val("n_groups");
     constexpr uint32_t log_n_groups = get_named_compile_time_arg_val("log_n_groups");
+    constexpr bool stable_sort = get_named_compile_time_arg_val("stable_sort") != 0;
 
     constexpr uint32_t end_phase = log_group_size - 1;
 
@@ -412,7 +416,7 @@ void kernel_main() {
         blocks::add_bias(cb_sigmoid_scores, cb_in_bias, cb_biased_scores, width_tiles);
         // Note: cb_sigmoid_scores is NOT popped here - writer will pop it after gather
         // Transpose tiles into dest and then perform topk_local_sort
-        blocks::process_and_sort_tiles(
+        blocks::process_and_sort_tiles<stable_sort>(
             cb_biased_scores,
             cb_expert_index_template,
             cb_sorted_group_scores,
@@ -422,9 +426,9 @@ void kernel_main() {
             false,
             end_phase);
         blocks::sum_top_experts_per_group(cb_top_experts_per_group, cb_group_summed_scores, summed_experts_per_group);
-        blocks::topk_group_scores(
+        blocks::topk_group_scores<stable_sort>(
             cb_group_summed_scores, cb_group_index_template, cb_sorted_group_order, false, false, log_n_groups - 1);
-        blocks::topk(
+        blocks::topk<stable_sort>(
             cb_winning_group_scores,
             cb_winning_group_indices,
             cb_final_indices_transposed,

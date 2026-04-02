@@ -144,8 +144,8 @@ FORCE_INLINE void generate_summed_experts_tiles(
     // copy 0,...,summed_experts_per_group-1 rows from cb_sorted_group_scores to 0,...,summed_experts_per_group-1 tile
     // in cb_top_experts_per_group for each width_tile
     // for each group, copy the top experts_per_group rows to cb_top_experts_per_group
-    // summed_experts_per_group has experts_per_group tiles, each tile is 32x32 bf16 values, divided into 16x16 faces
-    // in our case, for now, width_tiles = n_groups
+    // summed_experts_per_group has experts_per_group tiles, each tile is 32x32 fp32/bf16 elements, divided into 16x16
+    // faces in our case, for now, width_tiles = n_groups
 
     // for each group, copy the top experts_per_group rows to cb_top_experts_per_group
     cb_reserve_back(cb_top_experts_per_group, summed_experts_per_group);

@@ -80,6 +80,7 @@ moe_grouped_topk(
     uint32_t n_activated_experts,
     float route_scale,
     float epsilon,
+    bool stable_sort,
     const std::optional<MemoryConfig>& output_mem_config) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk::MoeGroupedTopkDeviceOperation;
@@ -91,6 +92,7 @@ moe_grouped_topk(
         n_activated_experts,
         route_scale,
         epsilon,
+        stable_sort,
         output_mem_config.value_or(scores.memory_config())};
     auto tensor_args = OperationType::tensor_args_t{scores, bias};
 
