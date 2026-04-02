@@ -6,7 +6,6 @@ import json
 import pathlib
 import sys
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 if __package__ in (None, ""):
@@ -18,9 +17,9 @@ from tests.sweep_framework.framework.execution_capabilities import (
 )
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
 from tests.sweep_framework.framework.vector_routing import (
+    ManifestFileEntry,
     is_manifest_entry_eligible,
-    normalize_manifest_hardware_group,
-    normalize_manifest_mesh_shapes,
+    load_manifest_file_entries,
 )
 
 
@@ -111,24 +110,14 @@ class FileVectorSource(VectorSource):
 class VectorExportSource(VectorSource):
     """Vectors export directory source"""
 
-    @dataclass(frozen=True)
-    class ExportManifestEntry:
-        module_name: str
-        base_module_name: str
-        file_path: pathlib.Path
-        grouping_kind: str
-        hardware_group: tuple[str, str, int] | None
-        mesh_shapes: tuple[tuple[int, int], ...]
-        suite_names: tuple[str, ...]
-
     def __init__(self, export_dir: pathlib.Path | None = None):
         if export_dir is None:
             # Default to vectors_export directory relative to this file
             self.export_dir = pathlib.Path(__file__).parent.parent / "vectors_export"
         else:
             self.export_dir = export_dir
-        self._manifest_entries_by_base: dict[str, list[VectorExportSource.ExportManifestEntry]] | None = None
-        self._manifest_entries_by_module: dict[str, list[VectorExportSource.ExportManifestEntry]] | None = None
+        self._manifest_entries_by_base: dict[str, list[ManifestFileEntry]] | None = None
+        self._manifest_entries_by_module: dict[str, list[ManifestFileEntry]] | None = None
         self._manifest_path = self.export_dir / "export_manifest.json"
 
     def _load_manifest_index(self) -> None:
@@ -138,48 +127,17 @@ class VectorExportSource(VectorSource):
         self._manifest_entries_by_base = {}
         self._manifest_entries_by_module = {}
 
-        if not self._manifest_path.exists():
-            logger.warning(f"Export manifest not found at {self._manifest_path}")
-            return
-
         try:
-            with open(self._manifest_path, "r", encoding="utf-8") as file:
-                manifest = json.load(file)
-        except (json.JSONDecodeError, IOError) as e:
+            entries = load_manifest_file_entries(self._manifest_path, repo_root=REPO_ROOT, strict=False)
+        except RuntimeError as e:
             logger.warning(f"Failed to load export manifest at {self._manifest_path}: {e}")
             return
 
-        raw_entries = manifest.get("files")
-        if not isinstance(raw_entries, list):
-            logger.warning(f"Invalid export manifest format at {self._manifest_path}: missing 'files' list")
-            return
-
-        for raw_entry in raw_entries:
-            if not isinstance(raw_entry, dict):
-                continue
-            module_name = str(raw_entry.get("module_name") or "").strip()
-            base_module_name = str(raw_entry.get("base_module_name") or "").strip()
-            file_path_str = str(raw_entry.get("file_path") or "").strip()
-            if not module_name or not base_module_name or not file_path_str:
-                continue
-
-            file_path = pathlib.Path(file_path_str)
-            if not file_path.is_absolute():
-                file_path = REPO_ROOT / file_path
-
-            entry = VectorExportSource.ExportManifestEntry(
-                module_name=module_name,
-                base_module_name=base_module_name,
-                file_path=file_path,
-                grouping_kind=str(raw_entry.get("grouping_kind") or "ungrouped"),
-                hardware_group=normalize_manifest_hardware_group(raw_entry.get("hardware_group")),
-                mesh_shapes=normalize_manifest_mesh_shapes(raw_entry.get("mesh_shapes")),
-                suite_names=tuple(sorted(set(raw_entry.get("suite_names", [])))),
-            )
+        for entry in entries:
             self._manifest_entries_by_base.setdefault(entry.base_module_name, []).append(entry)
             self._manifest_entries_by_module.setdefault(entry.module_name, []).append(entry)
 
-    def _find_module_entries(self, module_name: str) -> list[ExportManifestEntry]:
+    def _find_module_entries(self, module_name: str) -> list[ManifestFileEntry]:
         """Find manifest entries for a module by base name or full grouped name."""
         self._load_manifest_index()
         assert self._manifest_entries_by_base is not None

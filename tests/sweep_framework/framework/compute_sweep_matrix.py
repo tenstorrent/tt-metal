@@ -36,7 +36,7 @@ from tests.sweep_framework.framework.vector_routing import (
     HW_GROUP_MATRIX_KEYS,
     ManifestRoutingEntry,
     get_runner_config,
-    manifest_entry_from_raw,
+    load_manifest_routing_entries,
     runner_for_hardware_group,
 )
 
@@ -65,25 +65,7 @@ def chunk_modules(items, size):
 def load_manifest_entries(vectors_path: Path) -> list[ManifestRoutingEntry]:
     """Load planning entries from the generated export manifest."""
     manifest_path = vectors_path / EXPORT_MANIFEST_NAME
-    if not manifest_path.exists():
-        raise RuntimeError(f"Export manifest not found: {manifest_path}")
-
-    try:
-        with open(manifest_path, "r", encoding="utf-8") as handle:
-            manifest = json.load(handle)
-    except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"Failed to read export manifest {manifest_path}: {exc}") from exc
-
-    raw_files = manifest.get("files")
-    if not isinstance(raw_files, list):
-        raise RuntimeError(f"Export manifest {manifest_path} is missing a valid 'files' list.")
-
-    entries = [
-        manifest_entry_from_raw(raw_entry, strict=True) for raw_entry in raw_files if isinstance(raw_entry, dict)
-    ]
-    if not entries:
-        raise RuntimeError(f"Export manifest {manifest_path} does not contain any planning entries.")
-    return [entry for entry in entries if entry is not None]
+    return load_manifest_routing_entries(manifest_path, strict=True)
 
 
 def _hw_label(hardware_group):

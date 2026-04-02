@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from tests.sweep_framework.framework.constants import normalize_hardware_group
@@ -21,6 +23,18 @@ EXPORT_MANIFEST_NAME = "export_manifest.json"
 class ManifestRoutingEntry:
     module_name: str
     base_module_name: str
+    grouping_kind: str
+    hardware_group: HardwareGroup | None
+    mesh_shapes: tuple[MeshShape, ...]
+    suite_names: tuple[str, ...]
+    trace_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class ManifestFileEntry:
+    module_name: str
+    base_module_name: str
+    file_path: Path
     grouping_kind: str
     hardware_group: HardwareGroup | None
     mesh_shapes: tuple[MeshShape, ...]
@@ -144,6 +158,80 @@ def manifest_entry_from_raw(raw_entry: dict[str, Any], *, strict: bool = True) -
         suite_names=suite_names,
         trace_ids=normalize_manifest_trace_ids(raw_entry.get("trace_ids")),
     )
+
+
+def manifest_file_entry_from_raw(
+    raw_entry: dict[str, Any],
+    *,
+    repo_root: Path,
+    strict: bool = False,
+) -> ManifestFileEntry | None:
+    routing_entry = manifest_entry_from_raw(raw_entry, strict=strict)
+    if routing_entry is None:
+        return None
+
+    file_path_str = str(raw_entry.get("file_path") or "").strip()
+    if not file_path_str:
+        if strict:
+            raise RuntimeError(f"Manifest entry is missing file_path: {raw_entry}")
+        return None
+
+    file_path = Path(file_path_str)
+    if not file_path.is_absolute():
+        file_path = repo_root / file_path
+
+    return ManifestFileEntry(
+        module_name=routing_entry.module_name,
+        base_module_name=routing_entry.base_module_name,
+        file_path=file_path,
+        grouping_kind=routing_entry.grouping_kind,
+        hardware_group=routing_entry.hardware_group,
+        mesh_shapes=routing_entry.mesh_shapes,
+        suite_names=routing_entry.suite_names,
+        trace_ids=routing_entry.trace_ids,
+    )
+
+
+def load_manifest_raw_files(manifest_path: Path) -> list[dict[str, Any]]:
+    if not manifest_path.exists():
+        raise RuntimeError(f"Export manifest not found: {manifest_path}")
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as handle:
+            manifest = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Failed to read export manifest {manifest_path}: {exc}") from exc
+
+    raw_files = manifest.get("files")
+    if not isinstance(raw_files, list):
+        raise RuntimeError(f"Export manifest {manifest_path} is missing a valid 'files' list.")
+    return [raw_entry for raw_entry in raw_files if isinstance(raw_entry, dict)]
+
+
+def load_manifest_routing_entries(manifest_path: Path, *, strict: bool = True) -> list[ManifestRoutingEntry]:
+    entries = [
+        manifest_entry_from_raw(raw_entry, strict=strict) for raw_entry in load_manifest_raw_files(manifest_path)
+    ]
+    filtered = [entry for entry in entries if entry is not None]
+    if strict and not filtered:
+        raise RuntimeError(f"Export manifest {manifest_path} does not contain any planning entries.")
+    return filtered
+
+
+def load_manifest_file_entries(
+    manifest_path: Path,
+    *,
+    repo_root: Path,
+    strict: bool = False,
+) -> list[ManifestFileEntry]:
+    entries = [
+        manifest_file_entry_from_raw(raw_entry, repo_root=repo_root, strict=strict)
+        for raw_entry in load_manifest_raw_files(manifest_path)
+    ]
+    filtered = [entry for entry in entries if entry is not None]
+    if strict and not filtered:
+        raise RuntimeError(f"Export manifest {manifest_path} does not contain any file entries.")
+    return filtered
 
 
 def get_runner_config(name: str) -> dict[str, Any]:
