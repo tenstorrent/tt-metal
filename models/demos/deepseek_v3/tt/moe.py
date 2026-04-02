@@ -23,7 +23,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     ReduceScatterAsyncMinimalConfig,
     RepeatConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_shared_experts_per_device
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -34,6 +34,91 @@ from models.demos.deepseek_v3.utils.run_config import (
     WeightConfig,
 )
 from models.demos.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
+
+
+def map_shared_experts(
+    expert_mapping_tensor: torch.Tensor,
+    shared_expert_ids_to_devices: dict[int, list[int]],
+    mesh_shape: Iterable[int],
+    cluster_axis: int,
+) -> torch.Tensor:
+    """
+    Map shared experts to their nearest on-axis device for dispatch operations.
+
+    This function extends the expert mapping tensor to include shared experts by determining
+    the optimal device assignment for each shared expert based on cluster topology. For each
+    dispatching device, it selects the nearest receiving device on the same cluster axis
+    that has the shared expert.
+
+    Args:
+        expert_mapping_tensor: 2D tensor of shape [devices, routed_experts] containing
+            linearized mesh coordinates of the device owning each expert.
+        shared_expert_ids_to_devices: Dictionary mapping shared expert IDs to lists of
+            device IDs where they are replicated. Expert IDs must be contiguous
+            continuations of routed expert IDs.
+        mesh_shape: Tuple/list representing the dimensions of the device mesh (e.g., (4, 4)).
+        cluster_axis: Axis along which devices are clustered (0 or 1). Determines the
+            direction of nearest-neighbor search for shared experts.
+
+    Returns:
+        torch.Tensor: Extended mapping tensor of shape [devices, routed_experts + shared_experts]
+            where each entry [d, e] contains the device ID that device d should dispatch
+            expert e to. For shared experts, this is the nearest device on the same
+            cluster axis that has the expert.
+
+    Raises:
+        RuntimeError: If shared experts are not distributed evenly across devices.
+        RuntimeError: If more than 3 experts per device would result (current limitation).
+        RuntimeError: If shared expert IDs are not contiguous with routed expert IDs.
+
+    Notes:
+        - The function uses Manhattan distance along the cluster axis to find nearest devices.
+        - If no device with the shared expert is on the same cluster axis, a default
+          device is selected (the first in the list).
+        - This mapping is critical for efficient MoE dispatch operations in distributed systems.
+    """
+
+    # assuming [devices, experts] -> linearized mesh coordinate of owning device
+    assert len(expert_mapping_tensor.shape) == 2
+
+    devices = expert_mapping_tensor.shape[0]
+    routed_experts = expert_mapping_tensor.shape[1]
+
+    routed_experts_per_device = routed_experts // devices
+
+    shared_experts = len(shared_expert_ids_to_devices)
+
+    shared_experts_per_device = get_shared_experts_per_device(shared_expert_ids_to_devices, devices)
+
+    if not len(set(shared_experts_per_device)) == 1:
+        raise RuntimeError("Shared Experts must be distributed such that all devices have an equal number of experts")
+
+    # this is a fairly soft limitation at the moment, small changes to moe_compute are required to lift it
+    if shared_experts_per_device[0] + routed_experts_per_device > 3:
+        raise RuntimeError("At the moment MoE supports up to 3 experts per device")
+
+    if list(range(routed_experts)) + sorted([se for se in shared_expert_ids_to_devices]) != list(
+        range(routed_experts + shared_experts)
+    ):
+        raise RuntimeError("Shared expert IDs should be a contigious continuation of routed expert IDs ")
+
+    routed_and_shared_expert_mapping = torch.cat(
+        [expert_mapping_tensor, torch.zeros((devices, shared_experts), dtype=expert_mapping_tensor.dtype)], dim=1
+    )
+    for disp_d in range(devices):
+        for se, rec_ds in shared_expert_ids_to_devices.items():
+            min_distance = mesh_shape[cluster_axis] + 1
+
+            # just pick one as the default case. If none of the device assignments are on the same cluster axis as
+            # disp_d then this expert will also get skipped by dispatch on disp_d
+            routed_and_shared_expert_mapping[disp_d, se] = rec_ds[0]
+            for rec_d in rec_ds:
+                distance = _cluster_distance(disp_d, rec_d, mesh_shape, cluster_axis)
+                if distance is not None and distance < min_distance:
+                    routed_and_shared_expert_mapping[disp_d, se] = rec_d
+                    min_distance = distance
+
+    return routed_and_shared_expert_mapping
 
 
 class MoE(SharedStateAddOn, AbstractModule):

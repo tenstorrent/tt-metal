@@ -17,6 +17,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
     even_int_div,
     get_dequantized_tensor,
+    get_shared_experts_per_device,
     shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import (
@@ -26,6 +27,41 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+
+
+def add_shared_expert_weights(
+    routed_w0: torch.Tensor,  # (layers, routed experts, hidden, matmul N)
+    routed_w1: torch.Tensor,  # (layers, routed experts, hidden, matmul N)
+    routed_w2: torch.Tensor,  # (layers, routed experts, matmul N, hidden)
+    shared_w0: dict[int, torch.Tensor],  # id: (layers, 1, hidden, matmul N)
+    shared_w1: dict[int, torch.Tensor],  # id: (layers, 1, hidden, matmul N)
+    shared_w2: dict[int, torch.Tensor],  # id: (layers, 1, matmul N, hidden)
+    shared_expert_ids_to_device: dict[int, list[int]],
+    num_devices: int,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Note: better validation of shared_expert_ids_to_device mapping occurs in tt.moe.map_shared_experts
+    """
+    num_routed_experts = routed_w0.shape[1]
+    num_routed_experts_per_device = num_routed_experts // num_devices
+    num_shared_experts_per_device = get_shared_experts_per_device(shared_expert_ids_to_device, num_devices)[0]
+
+    def _add_shared_expert_weight(routed, shared):
+        expert_weights = []
+        for d in range(devices):
+            expert_weights.append(
+                routed[:, d * num_routed_experts_per_device : (d + 1) * num_routed_experts_per_device, :, :]
+            )
+            for shared_id, shared_ds in sorted(shared_expert_ids_to_device.items(), key=lambda k, _: k):
+                if d in ds:
+                    expert_weights.append(shared[shared_id])
+        return torch.cat(expert_weights)
+
+    return (
+        _add_shared_expert_weight(routed_w0, shared_w0),
+        _add_shared_expert_weight(routed_w1, shared_w1),
+        _add_shared_expert_weight(routed_w2, shared_w2),
+    )
 
 
 class Experts(AbstractModule):

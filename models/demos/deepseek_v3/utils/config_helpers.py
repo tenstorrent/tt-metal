@@ -36,6 +36,14 @@ DEFAULT_SAMPLING_TOP_P = 0.95
 DEFAULT_SAMPLING_TOP_K = 32
 
 
+def get_shared_experts_per_device(shared_expert_ids_to_devices: dict[int, list[int]], devices: int) -> list[int]:
+    shared_experts_per_device = [0] * devices
+    for ds in shared_expert_ids_to_devices.values():
+        for d in ds:
+            shared_experts_per_device[d] += 1
+    return shared_experts_per_device
+
+
 def get_fabric_config():
     return (
         ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
