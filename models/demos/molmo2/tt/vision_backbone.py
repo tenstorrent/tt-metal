@@ -505,3 +505,95 @@ class VisionBackbone(LightweightModule):
         ttnn.deallocate(pooled_features)
 
         return visual_embeddings
+
+    def encode_image_only_ttnn(self, images_embedded: ttnn.Tensor) -> ttnn.Tensor:
+        """
+        Run only ViT encoding without pooling/projection.
+
+        Use this for chunked video processing where pooling needs cross-frame
+        attention across ALL frames. Call this in chunks, concatenate the
+        outputs, then call pool_and_project_ttnn on the combined features.
+
+        Args:
+            images_embedded: Embedded patches [1, 1, B*N, hidden_dim]
+
+        Returns:
+            image_features: ViT output [1, 1, B*N, pool_dim] (concatenated multi-scale features)
+        """
+        return self.encode_image(images_embedded)
+
+    def pool_and_project_ttnn(
+        self,
+        image_features: ttnn.Tensor,
+        pooled_patches_idx_ttnn: ttnn.Tensor,
+        valid_mask_ttnn: ttnn.Tensor,
+        n_out: int,
+        k_pool: int,
+        batch_size: int,
+    ) -> ttnn.Tensor:
+        """
+        Run gather, pooling, and projection on pre-computed ViT features.
+
+        Use this after encode_image_only_ttnn when doing chunked processing.
+        The image_features should contain ALL frames concatenated so that
+        pooling can attend across all frames via global indices.
+
+        Args:
+            image_features: ViT output [1, 1, total_patches, pool_dim] from ALL frames
+            pooled_patches_idx_ttnn: Flattened GLOBAL indices [1, B*N_out*K_pool]
+            valid_mask_ttnn: Valid mask [1, 1, B*N_out*K_pool, 1]
+            n_out: Number of output positions per frame
+            k_pool: Pooling kernel size
+            batch_size: Total number of frames
+
+        Returns:
+            visual_embeddings: [1, 1, B*N_out, output_dim]
+        """
+        # Squeeze to 2D for embedding lookup: [total_patches, pool_dim]
+        image_features_2d = ttnn.reshape(image_features, [-1, image_features.shape[-1]])
+
+        # Convert to ROW_MAJOR for embedding lookup
+        image_features_2d = ttnn.to_layout(image_features_2d, ttnn.ROW_MAJOR_LAYOUT)
+
+        # Gather features using ttnn.embedding with GLOBAL indices
+        gathered = ttnn.embedding(
+            pooled_patches_idx_ttnn,
+            image_features_2d,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # gathered: [1, B*N_out*K_pool, pool_dim]
+
+        # Reshape to [1, 1, B*N_out*K_pool, pool_dim] for masking
+        pool_dim = image_features.shape[-1]
+        gathered = ttnn.reshape(gathered, [1, 1, batch_size * n_out * k_pool, pool_dim])
+
+        # Apply valid mask (zero out invalid positions)
+        gathered = ttnn.mul(gathered, valid_mask_ttnn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # Reshape to [1, B*N_out, K_pool, pool_dim]
+        to_pool = ttnn.reshape(gathered, [1, batch_size * n_out, k_pool, pool_dim])
+
+        # Compute query (mean of features per output position)
+        query_sum = ttnn.sum(to_pool, dim=2, keepdim=True)  # [1, B*N_out, 1, pool_dim]
+        query = ttnn.mul(query_sum, 1.0 / k_pool, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # Cross-attention pooling
+        pooled_features = self.image_pooling_2d(
+            query=query,
+            key_value=to_pool,
+            attn_mask=None,
+        )
+
+        ttnn.deallocate(query)
+        ttnn.deallocate(to_pool)
+        ttnn.deallocate(gathered)
+
+        # Reshape: [1, B*N_out, 1, hidden_dim] -> [1, 1, B*N_out, hidden_dim]
+        pooled_features = ttnn.reshape(pooled_features, [1, 1, batch_size * n_out, -1])
+
+        # Project to language model dimension
+        visual_embeddings = self.image_projector(pooled_features)
+        ttnn.deallocate(pooled_features)
+
+        return visual_embeddings
