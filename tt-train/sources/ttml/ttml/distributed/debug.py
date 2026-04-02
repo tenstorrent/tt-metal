@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 if TYPE_CHECKING:
     from ttml.trainers import SFTTrainer
 
+from ttml.trainers.sft_trainer import TrainerCallback
 from .layout import DistributedLayout
 
 logger = logging.getLogger("ttml.distributed.dispatch")
@@ -237,18 +238,14 @@ class DispatchTrace:
                 if include_ccls and e.redistributions:
                     for r in e.redistributions:
                         arg = r.get("arg_idx", "")
-                        lines.append(
-                            f"{path_s};{self._folded_frame(e.op_name)};redistribute(arg{arg}) 1"
-                        )
+                        lines.append(f"{path_s};{self._folded_frame(e.op_name)};redistribute(arg{arg}) 1")
 
                 if include_ccls and e.post_collectives:
                     for c in e.post_collectives:
                         ctype = c.get("type", "post_ccl")
                         axis = c.get("mesh_axis", "")
                         frame = f"{ctype}(axis={axis})" if axis else ctype
-                        lines.append(
-                            f"{path_s};{self._folded_frame(e.op_name)};{self._folded_frame(frame)} 1"
-                        )
+                        lines.append(f"{path_s};{self._folded_frame(e.op_name)};{self._folded_frame(frame)} 1")
 
             return "\n".join(lines) + "\n"
         else:
@@ -258,9 +255,7 @@ class DispatchTrace:
                 path.append(e.op_name)
                 stack = ";".join(self._folded_frame(s) for s in path)
                 stacks.append(stack)
-            lines = [
-                f"{stack} {count}" for stack, count in sorted(Counter(stacks).items())
-            ]
+            lines = [f"{stack} {count}" for stack, count in sorted(Counter(stacks).items())]
             return "\n".join(lines) + "\n" if lines else ""
 
     def export_folded(
@@ -273,9 +268,7 @@ class DispatchTrace:
         """Write folded format to a file. Use with: flamegraph.pl path.folded > path.svg
         By default uses time_order=True, include_ccls=True (X=time, all events including CCLs).
         """
-        folded = self.to_folded(
-            entries, time_order=time_order, include_ccls=include_ccls
-        )
+        folded = self.to_folded(entries, time_order=time_order, include_ccls=include_ccls)
         with open(path, "w") as f:
             f.write(folded)
 
@@ -297,9 +290,7 @@ class DispatchTrace:
         script = flamegraph_pl or os.environ.get("FLAMEGRAPH_PL", "flamegraph.pl")
         try:
             folded = self.to_folded(entries)
-            out_file = out_path or os.path.join(
-                tempfile.gettempdir(), "dispatch_flame.svg"
-            )
+            out_file = out_path or os.path.join(tempfile.gettempdir(), "dispatch_flame.svg")
             result = subprocess.run(
                 [script, "-t", "modules+ops"],
                 input=folded,
@@ -370,9 +361,7 @@ class DispatchTrace:
             lines.append(prefix + node_char + segment)
             child_prefix = prefix + (indent_str if is_last_sibling else bar)
             for i, ent in enumerate(path_entries):
-                op_char = (
-                    last_branch if (i == len(path_entries) - 1 and not kids) else branch
-                )
+                op_char = last_branch if (i == len(path_entries) - 1 and not kids) else branch
                 lines.append(child_prefix + op_char + ent.op_name + short_summary(ent))
             for i, child_path in enumerate(kids):
                 recurse(child_path, child_prefix, i == len(kids) - 1)
@@ -382,11 +371,7 @@ class DispatchTrace:
         # Root-level ops (no module)
         for i, ent in enumerate(root_entries):
             lines.append(
-                (
-                    last_branch
-                    if i == len(root_entries) - 1 and not root_kids
-                    else branch
-                )
+                (last_branch if i == len(root_entries) - 1 and not root_kids else branch)
                 + ent.op_name
                 + short_summary(ent)
             )
@@ -411,12 +396,7 @@ class DispatchTrace:
             )
 
         def escape(s: str) -> str:
-            return (
-                s.replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-                .replace('"', "&quot;")
-            )
+            return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
         def layout_str(x: Any) -> str:
             return escape(repr(x)) if x is not None else ""
@@ -427,9 +407,7 @@ class DispatchTrace:
             for c in ent.pre_collectives:
                 ctype = c.get("type", "?")
                 axis = c.get("mesh_axis", "")
-                lines.append(
-                    f'<span class="ccl pre">↑ {escape(str(ctype))}(axis={axis})</span>'
-                )
+                lines.append(f'<span class="ccl pre">↑ {escape(str(ctype))}(axis={axis})</span>')
             for r in ent.redistributions:
                 arg = r.get("arg_idx", "")
                 fr = r.get("from")
@@ -442,9 +420,7 @@ class DispatchTrace:
                 axis = c.get("mesh_axis", "")
                 noop = c.get("noop_backward", "")
                 extra = f", noop_backward={noop}" if noop else ""
-                lines.append(
-                    f'<span class="ccl post">↳ {escape(str(ctype))}(axis={axis}{extra})</span>'
-                )
+                lines.append(f'<span class="ccl post">↳ {escape(str(ctype))}(axis={axis}{extra})</span>')
             if not lines:
                 return ""
             return '<div class="ccls">' + "".join(lines) + "</div>"
@@ -550,7 +526,7 @@ class DispatchTracer:
         return dispatch_trace._entries[self._entries_before :]
 
 
-class DispatchTraceCallback:
+class DispatchTraceCallback(TrainerCallback):
     """Trainer callback for dispatch trace logging.
 
     Args:
@@ -576,9 +552,7 @@ class DispatchTraceCallback:
         dispatch_trace.enable()
         self._first_step_done = False
 
-    def on_step_end(
-        self, trainer: "SFTTrainer", step: int, loss: float, lr: float
-    ) -> None:
+    def on_step_end(self, trainer: "SFTTrainer", step: int, loss: float, lr: float) -> None:
         if self.first_step_only and not self._first_step_done:
             self._first_step_done = True
             dispatch_trace.disable()
@@ -604,22 +578,16 @@ class DispatchTraceCallback:
 
         if self.dump_path:
             if self.dump_path.endswith(".html"):
-                html = dispatch_trace.format_entries_html(
-                    entries=entries, title="Dispatch trace"
-                )
+                html = dispatch_trace.format_entries_html(entries=entries, title="Dispatch trace")
                 with open(self.dump_path, "w") as f:
                     f.write(html)
                 print(f"  Wrote HTML trace to {self.dump_path} (open in a browser)")
                 base = self.dump_path[:-5]
                 folded_path = base + ".folded"
                 dispatch_trace.export_folded(folded_path, entries=entries)
-                print(
-                    f"  Wrote folded stacks to {folded_path} (use flamegraph.pl for classic SVG)"
-                )
+                print(f"  Wrote folded stacks to {folded_path} (use flamegraph.pl for classic SVG)")
                 svg_path = base + "_flame.svg"
-                if dispatch_trace.build_flamegraph_svg(
-                    entries=entries, out_path=svg_path
-                ):
+                if dispatch_trace.build_flamegraph_svg(entries=entries, out_path=svg_path):
                     print(f"  Wrote flame graph to {svg_path} (open in browser)")
             else:
                 with open(self.dump_path, "w") as f:
