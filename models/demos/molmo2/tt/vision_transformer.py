@@ -29,6 +29,10 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.molmo2.tt.vision_block import VisionBlock
 
+# Patch-embed matmul: L1 is ok for one 27×27 grid (729 patches); more (video / multi-crop) needs DRAM
+# to avoid L1 circular-buffer overflow on large M.
+_PATCH_EMBED_DRAM_THRESHOLD_PATCHES = 27 * 27
+
 
 class VisionTransformer(LightweightModule):
     """
@@ -190,11 +194,25 @@ class VisionTransformer(LightweightModule):
         per_core_n = ttnn.core.divup(n_pad, tile * num_cores)
         in0_block_w = self._max_divisor_at_most(k_tiles, 8)
         max_sb = 8
-        out_subblock_w = max(i for i in range(1, max_sb + 1) if per_core_n % i == 0)
-        out_subblock_h = max(
-            (h for h in range(1, max_sb + 1) if per_core_m % h == 0 and h * out_subblock_w <= max_sb),
-            default=1,
-        )
+        # Same limits as vision_attention._l1_linear_1d_program_config (dest regs + width-sharded)
+        max_subblock_product = 4
+        out_subblock_w, out_subblock_h = 1, 1
+        best = (-1, -1)
+        for ow in range(1, max_sb + 1):
+            if per_core_n % ow != 0:
+                continue
+            for oh in range(1, max_sb + 1):
+                if per_core_m % oh != 0:
+                    continue
+                if not (ow == per_core_n or oh == 1):
+                    continue
+                prod = ow * oh
+                if prod > max_subblock_product:
+                    continue
+                score = (prod, ow)
+                if score > best:
+                    best = score
+                    out_subblock_w, out_subblock_h = ow, oh
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(gx, gy),
             in0_block_w=in0_block_w,
@@ -317,14 +335,18 @@ class VisionTransformer(LightweightModule):
             mesh_mapper=mesh_mapper,
         )
 
-        mm_kwargs = {"memory_config": self.patch_embed_compute_memory_config}
-        if self.patch_embed_compute_memory_config != ttnn.DRAM_MEMORY_CONFIG:
+        total_patch_tokens = batch_size * num_patches
+        use_dram_patch = total_patch_tokens > _PATCH_EMBED_DRAM_THRESHOLD_PATCHES
+        compute_mem = ttnn.DRAM_MEMORY_CONFIG if use_dram_patch else self.patch_embed_compute_memory_config
+
+        mm_kwargs = {"memory_config": compute_mem}
+        if compute_mem != ttnn.DRAM_MEMORY_CONFIG:
             mm_kwargs["program_config"] = self._patch_embed_matmul_1d_program_config(batch_size * num_patches)
         embedded = ttnn.matmul(x_ttnn, self.patch_embed_weight, **mm_kwargs)
         ttnn.deallocate(x_ttnn)
 
         # Add bias
-        embedded = ttnn.add(embedded, self.patch_embed_bias, memory_config=self.patch_embed_compute_memory_config)
+        embedded = ttnn.add(embedded, self.patch_embed_bias, memory_config=compute_mem)
 
         # Add positional embedding: [1, 1, num_patches, 1152]
         if batch_size == 1:
@@ -332,17 +354,17 @@ class VisionTransformer(LightweightModule):
             embedded = ttnn.add(
                 embedded,
                 self.positional_embedding,
-                memory_config=self.patch_embed_compute_memory_config,
+                memory_config=compute_mem,
             )
         else:
             # Tile positional embedding for multi-crop: [1, 1, B*N, 1152]
             pos_tiles = [self.positional_embedding] * batch_size
             pos_tiled = ttnn.concat(pos_tiles, dim=2)
-            embedded = ttnn.add(embedded, pos_tiled, memory_config=self.patch_embed_compute_memory_config)
+            embedded = ttnn.add(embedded, pos_tiled, memory_config=compute_mem)
             ttnn.deallocate(pos_tiled)
 
         # Preserve existing interface expectations for downstream blocks.
-        if self.patch_embed_compute_memory_config != ttnn.DRAM_MEMORY_CONFIG:
+        if compute_mem != ttnn.DRAM_MEMORY_CONFIG:
             embedded = ttnn.to_memory_config(embedded, ttnn.DRAM_MEMORY_CONFIG)
 
         return embedded

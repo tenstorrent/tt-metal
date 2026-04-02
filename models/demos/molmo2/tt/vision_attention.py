@@ -24,6 +24,10 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
+# One 378×378 image at patch 14 → 27×27 patches = 729 ViT tokens. Above this (e.g. video frames),
+# L1-sharded matmul CBs can exceed device limits; use DRAM linears instead.
+DRAM_LINEAR_SEQ_LEN_THRESHOLD = 27 * 27
+
 
 class VisionAttention(LightweightModule):
     """
@@ -272,11 +276,28 @@ class VisionAttention(LightweightModule):
         per_core_n = ttnn.core.divup(n_pad, tile * num_cores)
         in0_block_w = self._max_divisor_at_most(k_tiles, 8)
         max_sb = 8
-        out_subblock_w = max(i for i in range(1, max_sb + 1) if per_core_n % i == 0)
-        out_subblock_h = max(
-            (h for h in range(1, max_sb + 1) if per_core_m % h == 0 and h * out_subblock_w <= max_sb),
-            default=1,
-        )
+        # out_subblock_w * out_subblock_h must be <= get_dest_reg_count(...) (often 4 on Wormhole
+        # with HiFi2); matmul_device_operation.cpp enforces product <= available_reg_count.
+        max_subblock_product = 4
+        # Width-sharded output: out_subblock_w == per_core_N || out_subblock_h == 1
+        # (matmul_device_operation.cpp).
+        out_subblock_w, out_subblock_h = 1, 1
+        best = (-1, -1)  # (product, w) — prefer larger tile blocks, then wider w
+        for ow in range(1, max_sb + 1):
+            if per_core_n % ow != 0:
+                continue
+            for oh in range(1, max_sb + 1):
+                if per_core_m % oh != 0:
+                    continue
+                if not (ow == per_core_n or oh == 1):
+                    continue
+                prod = ow * oh
+                if prod > max_subblock_product:
+                    continue
+                score = (prod, ow)
+                if score > best:
+                    best = score
+                    out_subblock_w, out_subblock_h = ow, oh
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(gx, gy),
             in0_block_w=in0_block_w,
@@ -306,15 +327,24 @@ class VisionAttention(LightweightModule):
         if seq_len > 2048 and seq_len % 2048 == 0:
             x = ttnn.reshape(x, [1, seq_len // 2048, 2048, -1])
 
-        pc_qkv = self._l1_linear_1d_program_config(seq_len, self.hidden_dim, self.qkv_proj_out_dim)
-        qkv = ttnn.linear(
-            x,
-            self.wqkv,
-            bias=self.bqkv,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=self.l1_width_sharded,
-            program_config=pc_qkv,
-        )
+        if seq_len > DRAM_LINEAR_SEQ_LEN_THRESHOLD:
+            qkv = ttnn.linear(
+                x,
+                self.wqkv,
+                bias=self.bqkv,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            pc_qkv = self._l1_linear_1d_program_config(seq_len, self.hidden_dim, self.qkv_proj_out_dim)
+            qkv = ttnn.linear(
+                x,
+                self.wqkv,
+                bias=self.bqkv,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+                memory_config=self.l1_width_sharded,
+                program_config=pc_qkv,
+            )
 
         # Reshape back if needed
         if seq_len > 2048 and seq_len % 2048 == 0:
@@ -366,14 +396,22 @@ class VisionAttention(LightweightModule):
         if seq_len > 1024 and seq_len % 1024 == 0:
             attn_output = ttnn.reshape(attn_output, [1, seq_len // 1024, 1024, -1])
 
-        pc_wo = self._l1_linear_1d_program_config(seq_len, self.wo_in_dim, self.hidden_dim)
-        output = ttnn.linear(
-            attn_output,
-            self.wo,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=self.l1_width_sharded,
-            program_config=pc_wo,
-        )
+        if seq_len > DRAM_LINEAR_SEQ_LEN_THRESHOLD:
+            output = ttnn.linear(
+                attn_output,
+                self.wo,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            pc_wo = self._l1_linear_1d_program_config(seq_len, self.wo_in_dim, self.hidden_dim)
+            output = ttnn.linear(
+                attn_output,
+                self.wo,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+                memory_config=self.l1_width_sharded,
+                program_config=pc_wo,
+            )
 
         ttnn.deallocate(attn_output)
 
