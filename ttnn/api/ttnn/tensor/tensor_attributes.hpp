@@ -34,11 +34,6 @@ public:
     // TODO(#40348): Remove this.
     TensorAttributes(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
 
-    // Transitional constructor: use TensorAttributes(DeviceStorage) instead.
-    // Same reason as above.
-    // TODO(#40348): Remove this.
-    TensorAttributes(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
-
     TensorAttributes(const TensorAttributes&) = default;
     TensorAttributes(TensorAttributes&&) = default;
     TensorAttributes& operator=(const TensorAttributes&) = default;
@@ -54,12 +49,6 @@ public:
 
 private:
     Storage storage_;
-
-    // These will be removed after Runtime Tensor refactoring,
-    // as they will be part of the Host and MeshTensor,
-    // Thus a part of Storage.
-    TensorSpec tensor_spec_;
-    TensorTopology tensor_topology_;
 };
 
 }  // namespace tt::tt_metal
