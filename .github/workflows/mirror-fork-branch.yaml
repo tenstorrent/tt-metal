@@ -1,6 +1,8 @@
 name: Mirror Fork Branch to Origin
 
 on:
+  issue_comment:
+    types: [created]
   workflow_call:
     inputs:
       source:
@@ -30,19 +32,58 @@ permissions:
 
 jobs:
   mirror-fork-branch:
+    # For issue_comment: only run on PR comments starting with /mirror
+    # For workflow_dispatch/workflow_call: always run
+    if: >
+      github.event_name != 'issue_comment' ||
+      (github.event.issue.pull_request && startsWith(github.event.comment.body, '/mirror'))
     runs-on: ubuntu-latest
     steps:
+      - name: React to comment
+        if: github.event_name == 'issue_comment'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -s -X POST \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "${{ github.event.comment.url }}/reactions" \
+            -d '{"content":"rocket"}'
+
       - name: Parse input
         id: parse_input
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Expect input format: <fork_owner>:<branch>
-          IFS=":" read -r FORK_OWNER SRC_BRANCH <<< "${{ github.event.inputs.source }}"
-          if [ -z "$FORK_OWNER" ] || [ -z "$SRC_BRANCH" ]; then
-            echo "Error: Input must be in the format <fork_owner>:<branch>"
-            exit 1
+          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+            # Extract fork owner and branch from the PR
+            PR_JSON=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "${{ github.event.issue.pull_request.url }}")
+
+            FORK_OWNER=$(echo "$PR_JSON" | jq -r '.head.repo.owner.login')
+            SRC_BRANCH=$(echo "$PR_JSON" | jq -r '.head.ref')
+
+            if [ "$FORK_OWNER" = "null" ] || [ "$SRC_BRANCH" = "null" ]; then
+              echo "Error: Could not extract fork owner or branch from PR"
+              exit 1
+            fi
+
+            # Parse optional target branch from comment: /mirror [target_branch]
+            TARGET=$(echo "${{ github.event.comment.body }}" | sed -n 's|^/mirror\s*||p' | xargs)
+            if [ -n "$TARGET" ]; then
+              echo "target_branch_override=$TARGET" >> $GITHUB_OUTPUT
+            fi
+          else
+            # workflow_dispatch or workflow_call: parse from inputs
+            IFS=":" read -r FORK_OWNER SRC_BRANCH <<< "${{ github.event.inputs.source || inputs.source }}"
+            if [ -z "$FORK_OWNER" ] || [ -z "$SRC_BRANCH" ]; then
+              echo "Error: Input must be in the format <fork_owner>:<branch>"
+              exit 1
+            fi
           fi
-          # Derive the fork repository name from the current repository.
+
           ORIGIN_REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2)
           FORK_REPO="${FORK_OWNER}/${ORIGIN_REPO_NAME}"
           echo "FORK_OWNER: $FORK_OWNER"
@@ -74,9 +115,12 @@ jobs:
         shell: bash
         run: |
           # Determine the target branch name.
-          if [ -n "${{ github.event.inputs.target_branch }}" ]; then
-            TARGET_BRANCH="${{ github.event.inputs.target_branch }}"
-          else
+          # Priority: comment override > workflow input > default
+          TARGET_BRANCH="${{ steps.parse_input.outputs.target_branch_override }}"
+          if [ -z "$TARGET_BRANCH" ]; then
+            TARGET_BRANCH="${{ github.event.inputs.target_branch || inputs.target_branch }}"
+          fi
+          if [ -z "$TARGET_BRANCH" ]; then
             TARGET_BRANCH="mirror/${{ steps.parse_input.outputs.fork_owner }}/${{ steps.parse_input.outputs.src_branch }}"
           fi
           echo "Using target branch: $TARGET_BRANCH"
@@ -103,13 +147,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Look for a PR with head "fork_owner:src_branch"
-          HEAD_QUERY="${{ steps.parse_input.outputs.fork_owner }}:${{ steps.parse_input.outputs.src_branch }}"
-          echo "Searching for PR with head: ${HEAD_QUERY}"
-          PR_JSON=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/pulls?head=${HEAD_QUERY}")
-          PR_NUMBER=$(echo "$PR_JSON" | jq '.[0].number // empty')
+          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+            # We already know the PR number
+            PR_NUMBER="${{ github.event.issue.number }}"
+          else
+            # Look for a PR with head "fork_owner:src_branch"
+            HEAD_QUERY="${{ steps.parse_input.outputs.fork_owner }}:${{ steps.parse_input.outputs.src_branch }}"
+            echo "Searching for PR with head: ${HEAD_QUERY}"
+            PR_JSON=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/pulls?head=${HEAD_QUERY}")
+            PR_NUMBER=$(echo "$PR_JSON" | jq '.[0].number // empty')
+          fi
           if [ -z "$PR_NUMBER" ]; then
             echo "No PR found"
             echo "issue=" >> $GITHUB_OUTPUT
