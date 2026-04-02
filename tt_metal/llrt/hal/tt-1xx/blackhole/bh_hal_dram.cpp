@@ -10,6 +10,7 @@
 #include "hostdev/fabric_telemetry_msgs.h"
 using namespace tt::tt_metal::blackhole::dram;
 
+#include <algorithm>
 #include <cstdint>
 
 #include "blackhole/bh_hal.hpp"
