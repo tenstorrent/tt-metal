@@ -147,8 +147,6 @@ AllToAllDispatchMetadataDeviceOperation::compute_output_specs(
         dispatch_devices = axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
     }
     uint32_t total_tokens = input_shape[0] * input_shape[1] * input_shape[2] * dispatch_devices;
-    // uint32_t total_tokens = input_shape[0] * input_shape[1] * input_shape[2] * dispatch_devices + 4; // breaking
-    // change
 
     uint32_t selected_experts_k = indices_shape[-1];
 

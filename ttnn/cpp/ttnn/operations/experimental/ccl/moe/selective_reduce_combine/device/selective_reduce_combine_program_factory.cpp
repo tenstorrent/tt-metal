@@ -174,7 +174,6 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
     const auto hidden_size = operation_attributes.hidden_size;
 
     const auto total_tokens = batch_size * seq_size;
-
     // Eventually map number of experts to device
     const auto experts = operation_attributes.experts;
 

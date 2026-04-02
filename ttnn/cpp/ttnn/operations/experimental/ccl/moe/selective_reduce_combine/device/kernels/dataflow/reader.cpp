@@ -18,7 +18,6 @@ void token_work_split_even(
         token_split_offsets[e] = 0;
         const uint32_t chunk = dense_token_counts_ptr[e] / NumTokenParallelCores;
         const uint32_t rem = dense_token_counts_ptr[e] % NumTokenParallelCores;
-
         for (uint32_t c = 0; c < NumTokenParallelCores; ++c) {
             const auto count = (c < rem) ? chunk + 1 : chunk;
 
