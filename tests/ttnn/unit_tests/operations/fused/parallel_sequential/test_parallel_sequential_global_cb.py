@@ -18,7 +18,7 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import comp_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 from models.experimental.ops.descriptors.fusion import Sequential, Parallel
 
@@ -466,8 +466,9 @@ class TestFusedGlobalCB:
         fused.launch()
 
         result = ttnn.to_torch(tt_output)
-        passing, pcc = comp_pcc(torch_input, result, pcc=0.999)
-        assert passing, f"PCC mismatch: {pcc}"
+        assert_numeric_metrics(
+            torch_input, result, pcc_threshold=0.999, rtol=0.015, atol=0.015, frobenius_threshold=0.015
+        )
 
     @pytest.mark.parametrize("num_tiles", [1, 8])
     def test_fused_identity_globalcb(self, device, num_tiles):
@@ -529,8 +530,9 @@ class TestFusedGlobalCB:
 
         # Verify: receiver output should match original input
         result = ttnn.to_torch(tt_output)
-        passing, pcc = comp_pcc(torch_input, result, pcc=0.999)
-        assert passing, f"PCC mismatch: {pcc}"
+        assert_numeric_metrics(
+            torch_input, result, pcc_threshold=0.999, rtol=0.015, atol=0.015, frobenius_threshold=0.015
+        )
 
     @pytest.mark.parametrize("num_tiles", [1, 8])
     def test_fused_mid_kernel_globalcb(self, device, num_tiles):
@@ -604,10 +606,12 @@ class TestFusedGlobalCB:
 
         # Receiver got input_a via GlobalCB from Phase 0
         result_recv = ttnn.to_torch(tt_output_recv)
-        passing_recv, pcc_recv = comp_pcc(torch_input_a, result_recv, pcc=0.999)
-        assert passing_recv, f"Receiver PCC mismatch: {pcc_recv}"
+        assert_numeric_metrics(
+            torch_input_a, result_recv, pcc_threshold=0.999, rtol=0.015, atol=0.015, frobenius_threshold=0.015
+        )
 
         # Phase 1 identity output matches input_b
         result_b = ttnn.to_torch(tt_output_b)
-        passing_b, pcc_b = comp_pcc(torch_input_b, result_b, pcc=0.999)
-        assert passing_b, f"Phase 1 PCC mismatch: {pcc_b}"
+        assert_numeric_metrics(
+            torch_input_b, result_b, pcc_threshold=0.999, rtol=0.015, atol=0.015, frobenius_threshold=0.015
+        )

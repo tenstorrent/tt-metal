@@ -5,7 +5,7 @@
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import is_blackhole
 from tests.ttnn.unit_tests.operations.test_utils import TILE_HEIGHT, TILE_WIDTH
 
@@ -378,8 +378,41 @@ def do_test_main(
             bias=bias,
         )
 
-    # Check PCC
-    assert_with_pcc(ref_output_tensor, output_ttnn, 0.9998)
+    if op_name == "layer_norm":
+        if use_welford:
+            pcc_threshold = 0.99975
+            rtol = 0.14
+            atol = 0.085
+            frobenius_threshold = 0.02
+        else:
+            pcc_threshold = 0.9999
+            rtol = 0.065
+            atol = 0.065
+            frobenius_threshold = 0.014
+    else:
+        # Thresholds from tests/ttnn/unit_tests/operations/fused/all_numeric_results_fused.csv
+        # (test_rms_norm_sharded_numeric_results, do_test_main[rms_norm,...]). ~10% margin on
+        # max_abs / frobenius; PCC ~= min - 1.5e-4; rtol from max rel among rows with rel < 10
+        # (BF16) / atol-dominated rtol (FP32) to avoid near-zero blowups in CSV max_rel.
+        # Max CSV ULP is large; no check_ulp (ulp_threshold would be >= 12).
+        if dtype == torch.bfloat16:
+            pcc_threshold = 0.999
+            rtol = 0.031
+            atol = 0.052
+            frobenius_threshold = 0.010
+        else:
+            pcc_threshold = 0.999
+            rtol = 0.060
+            atol = 0.049
+            frobenius_threshold = 0.011
+    assert_numeric_metrics(
+        ref_output_tensor,
+        output_ttnn,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
 
 
 def layernorm_test_main(

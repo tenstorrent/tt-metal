@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import torch_random
 
 
@@ -34,7 +34,14 @@ def test_large_softmax(device, batch_size, h, w, dim):
     output_tensor = ttnn.softmax(input_tensor, dim=dim, numeric_stable=True)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.10,
+        atol=0.04,
+        frobenius_threshold=0.044,
+    )
 
 
 @pytest.mark.parametrize(
@@ -68,7 +75,16 @@ def test_softmax_stable_neg_values(device, input_vector, math_approx, fp32_acc_e
     output_tensor = ttnn.softmax(input_tensor, dim=-1, compute_kernel_config=compute_kernel_config, numeric_stable=True)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.040,
+        atol=0.035,
+        frobenius_threshold=0.035,
+        ulp_threshold=10,
+        check_ulp=True,
+    )
 
 
 def run_softmax_stable_with_program_cache(
@@ -114,8 +130,26 @@ def run_softmax_stable_with_program_cache(
                 input_tensor, dim=-1, compute_kernel_config=compute_kernel_config, numeric_stable=True
             )
     output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    if in_dtype == ttnn.bfloat16:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.999,
+            rtol=0.030,
+            atol=0.020,
+            frobenius_threshold=0.030,
+            # check_ulp=True,
+            # ulp_threshold=14,
+        )
+    else:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.999,
+            rtol=0.120,
+            atol=0.040,
+            frobenius_threshold=0.032,
+        )
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -208,7 +242,24 @@ def run_softmax_sharded_stable(
             )
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    if in_dtype == ttnn.bfloat8_b:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.999,
+            rtol=0.400,
+            atol=0.570,
+            frobenius_threshold=0.035,
+        )
+    else:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.999,
+            rtol=0.066,
+            atol=0.043,
+            frobenius_threshold=0.034,
+        )
 
 
 @pytest.mark.parametrize("batch_size", [8])
@@ -256,7 +307,14 @@ def test_softmax(device, batch_size, h, w, dim):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.998,
+        rtol=0.088,
+        atol=0.009,
+        frobenius_threshold=0.030,
+    )
 
 
 def test_softmax_with_3D(device):
@@ -268,7 +326,14 @@ def test_softmax_with_3D(device):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.158,
+        atol=0.010,
+        frobenius_threshold=0.024,
+    )
 
 
 def test_softmax_with_padded_tile_layout(device):
@@ -282,7 +347,16 @@ def test_softmax_with_padded_tile_layout(device):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.044,
+        atol=0.043,
+        frobenius_threshold=0.035,
+        ulp_threshold=10,
+        check_ulp=True,
+    )
 
 
 def test_softmax_with_padded_tile_layout_large(device):
@@ -296,7 +370,14 @@ def test_softmax_with_padded_tile_layout_large(device):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.148,
+        atol=0.010,
+        frobenius_threshold=0.029,
+    )
 
 
 @pytest.mark.skip(reason="#4629: softmax pcc at 0.948 when comparing to torch")
@@ -315,7 +396,14 @@ def test_specific_tensor_combination(device):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.9999)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output,
+        pcc_threshold=0.999,
+        rtol=0.015,
+        atol=0.012,
+        frobenius_threshold=0.012,
+    )
 
 
 @pytest.mark.parametrize(
@@ -338,7 +426,14 @@ def test_5d_softmax(device, input_shape, dim):
     output_tensor = ttnn.softmax(input_tensor, dim)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.061,
+        atol=0.023,
+        frobenius_threshold=0.019,
+    )
 
 
 @pytest.mark.parametrize("input_shape", [(16, 7, 7)])
@@ -378,7 +473,14 @@ def test_large_fill_softmax(device, input_shape, dtype, dlayout, dim, numeric_st
     assert len(output_tensor.shape) == len(torch_output_tensor.shape)
     assert output_tensor.shape == torch_output_tensor.shape
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.008,
+        atol=0.002,
+        frobenius_threshold=0.008,
+    )
 
 
 def test_softmax_sd(device):
@@ -412,7 +514,14 @@ def test_softmax_sd(device):
         program_config=softmax_program_config,
     )
 
-    passed, pcc = assert_with_pcc(out_torch, ttnn.to_torch(out), pcc=0.999)
+    assert_numeric_metrics(
+        out_torch,
+        ttnn.to_torch(out),
+        pcc_threshold=0.999,
+        rtol=0.330,
+        atol=0.086,
+        frobenius_threshold=0.025,
+    )
 
 
 @pytest.mark.parametrize(
@@ -444,8 +553,14 @@ def test_softmax_dtypes(device, shape, dim, dtype):
     )
     ttnn_output = ttnn.softmax(ttnn_tensor, dim=dim)
     ttnn_output = ttnn.to_torch(ttnn_output)
-
-    assert_with_pcc(torch_output, ttnn_output, 0.997)
+    assert_numeric_metrics(
+        torch_output,
+        ttnn_output,
+        pcc_threshold=0.997,
+        rtol=0.063,
+        atol=0.003,
+        frobenius_threshold=0.021,
+    )
 
 
 @pytest.mark.parametrize(
@@ -480,8 +595,14 @@ def test_softmax_bfloat8_dims(device, shape, dim, dtype):
     )
     ttnn_output = ttnn.softmax(ttnn_tensor, dim=dim)
     ttnn_output = ttnn.to_torch(ttnn_output)
-
-    assert_with_pcc(torch_output, ttnn_output, 0.997)
+    assert_numeric_metrics(
+        torch_output,
+        ttnn_output,
+        pcc_threshold=0.996,
+        rtol=0.088,
+        atol=0.009,
+        frobenius_threshold=0.060,
+    )
 
 
 @pytest.mark.parametrize(
@@ -521,8 +642,16 @@ def test_softmax_accuracy(device, shape, fp32_acc_en, math_approx_mode, expected
     )
 
     output_torch = ttnn_output.cpu().to_torch()
-
-    assert_with_ulp(torch_output, output_torch, expected_ulp)
+    assert_numeric_metrics(
+        torch_output,
+        output_torch,
+        pcc_threshold=0.997,
+        rtol=0.080,
+        atol=0.001,
+        frobenius_threshold=0.022,
+        ulp_threshold=expected_ulp,
+        check_ulp=True,
+    )
 
 
 @pytest.mark.parametrize(
@@ -555,7 +684,16 @@ def test_softmax_large_kernel_block_size(device, Wt):
     ttnn_output = ttnn.softmax(ttnn_input, dim=-1, compute_kernel_config=compute_config, numeric_stable=True)
     ttnn_output = ttnn.to_torch(ttnn_output)
 
-    assert_with_pcc(torch_output, ttnn_output, 0.997)
+    assert_numeric_metrics(
+        torch_output,
+        ttnn_output,
+        pcc_threshold=0.999,
+        rtol=0.053,
+        atol=0.001,
+        frobenius_threshold=0.021,
+        ulp_threshold=10,
+        check_ulp=True,
+    )
 
 
 def test_softmax_4096x4096_fp32(device):
@@ -567,4 +705,11 @@ def test_softmax_4096x4096_fp32(device):
 
     ttnn_output_tensor = ttnn.softmax(ttnn_input_tensor, dim=3)
     output_torch = ttnn_output_tensor.cpu().to_torch()
-    assert_with_pcc(torch_output, output_torch, 0.998)
+    assert_numeric_metrics(
+        torch_output,
+        output_torch,
+        pcc_threshold=0.997,
+        rtol=0.044,
+        atol=0.001,
+        frobenius_threshold=0.019,
+    )
