@@ -32,16 +32,16 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     // Largest square grid with room for a helper column at x=grid_dim
     const uint32_t grid_dim = static_cast<uint32_t>(std::min(device_grid.x - 1, device_grid.y));
 
-    const uint32_t logical_M_tiles = input.logical_shape()[-2] / tt::constants::TILE_HEIGHT;
-    const uint32_t logical_K_tiles = input.logical_shape()[-1] / tt::constants::TILE_WIDTH;
+    // Tile counts from padded_shape (always tile-aligned, matches DRAM layout)
+    const uint32_t M_tiles = input.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+    const uint32_t K_tiles = input.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    const uint32_t K_half = K_tiles / 2;
 
-    const uint32_t padded_M_tiles = tt::round_up(logical_M_tiles, grid_dim);
+    const uint32_t padded_M_tiles = tt::round_up(M_tiles, grid_dim);
     const uint32_t Mpc = padded_M_tiles / grid_dim;
 
     const auto tile_format = tt::DataFormat::Float16_b;
     const auto tile_sz = tt::tile_size(tile_format);
-    const uint32_t K_tiles = logical_K_tiles;
-    const uint32_t K_half = K_tiles / 2;
 
     const auto full_grid = tt::tt_metal::CoreRange({0, 0}, {grid_dim - 1, grid_dim - 1});
 
@@ -114,8 +114,8 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     const uint32_t block_sz = K_block_tiles * M_block;
     const uint32_t cb_size = input_cb_num_blocks * block_sz;
     const uint32_t num_tiles = M_block * K_tiles;  // tiles per sender per (m_sub, n_sub) pass
-    // Output tensor is logical [M, M] — width in tiles matches logical_M_tiles
-    const uint32_t padded_out_tiles = logical_M_tiles;
+    // Output DRAM stride in tiles — use padded M (tile-aligned) to match DRAM layout
+    const uint32_t padded_out_tiles = M_tiles;
     const uint32_t recv_tiles = K_half * M_block;  // tiles per receiver per (m_sub, n_sub) pass
 
     const uint32_t send_out_cb = (uint32_t)tt::CBIndex::c_5;
@@ -539,8 +539,8 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
              0u,           // tile_offset_row (grid row 0)
              Mpc,
              K_tiles,
-             logical_M_tiles,
-             logical_K_tiles,
+             M_tiles,
+             K_tiles,
              (uint32_t)helper_p.x,    // partner_noc_x (helper core)
              (uint32_t)helper_p.y});  // partner_noc_y
     }
@@ -578,8 +578,8 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
              y * Mpc,        // tile_offset_row
              Mpc,
              K_tiles,
-             logical_M_tiles,
-             logical_K_tiles});
+             M_tiles,
+             K_tiles});
     }
 
     // --- Col sender at (x, 0) ---
@@ -622,8 +622,8 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
              x * Mpc,  // tile_offset_row
              Mpc,
              K_tiles,
-             logical_M_tiles,
-             logical_K_tiles});
+             M_tiles,
+             K_tiles});
     }
 
     // --- Row receiver runtime args (x>0, all y) ---
@@ -652,12 +652,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
                 uint32_t M_start_tile = y * Mpc;
                 uint32_t N_start_tile = x * Mpc;
                 std::vector<uint32_t> rt = {
-                    (uint32_t)row_sender_p.x,
-                    (uint32_t)row_sender_p.y,
-                    out_addr,
-                    M_start_tile,
-                    N_start_tile,
-                    logical_M_tiles};
+                    (uint32_t)row_sender_p.x, (uint32_t)row_sender_p.y, out_addr, M_start_tile, N_start_tile, M_tiles};
                 if (mirror_active) {
                     rt.push_back(N_start_tile);  // mirror_M_start = N_start (swapped)
                     rt.push_back(M_start_tile);  // mirror_N_start = M_start (swapped)
@@ -708,8 +703,8 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
                  out_addr,
                  y * Mpc,  // M_start_tile (diagonal)
                  y * Mpc,  // N_start_tile (diagonal)
-                 logical_M_tiles,
-                 logical_K_tiles});
+                 M_tiles,
+                 K_tiles});
         }
     }
 
