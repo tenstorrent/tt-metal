@@ -115,7 +115,7 @@ void copy_to_device(
     Tensor& device_tensor,
     const std::optional<BufferRegion>& region) {
     GraphTracker::instance().track_function_start("tt::tt_metal::copy_to_device", queue, src, device_tensor, region);
-    tensor_impl::copy_to_device(queue, src, device_tensor, region);
+    tensor_impl::copy_to_device(queue, src, device_tensor.mesh_tensor(), region);
     GraphTracker::instance().track_function_end(device_tensor);
 }
 
@@ -127,14 +127,19 @@ void copy_to_host(
     bool blocking) {
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::copy_to_host", queue, device_tensor, dst, region, blocking);
-    tensor_impl::copy_to_host(queue, device_tensor, dst, region, blocking);
+    tensor_impl::copy_to_host(queue, device_tensor.mesh_tensor(), dst, region, blocking);
     GraphTracker::instance().track_function_end(device_tensor);
 }
 
 void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blocking, std::optional<QueueId> cq_id) {
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::copy_to_host", device_tensor, host_tensor, blocking, cq_id);
-    tensor_impl::copy_to_host(device_tensor, host_tensor, blocking, cq_id);
+    tensor_impl::copy_to_host(
+        device_tensor.mesh_tensor(),
+        device_tensor.device_storage().get_coords(),
+        host_tensor.host_tensor(),
+        blocking,
+        cq_id);
     GraphTracker::instance().track_function_end(host_tensor);
 }
 
