@@ -1,0 +1,95 @@
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from transformers import AutoModelForSequenceClassification
+
+class AdaptivePatchingLayer(nn.Module):
+    def __init__(self, patch_size):
+        super(AdaptivePatchingLayer, self).__init__()
+        self.patch_size = patch_size
+
+    def forward(self, x):
+        # Learn optimal patch size
+        patch_size = self.patch_size
+        patches = x.unfold(1, patch_size, patch_size)
+        return patches
+
+class PatchEmbeddingLayer(nn.Module):
+    def __init__(self, patch_size, embedding_dim):
+        super(PatchEmbeddingLayer, self).__init__()
+        self.patch_size = patch_size
+        self.embedding_dim = embedding_dim
+        self.embedding = nn.Linear(patch_size, embedding_dim)
+
+    def forward(self, x):
+        # Patch embedding with lightweight projection
+        embedded_patches = self.embedding(x)
+        return embedded_patches
+
+class TimeMixingLayer(nn.Module):
+    def __init__(self, embedding_dim):
+        super(TimeMixingLayer, self).__init__()
+        self.embedding_dim = embedding_dim
+        self.mixer = nn.Linear(embedding_dim, embedding_dim)
+
+    def forward(self, x):
+        # Lightweight time-mixing layer
+        mixed = self.mixer(x)
+        return mixed
+
+class ChannelMixingLayer(nn.Module):
+    def __init__(self, embedding_dim):
+        super(ChannelMixingLayer, self).__init__()
+        self.embedding_dim = embedding_dim
+        self.mixer = nn.Linear(embedding_dim, embedding_dim)
+
+    def forward(self, x):
+        # Lightweight channel-mixing layer
+        mixed = self.mixer(x)
+        return mixed
+
+class ForecastingHead(nn.Module):
+    def __init__(self, embedding_dim, forecast_length):
+        super(ForecastingHead, self).__init__()
+        self.embedding_dim = embedding_dim
+        self.forecast_length = forecast_length
+        self.head = nn.Linear(embedding_dim, forecast_length)
+
+    def forward(self, x):
+        # Forecasting head for point predictions
+        forecast = self.head(x)
+        return forecast
+
+class TinyTimeMixerModel(nn.Module):
+    def __init__(self, patch_size, embedding_dim, forecast_length):
+        super(TinyTimeMixerModel, self).__init__()
+        self.patch_size = patch_size
+        self.embedding_dim = embedding_dim
+        self.forecast_length = forecast_length
+        self.adaptive_patching_layer = AdaptivePatchingLayer(patch_size)
+        self.patch_embedding_layer = PatchEmbeddingLayer(patch_size, embedding_dim)
+        self.time_mixing_layer = TimeMixingLayer(embedding_dim)
+        self.channel_mixing_layer = ChannelMixingLayer(embedding_dim)
+        self.forecasting_head = ForecastingHead(embedding_dim, forecast_length)
+
+    def forward(self, x):
+        # Forward pass through the model
+        patches = self.adaptive_patching_layer(x)
+        embedded_patches = self.patch_embedding_layer(patches)
+        mixed_time = self.time_mixing_layer(embedded_patches)
+        mixed_channel = self.channel_mixing_layer(mixed_time)
+        forecast = self.forecasting_head(mixed_channel)
+        return forecast
+
+# Initialize the model
+model = TinyTimeMixerModel(patch_size=512, embedding_dim=128, forecast_length=96)
+
+# Load pre-trained weights from HuggingFace
+# model.load_state_dict(torch.load('ibm-granite/granite-timeseries-ttm-r1'))
+
+# Test the model
+input_data = torch.randn(1, 512)
+output = model(input_data)
+print(output.shape)
+```
