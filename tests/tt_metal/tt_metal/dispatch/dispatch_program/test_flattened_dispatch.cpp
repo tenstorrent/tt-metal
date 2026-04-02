@@ -278,10 +278,7 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, FlattenedDispatch_MultipleProgramsAlt
 // Test 3a: Random program stress test using existing random program fixture
 class FlattenedRandomProgramFixture : public UnitMeshRandomProgramFixture {};
 
-// TODO: Random programs hang on 2nd dispatch (flattened fast path) for complex programs.
-// The 7 simple tests pass — likely a CB config or RTA offset mismatch for programs with
-// many RTAs/CBs across multiple runtime_args_command_sequences. Needs investigation.
-TEST_F(FlattenedRandomProgramFixture, DISABLED_FlattenedDispatch_RandomPrograms) {
+TEST_F(FlattenedRandomProgramFixture, FlattenedDispatch_RandomPrograms) {
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         Program program = Program();
         create_kernel(program, CoreType::WORKER);
