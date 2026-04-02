@@ -3,14 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+import shutil
+from hashlib import sha256
+from pathlib import Path
 from typing import ClassVar
 
+import torch
 from ttexalens.tt_exalens_lib import (
     read_from_device,
     write_to_device,
 )
 
 from .format_config import DataFormat
+from .golden_generators import GeneratorProxy, ProxyMode
 from .llk_params import format_tile_sizes
 from .logger import logger
 from .pack import (
@@ -30,9 +36,7 @@ from .pack import (
     pack_uint32,
 )
 from .tile_constants import FACE_C_DIM, MAX_TILE_ELEMENTS, calculate_tile_size_bytes
-from .unpack import (
-    unpack_res_tiles,
-)
+from .unpack import unpack_res_tiles
 
 
 class StimuliConfig:
@@ -43,17 +47,28 @@ class StimuliConfig:
 
     WITH_COVERAGE: ClassVar[bool] = False
 
+    OFFSET_DICT: ClassVar[dict[str, list[int]]]
+    STIMULI_CACHE_ROOT: ClassVar[Path]
+
+    @classmethod
+    def initialize_cache(cls, folder_path: Path):
+        GeneratorProxy.STIMULI_CACHE_ROOT = cls.STIMULI_CACHE_ROOT = folder_path
+        if GeneratorProxy.MODE == ProxyMode.CACHE_GOLDEN:
+            # Clean entire folder if there already was some stimuli cached
+            shutil.rmtree(cls.STIMULI_CACHE_ROOT, ignore_errors=True)
+            os.makedirs(cls.STIMULI_CACHE_ROOT, exist_ok=True)
+
     def __init__(
         self,
-        buffer_A,
+        buffer_A: torch.Tensor,
         stimuli_A_format: DataFormat,
-        buffer_B,
+        buffer_B: torch.Tensor,
         stimuli_B_format: DataFormat,
         stimuli_res_format: DataFormat,
         tile_count_A: int = 1,
         tile_count_B: int = None,
         tile_count_res: int = 1,
-        buffer_C=None,
+        buffer_C: torch.Tensor = None,
         stimuli_C_format: DataFormat = None,
         tile_count_C: int = None,
         num_faces: int = 4,
@@ -488,3 +503,55 @@ class StimuliConfig:
             tile_stride_bytes=stride_bytes,
         )
         return res_from_L1
+
+    def save_to_cache(self):
+        stimuli_id = sha256(os.environ.get("PYTEST_CURRENT_TEST").encode()).hexdigest()
+        os.makedirs(StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id, exist_ok=True)
+
+        if self.buffer_A is not None:
+            logger.debug(StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_A.pt")
+            torch.save(
+                self.buffer_A,
+                StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_A.pt",
+            )
+
+        if self.buffer_B is not None:
+            logger.debug(StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_B.pt")
+            torch.save(
+                self.buffer_B,
+                StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_B.pt",
+            )
+
+        if self.buffer_C is not None:
+            logger.debug(StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_C.pt")
+            torch.save(
+                self.buffer_C,
+                StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_C.pt",
+            )
+
+        if GeneratorProxy.TEMP_RESULT is not None:
+            logger.debug(StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "golden.pt")
+            torch.save(
+                GeneratorProxy.TEMP_RESULT,
+                StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "golden.pt",
+            )
+
+    def load_from_cache(self):
+        stimuli_id = sha256(os.environ.get("PYTEST_CURRENT_TEST").encode()).hexdigest()
+        if self.buffer_A is not None:
+            logger.debug(StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_A.pt")
+            self.buffer_A = torch.load(
+                StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_A.pt"
+            )
+
+        if self.buffer_B is not None:
+            logger.debug(StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_B.pt")
+            self.buffer_B = torch.load(
+                StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_B.pt"
+            )
+
+        if self.buffer_C is not None:
+            logger.debug(StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_C.pt")
+            self.buffer_C = torch.load(
+                StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_C.pt"
+            )

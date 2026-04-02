@@ -38,7 +38,6 @@ def test_perf_pack_untilize(
     formats,
     full_rt_dim,
     full_ct_dim,
-    workers_tensix_coordinates,
 ):
     if formats.output_format == DataFormat.Bfp8_b:
         pytest.skip("Pack Untilize does not support Bfp8_b output")
@@ -90,4 +89,4 @@ def test_perf_pack_untilize(
         unpack_to_dest=formats.input_format.is_32_bit(),
     )
 
-    configuration.run(perf_report, location=workers_tensix_coordinates)
+    configuration.run(perf_report)

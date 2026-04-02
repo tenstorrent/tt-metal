@@ -36,7 +36,11 @@ from helpers.utils import passed_test
     ],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_sfpu_binary_float(formats, dest_acc, mathop, workers_tensix_coordinates):
+def test_sfpu_binary_float(
+    formats,
+    dest_acc,
+    mathop,
+):
     if (
         TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
         and mathop == MathOperation.SfpuElwsub
@@ -60,7 +64,11 @@ def test_sfpu_binary_float(formats, dest_acc, mathop, workers_tensix_coordinates
             "Float16_a isn't supported for SFPU on Blackhole without being converted to 32-bit intermediate format in dest register"
         )
 
-    sfpu_binary(formats, dest_acc, mathop, workers_tensix_coordinates)
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+    )
 
 
 @parametrize(
@@ -76,8 +84,16 @@ def test_sfpu_binary_float(formats, dest_acc, mathop, workers_tensix_coordinates
     ],
     dest_acc=[DestAccumulation.Yes],
 )
-def test_sfpu_binary_int(formats, dest_acc, mathop, workers_tensix_coordinates):
-    sfpu_binary(formats, dest_acc, mathop, workers_tensix_coordinates)
+def test_sfpu_binary_int(
+    formats,
+    dest_acc,
+    mathop,
+):
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+    )
 
 
 @parametrize(
@@ -92,7 +108,11 @@ def test_sfpu_binary_int(formats, dest_acc, mathop, workers_tensix_coordinates):
     mathop=[MathOperation.SfpuAddTopRow],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_sfpu_binary_add_top_row(formats, dest_acc, mathop, workers_tensix_coordinates):
+def test_sfpu_binary_add_top_row(
+    formats,
+    dest_acc,
+    mathop,
+):
     input_dimensions = [64, 32]
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -144,7 +164,7 @@ def test_sfpu_binary_add_top_row(formats, dest_acc, mathop, workers_tensix_coord
         disable_format_inference=True,
         compile_time_formats=True,
     )
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).view(input_dimensions)
@@ -158,7 +178,11 @@ def test_sfpu_binary_add_top_row(formats, dest_acc, mathop, workers_tensix_coord
     ), "Assert against golden failed"
 
 
-def sfpu_binary(formats, dest_acc, mathop, workers_tensix_coordinates):
+def sfpu_binary(
+    formats,
+    dest_acc,
+    mathop,
+):
 
     input_dimensions = [64, 32]
 
@@ -215,7 +239,7 @@ def sfpu_binary(formats, dest_acc, mathop, workers_tensix_coordinates):
         unpack_to_dest=formats.input_format.is_32_bit(),
         compile_time_formats=True,
     )
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()

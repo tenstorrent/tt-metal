@@ -76,7 +76,6 @@ def test_eltwise_bcast_col_custom(
     broadcast_type,
     input_dimensions_A,
     input_dimensions_B,
-    workers_tensix_coordinates,
 ):
     if (
         TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
@@ -155,7 +154,7 @@ def test_eltwise_bcast_col_custom(
         ),
         dest_acc=dest_acc,
     )
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     res_from_L1 = untilize_block(
         res_from_L1, formats.output_format, input_dimensions_A

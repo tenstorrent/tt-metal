@@ -34,7 +34,6 @@ def test_perf_math_transpose(
     formats,
     unpack_transpose_faces,
     math_transpose_faces,
-    workers_tensix_coordinates,
 ):
     if formats.input_format != formats.output_format:
         pytest.skip("Prevent mixing INT and FP in math transpose")
@@ -81,4 +80,4 @@ def test_perf_math_transpose(
         ),
     )
 
-    configuration.run(perf_report, location=workers_tensix_coordinates)
+    configuration.run(perf_report)

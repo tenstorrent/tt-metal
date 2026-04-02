@@ -54,7 +54,6 @@ def test_perf_eltwise_bcast_col_custom(
     broadcast_type,
     ct_dim,
     loop_factor,
-    workers_tensix_coordinates,
 ):
     if TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE:
         pytest.skip("Custom blocked sub_bcast_cols not supported on Wormhole")
@@ -91,4 +90,4 @@ def test_perf_eltwise_bcast_col_custom(
         dest_acc=dest_acc,
     )
 
-    configuration.run(perf_report, location=workers_tensix_coordinates)
+    configuration.run(perf_report)

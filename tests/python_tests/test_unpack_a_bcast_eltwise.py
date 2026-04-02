@@ -53,7 +53,6 @@ def test_unp_bcast_sub_sdpa(
     math_fidelity,
     input_dimensions,
     srca_reuse_count,
-    workers_tensix_coordinates,
 ):
 
     # Precompute constants
@@ -148,7 +147,7 @@ def test_unp_bcast_sub_sdpa(
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
         golden_tensor
