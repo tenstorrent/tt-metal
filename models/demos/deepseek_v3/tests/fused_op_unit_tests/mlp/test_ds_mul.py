@@ -262,7 +262,7 @@ def _build_mul_inputs(
         mesh_device,
         force_recalculate_weight_config,
     )
-    model_config = get_model_config(MLP, mode, hf_config, mesh_device, fabric_config)
+    model_config = get_model_config(MLP, mode, hf_config, mesh_device, fabric_config, batch_size_per_row=USERS_PER_ROW)
     model_state = {
         "mesh_device": mesh_device,
         "mesh_shape": mesh_device.shape,
@@ -298,7 +298,7 @@ def _build_mul_inputs(
         max_num_cores = mesh_device.core_grid.x * mesh_device.core_grid.y
         inner_num_cores = max(get_activation_sharding_core_counts_for_dram_matmul(hidden_dim_per_device, max_num_cores))
         input_memory_config = MLP._get_decode_activation_memory_config(
-            hidden_dim_per_device, inner_num_cores, mesh_device
+            hidden_dim_per_device, inner_num_cores, mesh_device, batch_size_per_row=USERS_PER_ROW
         )
     else:
         input_memory_config = ttnn.DRAM_MEMORY_CONFIG
@@ -520,7 +520,9 @@ def test_ds_mul_single_device(
         mesh_device,
         force_recalculate_weight_config,
     )
-    model_config = get_model_config(MLP, mode, hf_config, mesh_device, device_params["fabric_config"])
+    model_config = get_model_config(
+        MLP, mode, hf_config, mesh_device, device_params["fabric_config"], batch_size_per_row=USERS_PER_ROW
+    )
     model_state = {
         "mesh_device": mesh_device,
         "mesh_shape": mesh_device.shape,
