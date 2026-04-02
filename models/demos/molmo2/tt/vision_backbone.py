@@ -155,11 +155,11 @@ class VisionBackbone(LightweightModule):
         Returns:
             Concatenated multi-scale features [B, T*N, pool_input_dim]
         """
-        # Run through ViT and collect all hidden states
         hidden_states = self.image_vit.forward(
             images_embedded,
             return_all_hidden_states=True,
             matmul_output_memory_config=matmul_output_memory_config,
+            num_crops=num_crops,
         )
 
         # Extract features from specified layers and concat
@@ -243,12 +243,17 @@ class VisionBackbone(LightweightModule):
         # 1. Encode image through ViT
         # Check if input is raw pixels (torch.Tensor) or already embedded (ttnn.Tensor)
         if isinstance(images_embedded, torch.Tensor):
+            pixel_batch = images_embedded.shape[0]
             image_features = self.encode_image_from_pixels(
-                images_embedded, num_crops, matmul_output_memory_config=vit_matmul_config
+                images_embedded,
+                pixel_batch,
+                matmul_output_memory_config=vit_matmul_config,
             )
         else:
             image_features = self.encode_image(
-                images_embedded, num_crops, matmul_output_memory_config=vit_matmul_config
+                images_embedded,
+                batch_size,
+                matmul_output_memory_config=vit_matmul_config,
             )
 
         # 2. Convert to torch for gathering (CPU operation)
@@ -435,9 +440,9 @@ class VisionBackbone(LightweightModule):
         _vit_el = images_embedded.shape[2] * images_embedded.shape[3]
         vit_matmul_config = ttnn.L1_MEMORY_CONFIG if _vit_el <= 512 * 1024 else ttnn.DRAM_MEMORY_CONFIG
 
-        # 1. Encode image through ViT
         image_features = self.encode_image(
             images_embedded,
+            num_crops=batch_size,
             matmul_output_memory_config=vit_matmul_config,
         )
         # image_features: [1, 1, B*T*N, pool_dim]

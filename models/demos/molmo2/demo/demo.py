@@ -23,9 +23,32 @@ Usage:
 
     # Run with tracing enabled
     python -m models.demos.molmo2.demo.demo --use-trace
+
+Frame-level vision parallelism (T3K / multi-device), via ``models.demos.molmo2.tt.frame_parallel_config``:
+
+    MOLMO2_VISION_PARALLEL_MILESTONE
+        ``0`` legacy ViT (no cross-device frame split). ``1`` (default) frame DP on mesh.
+        ``2`` like ``1`` plus align max frames to device count before extraction.
+
+    MOLMO2_FRAME_DP_LOG_ROUNDS
+        Log each ViT parallel round (frame ranges).
+
+    MOLMO2_FRAME_DP_LOG_DEVICE_FRAMES
+        Log per-shard mapping: physical device id and global frame index (sharded vs replicated tail).
+
+    MOLMO2_FRAME_DP_REMAINDER
+        ``tail`` (default): replicated sequential path for leftover frames. ``pad``: zero-pad
+        to a full last round then strip tokens. ``gather``: partial sharded round + concat gather.
+
+    MOLMO2_VIDEO_ALIGN_FRAMES
+        Align max frames to ``len(get_device_ids())`` without requiring milestone 2.
+
+    MOLMO2_VIDEO_MAX_FRAMES
+        Default cap when not passing ``--max-video-frames`` (otherwise CLI wins).
 """
 
 import argparse
+import logging
 import os
 import time
 from pathlib import Path
@@ -56,14 +79,62 @@ FRAME_START_TOKEN = "<frame_start>"
 FRAME_END_TOKEN = "<frame_end>"
 VIDEO_PROMPT = "<|video|>"
 
-# Default video parameters matching HF Molmo2 video processor defaults
-VIDEO_MAX_FRAMES = 8
+# Default video parameters (32 frames fits 4×8-way ViT rounds on T3K; override with CLI or env)
+VIDEO_MAX_FRAMES = 32
 VIDEO_MAX_FPS = 2.0
+
+
+def _configure_molmo2_stdlib_logging_to_stderr() -> None:
+    """
+    TT modules under ``models.demos.molmo2`` (e.g. ``vision_transformer``) use stdlib ``logging``.
+    The demo uses Loguru for its own messages, so stdlib INFO was previously invisible (default
+    WARNING threshold). Attach one INFO StreamHandler for the package subtree.
+    """
+    molmo_log = logging.getLogger("models.demos.molmo2")
+    molmo_log.setLevel(logging.INFO)
+    if molmo_log.handlers:
+        return
+    handler = logging.StreamHandler()
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)-8s | %(name)s: %(message)s"))
+    molmo_log.addHandler(handler)
+
 
 # Molmo2 normalization constants (from HuggingFace Molmo2ImageProcessor)
 # These differ from standard ImageNet normalization
 IMAGENET_MEAN = [0.48145466, 0.4578275, 0.40821073]
 IMAGENET_STD = [0.26862954, 0.26130258, 0.27577711]
+
+
+def effective_video_max_frames(requested: int) -> int:
+    """
+    Apply ``MOLMO2_VIDEO_MAX_FRAMES`` if set, then optional alignment to device count
+    (milestone 2 or ``MOLMO2_VIDEO_ALIGN_FRAMES``).
+    """
+    from models.demos.molmo2.tt.frame_parallel_config import video_align_frames_to_mesh_width
+
+    cap = requested
+    raw = os.environ.get("MOLMO2_VIDEO_MAX_FRAMES", "").strip()
+    if raw:
+        try:
+            cap = max(1, int(raw))
+        except ValueError:
+            logger.warning(f"Invalid MOLMO2_VIDEO_MAX_FRAMES={raw!r}; using {cap}")
+
+    if not video_align_frames_to_mesh_width():
+        return cap
+    try:
+        n = len(ttnn.get_device_ids())
+    except Exception:
+        return cap
+    if n <= 1:
+        return cap
+    aligned = (cap // n) * n
+    if aligned <= 0:
+        return cap
+    if aligned != cap:
+        logger.info(f"Aligning max video frames {cap} -> {aligned} for multiple of {n} devices")
+    return aligned
 
 
 def load_processor():
@@ -1660,15 +1731,31 @@ class Molmo2Generator:
         seq_len = input_ids.shape[1]
         timing = {}
 
+        vision_batch = pooled_patches_idx.shape[0] if pixel_values is not None else 1
+        effective_unified = use_unified_trace
+        effective_vision_trace = use_vision_trace
+        if vision_batch > 1:
+            if effective_unified:
+                logger.info(
+                    "Unified vision+prefill trace disabled for vision batch %s (multi-frame / frame-DP path).",
+                    vision_batch,
+                )
+                effective_unified = False
+            if effective_vision_trace:
+                logger.info(
+                    "Vision trace disabled for vision batch %s; using eager vision forward.",
+                    vision_batch,
+                )
+                effective_vision_trace = False
+
         # Unified trace path: Vision + embed_tokens + Fusion + Prefill in single trace
-        # This eliminates CPU roundtrip between vision and text prefill
-        if use_unified_trace and pixel_values is not None:
+        if effective_unified and pixel_values is not None:
             return self._run_unified_prefill(input_ids, pixel_values, pooled_patches_idx, timing)
 
         # Start end-to-end TTFT timer (vision + fusion + prefill)
         e2e_ttft_start = None
 
-        if use_vision_trace and pixel_values is not None:
+        if effective_vision_trace and pixel_values is not None:
             # Vision tracing path - uses forward_ttnn with TTNN-native gather
             logger.info("Preparing vision inputs for tracing...")
             vision_prep_start = time.perf_counter()
@@ -2214,9 +2301,10 @@ def run_video_demo(
     # Preprocess video
     logger.info(f"Preprocessing video: {video_path}")
     video_extraction_start = time.perf_counter()
+    max_frames_eff = effective_video_max_frames(max_frames)
     video_inputs = preprocess_video_molmo2(
         video_path,
-        max_frames=max_frames,
+        max_frames=max_frames_eff,
         max_fps=max_fps,
     )
     video_extraction_ms = (time.perf_counter() - video_extraction_start) * 1000
@@ -2232,6 +2320,27 @@ def run_video_demo(
     logger.info(f"Opening TTNN mesh device with shape {mesh_shape}")
     device = ttnn.open_mesh_device(mesh_shape)
     logger.info(f"Opened mesh device with {device.get_num_devices()} devices")
+    from models.demos.molmo2.tt.frame_parallel_config import (
+        molmo2_vision_parallel_milestone,
+        video_align_frames_to_mesh_width,
+        vision_frame_dp_enabled,
+        vision_frame_dp_remainder_mode,
+    )
+
+    milestone = molmo2_vision_parallel_milestone()
+    frame_dp = vision_frame_dp_enabled()
+    align = video_align_frames_to_mesh_width()
+    remainder = vision_frame_dp_remainder_mode()
+    mesh_devices = device.get_num_devices()
+
+    logger.info(
+        f"Vision parallel config: milestone={milestone} (frame_dp={frame_dp}), "
+        f"align_frames={align}, remainder={remainder}, mesh_devices={mesh_devices}"
+    )
+    logger.info(
+        f"Vision parallel env: effective remainder={remainder} (MOLMO2_FRAME_DP_REMAINDER); "
+        f"effective align_frames={align} (milestone>=2 or MOLMO2_VIDEO_ALIGN_FRAMES=1)"
+    )
 
     try:
         model = create_model(device, state_dict, num_layers)
@@ -2245,6 +2354,15 @@ def run_video_demo(
             batch_size=1,
             max_seq_len=max_seq_len,
         )
+
+        nd = device.get_num_devices()
+        rem_mode = vision_frame_dp_remainder_mode()
+        if nd > 1 and n_frames % nd != 0 and rem_mode == "tail":
+            logger.warning(
+                f"Video has {n_frames} frames (not divisible by {nd} devices): default remainder mode `tail` uses a "
+                "slower replicated sequential path for the last frames. Set MOLMO2_FRAME_DP_REMAINDER=pad or gather, or "
+                f"MOLMO2_VISION_PARALLEL_MILESTONE=2 / MOLMO2_VIDEO_ALIGN_FRAMES=1, or --max-video-frames multiple of {nd}."
+            )
 
         logger.info("\n" + "=" * 60)
         logger.info(f"Prompt: {prompt}")
@@ -2409,6 +2527,7 @@ def run_demo(
 
 
 def main():
+    _configure_molmo2_stdlib_logging_to_stderr()
     parser = argparse.ArgumentParser(description="Molmo2-8B Demo")
     parser.add_argument(
         "--image",
@@ -2456,7 +2575,10 @@ def main():
         "--max-video-frames",
         type=int,
         default=VIDEO_MAX_FRAMES,
-        help=f"Maximum video frames to sample (default: {VIDEO_MAX_FRAMES})",
+        help=(
+            f"Maximum video frames to sample (default: {VIDEO_MAX_FRAMES}). "
+            "For T3K frame DP, prefer a multiple of 8; use milestone 2 or MOLMO2_VIDEO_ALIGN_FRAMES=1 to trim."
+        ),
     )
     parser.add_argument(
         "--max-video-fps",

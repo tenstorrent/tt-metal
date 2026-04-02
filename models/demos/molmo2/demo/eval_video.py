@@ -88,7 +88,7 @@ def run_eval(
     num_samples: Optional[int] = None,
     max_new_tokens: int = 16,
     max_seq_len: int = 16384,
-    max_frames: int = 8,
+    max_frames: int = 32,
     max_fps: float = 2.0,
     num_layers: Optional[int] = None,
     use_trace: bool = False,
@@ -122,6 +122,7 @@ def run_eval(
         VIDEO_PROMPT,
         Molmo2Generator,
         create_model,
+        effective_video_max_frames,
         load_model_weights,
         load_processor,
         preprocess_video_molmo2,
@@ -228,7 +229,7 @@ def run_eval(
                 t0 = time.perf_counter()
                 video_inputs = preprocess_video_molmo2(
                     video_path,
-                    max_frames=max_frames,
+                    max_frames=effective_video_max_frames(max_frames),
                     max_fps=max_fps,
                 )
                 extract_ms = (time.perf_counter() - t0) * 1000
@@ -352,8 +353,8 @@ def main():
     parser.add_argument(
         "--max-video-frames",
         type=int,
-        default=8,
-        help="Maximum frames to extract per video",
+        default=32,
+        help="Maximum frames to extract per video (use multiple of mesh width for even DP)",
     )
     parser.add_argument(
         "--max-video-fps",

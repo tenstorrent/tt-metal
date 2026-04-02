@@ -18,8 +18,15 @@ Key dimensions:
 - Hidden dim: 1152
 - Heads: 16
 - Head dim: 72
+
+Multi-frame / multi-crop on a mesh: optional **frame-level data parallelism** via
+``models.demos.molmo2.tt.frame_parallel_config`` (default milestone 1). Each parallel
+round runs up to ``mesh_device.get_num_devices()`` frames (one per device); e.g. 32
+frames on 8 devices => 4 equal rounds. If the frame count is not divisible by ``D``,
+see ``MOLMO2_FRAME_DP_REMAINDER`` (``tail`` / ``pad`` / ``gather``).
 """
 
+import logging
 from typing import List, Tuple
 
 import torch
@@ -27,7 +34,25 @@ import torch.nn.functional as F
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.molmo2.tt.frame_parallel_config import (
+    vision_frame_dp_enabled,
+    vision_frame_dp_log_device_frames,
+    vision_frame_dp_log_rounds,
+    vision_frame_dp_remainder_mode,
+)
+
+_log = logging.getLogger(__name__)
 from models.demos.molmo2.tt.vision_block import VisionBlock
+
+
+def _mesh_physical_device_ids(mesh_device) -> List[int]:
+    try:
+        ids = list(mesh_device.get_device_ids())
+        if ids:
+            return ids
+    except Exception:
+        pass
+    return list(range(mesh_device.get_num_devices()))
 
 
 class VisionTransformer(LightweightModule):
@@ -293,43 +318,318 @@ class VisionTransformer(LightweightModule):
 
         return embedded
 
+    def _is_mesh_device(self) -> bool:
+        return self.mesh_device.__class__.__name__ == "MeshDevice"
+
+    def _use_frame_level_dp(self, num_crops: int) -> bool:
+        return vision_frame_dp_enabled() and self._is_mesh_device() and num_crops > 1
+
+    def _replicated_embed_to_torch_crops(self, x: ttnn.Tensor, num_crops: int) -> torch.Tensor:
+        seq_len = x.shape[2]
+        hidden_dim = x.shape[3]
+        if seq_len % num_crops != 0:
+            raise ValueError(f"ViT seq len {seq_len} not divisible by num_crops={num_crops}")
+        num_patches = seq_len // num_crops
+        # Replicated mesh tensors cannot use bare to_torch (TT_FATAL: supply mesh composer).
+        # All devices hold the same logical data — read any single-device shard.
+        if self._is_mesh_device():
+            th = ttnn.to_torch(ttnn.get_device_tensors(x)[0])
+        else:
+            th = ttnn.to_torch(x)
+        if isinstance(th, (list, tuple)):
+            th = th[0]
+        return th.squeeze(0).squeeze(0).reshape(num_crops, num_patches, hidden_dim)
+
+    def _gather_sharded_vit_layer_replicated(
+        self,
+        sharded_layer: ttnn.Tensor,
+        chunk: int,
+        num_patches: int,
+        hidden_dim: int,
+    ) -> ttnn.Tensor:
+        th = ttnn.to_torch(
+            sharded_layer,
+            mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=1),
+        )
+        if isinstance(th, (list, tuple)):
+            th = th[0]
+        th = th.reshape(1, 1, chunk * num_patches, hidden_dim)
+        return ttnn.from_torch(
+            th,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+    def _strip_frame_padding_from_hidden_list(
+        self, layers: List[ttnn.Tensor], *, original_batch: int, num_patches: int
+    ) -> List[ttnn.Tensor]:
+        seq_keep = original_batch * num_patches
+        out: List[ttnn.Tensor] = []
+        for t in layers:
+            if t.shape[2] <= seq_keep:
+                out.append(t)
+                continue
+            hdim = t.shape[3]
+            out.append(ttnn.slice(t, (0, 0, 0, 0), (1, 1, seq_keep, hdim)))
+        return out
+
+    def _log_frame_dp_device_map_sharded(
+        self,
+        mesh_device,
+        cursor: int,
+        chunk: int,
+        *,
+        round_kind: str,
+        original_batch: int,
+        remainder_mode: str,
+    ) -> None:
+        """Log shard slot -> physical device id -> global frame index (enable via env)."""
+        if not vision_frame_dp_log_device_frames():
+            return
+        phy_ids = _mesh_physical_device_ids(mesh_device)
+        parts: List[str] = []
+        for slot in range(chunk):
+            dev_id = phy_ids[slot] if slot < len(phy_ids) else slot
+            gfi = cursor + slot
+            pad_note = ""
+            if remainder_mode == "pad" and gfi >= original_batch:
+                pad_note = " [zero-pad]"
+            parts.append("shard_%s->device_id=%s->global_frame=%s%s" % (slot, dev_id, gfi, pad_note))
+        _log.info("ViT frame DP device map (%s): %s", round_kind, "; ".join(parts))
+
+    def _log_frame_dp_tail_replicated(self, mesh_device, crop_idx: int) -> None:
+        if not vision_frame_dp_log_device_frames():
+            return
+        phy_ids = _mesh_physical_device_ids(mesh_device)
+        _log.info(
+            "ViT frame DP tail (replicated): global_frame_index=%s on all %s devices; physical_device_ids=%s",
+            crop_idx,
+            len(phy_ids),
+            phy_ids,
+        )
+
+    def _vit_frame_dp_run_sharded_slab(
+        self,
+        slab_1chn: torch.Tensor,
+        chunk: int,
+        num_patches: int,
+        hidden_dim: int,
+        *,
+        return_all_hidden_states: bool,
+        matmul_output_memory_config,
+        shard_mapper,
+        mesh_device,
+        log_msg: str,
+    ) -> List[ttnn.Tensor]:
+        if vision_frame_dp_log_rounds():
+            _log.info(log_msg)
+        x_ttnn = ttnn.from_torch(
+            slab_1chn,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=shard_mapper,
+        )
+        hidden_sharded: List[ttnn.Tensor] = []
+        for block in self.blocks:
+            x_ttnn = block(x_ttnn, matmul_output_memory_config=matmul_output_memory_config)
+            if return_all_hidden_states:
+                hidden_sharded.append(x_ttnn)
+        if not return_all_hidden_states:
+            hidden_sharded = [x_ttnn]
+
+        gathered: List[ttnn.Tensor] = []
+        for h in hidden_sharded:
+            g = self._gather_sharded_vit_layer_replicated(h, chunk, num_patches, hidden_dim)
+            gathered.append(g)
+            ttnn.deallocate(h)
+        ttnn.deallocate(x_ttnn)
+        return gathered
+
+    def _vit_frame_parallel_from_torch(
+        self,
+        x_bt_nh: torch.Tensor,
+        *,
+        return_all_hidden_states: bool,
+        matmul_output_memory_config,
+    ) -> List[ttnn.Tensor]:
+        """
+        Frame-level data parallel ViT: each round uses ``ShardTensorToMesh(dim=1)`` with slab
+        ``[1, chunk, N, H]``. Remainder handling is controlled by ``MOLMO2_FRAME_DP_REMAINDER``.
+        """
+        mesh_device = self.mesh_device
+        num_dev = mesh_device.get_num_devices()
+        original_batch, num_patches, hidden_dim = x_bt_nh.shape
+        remainder_mode = vision_frame_dp_remainder_mode()
+
+        pad_count = (num_dev - (original_batch % num_dev)) % num_dev
+        if remainder_mode == "pad" and pad_count > 0:
+            pad = torch.zeros(
+                pad_count,
+                num_patches,
+                hidden_dim,
+                dtype=x_bt_nh.dtype,
+                device=x_bt_nh.device,
+            )
+            x_bt_nh = torch.cat([x_bt_nh, pad], dim=0)
+
+        batch_size, num_patches, hidden_dim = x_bt_nh.shape
+        shard_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=1)
+        replicate_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+
+        round_outputs: List[List[ttnn.Tensor]] = []
+        cursor = 0
+
+        while cursor < batch_size:
+            remaining = batch_size - cursor
+            if remaining >= num_dev:
+                chunk = num_dev
+                slab = x_bt_nh[cursor : cursor + chunk].unsqueeze(0)
+                self._log_frame_dp_device_map_sharded(
+                    mesh_device,
+                    cursor,
+                    chunk,
+                    round_kind="full_sharded_round",
+                    original_batch=original_batch,
+                    remainder_mode=remainder_mode,
+                )
+                gathered = self._vit_frame_dp_run_sharded_slab(
+                    slab,
+                    chunk,
+                    num_patches,
+                    hidden_dim,
+                    return_all_hidden_states=return_all_hidden_states,
+                    matmul_output_memory_config=matmul_output_memory_config,
+                    shard_mapper=shard_mapper,
+                    mesh_device=mesh_device,
+                    log_msg=(
+                        "ViT frame DP round: global_frames [%s, %s) chunk=%s devices=%s"
+                        % (cursor, cursor + chunk, chunk, num_dev)
+                    ),
+                )
+                round_outputs.append(gathered)
+                cursor += chunk
+            elif remainder_mode == "gather" and remaining > 0:
+                chunk = remaining
+                slab = x_bt_nh[cursor : cursor + chunk].unsqueeze(0)
+                self._log_frame_dp_device_map_sharded(
+                    mesh_device,
+                    cursor,
+                    chunk,
+                    round_kind="partial_sharded_round (gather)",
+                    original_batch=original_batch,
+                    remainder_mode=remainder_mode,
+                )
+                gathered = self._vit_frame_dp_run_sharded_slab(
+                    slab,
+                    chunk,
+                    num_patches,
+                    hidden_dim,
+                    return_all_hidden_states=return_all_hidden_states,
+                    matmul_output_memory_config=matmul_output_memory_config,
+                    shard_mapper=shard_mapper,
+                    mesh_device=mesh_device,
+                    log_msg=(
+                        "ViT frame DP partial round (check-gather): global_frames [%s, %s) chunk=%s mesh_devices=%s"
+                        % (cursor, cursor + chunk, chunk, num_dev)
+                    ),
+                )
+                round_outputs.append(gathered)
+                cursor += chunk
+            else:
+                all_crop_hidden: List[List[ttnn.Tensor]] = []
+                for crop_idx in range(cursor, batch_size):
+                    self._log_frame_dp_tail_replicated(mesh_device, crop_idx)
+                    crop_x = x_bt_nh[crop_idx : crop_idx + 1].unsqueeze(0)
+                    crop_ttnn = ttnn.from_torch(
+                        crop_x,
+                        device=mesh_device,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=replicate_mapper,
+                    )
+                    states: List[ttnn.Tensor] = []
+                    for block in self.blocks:
+                        crop_ttnn = block(
+                            crop_ttnn,
+                            matmul_output_memory_config=matmul_output_memory_config,
+                        )
+                        if return_all_hidden_states:
+                            states.append(crop_ttnn)
+                    if not return_all_hidden_states:
+                        states = [crop_ttnn]
+                    all_crop_hidden.append(states)
+
+                num_layers_out = len(all_crop_hidden[0])
+                combined_tail: List[ttnn.Tensor] = []
+                for layer_idx in range(num_layers_out):
+                    parts = [ch[layer_idx] for ch in all_crop_hidden]
+                    c = ttnn.concat(parts, dim=2)
+                    combined_tail.append(c)
+                    for t in parts:
+                        ttnn.deallocate(t)
+                if vision_frame_dp_log_rounds():
+                    _log.info(
+                        "ViT frame DP tail: sequential replicated frames [%s, %s)",
+                        cursor,
+                        batch_size,
+                    )
+                round_outputs.append(combined_tail)
+                cursor = batch_size
+
+        if len(round_outputs) == 1:
+            out = round_outputs[0]
+        else:
+            num_layers_out = len(round_outputs[0])
+            merged: List[ttnn.Tensor] = []
+            for layer_idx in range(num_layers_out):
+                parts = [rnd[layer_idx] for rnd in round_outputs]
+                m = ttnn.concat(parts, dim=2)
+                merged.append(m)
+                for p in parts:
+                    ttnn.deallocate(p)
+            out = merged
+
+        if remainder_mode == "pad" and pad_count > 0:
+            out = self._strip_frame_padding_from_hidden_list(
+                out, original_batch=original_batch, num_patches=num_patches
+            )
+        return out
+
     def forward(
         self,
         x: ttnn.Tensor,
         patch_grid: Tuple[int, int] = None,
         return_all_hidden_states: bool = True,
         matmul_output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        num_crops: int = 1,
     ) -> List[ttnn.Tensor]:
         """
-        Forward pass through the vision transformer.
-
-        Args:
-            x: Input tensor of shape [1, 1, num_patches, hidden_dim]
-               (after patch embedding and positional embedding have been applied)
-            patch_grid: Tuple of (patches_h, patches_w) for positional embedding interpolation
-            return_all_hidden_states: If True, return hidden states from all layers
-
-        Returns:
-            List of hidden states from all layers if return_all_hidden_states=True,
-            otherwise just the final hidden state
+        Forward through ViT blocks. With frame-level DP (see ``frame_parallel_config``),
+        ``num_crops`` splits ``[1,1,B*N,H]`` into B rounds of parallel work on the mesh.
         """
-        hidden_states = []
+        if self._use_frame_level_dp(num_crops):
+            x_torch = self._replicated_embed_to_torch_crops(x, num_crops)
+            return self._vit_frame_parallel_from_torch(
+                x_torch,
+                return_all_hidden_states=return_all_hidden_states,
+                matmul_output_memory_config=matmul_output_memory_config,
+            )
 
-        # Add positional embedding if not already added
-        # (Typically done before calling forward, but can be done here)
-
-        # Process through transformer blocks
-        for i, block in enumerate(self.blocks):
+        hidden_states: List[ttnn.Tensor] = []
+        for block in self.blocks:
             x = block(x, matmul_output_memory_config=matmul_output_memory_config)
             if return_all_hidden_states:
-                # No clone needed - block() creates a new tensor, so old x is still valid
-                # This follows tt_transformers' pattern for traceable ViT
                 hidden_states.append(x)
 
         if return_all_hidden_states:
             return hidden_states
-        else:
-            return [x]
+        return [x]
 
     def forward_with_patch_embed(
         self,
@@ -351,33 +651,30 @@ class VisionTransformer(LightweightModule):
         patches_h = height // self.patch_size
         patches_w = width // self.patch_size
 
-        # Patch embedding on CPU
-        x = self.patch_embed_cpu(pixel_values)  # [batch, num_patches, hidden_dim]
+        x = self.patch_embed_cpu(pixel_values)
 
-        # Interpolate positional embedding if needed
         if patches_h != self.base_num_patches_per_side or patches_w != self.base_num_patches_per_side:
-            # For simplicity, assume square patches
             assert patches_h == patches_w, "Non-square patch grids not yet supported"
             pos_embed = self.interpolate_pos_embedding(patches_h)
         else:
             pos_embed = self.positional_embedding_torch
 
-        # Add positional embedding
         x = x + pos_embed.unsqueeze(0)
 
-        is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
-        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
+        is_mesh = self._is_mesh_device()
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh else None
 
-        # Process each crop separately (nlp_create_qkv_heads requires batch_size=1)
-        # Then concatenate hidden states from all crops
+        if batch_size > 1 and self._use_frame_level_dp(batch_size):
+            return self._vit_frame_parallel_from_torch(
+                x,
+                return_all_hidden_states=return_all_hidden_states,
+                matmul_output_memory_config=matmul_output_memory_config,
+            )
+
         if batch_size > 1:
-            all_crop_hidden_states = []
-
+            all_crop_hidden_states: List[List[ttnn.Tensor]] = []
             for crop_idx in range(batch_size):
-                # Get single crop: [1, num_patches, hidden_dim]
-                crop_x = x[crop_idx : crop_idx + 1]
-                crop_x = crop_x.unsqueeze(0)  # [1, 1, num_patches, hidden_dim]
-
+                crop_x = x[crop_idx : crop_idx + 1].unsqueeze(0)
                 crop_x_ttnn = ttnn.from_torch(
                     crop_x,
                     device=self.mesh_device,
@@ -386,8 +683,6 @@ class VisionTransformer(LightweightModule):
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=mesh_mapper,
                 )
-
-                # Forward through transformer blocks
                 crop_hidden_states = self.forward(
                     crop_x_ttnn,
                     return_all_hidden_states=return_all_hidden_states,
@@ -395,41 +690,27 @@ class VisionTransformer(LightweightModule):
                 )
                 all_crop_hidden_states.append(crop_hidden_states)
 
-            # Combine hidden states from all crops
-            # Each layer's hidden states from all crops should be concatenated
-            # crop_hidden_states[i] is layer i's output: [1, 1, num_patches, hidden_dim]
-            # We want: [1, 1, batch*num_patches, hidden_dim]
-            combined_hidden_states = []
+            combined_hidden_states: List[ttnn.Tensor] = []
             num_layers_out = len(all_crop_hidden_states[0])
-
             for layer_idx in range(num_layers_out):
-                # Collect this layer's outputs from all crops
-                layer_outputs = [crop_states[layer_idx] for crop_states in all_crop_hidden_states]
-                # Concatenate along sequence dimension (dim=2)
+                layer_outputs = [s[layer_idx] for s in all_crop_hidden_states]
                 combined = ttnn.concat(layer_outputs, dim=2)
                 combined_hidden_states.append(combined)
-
-                # Clean up individual crop tensors
-                for crop_tensor in layer_outputs:
-                    ttnn.deallocate(crop_tensor)
-
+                for t in layer_outputs:
+                    ttnn.deallocate(t)
             return combined_hidden_states
-        else:
-            # Single crop - original path
-            x = x.unsqueeze(0)  # [1, batch, num_patches, hidden_dim]
 
-            x_ttnn = ttnn.from_torch(
-                x,
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mesh_mapper,
-            )
-
-            # Forward through transformer blocks
-            return self.forward(
-                x_ttnn,
-                return_all_hidden_states=return_all_hidden_states,
-                matmul_output_memory_config=matmul_output_memory_config,
-            )
+        x = x.unsqueeze(0)
+        x_ttnn = ttnn.from_torch(
+            x,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+        return self.forward(
+            x_ttnn,
+            return_all_hidden_states=return_all_hidden_states,
+            matmul_output_memory_config=matmul_output_memory_config,
+        )
