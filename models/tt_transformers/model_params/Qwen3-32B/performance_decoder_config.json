@@ -5,7 +5,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -20,7 +21,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -35,7 +37,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -50,7 +53,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -65,7 +69,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -80,7 +85,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -95,7 +101,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -110,7 +117,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -125,7 +133,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -140,7 +149,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -155,7 +165,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -170,7 +181,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -185,7 +197,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -200,7 +213,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -215,7 +229,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -230,7 +245,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -245,7 +261,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -260,7 +277,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -275,7 +293,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -290,7 +309,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -305,7 +325,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -320,7 +341,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -335,7 +357,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -350,7 +373,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -365,7 +389,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -380,7 +405,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -395,7 +421,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -410,7 +437,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -425,7 +453,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -440,7 +469,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -455,7 +485,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -470,7 +501,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -485,7 +517,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -500,7 +533,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -515,7 +549,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -530,7 +565,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -545,7 +581,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -560,7 +597,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -575,7 +613,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -590,7 +629,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -605,7 +645,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -620,7 +661,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -635,7 +677,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -650,7 +693,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -665,7 +709,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -680,7 +725,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -695,7 +741,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -710,7 +757,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -725,7 +773,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -740,7 +789,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -755,7 +805,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -770,7 +821,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -785,7 +837,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -800,7 +853,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -815,7 +869,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -830,7 +885,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -845,7 +901,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -860,7 +917,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -875,7 +933,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -890,7 +949,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -905,7 +965,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -920,7 +981,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -935,7 +997,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
@@ -950,7 +1013,8 @@
         "FF1_FF3": "BFP4",
         "FF2": "BFP4",
         "WQKV": "BFP4",
-        "WO": "BFP4"
+        "WO": "BFP4",
+        "ACTIVATION": "BFP8"
       },
       "fidelity_cfg": {
         "LI_FF1_FF3": "LOFI",
