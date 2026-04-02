@@ -7,6 +7,7 @@
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -26,6 +27,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> llama_rs_create_heads(
     const std::optional<ttnn::MemoryConfig>& qkv_memory_config,
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::llama_rs_create_heads");
     uint32_t resolved_num_links =
         num_links.value_or(ttnn::operations::ccl::common::get_num_links(mesh_device, cluster_axis));
     const auto& mesh_view = mesh_device.get_view();

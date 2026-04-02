@@ -16,6 +16,7 @@
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::data_movement {
 namespace {
@@ -277,6 +278,7 @@ Tensor scatter(
     const std::optional<MemoryConfig>& output_memory_config,
     const std::optional<std::string>& opt_reduction_string,
     const std::optional<CoreRangeSet>& sub_core_grid) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::scatter");
     const ttnn::Shape& original_input_tensor_lshape = input_tensor.logical_shape();
     const auto input_tensor_rank = input_tensor.logical_shape().rank();
 
@@ -351,6 +353,7 @@ Tensor scatter_add(
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config,
     const std::optional<CoreRangeSet>& sub_core_grid) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::scatter_add");
     return scatter(
         input_tensor, dim, index_tensor, source_tensor, output_memory_config, std::make_optional("add"), sub_core_grid);
 }

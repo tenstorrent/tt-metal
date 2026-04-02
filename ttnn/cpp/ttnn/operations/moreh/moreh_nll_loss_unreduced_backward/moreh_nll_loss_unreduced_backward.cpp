@@ -6,6 +6,7 @@
 #include "moreh_nll_loss_unreduced_backward.hpp"
 
 #include "device/moreh_nll_loss_unreduced_backward_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -17,6 +18,7 @@ Tensor moreh_nll_loss_unreduced_backward(
     const int32_t ignore_index,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_nll_loss_unreduced_backward");
     return prim::moreh_nll_loss_unreduced_backward(
         target_tensor,
         output_grad_tensor,

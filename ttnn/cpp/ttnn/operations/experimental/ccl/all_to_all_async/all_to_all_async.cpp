@@ -9,6 +9,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -23,6 +24,7 @@ ttnn::Tensor all_to_all_async(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::all_to_all_async");
     bool composite_all_to_all_case =
         composite_common::use_composite_all_to_all(input_tensor, in_dim, out_dim, memory_config);
     if (composite_all_to_all_case) {

@@ -9,6 +9,7 @@
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -22,6 +23,7 @@ ttnn::Tensor slice(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::slice");
     // Ensure start and end vectors have matching sizes and correct tensor rank
 
     const auto& input_shape = input_tensor.logical_shape();
@@ -256,6 +258,7 @@ ttnn::Tensor slice(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::slice");
     ttsl::Span<const T> start(output_tensor_start.begin(), output_tensor_start.end());
     ttsl::Span<const T> end(output_tensor_end.begin(), output_tensor_end.end());
     ttsl::Span<const T> step_vec(step.begin(), step.end());
@@ -275,6 +278,7 @@ ttnn::Tensor slice(
     const std::optional<uint32_t>& slice_dim,
     const std::optional<uint32_t>& num_devices,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::slice");
     TT_FATAL(
         output_tensor_start.logical_shape().rank() == 1,
         "The start tensor for slicing must be in 1D shape, but got {}D",

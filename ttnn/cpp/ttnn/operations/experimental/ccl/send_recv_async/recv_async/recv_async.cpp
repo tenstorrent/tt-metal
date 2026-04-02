@@ -8,11 +8,13 @@
 
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include "ttnn/operations/experimental/ccl/send_recv_async/recv_async/device/recv_async_op_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
 std::vector<ttnn::Tensor> recv_async(
     const ttnn::Tensor& output_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::recv_async");
     return ttnn::prim::recv_async(output_tensor, mesh_socket);
 }
 

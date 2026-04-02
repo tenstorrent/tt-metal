@@ -27,6 +27,7 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::conv::conv2d {
 
@@ -882,6 +883,7 @@ Conv2dResultWithOptions conv2d(
     const std::optional<const Conv2dSliceConfig>& slice_config_,
     bool return_output_dim,
     bool return_weights_and_bias) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::conv2d", input_tensor, weight_tensor);
     using namespace operations::conv::conv2d;
     using operations::conv::Conv2dExecutionPath;
     using operations::conv::determine_conv2d_execution_path;

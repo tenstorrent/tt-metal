@@ -6,6 +6,7 @@
 #include "device/llama_reduce_scatter_device_operation.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -21,6 +22,7 @@ ttnn::Tensor llama_reduce_scatter(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     tt::tt_fabric::Topology topology,
     bool use_noc1_only) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::llama_reduce_scatter");
     uint32_t resolved_num_links =
         num_links.value_or(ttnn::operations::ccl::common::get_num_links(mesh_device, cluster_axis));
     const auto& mesh_view = mesh_device.get_view();

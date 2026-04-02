@@ -11,6 +11,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -29,6 +30,7 @@ ttnn::Tensor all_gather_async(
     const std::optional<CoreRangeSet>& sub_core_grid,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::all_gather_async");
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required for all_gather_async operation");
     uint32_t resolved_num_links =
@@ -90,6 +92,7 @@ ttnn::Tensor all_gather_async(
     std::optional<uint32_t> num_buffers_per_channel,
     bool reverse_order,
     const std::optional<CoreRangeSet>& sub_core_grid) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::all_gather_async");
     auto* mesh_device_ptr = input_tensor.device();
     TT_FATAL(mesh_device_ptr != nullptr, "Mesh device is required for all_gather_async operation");
     uint32_t resolved_num_links =
@@ -145,6 +148,7 @@ std::vector<ttnn::Tensor> all_gather_async(
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     const std::optional<CoreRangeSet>& sub_core_grid) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::all_gather_async");
     auto* mesh_device_ptr = input_tensors.at(0).device();
     TT_FATAL(mesh_device_ptr != nullptr, "Mesh device is required for all_gather_async operation");
     uint32_t resolved_num_links =
@@ -212,6 +216,7 @@ ttnn::Tensor all_gather_async(
     const std::optional<CoreRangeSet>& sub_core_grid,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::all_gather_async");
     uint32_t resolved_links =
         num_preferred_links.value_or(ttnn::operations::ccl::common::get_num_links(mesh_device, cluster_axis));
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
@@ -263,6 +268,7 @@ ttnn::Tensor all_gather_async_reversed(
     const std::optional<CoreRangeSet>& sub_core_grid,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::all_gather_async_reversed");
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required for all_gather_async_reversed operation");
     uint32_t resolved_num_links =
@@ -325,6 +331,7 @@ ttnn::Tensor all_gather_async_reversed(
     std::optional<uint32_t> num_buffers_per_channel,
     bool /*reverse_order*/,
     const std::optional<CoreRangeSet>& sub_core_grid) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::all_gather_async_reversed");
     auto* mesh_device_ptr = input_tensor.device();
     TT_FATAL(mesh_device_ptr != nullptr, "Mesh device is required for all_gather_async_reversed operation");
     uint32_t resolved_num_links =
@@ -381,6 +388,7 @@ ttnn::Tensor all_gather_async_reversed(
     const std::optional<CoreRangeSet>& sub_core_grid,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::all_gather_async_reversed");
     uint32_t resolved_links =
         num_preferred_links.value_or(ttnn::operations::ccl::common::get_num_links(mesh_device, cluster_axis));
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);

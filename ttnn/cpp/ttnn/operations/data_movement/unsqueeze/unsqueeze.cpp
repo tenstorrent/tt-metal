@@ -4,10 +4,12 @@
 
 #include "unsqueeze.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
 ttnn::Tensor unsqueeze(const ttnn::Tensor& input_tensor, const int dim) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::unsqueeze");
     const auto& tensor_shape = input_tensor.logical_shape();
     const uint32_t rank = tensor_shape.rank();
     const int32_t max_dim = (int)(rank);

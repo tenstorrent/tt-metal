@@ -12,6 +12,7 @@
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/allocator.hpp>
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 
@@ -137,6 +138,7 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
 namespace ttnn {
 
 Tensor move(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::move");
     if (input_tensor.memory_config().is_sharded()) {
         return operations::data_movement::move_sharded(input_tensor, output_mem_config);
     }

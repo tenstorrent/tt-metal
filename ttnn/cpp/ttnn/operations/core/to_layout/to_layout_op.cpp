@@ -17,6 +17,7 @@
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::core::CMAKE_UNIQUE_NAMESPACE {
 namespace {
@@ -246,6 +247,7 @@ Tensor to_layout(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const float pad_value) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::to_layout");
     return operations::core::CMAKE_UNIQUE_NAMESPACE::to_layout_impl(
         tensor_arg, layout, dtype, memory_config, sub_core_grids, pad_value);
 }

@@ -13,6 +13,7 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::data_movement {
 namespace {
@@ -166,6 +167,7 @@ std::vector<Tensor> sort(
     const bool stable,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<std::tuple<Tensor&, Tensor&>> optional_output_tensors) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::sort");
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
     const auto rank = input_tensor.logical_shape().rank();
 

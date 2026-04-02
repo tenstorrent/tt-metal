@@ -7,6 +7,7 @@
 
 #include "moe_compute.hpp"
 #include "device/moe_compute_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -27,6 +28,7 @@ std::vector<ttnn::Tensor> moe_compute(
     const std::optional<ttnn::MemoryConfig>& output_memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<ttnn::GlobalSemaphore>& optional_cross_device_semaphore) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::moe_compute");
     return ttnn::prim::moe_compute(
         tilize_input_tensor,
         tilize_expert_indices_tensor,
@@ -47,6 +49,7 @@ std::vector<ttnn::Tensor> moe_compute(
 }
 
 std::vector<ttnn::CoreCoord> get_moe_combine_cores(ttnn::MeshDevice* mesh_device) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::get_moe_combine_cores");
     return ttnn::prim::get_moe_combine_cores(mesh_device);
 }
 }  // namespace ttnn::experimental

@@ -11,11 +11,13 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
 ttnn::Tensor deepseek_moe_post_combine_tilize(
     const ttnn::Tensor& input_tensor, const tt::tt_metal::MemoryConfig& output_memory_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::deepseek_moe_post_combine_tilize");
     return ttnn::prim::deepseek_moe_post_combine_tilize(input_tensor, output_memory_config);
 }
 

@@ -7,12 +7,14 @@
 #include "ttnn/operations/experimental/transformer/nlp_concat_heads/device/nlp_concat_heads_device_operation.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::transformer {
 
 ttnn::Tensor concatenate_heads(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::transformer::concatenate_heads");
     // Additional validation for concatenate_heads wrapper
     const auto& input_logical_shape = input_tensor.logical_shape();
     const auto head_size = input_logical_shape[-1];

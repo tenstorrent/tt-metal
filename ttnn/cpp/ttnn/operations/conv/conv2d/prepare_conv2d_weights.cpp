@@ -31,6 +31,7 @@
 
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::conv {
 using namespace tt;

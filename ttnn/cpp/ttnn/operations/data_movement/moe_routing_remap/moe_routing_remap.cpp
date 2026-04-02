@@ -5,6 +5,7 @@
 #include "ttnn/operation.hpp"
 #include "device/moe_routing_remap_device_operation.hpp"
 #include "moe_routing_remap.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -15,6 +16,7 @@ Tensor moe_routing_remap(
     const uint32_t cluster_axis,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moe_routing_remap");
     return prim::moe_routing_remap(
         routing_weights_tensor,
         non_zero_weight_size,

@@ -4,6 +4,7 @@
 
 #include "deepseek_grouped_gate.hpp"
 #include "device/deepseek_grouped_gate_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -17,6 +18,7 @@ std::array<Tensor, 2> deepseek_grouped_gate(
     float route_scale,
     float epsilon,
     const std::optional<MemoryConfig>& output_mem_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::deepseek_grouped_gate");
     return ttnn::prim::deepseek_grouped_gate(
         scores,
         bias,

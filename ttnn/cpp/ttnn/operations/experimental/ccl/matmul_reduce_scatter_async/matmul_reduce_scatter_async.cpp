@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -32,6 +33,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::CoreGrid> core_grid) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::matmul_reduce_scatter_async");
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required for matmul_reduce_scatter_async operation");
     uint32_t resolved_num_links =

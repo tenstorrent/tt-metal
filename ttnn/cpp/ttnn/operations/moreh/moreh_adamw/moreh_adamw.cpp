@@ -5,6 +5,7 @@
 #include "moreh_adamw.hpp"
 
 #include "ttnn/operations/moreh/moreh_adamw/device/moreh_adamw_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 
@@ -31,6 +32,7 @@ std::vector<std::optional<Tensor>> moreh_adamw(
     const std::optional<Tensor>& max_exp_avg_sq_out,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_adamw");
     return prim::moreh_adamw(
         param_in,
         grad,

@@ -8,6 +8,7 @@
 
 #include "ttnn/operations/transformer/sdpa_windowed/device/sdpa_windowed_device_operation.hpp"
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::transformer {
 
@@ -20,6 +21,7 @@ ttnn::Tensor windowed_scaled_dot_product_attention(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::transformer::windowed_scaled_dot_product_attention");
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 

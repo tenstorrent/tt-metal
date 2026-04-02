@@ -700,12 +700,19 @@ def import_graph(
                     for idx, tid in enumerate(direct_inputs):
                         input_tensors_batch.append((operation_id, idx, tid))
                 elif nested_input_tensor_ids:
+                    scope_start = start_node["counter"] if start_node else 0
                     seen = set()
                     lifted_inputs = []
                     for tid in nested_input_tensor_ids:
                         if tid in all_nested_output_ids:
                             continue
                         if tid in seen:
+                            continue
+                        # Skip tensors whose first appearance is inside
+                        # this function scope -- they are internal
+                        # intermediates, not true external inputs.
+                        first_c = tensor_first_counter.get(tid)
+                        if first_c is not None and first_c > scope_start:
                             continue
                         seen.add(tid)
                         lifted_inputs.append(tid)
@@ -749,10 +756,18 @@ def import_graph(
                 # If parent had no direct outputs, lift from nested children.
                 if output_idx == 0 and nested_output_tensor_ids:
                     intermediate_tids = all_nested_output_ids & all_nested_input_ids
+                    scope_start = start_node["counter"] if start_node else 0
+                    has_scope_marker = not start_node.get("input_tensors") if start_node else False
                     seen = set()
                     kept_nodes = []
                     for i, tid in enumerate(nested_output_tensor_ids):
                         if tid in intermediate_tids:
+                            continue
+                        # When the parent is a scope marker (no direct
+                        # input_tensors), also treat any output consumed
+                        # by another nested op as internal, even if the
+                        # consumer is at a different nesting depth.
+                        if has_scope_marker and tid in all_nested_input_ids:
                             continue
                         tensor_node = nested_output_tensor_nodes[i]
                         if tid not in seen:

@@ -5,6 +5,7 @@
 #include "moreh_sgd.hpp"
 
 #include "ttnn/operations/moreh/moreh_sgd/device/moreh_sgd_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 
@@ -25,6 +26,7 @@ std::vector<std::optional<Tensor>> moreh_sgd(
     const std::optional<MemoryConfig>& param_out_memory_config,
     const std::optional<MemoryConfig>& momentum_buffer_out_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_sgd");
     return ttnn::prim::moreh_sgd(
         param_in,
         grad,

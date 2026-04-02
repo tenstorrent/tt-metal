@@ -7,6 +7,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <tt-metalium/sub_device.hpp>
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 ttnn::Tensor mesh_partition(
@@ -14,6 +15,7 @@ ttnn::Tensor mesh_partition(
     int32_t dim,
     std::optional<uint32_t> cluster_axis,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::mesh_partition");
     if (ttnn::operations::ccl::detail::get_cluster_axis_size(input_tensor, cluster_axis) == 1) {
         return input_tensor;
     }

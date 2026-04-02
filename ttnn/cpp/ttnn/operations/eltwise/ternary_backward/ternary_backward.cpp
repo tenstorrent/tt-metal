@@ -10,6 +10,7 @@
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/ternary_backward/ternary_backward.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -20,6 +21,7 @@ std::vector<Tensor> addcmul_bw(
     const Tensor& tensor2,
     float value,
     const std::optional<MemoryConfig>& memory_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::addcmul_bw");
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
@@ -39,6 +41,7 @@ std::vector<Tensor> addcdiv_bw(
     const Tensor& tensor2,
     float value,
     const std::optional<MemoryConfig>& memory_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::addcdiv_bw");
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
@@ -78,6 +81,7 @@ std::vector<std::optional<Tensor>> where_bw(
     const std::vector<bool>& are_required_outputs,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::where_bw");
     std::vector<std::optional<Tensor>> result;
     if (are_required_outputs.at(0)) {
         if (input_grad.has_value()) {
@@ -109,6 +113,7 @@ std::vector<Tensor> lerp_bw(
     const Tensor& end,
     const Tensor& weight,
     const std::optional<MemoryConfig>& output_mem_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::lerp_bw");
     std::vector<Tensor> grad_tensor;
     Tensor result_1 = ttnn::multiply(
         grad, ttnn::rsub(weight, 1.0f, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
@@ -127,6 +132,7 @@ std::vector<Tensor> lerp_bw(
     const Tensor& /*end*/,
     float weight,
     const std::optional<MemoryConfig>& output_mem_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::lerp_bw");
     std::vector<Tensor> grad_tensor;
     float sub_scalar = 1.0f - weight;
     Tensor result_1 = ttnn::multiply(grad, sub_scalar, std::nullopt, output_mem_config);

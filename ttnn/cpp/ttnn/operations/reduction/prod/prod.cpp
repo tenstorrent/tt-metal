@@ -15,6 +15,7 @@
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/functions.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::reduction {
 
@@ -225,6 +226,7 @@ namespace ttnn {
 
 Tensor prod(
     const Tensor& input, std::optional<int64_t> dim, bool keepdim, const std::optional<MemoryConfig>& memory_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::prod");
     return operations::reduction::prod_impl(input, dim, keepdim, memory_config);
 }
 
@@ -233,6 +235,7 @@ Tensor prod(
     const Tensor& output,
     SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::prod");
     return operations::reduction::prod_nc_impl(input, output, dims, memory_config);
 }
 

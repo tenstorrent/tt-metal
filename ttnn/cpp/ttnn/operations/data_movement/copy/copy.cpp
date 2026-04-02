@@ -8,12 +8,14 @@
 
 #include "device/copy_device_operation.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn {
 
 Tensor copy(const Tensor& src_tensor, const Tensor& dst_tensor) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::copy");
     return ttnn::prim::copy(src_tensor, dst_tensor.memory_config(), dst_tensor.dtype(), std::make_optional(dst_tensor));
 }
 
@@ -22,10 +24,12 @@ Tensor assign(
     const MemoryConfig& output_mem_config,
     std::optional<const DataType> output_dtype,
     const std::optional<Tensor>& optional_output_tensor) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::assign");
     return ttnn::prim::copy(input, output_mem_config, output_dtype.value_or(input.dtype()), optional_output_tensor);
 }
 
 Tensor assign(const Tensor& input_a, const Tensor& input_b) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::assign");
     return ttnn::prim::copy(input_a, input_b.memory_config(), input_b.dtype(), std::make_optional(input_b));
 }
 

@@ -6,6 +6,7 @@
 
 #include "device/moreh_layer_norm_backward_gamma_beta_grad_device_operation.hpp"
 #include "device/moreh_layer_norm_backward_input_grad_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 
@@ -58,6 +59,7 @@ std::vector<std::optional<Tensor>> moreh_layer_norm_backward(
     const std::optional<const Tensor>& beta_grad,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_layer_norm_backward");
     std::vector<std::optional<Tensor>> outputs;
     outputs.reserve(3);
 

@@ -12,6 +12,7 @@
 #include <cassert>
 
 #include <tt_stl/overloaded.hpp>
+#include "ttnn/graph/composite_trace.hpp"
 
 /*
  * TODO: Improve the composite op fallback and/or make binary eltwise ops more flexible.
@@ -195,6 +196,7 @@ Tensor quantize(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::quantize");
     const Tensor input_a = tt::tt_metal::is_block_float(input_tensor.dtype())
                                ? ttnn::typecast(input_tensor, DataType::BFLOAT16)
                                : input_tensor;
@@ -333,6 +335,7 @@ Tensor requantize(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::requantize");
     const DataType a_dtype = input_tensor.dtype();
     constexpr DataType c_dtype = DataType::INT32;
 
@@ -492,6 +495,7 @@ Tensor dequantize(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::dequantize");
     const DataType a_dtype = input_tensor.dtype();
     const DataType c_dtype = get_output_dtype(output_dtype, optional_output_tensor, DataType::BFLOAT16);
 

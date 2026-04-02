@@ -9,6 +9,7 @@
 #include "moreh_nll_loss_step1/device/moreh_nll_loss_step1_device_operation.hpp"
 #include "moreh_nll_loss_step2/device/moreh_nll_loss_step2_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -22,6 +23,7 @@ Tensor moreh_nll_loss(
     const int32_t ignore_index,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_nll_loss");
     using namespace operations::moreh;
 
     const auto compute_kernel_config_val =

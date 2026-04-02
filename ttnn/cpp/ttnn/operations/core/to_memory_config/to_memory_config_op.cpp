@@ -10,6 +10,7 @@
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp"
 #include "ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -18,6 +19,7 @@ Tensor to_memory_config(
     const MemoryConfig& memory_config,
     std::optional<DataType> dtype,
     const std::optional<Tensor>& output_tensor) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::to_memory_config");
     using namespace tt::tt_metal;
 
     // Temporary until we see why buffer data not being populated

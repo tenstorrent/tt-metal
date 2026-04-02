@@ -8,6 +8,7 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 
 #include <utility>
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -55,6 +56,7 @@ Tensor argmax(
     bool use_multicore,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::argmax");
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
 
     TT_FATAL(is_device_tensor(input_tensor), "Input tensor must be on device");

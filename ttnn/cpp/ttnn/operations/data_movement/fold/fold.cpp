@@ -22,6 +22,7 @@
 #include "ttnn/operations/core/core.hpp"
 
 #include "fold.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -384,6 +385,7 @@ Tensor fold(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>, std::array<uint32_t, 6>> padding,
     const std::optional<CoreRangeSet>& core_grid,
     const std::optional<MemoryConfig>& override_memory_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::fold");
     // Extract padding values
     const std::array<uint32_t, 6> padding_values = operations::data_movement::extract_padding_values(padding);
     const uint32_t pad_top = padding_values[0];

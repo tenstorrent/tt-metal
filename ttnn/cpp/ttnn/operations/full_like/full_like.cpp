@@ -5,6 +5,7 @@
 #include "full_like.hpp"
 
 #include "ttnn/operations/full/device/full_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -14,6 +15,7 @@ Tensor moreh_full_like(
     const std::optional<DataType>& dtype,
     const std::optional<Layout>& layout,
     const std::optional<MemoryConfig>& memory_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_full_like");
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Full Like: Input must be on device");
     const auto& shape = input.logical_shape();
     return ttnn::prim::full(

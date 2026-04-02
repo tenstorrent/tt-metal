@@ -5,6 +5,7 @@
 #include "moreh_dot_backward.hpp"
 
 #include "ttnn/operations/moreh/moreh_dot_backward/device/moreh_dot_backward_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 
@@ -17,6 +18,7 @@ std::vector<std::optional<Tensor>> moreh_dot_backward(
     const std::optional<const Tensor>& input_grad,
     const std::optional<const Tensor>& other_grad,
     const std::optional<MemoryConfig>& memory_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_dot_backward");
     return ttnn::prim::moreh_dot_backward(output_grad, input, other, input_grad, other_grad, memory_config);
 }
 

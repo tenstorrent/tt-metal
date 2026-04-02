@@ -5,6 +5,7 @@
 #include "moreh_layer_norm.hpp"
 
 #include "ttnn/operations/moreh/moreh_layer_norm/device/moreh_layer_norm_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 
@@ -21,6 +22,7 @@ std::vector<std::optional<Tensor>> moreh_layer_norm(
     const std::optional<const Tensor>& rstd,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_layer_norm");
     return ttnn::prim::moreh_layer_norm(
         input, normalized_dims, eps, gamma, beta, output, mean, rstd, memory_config, compute_kernel_config);
 }

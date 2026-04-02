@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_getitem.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -12,6 +13,7 @@ Tensor moreh_getitem(
     const ttnn::SmallVector<uint32_t>& index_dims,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_getitem");
     if (!input.has_value()) {
         // FIXME: This is a hack to work around limitations in the decorator
         // infra which requires either an input tensor or a vector of input

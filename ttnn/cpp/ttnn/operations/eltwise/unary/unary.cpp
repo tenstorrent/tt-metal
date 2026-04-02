@@ -9,7 +9,6 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
-
 using namespace ttnn::operations::unary;
 
 namespace ttnn::detail {

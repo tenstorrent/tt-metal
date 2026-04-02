@@ -4,6 +4,7 @@
 
 #include "dit_minimal_matmul_addcmul_fused.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -18,6 +19,7 @@ ttnn::Tensor dit_minimal_matmul_addcmul_fused(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::dit_minimal_matmul_addcmul_fused");
     // Delegates to minimal_matmul with fused addcmul (ternary) parameters.
     // Formula: output = addcmul_input_tensor1 + (scalar * matmul_output * addcmul_input_tensor2).
     auto outputs = ttnn::prim::minimal_matmul(

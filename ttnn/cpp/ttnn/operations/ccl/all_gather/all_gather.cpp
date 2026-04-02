@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 using namespace ttnn::operations::ccl;
@@ -31,6 +32,7 @@ ttnn::Tensor all_gather(
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     const std::optional<CoreRangeSet>& sub_core_grid) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::all_gather");
     // If cluster_axis is None, but mesh shape is not 1xM or Mx1, then we call all-gather on cluster_axis=1, then
     // all-gather on cluster_axis=0
     if (cluster_axis == std::nullopt) {

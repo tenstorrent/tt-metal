@@ -25,6 +25,7 @@
 #include "ttnn/tensor/memory_config/memory_config.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::conv::conv_transpose2d {
 
@@ -1234,6 +1235,7 @@ ConvTranspose2dResultWithOptions conv_transpose2d(
     bool mirror_kernel,
     bool return_output_dim,
     bool return_weights_and_bias) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::conv_transpose2d");
     using namespace operations::conv::conv_transpose2d;
     // Determine execution path based on configuration and input properties
     ConvT2dExecutionPath path = determine_conv_transpose2d_execution_path(input_tensor, dram_slice_config_);

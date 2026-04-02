@@ -7,6 +7,7 @@
 #include "bcast_to.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/experimental/bcast_to/device/bcast_to_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -55,6 +56,7 @@ Tensor broadcast_to(
     const Shape& output_shape,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::broadcast_to");
     CMAKE_UNIQUE_NAMESPACE::check_shape(input, output_shape);
     return ttnn::prim::bcast_to(input, output_shape, memory_config, output);
 }

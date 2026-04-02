@@ -5,11 +5,13 @@
 #include "ttnn/operations/data_movement/non_zero_indices/non_zero_indices.hpp"
 
 #include "ttnn/operations/data_movement/non_zero_indices/device/non_zero_indices_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
 std::vector<Tensor> nonzero(
     const Tensor& input_tensor, const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::nonzero");
     auto input_memory_config = memory_config.value_or(input_tensor.memory_config());
     auto [output_0, output_1] = ttnn::prim::nonzero(input_tensor, input_memory_config);
     std::vector<Tensor> output_tensor_vec;

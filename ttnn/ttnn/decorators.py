@@ -463,7 +463,6 @@ class FastOperation:
 
         recording = ttnn.graph.is_python_io_recording_enabled()
         if recording:
-            ttnn.graph.track_function_start(self.python_fully_qualified_name)
             ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
             input_tensors = get_all_tensors((function_args, function_kwargs))
             set_tensor_id(input_tensors)
@@ -479,9 +478,7 @@ class FastOperation:
             if enhanced_msg:
                 raise TypeError(enhanced_msg) from e
             raise
-        finally:
-            if recording:
-                ttnn.graph.track_function_end()
+
 
         if recording:
             set_tensor_id(get_all_tensors(result), force=True)

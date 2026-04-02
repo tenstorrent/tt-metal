@@ -4,6 +4,7 @@
 
 #include "neighbor_pad_async.hpp"
 #include "ttnn/operations/experimental/ccl/neighbor_pad_async/device/neighbor_pad_async_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -20,6 +21,7 @@ ttnn::Tensor neighbor_pad_async(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::ccl::Topology> topology,
     const std::optional<ttnn::Tensor>& persistent_output_buffer) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::neighbor_pad_async");
     TT_FATAL(!dim.empty() && dim.size() <= 2, "dim must have 1 or 2 elements, got {}", dim.size());
     const size_t num_dims = dim.size();
     for (size_t i = 0; i < num_dims; i++) {

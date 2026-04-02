@@ -15,6 +15,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <vector>
 #include <algorithm>
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 
@@ -140,6 +141,7 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
 
 Tensor prepare_conv3d_weights(
     const ttnn::Tensor& weights, uint32_t groups, uint32_t C_in_block, uint32_t alignment, MeshDevice* device) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::prepare_conv3d_weights");
     ttnn::Tensor prepare_weights = weights;
 
     if (groups > 1) {

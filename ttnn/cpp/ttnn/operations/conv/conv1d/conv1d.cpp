@@ -10,6 +10,7 @@
 #include "ttnn/operations/conv/conv_types.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -33,6 +34,7 @@ Conv1dResult conv1d(
     const std::optional<const MemoryConfig>& memory_config,
     bool return_output_dim,
     bool return_weights_and_bias) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::conv1d");
     // reshape input tensor to 4D, if it is not already
     const ttnn::Tensor& input_tensor_4d =
         (input_tensor.logical_shape().rank() < 4)

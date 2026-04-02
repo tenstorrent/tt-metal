@@ -6,6 +6,7 @@
 #include "bernoulli.hpp"
 
 #include "device/bernoulli_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -16,6 +17,7 @@ Tensor bernoulli(
     const std::optional<DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::bernoulli");
     return ttnn::prim::bernoulli(input, seed, output, dtype, memory_config, compute_kernel_config);
 }
 

@@ -11,6 +11,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 constexpr float DEFAULT_SCALE_VALUE = 1.0f;
 
@@ -22,6 +23,7 @@ Tensor softmax(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     bool numeric_stable) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::softmax");
     // Constants
     const auto mem_config = memory_config.value_or(input_tensor.memory_config());
     const auto& input_shape = input_tensor.logical_shape();
@@ -57,6 +59,7 @@ Tensor scale_mask_softmax(
     bool is_causal_mask,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     bool numeric_stable) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::scale_mask_softmax");
     // Constants
     const auto& input_shape = input_tensor.logical_shape();
     const auto rank = input_shape.size();
@@ -92,6 +95,7 @@ Tensor softmax_in_place(
     const SoftmaxProgramConfig& program_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     bool numeric_stable) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::softmax_in_place");
     // Constants
     const auto& input_shape = input_tensor.logical_shape();
     const auto rank = input_shape.size();
@@ -122,6 +126,7 @@ Tensor scale_mask_softmax_in_place(
     bool is_causal_mask,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     bool numeric_stable) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::scale_mask_softmax_in_place");
     // Constants
     const auto& input_shape = input_tensor.logical_shape();
     const auto rank = input_shape.size();
@@ -147,6 +152,7 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
     const SoftmaxProgramConfig& program_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     bool numeric_stable) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::scale_causal_mask_hw_dims_softmax_in_place");
     // Constants
     const auto& input_shape = input_tensor.logical_shape();
     const auto rank = input_shape.size();

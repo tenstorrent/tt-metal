@@ -12,6 +12,7 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 
 #include <tt-metalium/hal.hpp>
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::data_movement::transpose {
 
@@ -202,10 +203,12 @@ ttnn::Tensor transpose(
     int64_t dim2,
     const std::optional<MemoryConfig>& memory_config,
     float pad_value) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::transpose");
     return operations::data_movement::transpose::transpose_impl(input_tensor, dim1, dim2, memory_config, pad_value);
 }
 
 ttnn::Tensor transpose(const ttnn::Tensor& input_tensor, int64_t dim1, int64_t dim2, float pad_value) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::transpose");
     return transpose(input_tensor, dim1, dim2, std::nullopt, pad_value);
 }
 

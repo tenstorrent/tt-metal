@@ -4,6 +4,7 @@
 
 #include "device/gelu_backward_device_operation.hpp"
 #include "gelu_backward.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -13,6 +14,7 @@ Tensor gelu_bw(
     const std::string& approximate,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> input_grad_tensor) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::gelu_bw");
     DataType output_dtype = input_tensor.dtype();
     auto output_memory_config = input_grad_tensor.has_value() ? input_grad_tensor.value().memory_config()
                                                               : memory_config.value_or(input_tensor.memory_config());

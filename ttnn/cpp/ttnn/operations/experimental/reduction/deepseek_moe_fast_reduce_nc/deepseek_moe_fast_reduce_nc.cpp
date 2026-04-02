@@ -12,6 +12,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental::reduction {
 
@@ -21,6 +22,7 @@ std::vector<ttnn::Tensor> deepseek_moe_fast_reduce_nc(
     uint64_t split_size,
     const tt::tt_metal::MemoryConfig& output_memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::deepseek_moe_fast_reduce_nc");
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(init_device_compute_kernel_config(
         input_tensor.device()->arch(),
         std::nullopt,

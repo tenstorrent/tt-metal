@@ -9,6 +9,7 @@
 #include <tt-metalium/sub_device.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 
@@ -29,6 +30,7 @@ std::array<ttnn::Tensor, 2> dispatch(
     std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::deepseek_prefill::dispatch");
     auto* mesh_device = input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);

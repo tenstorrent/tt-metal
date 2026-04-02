@@ -5,6 +5,7 @@
 #include "unary_composite_op.hpp"
 
 #include <functional>
+#include "ttnn/graph/composite_trace.hpp"
 #include <optional>
 #include <variant>
 
@@ -248,6 +249,7 @@ Tensor clip(
     std::optional<float> min,
     std::optional<float> max,
     const std::optional<MemoryConfig>& output_mem_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::clip");
     // Convert float optionals to variant optionals
     std::optional<std::variant<float, int32_t>> min_variant =
         min ? std::make_optional<std::variant<float, int32_t>>(std::in_place_type<float>, *min) : std::nullopt;
@@ -262,6 +264,7 @@ Tensor clip(
     std::optional<Tensor> min,
     std::optional<Tensor> max,
     const std::optional<MemoryConfig>& output_mem_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::clip");
     return clamp(input_a, std::move(min), std::move(max), output_mem_config);
 }
 
@@ -272,6 +275,7 @@ Tensor clamp(
     std::optional<std::variant<float, int32_t>> max,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::clamp");
     TT_FATAL(
         (max.has_value() || min.has_value()),
         "Either 'min' value or 'max' value can be None. Please provide at least one value");
@@ -305,6 +309,7 @@ Tensor clamp(
     std::optional<Tensor> max,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& /*output_tensor*/) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::clamp");
     auto output_memory_config = output_mem_config.value_or(input_a.memory_config());
     TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' can be None. Please provide one value");
     if (!max.has_value()) {

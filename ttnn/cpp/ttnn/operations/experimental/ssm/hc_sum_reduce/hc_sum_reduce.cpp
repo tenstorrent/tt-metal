@@ -5,6 +5,7 @@
 #include "hc_sum_reduce.hpp"
 
 #include "device/hc_sum_reduce_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 
@@ -15,6 +16,7 @@ ttnn::Tensor hc_sum_reduce(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DataType> dtype,
     const std::optional<tt::tt_metal::MathFidelity> math_fidelity) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::hc_sum_reduce");
     return ttnn::prim::hc_sum_reduce(input, memory_config, dtype, math_fidelity);
 }
 

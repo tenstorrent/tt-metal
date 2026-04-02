@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/moreh/moreh_mean/device/moreh_mean_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -17,6 +18,7 @@ Tensor moreh_mean(
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_mean");
     ttnn::SmallVector<int64_t> dims = operations::get_dim(dim, input.logical_shape().rank());
     std::sort(dims.begin(), dims.end());
 

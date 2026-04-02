@@ -10,6 +10,7 @@
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::loss::loss_utils {
 
@@ -59,6 +60,7 @@ Tensor mse_loss(
     operations::loss::LossReductionMode mode,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::mse_loss");
     return operations::loss::loss_utils::loss_function(ref, prediction, operations::loss::LossFunction::MSE, mode, memory_config, optional_output_tensor);
 }
 
@@ -68,6 +70,7 @@ Tensor l1_loss(
     operations::loss::LossReductionMode mode,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::l1_loss");
     return operations::loss::loss_utils::loss_function(ref, prediction, operations::loss::LossFunction::MAE, mode, memory_config, optional_output_tensor);
 }
 

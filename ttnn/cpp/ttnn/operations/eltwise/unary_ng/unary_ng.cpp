@@ -8,6 +8,7 @@
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::unary_ng::detail {
 
@@ -57,6 +58,7 @@ Tensor abs(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::abs");
     using namespace operations::unary;
     UnaryOpType op_type = UnaryOpType::ABS;
     if (input_tensor.dtype() == DataType::INT32) {
@@ -67,6 +69,7 @@ Tensor abs(
 }
 
 Tensor abs(const ComplexTensor& input_tensor, const MemoryConfig& output_mem_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::abs");
     return ttnn::hypot(input_tensor[0], input_tensor[1], output_mem_config);
 }
 
@@ -85,19 +88,20 @@ ComplexTensor reciprocal(const ComplexTensor& input, const MemoryConfig& output_
 }
 
 // Helper macro: most basic ops just forward a single UnaryOpType to unary_ng_impl.
-#define DEFINE_UNARY_NG_OP(op_name, OP_TYPE)                 \
-    Tensor op_name(                                          \
-        const Tensor& input_tensor,                          \
-        const std::optional<MemoryConfig>& memory_config,    \
-        const std::optional<Tensor>& optional_output_tensor, \
-        const std::optional<CoreRangeSet>& sub_core_grids) { \
-        using namespace operations::unary;                   \
-        return operations::unary_ng::detail::unary_ng_impl(  \
-            input_tensor,                                    \
-            {UnaryWithParam{UnaryOpType::OP_TYPE}},          \
-            memory_config,                                   \
-            optional_output_tensor,                          \
-            sub_core_grids);                                 \
+#define DEFINE_UNARY_NG_OP(op_name, OP_TYPE)                                       \
+    Tensor op_name(                                                                \
+        const Tensor& input_tensor,                                                \
+        const std::optional<MemoryConfig>& memory_config,                          \
+        const std::optional<Tensor>& optional_output_tensor,                       \
+        const std::optional<CoreRangeSet>& sub_core_grids) {                       \
+        ttnn::graph::ScopedCompositeTrace _trace("ttnn::" #op_name, input_tensor); \
+        using namespace operations::unary;                                         \
+        return operations::unary_ng::detail::unary_ng_impl(                        \
+            input_tensor,                                                          \
+            {UnaryWithParam{UnaryOpType::OP_TYPE}},                                \
+            memory_config,                                                         \
+            optional_output_tensor,                                                \
+            sub_core_grids);                                                       \
     }
 
 DEFINE_UNARY_NG_OP(neg, NEG)
@@ -164,6 +168,7 @@ DEFINE_UNARY_NG_OP(tanhshrink, TANHSHRINK)
         const std::optional<MemoryConfig>& memory_config,                                          \
         const std::optional<Tensor>& optional_output_tensor,                                       \
         const std::optional<CoreRangeSet>& sub_core_grids) {                                       \
+        ttnn::graph::ScopedCompositeTrace _trace("ttnn::" #op_name, input_tensor);                 \
         using namespace operations::unary;                                                         \
         return operations::unary_ng::detail::unary_ng_impl(                                        \
             input_tensor,                                                                          \
@@ -194,6 +199,7 @@ DEFINE_UNARY_NG_OP_WITH_FAST_AND_APPROXIMATE_MODE(mish, MISH)
         const std::optional<MemoryConfig>& memory_config,                          \
         const std::optional<Tensor>& optional_output_tensor,                       \
         const std::optional<CoreRangeSet>& sub_core_grids) {                       \
+        ttnn::graph::ScopedCompositeTrace _trace("ttnn::" #op_name, input_tensor); \
         using namespace operations::unary;                                         \
         return operations::unary_ng::detail::unary_ng_impl(                        \
             input_tensor,                                                          \
@@ -218,16 +224,17 @@ DEFINE_UNARY_NG_OP_WITH_FLOAT_PARAM(softshrink, SOFTSHRINK)
 
 #undef DEFINE_UNARY_NG_OP_WITH_FLOAT_PARAM
 
-#define DEFINE_UNARY_NG_OP_WITH_TWO_FLOAT_PARAMS(op_name, OP_TYPE)              \
-    Tensor op_name(                                                             \
-        const Tensor& input_tensor,                                             \
-        float parameter_a,                                                      \
-        float parameter_b,                                                      \
-        const std::optional<MemoryConfig>& memory_config,                       \
-        const std::optional<Tensor>& optional_output_tensor,                    \
-        const std::optional<CoreRangeSet>& sub_core_grids) {                    \
-        using namespace operations::unary;                                      \
-        return operations::unary_ng::detail::unary_ng_impl(                     \
+#define DEFINE_UNARY_NG_OP_WITH_TWO_FLOAT_PARAMS(op_name, OP_TYPE)                    \
+    Tensor op_name(                                                                  \
+        const Tensor& input_tensor,                                                  \
+        float parameter_a,                                                           \
+        float parameter_b,                                                           \
+        const std::optional<MemoryConfig>& memory_config,                            \
+        const std::optional<Tensor>& optional_output_tensor,                         \
+        const std::optional<CoreRangeSet>& sub_core_grids) {                         \
+        ttnn::graph::ScopedCompositeTrace _trace("ttnn::" #op_name, input_tensor);   \
+        using namespace operations::unary;                                           \
+        return operations::unary_ng::detail::unary_ng_impl(                          \
             input_tensor,                                                       \
             {UnaryWithParam{UnaryOpType::OP_TYPE, {parameter_a, parameter_b}}}, \
             memory_config,                                                      \
@@ -242,14 +249,15 @@ DEFINE_UNARY_NG_OP_WITH_TWO_FLOAT_PARAMS(selu, SELU)
 
 #undef DEFINE_UNARY_NG_OP_WITH_TWO_FLOAT_PARAMS
 
-#define DEFINE_UNARY_NG_OP_SCALAR_VARIANT(op_name, OP_TYPE)                 \
-    Tensor op_name(                                                         \
-        const Tensor& input_tensor,                                         \
-        operations::unary::ScalarVariant parameter,                         \
-        const std::optional<MemoryConfig>& memory_config,                   \
-        const std::optional<Tensor>& optional_output_tensor,                \
-        const std::optional<CoreRangeSet>& sub_core_grids) {                \
-        return std::visit(                                                  \
+#define DEFINE_UNARY_NG_OP_SCALAR_VARIANT(op_name, OP_TYPE)                         \
+    Tensor op_name(                                                                 \
+        const Tensor& input_tensor,                                                 \
+        operations::unary::ScalarVariant parameter,                                 \
+        const std::optional<MemoryConfig>& memory_config,                           \
+        const std::optional<Tensor>& optional_output_tensor,                        \
+        const std::optional<CoreRangeSet>& sub_core_grids) {                        \
+        ttnn::graph::ScopedCompositeTrace _trace("ttnn::" #op_name, input_tensor);  \
+        return std::visit(                                                          \
             [&](auto param) {                                               \
                 using namespace operations::unary;                          \
                 return operations::unary_ng::detail::unary_ng_impl(         \
@@ -284,6 +292,7 @@ Tensor xielu(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::xielu");
     using namespace operations::unary;
     return operations::unary_ng::detail::unary_ng_impl(
         input,
@@ -314,6 +323,7 @@ Tensor logit(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::logit");
     using namespace operations::unary;
     return operations::unary_ng::detail::unary_ng_impl(
         input_tensor,
@@ -443,6 +453,7 @@ Tensor bitcast(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::bitcast");
     using namespace operations::unary;
     if (optional_output_tensor.has_value()) {
         TT_FATAL(
@@ -497,6 +508,7 @@ Tensor sigmoid(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::sigmoid");
     using namespace operations::unary;
     std::vector<EltwiseUnaryWithParam> op_chain;
     switch (mode) {
@@ -523,6 +535,7 @@ Tensor sigmoid_accurate(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::sigmoid_accurate");
     using namespace operations::unary;
     auto op_chain =
         fast_and_approximate_mode
@@ -540,6 +553,7 @@ Tensor unary_chain(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::unary_chain");
     return operations::unary_ng::detail::unary_ng_impl(
         input_tensor, ops_chain, memory_config, optional_output_tensor, sub_core_grids);
 }

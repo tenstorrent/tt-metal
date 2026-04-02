@@ -8,11 +8,13 @@
 #include "ttnn/operations/core/core.hpp"
 #include <utility>
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
 Tensor fill_implicit_tile_padding(
     const Tensor& input_tensor, float fill_value, const std::optional<MemoryConfig>& memory_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::fill_implicit_tile_padding");
     // if padded shape == logical shape for last 2 dims no padding should be present, and no fill pad is necessary
     uint32_t padded_height =
         tt::div_up(input_tensor.logical_shape()[-2], tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;

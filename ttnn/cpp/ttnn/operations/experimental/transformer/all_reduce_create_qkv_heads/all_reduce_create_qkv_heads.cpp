@@ -4,6 +4,7 @@
 #include "all_reduce_create_qkv_heads.hpp"
 
 #include "device/all_reduce_create_qkv_heads_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -26,6 +27,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> all_reduce_cr
     const std::optional<MemoryConfig>& final_memory_config,
     std::optional<DataType> dtype,
     bool use_noc1_only) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::all_reduce_create_qkv_heads");
     MemoryConfig out_memory_config = all_reduce_memory_config.value_or(input_tensor.memory_config());
     const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_heads);
 

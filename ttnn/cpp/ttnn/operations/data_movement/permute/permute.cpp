@@ -13,6 +13,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -162,6 +163,7 @@ ttnn::Tensor permute(
     const SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
     float pad_value) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::permute", input_tensor);
     const auto input_rank = input_tensor.logical_shape().rank();
     TT_FATAL(
         input_rank == dims.size(),
@@ -212,6 +214,7 @@ ttnn::Tensor permute(
 }
 
 ttnn::Tensor permute(const ttnn::Tensor& input_tensor, const SmallVector<int64_t>& dims, float pad_value) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::permute", input_tensor);
     return permute(input_tensor, dims, std::nullopt, pad_value);
 }
 

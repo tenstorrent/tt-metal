@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/nlp_create_qkv_heads_segformer.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/device/nlp_create_qkv_heads_segformer_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -11,6 +12,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> nlp_create_qkv_heads_segfor
     const Tensor& input_tensor_q,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::nlp_create_qkv_heads_segformer");
     const MemoryConfig output_mem_config = memory_config.value_or(input_tensor_q.memory_config());
     std::vector<std::optional<Tensor>> output_tensors;
     if (optional_output_tensors.has_value()) {

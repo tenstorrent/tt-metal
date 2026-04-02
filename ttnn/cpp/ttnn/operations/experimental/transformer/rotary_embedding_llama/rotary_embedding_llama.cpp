@@ -5,6 +5,7 @@
 #include "rotary_embedding_llama.hpp"
 
 #include "device/rotary_embedding_llama_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -16,6 +17,7 @@ Tensor rotary_embedding_llama(
     const bool is_decode_mode,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::rotary_embedding_llama");
     return ttnn::prim::rotary_embedding_llama(
         input_tensor, cos_cache, sin_cache, trans_mat, is_decode_mode, memory_config, compute_kernel_config);
 }

@@ -5,6 +5,7 @@
 #include "manual_seed.hpp"
 
 #include "device/manual_seed_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -13,6 +14,7 @@ Tensor manual_seed(
     std::optional<std::reference_wrapper<MeshDevice>> device,
     const std::optional<std::variant<uint32_t, Tensor>>& user_ids,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::manual_seed");
     return ttnn::prim::manual_seed(seeds, device, user_ids, sub_core_grids);
 }
 

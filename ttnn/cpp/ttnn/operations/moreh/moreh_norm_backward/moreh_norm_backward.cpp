@@ -5,6 +5,7 @@
 #include "moreh_norm_backward.hpp"
 
 #include "device/moreh_norm_backward_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -18,6 +19,7 @@ Tensor moreh_norm_backward(
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_norm_backward");
     return ttnn::prim::moreh_norm_backward(
         input, output, output_grad, p, dim, keepdim, input_grad, memory_config, compute_kernel_config);
 }

@@ -10,6 +10,7 @@
 #include "ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
 #include "device/running_statistics_device_operation.hpp"
 #include "device/batch_norm_utils.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 
@@ -41,6 +42,7 @@ Tensor batch_norm(
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::batch_norm");
     TT_FATAL(
         input.logical_shape().rank() >= 4,
         "batch_norm not supported for tensors with rank < 4. (rank={})",

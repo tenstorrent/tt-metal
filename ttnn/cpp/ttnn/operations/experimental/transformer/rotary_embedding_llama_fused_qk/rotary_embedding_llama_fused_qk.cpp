@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/rotary_embedding_llama_fused_qk_device_operation.hpp"
 #include "ttnn/device.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -16,6 +17,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> rotary_embedding_llama_fused_qk(
     const Tensor& sin_cache,
     const Tensor& trans_mat,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::rotary_embedding_llama_fused_qk");
     auto arch = q_input_tensor.storage_type() == StorageType::DEVICE ? q_input_tensor.device()->arch()
                                                                      : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =

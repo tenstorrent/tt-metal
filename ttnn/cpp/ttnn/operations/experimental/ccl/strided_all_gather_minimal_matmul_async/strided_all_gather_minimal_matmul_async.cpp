@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -26,6 +27,7 @@ std::vector<ttnn::Tensor> strided_all_gather_minimal_matmul_async(
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     std::optional<bool> read_local_slice_from_input) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::strided_all_gather_minimal_matmul_async");
     return ttnn::prim::strided_all_gather_minimal_matmul_async(
         input_tensor,
         weight_tensor,

@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial.hpp"
 #include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 
@@ -16,6 +17,7 @@ ttnn::Tensor sharded_to_interleaved_partial(
     int64_t slice_index,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DataType>& output_dtype) {
+    ttnn::graph::ScopedCompositeTrace _trace("ttnn::sharded_to_interleaved_partial");
     auto mem_config = memory_config.value_or(input_tensor.memory_config());
     TT_FATAL(input_tensor.shard_spec().has_value(), "Input tensor must have a shard spec");
 
