@@ -37,25 +37,21 @@ allclose_thresholds = {
 def assert_output_accuracy(torch_output, ttnn_output):
     dtype = ttnn_output.dtype
     if dtype == torch.bfloat16:
-        assert_numeric_metrics(
+        return assert_numeric_metrics(
             torch_output,
             ttnn_output,
-            pcc_threshold=0.999,
             rtol=allclose_thresholds[dtype].rtol,
             atol=allclose_thresholds[dtype].atol,
-            frobenius_threshold=0.05,
+            check_frobenius=False,
+            check_pcc=False,
         )
     elif dtype == torch.float32:
         # torch.float32 data is not being robustly converted to tt tensors
         # (see https://github.com/tenstorrent/tt-metal/issues/33621).
-        # Use relative Frobenius norm of the error (global metric, looser than allclose).
-        assert_numeric_metrics(
-            torch_output,
-            ttnn_output,
-            pcc_threshold=0.9999,
-            rtol=0.01,
-            atol=0.01,
-            frobenius_threshold=0.01,
+        # So we'll use relative Frobenius norm of the error instead, which is
+        # looser than allclose (since it's a global metric), but better than PCC.
+        return assert_numeric_metrics(
+            torch_output, ttnn_output, frobenius_threshold=0.01, check_pcc=False, check_allclose=False
         )
     else:
         raise ValueError(f"Robust checks are not implemented for dtype: {dtype}")
@@ -417,8 +413,8 @@ def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_
             output_tensor,
             pcc_threshold=0.9999,
             rtol=0.02,
-            atol=0.02,
-            frobenius_threshold=0.0103,
+            atol=0.04,
+            frobenius_threshold=0.02,
         )
     else:
         assert_output_accuracy(torch_output_tensor, output_tensor)

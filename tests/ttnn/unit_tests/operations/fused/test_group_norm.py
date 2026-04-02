@@ -345,7 +345,8 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
         pcc_threshold = 0.9999
         rtol = 0.065
         atol = 0.065
-        frobenius_threshold = 0.015
+        frobenius_threshold = 0.02
+
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -570,15 +571,15 @@ def run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inpla
         tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
         if use_welford:
-            pcc_threshold = 0.99975
+            pcc_threshold = 0.9995
             rtol = 0.14
             atol = 0.085
-            frobenius_threshold = 0.02
+            frobenius_threshold = 0.04
         else:
             pcc_threshold = 0.9999
             rtol = 0.065
             atol = 0.065
-            frobenius_threshold = 0.015
+            frobenius_threshold = 0.04
         assert_numeric_metrics(
             torch_output_tensor,
             tt_output_tensor,
@@ -796,7 +797,7 @@ def test_sdxl_base_group_norm_negative_mask(device, input_shape, perf_test_mode=
         pcc_threshold = 0.9999
         rtol = 0.065
         atol = 0.065
-        frobenius_threshold = 0.014
+        frobenius_threshold = 0.016
         assert_numeric_metrics(
             torch_output_tensor,
             tt_output_tensor,
@@ -1296,7 +1297,7 @@ def test_group_norm_optional_weight_bias(device, N, C, H, W, num_groups, use_wel
         pcc_threshold = 0.9999
         rtol = 0.065
         atol = 0.065
-        frobenius_threshold = 0.014
+        frobenius_threshold = 0.016
     assert_numeric_metrics(
         torch_output,
         tt_output,

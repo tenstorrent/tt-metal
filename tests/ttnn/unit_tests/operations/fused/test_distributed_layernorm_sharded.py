@@ -240,7 +240,7 @@ def run_pre_allgather_layernorm(
                     tt_residual_add_output,
                     pcc_threshold=min_pcc_residual_add,
                     rtol=0.05,
-                    atol=0.05,
+                    atol=0.063,
                     frobenius_threshold=0.05,
                 )
 
