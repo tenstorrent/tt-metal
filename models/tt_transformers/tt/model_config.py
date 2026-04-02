@@ -1003,8 +1003,10 @@ class ModelArgs:
                     },
                 }
             }
-            # Model-specific CCL configs are tuned for Galaxy (TG) with 4 links
-            # Only apply them on Galaxy, otherwise use defaults
+            # Model-specific CCL configs
+            # For P150x8 Qwen3-32B: use L1 intermediate for MLP reduce-scatter
+            if self.is_multichip and not self.is_galaxy and self.base_model_name == "Qwen3-32B":
+                default_mlp_rs["rs_memory_config"] = ttnn.L1_MEMORY_CONFIG
             executed_on_galaxy = ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
             if executed_on_galaxy and self.base_model_name in model_specific_ccl_configs:
                 self.model_config["ATTN_LN_AG_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["attn_ln_ag"]
