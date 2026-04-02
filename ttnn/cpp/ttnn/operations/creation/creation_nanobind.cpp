@@ -474,10 +474,10 @@ void bind_empty_like(nb::module_& mod) {
             tensor (ttnn.Tensor): The reference tensor whose shape will be used for the output tensor.
 
         Keyword Args:
-            dtype (ttnn.DataType, optional): The desired data type of the output tensor. Defaults to `ttnn.bfloat16`.
-            layout (ttnn.Layout, optional): The desired layout of the output tensor. Defaults to `ttnn.ROW_MAJOR`.
-            device (ttnn.Device | ttnn.MeshDevice, optional): The device where the tensor will be allocated. Defaults to `None`.
-            memory_config (ttnn.MemoryConfig, optional): The memory configuration for the operation. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
+            dtype (ttnn.DataType, optional): The desired data type of the output tensor. Defaults to the input tensor's dtype.
+            layout (ttnn.Layout, optional): The desired layout of the output tensor. Defaults to the input tensor's layout.
+            device (ttnn.Device | ttnn.MeshDevice, optional): The device where the tensor will be allocated. Defaults to the input tensor's device.
+            memory_config (ttnn.MemoryConfig, optional): The memory configuration for the operation. Defaults to the input tensor's memory config.
 
         Returns:
             ttnn.Tensor: The output uninitialized tensor with the same shape as the input tensor.
@@ -489,10 +489,10 @@ void bind_empty_like(nb::module_& mod) {
         empty_like_impl,
         nb::arg("tensor"),
         nb::kw_only(),
-        nb::arg("dtype") = DataType::BFLOAT16,
-        nb::arg("layout") = Layout::ROW_MAJOR,
+        nb::arg("dtype") = nb::none(),
+        nb::arg("layout") = nb::none(),
         nb::arg("device") = nb::none(),
-        nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG);
+        nb::arg("memory_config") = nb::none());
 }
 
 Tensor from_buffer_impl(

@@ -648,6 +648,10 @@ void JitBuildState::weaken(const string& out_dir) const {
     std::string pathname_in = out_dir + target_name_ + ".elf";
     jit_build::utils::FileRenamer out_file(this->weakened_firmware_name_);
 
+    // The output directory may differ from out_dir when firmware_binary_root_
+    // points to a pre-compiled directory that lacks this target's subdirectory.
+    fs::create_directories(fs::path(out_file.path()).parent_path());
+
     ll_api::ElfFile elf;
     elf.ReadImage(pathname_in);
     static const std::string_view strong_names[] = {"__fw_export_*", "__global_pointer$"};

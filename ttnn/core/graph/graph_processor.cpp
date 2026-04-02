@@ -548,7 +548,6 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
     nlohmann::json device_tensors_json = nlohmann::json::array();
     if (is_device_tensor(t) && t.is_allocated()) {
         const auto& mesh_buffer = t.mesh_buffer();
-
         // `t.buffers()` returns a reference buffer allocated on first device in a mesh.
         // It has an ID different from the "backing" buffer that was used to perform the allocation.
         // To deduplicate an entry for this buffer, captured during its allocation, use the "backing"
@@ -556,7 +555,7 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
         buffer = mesh_buffer.get_backing_buffer();
 
         // For multi-device tensors, capture per-device addresses and mesh device IDs
-        for (const auto& coord : t.device_storage().coords) {
+        for (const auto& coord : t.device_storage().get_coords()) {
             auto* device_buffer = mesh_buffer.get_device_buffer(coord);
             if (device_buffer != nullptr) {
                 device_tensors_json.push_back(

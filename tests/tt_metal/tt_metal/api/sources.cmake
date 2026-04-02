@@ -43,6 +43,7 @@ set(UNIT_TESTS_API_SOURCES
     test_runtime_args.cpp
     test_semaphores.cpp
     test_shape_base.cpp
+    test_shape.cpp
     test_sharded_l1_buffer.cpp
     test_simple_dram_buffer.cpp
     test_tensor_accessor_default_page_size.cpp
@@ -54,4 +55,5 @@ set(UNIT_TESTS_API_SOURCES
     test_blockfloat_common.cpp
     test_duplicate_kernel.cpp
     test_core_local_mem_api.cpp
+    disaggregation/test_kv_chunk_address_table.cpp
 )

@@ -82,19 +82,18 @@ void bind_fill_rm_op(nb::module_& mod) {
     ttnn::bind_function<"fill_rm">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::fill_rm,
-            nb::arg("N"),
-            nb::arg("C"),
-            nb::arg("H"),
-            nb::arg("W"),
-            nb::arg("hOnes"),
-            nb::arg("wOnes"),
-            nb::arg("any"),
-            nb::arg("val_hi"),
-            nb::arg("val_lo"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()));
+        &ttnn::fill_rm,
+        nb::arg("N"),
+        nb::arg("C"),
+        nb::arg("H"),
+        nb::arg("W"),
+        nb::arg("hOnes"),
+        nb::arg("wOnes"),
+        nb::arg("any"),
+        nb::arg("val_hi"),
+        nb::arg("val_lo"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 void bind_fill_ones_rm_op(nb::module_& mod) {
@@ -140,17 +139,16 @@ void bind_fill_ones_rm_op(nb::module_& mod) {
     ttnn::bind_function<"fill_ones_rm">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::fill_ones_rm,
-            nb::arg("N"),
-            nb::arg("C"),
-            nb::arg("H"),
-            nb::arg("W"),
-            nb::arg("hOnes"),
-            nb::arg("wOnes"),
-            nb::arg("any"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()));
+        &ttnn::fill_ones_rm,
+        nb::arg("N"),
+        nb::arg("C"),
+        nb::arg("H"),
+        nb::arg("W"),
+        nb::arg("hOnes"),
+        nb::arg("wOnes"),
+        nb::arg("any"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace

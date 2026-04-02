@@ -25,7 +25,6 @@
 
 // used all over the place so just include it here to make the typecaster visible
 #include "ttnn-nanobind/small_vector_caster.hpp"
-#include "ttnn/decorators.hpp"
 
 namespace ttnn {
 namespace decorators {

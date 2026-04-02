@@ -4,9 +4,8 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
-
 #include "ttnn/operations/normalization/softmax/device/softmax_operation_types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::transformer {
 

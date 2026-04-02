@@ -12,6 +12,7 @@ from tracy.process_model_log import post_process_ops_log, run_device_profiler
 
 import ttnn
 from models.tt_dit.utils.padding import get_padded_vision_seq_len
+from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
 
@@ -60,6 +61,7 @@ def create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_
     submesh_shape[rp_axis] = rp_factor
     submesh_shape[up_axis] = up_factor
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape[0], submesh_shape[1]))
+    submesh_device.cache_entries_counter = CacheEntriesCounter(submesh_device)
     return submesh_device
 
 
@@ -465,31 +467,32 @@ def run_ring_joint_sdpa(
     tt_joint_out_list = []
 
     def run_iters(tt_out_list, tt_joint_out_list):
-        for i in range(n_iters):
-            tt_out, tt_joint_out, tt_lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
-                tt_Q,
-                tt_K,
-                tt_V,
-                tt_joint_Q,
-                tt_joint_K,
-                tt_joint_V,
-                persistent_output_buffer_k=persistent_output_buffers[i][0],
-                persistent_output_buffer_v=persistent_output_buffers[i][1],
-                joint_strategy="rear",
-                logical_n=base_seq_len,
-                program_config=program_config,
-                compute_kernel_config=compute_kernel_config,
-                dim=2,
-                multi_device_global_semaphore=ccl_semaphore_handles[i],
-                num_links=num_links,
-                cluster_axis=rp_axis,
-                mesh_device=submesh,
-                topology=all_gather_topology,
-                subdevice_id=worker_sub_device_id,
-                ccl_core_grid_offset=ccl_core_grid_offset,
-            )
-            tt_out_list.append(tt_out)
-            tt_joint_out_list.append(tt_joint_out)
+        with submesh.cache_entries_counter.measure():
+            for i in range(n_iters):
+                tt_out, tt_joint_out, tt_lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+                    tt_Q,
+                    tt_K,
+                    tt_V,
+                    tt_joint_Q,
+                    tt_joint_K,
+                    tt_joint_V,
+                    persistent_output_buffer_k=persistent_output_buffers[i][0],
+                    persistent_output_buffer_v=persistent_output_buffers[i][1],
+                    joint_strategy="rear",
+                    logical_n=base_seq_len,
+                    program_config=program_config,
+                    compute_kernel_config=compute_kernel_config,
+                    dim=2,
+                    multi_device_global_semaphore=ccl_semaphore_handles[i],
+                    num_links=num_links,
+                    cluster_axis=rp_axis,
+                    mesh_device=submesh,
+                    topology=all_gather_topology,
+                    subdevice_id=worker_sub_device_id,
+                    ccl_core_grid_offset=ccl_core_grid_offset,
+                )
+                tt_out_list.append(tt_out)
+                tt_joint_out_list.append(tt_joint_out)
 
     if trace_enabled:
         logger.info("Compile run")

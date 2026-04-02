@@ -11,7 +11,6 @@ This tests the decoupled workflow:
 """
 
 import json
-import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -29,10 +28,6 @@ import graph_report
 # Now import ttnn for device tests
 import ttnn
 from models.common.utility_functions import is_wormhole_b0
-
-
-def is_simulator():
-    return os.environ.get("TT_METAL_SIMULATOR") is not None
 
 
 @pytest.fixture
@@ -2252,7 +2247,6 @@ def imagenet_label_dict():
 
 
 @pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
-@pytest.mark.skipif(is_simulator(), reason="ResNet-50 uses ops unsupported by ttsim")
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
@@ -3095,7 +3089,6 @@ class TestCapturedGraphFallbackExtraction:
         conn.close()
 
 
-@pytest.mark.skipif(is_simulator(), reason="Fast dispatch with ttnn.add crashes ttsim worker on teardown")
 class TestFastOperationGraphTracking:
     """Tests that FastOperation emits track_function_start/end during graph capture."""
 

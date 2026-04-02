@@ -817,11 +817,19 @@ tt::tt_fabric::AdjacencyGraph<uint32_t> join_mesh_level(
     return ::tt::tt_metal::ASICLocation{0};
 }
 
-// Rebuild GroupingInfo.items from FlattenedMesh. Graph nodes are 0..n-1; items[i] is the item for node i.
+// Rebuild GroupingInfo.items from FlattenedMesh. items[node_id] is the item for graph node `node_id`.
+// Joined meshes may use non-contiguous node IDs (e.g. 0..3 and 8..11); index by node_id, not push order.
 void rebuild_items_from_flattened_mesh(tt::tt_fabric::GroupingInfo& info, const FlattenedMesh& mesh) {
     info.items.clear();
     const auto& node_ids = mesh.graph.get_nodes();
-    info.items.reserve(node_ids.size());
+    if (node_ids.empty()) {
+        return;
+    }
+    uint32_t max_node_id = 0;
+    for (uint32_t node_id : node_ids) {
+        max_node_id = std::max(max_node_id, node_id);
+    }
+    info.items.resize(max_node_id + 1);
 
     for (uint32_t node_id : node_ids) {
         tt::tt_fabric::GroupingItemInfo item;
@@ -836,7 +844,7 @@ void rebuild_items_from_flattened_mesh(tt::tt_fabric::GroupingInfo& info, const 
             item.asic_location = extract_asic_location_from_path(metadata.grouping_path);
             item.grouping_path = metadata.grouping_path;
         }
-        info.items.push_back(std::move(item));
+        info.items[node_id] = std::move(item);
     }
 }
 

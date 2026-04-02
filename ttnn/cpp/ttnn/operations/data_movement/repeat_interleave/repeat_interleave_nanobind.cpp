@@ -34,13 +34,12 @@ void bind_repeat_interleave(nb::module_& mod) {
     ttnn::bind_function<"repeat_interleave">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::repeat_interleave,
-            nb::arg("input_tensor"),
-            nb::arg("repeats"),
-            nb::arg("dim"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()));
+        &ttnn::repeat_interleave,
+        nb::arg("input_tensor"),
+        nb::arg("repeats"),
+        nb::arg("dim"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement::detail

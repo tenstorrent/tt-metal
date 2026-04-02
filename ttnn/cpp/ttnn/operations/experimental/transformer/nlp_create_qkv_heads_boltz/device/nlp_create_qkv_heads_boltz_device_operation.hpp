@@ -10,7 +10,6 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
