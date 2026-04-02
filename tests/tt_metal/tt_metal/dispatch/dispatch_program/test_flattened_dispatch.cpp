@@ -97,28 +97,25 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, FlattenedDispatch_BasicProgram) {
     verify_add_results(mesh_device, core_range, l1_addr, 30);
 }
 
-// Test 2b: Program with no RTAs and no CBs
-TEST_F(UnitMeshCQSingleCardProgramFixture, FlattenedDispatch_NoRTAs_NoCBs) {
+// Test 2b: Program with no CBs and minimal RTAs
+// Tests that flattened path handles empty cb_config_patches correctly.
+// We still provide 2 RTAs because add_two_ints.cpp requires them.
+TEST_F(UnitMeshCQSingleCardProgramFixture, FlattenedDispatch_NoCBs) {
     auto& mesh_device = devices_[0];
     CoreRange core_range({0, 0}, {0, 0});
     Program program = Program();
-
-    // Minimal kernel — no runtime args, no CBs
-    CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
-        core_range,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = {0}});
+    auto [kid, l1_addr] = create_add_two_ints_program(program, mesh_device, core_range);
+    set_add_args(program, kid, core_range, 1, 2);
 
     distributed::MeshWorkload workload;
     workload.add_program(device_range_, std::move(program));
 
-    // Should not crash with empty rta_patches and cb_config_patches
+    // Should not crash with empty cb_config_patches
     for (int i = 0; i < 3; i++) {
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
     }
     distributed::Finish(mesh_device->mesh_command_queue());
+    verify_add_results(mesh_device, core_range, l1_addr, 3);
 }
 
 // Test 2c: Program with max runtime args (341)
