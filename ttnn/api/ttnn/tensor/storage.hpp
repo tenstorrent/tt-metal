@@ -142,7 +142,7 @@ struct DeviceStorage {
     bool is_uniform_storage() const;
 
     // Returns the coordinates the tensor spans across.
-    std::span<const distributed::MeshCoordinate> get_coords() const;
+    const std::vector<distributed::MeshCoordinate>& get_coords() const;
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Deallocation management

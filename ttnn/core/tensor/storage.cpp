@@ -237,7 +237,7 @@ bool DeviceStorage::is_uniform_storage() const {
     return coords_.size() == get_device_bypass_deallocate_check()->num_devices();
 }
 
-std::span<const distributed::MeshCoordinate> DeviceStorage::get_coords() const {
+const std::vector<distributed::MeshCoordinate>& DeviceStorage::get_coords() const {
     // Conv breaks if we keep the assert here.
     // TT_FATAL(is_allocated(), "Device memory is not allocated");
     return coords_;

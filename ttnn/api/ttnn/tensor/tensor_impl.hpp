@@ -94,7 +94,12 @@ MeshTensor allocate_mesh_tensor(
 //                                         .to_host() and .to_device()
 // ======================================================================================
 
-Tensor to_host(const Tensor& tensor, bool blocking = true, std::optional<QueueId> cq_id = std::nullopt);
+// TODO: we should re-examine what we want to do with the coords parameter
+HostTensor to_host(
+    const MeshTensor& tensor,
+    const std::vector<distributed::MeshCoordinate>& coords,
+    bool blocking = true,
+    std::optional<QueueId> cq_id = std::nullopt);
 
 void copy_to_host(
     const Tensor& device_tensor,
@@ -109,13 +114,14 @@ void copy_to_host(
     const std::optional<BufferRegion>& region = std::nullopt,
     bool blocking = true);
 
-Tensor to_device(
-    const Tensor& tensor,
+MeshTensor to_device(
+    const HostTensor& tensor,
     distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt,
     std::optional<QueueId> cq_id = std::nullopt);
 
-void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<QueueId> cq_id = std::nullopt);
+void copy_to_device(
+    const HostTensor& host_tensor, MeshTensor& device_tensor, std::optional<QueueId> cq_id = std::nullopt);
 
 void copy_to_device(
     distributed::MeshCommandQueue& queue,

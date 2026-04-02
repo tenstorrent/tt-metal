@@ -97,14 +97,14 @@ Tensor to_device(
         GraphTracker::instance().track_function_end(input_tensor);
         return input_tensor;
     }
-    auto device_tensor = tensor_impl::to_device(input_tensor, mesh_device, mem_config, cq_id);
+    auto device_tensor = Tensor(tensor_impl::to_device(input_tensor.host_tensor(), mesh_device, mem_config, cq_id));
     GraphTracker::instance().track_function_end(device_tensor);
     return device_tensor;
 }
 
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<tt::tt_metal::QueueId> cq_id) {
     GraphTracker::instance().track_function_start("tt::tt_metal::copy_to_device", host_tensor, device_tensor, cq_id);
-    tensor_impl::copy_to_device(host_tensor, device_tensor, cq_id);
+    tensor_impl::copy_to_device(host_tensor.host_tensor(), device_tensor.mesh_tensor(), cq_id);
     device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
     GraphTracker::instance().track_function_end(device_tensor);
 }
@@ -145,7 +145,8 @@ Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_
 
     GraphTracker::instance().track_function_start("Tensor::cpu", input_tensor, blocking);
 
-    auto output = tensor_impl::to_host(input_tensor, blocking, cq_id);
+    auto output = Tensor(
+        tensor_impl::to_host(input_tensor.mesh_tensor(), input_tensor.device_storage().get_coords(), blocking, cq_id));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
