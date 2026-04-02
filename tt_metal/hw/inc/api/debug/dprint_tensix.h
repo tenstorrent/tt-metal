@@ -343,7 +343,7 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
     {                                                                                           \
         uint32_t reg_val = dbg_read_cfgreg(ckernel::dbg_cfgreg::bank, reg_field_name##_ADDR32); \
         DPRINT << #reg_field_name << " = " << HEX() << reg_val << ENDL();                       \
-        DEVICE_PRINT(#reg_field_name " = 0x{:08X}\n", reg_val);                                 \
+        DEVICE_PRINT(#reg_field_name " = 0x{:x}\n", reg_val);                                   \
     }
 
 // Print the content of the register field given the value in the register.
@@ -356,7 +356,7 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
             DEVICE_PRINT(name " = {}; ", field_value);                                      \
         } else {                                                                            \
             DPRINT << "0x" << HEX();                                                        \
-            DEVICE_PRINT(name " = 0x{:X}; ", field_value);                                  \
+            DEVICE_PRINT(name " = 0x{:x}; ", field_value);                                  \
         }                                                                                   \
         DPRINT << field_value << "; ";                                                      \
     }
@@ -369,7 +369,7 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
             DEVICE_PRINT(name ": {}\n", ((word) & (mask)) >> (shamt));     \
         } else {                                                           \
             DPRINT << "0x" << HEX();                                       \
-            DEVICE_PRINT(name ": 0x{:X}\n", ((word) & (mask)) >> (shamt)); \
+            DEVICE_PRINT(name ": 0x{:x}\n", ((word) & (mask)) >> (shamt)); \
         }                                                                  \
         DPRINT << (uint32_t)((((word) & (mask)) >> (shamt))) << ENDL();    \
     }

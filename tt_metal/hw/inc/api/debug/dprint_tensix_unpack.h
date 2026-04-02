@@ -26,13 +26,13 @@ inline void dprint_tensix_unpack_tile_descriptor_in_data_format(
 inline void dprint_tensix_unpack_tile_descriptor_uncompressed(
     const ckernel::unpacker::unpack_tile_descriptor_t& tile_descriptor) {
     DPRINT << "0x" << HEX() << tile_descriptor.uncompressed << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", tile_descriptor.uncompressed);
+    DEVICE_PRINT("0x{:x}\n", tile_descriptor.uncompressed);
 }
 
 inline void dprint_tensix_unpack_tile_descriptor_reserved_0(
     const ckernel::unpacker::unpack_tile_descriptor_t& tile_descriptor) {
     DPRINT << "0x" << HEX() << tile_descriptor.reserved_0 << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", tile_descriptor.reserved_0);
+    DEVICE_PRINT("0x{:x}\n", tile_descriptor.reserved_0);
 }
 
 inline void dprint_tensix_unpack_tile_descriptor_blobs_per_xy_plane(
@@ -44,7 +44,7 @@ inline void dprint_tensix_unpack_tile_descriptor_blobs_per_xy_plane(
 inline void dprint_tensix_unpack_tile_descriptor_reserved_1(
     const ckernel::unpacker::unpack_tile_descriptor_t& tile_descriptor) {
     DPRINT << "0x" << HEX() << tile_descriptor.reserved_1 << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", tile_descriptor.reserved_1);
+    DEVICE_PRINT("0x{:x}\n", tile_descriptor.reserved_1);
 }
 
 inline void dprint_tensix_unpack_tile_descriptor_x_dim(
@@ -80,7 +80,7 @@ inline void dprint_tensix_unpack_tile_descriptor_blobs_y_start(
 inline void dprint_tensix_unpack_tile_descriptor_digest_type(
     const ckernel::unpacker::unpack_tile_descriptor_t& tile_descriptor) {
     DPRINT << "0x" << HEX() << tile_descriptor.digest_type << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", tile_descriptor.digest_type);
+    DEVICE_PRINT("0x{:x}\n", tile_descriptor.digest_type);
 }
 
 inline void dprint_tensix_unpack_tile_descriptor_digest_size(
@@ -101,27 +101,27 @@ inline void dprint_tensix_unpack_config_out_data_format(const ckernel::unpacker:
 
 inline void dprint_tensix_unpack_config_throttle_mode(const ckernel::unpacker::unpack_config_t& config) {
     DPRINT << "0x" << HEX() << config.throttle_mode << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.throttle_mode);
+    DEVICE_PRINT("0x{:x}\n", config.throttle_mode);
 }
 
 inline void dprint_tensix_unpack_config_context_count(const ckernel::unpacker::unpack_config_t& config) {
     DPRINT << "0x" << HEX() << config.context_count << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.context_count);
+    DEVICE_PRINT("0x{:x}\n", config.context_count);
 }
 
 inline void dprint_tensix_unpack_config_haloize_mode(const ckernel::unpacker::unpack_config_t& config) {
     DPRINT << "0x" << HEX() << config.haloize_mode << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.haloize_mode);
+    DEVICE_PRINT("0x{:x}\n", config.haloize_mode);
 }
 
 inline void dprint_tensix_unpack_config_tileize_mode(const ckernel::unpacker::unpack_config_t& config) {
     DPRINT << "0x" << HEX() << config.tileize_mode << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.tileize_mode);
+    DEVICE_PRINT("0x{:x}\n", config.tileize_mode);
 }
 
 inline void dprint_tensix_unpack_config_force_shared_exp(const ckernel::unpacker::unpack_config_t& config) {
     DPRINT << "0x" << HEX() << config.force_shared_exp << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.force_shared_exp);
+    DEVICE_PRINT("0x{:x}\n", config.force_shared_exp);
 }
 
 inline void dprint_tensix_unpack_config_upsample_rate(const ckernel::unpacker::unpack_config_t& config) {
@@ -131,7 +131,7 @@ inline void dprint_tensix_unpack_config_upsample_rate(const ckernel::unpacker::u
 
 inline void dprint_tensix_unpack_config_upsample_and_interlave(const ckernel::unpacker::unpack_config_t& config) {
     DPRINT << "0x" << HEX() << config.upsamle_and_interlave << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.upsamle_and_interlave);
+    DEVICE_PRINT("0x{:x}\n", config.upsamle_and_interlave);
 }
 
 inline void dprint_tensix_unpack_config_shift_amount(const ckernel::unpacker::unpack_config_t& config) {
@@ -141,27 +141,27 @@ inline void dprint_tensix_unpack_config_shift_amount(const ckernel::unpacker::un
 
 inline void dprint_tensix_unpack_config_uncompress_cntx0_3(const ckernel::unpacker::unpack_config_t& config) {
     DPRINT << "0x" << HEX() << config.uncompress_cntx0_3 << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.uncompress_cntx0_3);
+    DEVICE_PRINT("0x{:x}\n", config.uncompress_cntx0_3);
 }
 
 inline void dprint_tensix_unpack_config_reserved_1(const ckernel::unpacker::unpack_config_t& config) {
     DPRINT << "0x" << HEX() << config.reserved_1 << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.reserved_1);
+    DEVICE_PRINT("0x{:x}\n", config.reserved_1);
 }
 
 inline void dprint_tensix_unpack_config_uncompress_cntx4_7(const ckernel::unpacker::unpack_config_t& config) {
     DPRINT << "0x" << HEX() << config.uncompress_cntx4_7 << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.uncompress_cntx4_7);
+    DEVICE_PRINT("0x{:x}\n", config.uncompress_cntx4_7);
 }
 
 inline void dprint_tensix_unpack_config_reserved_2(const ckernel::unpacker::unpack_config_t& config) {
     DPRINT << "0x" << HEX() << config.reserved_2 << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.reserved_2);
+    DEVICE_PRINT("0x{:x}\n", config.reserved_2);
 }
 
 inline void dprint_tensix_unpack_config_limit_addr(const ckernel::unpacker::unpack_config_t& config) {
     DPRINT << "0x" << HEX() << config.limit_addr << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.limit_addr);
+    DEVICE_PRINT("0x{:x}\n", config.limit_addr);
 }
 
 inline void dprint_tensix_unpack_config_fifo_size(const ckernel::unpacker::unpack_config_t& config) {
@@ -172,37 +172,37 @@ inline void dprint_tensix_unpack_config_fifo_size(const ckernel::unpacker::unpac
 #if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
 inline void dprint_tensix_unpack_config_unpack_src_reg_set_update(const ckernel::unpacker::unpack_config_t& config) {
     DPRINT << "0x" << HEX() << config.unpack_src_reg_set_update << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.unpack_src_reg_set_update);
+    DEVICE_PRINT("0x{:x}\n", config.unpack_src_reg_set_update);
 }
 
 inline void dprint_tensix_unpack_config_unpack_if_sel(const ckernel::unpacker::unpack_config_t& config) {
     DPRINT << "0x" << HEX() << config.unpack_if_sel << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.unpack_if_sel);
+    DEVICE_PRINT("0x{:x}\n", config.unpack_if_sel);
 }
 
 inline void dprint_tensix_unpack_config_unpack_if_sel_cntx0_3(const ckernel::unpacker::unpack_config_t& config) {
     DPRINT << "0x" << HEX() << config.unpack_if_sel_cntx0_3 << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.unpack_if_sel_cntx0_3);
+    DEVICE_PRINT("0x{:x}\n", config.unpack_if_sel_cntx0_3);
 }
 
 inline void dprint_tensix_unpack_config_unpack_if_sel_cntx4_7(const ckernel::unpacker::unpack_config_t& config) {
     DPRINT << "0x" << HEX() << config.unpack_if_sel_cntx4_7 << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.unpack_if_sel_cntx4_7);
+    DEVICE_PRINT("0x{:x}\n", config.unpack_if_sel_cntx4_7);
 }
 
 inline void dprint_tensix_unpack_config_reserved_3(const ckernel::unpacker::unpack_config_t& config) {
     DPRINT << "0x" << HEX() << config.reserved_3 << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.reserved_3);
+    DEVICE_PRINT("0x{:x}\n", config.reserved_3);
 }
 
 inline void dprint_tensix_unpack_config_reserved_4(const ckernel::unpacker::unpack_config_t& config) {
     DPRINT << "0x" << HEX() << config.reserved_4 << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.reserved_4);
+    DEVICE_PRINT("0x{:x}\n", config.reserved_4);
 }
 
 inline void dprint_tensix_unpack_config_reserved_5(const ckernel::unpacker::unpack_config_t& config) {
     DPRINT << "0x" << HEX() << config.reserved_5 << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.reserved_5);
+    DEVICE_PRINT("0x{:x}\n", config.reserved_5);
 }
 #endif
 
@@ -377,42 +377,42 @@ inline void dprint_tensix_unpack_config(uint reg_id = 0) {
 
 inline void dprint_tensix_alu_config_alu_rounding_mode_fpu_srnd_en(const ckernel::unpacker::alu_config_t& config) {
     DPRINT << "0x" << HEX() << config.ALU_ROUNDING_MODE_Fpu_srnd_en << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.ALU_ROUNDING_MODE_Fpu_srnd_en);
+    DEVICE_PRINT("0x{:x}\n", config.ALU_ROUNDING_MODE_Fpu_srnd_en);
 }
 
 inline void dprint_tensix_alu_config_alu_rounding_mode_gasket_srnd_en(const ckernel::unpacker::alu_config_t& config) {
     DPRINT << "0x" << HEX() << config.ALU_ROUNDING_MODE_Gasket_srnd_en << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.ALU_ROUNDING_MODE_Gasket_srnd_en);
+    DEVICE_PRINT("0x{:x}\n", config.ALU_ROUNDING_MODE_Gasket_srnd_en);
 }
 
 inline void dprint_tensix_alu_config_alu_rounding_mode_packer_srnd_en(const ckernel::unpacker::alu_config_t& config) {
     DPRINT << "0x" << HEX() << config.ALU_ROUNDING_MODE_Packer_srnd_en << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.ALU_ROUNDING_MODE_Packer_srnd_en);
+    DEVICE_PRINT("0x{:x}\n", config.ALU_ROUNDING_MODE_Packer_srnd_en);
 }
 
 inline void dprint_tensix_alu_config_alu_rounding_mode_padding(const ckernel::unpacker::alu_config_t& config) {
     DPRINT << "0x" << HEX() << config.ALU_ROUNDING_MODE_Padding << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.ALU_ROUNDING_MODE_Padding);
+    DEVICE_PRINT("0x{:x}\n", config.ALU_ROUNDING_MODE_Padding);
 }
 
 inline void dprint_tensix_alu_config_alu_rounding_mode_gs_lf(const ckernel::unpacker::alu_config_t& config) {
     DPRINT << "0x" << HEX() << config.ALU_ROUNDING_MODE_GS_LF << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.ALU_ROUNDING_MODE_GS_LF);
+    DEVICE_PRINT("0x{:x}\n", config.ALU_ROUNDING_MODE_GS_LF);
 }
 
 inline void dprint_tensix_alu_config_alu_rounding_mode_bfp8_hf(const ckernel::unpacker::alu_config_t& config) {
     DPRINT << "0x" << HEX() << config.ALU_ROUNDING_MODE_Bfp8_HF << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.ALU_ROUNDING_MODE_Bfp8_HF);
+    DEVICE_PRINT("0x{:x}\n", config.ALU_ROUNDING_MODE_Bfp8_HF);
 }
 
 inline void dprint_tensix_alu_config_alu_format_spec_reg0_srcaunsigned(const ckernel::unpacker::alu_config_t& config) {
     DPRINT << "0x" << HEX() << config.ALU_FORMAT_SPEC_REG0_SrcAUnsigned << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.ALU_FORMAT_SPEC_REG0_SrcAUnsigned);
+    DEVICE_PRINT("0x{:x}\n", config.ALU_FORMAT_SPEC_REG0_SrcAUnsigned);
 }
 
 inline void dprint_tensix_alu_config_alu_format_spec_reg0_srcbunsigned(const ckernel::unpacker::alu_config_t& config) {
     DPRINT << "0x" << HEX() << config.ALU_FORMAT_SPEC_REG0_SrcBUnsigned << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.ALU_FORMAT_SPEC_REG0_SrcBUnsigned);
+    DEVICE_PRINT("0x{:x}\n", config.ALU_FORMAT_SPEC_REG0_SrcBUnsigned);
 }
 
 inline void dprint_tensix_alu_config_alu_format_spec_reg0_srca(const ckernel::unpacker::alu_config_t& config) {
@@ -435,17 +435,17 @@ inline void dprint_tensix_alu_config_alu_format_spec_reg2_dstacc(const ckernel::
 
 inline void dprint_tensix_alu_config_alu_acc_ctrl_fp32_enabled(const ckernel::unpacker::alu_config_t& config) {
     DPRINT << "0x" << HEX() << config.ALU_ACC_CTRL_Fp32_enabled << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.ALU_ACC_CTRL_Fp32_enabled);
+    DEVICE_PRINT("0x{:x}\n", config.ALU_ACC_CTRL_Fp32_enabled);
 }
 
 inline void dprint_tensix_alu_config_alu_acc_ctrl_sfpu_fp32_enabled(const ckernel::unpacker::alu_config_t& config) {
     DPRINT << "0x" << HEX() << config.ALU_ACC_CTRL_SFPU_Fp32_enabled << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.ALU_ACC_CTRL_SFPU_Fp32_enabled);
+    DEVICE_PRINT("0x{:x}\n", config.ALU_ACC_CTRL_SFPU_Fp32_enabled);
 }
 
 inline void dprint_tensix_alu_config_alu_acc_ctrl_int8_math_enabled(const ckernel::unpacker::alu_config_t& config) {
     DPRINT << "0x" << HEX() << config.ALU_ACC_CTRL_INT8_math_enabled << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.ALU_ACC_CTRL_INT8_math_enabled);
+    DEVICE_PRINT("0x{:x}\n", config.ALU_ACC_CTRL_INT8_math_enabled);
 }
 
 // Print content of the register field by field.

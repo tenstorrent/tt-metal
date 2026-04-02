@@ -28,22 +28,22 @@ inline void dprint_tensix_pack_config_exp_section_size(const ckernel::packer::pa
 
 inline void dprint_tensix_pack_config_l1_dest_addr(const ckernel::packer::pack_config_t& config) {
     DPRINT << "0x" << HEX() << config.l1_dest_addr << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.l1_dest_addr);
+    DEVICE_PRINT("0x{:x}\n", config.l1_dest_addr);
 }
 
 inline void dprint_tensix_pack_config_uncompressed(const ckernel::packer::pack_config_t& config) {
     DPRINT << "0x" << HEX() << config.uncompress << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.uncompress);
+    DEVICE_PRINT("0x{:x}\n", config.uncompress);
 }
 
 inline void dprint_tensix_pack_config_add_l1_dest_addr_offset(const ckernel::packer::pack_config_t& config) {
     DPRINT << "0x" << HEX() << config.add_l1_dest_addr_offset << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.add_l1_dest_addr_offset);
+    DEVICE_PRINT("0x{:x}\n", config.add_l1_dest_addr_offset);
 }
 
 inline void dprint_tensix_pack_config_reserved_0(const ckernel::packer::pack_config_t& config) {
     DPRINT << "0x" << HEX() << config.reserved_0 << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.reserved_0);
+    DEVICE_PRINT("0x{:x}\n", config.reserved_0);
 }
 
 inline void dprint_tensix_pack_config_out_data_format(const ckernel::packer::pack_config_t& config) {
@@ -61,13 +61,13 @@ inline void dprint_tensix_pack_config_in_data_format(const ckernel::packer::pack
 #if defined(ARCH_WORMHOLE)
 inline void dprint_tensix_pack_config_reserved_1(const ckernel::packer::pack_config_t& config) {
     DPRINT << "0x" << HEX() << config.reserved_1 << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.reserved_1);
+    DEVICE_PRINT("0x{:x}\n", config.reserved_1);
 }
 #endif
 
 inline void dprint_tensix_pack_config_src_if_sel(const ckernel::packer::pack_config_t& config) {
     DPRINT << "0x" << HEX() << config.src_if_sel << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.src_if_sel);
+    DEVICE_PRINT("0x{:x}\n", config.src_if_sel);
 }
 
 #if defined(ARCH_WORMHOLE)
@@ -79,13 +79,13 @@ inline void dprint_tensix_pack_config_pack_per_xy_plane(const ckernel::packer::p
 
 inline void dprint_tensix_pack_config_l1_src_addr(const ckernel::packer::pack_config_t& config) {
     DPRINT << "0x" << HEX() << config.l1_src_addr << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.l1_src_addr);
+    DEVICE_PRINT("0x{:x}\n", config.l1_src_addr);
 }
 
 #if defined(ARCH_WORMHOLE)
 inline void dprint_tensix_pack_config_downsample_mask(const ckernel::packer::pack_config_t& config) {
     DPRINT << "0x" << HEX() << config.downsample_mask << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.downsample_mask);
+    DEVICE_PRINT("0x{:x}\n", config.downsample_mask);
 }
 
 inline void dprint_tensix_pack_config_downsample_shift_count(const ckernel::packer::pack_config_t& config) {
@@ -95,17 +95,17 @@ inline void dprint_tensix_pack_config_downsample_shift_count(const ckernel::pack
 
 inline void dprint_tensix_pack_config_read_mode(const ckernel::packer::pack_config_t& config) {
     DPRINT << "0x" << HEX() << config.read_mode << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.read_mode);
+    DEVICE_PRINT("0x{:x}\n", config.read_mode);
 }
 
 inline void dprint_tensix_pack_config_exp_threshold_en(const ckernel::packer::pack_config_t& config) {
     DPRINT << "0x" << HEX() << config.exp_threshold_en << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.exp_threshold_en);
+    DEVICE_PRINT("0x{:x}\n", config.exp_threshold_en);
 }
 
 inline void dprint_tensix_pack_config_reserved_2(const ckernel::packer::pack_config_t& config) {
     DPRINT << "0x" << HEX() << config.reserved_2 << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.reserved_2);
+    DEVICE_PRINT("0x{:x}\n", config.reserved_2);
 }
 
 inline void dprint_tensix_pack_config_exp_threshold(const ckernel::packer::pack_config_t& config) {
@@ -117,29 +117,29 @@ inline void dprint_tensix_pack_config_exp_threshold(const ckernel::packer::pack_
 #ifdef ARCH_WORMHOLE
 inline void dprint_tensix_pack_config_l1_acc_disable_pack_zero_flag(const ckernel::packer::pack_config_t& config) {
     DPRINT << "0x" << HEX() << config.pack_l1_acc_disable_pack_zero_flag << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.pack_l1_acc_disable_pack_zero_flag);
+    DEVICE_PRINT("0x{:x}\n", config.pack_l1_acc_disable_pack_zero_flag);
 }
 #endif
 
 #ifdef ARCH_BLACKHOLE
 inline void dprint_tensix_pack_config_disable_pack_zero_flag(const ckernel::packer::pack_config_t& config) {
     DPRINT << "0x" << HEX() << config.disable_pack_zero_flag << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.disable_pack_zero_flag);
+    DEVICE_PRINT("0x{:x}\n", config.disable_pack_zero_flag);
 }
 
 inline void dprint_tensix_pack_config_dis_shared_exp_assembler(const ckernel::packer::pack_config_t& config) {
     DPRINT << "0x" << HEX() << config.dis_shared_exp_assembler << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.dis_shared_exp_assembler);
+    DEVICE_PRINT("0x{:x}\n", config.dis_shared_exp_assembler);
 }
 
 inline void dprint_tensix_pack_config_auto_set_last_pacr_intf_sel(const ckernel::packer::pack_config_t& config) {
     DPRINT << "0x" << HEX() << config.auto_set_last_pacr_intf_sel << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.auto_set_last_pacr_intf_sel);
+    DEVICE_PRINT("0x{:x}\n", config.auto_set_last_pacr_intf_sel);
 }
 
 inline void dprint_tensix_pack_config_enable_out_fifo(const ckernel::packer::pack_config_t& config) {
     DPRINT << "0x" << HEX() << config.enable_out_fifo << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.enable_out_fifo);
+    DEVICE_PRINT("0x{:x}\n", config.enable_out_fifo);
 }
 
 inline void dprint_tensix_pack_config_sub_l1_tile_header_size(const ckernel::packer::pack_config_t& config) {
@@ -149,13 +149,13 @@ inline void dprint_tensix_pack_config_sub_l1_tile_header_size(const ckernel::pac
 
 inline void dprint_tensix_pack_config_pack_start_intf_pos(const ckernel::packer::pack_config_t& config) {
     DPRINT << "0x" << HEX() << config.pack_start_intf_pos << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.pack_start_intf_pos);
+    DEVICE_PRINT("0x{:x}\n", config.pack_start_intf_pos);
 }
 
 inline void dprint_tensix_pack_config_all_pack_disable_zero_compress_ovrd(
     const ckernel::packer::pack_config_t& config) {
     DPRINT << "0x" << HEX() << config.all_pack_disable_zero_compress_ovrd << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.all_pack_disable_zero_compress_ovrd);
+    DEVICE_PRINT("0x{:x}\n", config.all_pack_disable_zero_compress_ovrd);
 }
 
 inline void dprint_tensix_pack_config_add_tile_header_size(const ckernel::packer::pack_config_t& config) {
@@ -165,7 +165,7 @@ inline void dprint_tensix_pack_config_add_tile_header_size(const ckernel::packer
 
 inline void dprint_tensix_pack_config_pack_dis_y_pos_start_offset(const ckernel::packer::pack_config_t& config) {
     DPRINT << "0x" << HEX() << config.pack_dis_y_pos_start_offset << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.pack_dis_y_pos_start_offset);
+    DEVICE_PRINT("0x{:x}\n", config.pack_dis_y_pos_start_offset);
 }
 #endif
 
@@ -300,57 +300,57 @@ inline void dprint_tensix_pack_config_helper(const ckernel::packer::pack_config_
 inline void dprint_tensix_pack_relu_config_alu_acc_ctrl_zero_flag_disabled_src(
     const ckernel::packer::relu_config_t& config) {
     DPRINT << "0x" << HEX() << config.ALU_ACC_CTRL_Zero_Flag_disabled_src << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.ALU_ACC_CTRL_Zero_Flag_disabled_src);
+    DEVICE_PRINT("0x{:x}\n", config.ALU_ACC_CTRL_Zero_Flag_disabled_src);
 }
 
 inline void dprint_tensix_pack_relu_config_alu_acc_ctrl_zero_flag_disabled_dst(
     const ckernel::packer::relu_config_t& config) {
     DPRINT << "0x" << HEX() << config.ALU_ACC_CTRL_Zero_Flag_disabled_dst << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.ALU_ACC_CTRL_Zero_Flag_disabled_dst);
+    DEVICE_PRINT("0x{:x}\n", config.ALU_ACC_CTRL_Zero_Flag_disabled_dst);
 }
 
 inline void dprint_tensix_pack_relu_config_stacc_relu_apply_relu(const ckernel::packer::relu_config_t& config) {
     DPRINT << "0x" << HEX() << config.STACC_RELU_ApplyRelu << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.STACC_RELU_ApplyRelu);
+    DEVICE_PRINT("0x{:x}\n", config.STACC_RELU_ApplyRelu);
 }
 
 inline void dprint_tensix_pack_relu_config_stacc_relu_relu_threshold(const ckernel::packer::relu_config_t& config) {
     DPRINT << DEC() << config.STACC_RELU_ReluThreshold << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.STACC_RELU_ReluThreshold);
+    DEVICE_PRINT("{}\n", config.STACC_RELU_ReluThreshold);
 }
 
 inline void dprint_tensix_pack_relu_config_disable_risc_bp_disable_main(const ckernel::packer::relu_config_t& config) {
     DPRINT << "0x" << HEX() << config.DISABLE_RISC_BP_Disable_main << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.DISABLE_RISC_BP_Disable_main);
+    DEVICE_PRINT("0x{:x}\n", config.DISABLE_RISC_BP_Disable_main);
 }
 
 inline void dprint_tensix_pack_relu_config_disable_risc_bp_disable_trisc(const ckernel::packer::relu_config_t& config) {
     DPRINT << "0x" << HEX() << config.DISABLE_RISC_BP_Disable_trisc << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.DISABLE_RISC_BP_Disable_trisc);
+    DEVICE_PRINT("0x{:x}\n", config.DISABLE_RISC_BP_Disable_trisc);
 }
 
 inline void dprint_tensix_pack_relu_config_disable_risc_bp_disable_ncrisc(
     const ckernel::packer::relu_config_t& config) {
     DPRINT << "0x" << HEX() << config.DISABLE_RISC_BP_Disable_ncrisc << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.DISABLE_RISC_BP_Disable_ncrisc);
+    DEVICE_PRINT("0x{:x}\n", config.DISABLE_RISC_BP_Disable_ncrisc);
 }
 
 inline void dprint_tensix_pack_relu_config_disable_risc_bp_disable_bmp_clear_main(
     const ckernel::packer::relu_config_t& config) {
     DPRINT << "0x" << HEX() << config.DISABLE_RISC_BP_Disable_bmp_clear_main << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.DISABLE_RISC_BP_Disable_bmp_clear_main);
+    DEVICE_PRINT("0x{:x}\n", config.DISABLE_RISC_BP_Disable_bmp_clear_main);
 }
 
 inline void dprint_tensix_pack_relu_config_disable_risc_bp_disable_bmp_clear_trisc(
     const ckernel::packer::relu_config_t& config) {
     DPRINT << "0x" << HEX() << config.DISABLE_RISC_BP_Disable_bmp_clear_trisc << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.DISABLE_RISC_BP_Disable_bmp_clear_trisc);
+    DEVICE_PRINT("0x{:x}\n", config.DISABLE_RISC_BP_Disable_bmp_clear_trisc);
 }
 
 inline void dprint_tensix_pack_relu_config_disable_risc_bp_disable_bmp_clear_ncrisc(
     const ckernel::packer::relu_config_t& config) {
     DPRINT << "0x" << HEX() << config.DISABLE_RISC_BP_Disable_bmp_clear_ncrisc << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", config.DISABLE_RISC_BP_Disable_bmp_clear_ncrisc);
+    DEVICE_PRINT("0x{:x}\n", config.DISABLE_RISC_BP_Disable_bmp_clear_ncrisc);
 }
 
 inline void dprint_tensix_pack_relu_config() {
@@ -395,29 +395,29 @@ inline void dprint_tensix_pack_relu_config() {
 inline void dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_read_32b_data(
     const ckernel::packer::dest_rd_ctrl_t& dest) {
     DPRINT << "0x" << HEX() << dest.PCK_DEST_RD_CTRL_Read_32b_data << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", dest.PCK_DEST_RD_CTRL_Read_32b_data);
+    DEVICE_PRINT("0x{:x}\n", dest.PCK_DEST_RD_CTRL_Read_32b_data);
 }
 
 inline void dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_read_unsigned(
     const ckernel::packer::dest_rd_ctrl_t& dest) {
     DPRINT << "0x" << HEX() << dest.PCK_DEST_RD_CTRL_Read_unsigned << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", dest.PCK_DEST_RD_CTRL_Read_unsigned);
+    DEVICE_PRINT("0x{:x}\n", dest.PCK_DEST_RD_CTRL_Read_unsigned);
 }
 
 inline void dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_read_int8(const ckernel::packer::dest_rd_ctrl_t& dest) {
     DPRINT << "0x" << HEX() << dest.PCK_DEST_RD_CTRL_Read_int8 << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", dest.PCK_DEST_RD_CTRL_Read_int8);
+    DEVICE_PRINT("0x{:x}\n", dest.PCK_DEST_RD_CTRL_Read_int8);
 }
 
 inline void dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_round_10b_mant(
     const ckernel::packer::dest_rd_ctrl_t& dest) {
     DPRINT << "0x" << HEX() << dest.PCK_DEST_RD_CTRL_Round_10b_mant << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", dest.PCK_DEST_RD_CTRL_Round_10b_mant);
+    DEVICE_PRINT("0x{:x}\n", dest.PCK_DEST_RD_CTRL_Round_10b_mant);
 }
 
 inline void dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_reserved(const ckernel::packer::dest_rd_ctrl_t& dest) {
     DPRINT << "0x" << HEX() << dest.PCK_DEST_RD_CTRL_Reserved << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", dest.PCK_DEST_RD_CTRL_Reserved);
+    DEVICE_PRINT("0x{:x}\n", dest.PCK_DEST_RD_CTRL_Reserved);
 }
 
 // Printing dest control bits
@@ -505,37 +505,37 @@ inline void dprint_tensix_pack_strides_helper(uint reg_id, const volatile uint t
 
 inline void dprint_tensix_pack_edge_offset_mask(const ckernel::packer::pck_edge_offset_t& edge) {
     DPRINT << "0x" << HEX() << edge.mask << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", edge.mask);
+    DEVICE_PRINT("0x{:x}\n", edge.mask);
 }
 
 inline void dprint_tensix_pack_edge_offset_mode(const ckernel::packer::pck_edge_offset_t& edge) {
     DPRINT << "0x" << HEX() << edge.mode << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", edge.mode);
+    DEVICE_PRINT("0x{:x}\n", edge.mode);
 }
 
 inline void dprint_tensix_pack_edge_offset_tile_row_set_select_pack0(const ckernel::packer::pck_edge_offset_t& edge) {
     DPRINT << "0x" << HEX() << edge.tile_row_set_select_pack0 << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", edge.tile_row_set_select_pack0);
+    DEVICE_PRINT("0x{:x}\n", edge.tile_row_set_select_pack0);
 }
 
 inline void dprint_tensix_pack_edge_offset_tile_row_set_select_pack1(const ckernel::packer::pck_edge_offset_t& edge) {
     DPRINT << "0x" << HEX() << edge.tile_row_set_select_pack1 << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", edge.tile_row_set_select_pack1);
+    DEVICE_PRINT("0x{:x}\n", edge.tile_row_set_select_pack1);
 }
 
 inline void dprint_tensix_pack_edge_offset_tile_row_set_select_pack2(const ckernel::packer::pck_edge_offset_t& edge) {
     DPRINT << "0x" << HEX() << edge.tile_row_set_select_pack2 << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", edge.tile_row_set_select_pack2);
+    DEVICE_PRINT("0x{:x}\n", edge.tile_row_set_select_pack2);
 }
 
 inline void dprint_tensix_pack_edge_offset_tile_row_set_select_pack3(const ckernel::packer::pck_edge_offset_t& edge) {
     DPRINT << "0x" << HEX() << edge.tile_row_set_select_pack3 << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", edge.tile_row_set_select_pack3);
+    DEVICE_PRINT("0x{:x}\n", edge.tile_row_set_select_pack3);
 }
 
 inline void dprint_tensix_pack_edge_offset_reserved(const ckernel::packer::pck_edge_offset_t& edge) {
     DPRINT << "0x" << HEX() << edge.reserved << ENDL();
-    DEVICE_PRINT("0x{:08X}\n", edge.reserved);
+    DEVICE_PRINT("0x{:x}\n", edge.reserved);
 }
 
 // Printing packer edge offset
@@ -619,7 +619,7 @@ inline void dprint_tensix_pack_counters_pack_xys_per_til(const ckernel::packer::
 
 inline void dprint_tensix_pack_counters_pack_yz_transposed(const ckernel::packer::pack_counters_t& counters) {
     DPRINT << "0x" << HEX() << counters.pack_yz_transposed << ENDL();
-    DEVICE_PRINT("0x{:X}\n", counters.pack_yz_transposed);
+    DEVICE_PRINT("0x{:x}\n", counters.pack_yz_transposed);
 }
 
 inline void dprint_tensix_pack_counters_pack_per_xy_plane_offset(const ckernel::packer::pack_counters_t& counters) {
