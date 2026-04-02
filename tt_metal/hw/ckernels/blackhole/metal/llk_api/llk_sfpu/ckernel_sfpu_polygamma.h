@@ -8,6 +8,7 @@
 #include "ckernel_defs.h"
 
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_converter.h"
 
 namespace ckernel::sfpu {
 
@@ -33,13 +34,11 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
     constexpr int NUM_TERMS = 11;  // Exact terms (k=0..10)
 
-    // Unpack parameters (C++17 compatible — no std::bit_cast on SFPI compiler)
-    float n_float;
-    __builtin_memcpy(&n_float, &n_packed, sizeof(float));
+    // Unpack parameters using Converter (union-based type punning supported by SFPU compiler)
+    float n_float = Converter::as_float(n_packed);
     int n = static_cast<int>(n_float);
     int n_plus_1 = n + 1;
-    float scale;
-    __builtin_memcpy(&scale, &scale_packed, sizeof(float));
+    float scale = Converter::as_float(scale_packed);
 
     // Precompute Bernoulli-related coefficients for asymptotic tail
     // B_2 = 1/6 → coeff = (n+1)/12  (from B_2/(2!) * s*(s-1)... but simplified)
