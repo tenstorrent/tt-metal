@@ -3,11 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#ifdef ARCH_QUASAR
-#include "api/compute/unary_bcast_quasar.h"
-#else
 #include "api/compute/bcast.h"
-#endif
 #ifdef ARCH_QUASAR
 #include "experimental/dataflow_buffer.h"
 #else

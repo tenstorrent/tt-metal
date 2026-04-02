@@ -18,19 +18,16 @@ inline void read_tiles(
     constexpr uint32_t ublock_size_tiles = 1;
 
 #ifdef ARCH_QUASAR
-    (void)bank_id;
     experimental::DataflowBuffer dfb(buffer_id_in);
     uint32_t ublock_size_bytes = dfb.get_entry_size();
-    constexpr auto src_args = TensorAccessorArgs<0>();
-    const auto src_tensor = TensorAccessor(src_args, src_addr, ublock_size_bytes);
+    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_bank;
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
         dfb.reserve_back(ublock_size_tiles);
-        uint32_t l1_write_addr = dfb.get_write_ptr() + MEMORY_PORT_NONCACHEABLE_MEM_PORT_MEM_BASE_ADDR;
-        uint64_t src_noc_addr = get_noc_addr(i, src_tensor);
-        noc_async_read(src_noc_addr, l1_write_addr, ublock_size_bytes);
+        noc.async_read(dram_bank, dfb, ublock_size_bytes, {.bank_id = bank_id, .addr = src_addr}, {});
         noc.async_read_barrier();
         dfb.push_back(ublock_size_tiles);
+        src_addr += ublock_size_bytes;
     }
 #else
     experimental::CircularBuffer cb(buffer_id_in);

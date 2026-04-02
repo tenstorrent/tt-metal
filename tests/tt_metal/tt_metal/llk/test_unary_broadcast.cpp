@@ -450,10 +450,10 @@ void run_single_core_unary_broadcast(
 
 using namespace unit_tests::compute::unary_broadcast;
 
-// Quasar-only: DFB path is validated here. WH/BH CB path is tracked in https://github.com/tenstorrent/tt-metal/issues/36142
+// Single-core unary broadcast using dataflow buffers (Quasar).
 TEST_F(MeshDeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
     if (this->arch_ != tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "Unary broadcast unit test runs on Quasar only (WH/BH: issue #36142)";
+        GTEST_SKIP() << "Unary broadcast test requires Quasar";
     }
     for (BroadcastDim bcast_dim : {BroadcastDim::NONE, BroadcastDim::ROW, BroadcastDim::COL, BroadcastDim::SCALAR}) {
         for (tt::DataFormat in0_t_ : {tt::DataFormat::Bfp8_b, tt::DataFormat::Float16_b}) {

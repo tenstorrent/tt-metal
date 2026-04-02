@@ -23,6 +23,12 @@
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #endif
+#if defined(TRISC_UNPACK) && defined(ARCH_QUASAR)
+#include "llk_unpack_unary_broadcast_operands.h"
+#endif
+#if defined(TRISC_MATH) && defined(ARCH_QUASAR)
+#include "llk_math_unary_broadcast.h"
+#endif
 
 namespace ckernel {
 
@@ -30,6 +36,7 @@ template <BroadcastType bcast_type>
 ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
 
+#ifndef ARCH_QUASAR
     // 32bit formats are implemented using unpack to dest, since SrcB is only 19bits wide
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
     const std::uint32_t dst_format = get_operand_dst_format(icb);
@@ -56,10 +63,68 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init<false>(ocb)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
+#else
+#ifdef TRISC_UNPACK
+    const std::uint32_t operand_id_u = get_operand_id(icb);
+    const std::uint32_t dst_format_u = get_operand_dst_format(operand_id_u);
+    const bool enable_unpack_to_dest_u = (dst_format_u == static_cast<std::uint32_t>(DataFormat::Float32)) ||
+                                         (dst_format_u == static_cast<std::uint32_t>(DataFormat::UInt32)) ||
+                                         (dst_format_u == static_cast<std::uint32_t>(DataFormat::Int32));
+
+    UNPACK((llk_unpack_hw_configure(icb)));
+    if constexpr (bcast_type == BroadcastType::NONE) {
+        if (enable_unpack_to_dest_u) {
+            UNPACK((_llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false, DST_ACCUM_MODE>(operand_id_u, 1)));
+        } else {
+            UNPACK((_llk_unpack_unary_operand_init_<p_unpacr::UNP_B, false, DST_ACCUM_MODE>(operand_id_u, 1)));
+        }
+    } else {
+        if (enable_unpack_to_dest_u) {
+            UNPACK((
+                _llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_A, bcast_type, true, false>(operand_id_u, 1)));
+        } else {
+            UNPACK((_llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, bcast_type, false, DST_ACCUM_MODE>(
+                operand_id_u, 1)));
+        }
+    }
+#endif
+
+#ifdef TRISC_MATH
+    const std::uint32_t operand_id_m = get_operand_id(icb);
+    const std::uint32_t dst_format_m = get_operand_dst_format(operand_id_m);
+    const bool enable_unpack_to_dest_m = (dst_format_m == static_cast<std::uint32_t>(DataFormat::Float32)) ||
+                                         (dst_format_m == static_cast<std::uint32_t>(DataFormat::UInt32)) ||
+                                         (dst_format_m == static_cast<std::uint32_t>(DataFormat::Int32));
+
+    if constexpr (bcast_type == BroadcastType::NONE) {
+        if (enable_unpack_to_dest_m) {
+            MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
+        } else {
+            MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::B2D, DST_ACCUM_MODE>(icb)));
+        }
+    } else if (!enable_unpack_to_dest_m) {
+        const TileShape tile_shape{
+            .num_faces = get_operand_num_faces(operand_id_m),
+            .face_r_dim = get_operand_face_r_dim(operand_id_m),
+            .face_c_dim = static_cast<std::uint32_t>(ckernel::trisc::FACE_C_DIM),
+            .narrow_tile = get_operand_narrow_tile(operand_id_m) != 0,
+        };
+        MATH((_llk_math_eltwise_unary_broadcast_init_<bcast_type, false, DST_ACCUM_MODE>(tile_shape)));
+    }
+    MATH((llk_math_pack_sync_init()));
+    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
+#endif
+
+#ifdef TRISC_PACK
+    PACK((llk_pack_hw_configure(ocb)));
+    PACK((llk_pack_init(ocb)));
+#endif
+#endif
 }
 
 template <BroadcastType bcast_type>
 ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_index) {
+#ifndef ARCH_QUASAR
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
     // 32bit formats are implemented using unpack to dest, since SrcB is only 19bits wide
     const std::uint32_t dst_format = get_operand_dst_format(icb);
@@ -75,10 +140,55 @@ ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_in
         MATH((llk_math_eltwise_unary_datacopy<B2D, DST_ACCUM_MODE, bcast_type, false>(dst_tile_index, icb)));
     }
 #endif
+#else
+#ifdef TRISC_UNPACK
+    const std::uint32_t operand_id_u = get_operand_id(icb);
+    const std::uint32_t dst_format_u = get_operand_dst_format(operand_id_u);
+    const bool enable_unpack_to_dest_u = (dst_format_u == static_cast<std::uint32_t>(DataFormat::Float32)) ||
+                                         (dst_format_u == static_cast<std::uint32_t>(DataFormat::UInt32)) ||
+                                         (dst_format_u == static_cast<std::uint32_t>(DataFormat::Int32));
+    const std::uint32_t l1_tile_index = g_dfb_interface[operand_id_u].rd_entry_idx + in_tile_index;
+
+    if constexpr (bcast_type == BroadcastType::NONE) {
+        if (enable_unpack_to_dest_u) {
+            UNPACK((_llk_unpack_unary_operand_<p_unpacr::UNP_A>(l1_tile_index)));
+        } else {
+            UNPACK((_llk_unpack_unary_operand_<p_unpacr::UNP_B>(l1_tile_index)));
+        }
+    } else {
+        if (enable_unpack_to_dest_u) {
+            UNPACK((_llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_A, true>(l1_tile_index)));
+        } else {
+            UNPACK((_llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_B, false>(l1_tile_index)));
+        }
+    }
+#endif
+
+#ifdef TRISC_MATH
+    const std::uint32_t operand_id_m = get_operand_id(icb);
+    const std::uint32_t dst_format_m = get_operand_dst_format(operand_id_m);
+    const bool enable_unpack_to_dest_m = (dst_format_m == static_cast<std::uint32_t>(DataFormat::Float32)) ||
+                                         (dst_format_m == static_cast<std::uint32_t>(DataFormat::UInt32)) ||
+                                         (dst_format_m == static_cast<std::uint32_t>(DataFormat::Int32));
+
+    if constexpr (bcast_type == BroadcastType::NONE) {
+        MATH((llk_math_eltwise_unary_datacopy(dst_tile_index, icb)));
+    } else if (!enable_unpack_to_dest_m) {
+        const TileShape tile_shape{
+            .num_faces = get_operand_num_faces(operand_id_m),
+            .face_r_dim = get_operand_face_r_dim(operand_id_m),
+            .face_c_dim = static_cast<std::uint32_t>(ckernel::trisc::FACE_C_DIM),
+            .narrow_tile = get_operand_narrow_tile(operand_id_m) != 0,
+        };
+        MATH((_llk_math_eltwise_unary_broadcast_<bcast_type, false, DST_ACCUM_MODE>(dst_tile_index, tile_shape)));
+    }
+#endif
+#endif
 }
 
 template <BroadcastType bcast_type>
 ALWI void unary_bcast_uninit(uint32_t icb) {
+#ifndef ARCH_QUASAR
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
     const std::uint32_t dst_format = get_operand_dst_format(icb);
     const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
@@ -93,10 +203,14 @@ ALWI void unary_bcast_uninit(uint32_t icb) {
         MATH((llk_math_eltwise_unary_datacopy_uninit<bcast_type, false>()));
     }
 #endif
+#else
+    (void)icb;
+#endif
 }
 
 template <BroadcastType old_bcast_type, BroadcastType new_bcast_type>
 void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_ocb, uint32_t new_ocb) {
+#ifndef ARCH_QUASAR
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     // Pass through uses A2D and potentially direct unpack to dest.
     const auto data_copy_type = (new_bcast_type == BroadcastType::NONE) ? A2D : B2D;
@@ -127,7 +241,93 @@ void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_oc
 #endif
 
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_ocb, new_ocb)));
+#else
+#ifdef TRISC_UNPACK
+    const std::uint32_t new_operand_id = get_operand_id(new_icb);
+    const std::uint32_t old_operand_id = get_operand_id(old_icb);
+    const std::uint32_t dst_format = get_operand_dst_format(new_operand_id);
+    const bool enable_unpack_to_dest = (dst_format == static_cast<std::uint32_t>(DataFormat::Float32)) ||
+                                       (dst_format == static_cast<std::uint32_t>(DataFormat::UInt32)) ||
+                                       (dst_format == static_cast<std::uint32_t>(DataFormat::Int32));
+    const bool unpacker_src_format_change = unpack_src_format[new_operand_id] != unpack_src_format[old_operand_id];
+    const bool unpacker_dst_format_change = unpack_dst_format[new_operand_id] != unpack_dst_format[old_operand_id];
+    const bool bcast_type_change = (old_bcast_type != new_bcast_type);
+
+    if (unpacker_src_format_change || unpacker_dst_format_change) {
+        UNPACK((llk_unpack_hw_configure(new_icb)));
+    }
+
+    if (unpacker_src_format_change || unpacker_dst_format_change || bcast_type_change) {
+        if constexpr (new_bcast_type == BroadcastType::NONE) {
+            if (enable_unpack_to_dest) {
+                UNPACK((_llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false, DST_ACCUM_MODE>(new_operand_id, 1)));
+            } else {
+                UNPACK((_llk_unpack_unary_operand_init_<p_unpacr::UNP_B, false, DST_ACCUM_MODE>(new_operand_id, 1)));
+            }
+        } else {
+            if (enable_unpack_to_dest) {
+                UNPACK((_llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_A, new_bcast_type, true, false>(
+                    new_operand_id, 1)));
+            } else {
+                UNPACK(
+                    (_llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, new_bcast_type, false, DST_ACCUM_MODE>(
+                        new_operand_id, 1)));
+            }
+        }
+    }
+#endif
+
+#ifdef TRISC_MATH
+    const std::uint32_t new_operand_id = get_operand_id(new_icb);
+    const std::uint32_t old_operand_id = get_operand_id(old_icb);
+    const std::uint32_t dst_format = get_operand_dst_format(new_operand_id);
+    const bool enable_unpack_to_dest = (dst_format == static_cast<std::uint32_t>(DataFormat::Float32)) ||
+                                       (dst_format == static_cast<std::uint32_t>(DataFormat::UInt32)) ||
+                                       (dst_format == static_cast<std::uint32_t>(DataFormat::Int32));
+    const bool unpacker_dst_format_change = unpack_dst_format[new_operand_id] != unpack_dst_format[old_operand_id];
+    const bool bcast_type_change = (old_bcast_type != new_bcast_type);
+
+    if (unpacker_dst_format_change) {
+        MATH((llk_math_hw_configure<DST_ACCUM_MODE>(new_icb, new_icb)));
+    }
+
+    if (unpacker_dst_format_change || bcast_type_change) {
+        if constexpr (new_bcast_type == BroadcastType::NONE) {
+            if (enable_unpack_to_dest) {
+                MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(new_icb)));
+            } else {
+                MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::B2D, DST_ACCUM_MODE>(new_icb)));
+            }
+        } else if (!enable_unpack_to_dest) {
+            const TileShape tile_shape{
+                .num_faces = get_operand_num_faces(new_operand_id),
+                .face_r_dim = get_operand_face_r_dim(new_operand_id),
+                .face_c_dim = static_cast<std::uint32_t>(ckernel::trisc::FACE_C_DIM),
+                .narrow_tile = get_operand_narrow_tile(new_operand_id) != 0,
+            };
+            MATH((_llk_math_eltwise_unary_broadcast_init_<new_bcast_type, false, DST_ACCUM_MODE>(tile_shape)));
+        }
+    }
+#endif
+
+#ifdef TRISC_PACK
+    // Re-run pack HW configure and init when the output operand id or pack source/dest formats change.
+    const std::uint32_t old_out_id = get_output_id(old_ocb);
+    const std::uint32_t new_out_id = get_output_id(new_ocb);
+    const bool pack_operand_change = (old_ocb != new_ocb);
+    const bool pack_format_change = (pack_src_format[old_out_id] != pack_src_format[new_out_id]) ||
+                                    (pack_dst_format[old_out_id] != pack_dst_format[new_out_id]);
+    if (pack_operand_change || pack_format_change) {
+        PACK((llk_pack_hw_configure(new_ocb)));
+        PACK((llk_pack_init(new_ocb)));
+    }
+#endif
+#endif
 }
+
+// Quasar binary eltwise math currently only supports SrcB broadcast NONE (see llk_math_binary_api.h).
+// Omit these helpers for TRISC math so kernels that include bcast.h for unary paths still compile.
+#if !(defined(ARCH_QUASAR) && defined(TRISC_MATH))
 
 /**
  * Shorthand template instantiation of sub_tiles_bcast.
@@ -443,5 +643,7 @@ ALWI void sub_tiles_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1, uint32
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));
 }
+
+#endif  // !(ARCH_QUASAR && TRISC_MATH)
 
 }  // namespace ckernel
