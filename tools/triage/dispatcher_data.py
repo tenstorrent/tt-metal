@@ -507,7 +507,10 @@ class DispatcherData:
                     if self._is_2_erisc_mode
                     else firmware_base / "active_erisc" / "active_erisc.elf"
                 )
-
+            else:
+                raise TTTriageError(
+                    f"Unexpected processor name '{proc_name_l}' for active ETH block at {location}."
+                )
         else:
             if proc_name_l == "erisc" or proc_name_l == "erisc0":
                 firmware_resolved = firmware_base / "idle_erisc" / "idle_erisc.elf"

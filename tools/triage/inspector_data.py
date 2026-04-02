@@ -127,8 +127,8 @@ class InspectorUnserializedMethod(InspectorException):
 
 
 class InspectorRpcSerialized(InspectorData):
-    def __init__(self, directory: str | Path):
-        self.__directory = Path(directory)
+    def __init__(self, directory: Path):
+        self.__directory = directory
         self.__methods = inspector_capnp.capnp_scheme.Inspector.schema.methods
         if not self.__directory.exists() or not (self.__directory / "getPrograms.capnp.bin").exists():
             raise ValueError(f"Serialized RPC data not found in directory {directory}")

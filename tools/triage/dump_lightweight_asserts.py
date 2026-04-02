@@ -57,15 +57,14 @@ class LightweightAssertInfo:
     arguments_and_locals: str | None = triage_field("Arguments and Locals")
 
 
-def extract_assert_code(file: str | None, line: int | None, column: int | None) -> str:
+def extract_assert_code(file: Path | None, line: int | None, column: int | None) -> str:
     if file is None or line is None:
         return "?"
 
-    file_path = Path(file)
-    if not file_path.exists():
+    if not file.exists():
         return "?file not found?"
     try:
-        with file_path.open("r") as f:
+        with file.open("r") as f:
             lines = f.readlines()
             if not (0 <= line - 1 < len(lines)):
                 return "?wrong line number? Check the first code line in the stack trace."
@@ -197,29 +196,29 @@ def dump_lightweight_asserts(
         arguments_and_locals = None
         assert_code = "?"
         if callstack_data.kernel_callstack_with_message.callstack[0] is not None:
+            top = callstack_data.kernel_callstack_with_message.callstack[0]
             assert_code = extract_assert_code(
-                callstack_data.kernel_callstack_with_message.callstack[0].file,
-                callstack_data.kernel_callstack_with_message.callstack[0].line,
-                callstack_data.kernel_callstack_with_message.callstack[0].column,
+                Path(top.file) if top.file is not None else None,
+                top.line,
+                top.column,
             )
             arguments_and_locals = ""
-            top_frame = callstack_data.kernel_callstack_with_message.callstack[0]
-            if len(top_frame.template_parameters) > 0:
+            if len(top.template_parameters) > 0:
                 arguments_and_locals += "\nTemplate parameters:\n"
-                arguments_and_locals += serialize_variables(top_frame.template_parameters, assert_code)
-                for var in top_frame.template_parameters:
+                arguments_and_locals += serialize_variables(top.template_parameters, assert_code)
+                for var in top.template_parameters:
                     if var.name is not None:
                         assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
-            if len(top_frame.arguments) > 0:
+            if len(top.arguments) > 0:
                 arguments_and_locals += "\nRuntime arguments:\n"
-                arguments_and_locals += serialize_variables(top_frame.arguments, assert_code)
-                for var in top_frame.arguments:
+                arguments_and_locals += serialize_variables(top.arguments, assert_code)
+                for var in top.arguments:
                     if var.name is not None:
                         assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
-            if len(top_frame.locals) > 0:
+            if len(top.locals) > 0:
                 arguments_and_locals += "\nLocals:\n"
-                arguments_and_locals += serialize_variables(top_frame.locals, assert_code)
-                for var in top_frame.locals:
+                arguments_and_locals += serialize_variables(top.locals, assert_code)
+                for var in top.locals:
                     if var.name is not None:
                         assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
         return LightweightAssertInfo(

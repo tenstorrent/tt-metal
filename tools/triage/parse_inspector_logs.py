@@ -122,9 +122,9 @@ class ProgramData:
 
 
 # Note: This method is parsing entry by entry and should be used only for debugging large log files.
-def fast_parse_yaml_log_file(log_file: str | Path):
+def fast_parse_yaml_log_file(log_file: Path):
     log_entry = ""
-    with Path(log_file).open("r") as f:
+    with log_file.open("r") as f:
         while (line := f.readline()) != "":
             if len(line) > 0 and line[0] != " " and line[0] != "\t" and line[0] != "\n":
                 if len(log_entry) > 0:
@@ -140,8 +140,8 @@ def fast_parse_yaml_log_file(log_file: str | Path):
         yield yaml.safe_load(log_entry)
 
 
-def read_yaml(yaml_path: str | Path):
-    p = Path(yaml_path)
+def read_yaml(yaml_path: Path):
+    p = yaml_path
     if not p.exists():
         utils.WARN(f"  {p} file does not exist.")
         return []
@@ -175,8 +175,8 @@ class StartupData:
         print(f"  {self.convert_timestamp(timestamp_ns).strftime('%Y-%m-%d %H:%M:%S.%f')}: {message}")
 
 
-def get_kernels(log_directory: str | Path) -> dict[int, KernelData]:
-    yaml_path = Path(log_directory) / "kernels.yaml"
+def get_kernels(log_directory: Path) -> dict[int, KernelData]:
+    yaml_path = log_directory / "kernels.yaml"
     data = read_yaml(yaml_path)
 
     kernels: dict[int, KernelData] = {}
@@ -193,8 +193,8 @@ def get_kernels(log_directory: str | Path) -> dict[int, KernelData]:
     return kernels
 
 
-def get_startup_data(log_directory: str | Path) -> StartupData:
-    startup_yaml_path = Path(log_directory) / "startup.yaml"
+def get_startup_data(log_directory: Path) -> StartupData:
+    startup_yaml_path = log_directory / "startup.yaml"
     with startup_yaml_path.open("r") as f:
         startup_data = yaml.safe_load(f)
         for entry, startup_time in startup_data.items():
@@ -212,8 +212,8 @@ def get_startup_data(log_directory: str | Path) -> StartupData:
     raise ValueError("No startup time found in startup.yaml")
 
 
-def get_programs(log_directory: str | Path, verbose: bool = False) -> dict[int, ProgramData]:
-    yaml_path = Path(log_directory) / "programs_log.yaml"
+def get_programs(log_directory: Path, verbose: bool = False) -> dict[int, ProgramData]:
+    yaml_path = log_directory / "programs_log.yaml"
     data = read_yaml(yaml_path)
     if verbose:
         print("Programs log:")
@@ -284,8 +284,8 @@ def get_programs(log_directory: str | Path, verbose: bool = False) -> dict[int, 
     return programs
 
 
-def get_mesh_devices(log_directory: str | Path, verbose: bool = False) -> dict[int, MeshDeviceData]:
-    yaml_path = Path(log_directory) / "mesh_devices_log.yaml"
+def get_mesh_devices(log_directory: Path, verbose: bool = False) -> dict[int, MeshDeviceData]:
+    yaml_path = log_directory / "mesh_devices_log.yaml"
     data = read_yaml(yaml_path)
     if verbose:
         print("Mesh devices log:")
@@ -327,8 +327,8 @@ def get_mesh_devices(log_directory: str | Path, verbose: bool = False) -> dict[i
     return mesh_devices
 
 
-def get_mesh_workloads(log_directory: str | Path, verbose: bool = False) -> dict[int, MeshWorkloadData]:
-    yaml_path = Path(log_directory) / "mesh_workloads_log.yaml"
+def get_mesh_workloads(log_directory: Path, verbose: bool = False) -> dict[int, MeshWorkloadData]:
+    yaml_path = log_directory / "mesh_workloads_log.yaml"
     data = read_yaml(yaml_path)
     if verbose:
         print("Mesh workloads log:")
@@ -427,8 +427,8 @@ def get_log_directory(log_directory: str | None = None) -> Path:
 
 
 class InspectorLogsData:
-    def __init__(self, log_directory: str | Path):
-        self.log_directory = Path(log_directory)
+    def __init__(self, log_directory: Path):
+        self.log_directory = log_directory
 
     @cached_property
     def mesh_devices(self):

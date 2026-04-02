@@ -239,8 +239,8 @@ class TriageScript:
                 raise
 
     @staticmethod
-    def load(script_path: Path | str) -> "TriageScript":
-        script_path = Path(script_path).resolve()
+    def load(script_path: Path) -> "TriageScript":
+        script_path = script_path.resolve()
         base_path = str(script_path.parent)  # sys.path requires str entries
         appended = False
         if not base_path in sys.path:
@@ -307,8 +307,8 @@ class TriageScript:
                 sys.path.remove(base_path)
 
     @staticmethod
-    def load_all(script_path: Path | str) -> dict[Path, "TriageScript"]:
-        script_path = Path(script_path).resolve()
+    def load_all(script_path: Path) -> dict[Path, "TriageScript"]:
+        script_path = script_path.resolve()
         scripts: dict[Path, TriageScript] = {}
         loading: list[Path] = []
         script = TriageScript.load(script_path)
@@ -431,7 +431,7 @@ def process_arguments(args: ScriptArguments) -> None:
 
 def parse_arguments(
     scripts: dict[Path, TriageScript] = {},
-    script_path: Path | str | None = None,
+    script_path: Path | None = None,
     argv: list[str] | None = None,
     only_triage_script_args=False,
 ) -> ScriptArguments:
@@ -450,7 +450,7 @@ def parse_arguments(
     import sys
 
     if script_path is not None:
-        script_path = Path(script_path).resolve()
+        script_path = script_path.resolve()
 
     docs: dict[Path, str] = {}
     assert __doc__ is not None, "Help message must be provided in the script docstring."
@@ -806,7 +806,7 @@ def _init_ttexalens(args: ScriptArguments) -> Context:
 
 
 def run_script(
-    script_path: Path | str | None = None,
+    script_path: Path | None = None,
     args: ScriptArguments | None = None,
     context: Context | None = None,
     argv: list[str] | None = None,
@@ -820,19 +820,17 @@ def run_script(
         stack = inspect.stack()
         if stack is None or len(stack) < 2:
             raise ValueError("No script path provided and no caller found in callstack.")
-        script_path = stack[1].filename
+        script_path = Path(stack[1].filename).resolve()
         force_exit = True
     else:
-        if not script_path.endswith(".py"):
-            script_path = script_path + ".py"
+        if script_path.suffix != ".py":
+            script_path = script_path.with_suffix(".py")
         application_path = Path(__file__).parent
-        script_path = Path(script_path)
         if not script_path.is_absolute():
             script_path = application_path / script_path
         script_path = script_path.resolve()
         if not script_path.exists():
             raise FileNotFoundError(f"Script {script_path} does not exist.")
-        # load_all() normalizes to Path internally
 
     # Load script and its dependencies
     scripts = TriageScript.load_all(script_path)
@@ -858,8 +856,7 @@ def run_script(
             result = script.run(args=args, context=context, log_error=False)
             if script.config.data_provider and result is None:
                 raise TTTriageError(f"{script.name}: Data provider script did not return any data.")
-    script_key = Path(script_path).resolve()
-    script = scripts[script_key] if script_key in scripts else None
+    script = scripts[script_path] if script_path in scripts else None
     if return_result:
         return result
     serialize_result(script, result)
