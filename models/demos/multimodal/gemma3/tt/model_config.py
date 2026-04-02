@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+from functools import lru_cache
 
 import torch
 from loguru import logger
@@ -13,10 +14,32 @@ from models.tt_transformers.tt.common import calculate_prefill_warmup_seq_lens, 
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_meta_to_hf, standardize_hf_keys
 from models.tt_transformers.tt.model_config import HfAttentionWrapper, HfDecoderWrapper, HfModelWrapper
 from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
+from models.tt_transformers.tt.prefetcher import Prefetcher
 
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
 ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
+
+
+def _gemma3_sdpa_decode_k_chunk_tokens() -> int:
+    """Power-of-2 token K-chunk for paged decode SDPA (Metal requires multiple of 32)."""
+    # 256 fits Wormhole N150 L1 for Gemma3 paged decode; 512+ commonly hits circular-buffer clash
+    # (program.cpp static CB vs L1). Larger chunks only move HF mismatch boundaries—they are not a root fix.
+    default = 256
+    raw = os.environ.get("GEMMA3_SDPA_DECODE_K_CHUNK", "").strip()
+    if not raw:
+        return default
+    try:
+        n = int(raw, 10)
+    except ValueError:
+        logger.warning(f"GEMMA3_SDPA_DECODE_K_CHUNK={raw!r} is not an integer; using default {default}")
+        return default
+    if n <= 0 or (n & (n - 1)) != 0 or n % 32 != 0:
+        logger.warning(
+            f"GEMMA3_SDPA_DECODE_K_CHUNK={n} must be a power of 2 and a multiple of 32; using default {default}"
+        )
+        return default
+    return n
 
 
 class ModelArgs(TTModelArgs):
@@ -70,6 +93,39 @@ class ModelArgs(TTModelArgs):
         self.use_qk_fused = False  # For Gemma 3, we do not use qk fused ops (rotary embedding + paged cache update)
         self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
         self.padded_vocab_size = 262400
+
+    @lru_cache(maxsize=None)
+    def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
+        """Gemma3-only decode SDPA config.
+
+        ``k_chunk_size=0`` uses ``get_dynamic_Sk_chunk_t()``, which jumps 4→8 tiles at cur_pos 127→128
+        and misaligns paged KV (HF cliff at pos 128). **256** tokens is the default fixed chunk: it fits
+        **N150** L1. Do not assume a larger chunk “fixes” quality—it can **L1-clash** on Wormhole and only
+        **shifts** mismatch to a later position; the real fix is **ttnn** ``paged_scaled_dot_product_attention_decode``.
+
+        Optional: ``GEMMA3_SDPA_DECODE_K_CHUNK`` (power of 2, multiple of 32). Try ``512`` only on setups
+        with enough L1; expect possible ``program.cpp`` circular-buffer errors.
+        """
+        fixed_k_chunk_tokens = _gemma3_sdpa_decode_k_chunk_tokens()
+        if prefetcher is not None:
+            sdpa_grid_size = (8, 8)
+            start_core = ttnn.CoreCoord(1, 0)
+            num_sdpa_cores = sdpa_grid_size[0] * sdpa_grid_size[1]
+            return ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=sdpa_grid_size,
+                sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                    start_core, num_sdpa_cores, prefetcher.all_worker_cores_range_set, row_wise=True
+                ),
+                exp_approx_mode=False,
+                q_chunk_size=0,
+                k_chunk_size=fixed_k_chunk_tokens,
+            )
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            exp_approx_mode=False,
+            q_chunk_size=0,
+            k_chunk_size=fixed_k_chunk_tokens,
+        )
 
     def get_warmup_prefill_supported_seq_lens(self):
         DEFAULT_VALUE = self.capped_warmup_seq_len
