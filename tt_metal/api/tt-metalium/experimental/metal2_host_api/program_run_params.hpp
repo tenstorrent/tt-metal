@@ -46,6 +46,7 @@ struct ProgramRunParams {
         using CommonRuntimeArgs = std::vector<uint32_t>;
         CommonRuntimeArgs common_runtime_args;
     };
+    // KernelRunParams must be specified for ALL kernels in the ProgramSpec.
     std::vector<KernelRunParams> kernel_run_params;
 
     ////////////////////////////////////////////////////////////////////////
@@ -66,6 +67,8 @@ struct ProgramRunParams {
         // using BorrowedMemory = std::variant<BufferView, MeshTensorView>; // non-owning view types, TBD
         // std::optional<BorrowedMemory> borrowed_memory = std::nullopt;
     };
+    // DFBRunParams must be specified for those DFBs built on borrowed memory.
+    // It is optional for regular DFBs.
     std::vector<DFBRunParams> dfb_run_params;
 };
 

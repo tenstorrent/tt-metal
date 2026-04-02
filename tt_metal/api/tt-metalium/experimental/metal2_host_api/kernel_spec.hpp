@@ -96,6 +96,7 @@ struct KernelSpec {
 
         IncludePaths include_paths;         // -I <path>
         Defines defines;                    // -D <name>=<value>
+        Macros macros;                      // -M <macro>
         OptLevel opt_level = OptLevel::O2;  // -O<level>
         // Can add more options here as needed
     };

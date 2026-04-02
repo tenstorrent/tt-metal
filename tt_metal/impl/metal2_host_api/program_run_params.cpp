@@ -15,74 +15,7 @@
 namespace tt::tt_metal::experimental::metal2_host_api {
 
 // ============================================================================
-// Helper Function Forward Declarations
-// ============================================================================
-
-void ValidateProgramRunParams(const Program& program, const ProgramRunParams& params);
-
-// ============================================================================
-// PUBLIC ENTRY POINTS: SetProgramRunParameters + GetProgramRunParamsView
-// ============================================================================
-
-void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
-    log_debug(tt::LogMetal, "Setting ProgramRunParams");
-
-    // Validate parameters against the schema
-    ValidateProgramRunParams(program, params);
-
-    detail::ProgramImpl& program_impl = program.impl();
-
-    // Process kernel runtime arguments
-    for (const auto& kernel_params : params.kernel_run_params) {
-        std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_params.kernel_spec_name);
-
-        // Set per-node runtime args
-        // set_runtime_args handles both first-time allocation and subsequent updates
-        for (const auto& [node_coord, args] : kernel_params.runtime_args) {
-            kernel->set_runtime_args(node_coord, args);
-        }
-
-        // Set common runtime args
-        // TODO: Why on earth does SetCommonRuntimeArgs() only work the first time??
-        if (!kernel_params.common_runtime_args.empty()) {
-            if (kernel->common_runtime_args().empty()) {
-                // First time: use the normal setter which allocates storage
-                kernel->set_common_runtime_args(kernel_params.common_runtime_args);
-            } else {
-                // Subsequent calls: update in-place
-                // (set_common_runtime_args fatals if called twice, so use direct access)
-                RuntimeArgsData& crta = kernel->common_runtime_args_data();
-                TT_FATAL(
-                    crta.size() == kernel_params.common_runtime_args.size(),
-                    "Kernel '{}' common runtime args count cannot change from {} to {}",
-                    kernel_params.kernel_spec_name,
-                    crta.size(),
-                    kernel_params.common_runtime_args.size());
-                std::memcpy(
-                    crta.data(),
-                    kernel_params.common_runtime_args.data(),
-                    kernel_params.common_runtime_args.size() * sizeof(uint32_t));
-            }
-        }
-    }
-
-    // Process DFB runtime parameters
-    // (Not yet supported)
-}
-
-ProgramRunParamsView& GetProgramRunParamsView(Program& program) {
-    (void)program;
-    TT_FATAL(false, "GetProgramRunParamsView is not yet implemented.");
-
-    // This is the fast path, power user API.
-    // Return type was changed to a reference to avoid copying the view.
-    // With this API, we will need to either:
-    //   - Create the view object on the first call and stash it in the Program object.
-    //   - Or, create the view object upon Program construction.
-}
-
-// ============================================================================
-// IMPLEMENTATION: Validation
+// Validation Helper
 // ============================================================================
 
 // Type alias for readability
@@ -95,6 +28,7 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
     // Track which kernels we've seen parameters for
     std::unordered_set<KernelSpecName> kernels_with_params;
 
+    // Validate kernel runtime parameters
     for (const auto& kernel_params : params.kernel_run_params) {
         const KernelSpecName& kernel_name = kernel_params.kernel_spec_name;
         auto [it, inserted] = kernels_with_params.insert(kernel_name);
@@ -183,6 +117,70 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
             !dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value(),
             "DFB size overrides are not yet implemented.");
     }
+
+    // Unlike kernels, DFBs don't require DFBRunParams.
+    // It is only required for DFBs built on borrowed memory. (Which is not yet supported.)
+}
+
+// ============================================================================
+// PUBLIC ENTRY POINTS: SetProgramRunParameters + GetProgramRunParamsView
+// ============================================================================
+
+void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
+    log_debug(tt::LogMetal, "Setting ProgramRunParams");
+
+    // Validate parameters against the schema
+    ValidateProgramRunParams(program, params);
+
+    detail::ProgramImpl& program_impl = program.impl();
+
+    // Process kernel runtime arguments
+    for (const auto& kernel_params : params.kernel_run_params) {
+        std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_params.kernel_spec_name);
+
+        // Set per-node runtime args
+        // set_runtime_args handles both first-time allocation and subsequent updates
+        for (const auto& [node_coord, args] : kernel_params.runtime_args) {
+            kernel->set_runtime_args(node_coord, args);
+        }
+
+        // Set common runtime args
+        // TODO: Why on earth does SetCommonRuntimeArgs() only work the first time??
+        if (!kernel_params.common_runtime_args.empty()) {
+            if (kernel->common_runtime_args().empty()) {
+                // First time: use the normal setter which allocates storage
+                kernel->set_common_runtime_args(kernel_params.common_runtime_args);
+            } else {
+                // Subsequent calls: update in-place
+                // (set_common_runtime_args fatals if called twice, so use direct access)
+                RuntimeArgsData& crta = kernel->common_runtime_args_data();
+                TT_FATAL(
+                    crta.size() == kernel_params.common_runtime_args.size(),
+                    "Kernel '{}' common runtime args count cannot change from {} to {}",
+                    kernel_params.kernel_spec_name,
+                    crta.size(),
+                    kernel_params.common_runtime_args.size());
+                std::memcpy(
+                    crta.data(),
+                    kernel_params.common_runtime_args.data(),
+                    kernel_params.common_runtime_args.size() * sizeof(uint32_t));
+            }
+        }
+    }
+
+    // Process DFB runtime parameters
+    // (Not yet supported)
+}
+
+ProgramRunParamsView& GetProgramRunParamsView(Program& program) {
+    (void)program;
+    TT_FATAL(false, "GetProgramRunParamsView is not yet implemented.");
+
+    // This is the fast path, power user API.
+    // Return type was changed to a reference to avoid copying the view.
+    // With this API, we will need to either:
+    //   - Create the view object on the first call and stash it in the Program object.
+    //   - Or, create the view object upon Program construction.
 }
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api

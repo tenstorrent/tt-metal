@@ -302,6 +302,10 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             kernel.compiler_options.include_paths.empty(),
             "KernelSpec '{}' specifies include_paths -- this feature is not yet implemented. (Coming soon!)",
             kernel.unique_id);
+        TT_FATAL(
+            kernel.compiler_options.macros.empty(),
+            "KernelSpec '{}' specifies macros -- this feature is not yet implemented.",
+            kernel.unique_id);
     }
 
     // Validate no per-node thread maps are used (not yet implemented)
