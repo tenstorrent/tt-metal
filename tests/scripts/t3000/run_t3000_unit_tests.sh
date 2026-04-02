@@ -572,53 +572,61 @@ run_t3000_ccl_tests() {
 
   echo "LOG_METAL: Running run_t3000_ccl_tests"
 
-  # all gather: 1 ring, 1 line, 1 2d, 1 sharded should be covered
-  # width sharded to interleaved case using linear - using i2s_shape0 which is perf with fabric_linear
-  pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_sharded_to_interleaved[wormhole_b0-fabric_linear-i2s_shape0-perf-1-Layout.TILE-DataType.BFLOAT16-mesh_device0]
-  # 10 iteration trace test with fabric ring (dit_shape now in test_ttnn_all_gather, no barrier parameters)
-  pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_ttnn_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-dit_shape-perf-1link-mesh_device0]
+  # --------------------------------------------------------------------------
+  # Batch 1: CCL tests with exact test IDs (no -k filter).
+  #
+  # A session-scoped mesh device manager in tests/nightly/t3000/ccl/conftest.py
+  # keeps the 8-device mesh open across tests that share the same
+  # (mesh_shape, device_params) configuration.  Ordering tests so that
+  # same-config tests run consecutively maximizes device reuse.
+  #
+  # Tests are ordered by (mesh_shape, fabric_config, trace_region_size):
+  #   (1,8) FABRIC_1D  trace=90112   — all_gather x2
+  #   (1,8) FABRIC_1D  trace=10000   — all_broadcast
+  #   (1,8) FABRIC_1D  trace=1171456 — reduce_scatter_training_shapes
+  #   (1,8) FABRIC_1D_RING trace=1540000 — reduce_scatter_async
+  #   (1,8) FABRIC_1D_RING trace=500000  — all_to_all_combine
+  #   (2,4) FABRIC_1D  (no trace)    — reduce_scatter_sharded
+  #   (2,4) FABRIC_1D  trace=500000  — all_to_all_dispatch_trace (1d_linear)
+  #   (2,4) FABRIC_2D  (no trace)    — all_to_all_dispatch_no_trace (2d)
+  # --------------------------------------------------------------------------
+  pytest \
+    "tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_sharded_to_interleaved[wormhole_b0-fabric_linear-i2s_shape0-perf-1-Layout.TILE-DataType.BFLOAT16-mesh_device0]" \
+    "tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_ttnn_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-dit_shape-perf-1link-mesh_device0]" \
+    "tests/nightly/t3000/ccl/test_new_all_broadcast.py::test_all_broadcast_trace" \
+    "tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async_training_shapes[wormhole_b0-fabric_linear-random-mem_config_input0-mem_config_rs0-tt_training_test_one-check-mesh_device0-1link]" \
+    "tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-fabric_ring-random-mem_config_input0-mem_config_rs0-padded_dim_2_test_two-perf-no_barrier_with_persistent-1link-mesh_device0]" \
+    "tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-DataType.BFLOAT16-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_1d_ring_axis_1]" \
+    "tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_minimal_async_linear_sharded" \
+    "tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_trace[wormhole_b0-DataType.BFLOAT16-MAX_LINKS-dram-dram-s128-7168-8-8-8-cluster_axis_0-2x4_grid-True-fabric_1d_linear]" \
+    "tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_no_trace[wormhole_b0-DataType.BFLOAT16-MAX_LINKS-b1s3-l1-7168-8-8-cluster_col-2x4_grid-False-fabric_2d]"
+
+  # --------------------------------------------------------------------------
+  # Batch 2: Tests requiring -k filter (cannot merge with exact-ID batch).
+  # --------------------------------------------------------------------------
+
+  # all reduce: 4-chip bfloat8_b test
+  pytest tests/nightly/t3000/ccl/test_all_reduce.py::test_ring_all_reduce_post_commit -k "2x4x2048x32-bfloat8_b-DRAM-4-1"
+
+  # p2p: trace test with device delay (tile layout only)
+  pytest tests/nightly/t3000/ccl/test_point_to_point.py::test_point_to_point_with_device_delay -k tile
+
+  # neighbor pad: combine 1D + 2D correctness checks in one call
+  pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py -k "zeros_width_dim-check or small_5d_h0w1"
+
+  # --------------------------------------------------------------------------
+  # Batch 3: test_generic_op (different directory, no CCL conftest coverage).
+  # --------------------------------------------------------------------------
+  pytest tests/ttnn/unit_tests/operations/debug/test_generic_op.py::test_point_to_point
+
   # 2D fabric case – hanging on main? tracking with issue #30250
   # pytest tests/nightly/t3000/2d_ccl/test_minimal_all_gather_async.py::test_all_gather_async_training_shapes[wormhole_b0-fabric_2d_dynamic_linear-check-mem_config_input0-mem_config_ag0-tt_training_test_one-mesh_device0-1link]
   # training shapes - Re-enable this test when we have more T3K availability
   # pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_training_shapes[wormhole_b0-fabric_linear-mem_config_input0-mem_config_ag0-tt_training_test_four-check-mesh_device0-1link]
-
-  # reduce scatter: 1 ring, 1 line, 1 2d, 1 sharded should be covered
-  # sharded intermediate case with cluster axis 1
-  pytest tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_minimal_async_linear_sharded
-  # composite case
-  pytest tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async_training_shapes[wormhole_b0-fabric_linear-random-mem_config_input0-mem_config_rs0-tt_training_test_one-check-mesh_device0-1link]
   # long trace test on dim=1 with ring, currently hanging when run in the suite even though it passes when run in isolation - Re-enable this test when we have more T3K availability
   # pytest tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-fabric_ring-random-mem_config_input0-mem_config_rs0-scatter_dim_1_test_one-perf-no_barrier_with_persistent-1link-mesh_device0]
-  # long running dim = 3 trace test without barrier and with persistent buffers
-  pytest tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-fabric_ring-random-mem_config_input0-mem_config_rs0-padded_dim_2_test_two-perf-no_barrier_with_persistent-1link-mesh_device0]
-
-  # all reduce: 1 test should be enough
-  # 4 chip test with bfloat8_b
-  pytest tests/nightly/t3000/ccl/test_all_reduce.py::test_ring_all_reduce_post_commit -k "2x4x2048x32-bfloat8_b-DRAM-4-1"
-
-  # p2p: 1 test should be enough
-  # trace test with device delay
-  pytest tests/nightly/t3000/ccl/test_point_to_point.py::test_point_to_point_with_device_delay -k tile
-  pytest tests/ttnn/unit_tests/operations/debug/test_generic_op.py::test_point_to_point
-
-  # all broadcast: row major + tile test
-  # both rm and tile test are called here
-  pytest tests/nightly/t3000/ccl/test_new_all_broadcast.py::test_all_broadcast_trace
-
-  # all to all dispatch: 1 test for 2d and 1 for 1d linear should be enough
-  # fabric 1d linear test on cluster axis 0 as other CCL tests aren't testing on this axis
-  pytest tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_trace[wormhole_b0-DataType.BFLOAT16-MAX_LINKS-dram-dram-s128-7168-8-8-8-cluster_axis_0-2x4_grid-True-fabric_1d_linear]
-  # fabric 2d test on cluster axis 1
-  pytest tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_no_trace[wormhole_b0-DataType.BFLOAT16-MAX_LINKS-b1s3-l1-7168-8-8-cluster_col-2x4_grid-False-fabric_2d]
-
-  # all to all combine: 1 test for 1d ring and 1 for 2d should be enough
-  pytest tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-DataType.BFLOAT16-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_1d_ring_axis_1]
   # fabric 2d test on cluster axis 0 - Re-enable this test when we have more T3K availability
   # pytest tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-DataType.BFLOAT16-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_2d_axis_0]
-
-  # neighbor pad: 1D correctness check + 2D correctness check
-  pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_1d -k "zeros_width_dim-check"
-  pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_2d -k "small_5d_h0w1"
 
   # Record the end time
   end_time=$(date +%s)
