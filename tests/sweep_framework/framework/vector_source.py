@@ -213,8 +213,8 @@ class VectorExportSource(VectorSource):
 
     @staticmethod
     def _is_manifest_entry_eligible(entry: ExportManifestEntry, profile) -> bool:
-        # Manifest grouping is authoritative: grouped-by-hw files are checked by hardware,
-        # grouped-by-mesh files are checked by mesh.
+        # grouping_kind is authoritative for runtime selection. Non-grouping
+        # metadata is retained in the manifest for observability/debugging.
         if entry.grouping_kind == "hw":
             if entry.hardware_group and entry.hardware_group not in profile.allowed_hardware_groups:
                 return False

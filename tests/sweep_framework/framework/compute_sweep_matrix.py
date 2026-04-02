@@ -127,7 +127,7 @@ CAPABILITY_PROFILE_BY_TEST_GROUP = {
     "wormhole-n150-sweeps": "wormhole_n150_host",
     "lead-models-single-chip": "wormhole_n150_host",
     "wormhole-n300-sweeps": "wormhole_n300_1c_host",
-    "n300-llmbox-ccl": "wormhole_n300_1c_host",
+    "n300-llmbox-ccl": "wormhole_t3k_host",
     "blackhole-p150b-sweeps": "blackhole_p150b_host",
     "wormhole-t3k-sweeps": "wormhole_t3k_host",
     "wormhole-galaxy-sweeps": "wormhole_galaxy_host",
@@ -337,6 +337,8 @@ def compute_lead_models_matrix(entries: list[ManifestEntry], batch_size: int):
         mesh_labels = sorted({_mesh_shape_string(mesh_shape) for mesh_shape in entry.mesh_shapes})
         matched_configs = []
 
+        # Planner follows the same contract as runtime selection: grouping_kind
+        # is authoritative, while other manifest metadata is descriptive only.
         if entry.grouping_kind == "mesh" and mesh_labels:
             unknown_shapes = [mesh for mesh in mesh_labels if mesh not in configured_shapes]
             for mesh in unknown_shapes:

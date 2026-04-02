@@ -5,7 +5,6 @@ profiles:
     card_count: 1
     hardware_groups:
       - [wormhole, n150, 1]
-      - [wormhole, n300, 1]
     mesh_shapes:
       - [1, 1]
 
@@ -17,17 +16,8 @@ profiles:
       - [wormhole, n300, 1]
     mesh_shapes:
       - [1, 1]
-
-  wormhole_n300_2c_host:
-    board_type: wormhole
-    device_series: n300
-    card_count: 2
-    hardware_groups:
-      - [wormhole, n300, 2]
-      - [wormhole, n300, 1]
-    mesh_shapes:
       - [1, 2]
-      - [1, 1]
+      - [2, 1]
 
   wormhole_t3k_host:
     board_type: wormhole
@@ -37,6 +27,7 @@ profiles:
       - [wormhole, n300, 4]
     mesh_shapes:
       - [1, 4]
+      - [4, 1]
 
   wormhole_galaxy_host:
     board_type: wormhole

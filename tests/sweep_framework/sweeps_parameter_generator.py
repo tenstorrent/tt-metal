@@ -182,6 +182,8 @@ def _record_export_manifest_entry(
         },
     )
 
+    # grouping_kind is the authoritative routing dimension for the file.
+    # Other recorded metadata is preserved for observability/debugging.
     if grouping_kind == "hw":
         entry["hardware_group"] = _normalize_hardware_for_manifest(group_key)
     elif grouping_kind == "mesh":
