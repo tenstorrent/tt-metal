@@ -2728,7 +2728,7 @@ void build_flattened_command_sequence(
         FlattenedCommandSequence::LaunchMsgPatchInfo info;
         // kernel_config_base is an array — get address of each element
         auto kernel_config = lm.msg_ptr.kernel_config();
-        auto& base_arr = kernel_config.kernel_config_base();
+        auto base_arr = kernel_config.kernel_config_base();
         for (uint32_t i = 0; i < hal.get_programmable_core_type_count(); i++) {
             uint32_t flat_off = ptr_to_flat(pcs.launch_msg_command_sequence, launch_msg_start, &base_arr[i]);
             info.kernel_config_base_offsets.push_back(flat_off);
@@ -2777,7 +2777,7 @@ void update_flattened_command_sequence(
     CoreType dispatch_core_type,
     SubDeviceId sub_device_id,
     const ProgramDispatchMetadata& dispatch_md,
-    ProgramBinaryStatus program_binary_status,
+    ProgramBinaryStatus /* program_binary_status */,
     std::pair<bool, int> unicast_go_signal_update) {
     ZoneScopedN("update_flattened_command_sequence");
     uint8_t* buf = flat.buffer.data();
