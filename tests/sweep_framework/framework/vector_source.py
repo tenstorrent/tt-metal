@@ -7,7 +7,6 @@ import pathlib
 import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 if __package__ in (None, ""):
@@ -15,11 +14,14 @@ if __package__ in (None, ""):
         sys.path.insert(0, str(REPO_ROOT))
 
 from tests.sweep_framework.framework.execution_capabilities import (
-    normalize_mesh_shape,
     resolve_active_profile,
 )
-from tests.sweep_framework.framework.constants import normalize_hardware_group
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
+from tests.sweep_framework.framework.vector_routing import (
+    is_manifest_entry_eligible,
+    normalize_manifest_hardware_group,
+    normalize_manifest_mesh_shapes,
+)
 
 
 class VectorSource(ABC):
@@ -129,23 +131,6 @@ class VectorExportSource(VectorSource):
         self._manifest_entries_by_module: dict[str, list[VectorExportSource.ExportManifestEntry]] | None = None
         self._manifest_path = self.export_dir / "export_manifest.json"
 
-    @staticmethod
-    def _normalize_manifest_hardware_group(value: Any) -> tuple[str, str, int] | None:
-        if not isinstance(value, dict):
-            return None
-        return normalize_hardware_group(value.get("board_type"), value.get("device_series"), value.get("card_count"))
-
-    @staticmethod
-    def _normalize_manifest_mesh_shapes(value: Any) -> tuple[tuple[int, int], ...]:
-        if not isinstance(value, list):
-            return ()
-        mesh_shapes = set()
-        for mesh_shape in value:
-            normalized = normalize_mesh_shape(mesh_shape)
-            if normalized is not None:
-                mesh_shapes.add(normalized)
-        return tuple(sorted(mesh_shapes))
-
     def _load_manifest_index(self) -> None:
         if self._manifest_entries_by_base is not None and self._manifest_entries_by_module is not None:
             return
@@ -187,8 +172,8 @@ class VectorExportSource(VectorSource):
                 base_module_name=base_module_name,
                 file_path=file_path,
                 grouping_kind=str(raw_entry.get("grouping_kind") or "ungrouped"),
-                hardware_group=self._normalize_manifest_hardware_group(raw_entry.get("hardware_group")),
-                mesh_shapes=self._normalize_manifest_mesh_shapes(raw_entry.get("mesh_shapes")),
+                hardware_group=normalize_manifest_hardware_group(raw_entry.get("hardware_group")),
+                mesh_shapes=normalize_manifest_mesh_shapes(raw_entry.get("mesh_shapes")),
                 suite_names=tuple(sorted(set(raw_entry.get("suite_names", [])))),
             )
             self._manifest_entries_by_base.setdefault(entry.base_module_name, []).append(entry)
@@ -210,26 +195,6 @@ class VectorExportSource(VectorSource):
         for entry in entries:
             by_path[entry.file_path] = entry
         return sorted(by_path.values(), key=lambda item: item.file_path.name)
-
-    @staticmethod
-    def _is_manifest_entry_eligible(entry: ExportManifestEntry, profile) -> bool:
-        # grouping_kind is authoritative for runtime selection. Non-grouping
-        # metadata is retained in the manifest for observability/debugging.
-        if entry.grouping_kind == "hw":
-            if entry.hardware_group and entry.hardware_group not in profile.allowed_hardware_groups:
-                return False
-            return True
-        if entry.grouping_kind == "mesh":
-            if entry.mesh_shapes and not set(entry.mesh_shapes).intersection(profile.allowed_mesh_shapes):
-                return False
-            return True
-
-        # Fallback for legacy/ungrouped entries that may carry both hints.
-        if entry.hardware_group and entry.hardware_group not in profile.allowed_hardware_groups:
-            return False
-        if entry.mesh_shapes and not set(entry.mesh_shapes).intersection(profile.allowed_mesh_shapes):
-            return False
-        return True
 
     def _get_active_profile(self):
         """Resolve the active execution capability profile for the current host."""
@@ -260,7 +225,14 @@ class VectorExportSource(VectorSource):
         active_profile = None if vector_id else self._get_active_profile()
         if active_profile is not None:
             eligible_entries = [
-                entry for entry in module_entries if self._is_manifest_entry_eligible(entry, active_profile)
+                entry
+                for entry in module_entries
+                if is_manifest_entry_eligible(
+                    grouping_kind=entry.grouping_kind,
+                    hardware_group=entry.hardware_group,
+                    mesh_shapes=entry.mesh_shapes,
+                    profile=active_profile,
+                )
             ]
             skipped_entries = len(module_entries) - len(eligible_entries)
             if skipped_entries > 0:
