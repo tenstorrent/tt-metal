@@ -26,8 +26,34 @@ import functools
 import torch
 
 
+def _patch_talkers_code_predictor_class_device_dtype() -> None:
+    """Ensure ``talker.code_predictor`` exposes ``.device`` / ``.dtype`` for HF ``GenerationMixin``.
+
+    ``code_predictor.generate()`` calls ``self.device`` (e.g. when building default ``input_ids``). The nested
+    ``Qwen3OmniMoeTalkerCodePredictorModelForConditionalGeneration`` is not the same module as ``talker``; tests
+    that only patched ``thinker``/``talker``/``code2wav`` left ``code_predictor`` without the symbiote placeholders,
+    which can surface as ``AttributeError: ... has no attribute 'device'``.
+    """
+    from transformers.models.qwen3_omni_moe import modeling_qwen3_omni_moe as omni_mod
+
+    cls = omni_mod.Qwen3OmniMoeTalkerCodePredictorModelForConditionalGeneration
+    if getattr(cls, "_tt_symbiote_device_patched", False):
+        return
+    _cpu = torch.device("cpu")
+    _dtype = torch.bfloat16
+    dev_attr = getattr(cls, "device", None)
+    if dev_attr is None or isinstance(dev_attr, property):
+        cls.device = property(lambda self, d=_cpu: d)
+    dtype_attr = getattr(cls, "dtype", None)
+    if dtype_attr is None or isinstance(dtype_attr, property):
+        cls.dtype = property(lambda self, d=_dtype: d)
+    cls._tt_symbiote_device_patched = True
+
+
 def apply_qwen3_omni_talker_prepare_inputs_fix() -> None:
     from transformers.models.qwen3_omni_moe import modeling_qwen3_omni_moe as omni_mod
+
+    _patch_talkers_code_predictor_class_device_dtype()
 
     talker_cls = omni_mod.Qwen3OmniMoeTalkerForConditionalGeneration
     if not getattr(talker_cls, "_tt_symbiote_prepare_inputs_patched", False):

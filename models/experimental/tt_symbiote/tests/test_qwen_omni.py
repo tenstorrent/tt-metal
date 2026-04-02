@@ -22,6 +22,10 @@ from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeThinkerTextSparseMoeBlock,
     Qwen3OmniMoeVisionMLP,
     Qwen3OmniMoeVisionAttention,
+    Qwen3OmniMoeThinkerTextMLP,
+    Qwen3OmniMoeMLP,
+    Qwen3OmniMoeCode2WavMlp,
+    Qwen3OmniMoeTalkerCodePredictorAttention,
 )
 from qwen_omni_utils import process_mm_info
 
@@ -35,6 +39,8 @@ from models.experimental.tt_symbiote.modules.attention import TTNNQwen3OmniMoeCo
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3Attention
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3OmniAttention
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3VLMoeVisionAttention
+from models.experimental.tt_symbiote.modules.moe import TTNNGlm4MoeMLP
+
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNQwen3OmniTalkerResizeMLP,
     TTNNQwen3OmniVisionMLP,
@@ -49,6 +55,8 @@ _ALLOWED_SYMBIOTE_RUN_MODES = frozenset({"CPU", "NORMAL", "NORMAL_WITH_FALLBACK"
 NN_TO_TTNN_THINKER = {
     Qwen3OmniMoeThinkerTextSparseMoeBlock: TTNNQwen3OmniThinkerNaiveMoE,
     Qwen3OmniMoeThinkerTextAttention: TTNNQwen3OmniAttention,
+    Qwen3OmniMoeThinkerTextMLP: TTNNGlm4MoeMLP,
+    Qwen3OmniMoeMLP: TTNNGlm4MoeMLP,
     # Width-sharded hidden on mesh: gamma must match pre/post all_gather path (not full-width TTNNRMSNorm).
     Qwen3OmniMoeThinkerTextRMSNorm: TTNNDistributedRMSNorm,
     Qwen3OmniMoeTextRMSNorm: TTNNDistributedRMSNorm,
@@ -59,10 +67,12 @@ NN_TO_TTNN_THINKER = {
 NN_TO_TTNN_CODE2WAV = {
     Qwen3OmniMoeCode2WavAttention: TTNNQwen3OmniMoeCode2WavAttention,
     Qwen3OmniMoeCode2WavRMSNorm: TTNNDistributedRMSNorm,
+    Qwen3OmniMoeCode2WavMlp: TTNNGlm4MoeMLP,
 }
 NN_TO_TTNN_TALKER = {
     Qwen3OmniMoeTalkerTextSparseMoeBlock: TTNNQwen3TalkerMoE,
     Qwen3OmniMoeThinkerTextAttention: TTNNQwen3Attention,
+    Qwen3OmniMoeTalkerCodePredictorAttention: TTNNQwen3Attention,
     Qwen3OmniMoeTalkerResizeMLP: TTNNQwen3OmniTalkerResizeMLP,
     Qwen3OmniMoeRMSNorm: TTNNDistributedRMSNorm,
 }
@@ -133,11 +143,16 @@ def _patch_thinker_talker_device_dtype(model):
     """HF generate() reads thinker/talker/code2wav .device/.dtype; TTNN submodules don't support .to()."""
     _cpu = torch.device("cpu")
     _dtype = torch.bfloat16
-    for sub in (
+    talker = getattr(model, "talker", None)
+    subs = [
         getattr(model, "thinker", None),
-        getattr(model, "talker", None),
+        talker,
         getattr(model, "code2wav", None),
-    ):
+    ]
+    # talker.code_predictor is a separate PreTrainedModel; GenerationMixin still uses self.device inside .generate().
+    if talker is not None:
+        subs.append(getattr(talker, "code_predictor", None))
+    for sub in subs:
         if sub is None:
             continue
         cls = type(sub)
