@@ -153,7 +153,7 @@ struct DeviceStorage {
     // Deallocate will deallocate the device memory of among all shared instances.
     void deallocate();
 
-    // Returns true if no other DeviceStorage or third party has a shared reference to the device memory (MeshBuffer).
+    // Returns true if no other DeviceStorage shares this storage's MeshTensor handle(s) (surface and optional root).
     bool is_sole_owner_of_device_memory() const;
 
     // Returns true if the underlying device memory is allocated.
