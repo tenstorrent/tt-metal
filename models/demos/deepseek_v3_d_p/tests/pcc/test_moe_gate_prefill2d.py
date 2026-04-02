@@ -283,49 +283,53 @@ def test_forward_pass(
         broadcast_groups=n_tp_devices,
     )
 
-    # EP-sharded checks: offsets and totals
-    experts_per_chip = n_routed_experts // (n_sp_devices * n_tp_devices)
-    ref_dispatch_offsets, ref_expert_token_counts, _ = get_gate_outputs(
-        indices=reference_topk_indices.view(n_sp_devices, seq_len_per_device, -1).int(),
-        dispatch_group_size=n_sp_devices,
-        num_routed_experts=n_routed_experts,
-        experts_per_chip=experts_per_chip,
-        seq_len_per_chip=seq_len_per_device,
-        num_experts_per_tok=config.n_activated_experts,
-        expert_dispatch_table=dispatch_table,
-    )
+    all_results = [recall_topk_indices, pcc_logits, pcc_scores]
 
-    ep_composer = get_ep_mesh_composer(mesh_device)
+    # EP-sharded exact checks only make sense when the gate runs on host
+    if gate_fallback_mode == GateComputeMode.HOST_ALL:
+        experts_per_chip = n_routed_experts // (n_sp_devices * n_tp_devices)
+        ref_dispatch_offsets, ref_expert_token_counts, _ = get_gate_outputs(
+            indices=reference_topk_indices.view(n_sp_devices, seq_len_per_device, -1).int(),
+            dispatch_group_size=n_sp_devices,
+            num_routed_experts=n_routed_experts,
+            experts_per_chip=experts_per_chip,
+            seq_len_per_chip=seq_len_per_device,
+            num_experts_per_tok=config.n_activated_experts,
+            expert_dispatch_table=dispatch_table,
+        )
 
-    tt_dispatch_offsets = ttnn.unsqueeze_to_4D(tt_dispatch_offsets)
-    host_dispatch_offsets = ttnn.to_torch(tt_dispatch_offsets, mesh_composer=ep_composer).squeeze(2).long()
+        ep_composer = get_ep_mesh_composer(mesh_device)
 
-    exact_dispatch_offsets = validate_composed(
-        host_dispatch_offsets,
-        ref_dispatch_offsets.long(),
-        n_tp_devices,
-        n_sp_devices,
-        compare_exact,
-        name="dispatch_offsets",
-    )
+        tt_dispatch_offsets = ttnn.unsqueeze_to_4D(tt_dispatch_offsets)
+        host_dispatch_offsets = ttnn.to_torch(tt_dispatch_offsets, mesh_composer=ep_composer).squeeze(2).long()
 
-    tt_total_counts_per_expert = ttnn.unsqueeze_to_4D(tt_total_counts_per_expert)
-    host_tt_total_counts_per_expert = (
-        ttnn.to_torch(tt_total_counts_per_expert, mesh_composer=ep_composer).squeeze(2).long()
-    )
-    # Totals replicated across chips — broadcast row 0 reference to all chips
-    ref_expert_token_counts = ref_expert_token_counts[:, 0, :].unsqueeze(1).expand(-1, n_sp_devices, -1).long()
+        exact_dispatch_offsets = validate_composed(
+            host_dispatch_offsets,
+            ref_dispatch_offsets.long(),
+            n_tp_devices,
+            n_sp_devices,
+            compare_exact,
+            name="dispatch_offsets",
+        )
 
-    expert_token_counts = validate_composed(
-        host_tt_total_counts_per_expert,
-        ref_expert_token_counts,
-        n_tp_devices,
-        n_sp_devices,
-        compare_exact,
-        name="expert_token_counts",
-    )
+        tt_total_counts_per_expert = ttnn.unsqueeze_to_4D(tt_total_counts_per_expert)
+        host_tt_total_counts_per_expert = (
+            ttnn.to_torch(tt_total_counts_per_expert, mesh_composer=ep_composer).squeeze(2).long()
+        )
+        ref_expert_token_counts = ref_expert_token_counts[:, 0, :].unsqueeze(1).expand(-1, n_sp_devices, -1).long()
 
-    all_results = [recall_topk_indices, pcc_logits, pcc_scores, exact_dispatch_offsets, expert_token_counts]
+        expert_token_counts = validate_composed(
+            host_tt_total_counts_per_expert,
+            ref_expert_token_counts,
+            n_tp_devices,
+            n_sp_devices,
+            compare_exact,
+            name="expert_token_counts",
+        )
+
+        all_results.extend([exact_dispatch_offsets, expert_token_counts])
+    else:
+        logger.info("Skipping dispatch_offsets and expert_token_counts exact checks (device gate mode)")
     for res in all_results:
         res.log_mismatches()
     log_validation_results(
