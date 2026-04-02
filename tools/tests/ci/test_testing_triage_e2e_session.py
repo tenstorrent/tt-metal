@@ -26,6 +26,7 @@ def test_build_bot_response_fix_request_contains_mock_pr() -> None:
         issue_number=77,
         progress={"defer_disable": False},
         fix_request={"requested": True},
+        mock_github_owner="test-owner",
     )
     assert "Mock draft PR" in text
     assert "mock-77" in text

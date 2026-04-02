@@ -18,6 +18,12 @@ PRIMARY_REPO = "tenstorrent/tt-metal"
 LAYER_ORDER = {"llk": 1, "metalium": 2, "ttnn": 3, "models": 4, "infra": 5, "unknown": 99}
 
 
+def now_utc() -> str:
+    import datetime as dt
+
+    return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
 def run(cmd: list[str], *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     merged_env = None
     if env:
