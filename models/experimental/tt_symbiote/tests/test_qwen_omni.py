@@ -115,7 +115,6 @@ _QWEN_OMNI_CONV_NN_TO_TTNN = {
     # torch.nn.ConvTranspose1d: TTNNConvTranspose1d,
 }
 
-
 def _qwen_omni_ttft_probe_s(model, inputs: dict, *, use_audio_in_video: bool, mesh_device) -> float:
     """Wall time for thinker-only generation with a single new token (no talker / code2wav).
 
