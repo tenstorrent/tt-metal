@@ -230,15 +230,89 @@ def test_unary_composite_multigammaln_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_composite_polygamma_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, 1, 10, device)
-    k = 5
-    output_tensor = ttnn.polygamma(input_tensor1, k)
-    golden_function = ttnn.get_golden_function(ttnn.polygamma)
-    golden_tensor = golden_function(in_data1, k)
+@pytest.mark.parametrize("k", [1, 5])
+def test_unary_composite_polygamma_ttnn(input_shapes, k, device):
+    import struct
+    import numpy as np
+    from loguru import logger
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    def _float_to_bf16_bits(f):
+        f32_bits = struct.unpack(">I", struct.pack(">f", f))[0]
+        return f32_bits >> 16
+
+    def _bf16_daz_normalize(bits):
+        exp = (bits >> 7) & 0xFF
+        mantissa = bits & 0x7F
+        if (exp == 0) and (mantissa != 0):
+            return 0x0000
+        if bits == 0x8000:
+            return 0x0000
+        return bits
+
+    def _bf16_value_order_index_daz(bits):
+        bits = _bf16_daz_normalize(bits)
+        exp = (bits >> 7) & 0xFF
+        mantissa = bits & 0x7F
+        if exp == 0xFF and mantissa != 0:
+            return -1
+        if bits == 0x7F80:
+            return 65281
+        if bits == 0xFF80:
+            return -1
+        if bits == 0x0000:
+            return 32640
+        if bits & 0x8000:
+            return 0x7F7F - (bits & 0x7FFF)
+        return 32640 + bits - 0x007F
+
+    def _ulp_distance_bf16_daz(a, b):
+        a_bits = _bf16_daz_normalize(_float_to_bf16_bits(a))
+        b_bits = _bf16_daz_normalize(_float_to_bf16_bits(b))
+        a_exp = (a_bits >> 7) & 0xFF
+        b_exp = (b_bits >> 7) & 0xFF
+        if (a_exp == 0xFF and (a_bits & 0x7F) != 0) or (b_exp == 0xFF and (b_bits & 0x7F) != 0):
+            return -1
+        idx_a = _bf16_value_order_index_daz(a_bits)
+        idx_b = _bf16_value_order_index_daz(b_bits)
+        if idx_a < 0 or idx_b < 0:
+            return -1
+        return abs(idx_a - idx_b)
+
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, 1, 10, device)
+    output_tensor = ttnn.polygamma(input_tensor1, k)
+    output_torch = ttnn.to_torch(output_tensor)
+
+    # High-precision reference
+    ref_f64 = torch.special.polygamma(k, in_data1.to(torch.float64))
+
+    result_flat = output_torch.flatten()
+    ref_flat = ref_f64.flatten()
+
+    worst_ulp = 0
+    ulp_errors = []
+    for i in range(len(result_flat)):
+        res_val = result_flat[i].item()
+        ref_val = ref_flat[i].item()
+        if not np.isfinite(res_val) or not np.isfinite(ref_val):
+            continue
+        ref_bf16 = torch.tensor(ref_val, dtype=torch.bfloat16).item()
+        ulp = _ulp_distance_bf16_daz(res_val, ref_bf16)
+        if ulp < 0:
+            continue
+        ulp_errors.append(ulp)
+        if ulp > worst_ulp:
+            worst_ulp = ulp
+
+    ulp_arr = np.array(ulp_errors)
+    logger.info(
+        f"polygamma(n={k}, shape={input_shapes}) ULP — max: {worst_ulp}, "
+        f"mean: {np.mean(ulp_arr):.2f}, p99: {np.percentile(ulp_arr, 99):.1f}"
+    )
+
+    max_ulp = 1
+    assert (
+        worst_ulp <= max_ulp
+    ), f"polygamma(n={k}, shape={input_shapes}) max ULP {worst_ulp} exceeds threshold {max_ulp}"
 
 
 @pytest.mark.parametrize(
