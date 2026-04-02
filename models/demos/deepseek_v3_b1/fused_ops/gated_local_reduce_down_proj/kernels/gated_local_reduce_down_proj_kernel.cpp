@@ -59,37 +59,45 @@ void kernel_main() {
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
     // Input gather g1 sender args
-    deepseek_b1_ops::Gather::SenderArgs ig_g1_args{
-        get_named_compile_time_arg_val("ig_g1_dest_noc_x"),
-        get_named_compile_time_arg_val("ig_g1_dest_noc_y"),
-        get_named_compile_time_arg_val("ig_g1_data_size_bytes"),
-        get_semaphore(get_named_compile_time_arg_val("ig_g1_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("ig_g1_src_cb"),
-        get_named_compile_time_arg_val("ig_g1_src_num_pages"),
-        0,
-        0,
-        0,
-        0,
-        1,
-        get_named_compile_time_arg_val("ig_g1_receiver_data_addr"),
-        get_named_compile_time_arg_val("ig_g1_sender_idx"),
+    deepseek_b1_ops::Gather::DMArgs ig_g1_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("ig_g1_dest_noc_x"),
+                get_named_compile_time_arg_val("ig_g1_dest_noc_y"),
+                get_named_compile_time_arg_val("ig_g1_data_size_bytes"),
+                get_semaphore(get_named_compile_time_arg_val("ig_g1_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("ig_g1_src_cb"),
+                get_named_compile_time_arg_val("ig_g1_src_num_pages"),
+                0,
+                0,
+                0,
+                0,
+                1,
+                get_named_compile_time_arg_val("ig_g1_receiver_data_addr"),
+                get_named_compile_time_arg_val("ig_g1_sender_idx"),
+            },
+        .receiver = {},
     };
 
     // Input gather g2 sender args
-    deepseek_b1_ops::Gather::SenderArgs ig_g2_args{
-        get_named_compile_time_arg_val("ig_g2_dest_noc_x"),
-        get_named_compile_time_arg_val("ig_g2_dest_noc_y"),
-        get_named_compile_time_arg_val("ig_g2_data_size_bytes"),
-        get_semaphore(get_named_compile_time_arg_val("ig_g2_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("ig_g2_src_cb"),
-        get_named_compile_time_arg_val("ig_g2_src_num_pages"),
-        0,
-        0,
-        0,
-        0,
-        1,
-        get_named_compile_time_arg_val("ig_g2_receiver_data_addr"),
-        get_named_compile_time_arg_val("ig_g2_sender_idx"),
+    deepseek_b1_ops::Gather::DMArgs ig_g2_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("ig_g2_dest_noc_x"),
+                get_named_compile_time_arg_val("ig_g2_dest_noc_y"),
+                get_named_compile_time_arg_val("ig_g2_data_size_bytes"),
+                get_semaphore(get_named_compile_time_arg_val("ig_g2_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("ig_g2_src_cb"),
+                get_named_compile_time_arg_val("ig_g2_src_num_pages"),
+                0,
+                0,
+                0,
+                0,
+                1,
+                get_named_compile_time_arg_val("ig_g2_receiver_data_addr"),
+                get_named_compile_time_arg_val("ig_g2_sender_idx"),
+            },
+        .receiver = {},
     };
 
     // Gated reduce reader args (NCRISC no-op)
@@ -117,20 +125,24 @@ void kernel_main() {
     deepseek_b1_ops::Matmul::ReaderArgs matmul_args{};
 
     // Output gather sender args
-    deepseek_b1_ops::Gather::SenderArgs og_args{
-        get_named_compile_time_arg_val("gather_dest_noc_x"),
-        get_named_compile_time_arg_val("gather_dest_noc_y"),
-        get_named_compile_time_arg_val("gather_data_size_bytes"),
-        get_semaphore(get_named_compile_time_arg_val("gather_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("gather_src_cb"),
-        get_named_compile_time_arg_val("gather_src_num_pages"),
-        get_named_compile_time_arg_val("gather_sender_grid_start_x"),
-        get_named_compile_time_arg_val("gather_sender_grid_start_y"),
-        get_named_compile_time_arg_val("gather_sender_grid_end_x"),
-        get_named_compile_time_arg_val("gather_sender_grid_end_y"),
-        get_named_compile_time_arg_val("gather_row_major"),
-        get_named_compile_time_arg_val("gather_receiver_data_addr"),
-        get_named_compile_time_arg_val("gather_sender_idx"),
+    deepseek_b1_ops::Gather::DMArgs og_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("gather_dest_noc_x"),
+                get_named_compile_time_arg_val("gather_dest_noc_y"),
+                get_named_compile_time_arg_val("gather_data_size_bytes"),
+                get_semaphore(get_named_compile_time_arg_val("gather_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("gather_src_cb"),
+                get_named_compile_time_arg_val("gather_src_num_pages"),
+                get_named_compile_time_arg_val("gather_sender_grid_start_x"),
+                get_named_compile_time_arg_val("gather_sender_grid_start_y"),
+                get_named_compile_time_arg_val("gather_sender_grid_end_x"),
+                get_named_compile_time_arg_val("gather_sender_grid_end_y"),
+                get_named_compile_time_arg_val("gather_row_major"),
+                get_named_compile_time_arg_val("gather_receiver_data_addr"),
+                get_named_compile_time_arg_val("gather_sender_idx"),
+            },
+        .receiver = {},
     };
 
 // ============================================================================
@@ -138,23 +150,31 @@ void kernel_main() {
 // ============================================================================
 #elif defined(COMPILE_FOR_BRISC)
     // Input gather g1 receiver args
-    deepseek_b1_ops::Gather::ReceiverArgs ig_g1_args{
-        get_named_compile_time_arg_val("ig_g1_noc0_num_senders"),
-        0,
-        get_semaphore(get_named_compile_time_arg_val("ig_g1_noc0_receiver_semaphore_id")),
-        get_semaphore(get_named_compile_time_arg_val("ig_g1_noc1_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("ig_g1_dst_cb"),
-        get_named_compile_time_arg_val("ig_g1_dst_num_pages"),
+    deepseek_b1_ops::Gather::DMArgs ig_g1_args{
+        .sender = {},
+        .receiver =
+            {
+                get_named_compile_time_arg_val("ig_g1_noc0_num_senders"),
+                0,
+                get_semaphore(get_named_compile_time_arg_val("ig_g1_noc0_receiver_semaphore_id")),
+                get_semaphore(get_named_compile_time_arg_val("ig_g1_noc1_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("ig_g1_dst_cb"),
+                get_named_compile_time_arg_val("ig_g1_dst_num_pages"),
+            },
     };
 
     // Input gather g2 receiver args
-    deepseek_b1_ops::Gather::ReceiverArgs ig_g2_args{
-        get_named_compile_time_arg_val("ig_g2_noc0_num_senders"),
-        0,
-        get_semaphore(get_named_compile_time_arg_val("ig_g2_noc0_receiver_semaphore_id")),
-        get_semaphore(get_named_compile_time_arg_val("ig_g2_noc1_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("ig_g2_dst_cb"),
-        get_named_compile_time_arg_val("ig_g2_dst_num_pages"),
+    deepseek_b1_ops::Gather::DMArgs ig_g2_args{
+        .sender = {},
+        .receiver =
+            {
+                get_named_compile_time_arg_val("ig_g2_noc0_num_senders"),
+                0,
+                get_semaphore(get_named_compile_time_arg_val("ig_g2_noc0_receiver_semaphore_id")),
+                get_semaphore(get_named_compile_time_arg_val("ig_g2_noc1_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("ig_g2_dst_cb"),
+                get_named_compile_time_arg_val("ig_g2_dst_num_pages"),
+            },
     };
 
     // Gated reduce writer args (BRISC no-op)
@@ -207,13 +227,17 @@ void kernel_main() {
     deepseek_b1_ops::Matmul::WriterArgs matmul_args{};
 
     // Output gather receiver args
-    deepseek_b1_ops::Gather::ReceiverArgs og_args{
-        get_named_compile_time_arg_val("gather_noc0_num_senders"),
-        get_named_compile_time_arg_val("gather_noc1_num_senders"),
-        get_semaphore(get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_id")),
-        get_semaphore(get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("gather_dst_cb"),
-        get_named_compile_time_arg_val("gather_dst_num_pages"),
+    deepseek_b1_ops::Gather::DMArgs og_args{
+        .sender = {},
+        .receiver =
+            {
+                get_named_compile_time_arg_val("gather_noc0_num_senders"),
+                get_named_compile_time_arg_val("gather_noc1_num_senders"),
+                get_semaphore(get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_id")),
+                get_semaphore(get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("gather_dst_cb"),
+                get_named_compile_time_arg_val("gather_dst_num_pages"),
+            },
     };
 
 // ============================================================================
