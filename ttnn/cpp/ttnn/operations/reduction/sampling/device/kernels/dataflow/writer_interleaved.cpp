@@ -287,18 +287,24 @@ void kernel_main() {
     uint16_t temp = temp_ptr[core_id];
     uint32_t temp_packed = (static_cast<uint32_t>(temp) << 16) + static_cast<uint32_t>(temp);
     generate_bcast_unary_scalar(cb_id_temp, temp_packed);
-    // generate the top-k mask
+    // Ht = number of tile rows (batch/32), Kt = 1 for K=32
+    constexpr uint32_t tile_height = FACE_HEIGHT * 2;  // 32
+    constexpr uint32_t Ht = num_cores / tile_height;
+    constexpr uint32_t Kt = 1;  // nearest32_K / tile_width = 32/32
+    // generate the top-k mask (Ht copies for multi-tile batches)
     constexpr uint32_t one = 1;
-    generate_mask<cb_id_mask, one>(one, ids_per_batch / 32, k - 1);
+    for (uint32_t ht = 0; ht < Ht; ++ht) {
+        generate_mask<cb_id_mask, one>(one, ids_per_batch / 32, k - 1);
+    }
     // get random number
     cb_wait_front(rand_tile_index, 1);
     uint32_t cb_rand_addr = get_write_ptr(rand_tile_index);
     volatile tt_l1_ptr uint16_t* rand_values = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_rand_addr);
     uint16_t rand = rand_values[0];
     // wait for compute kernel
-    cb_wait_front(output_final_indices_rm_cb_index, 32);
-    cb_wait_front(output_local_values_cb_index, 1);
-    cb_wait_front(output_local_indices_cb_index, 1);
+    cb_wait_front(output_final_indices_rm_cb_index, num_cores);
+    cb_wait_front(output_local_values_cb_index, Ht * Kt);
+    cb_wait_front(output_local_indices_cb_index, Ht * Kt);
     // Use cb as L1 scratch memory
     uint32_t cb_local_values_addr = get_write_ptr(output_local_values_cb_index);
     volatile tt_l1_ptr uint16_t* local_values = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_local_values_addr);
@@ -313,12 +319,18 @@ void kernel_main() {
     uint32_t out_addr = get_write_ptr(cb_id_out);
     volatile tt_l1_ptr uint32_t* index_out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
 
-    uint32_t start_id_local_phase_0 = core_id * FACE_WIDTH;
+    // Compute tile-aware face indexing for multi-tile batches (Ht > 1)
+    // Each tile has 4 faces of 16x16 = 1024 elements total
+    constexpr uint32_t tile_elements = FACE_WIDTH * FACE_HEIGHT * 4;
+    constexpr uint32_t tile_id = core_id / tile_height;
+    constexpr uint32_t local_user_id = core_id % tile_height;
+    uint32_t start_id_local_phase_0 = tile_id * tile_elements + local_user_id * FACE_WIDTH;
     // each user is on 1 core, so core_id = user_id
-    // users 0-16 have their data on first 2 faces (2 * FACE_WIDTH * FACE_HEIGHT = 2*16*16 = 512 values)
-    // skip the first 2 faces for users >= FACE_WIDTH users (16 users)
-    if (core_id >= FACE_WIDTH) {
-        start_id_local_phase_0 = 2 * FACE_WIDTH * FACE_HEIGHT + (core_id - FACE_WIDTH) * FACE_WIDTH;
+    // users 0-15 within a tile have their data on first 2 faces
+    // skip the first 2 faces for users >= FACE_WIDTH within the tile
+    if (local_user_id >= FACE_WIDTH) {
+        start_id_local_phase_0 =
+            tile_id * tile_elements + 2 * FACE_WIDTH * FACE_HEIGHT + (local_user_id - FACE_WIDTH) * FACE_WIDTH;
     }
     uint32_t end_id_local_phase_0 = start_id_local_phase_0 + FACE_WIDTH;
     uint32_t start_id_local_phase_1 = FACE_WIDTH * FACE_HEIGHT + start_id_local_phase_0;
