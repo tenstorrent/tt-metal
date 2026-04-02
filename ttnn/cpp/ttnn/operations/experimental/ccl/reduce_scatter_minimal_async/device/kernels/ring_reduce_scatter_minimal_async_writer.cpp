@@ -228,7 +228,8 @@ void kernel_main() {
         uint32_t num_iters = (ring_size / 2) + 1;
         for (uint32_t i = 0; i < num_iters; ++i) {
             // State machine for control variables
-            bool even_chunks, odd_chunks, reduce_even_chunks, reduce_odd_chunks, write_to_remote, write_to_interm;
+            bool even_chunks, odd_chunks, reduce_even_chunks, reduce_odd_chunks, write_to_remote, write_to_interm,
+                separate_even_odd_sems;
             switch (i) {
                 case 0: {
                     even_chunks = direction;     // process the even chunks (half the tensor slice)
@@ -237,6 +238,8 @@ void kernel_main() {
                     reduce_odd_chunks = false;   // grab output from compute or reader
                     write_to_remote = true;      // write to remote device or local device
                     write_to_interm = true;      // write to interm_tensor or output_tensor
+                    separate_even_odd_sems =
+                        false;  // 2nd-last iter: send sem incrs separately for even & odd chunks to diff workers
                     break;
                 }
                 case (ring_size / 2): {
@@ -246,16 +249,18 @@ void kernel_main() {
                     reduce_odd_chunks = odd_chunks;
                     write_to_remote = false;
                     write_to_interm = false;
+                    separate_even_odd_sems = false;
                     break;
                 }
                 case 1:
-                case (ring_size / 2) - 1: {
+                case (ring_size / 2) - 1: {  // these two cases can coincide (ring_size = 4)
                     even_chunks = true;
                     odd_chunks = true;
                     reduce_even_chunks = (i == 1) ? direction : even_chunks;
                     reduce_odd_chunks = (i == 1) ? !direction : odd_chunks;
                     write_to_remote = true;
                     write_to_interm = (i == (ring_size / 2) - 1) ? direction : true;
+                    separate_even_odd_sems = (i == (ring_size / 2) - 1);
                     break;
                 }
                 default: {
@@ -265,6 +270,7 @@ void kernel_main() {
                     reduce_odd_chunks = odd_chunks;
                     write_to_remote = true;
                     write_to_interm = true;
+                    separate_even_odd_sems = false;
                     break;
                 }
             }
@@ -309,9 +315,9 @@ void kernel_main() {
             uint32_t odd_chunk_count = 0;
             for (uint32_t c = 0; c < slice_C; ++c) {
                 // reset addr counters
-                output_tiles_read = start_tiles_read;
                 interm_pages_read_in_row = start_pages_read_in_row;
                 interm_row_offset = start_row_offset;
+                output_tiles_read = start_tiles_read;
                 uint32_t tiles_read = start_tiles_read;
                 uint32_t total_tiles_to_read = start_tiles_to_read;
 
@@ -382,13 +388,11 @@ void kernel_main() {
                             }
                             cb_pop_front(cb_out, tile_granularity);
 
-                            // ++chunk_count % chunks_per_sync
-                            chunk_count = (chunk_count == chunks_per_sync - 1) ? 0 : (chunk_count + 1);
+                            // Send semaphore increment to remote worker core
+                            ++chunk_count;
                             even_chunk_count += is_even_chunk;
                             odd_chunk_count += !is_even_chunk;
-                            if (i == ring_size / 2 - 1) {
-                                // HACK make this proper, with comments, fix hardcoded conditional
-                                // HACK cleanup semaphore is not handled for this case (of split even/odd sem incrs)
+                            if (separate_even_odd_sems) {
                                 if (is_even_chunk && even_chunk_count == chunks_per_sync) {
                                     even_chunk_count = 0;
                                     fabric_unicast_noc_unicast_atomic_inc_with_state<
@@ -407,8 +411,8 @@ void kernel_main() {
                                     noc_async_writes_flushed();
                                 }
                             } else {
-                                if (chunk_count == 0) {
-                                    // 2. unicast output ready semaphore
+                                if (chunk_count == chunks_per_sync) {
+                                    chunk_count = 0;
                                     uint64_t out_ready_sem_noc_addr_in_pkt =
                                         safe_get_noc_addr(this_core_x, this_core_y, out_ready_sem, 0);
                                     fabric_unicast_noc_unicast_atomic_inc_with_state<
@@ -449,22 +453,42 @@ void kernel_main() {
                 output_tile_id_start += output_channel_num_pages;
             }  // for slice_C
 
-            if (write_to_remote && chunk_count != 0) {
-                // 2. unicast output ready semaphore
-                uint64_t out_ready_sem_noc_addr_in_pkt = safe_get_noc_addr(this_core_x, this_core_y, out_ready_sem, 0);
-                fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                    fabric_direction_connection,
-                    pkt_hdr_seminc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
-                noc_async_writes_flushed();
+            // Send semaphore increment to remote worker core (cleanup, when chunks_per_sync doesn't evenly divide
+            // total_tiles_to_read)
+            if (write_to_remote) {
+                if (separate_even_odd_sems) {
+                    if (even_chunks && even_chunk_count != 0) {
+                        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                            fabric_direction_connection,
+                            pkt_hdr_seminc,
+                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{even_core_sem_noc_addr, 0});
+                        noc_async_writes_flushed();
+                    }
+                    if (odd_chunks && odd_chunk_count != 0) {
+                        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                            fabric_direction_connection,
+                            pkt_hdr_seminc,
+                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{odd_core_sem_noc_addr, 0});
+                        noc_async_writes_flushed();
+                    }
+                } else {
+                    if (chunk_count != 0) {
+                        uint64_t out_ready_sem_noc_addr_in_pkt =
+                            safe_get_noc_addr(this_core_x, this_core_y, out_ready_sem, 0);
+                        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                            fabric_direction_connection,
+                            pkt_hdr_seminc,
+                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                        noc_async_writes_flushed();
+                    }
+                }
             }
 
             // Next slice idx
             slice_idx = direction ? (slice_idx - 1) : (slice_idx + 1);
         }
 
-        // 2. mcast half batch ready semaphore
-        // TODO wait for opposite cores as well
+        // Batch ready semaphore - multicast to entire ring of workers for both this dir and opposite dir
         uint64_t batch_ready_sem_noc_addr_in_pkt = safe_get_noc_addr(this_core_x, this_core_y, batch_ready_sem, 0);
         fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
             fabric_direction_connection,
@@ -472,9 +496,16 @@ void kernel_main() {
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
         noc_async_writes_flushed();
 
-        // Reset the global semaphore before the next batch
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ring_size - 1);
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
+        batch_ready_sem_noc_addr_in_pkt = safe_get_noc_addr(opposite_core_x, opposite_core_y, batch_ready_sem, 0);
+        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            fabric_direction_connection,
+            pkt_hdr_mcastseminc,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
+        noc_async_writes_flushed();
+
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 2 * (ring_size - 1));
+        noc_semaphore_set(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);  // reset semaphore before next batch
     }
 
     noc_async_write_barrier();
