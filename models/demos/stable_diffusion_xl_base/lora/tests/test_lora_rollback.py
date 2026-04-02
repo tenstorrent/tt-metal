@@ -45,15 +45,17 @@ def _run_forward_pass(tt_sdxl, pipeline, prompt, negative_prompt, batch_size):
     ],
 )
 @torch.no_grad()
-def test_lora_rollback(mesh_device, is_ci_env, lora_path, prompt, negative_prompt, lora_prompt):
+def test_lora_rollback(
+    mesh_device, is_ci_env, is_ci_v2_env, sdxl_base_pipeline_location, lora_path, prompt, negative_prompt, lora_prompt
+):
     prepare_device(mesh_device, use_cfg_parallel=False)
     batch_size = determinate_min_batch_size(mesh_device, use_cfg_parallel=False)
 
     pipeline = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        sdxl_base_pipeline_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_v2_env or is_ci_env,
     )
     assert isinstance(pipeline.text_encoder, CLIPTextModel)
     assert isinstance(pipeline.text_encoder_2, CLIPTextModelWithProjection)
