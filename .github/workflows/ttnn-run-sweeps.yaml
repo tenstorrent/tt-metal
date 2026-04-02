@@ -1263,7 +1263,6 @@ jobs:
         with:
           pattern: sweeps-run-result
           path: tests/sweep_framework/results_export
-          merge-multiple: true
       - name: List all downloaded files
         run: |
           ls -hal tests/sweep_framework/results_export
