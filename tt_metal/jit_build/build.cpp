@@ -527,8 +527,13 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
                 for (const auto& entry : entries) {
                     const char* dispatch_str =
                         entry.dispatch == RuntimeArgDispatch::COMMON ? "Dispatch::COMMON" : "Dispatch::PER_CORE";
-                    header_rt << "    constexpr Arg " << entry.field << " = {" << entry.index << ", " << dispatch_str
-                              << "};\n";
+                    if (entry.length > 1) {
+                        header_rt << "    constexpr ArrayArg " << entry.field << " = {" << entry.index << ", "
+                                  << entry.length << ", " << dispatch_str << "};\n";
+                    } else {
+                        header_rt << "    constexpr Arg " << entry.field << " = {" << entry.index << ", "
+                                  << dispatch_str << "};\n";
+                    }
                 }
                 if (!ns.empty()) {
                     header_rt << "}\n";

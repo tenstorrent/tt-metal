@@ -117,6 +117,14 @@ struct KernelDescriptor {
         std::vector<std::pair<CoreCoord, uint32_t>> core_values;
     };
     using NamedPerCoreRuntimeArgs = std::vector<NamedPerCoreRuntimeArg>;
+
+    // Array variant: named RT arg that occupies N contiguous slots.
+    // Generates ArrayArg (with length) in the kernel header instead of Arg.
+    struct NamedCommonRuntimeArgArray {
+        std::string name;
+        std::vector<uint32_t> values;
+    };
+    using NamedCommonRuntimeArgArrays = std::vector<NamedCommonRuntimeArgArray>;
     using ConfigDescriptor = std::
         variant<ReaderConfigDescriptor, WriterConfigDescriptor, DataMovementConfigDescriptor, ComputeConfigDescriptor>;
     enum class SourceType { FILE_PATH, SOURCE_CODE };
@@ -140,6 +148,8 @@ struct KernelDescriptor {
     // Per-core named runtime args: each entry has a name and per-core values.
     // Values are merged into runtime_args by program.cpp; indices auto-assigned by position.
     NamedPerCoreRuntimeArgs named_per_core_runtime_args;
+    // Array variant: each entry occupies N contiguous common RT arg slots.
+    NamedCommonRuntimeArgArrays named_common_runtime_arg_arrays;
 
     std::optional<KernelBuildOptLevel> opt_level = std::nullopt;
 
