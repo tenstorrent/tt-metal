@@ -265,136 +265,105 @@ class Molmo2Model(LightweightModule):
         max_frames_per_chunk: int = 8,
     ) -> Tuple[ttnn.Tensor, torch.Tensor]:
         """
-        Process video frames in chunks to avoid OOM for long videos.
+        Process video frames in chunks with two-stage processing.
+
+        Stage 1: Run ViT encoding in chunks (no cross-frame attention needed in ViT)
+        Stage 2: Run pooling on ALL concatenated features (preserves cross-frame attention)
+
+        This allows processing videos with many frames (up to 384) while preserving
+        the cross-frame attention in image_pooling_2d that the model requires.
 
         Args:
             pixel_values: [B, C, H, W] where B is number of frames
-            pooled_patches_idx: [B, N_out, K_pool] pooling indices
-            max_frames_per_chunk: Max frames per chunk
+            pooled_patches_idx: [B, N_out, K_pool] pooling indices (GLOBAL indices)
+            max_frames_per_chunk: Max frames per ViT chunk
 
         Returns:
-            Tuple of (concatenated visual_embeddings, valid_token)
+            Tuple of (visual_embeddings, valid_token)
         """
         from loguru import logger
 
         is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
         mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
+        mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0) if is_mesh_device else None
 
-        batch_size = pooled_patches_idx.shape[0]
+        batch_size = pooled_patches_idx.shape[0]  # Total number of frames
         n_out = pooled_patches_idx.shape[1]
         k_pool = pooled_patches_idx.shape[2]
 
         vit = self.vision_backbone.image_vit
         patch_features = vit.patch_size * vit.patch_size * 3  # 588
-        num_patches_per_frame = (378 // vit.patch_size) ** 2  # 729 patches per frame
 
-        # Process in chunks
-        all_embeddings = []
-        all_valid_tokens = []
+        logger.info(
+            f"embed_image_chunked: Two-stage processing {batch_size} frames in chunks of {max_frames_per_chunk}"
+        )
+
+        # ============================================================
+        # STAGE 1: Run ViT encoding in chunks
+        # ViT has no cross-frame attention, so chunking is safe here
+        # ============================================================
+        all_vit_features = []
 
         for chunk_start in range(0, batch_size, max_frames_per_chunk):
             chunk_end = min(chunk_start + max_frames_per_chunk, batch_size)
             chunk_size = chunk_end - chunk_start
 
-            logger.debug(f"embed_image_chunked: Processing frames {chunk_start}-{chunk_end} ({chunk_size} frames)")
+            logger.debug(f"  Stage 1: ViT encoding frames {chunk_start}-{chunk_end} ({chunk_size} frames)")
 
             # Extract chunk of pixel values
             if pixel_values.dim() == 3 and pixel_values.shape[-1] == patch_features:
-                # Pre-unfolded format [B, num_patches, 588]
                 chunk_pixels = pixel_values[chunk_start:chunk_end]
             else:
-                # Raw image format [B, C, H, W]
                 chunk_pixels = pixel_values[chunk_start:chunk_end]
 
-            # Extract chunk of pooling indices and adjust for chunk-local patch indices
-            chunk_idx = pooled_patches_idx[chunk_start:chunk_end].clone()
-            # Indices reference global patch positions, need to make them chunk-local
-            # Each frame has num_patches_per_frame patches
-            offset = chunk_start * num_patches_per_frame
-            chunk_idx = torch.where(chunk_idx >= 0, chunk_idx - offset, chunk_idx)
-
-            # Embed this chunk
+            # Embed and run ViT only (no pooling yet)
             if pixel_values.dim() == 3 and pixel_values.shape[-1] == patch_features:
                 embedded_ttnn = vit.patch_embed_from_patches_ttnn(chunk_pixels)
             else:
                 embedded_ttnn = vit.patch_embed_ttnn(chunk_pixels)
 
-            # Prepare gather indices and masks for chunk
-            valid = chunk_idx >= 0
-            valid_token = torch.any(valid, dim=-1)  # [chunk_size, N_out]
-            clipped_idx = torch.clip(chunk_idx, min=0)
-            flat_idx = clipped_idx.reshape(1, -1).to(torch.int32)
-            valid_mask = valid.reshape(1, 1, -1, 1).float()
+            # Run ViT encoding only
+            vit_features = self.vision_backbone.encode_image_only_ttnn(embedded_ttnn)
 
-            idx_ttnn = ttnn.from_torch(
-                flat_idx,
-                device=self.mesh_device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mesh_mapper,
-            )
-            valid_mask_ttnn = ttnn.from_torch(
-                valid_mask,
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mesh_mapper,
-            )
-            valid_token_ttnn = ttnn.from_torch(
-                valid_token.flatten().float(),
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mesh_mapper,
-            )
-
-            # Process chunk through vision backbone
-            chunk_embeddings = self.vision_backbone.forward_ttnn(
-                images_embedded=embedded_ttnn,
-                pooled_patches_idx_ttnn=idx_ttnn,
-                valid_mask_ttnn=valid_mask_ttnn,
-                valid_token_ttnn=valid_token_ttnn,
-                n_out=n_out,
-                k_pool=k_pool,
-                batch_size=chunk_size,
-            )
-
-            # Move to CPU for concatenation (then back to device)
+            # Move to CPU for concatenation
             if is_mesh_device:
-                mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-                chunk_emb_torch = ttnn.to_torch(chunk_embeddings, mesh_composer=mesh_composer)[0]
+                vit_features_torch = ttnn.to_torch(vit_features, mesh_composer=mesh_composer)[0]
             else:
-                chunk_emb_torch = ttnn.to_torch(chunk_embeddings)
+                vit_features_torch = ttnn.to_torch(vit_features)
 
-            logger.debug(
-                f"embed_image_chunked: chunk {chunk_start//max_frames_per_chunk} shape: {chunk_emb_torch.shape}"
-            )
-            all_embeddings.append(chunk_emb_torch)
-            all_valid_tokens.append(valid_token)
+            logger.debug(f"    ViT chunk output shape: {vit_features_torch.shape}")
+            all_vit_features.append(vit_features_torch)
 
-            # Cleanup chunk tensors
+            # Cleanup
             ttnn.deallocate(embedded_ttnn)
-            ttnn.deallocate(idx_ttnn)
-            ttnn.deallocate(valid_mask_ttnn)
-            ttnn.deallocate(valid_token_ttnn)
-            ttnn.deallocate(chunk_embeddings)
-
-            # Sync to ensure memory is freed
+            ttnn.deallocate(vit_features)
             ttnn.synchronize_device(self.mesh_device)
 
-        # Concatenate all chunks along sequence dimension (dim=1)
-        # Each chunk has shape [1, chunk_seq_len, hidden_dim]
-        combined_embeddings = torch.cat(all_embeddings, dim=1)  # Concat along seq dim
-        combined_valid_token = torch.cat(all_valid_tokens, dim=0)
+        # ============================================================
+        # Concatenate ALL ViT features
+        # to_torch returns [1, seq, hidden], concatenate along seq (dim=1)
+        # Then reshape to [1, 1, total_patches, pool_dim] for pool_and_project_ttnn
+        # ============================================================
+        combined_vit_features = torch.cat(all_vit_features, dim=1)  # [1, total_seq, pool_dim]
+        combined_vit_features = combined_vit_features.unsqueeze(1)  # [1, 1, total_seq, pool_dim]
+        logger.info(f"  Combined ViT features: {combined_vit_features.shape}")
 
-        logger.info(f"embed_image_chunked: Combined {len(all_embeddings)} chunks -> shape {combined_embeddings.shape}")
+        # ============================================================
+        # STAGE 2: Pool + Project on ALL features together
+        # This preserves cross-frame attention via GLOBAL indices
+        # ============================================================
+        logger.debug(f"  Stage 2: Pooling + projection on all {batch_size} frames")
 
-        # Move back to device
-        visual_embeddings = ttnn.from_torch(
-            combined_embeddings,
+        # Prepare GLOBAL pooling indices (no chunk-local adjustment!)
+        valid = pooled_patches_idx >= 0
+        valid_token = torch.any(valid, dim=-1)  # [batch_size, N_out]
+        clipped_idx = torch.clip(pooled_patches_idx, min=0)
+        flat_idx = clipped_idx.reshape(1, -1).to(torch.int32)
+        valid_mask = valid.reshape(1, 1, -1, 1).float()
+
+        # Move tensors to device
+        combined_features_ttnn = ttnn.from_torch(
+            combined_vit_features,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -402,7 +371,42 @@ class Molmo2Model(LightweightModule):
             mesh_mapper=mesh_mapper,
         )
 
-        return visual_embeddings, combined_valid_token
+        idx_ttnn = ttnn.from_torch(
+            flat_idx,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+
+        valid_mask_ttnn = ttnn.from_torch(
+            valid_mask,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+
+        # Run pooling + projection on ALL features with GLOBAL indices
+        visual_embeddings = self.vision_backbone.pool_and_project_ttnn(
+            image_features=combined_features_ttnn,
+            pooled_patches_idx_ttnn=idx_ttnn,
+            valid_mask_ttnn=valid_mask_ttnn,
+            n_out=n_out,
+            k_pool=k_pool,
+            batch_size=batch_size,
+        )
+
+        # Cleanup
+        ttnn.deallocate(combined_features_ttnn)
+        ttnn.deallocate(idx_ttnn)
+        ttnn.deallocate(valid_mask_ttnn)
+
+        logger.info(f"embed_image_chunked: Complete, output shape: {visual_embeddings.shape}")
+
+        return visual_embeddings, valid_token
 
     def prepare_inputs_for_multimodal(
         self,
