@@ -346,7 +346,8 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
             results = _default_results_parallel_branches(container._items)
         else:
             results = _default_results(container._items)
-    return [desc.output_tensors[0] for desc in results]
+    # Branches may have no DRAM outputs (e.g. GlobalCB-only push); align with results list.
+    return [(desc.output_tensors[0] if desc.output_tensors else None) for desc in results]
 
 
 # =============================================================================
