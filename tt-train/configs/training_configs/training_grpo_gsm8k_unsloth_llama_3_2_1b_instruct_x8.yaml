@@ -1,5 +1,5 @@
 training_config:
-  batch_size: 16                # 16 prompts * 8 group_size = 128 total completions
+  batch_size: 8                # 8 prompts * 16 group_size = 128 total completions
   num_epochs: 1
   model_config: "model_configs/llama3_2_1B.yaml"
 
@@ -14,7 +14,7 @@ training_config:
     kahan_summation: false
 
 grpo_config:
-  group_size: 8
+  group_size: 16
   micro_batch_size: 128
   warmup_steps: 100
   max_tokens_to_complete: 512
