@@ -34,3 +34,16 @@ install(
         ASanCoverage
     COMPONENT metalium-runtime
 )
+
+# Install cluster descriptor YAML files for mock device testing.
+# These are required by configure_mock_mode(), which looks for files in:
+# get_root_dir() + "/tt_metal/third_party/umd/tests/cluster_descriptor_examples/"
+install(
+    DIRECTORY
+        ${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/tests/cluster_descriptor_examples/
+    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/third_party/umd/tests/cluster_descriptor_examples
+    COMPONENT metalium-validation
+    FILES_MATCHING
+    PATTERN
+    "*.yaml"
+)
