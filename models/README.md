@@ -103,6 +103,35 @@
 | [YOLOv12x (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov12x)    | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 28      | 300        |             |
 
 
+### Object Detection
+| Model                                                                       | Batch | Hardware                                                 | Frame/sec (FPS)     | Target FPS | Release     |
+|-----------------------------------------------------------------------------|-------|----------------------------------------------------------|---------|------------|-------------|
+| [YOLOv4 (320x320)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov4)               | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 166     | 320        |             |
+| [YOLOv4 (320x320) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov4)        | 1     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 254     | 640        |             |
+| [YOLOv4 (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov4)               | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 74      | 160        |             |
+| [YOLOv4 (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov4)        | 1     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 123     | 320        |             |
+| [YOLOv5x (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov5x)             | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 67      | 150        |             |
+| [YOLOv5x (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov5x)      | 1     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 126     | 300        |             |
+| [YOLOv6l (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov6l)             | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 103     | 200        |             |
+| [YOLOv6l (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov6l)      | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 181     | 400        |             |
+| [YOLOv8x (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov8x)             | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 66      | 100        |             |
+| [YOLOv8x (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov8x)      | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 124     | 200        |             |
+| [YOLOv8s (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov8s)             | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 215     | 320        |             |
+| [YOLOv8s (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov8s)      | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 368     | 640        |             |
+| [YOLOv8s_world (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov8s_world) | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 105     | 320        |             |
+| [YOLOv8s_world (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov8s_world) | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole) | 189     | 640        |             |
+| [YOLOv9c (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov9c)             | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 98      | 320        |             |
+| [YOLOv9c (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov9c)      | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 173     | 640        |             |
+| [YOLOv10x (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov10x)           | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 48      | 150        |             |
+| [YOLOv10x (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov10x)    | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 91      | 300        |             |
+| [YOLOv11m (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov11m)           | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 95      | 200        |             |
+| [YOLOv11m (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov11m)    | 1     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 157     | 400        |             |
+| [YOLOv11n (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov11)            | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 234     | 500        |             |
+| [YOLOv11n (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov11)     | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 372     | 1000       |             |
+| [YOLOv12x (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov12x)           | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 14      | 150        |             |
+| [YOLOv12x (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov12x)    | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 28      | 300        |             |
+
+
 ### Segmentation
 | Model                                                                       | Batch | Hardware                                                 | Frame/sec (FPS)     | Target FPS | Release     |
 |-----------------------------------------------------------------------------|-------|----------------------------------------------------------|---------|------------|-------------|

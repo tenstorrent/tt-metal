@@ -150,8 +150,9 @@ class TtConv:
         if self.deallocate_activation:
             conv_config.deallocate_activation = self.deallocate_activation
 
-        # if self.change_shard:
-        #     conv_config.shard_layout = None
+        # Newer TTNN no longer accepts `None` for shard_layout; keep default HEIGHT_SHARDED.
+        if self.change_shard:
+            pass
 
         if self.act_block_h:
             conv_config.act_block_h_override = self.act_blocks
