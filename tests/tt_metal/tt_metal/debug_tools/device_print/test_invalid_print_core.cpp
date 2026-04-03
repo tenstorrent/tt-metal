@@ -23,7 +23,7 @@ using namespace tt::tt_metal;
 
 TEST_F(DevicePrintFixture, TensixTestPrintInvalidCore) {
     // Set DPRINT enabled on a mix of invalid and valid cores. Previously this would hang during
-    // device setup, but not the print server should simply ignore the invalid cores.
+    // device setup, but now the print server should simply ignore the invalid cores.
     std::map<tt::CoreType, std::vector<CoreCoord>> dprint_cores;
     dprint_cores[tt::CoreType::WORKER] = {{0, 0}, {1, 1}, {100, 100}};
     tt::tt_metal::MetalContext::instance().rtoptions().set_feature_cores(
