@@ -1394,7 +1394,7 @@ class WanDecoder(Module):
             # Remaining frames are then chunked normally starting from frame 1.
             output_BCTHW = None
             for t_start in [0] + list(range(1, T, t_chunk_size)):
-                t_end = 1 if t_start == 0 else t_start + t_chunk_size
+                t_end = 1 if t_start == 0 else min(t_start + t_chunk_size, T)
                 self._conv_idx = [0]
                 out_BTHWC, new_logical_h = self.decoder(
                     x_BTHWC[:, t_start:t_end, :, :, :],
