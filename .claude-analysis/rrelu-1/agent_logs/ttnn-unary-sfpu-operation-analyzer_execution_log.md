@@ -140,3 +140,72 @@ No errors or recovery needed. Straightforward SFPI kernel analysis.
 - **WH vs BH difference**: None -- implementations are identical
 - **Approximation mode**: APPROXIMATION_MODE template parameter is not used in the function body; exp helper is always called with is_fp32_dest_acc_en=true
 - **Notable**: The exp helper `_sfpu_exp_21f_bf16_` is called with hardcoded `is_fp32_dest_acc_en=true` to avoid premature FP16B rounding, even though the outer function defaults to `is_fp32_dest_acc_en=false`. Final rounding to FP16B is done explicitly after the full SELU formula.
+
+---
+
+# Execution Log: ttnn-unary-sfpu-operation-analyzer (leaky_relu)
+
+## Metadata
+- **Operation**: leaky_relu
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Status**: SUCCESS
+- **Output File**: `.claude-analysis/rrelu-1/leaky_relu_analysis.md`
+
+## Input Interpretation
+| Field | Value | Confidence |
+|-------|-------|------------|
+| Operation name | leaky_relu | HIGH |
+| UnaryOpType | LEAKY_RELU | HIGH |
+| Compute kernel | eltwise_sfpu.cpp (default) | HIGH |
+| Include guard | SFPU_OP_RELU_FAMILY_INCLUDE | HIGH |
+| Init function | leaky_relu_tile_init() | HIGH |
+| Tile function | leaky_relu_tile(idst, slope) | HIGH |
+| Approx mode | false | HIGH |
+
+## Execution Timeline
+
+### Phase 1: Dispatch Tracing
+- Read `unary_op_utils.cpp` to find `get_macro_definition()` -> `SFPU_OP_RELU_FAMILY_INCLUDE`
+- Read `get_op_init_and_func()` -> `leaky_relu_tile_init()` / `leaky_relu_tile(idst, param0u)`
+- Read `get_compute_kernel_path()` -> falls through to default `eltwise_sfpu.cpp`
+- Read `get_op_approx_mode()` -> falls through to `default: return false`
+
+### Phase 2: Abstraction Layer Tracing
+- Read API header `relu.h` -> `SFPU_UNARY_ONE_PARAM_KERNEL_FN(calculate_lrelu, RC, APPROX, idst, slope)`
+- Read macros header `llk_math_eltwise_unary_sfpu_macros.h` -> expands to `_llk_math_eltwise_unary_sfpu_params_<APPROX>(ckernel::sfpu::calculate_lrelu<APPROX>, ...)`
+- Read params dispatch (WH and BH) -> `VectorMode::RC` loop over 4 faces
+- Read init function -> `eltwise_unary_sfpu_configure_addrmod()` sets ADDR_MOD_7 with zero increments
+
+### Phase 3: Core SFPU Kernel Analysis
+- Read WH `ckernel_sfpu_relu.h` (tt_llk) -> `_calculate_lrelu_` with raw TTI instructions
+- Read BH `ckernel_sfpu_relu.h` (tt_llk) -> identical except ADDR_MOD_7 vs ADDR_MOD_3
+- Identified 6 SFPU instructions: SFPLOADI, SFPLOAD, SFPSETCC, SFPMUL, SFPENCC, SFPSTORE
+- Analyzed CC pattern: simple LT0 guard (SFPSETCC enables CC for negative lanes, SFPMUL is guarded, SFPENCC resets)
+- Verified ADDR_MOD remapping on WH via `set_addr_mod_base()`
+
+### Phase 4: Verification
+- Verified all function names exist in source (grep)
+- Verified all SFPU instructions exist in the kernel file (grep: 9 matches)
+- Verified all cited file paths exist
+
+## External Services
+| Service | Status | Notes |
+|---------|--------|-------|
+| DeepWiki | UNAVAILABLE | Repository not indexed |
+| Confluence | Not needed | SFPU Hardware Model Reference was sufficient |
+| Glean | Not needed | All information found in source code |
+
+## Artifacts
+| File | Action |
+|------|--------|
+| `.claude-analysis/rrelu-1/leaky_relu_analysis.md` | Created |
+| `.claude-analysis/rrelu-1/agent_logs/ttnn-unary-sfpu-operation-analyzer_breadcrumbs.jsonl` | Appended |
+| `.claude-analysis/rrelu-1/agent_logs/ttnn-unary-sfpu-operation-analyzer_execution_log.md` | Updated (appended) |
+
+## SFPU Analysis Summary
+- **Kernel style**: B_raw_TTI (raw TTI instructions with simple CC pattern)
+- **Core logic**: Leaky ReLU -- pass through non-negative values unchanged, multiply negative values by a scalar slope
+- **Instructions**: SFPLOADI (x2, slope load), SFPLOAD, SFPSETCC (LT0), SFPMUL, SFPENCC (EU_R1), SFPSTORE
+- **CC pattern**: Simple LT0 guard (SFPSETCC -> guarded SFPMUL -> SFPENCC reset)
+- **WH vs BH difference**: Only ADDR_MOD numbering differs (WH: ADDR_MOD_3 remapped via base to slot 7; BH: ADDR_MOD_7 directly)
+- **Approximation mode**: Has no effect -- kernel has no APPROXIMATION_MODE branches
