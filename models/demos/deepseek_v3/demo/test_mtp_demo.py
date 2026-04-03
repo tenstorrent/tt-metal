@@ -73,7 +73,7 @@ def _write_demo_artifact(prompts: list[str], results: dict, artifact_name: str) 
     "prompts_file,num_prompts,max_new_tokens",
     [
         pytest.param(
-            Path("models/demos/deepseek_v3/demo/test_prompts.json"),
+            Path("models/demos/deepseek_v3/demo/demo_aime24_gpqa_short.json"),
             2,
             32,
             id="smoke_2_prompts_32_tokens",
