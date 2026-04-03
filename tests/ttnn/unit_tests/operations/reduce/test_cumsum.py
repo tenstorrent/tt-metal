@@ -6,7 +6,16 @@ import torch
 import pytest
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose
+from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose, assert_equal
+
+
+def assert_cumsum_quality(expected_output, torch_output):
+    if torch_output.dtype == torch.int32:
+        assert_equal(expected_output, torch_output)
+    elif torch_output.dtype == torch.bfloat16:
+        assert_with_ulp(expected_output, torch_output, ulp_threshold=1)
+    else:
+        assert_allclose(expected_output, torch_output, rtol=1e-2, atol=1e-6)
 
 
 def get_backward_tensors(output_grad_shape, input_grad_shape, device):
@@ -68,10 +77,7 @@ def test_cumsum(size, dim, dtypes, device):
 
         expected_output = torch.cumsum(torch_input_tensor, dim=dim, dtype=torch_dtype)
 
-        if torch_dtype == torch.bfloat16:
-            assert_with_ulp(expected_output, torch_output, ulp_threshold=1)
-        else:
-            assert_allclose(expected_output, torch_output, rtol=1e-2, atol=1e-6)
+        assert_cumsum_quality(expected_output, torch_output)
 
 
 @pytest.mark.parametrize(
@@ -122,10 +128,7 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
 
     assert preallocated_output_tensor == output_tensor
 
-    if torch_dtype == torch.bfloat16:
-        assert_with_ulp(expected_output, torch_output, ulp_threshold=1)
-    else:
-        assert_allclose(expected_output, torch_output, rtol=1e-2, atol=1e-6)
+    assert_cumsum_quality(expected_output, torch_output)
 
     assert device.num_program_cache_entries() >= 1
 
@@ -174,10 +177,7 @@ def test_cumsum_backward(size, dim, dtypes, device):
     )
 
     assert tt_input_grad_cpu.shape == torch_input_tensor.grad.shape
-    if torch_dtype == torch.bfloat16:
-        assert_with_ulp(tt_input_grad_cpu, torch_input_tensor.grad, ulp_threshold=1)
-    else:
-        assert_allclose(tt_input_grad_cpu, torch_input_tensor.grad, rtol=1e-2, atol=1e-6)
+    assert_cumsum_quality(tt_input_grad_cpu, torch_input_tensor.grad)
 
 
 @pytest.mark.parametrize(

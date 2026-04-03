@@ -100,11 +100,11 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
     std::map<std::string, std::string> defines_kernel_args = {};
 
     if (is_integer_format(dst_cb_data_format)) {
-        defines_kernel_args["BINARY_OP_INIT"] =
-            operation_attributes.op == AccumulationOp::CUMSUM ? "add_int_tile_init" : "mul_int_tile_init";
-        defines_kernel_args["BINARY_OP"] = operation_attributes.op == AccumulationOp::CUMSUM
-                                               ? "add_int_tile<DataFormat::Int32>"
-                                               : "mul_int_tile<DataFormat::Int32>";
+        defines_kernel_args["BINARY_OP_INIT"] = operation_attributes.op == AccumulationOp::CUMSUM
+                                                    ? "add_int_tile_init"
+                                                    : "mul_int_tile_init<DataFormat::Int32>";
+        defines_kernel_args["BINARY_OP"] =
+            operation_attributes.op == AccumulationOp::CUMSUM ? "add_int_tile" : "mul_int_tile<DataFormat::Int32>";
         unpack_to_dst[static_cast<unsigned>(AccumulationCB::SRC)] = UnpackToDestMode::UnpackToDestFp32;
     } else {
         defines_kernel_args["BINARY_OP_INIT"] =
@@ -128,7 +128,6 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
     // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     // Use HiFi3 silently when fp32_dest_acc_en is True on Wormhole B0.
     const ComputeConfig compute_config{
-        .math_fidelity = MathFidelity::HiFi4,
         .fp32_dest_acc_en = true,
         .unpack_to_dest_mode = unpack_to_dst,
         .math_approx_mode = false,
