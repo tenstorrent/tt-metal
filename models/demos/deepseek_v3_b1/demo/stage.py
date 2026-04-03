@@ -411,12 +411,17 @@ class SpecLMHeadStage(StageKind):
         *,
         fp32_dest_acc_en: bool = True,
         persistent_mode: bool = True,
+        shared_head_norm: ttnn.Tensor | None = None,
     ) -> None:
         self._weights = weights
         self._fp32_dest_acc_en = fp32_dest_acc_en
         self._persistent_mode = persistent_mode
+        self._shared_head_norm = shared_head_norm
         self._state: dict[str, Any] = {}
-        print(f"[STAGE] SpecLMHeadStage.__init__ fp32={fp32_dest_acc_en} persistent={persistent_mode}", flush=True)
+        print(
+            f"[STAGE] SpecLMHeadStage.__init__ fp32={fp32_dest_acc_en} persistent={persistent_mode} shared_head_norm={shared_head_norm is not None}",
+            flush=True,
+        )
 
     def _get_sender_coord(self, ctx: StageContext, pipeline_block):
         """Return the broadcast sender MeshCoordinate for SpecLMHead."""
@@ -587,10 +592,11 @@ class SpecLMHeadStage(StageKind):
             }
         )
 
+        spec_gamma = self._shared_head_norm if self._shared_head_norm is not None else self._weights.final_norm
         self._state = {
             "input_tensor_mesh": input_tensor_mesh,
             "intermediate_tensor_mesh": intermediate_tensor_mesh,
-            "ttnn_gamma": self._weights.final_norm,
+            "ttnn_gamma": spec_gamma,
             "ttnn_b": self._weights.lm_head,
             "ttnn_scores": ttnn_scores,
             "ttnn_indices": ttnn_indices,
@@ -1180,11 +1186,17 @@ class SpecLMHeadWithEmbeddingStage(SpecLMHeadStage):
         *,
         fp32_dest_acc_en: bool = True,
         persistent_mode: bool = True,
+        shared_head_norm: ttnn.Tensor | None = None,
     ) -> None:
-        super().__init__(weights, fp32_dest_acc_en=fp32_dest_acc_en, persistent_mode=persistent_mode)
+        super().__init__(
+            weights,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+            shared_head_norm=shared_head_norm,
+        )
         self._embedding_weights = embedding_weights
         print(
-            f"[STAGE] SpecLMHeadWithEmbeddingStage.__init__ fp32={fp32_dest_acc_en} persistent={persistent_mode}",
+            f"[STAGE] SpecLMHeadWithEmbeddingStage.__init__ fp32={fp32_dest_acc_en} persistent={persistent_mode} shared_head_norm={shared_head_norm is not None}",
             flush=True,
         )
 

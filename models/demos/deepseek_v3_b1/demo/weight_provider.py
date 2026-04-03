@@ -212,6 +212,7 @@ def _build_synthetic_mtp_state_dict(mtp_layer_idx: int = _MTP_LAYER_IDX) -> dict
         _layer_key(mtp_layer_idx, "hnorm.weight"): torch.ones(H, dtype=dtype),
         _layer_key(mtp_layer_idx, "enorm.weight"): torch.ones(H, dtype=dtype),
         _layer_key(mtp_layer_idx, "eh_proj.weight"): torch.randn(H, 2 * H, dtype=dtype),
+        _layer_key(mtp_layer_idx, "shared_head.norm.weight"): torch.ones(H, dtype=dtype),
     }
 
 
