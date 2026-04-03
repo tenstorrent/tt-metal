@@ -43,9 +43,6 @@ def test_rms_norm(device, batch_size, h, w):
 def test_rms_norm_row_major(device, batch_size, h, w, math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc):
     torch.manual_seed(0)
 
-    if fp32_dest_acc_en and device.arch() == ttnn.device.Arch.BLACKHOLE:
-        pytest.skip("Skipping test on Blackhole with fp32_dest_acc_en=True, see issue #38561")
-
     torch_input_tensor = torch.rand((batch_size, h, w), dtype=torch.bfloat16)
     torch_weight = torch.rand((w,), dtype=torch.bfloat16)
     golden_function = ttnn.get_golden_function(ttnn.rms_norm)
