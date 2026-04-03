@@ -51,7 +51,6 @@ Tensor unary_ng_impl(
 
 namespace ttnn {
 
-Tensor abs(
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
@@ -63,10 +62,6 @@ Tensor abs(
     }
     return operations::unary_ng::detail::unary_ng_impl(
         input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor, sub_core_grids);
-}
-
-Tensor abs(const ComplexTensor& input_tensor, const MemoryConfig& output_mem_config) {
-    return ttnn::hypot(input_tensor[0], input_tensor[1], output_mem_config);
 }
 
 // Helper macro: most basic ops just forward a single UnaryOpType to unary_ng_impl.
@@ -84,54 +79,6 @@ Tensor abs(const ComplexTensor& input_tensor, const MemoryConfig& output_mem_con
             optional_output_tensor,                          \
             sub_core_grids);                                 \
     }
-
-DEFINE_UNARY_NG_OP(neg, NEG)
-DEFINE_UNARY_NG_OP(acos, ACOS)
-DEFINE_UNARY_NG_OP(asin, ASIN)
-DEFINE_UNARY_NG_OP(asinh, ASINH)
-DEFINE_UNARY_NG_OP(atan, ATAN)
-DEFINE_UNARY_NG_OP(atanh, ATANH)
-DEFINE_UNARY_NG_OP(cos, COS)
-DEFINE_UNARY_NG_OP(acosh, ACOSH)
-DEFINE_UNARY_NG_OP(cosh, COSH)
-DEFINE_UNARY_NG_OP(sinh, SINH)
-DEFINE_UNARY_NG_OP(erfinv, ERFINV)
-DEFINE_UNARY_NG_OP(exp2, EXP2)
-DEFINE_UNARY_NG_OP(expm1, EXPM1)
-DEFINE_UNARY_NG_OP(gez, GEZ)
-DEFINE_UNARY_NG_OP(gtz, GTZ)
-DEFINE_UNARY_NG_OP(i0, I0)
-DEFINE_UNARY_NG_OP(i1, I1)
-DEFINE_UNARY_NG_OP(isfinite, ISFINITE)
-DEFINE_UNARY_NG_OP(isinf, ISINF)
-DEFINE_UNARY_NG_OP(isnan, ISNAN)
-DEFINE_UNARY_NG_OP(isneginf, ISNEGINF)
-DEFINE_UNARY_NG_OP(isposinf, ISPOSINF)
-DEFINE_UNARY_NG_OP(lez, LEZ)
-DEFINE_UNARY_NG_OP(logical_not, LOGICAL_NOT_UNARY)
-DEFINE_UNARY_NG_OP(ltz, LTZ)
-DEFINE_UNARY_NG_OP(nez, NEZ)
-DEFINE_UNARY_NG_OP(reciprocal, RECIP)
-DEFINE_UNARY_NG_OP(relu, RELU)
-DEFINE_UNARY_NG_OP(relu6, RELU6)
-DEFINE_UNARY_NG_OP(sign, SIGN)
-DEFINE_UNARY_NG_OP(signbit, SIGNBIT)
-DEFINE_UNARY_NG_OP(silu, SILU)
-DEFINE_UNARY_NG_OP(sin, SIN)
-DEFINE_UNARY_NG_OP(square, SQUARE)
-DEFINE_UNARY_NG_OP(tan, TAN)
-DEFINE_UNARY_NG_OP(tiled_prod, TILED_PROD)
-DEFINE_UNARY_NG_OP(bitwise_not, BITWISE_NOT)
-DEFINE_UNARY_NG_OP(alt_complex_rotate90, ALT_COMPLEX_ROTATE90)
-DEFINE_UNARY_NG_OP(floor, FLOOR)
-DEFINE_UNARY_NG_OP(ceil, CEIL)
-DEFINE_UNARY_NG_OP(trunc, TRUNC)
-DEFINE_UNARY_NG_OP(frac, FRAC)
-DEFINE_UNARY_NG_OP(hardsigmoid, HARDSIGMOID)
-DEFINE_UNARY_NG_OP(hardswish, HARDSWISH)
-DEFINE_UNARY_NG_OP(softsign, SOFTSIGN)
-DEFINE_UNARY_NG_OP(cbrt, CBRT)
-DEFINE_UNARY_NG_OP(lgamma, LGAMMA)
 
 #undef DEFINE_UNARY_NG_OP
 

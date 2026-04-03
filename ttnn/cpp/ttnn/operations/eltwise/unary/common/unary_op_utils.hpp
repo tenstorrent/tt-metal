@@ -43,64 +43,8 @@ std::map<std::string, std::string> get_block_defines(
 template <typename T>
 bool is_parametrized_type(T val) {
     switch (val) {
-        case UnaryOpType::RELU_MAX:
-        case UnaryOpType::RELU_MIN:
-        case UnaryOpType::POWER:
-        case UnaryOpType::POWER_ITERATIVE:
-        case UnaryOpType::LEAKY_RELU:
-        case UnaryOpType::ELU:
-        case UnaryOpType::GELU:
-        case UnaryOpType::RSQRT:
-        case UnaryOpType::SQRT:
-        case UnaryOpType::HEAVISIDE:
-        case UnaryOpType::ERF:
-        case UnaryOpType::ERFC:
-        case UnaryOpType::RSUB:
-        case UnaryOpType::RDIV:
-        case UnaryOpType::EXP:
-        case UnaryOpType::SOFTPLUS:
-        case UnaryOpType::XIELU:
-        case UnaryOpType::ADD_UNARY_SFPU:
-        case UnaryOpType::SUB_UNARY_SFPU:
-        case UnaryOpType::MUL_UNARY_SFPU:
-        case UnaryOpType::DIV_UNARY_SFPU:
-        case UnaryOpType::UNARY_NE:
-        case UnaryOpType::UNARY_EQ:
-        case UnaryOpType::UNARY_GT:
-        case UnaryOpType::UNARY_LT:
-        case UnaryOpType::UNARY_GE:
-        case UnaryOpType::UNARY_LE:
-        case UnaryOpType::TYPECAST:
-        case UnaryOpType::BITCAST:
-        case UnaryOpType::BITWISE_XOR:
-        case UnaryOpType::BITWISE_AND:
-        case UnaryOpType::BITWISE_OR:
-        case UnaryOpType::RIGHT_SHIFT:
-        case UnaryOpType::LEFT_SHIFT:
-        case UnaryOpType::REMAINDER:
-        case UnaryOpType::FILL:
-        case UnaryOpType::ROUND:
-        case UnaryOpType::SIGMOID:
-        case UnaryOpType::PRELU_SFPU:
-        case UnaryOpType::FMOD:
-        case UnaryOpType::MINIMUM:
-        case UnaryOpType::MAXIMUM:
-        case UnaryOpType::LOG:
-        case UnaryOpType::LOG10:
-        case UnaryOpType::LOG2:
-        case UnaryOpType::LOG1P:
-        case UnaryOpType::TANH:
-        case UnaryOpType::SOFTSHRINK:
-        case UnaryOpType::HARDSHRINK:
-        case UnaryOpType::WHERE_TSS:
-        case UnaryOpType::CELU:
-        case UnaryOpType::HARDTANH:
-        case UnaryOpType::THRESHOLD:
-        case UnaryOpType::CLAMP_TSS:
-        case UnaryOpType::SELU:
-        case UnaryOpType::LOGIT:
-        case UnaryOpType::RPOW:
-        case UnaryOpType::MISH: return true;
+        case UnaryOpType::MISH:
+        case UnaryOpType::LOGIT: return true;
         default: return false;
     }
     return false;

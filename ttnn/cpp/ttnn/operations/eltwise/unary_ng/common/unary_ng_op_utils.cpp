@@ -18,41 +18,6 @@ namespace {
 
 std::string get_macro_definition(UnaryOpType op_type) {
     switch (op_type) {
-        case UnaryOpType::ASINH:
-        case UnaryOpType::ATANH:
-        case UnaryOpType::COS:
-        case UnaryOpType::ACOSH:
-        case UnaryOpType::COSH:
-        case UnaryOpType::SINH:
-        case UnaryOpType::SIN:
-        case UnaryOpType::TAN: return "SFPU_OP_TRIG_FAMILY_INCLUDE";
-        case UnaryOpType::NEG: return "SFPU_OP_NEG_INCLUDE";
-        case UnaryOpType::ERFINV: return "SFPU_OP_ERFINV_INCLUDE";
-        case UnaryOpType::I0: return "SFPU_OP_I0_INCLUDE";
-        case UnaryOpType::I1: return "SFPU_OP_I1_INCLUDE";
-        case UnaryOpType::ISFINITE:
-        case UnaryOpType::ISINF:
-        case UnaryOpType::ISNAN:
-        case UnaryOpType::ISNEGINF:
-        case UnaryOpType::ISPOSINF: return "SFPU_OP_ISINF_ISNAN_INCLUDE";
-        case UnaryOpType::GEZ:
-        case UnaryOpType::GTZ:
-        case UnaryOpType::LEZ:
-        case UnaryOpType::LTZ:
-        case UnaryOpType::NEZ: return "SFPU_OP_UNARY_COMP_INCLUDE";
-        case UnaryOpType::LOGICAL_NOT_UNARY: return "SFPU_OP_LOGICAL_NOT_INCLUDE";
-        case UnaryOpType::RECIP: return "SFPU_OP_RECIP_INCLUDE";
-        case UnaryOpType::RELU:
-        case UnaryOpType::RELU6: return "SFPU_OP_RELU_FAMILY_INCLUDE";
-        case UnaryOpType::BITWISE_NOT: return "SFPU_OP_BITWISE_NOT_INCLUDE";
-        case UnaryOpType::FLOOR:
-        case UnaryOpType::CEIL:
-        case UnaryOpType::TRUNC:
-        case UnaryOpType::FRAC: return "SFPU_OP_ROUND_FAMILY_INCLUDE";
-        case UnaryOpType::HARDSIGMOID:
-        case UnaryOpType::SOFTSIGN: return "SFPU_OP_ACTIVATIONS_INCLUDE";
-        case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
-        case UnaryOpType::CBRT: return "SFPU_OP_CBRT_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     }
 }
@@ -61,62 +26,36 @@ std::string get_macro_definition(UnaryOpType op_type) {
 std::pair<std::string, std::string> get_op_init_and_func(
     UnaryOpType op_type, const std::string& idst, std::optional<DataType> input_dtype) {
     switch (op_type) {
-        case UnaryOpType::ABS: return {"abs_tile_init();", fmt::format("abs_tile({});", idst)};
-        case UnaryOpType::ABS_INT32: return {"abs_tile_init();", fmt::format("abs_tile_int32({});", idst)};
-        case UnaryOpType::NEG:
-            if (input_dtype.has_value() && input_dtype.value() == DataType::INT32) {
-                return {"negative_tile_init();", fmt::format("negative_tile_int32({});", idst)};
-            }
-            return {"negative_tile_init();", fmt::format("negative_tile({});", idst)};
-        case UnaryOpType::ACOS: return {"acos_tile_init();", fmt::format("acos_tile({});", idst)};
-        case UnaryOpType::ASIN: return {"asin_tile_init();", fmt::format("asin_tile({});", idst)};
-        case UnaryOpType::ASINH: return {"asinh_tile_init();", fmt::format("asinh_tile({});", idst)};
-        case UnaryOpType::ATAN: return {"atan_tile_init();", fmt::format("atan_tile({});", idst)};
-        case UnaryOpType::ATANH: return {"atanh_tile_init();", fmt::format("atanh_tile({});", idst)};
-        case UnaryOpType::COS: return {"cos_tile_init();", fmt::format("cos_tile({});", idst)};
-        case UnaryOpType::ACOSH: return {"acosh_tile_init();", fmt::format("acosh_tile({});", idst)};
-        case UnaryOpType::COSH: return {"cosh_tile_init();", fmt::format("cosh_tile({});", idst)};
-        case UnaryOpType::SINH: return {"sinh_tile_init();", fmt::format("sinh_tile({});", idst)};
-        case UnaryOpType::ERFINV: return {"erfinv_tile_init();", fmt::format("erfinv_tile({});", idst)};
-        case UnaryOpType::EXP2: return {"exp2_tile_init();", fmt::format("exp2_tile({});", idst)};
-        case UnaryOpType::EXPM1: return {"expm1_tile_init();", fmt::format("expm1_tile({});", idst)};
-        case UnaryOpType::GEZ:
-            if (input_dtype.has_value() && *input_dtype == DataType::INT32) {
-                return {"gez_tile_init();", fmt::format("gez_tile_int32({});", idst)};
-            }
-            return {"gez_tile_init();", fmt::format("gez_tile({});", idst)};
-        case UnaryOpType::GTZ:
-            if (input_dtype.has_value() && *input_dtype == DataType::INT32) {
-                return {"gtz_tile_init();", fmt::format("gtz_tile_int32({});", idst)};
-            }
-            return {"gtz_tile_init();", fmt::format("gtz_tile({});", idst)};
-        case UnaryOpType::I0: return {"i0_tile_init();", fmt::format("i0_tile({});", idst)};
-        case UnaryOpType::I1: return {"i1_tile_init();", fmt::format("i1_tile({});", idst)};
-        case UnaryOpType::ISFINITE: return {"isfinite_tile_init();", fmt::format("isfinite_tile({});", idst)};
-        case UnaryOpType::ISINF: return {"isinf_tile_init();", fmt::format("isinf_tile({});", idst)};
-        case UnaryOpType::ISNAN: return {"isnan_tile_init();", fmt::format("isnan_tile({});", idst)};
-        case UnaryOpType::ISNEGINF: return {"isneginf_tile_init();", fmt::format("isneginf_tile({});", idst)};
-        case UnaryOpType::ISPOSINF: return {"isposinf_tile_init();", fmt::format("isposinf_tile({});", idst)};
-        case UnaryOpType::LEZ:
-            if (input_dtype.has_value() && *input_dtype == DataType::INT32) {
-                return {"lez_tile_init();", fmt::format("lez_tile_int32({});", idst)};
-            }
-            return {"lez_tile_init();", fmt::format("lez_tile({});", idst)};
-        case UnaryOpType::LOGICAL_NOT_UNARY: {
-            TT_FATAL(input_dtype.has_value(), "LOGICAL_NOT_UNARY requires input_dtype");
-            const char* df;
-            switch (*input_dtype) {
-                case DataType::INT32: df = "Int32"; break;
-                case DataType::UINT32: df = "UInt32"; break;
-                case DataType::UINT16: df = "UInt16"; break;
-                case DataType::FLOAT32: df = "Float32"; break;
-                case DataType::BFLOAT16: df = "Float16_b"; break;
-                case DataType::BFLOAT8_B: df = "Bfp8_b"; break;
-                case DataType::BFLOAT4_B: df = "Bfp4_b"; break;
-                default: TT_THROW("Unsupported dtype for logical_not: {}", *input_dtype);
-            }
-            return {"logical_not_tile_init();", fmt::format("logical_not_tile<DataFormat::{}>({});", df, idst)};
+        if (input_dtype.has_value() && input_dtype.value() == DataType::INT32) {
+            return {"negative_tile_init();", fmt::format("negative_tile_int32({});", idst)};
         }
+        return {"negative_tile_init();", fmt::format("negative_tile({});", idst)};
+        if (input_dtype.has_value() && *input_dtype == DataType::INT32) {
+            return {"gez_tile_init();", fmt::format("gez_tile_int32({});", idst)};
+        }
+        return {"gez_tile_init();", fmt::format("gez_tile({});", idst)};
+        if (input_dtype.has_value() && *input_dtype == DataType::INT32) {
+            return {"gtz_tile_init();", fmt::format("gtz_tile_int32({});", idst)};
+        }
+        return {"gtz_tile_init();", fmt::format("gtz_tile({});", idst)};
+        if (input_dtype.has_value() && *input_dtype == DataType::INT32) {
+            return {"lez_tile_init();", fmt::format("lez_tile_int32({});", idst)};
+        }
+        return {"lez_tile_init();", fmt::format("lez_tile({});", idst)};
+        TT_FATAL(input_dtype.has_value(), "LOGICAL_NOT_UNARY requires input_dtype");
+        const char* df;
+        switch (*input_dtype) {
+            case DataType::INT32: df = "Int32"; break;
+            case DataType::UINT32: df = "UInt32"; break;
+            case DataType::UINT16: df = "UInt16"; break;
+            case DataType::FLOAT32: df = "Float32"; break;
+            case DataType::BFLOAT16: df = "Float16_b"; break;
+            case DataType::BFLOAT8_B: df = "Bfp8_b"; break;
+            case DataType::BFLOAT4_B: df = "Bfp4_b"; break;
+            default: TT_THROW("Unsupported dtype for logical_not: {}", *input_dtype);
+        }
+        return {"logical_not_tile_init();", fmt::format("logical_not_tile<DataFormat::{}>({});", df, idst)};
+    }
         case UnaryOpType::LTZ:
             if (input_dtype.has_value() && *input_dtype == DataType::INT32) {
                 return {"ltz_tile_init();", fmt::format("ltz_tile_int32({});", idst)};
@@ -203,28 +142,19 @@ std::map<std::string, std::string> get_defines_impl(
 
 std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<DataType> input_dtype) {
     switch (op_type) {
-        case UnaryOpType::LGAMMA:
-            TT_FATAL(input_dtype.has_value(), "UnaryNg lgamma: missing input dtype for kernel selection.");
-            if (input_dtype.value() == DataType::BFLOAT16) {
-                return "lgamma_fast_kernel.cpp";
-            }
-            return "lgamma_kernel.cpp";
-        case UnaryOpType::MISH: return "mish_kernel.cpp";
-        case UnaryOpType::TANHSHRINK:
-            if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
-                return "tanhshrink_sfpu_kernel.cpp";
-            }
-            return "tanhshrink_kernel.cpp";
-        case UnaryOpType::IDENTITY: return "eltwise_identity_kernel.cpp";
-        case UnaryOpType::WHERE_TSS: return "where_tss_kernel.cpp";
-        case UnaryOpType::LOGIT: return "logit_kernel.cpp";
-        case UnaryOpType::HARDSHRINK:
-            if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
-                return "hardshrink_kernel_sfpu.cpp";
-            }
-            return "hardshrink_kernel.cpp";
-        case UnaryOpType::HARDSWISH: return "hardswish_kernel.cpp";
-        case UnaryOpType::LOGSIGMOID: return "logsigmoid_kernel.cpp";
+        TT_FATAL(input_dtype.has_value(), "UnaryNg lgamma: missing input dtype for kernel selection.");
+        if (input_dtype.value() == DataType::BFLOAT16) {
+            return "lgamma_fast_kernel.cpp";
+        }
+        return "lgamma_kernel.cpp";
+        if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
+            return "tanhshrink_sfpu_kernel.cpp";
+        }
+        return "tanhshrink_kernel.cpp";
+        if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
+            return "hardshrink_kernel_sfpu.cpp";
+        }
+        return "hardshrink_kernel.cpp";
         default: return "eltwise_sfpu.cpp";
     }
 }
