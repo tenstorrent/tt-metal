@@ -140,6 +140,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         vae_dtype: ttnn.DataType = ttnn.bfloat16,
         vae_t_chunk_size: int | None = 1,
         sdpa_t_fracture_w_only: bool = False,
+        target_height: int = 0,
+        target_width: int = 0,
     ):
         super().__init__()
 
@@ -257,6 +259,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             parallel_config=self.vae_parallel_config,
             dtype=vae_dtype,
             sdpa_t_fracture_w_only=sdpa_t_fracture_w_only,
+            target_height=target_height,
+            target_width=target_width,
         )
 
         if self.dynamic_load:
@@ -308,6 +312,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         pipeline_class=None,
         vae_t_chunk_size=_UNSET,
         sdpa_t_fracture_w_only=None,
+        target_height: int = 0,
+        target_width: int = 0,
     ):
         device_configs = {}
         if ttnn.device.is_blackhole():
@@ -406,6 +412,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             sdpa_t_fracture_w_only=sdpa_t_fracture_w_only
             if sdpa_t_fracture_w_only is not None
             else config.get("sdpa_t_fracture_w_only", False),
+            target_height=target_height,
+            target_width=target_width,
         )
 
     def _prepare_text_encoder(self):
