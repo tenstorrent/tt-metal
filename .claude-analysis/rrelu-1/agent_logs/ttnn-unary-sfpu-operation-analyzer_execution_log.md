@@ -67,3 +67,76 @@ No errors or recovery needed. Straightforward SFPI kernel analysis.
 - **CC pattern**: Simple v_if guard on sign bit (LT0)
 - **WH vs BH difference**: Only unroll pragma differs (8 vs 0); logic is identical
 - **Approximation mode**: Has no effect -- kernel has no APPROXIMATION_MODE branches
+
+---
+
+# Execution Log: ttnn-unary-sfpu-operation-analyzer (selu)
+
+## Metadata
+- **Operation**: selu
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Status**: SUCCESS
+
+## Input Interpretation
+| Field | Value | Confidence |
+|-------|-------|-----------|
+| Operation name | selu | HIGH |
+| UnaryOpType | SELU | HIGH |
+| Output directory | .claude-analysis/rrelu-1/ | HIGH |
+| Output filename | selu_analysis.md | HIGH |
+
+## Execution Timeline
+
+### Phase 1: Dispatch Tracing
+- Read `unary_op_utils.cpp` to find `get_compute_kernel_path()` -- SELU uses default `eltwise_sfpu.cpp`
+- Read `get_op_init_and_func()` -- SELU case at line 553: `selu_tile_init()` / `selu_tile(idst, param0, param1)`
+- Read `get_op_approx_mode()` -- SELU falls through to `default: return false`
+- Identified include guard: `SFPU_OP_SELU_INCLUDE`
+
+### Phase 2: Abstraction Layer Tracing
+- API Header: `tt_metal/hw/inc/api/compute/eltwise_unary/selu.h`
+- LLK Dispatch: `llk_math_eltwise_unary_sfpu_selu.h` (WH/BH identical)
+- Core SFPU: `ckernel_sfpu_unary_selu.h` (WH/BH identical)
+- Params Dispatch: `llk_math_eltwise_unary_sfpu_params.h` (from tt_llk)
+
+### Phase 3: Kernel Source Analysis
+- Read both WH and BH `ckernel_sfpu_unary_selu.h` -- confirmed identical
+- Key finding: SFPI-based kernel (Style A), uses `v_if(v >= 0.0f)` / `v_else` branching
+- Positive branch: simple `v * scale`
+- Negative branch: calls `_sfpu_exp_21f_bf16_<true>(v)`, computes `(exp(x)-1) * alpha * scale`
+- Read `ckernel_sfpu_exp.h` for the exp_21f algorithm (Moroz et al. 2022)
+- Read `ckernel_sfpu_polyval.h` for PolynomialEvaluator (Horner's method)
+- Traced SFPI intrinsics to `__builtin_rvtt_sfp*` builtins via `sfpi_lib.h`
+
+### Phase 4: Instruction Mapping
+- Mapped 17 distinct SFPU instructions used across the kernel and its helpers
+- Confirmed no raw TTI instructions in the SELU kernel itself
+- All SFPU instructions emitted by the SFPI compiler from high-level C++ abstractions
+
+### Phase 5: Address Mode Analysis
+- `SfpuType::selu` does not match any special-case branches in `eltwise_unary_sfpu_configure_addrmod`
+- Only `ADDR_MOD_7` is configured: `{srca.incr=0, srcb.incr=0, dest.incr=0}`
+- Identical on both Wormhole B0 and Blackhole
+
+## External Services
+| Service | Status | Fallback |
+|---------|--------|----------|
+| DeepWiki | FAILED (repository not indexed) | Source code analysis only |
+| Confluence | Not consulted | N/A |
+| Glean | Not consulted | N/A |
+
+## Artifacts
+| File | Action |
+|------|--------|
+| `.claude-analysis/rrelu-1/selu_analysis.md` | Created |
+| `.claude-analysis/rrelu-1/agent_logs/ttnn-unary-sfpu-operation-analyzer_breadcrumbs.jsonl` | Appended |
+| `.claude-analysis/rrelu-1/agent_logs/ttnn-unary-sfpu-operation-analyzer_execution_log.md` | Updated |
+
+## SFPU Analysis Summary
+- **Kernel style**: A_sfpi (pure SFPI abstractions)
+- **Core logic**: SELU splits into two CC-guarded branches: positive (v * scale) and negative ((exp(v)-1) * alpha * scale)
+- **Instructions**: 17 distinct SFPU instructions including SFPLOAD, SFPSTORE, SFPMAD, SFPLOADI, SFPSETCC, SFPENCC, SFPCOMPC, SFPPUSHC, SFPPOPC, SFPEXEXP, SFPEXMAN, SFPSHFT, SFPSETEXP, SFPSWAP, SFPCAST, SFP_STOCH_RND, SFPMUL
+- **CC pattern**: v_if(v >= 0.0f) / v_else with GTE0 sign bit test
+- **WH vs BH difference**: None -- implementations are identical
+- **Approximation mode**: APPROXIMATION_MODE template parameter is not used in the function body; exp helper is always called with is_fp32_dest_acc_en=true
+- **Notable**: The exp helper `_sfpu_exp_21f_bf16_` is called with hardcoded `is_fp32_dest_acc_en=true` to avoid premature FP16B rounding, even though the outer function defaults to `is_fp32_dest_acc_en=false`. Final rounding to FP16B is done explicitly after the full SELU formula.
