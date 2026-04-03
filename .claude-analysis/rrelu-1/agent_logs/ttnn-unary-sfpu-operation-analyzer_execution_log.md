@@ -209,3 +209,77 @@ No errors or recovery needed. Straightforward SFPI kernel analysis.
 - **CC pattern**: Simple LT0 guard (SFPSETCC -> guarded SFPMUL -> SFPENCC reset)
 - **WH vs BH difference**: Only ADDR_MOD numbering differs (WH: ADDR_MOD_3 remapped via base to slot 7; BH: ADDR_MOD_7 directly)
 - **Approximation mode**: Has no effect -- kernel has no APPROXIMATION_MODE branches
+
+---
+
+# Execution Log: ttnn-unary-sfpu-operation-analyzer (rand)
+
+## Metadata
+- **Operation**: rand
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Status**: SUCCESS
+- **Output File**: `.claude-analysis/rrelu-1/rand_analysis.md`
+
+## Input Interpretation
+| Field | Value | Confidence |
+|-------|-------|------------|
+| Operation name | rand | HIGH |
+| UnaryOpType | N/A (standalone API) | HIGH |
+| Compute kernel | compute_uniform.cpp (not standard eltwise_sfpu.cpp) | HIGH |
+| Init function | rand_tile_init(seed) | HIGH |
+| Tile function | rand_tile(idst, from, scale) | HIGH |
+| Approx mode | true (from rand_program_factory.cpp) | HIGH |
+
+## Execution Timeline
+
+### Phase 1: Dispatch Tracing
+- Searched for `UnaryOpType::RAND` -- not found in unary op utils
+- Found standalone API at `tt_metal/hw/inc/api/compute/eltwise_unary/rand.h`
+- Traced macro: `SFPU_UNARY_PARAMS_KERNEL_EXTRA_ARGS(rand, RC, APPROX, idst, from, scale)`
+- Identified consumers: `compute_uniform.cpp` (ttnn::rand), `compute_bernoulli.cpp` (ttnn::bernoulli)
+- Confirmed APPROX=true from `rand_program_factory.cpp:86`
+
+### Phase 2: Kernel Source Read
+- Read WH `ckernel_sfpu_rand.h` -- raw TTI instructions, no CC manipulation
+- Read BH `ckernel_sfpu_rand.h` -- nearly identical, minus NOPs and with symbolic constants
+- Read `rand_init` -> calls `init_prng_seed(seed)` which writes PRNG_SEED and waits 600 SFPNOP cycles
+- Read `_llk_math_eltwise_unary_sfpu_params_` for WH and BH dispatch patterns
+- Read `llk_math_eltwise_unary_sfpu.h` for addr_mod configuration
+
+### Phase 3: Instruction Analysis
+- Identified 8 distinct SFPU instructions
+- Key discovery: SFPMOV(InstrMod=8, VC=9) reads PRNG Counter from RS view
+- Consulted Confluence ISA page (1170505767) for:
+  - SFPMOV instruction definition (PRNG read mechanism)
+  - PRNG section (32-bit LFSR with XNOR taps at 31,30,10,0)
+  - SFPU Status (RS) view (RS[9] = PRNG Counter)
+  - SFPLOADI format modes (LO16_ONLY, HI16_ONLY)
+  - SFPSETSGN and SFPSETEXP instruction definitions
+
+### Phase 4: Analysis Writing
+- Wrote comprehensive analysis with both WH and BH annotated source
+- Documented algorithm: PRNG -> force [1,2) -> subtract 1 -> scale+offset -> [from, from+scale)
+- Documented WH vs BH differences (NOPs, ADDR_MOD, symbolic constants)
+
+## External Services
+| Service | Status | Notes |
+|---------|--------|-------|
+| DeepWiki | UNAVAILABLE | Repository not indexed (2 failed queries) |
+| Confluence | SUCCESS | Retrieved SFPMOV, PRNG, RS view, SFPLOADI, SFPSETSGN, SFPSETEXP sections |
+| Glean | Not needed | Confluence ISA page was sufficient |
+
+## Artifacts
+| File | Action |
+|------|--------|
+| `.claude-analysis/rrelu-1/rand_analysis.md` | Created |
+| `.claude-analysis/rrelu-1/agent_logs/ttnn-unary-sfpu-operation-analyzer_breadcrumbs.jsonl` | Appended |
+| `.claude-analysis/rrelu-1/agent_logs/ttnn-unary-sfpu-operation-analyzer_execution_log.md` | Updated (appended) |
+
+## SFPU Analysis Summary
+- **Kernel style**: B_raw_TTI (raw TTI instructions, no CC manipulation)
+- **Core logic**: Uniform random number generation using hardware PRNG LFSR
+- **Instructions**: SFPLOADI, SFPMOV (PRNG read), SFPSETSGN, SFPSETEXP, SFPADDI, SFPMAD, SFPNOP (WH only), SFPSTORE
+- **CC pattern**: None -- all lanes unconditionally active
+- **WH vs BH difference**: WH includes NOPs for latency hazards, uses ADDR_MOD_3; BH omits NOPs, uses ADDR_MOD_7
+- **Approximation mode**: Template parameter accepted but unused (no branches on APPROXIMATION_MODE)
+- **Notable**: rand is NOT a standard UnaryOpType; it's a standalone compute API with its own program factory
