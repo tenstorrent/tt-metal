@@ -5,11 +5,14 @@
 # Dedicated test suite for tooling and MPI infrastructure tests on dual T3K.
 # This runs:
 #   1. ttrun env passthrough multihost pytest (validates tt-run launch infrastructure)
-#   2. ULFM fault tolerance tests (MPI fault detection / recovery control plane)
-#   3. Multihost ULFM annotation smoke tests (remote-host hostname + fast-fail annotation)
-#   4. Single-node ULFM gap tests (exercise fast-fail, watchdog, terminate handler)
+#   2. Multihost ULFM annotation smoke tests (FAST_FAIL ::error with two hosts, then FAULT_TOLERANT)
+#   3. ULFM fault tolerance tests (MPI fault detection / recovery — many fault_tolerant lines)
+#   4. Single-node ULFM gap tests (fast-fail same-host, watchdog, terminate handler, …)
 #   5. Python unit tests: ttrun exit code interpretation
 #   6. Python unit tests: mpi_fault.py failure paths
+#
+# Step 2 is before step 3 so GitHub Actions sees multihost FAST_FAIL annotations first;
+# step 3's np=8 suite otherwise floods the log with fault_tolerant warnings on fewer hosts.
 
 set -euo pipefail
 
@@ -48,13 +51,13 @@ echo "LOG_METAL: Running ttrun env passthrough multihost pytest (import-isolated
   -m multihost \
   "${repo_root}/tests/ttnn/distributed/test_ttrun_env_passthrough.py") || fail=$((fail + 1))
 
-# ── 2. ULFM fault tolerance tests ─────────────────────────────────────
-echo "LOG_METAL: Running ULFM fault tolerance tests"
-"${repo_root}/tests/tt_metal/multihost/run_fault_tolerance_tests.sh" || fail=$((fail + 1))
-
-# ── 3. Multihost ULFM annotation smoke tests ──────────────────────────
+# ── 2. Multihost ULFM annotation smoke tests ──────────────────────────
 echo "LOG_METAL: Running multihost ULFM annotation smoke tests"
 "${repo_root}/tests/tt_metal/multihost/run_multihost_ulfm_annotation_tests.sh" || fail=$((fail + 1))
+
+# ── 3. ULFM fault tolerance tests ─────────────────────────────────────
+echo "LOG_METAL: Running ULFM fault tolerance tests"
+"${repo_root}/tests/tt_metal/multihost/run_fault_tolerance_tests.sh" || fail=$((fail + 1))
 
 # ── 4. Single-node ULFM gap tests (section 7.8) ───────────────────────
 #

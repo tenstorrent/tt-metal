@@ -180,12 +180,13 @@ jobs:
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
             --pid=host
-            --hostname=mpirun-host
           install_wheel: true
           run_args: |
             # Setup shared venv and switch to it (handles multi-host race conditions)
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_dual_bh_lb_tests.sh
+            ./tests/scripts/multihost/ulfm_github_workflow_wrappers.sh run \
+                ./tests/scripts/multihost/run_dual_bh_lb_tests.sh
+
   multi-host-bh-lb-4x:
     if: ${{ github.event.inputs.bh_lb_4x_multihost == 'true' || github.event.schedule == '0 */3 * * *' }}
     runs-on:
@@ -232,12 +233,12 @@ jobs:
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
             --pid=host
-            --hostname=mpirun-host
           install_wheel: true
           run_args: |
             # Setup shared venv and switch to it (handles multi-host race conditions)
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_bh_lb_tests.sh
+            ./tests/scripts/multihost/ulfm_github_workflow_wrappers.sh run \
+                ./tests/scripts/multihost/run_quad_bh_lb_tests.sh
 
   multi-host-t3k:
     if: ${{ github.event.inputs.t3k_multihost == 'true' || github.event.schedule == '0 */3 * * *' }}
@@ -288,7 +289,8 @@ jobs:
           run_args: |
             # Setup shared venv and switch to it (handles multi-host race conditions)
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_dual_t3k_tests.sh
+            ./tests/scripts/multihost/ulfm_github_workflow_wrappers.sh run \
+                ./tests/scripts/multihost/run_dual_t3k_tests.sh
 
   multi-host-glx-2x:
     if: ${{ github.event.inputs.glx_2x_multihost == 'true' || github.event.schedule == '0 */3 * * *' }}
@@ -339,7 +341,8 @@ jobs:
           run_args: |
             # Setup shared venv and switch to it (handles multi-host race conditions)
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_dual_galaxy_tests.sh
+            ./tests/scripts/multihost/ulfm_github_workflow_wrappers.sh run \
+                ./tests/scripts/multihost/run_dual_galaxy_tests.sh
 
   multi-host-glx-4x:
     if: ${{ github.event.inputs.glx_4x_unit_tests == 'true' || github.event.schedule == '0 4 * * *' }}
@@ -391,4 +394,5 @@ jobs:
           run_args: |
             # Setup shared venv and switch to it (handles multi-host race conditions)
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh unit_tests
+            ./tests/scripts/multihost/ulfm_github_workflow_wrappers.sh run \
+                ./tests/scripts/multihost/run_quad_galaxy_tests.sh unit_tests

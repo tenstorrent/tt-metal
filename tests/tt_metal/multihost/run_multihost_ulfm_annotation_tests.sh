@@ -3,19 +3,21 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Purpose: Run focused multihost ULFM rank-failure diagnostic smoke tests.
+# FAST_FAIL runs first so CI (e.g. tooling-and-mpi-t3k) emits multihost ::error
+# annotations before the FAULT_TOLERANT case.
 # These verify that:
 #   - A rank failure on the remote host reports the remote hostname (when ULFM
 #     can resolve it; MPIX_ERR_REVOKED often yields failed_hostname=unknown-hostname)
 #   - FAULT_TOLERANT / FAST_FAIL paths log policy=... with structured fields
 #
-# When GITHUB_ACTIONS is set, every captured "ULFM detected a rank failure" line
-# is re-emitted as a workflow ::warning so it appears in the Actions UI.
+# When GITHUB_ACTIONS is set, ulfm_github_workflow_wrappers.sh promotes structured
+# ULFM diagnostic lines to ::error / ::warning as documented in that script.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=ulfm_github_workflow_helpers.sh
-source "$SCRIPT_DIR/ulfm_github_workflow_helpers.sh"
+# shellcheck source=../../scripts/multihost/ulfm_github_workflow_wrappers.sh
+source "$SCRIPT_DIR/../../scripts/multihost/ulfm_github_workflow_wrappers.sh"
 
 MPIRUN="${MPIRUN:-$SCRIPT_DIR/mpirun_wrapper.sh}"
 TT_METAL_HOME="${TT_METAL_HOME:-$(cd "$SCRIPT_DIR" && git rev-parse --show-toplevel)}"
@@ -169,18 +171,18 @@ _run_expected_diagnostic_test() {
 echo "=== Multihost ULFM rank-failure diagnostic smoke tests (${primary_host} -> ${remote_host}) ==="
 
 _run_expected_diagnostic_test \
-    "FaultTolerance.MPIRankFailureExceptionCarriesContext" \
-    "fault_tolerant" \
-    "yes" \
-    "$MPIRUN" -x TT_METAL_HOME -x LD_LIBRARY_PATH "${common_mpi_args[@]}" "$TEST_BIN" \
-    --gtest_filter=FaultTolerance.MPIRankFailureExceptionCarriesContext
-
-_run_expected_diagnostic_test \
     "FaultTolerance.FastFailEmitsRankFailureDiagnostics" \
     "fast_fail" \
     "no" \
     "$MPIRUN" -x TT_METAL_HOME -x LD_LIBRARY_PATH "${common_mpi_args[@]}" "$TEST_BIN" \
     --gtest_filter=FaultTolerance.FastFailEmitsRankFailureDiagnostics
+
+_run_expected_diagnostic_test \
+    "FaultTolerance.MPIRankFailureExceptionCarriesContext" \
+    "fault_tolerant" \
+    "yes" \
+    "$MPIRUN" -x TT_METAL_HOME -x LD_LIBRARY_PATH "${common_mpi_args[@]}" "$TEST_BIN" \
+    --gtest_filter=FaultTolerance.MPIRankFailureExceptionCarriesContext
 
 if [[ $fail -ne 0 ]]; then
     exit 1
