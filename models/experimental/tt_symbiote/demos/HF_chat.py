@@ -39,7 +39,7 @@ from models.experimental.tt_symbiote.modules.attention import (
 )
 from models.experimental.tt_symbiote.modules.decoder_layer import TTNNBailingMoEDecoderLayerPadded
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
-
+from models.experimental.tt_symbiote.modules.embedding import TTNNBailingPaddedEmbedding
 
 MESH_DEVICE_MAP = {
     "N150": (1, 1),
@@ -110,6 +110,7 @@ def load_model(mesh_device, model_name="inclusionAI/Ling-mini-2.0"):
     nn_to_ttnn = {
         model.model.layers[0].__class__: TTNNBailingMoEDecoderLayerPadded,
         model.model.norm.__class__: TTNNDistributedRMSNorm,
+        nn.Embedding: TTNNBailingPaddedEmbedding,
     }
     nn_to_ttnn2 = {
         nn.Linear: TTNNLinearIColShardedWRowSharded,
@@ -118,6 +119,7 @@ def load_model(mesh_device, model_name="inclusionAI/Ling-mini-2.0"):
 
     modules1 = register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
     modules2 = register_module_replacement_dict(model, nn_to_ttnn2, model_config=None)
+    type(model).device = property(lambda self: torch.device("cpu"))
     set_device(model, mesh_device)
 
     all_modules = {**modules1, **modules2}
