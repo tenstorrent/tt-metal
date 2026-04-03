@@ -564,15 +564,14 @@ def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
                 continue
 
             detected_rankfile_path = resolve_rankfile_for_mpi(mpi_args[i + 1])
-            normalized_args.extend(["--map-by", f"rankfile:file={detected_rankfile_path}"])
-            rewrote_rankfile_args = True
+            normalized_args.extend(["--rankfile", detected_rankfile_path])
             i += 2
             continue
 
         if arg.startswith("--rankfile=") or arg.startswith("-rankfile="):
             rankfile_path = arg.split("=", 1)[1]
             detected_rankfile_path = resolve_rankfile_for_mpi(rankfile_path)
-            normalized_args.extend(["--map-by", f"rankfile:file={detected_rankfile_path}"])
+            normalized_args.extend(["--rankfile", detected_rankfile_path])
             rewrote_rankfile_args = True
             i += 1
             continue
