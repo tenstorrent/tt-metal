@@ -1,16 +1,16 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
 # SPDX-License-Identifier: Apache-2.0
 
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import numpy as np
 import torch
-from typing import Union
 from torch import Tensor
-from typing import Tuple, Union
-import numpy as np
-import torch
-from torch import Tensor
+
+from abc import abstractmethod
+from typing import Sequence, Tuple, Union
+from abc import ABCMeta, abstractmethod
 
 
 # taken from  mmdet3d.structures.bbox_3d.utils import limit_period
@@ -110,9 +110,6 @@ def bbox3d2result(bboxes, scores, labels, attrs=None):
     return result_dict
 
 
-from abc import ABCMeta, abstractmethod
-
-
 # taken from mmdet.models.task_modules import BaseBBoxCoder
 class BaseBBoxCoder(metaclass=ABCMeta):
     """Base bounding box coder.
@@ -136,14 +133,6 @@ class BaseBBoxCoder(metaclass=ABCMeta):
     def decode(self, bboxes, bboxes_pred):
         """Decode the predicted bboxes according to prediction and base
         boxes."""
-
-
-from abc import abstractmethod
-from typing import Sequence, Tuple, Union
-
-import numpy as np
-import torch
-from torch import Tensor
 
 
 # taken from mmdet3d/structures/bbox_3d/base_box3d.py
