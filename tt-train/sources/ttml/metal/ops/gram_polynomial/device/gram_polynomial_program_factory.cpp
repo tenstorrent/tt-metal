@@ -488,7 +488,7 @@ GramPolynomialProgramFactory::cached_program_t GramPolynomialProgramFactory::cre
                  subblock_h,
                  N_block,
                  num_n_blocks,
-                 std::bit_cast<uint32_t>(attrs.b),
+                 std::bit_cast<uint32_t>(attrs.c != 0.0f ? attrs.b / attrs.c : 0.0f),
                  std::bit_cast<uint32_t>(attrs.c)},
             .defines = defines};
     };
@@ -497,7 +497,7 @@ GramPolynomialProgramFactory::cached_program_t GramPolynomialProgramFactory::cre
     std::vector<tt::tt_metal::CoreCoord> sender_transpose_cores;
     for (uint32_t y = 1; y < grid_dim; y++)
         for (uint32_t x = 0; x < y; x++) sender_transpose_cores.push_back({x, y});
-    CreateKernel(
+    const auto compute_lower_kid = CreateKernel(
         program,
         compute_matmul_path,
         make_core_range_set(sender_transpose_cores),
@@ -506,7 +506,7 @@ GramPolynomialProgramFactory::cached_program_t GramPolynomialProgramFactory::cre
     // Diagonal: REDUCE_SENDER
     std::vector<tt::tt_metal::CoreCoord> sender_diag_cores;
     for (uint32_t d = 0; d < grid_dim; d++) sender_diag_cores.push_back({d, d});
-    CreateKernel(
+    const auto compute_diag_kid = CreateKernel(
         program, compute_matmul_path, make_core_range_set(sender_diag_cores), compute_cfg({{"REDUCE_SENDER", "1"}}));
 
     // Upper: REDUCE_ACCUMULATOR
@@ -516,10 +516,19 @@ GramPolynomialProgramFactory::cached_program_t GramPolynomialProgramFactory::cre
     auto accum_defines = std::map<std::string, std::string>{{"REDUCE_ACCUMULATOR", "1"}};
     if (mirror_active)
         accum_defines["MIRROR_OUTPUT"] = "1";
-    CreateKernel(program, compute_matmul_path, make_core_range_set(accum_cores), compute_cfg(accum_defines));
+    const auto compute_upper_kid =
+        CreateKernel(program, compute_matmul_path, make_core_range_set(accum_cores), compute_cfg(accum_defines));
 
     // Helpers: REDUCE_ACCUMULATOR (no mirror — diagonal blocks are self-symmetric)
-    CreateKernel(program, compute_matmul_path, helper_range, compute_cfg({{"REDUCE_ACCUMULATOR", "1"}}));
+    const auto compute_helper_kid =
+        CreateKernel(program, compute_matmul_path, helper_range, compute_cfg({{"REDUCE_ACCUMULATOR", "1"}}));
+
+    // Compute runtime args: N_global_offset = x * Mpc (column position of this core's output block)
+    for (auto& c : sender_transpose_cores) SetRuntimeArgs(program, compute_lower_kid, c, {c.x * Mpc});
+    for (auto& c : sender_diag_cores) SetRuntimeArgs(program, compute_diag_kid, c, {c.x * Mpc});
+    for (auto& c : accum_cores) SetRuntimeArgs(program, compute_upper_kid, c, {c.x * Mpc});
+    for (uint32_t y = 0; y < grid_dim; y++)
+        SetRuntimeArgs(program, compute_helper_kid, tt::tt_metal::CoreCoord{grid_dim, y}, {y * Mpc});
 
     // === Runtime args ===
 

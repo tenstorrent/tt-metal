@@ -127,8 +127,8 @@ TEST_F(GramPolynomialTest, ScaledGSquared_2048x2048) {
 // Phase 3: bG + cG² (Muon coefficients)
 TEST_F(GramPolynomialTest, BgPlusCgSquared_2048x2048) {
     auto G = make_random_tensor(2048);
-    constexpr float b = -4.775f;
-    constexpr float c = 2.0315f;
+    constexpr float b = 1000.0f;  // DEBUG: large b to check if bG is applied
+    constexpr float c = 1.0f;
     auto output = ttml::metal::gram_polynomial(G, b, c, ttml::metal::OutputMode::Full);
     tt::tt_metal::distributed::Synchronize(&ttml::autograd::ctx().get_device(), std::nullopt);
 
