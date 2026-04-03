@@ -27,6 +27,7 @@ Usage:
 
 import argparse
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
@@ -35,6 +36,16 @@ from loguru import logger
 
 import ttnn
 from models.demos.molmo2.tt.model_loader import create_model, load_model_weights, load_processor
+
+
+@dataclass
+class PenaltyArgs:
+    """Arguments for TTPenalties initialization."""
+
+    max_batch_size: int = 32
+    vocab_size: int = 152064
+    padded_vocab_size: int = 152064
+
 
 # Import shared utilities from tt module
 from models.demos.molmo2.tt.utils import (
@@ -83,6 +94,7 @@ class Molmo2Generator:
         use_paged_attention: bool = False,
         block_size: int = 64,
         num_blocks: int = 512,
+        repetition_penalty: float = 1.0,
     ):
         self.mesh_device = mesh_device
         self.model = model
@@ -90,6 +102,7 @@ class Molmo2Generator:
         self.num_layers = num_layers
         self.batch_size = batch_size
         self.max_seq_len = max_seq_len
+        self.repetition_penalty = repetition_penalty
 
         # Paged attention config
         self.use_paged_attention = use_paged_attention
@@ -97,6 +110,15 @@ class Molmo2Generator:
         self.num_blocks = num_blocks
         self.page_table = None  # ttnn tensor for current request's page table
         self.page_table_torch = None  # torch tensor for page table management
+
+        # Simple CPU-based repetition penalty tracking
+        self.generated_token_ids = set()  # Track generated tokens for penalty
+        if repetition_penalty != 1.0:
+            logger.info(f"Repetition penalty enabled: {repetition_penalty}")
+
+        # Chunked prefill config - process long sequences in chunks to avoid OOM
+        # 8192 is safe for ~12GB DRAM per device (attention matrix fits in memory)
+        self.max_prefill_chunk_size = 8192
 
         # Separate trace state for prefill and decode
         self.prefill_traces = {}  # {seq_len: (trace_id, trace_inputs, trace_output)}
@@ -277,6 +299,8 @@ class Molmo2Generator:
         input_ids: torch.Tensor,
         pixel_values: torch.Tensor,
         pooled_patches_idx: torch.Tensor,
+        use_data_parallel: bool = False,
+        frames_per_device: int = 8,
     ) -> ttnn.Tensor:
         """
         Prepare text model inputs by processing vision and fusing embeddings on device.
@@ -311,12 +335,30 @@ class Molmo2Generator:
             if pixel_values.dim() == 3 and pixel_values.shape[-1] != patch_features:
                 # Raw image [C, H, W] -> [1, C, H, W]
                 pixel_values = pixel_values.unsqueeze(0)
-            visual_embeddings_ttnn, valid_token = self.model.embed_image(pixel_values, pooled_patches_idx)
+            visual_embeddings_ttnn, valid_token = self.model.embed_image(
+                pixel_values,
+                pooled_patches_idx,
+                use_data_parallel=use_data_parallel,
+                frames_per_device=frames_per_device,
+            )
 
             sdpa_calls_after = VisionAttention._sdpa_call_count
             logger.info(f"_prepare_text_inputs (DEMO): embed_image completed (REQUEST #{request_num})")
             logger.info(
                 f"  SDPA calls this request: {sdpa_calls_after - sdpa_calls_before} (total: {sdpa_calls_after})"
+            )
+
+            # Debug: dump visual embedding statistics for comparison
+            is_mesh = self.mesh_device.__class__.__name__ == "MeshDevice"
+            if is_mesh:
+                ve_torch = ttnn.to_torch(
+                    visual_embeddings_ttnn, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+                )[0]
+            else:
+                ve_torch = ttnn.to_torch(visual_embeddings_ttnn)
+            logger.info(f"  Visual embeddings shape: {ve_torch.shape}")
+            logger.info(
+                f"  Visual embeddings stats: mean={ve_torch.mean().item():.6f}, std={ve_torch.std().item():.6f}, min={ve_torch.min().item():.6f}, max={ve_torch.max().item():.6f}"
             )
 
             fused_ttnn = self.model.prepare_inputs_for_multimodal(input_ids, visual_embeddings_ttnn, valid_token)
@@ -1629,6 +1671,8 @@ class Molmo2Generator:
         use_unified_trace: bool = False,
         page_table: Optional[ttnn.Tensor] = None,
         user_id: int = 0,
+        use_data_parallel: bool = False,
+        frames_per_device: int = 8,
     ) -> Tuple[ttnn.Tensor, dict]:
         """
         Run prefill phase (process prompt + image).
@@ -1762,7 +1806,13 @@ class Molmo2Generator:
             e2e_ttft_start = time.perf_counter()
             logger.info("Preparing inputs (vision processing)...")
             vision_start = time.perf_counter()
-            hidden_states_ttnn = self._prepare_text_inputs(input_ids, pixel_values, pooled_patches_idx)
+            hidden_states_ttnn = self._prepare_text_inputs(
+                input_ids,
+                pixel_values,
+                pooled_patches_idx,
+                use_data_parallel=use_data_parallel,
+                frames_per_device=frames_per_device,
+            )
             timing["vision_ms"] = (time.perf_counter() - vision_start) * 1000
             logger.info(f"Vision processing completed in {timing['vision_ms']:.2f}ms")
 
@@ -1791,21 +1841,54 @@ class Molmo2Generator:
 
             ttnn.deallocate(hidden_states_ttnn)
         else:
-            # Warm-up (compile)
-            timing["compile_prefill_ms"] = self.warmup_prefill(
-                hidden_states_ttnn, None, use_trace=False, page_table=effective_page_table
-            )
+            # Warm-up (compile) - use smaller chunk for warmup if chunked prefill
+            compile_seq_len = min(seq_len, self.max_prefill_chunk_size)
+            if compile_seq_len < seq_len:
+                # Create a smaller hidden_states for compilation
+                warmup_hidden_states = ttnn.slice(
+                    hidden_states_ttnn,
+                    (0, 0, 0, 0),
+                    (1, 1, compile_seq_len, 4096),
+                )
+                timing["compile_prefill_ms"] = self.warmup_prefill(
+                    warmup_hidden_states, None, use_trace=False, page_table=effective_page_table
+                )
+                ttnn.deallocate(warmup_hidden_states)
+            else:
+                timing["compile_prefill_ms"] = self.warmup_prefill(
+                    hidden_states_ttnn, None, use_trace=False, page_table=effective_page_table
+                )
 
-            # Actual prefill (TTFT) - pass KV cache to fill during forward
+            # Actual prefill (TTFT) - use chunked prefill for long sequences
             ttft_start = time.perf_counter()
-            logits, _ = self.model.text_model.forward(
-                hidden_states=hidden_states_ttnn,
-                start_pos=0,
-                attn_mask=None,
-                kv_caches=self.kv_caches,  # Pass pre-allocated cache to fill
-                page_table=effective_page_table,
-                user_id=user_id,
-            )
+
+            if seq_len > self.max_prefill_chunk_size and self.use_paged_attention:
+                # Chunked prefill for long sequences
+                logger.info(f"Using chunked prefill: seq_len={seq_len}, chunk_size={self.max_prefill_chunk_size}")
+                logits, last_chunk_size = self._run_chunked_prefill(
+                    hidden_states_ttnn,
+                    seq_len,
+                    effective_page_table,
+                    user_id,
+                )
+                # For chunked prefill, logits are only for the last chunk
+                # Store the index within the last chunk for correct logits access
+                timing["chunked_prefill"] = True
+                timing["last_chunk_size"] = last_chunk_size
+                # Compute the position within the last chunk
+                # original_seq_len may be less than seq_len (padded)
+                last_chunk_start = ((original_seq_len - 1) // self.max_prefill_chunk_size) * self.max_prefill_chunk_size
+                timing["last_token_idx_in_chunk"] = original_seq_len - 1 - last_chunk_start
+            else:
+                # Standard prefill for short sequences
+                logits, _ = self.model.text_model.forward(
+                    hidden_states=hidden_states_ttnn,
+                    start_pos=0,
+                    attn_mask=None,
+                    kv_caches=self.kv_caches,  # Pass pre-allocated cache to fill
+                    page_table=effective_page_table,
+                    user_id=user_id,
+                )
             ttnn.synchronize_device(self.mesh_device)
             timing["ttft_ms"] = (time.perf_counter() - ttft_start) * 1000
 
@@ -1824,6 +1907,92 @@ class Molmo2Generator:
         timing["original_seq_len"] = original_seq_len
 
         return logits, timing
+
+    def _run_chunked_prefill(
+        self,
+        hidden_states_ttnn: ttnn.Tensor,
+        seq_len: int,
+        page_table: ttnn.Tensor,
+        user_id: int = 0,
+    ) -> Tuple[ttnn.Tensor, int]:
+        """
+        Run prefill in chunks to avoid OOM for long sequences.
+
+        For sequences longer than max_prefill_chunk_size, processes in chunks
+        using chunked_scaled_dot_product_attention which reads previous KV from cache.
+
+        Args:
+            hidden_states_ttnn: Full hidden states [1, 1, seq_len, hidden_dim]
+            seq_len: Total sequence length
+            page_table: Page table for paged attention
+            user_id: User ID for KV cache slot
+
+        Returns:
+            Tuple of (logits from the last chunk, size of the last chunk)
+        """
+        chunk_size = self.max_prefill_chunk_size
+        num_chunks = (seq_len + chunk_size - 1) // chunk_size
+        logger.info(f"Chunked prefill: {num_chunks} chunks of {chunk_size} tokens")
+
+        logits = None
+
+        for chunk_idx in range(num_chunks):
+            chunk_start = chunk_idx * chunk_size
+            chunk_end = min(chunk_start + chunk_size, seq_len)
+            actual_chunk_size = chunk_end - chunk_start
+
+            logger.debug(f"Processing chunk {chunk_idx + 1}/{num_chunks}: positions {chunk_start}-{chunk_end}")
+
+            # Slice hidden states for this chunk
+            chunk_hidden = ttnn.slice(
+                hidden_states_ttnn,
+                (0, 0, chunk_start, 0),
+                (1, 1, chunk_end, 4096),
+            )
+
+            # Get rotation matrices for this chunk's positions
+            rot_mats = self.model.text_model.rotary_setup.get_rot_mats_prefill(actual_chunk_size, start_pos=chunk_start)
+
+            # Compute chunk page table (pages for this chunk)
+            blocks_per_chunk = (chunk_size + self.block_size - 1) // self.block_size
+            chunk_start_block = chunk_start // self.block_size
+            chunk_end_block = (chunk_end + self.block_size - 1) // self.block_size
+
+            # Get page table for this chunk
+            chunk_page_table_torch = self.page_table_torch[:, chunk_start_block:chunk_end_block]
+            chunk_page_table = ttnn.from_torch(
+                chunk_page_table_torch,
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
+            # Forward pass with chunked attention
+            chunk_logits, _ = self.model.text_model.forward(
+                hidden_states=chunk_hidden,
+                start_pos=chunk_start,
+                attn_mask=None,
+                kv_caches=self.kv_caches,
+                rot_mats=rot_mats,
+                page_table=page_table,  # Full page table for reading previous KV
+                user_id=user_id,
+                chunk_page_table=chunk_page_table,  # Chunk page table for writing new KV
+                chunk_start_idx=chunk_start,  # Enables chunked attention
+            )
+
+            ttnn.deallocate(chunk_hidden)
+            ttnn.deallocate(chunk_page_table)
+
+            # Keep logits from the last chunk
+            if chunk_idx == num_chunks - 1:
+                logits = chunk_logits
+                last_chunk_size = actual_chunk_size
+            else:
+                ttnn.deallocate(chunk_logits)
+
+        return logits, last_chunk_size
 
     def run_decode_step(
         self,
@@ -1894,8 +2063,52 @@ class Molmo2Generator:
 
         ttnn.deallocate(hidden_states)
 
-        # On-device argmax (no CPU logits transfer)
-        tt_next_token = self._argmax_on_device(logits)
+        # Apply repetition penalty if enabled (CPU-based for correctness)
+        if self.repetition_penalty != 1.0:
+            # Move logits to CPU, apply penalty, then do argmax on CPU
+            mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+            logits_torch = ttnn.to_torch(logits, mesh_composer=mesh_composer)[0]
+
+            # Apply repetition penalty to previously generated tokens
+            num_penalized = len(self.generated_token_ids)
+            for token_id in self.generated_token_ids:
+                if logits_torch.dim() == 4:  # [1, 1, batch, vocab]
+                    for b in range(logits_torch.shape[2]):
+                        if logits_torch[0, 0, b, token_id] > 0:
+                            logits_torch[0, 0, b, token_id] /= self.repetition_penalty
+                        else:
+                            logits_torch[0, 0, b, token_id] *= self.repetition_penalty
+                elif logits_torch.dim() == 3:  # [1, batch, vocab]
+                    for b in range(logits_torch.shape[1]):
+                        if logits_torch[0, b, token_id] > 0:
+                            logits_torch[0, b, token_id] /= self.repetition_penalty
+                        else:
+                            logits_torch[0, b, token_id] *= self.repetition_penalty
+
+            # CPU argmax
+            if logits_torch.dim() == 4:
+                next_token = logits_torch[0, 0, 0, :].argmax().item()
+            else:
+                next_token = logits_torch[0, 0, :].argmax().item()
+
+            # Track generated token
+            self.generated_token_ids.add(next_token)
+            if len(self.generated_token_ids) <= 5 or len(self.generated_token_ids) % 10 == 0:
+                logger.debug(f"Repetition penalty: penalized {num_penalized} tokens, selected token {next_token}")
+
+            # Create token tensor on device
+            token_batch = torch.tensor([[next_token] * self.batch_size], dtype=torch.long)
+            tt_next_token = ttnn.from_torch(
+                token_batch,
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=self.mesh_mapper,
+            )
+        else:
+            # On-device argmax (no CPU logits transfer)
+            tt_next_token = self._argmax_on_device(logits)
 
         # On-device position increment (no CPU tensor creation)
         ttnn.plus_one(self.current_pos)
@@ -2029,6 +2242,12 @@ class Molmo2Generator:
             mesh_mapper=self.mesh_mapper,
         )
 
+        # Reset repetition penalty tracking
+        self.generated_token_ids = set()
+        if self.repetition_penalty != 1.0:
+            # Add first generated token to tracking
+            self.generated_token_ids.add(next_token)
+
         # Autoregressive generation -- forward pass is fully on device
         decode_times = []
         eos_token_id = self.tokenizer.eos_token_id
@@ -2097,6 +2316,8 @@ class Molmo2Generator:
         use_decode_trace: bool = False,
         use_vision_trace: bool = False,
         use_unified_trace: bool = False,
+        use_data_parallel: bool = False,
+        frames_per_device: int = 8,
     ) -> Tuple[str, dict]:
         """
         Run full inference on a video input with autoregressive generation.
@@ -2150,6 +2371,8 @@ class Molmo2Generator:
             use_trace=use_trace,
             use_vision_trace=use_vision_trace,
             use_unified_trace=use_unified_trace,
+            use_data_parallel=use_data_parallel,
+            frames_per_device=frames_per_device,
         )
 
         vision_total_ms = (time.perf_counter() - vision_start) * 1000
@@ -2160,7 +2383,12 @@ class Molmo2Generator:
         mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
         logits_torch = ttnn.to_torch(logits, mesh_composer=mesh_composer)[0].squeeze()
         if logits_torch.dim() == 2:
-            next_token_logits = logits_torch[original_seq_len - 1, :]
+            # For chunked prefill, use the index within the last chunk
+            if prefill_timing.get("chunked_prefill", False):
+                logits_idx = prefill_timing["last_token_idx_in_chunk"]
+            else:
+                logits_idx = original_seq_len - 1
+            next_token_logits = logits_torch[logits_idx, :]
         else:
             next_token_logits = logits_torch
 
@@ -2179,6 +2407,12 @@ class Molmo2Generator:
             mesh_mapper=self.mesh_mapper,
         )
 
+        # Reset repetition penalty tracking
+        self.generated_token_ids = set()
+        if self.repetition_penalty != 1.0:
+            # Add first generated token to tracking
+            self.generated_token_ids.add(next_token)
+
         # Autoregressive generation
         decode_times = []
         eos_token_id = self.tokenizer.eos_token_id
@@ -2194,7 +2428,12 @@ class Molmo2Generator:
             )
             decode_times.append(decode_time)
 
-            next_token = self._read_token_from_device(tt_next_token)
+            # Read token - for repetition penalty we already have it from run_decode_step
+            if self.repetition_penalty != 1.0:
+                # Token was tracked in run_decode_step, get it from the device
+                next_token = self._read_token_from_device(tt_next_token)
+            else:
+                next_token = self._read_token_from_device(tt_next_token)
             generated_tokens.append(next_token)
 
             if (i + 1) % 10 == 0:
@@ -2416,7 +2655,7 @@ def run_video_demo(
     max_new_tokens: int = 200,
     device_id: int = 0,
     num_layers: Optional[int] = None,
-    max_seq_len: int = 16384,
+    max_seq_len: int = 65536,  # 64k for ~320-frame video support
     max_frames: int = VIDEO_MAX_FRAMES,
     max_fps: float = VIDEO_MAX_FPS,
     use_trace: bool = False,
@@ -2426,6 +2665,9 @@ def run_video_demo(
     use_paged_attention: bool = False,
     batch_size: int = 1,
     num_devices: int = 8,
+    use_data_parallel: bool = False,
+    frames_per_device: int = 8,
+    repetition_penalty: float = 1.1,
 ):
     """
     Run the Molmo2 demo with video input.
@@ -2475,7 +2717,7 @@ def run_video_demo(
     logger.info(f"Opened mesh device with {device.get_num_devices()} devices")
 
     try:
-        model = create_model(device, state_dict, num_layers, max_batch_size=batch_size)
+        model = create_model(device, state_dict, num_layers, max_batch_size=batch_size, max_seq_len=max_seq_len)
         text_num_layers = num_layers if num_layers is not None else 36
 
         generator = Molmo2Generator(
@@ -2486,6 +2728,7 @@ def run_video_demo(
             batch_size=batch_size,
             max_seq_len=max_seq_len,
             use_paged_attention=use_paged_attention,
+            repetition_penalty=repetition_penalty,
         )
 
         logger.info("\n" + "=" * 60)
@@ -2500,6 +2743,8 @@ def run_video_demo(
             use_decode_trace=use_decode_trace,
             use_vision_trace=use_vision_trace,
             use_unified_trace=use_unified_trace,
+            use_data_parallel=use_data_parallel,
+            frames_per_device=frames_per_device,
         )
 
         logger.info("\n" + "=" * 60)
@@ -2544,6 +2789,7 @@ def run_demo(
     use_paged_attention: bool = False,
     batch_size: int = 1,
     num_devices: int = 8,
+    repetition_penalty: float = 1.1,
 ):
     """
     Run the Molmo2 demo.
@@ -2603,7 +2849,7 @@ def run_demo(
 
     try:
         # Create model
-        model = create_model(device, state_dict, num_layers, max_batch_size=batch_size)
+        model = create_model(device, state_dict, num_layers, max_batch_size=batch_size, max_seq_len=max_seq_len)
         text_num_layers = num_layers if num_layers is not None else 36
 
         # Create generator
@@ -2615,6 +2861,7 @@ def run_demo(
             batch_size=batch_size,
             max_seq_len=max_seq_len,
             use_paged_attention=use_paged_attention,
+            repetition_penalty=repetition_penalty,
         )
 
         # Warmup: compile ops and capture traces for all bucket sizes
@@ -2770,7 +3017,7 @@ def run_batched_demo(
     logger.info(f"Opened mesh device with {device.get_num_devices()} devices")
 
     try:
-        model = create_model(device, state_dict, num_layers, max_batch_size=batch_size)
+        model = create_model(device, state_dict, num_layers, max_batch_size=batch_size, max_seq_len=max_seq_len)
         text_num_layers = num_layers if num_layers is not None else 36
 
         generator = Molmo2Generator(
@@ -2919,6 +3166,23 @@ def main():
         default=8,
         help="Number of TT devices to use (default: 8 for T3K)",
     )
+    parser.add_argument(
+        "--use-data-parallel",
+        action="store_true",
+        help="Use data parallelism for video frames (shard frames across devices)",
+    )
+    parser.add_argument(
+        "--frames-per-device",
+        type=int,
+        default=8,
+        help="Frames per device per pass when using data parallel (default: 8)",
+    )
+    parser.add_argument(
+        "--repetition-penalty",
+        type=float,
+        default=1.1,
+        help="Repetition penalty to prevent degenerate looping (default: 1.1, use 1.0 to disable)",
+    )
 
     args = parser.parse_args()
 
@@ -2938,8 +3202,12 @@ def main():
             num_devices=args.num_devices,
         )
     elif args.video is not None:
-        prompt = args.prompt if args.prompt is not None else f"{VIDEO_PROMPT} Describe what happens in this video."
-        max_seq_len = args.max_seq_len if args.max_seq_len is not None else 16384
+        if args.prompt is not None:
+            # Auto-prepend <|video|> if user forgot it
+            prompt = args.prompt if VIDEO_PROMPT in args.prompt else f"{VIDEO_PROMPT} {args.prompt}"
+        else:
+            prompt = f"{VIDEO_PROMPT} Describe what happens in this video."
+        max_seq_len = args.max_seq_len if args.max_seq_len is not None else 65536
         run_video_demo(
             video_path=args.video,
             prompt=prompt,
@@ -2956,9 +3224,16 @@ def main():
             use_paged_attention=args.paged_attention,
             batch_size=args.batch_size,
             num_devices=args.num_devices,
+            use_data_parallel=args.use_data_parallel,
+            frames_per_device=args.frames_per_device,
+            repetition_penalty=args.repetition_penalty,
         )
     else:
-        prompt = args.prompt if args.prompt is not None else "<|image|> Describe this image in detail."
+        # Image inference - auto-prepend <|image|> if user forgot it
+        if args.prompt is not None:
+            prompt = args.prompt if IMAGE_PROMPT in args.prompt else f"{IMAGE_PROMPT} {args.prompt}"
+        else:
+            prompt = f"{IMAGE_PROMPT} Describe this image in detail."
         max_seq_len = args.max_seq_len if args.max_seq_len is not None else 2048
         run_demo(
             image_path=args.image,
@@ -2974,6 +3249,7 @@ def main():
             use_paged_attention=args.paged_attention,
             batch_size=args.batch_size,
             num_devices=args.num_devices,
+            repetition_penalty=args.repetition_penalty,
         )
 
 

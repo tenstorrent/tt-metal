@@ -27,6 +27,11 @@ class VisionAttention(LightweightModule):
         - Separate Q, K, V projections with bias
         - Scaled dot-product attention (bidirectional)
         - Output projection with bias
+
+    Supports TP=8 tensor parallelism:
+        - Weights sharded by heads across devices (16 heads / 8 devices = 2 heads/device)
+        - Column-parallel for QKV projection
+        - Row-parallel for output projection with all_reduce
     """
 
     def __init__(
@@ -39,6 +44,7 @@ class VisionAttention(LightweightModule):
         head_dim: int,
         weight_cache_path=None,
         dtype=ttnn.bfloat16,  # Changed from bfloat8_b for better vision precision
+        use_tensor_parallel: bool = False,  # ViT uses data parallelism by default
     ):
         """
         Initialize VisionAttention.
@@ -52,6 +58,8 @@ class VisionAttention(LightweightModule):
             head_dim: Dimension per head (72 for Molmo2 ViT)
             weight_cache_path: Path to cache weights
             dtype: Data type for weights
+            use_tensor_parallel: If True, use TP=8 (shard weights). If False, replicate weights
+                                 for data parallelism. Default False for ViT (uses DP for frames).
         """
         super().__init__()
 
@@ -61,6 +69,20 @@ class VisionAttention(LightweightModule):
         self.head_dim = head_dim
         self.dtype = dtype
         self.tile_size = 32
+        self.use_tensor_parallel = use_tensor_parallel
+
+        # Device configuration
+        self.is_mesh_device = mesh_device.__class__.__name__ == "MeshDevice"
+        self.num_devices = mesh_device.get_num_devices() if self.is_mesh_device else 1
+
+        # For TP: local heads per device. For DP: all heads on each device.
+        if use_tensor_parallel and self.is_mesh_device:
+            assert (
+                num_heads % self.num_devices == 0
+            ), f"num_heads {num_heads} must be divisible by num_devices {self.num_devices}"
+            self.n_local_heads = num_heads // self.num_devices  # 16/8 = 2 heads per device
+        else:
+            self.n_local_heads = num_heads  # All heads on each device (data parallel)
 
         # Pad head_dim to tile boundary if needed
         self.padded_head_dim = math.ceil(head_dim / self.tile_size) * self.tile_size
@@ -74,8 +96,25 @@ class VisionAttention(LightweightModule):
         else:
             cache_name = lambda name: weight_cache_path / f"{state_dict_prefix}.{name}"
 
-        is_mesh_device = mesh_device.__class__.__name__ == "MeshDevice"
-        mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh_device else None
+        # Mesh mappers: TP uses sharding, DP uses replication
+        if self.is_mesh_device and use_tensor_parallel:
+            # TP=8: Column-parallel for QKV (shard output dimension)
+            col_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3)
+            # TP=8: Row-parallel for output projection (shard input dimension)
+            row_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+            bias_col_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
+            bias_replicate_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+        elif self.is_mesh_device:
+            # Data Parallel: Replicate all weights
+            col_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+            row_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+            bias_col_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+            bias_replicate_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+        else:
+            col_mesh_mapper = None
+            row_mesh_mapper = None
+            bias_col_mapper = None
+            bias_replicate_mapper = None
 
         # Load separate Q, K, V, O weights and combine Q, K, V for efficient computation
         # We'll create a fused QKV weight for efficiency
@@ -119,24 +158,28 @@ class VisionAttention(LightweightModule):
         wqkv = torch.cat([wq_t, wk_t, wv_t], dim=-1)
         bqkv = torch.cat([bq, bk, bv], dim=-1)
 
+        # For TP: weights are sharded by heads (dim=3 = last dimension after unsqueeze)
+        # wqkv shape: [1, 1, hidden_dim, 3 * num_heads * padded_head_dim]
+        # ShardTensorToMesh(dim=3) shards last dim across devices
         self.wqkv = ttnn.as_tensor(
             wqkv.unsqueeze(0).unsqueeze(0),
             dtype=dtype,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=col_mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("wqkv.weight"),
+            cache_file_name=cache_name("wqkv.weight.tp8") if self.is_mesh_device else cache_name("wqkv.weight"),
         )
 
+        # Bias for column-parallel is also sharded
         self.bqkv = ttnn.as_tensor(
             bqkv,
             dtype=ttnn.bfloat16,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=bias_col_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("wqkv.bias"),
+            cache_file_name=cache_name("wqkv.bias.tp8") if self.is_mesh_device else cache_name("wqkv.bias"),
         )
 
         # Output projection
@@ -152,21 +195,25 @@ class VisionAttention(LightweightModule):
 
         wo_t = torch.transpose(wo, -2, -1)
 
+        # For TP: output projection is row-parallel (shard input dim = dim 2)
+        # wo shape: [1, 1, num_heads * padded_head_dim, hidden_dim]
+        # ShardTensorToMesh(dim=2) shards the input dimension
         self.wo = ttnn.as_tensor(
             wo_t.unsqueeze(0).unsqueeze(0),
             dtype=dtype,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=row_mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("wo.weight"),
+            cache_file_name=cache_name("wo.weight.tp8") if self.is_mesh_device else cache_name("wo.weight"),
         )
 
+        # Bias for row-parallel is replicated (added after all_reduce)
         self.bo = ttnn.as_tensor(
             bo,
             dtype=ttnn.bfloat16,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=bias_replicate_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name("wo.bias"),
@@ -229,6 +276,9 @@ class VisionAttention(LightweightModule):
         """
         Forward pass through attention.
 
+        With TP=8, each device processes n_local_heads (2 heads).
+        After output projection, all_reduce combines partial results.
+
         Args:
             x: Input tensor of shape [1, 1, seq_len, hidden_dim]
 
@@ -246,14 +296,14 @@ class VisionAttention(LightweightModule):
         # Log every 25 calls (once per ViT layer set)
         if call_num % 25 == 1 or call_num <= 3:
             logger.debug(
-                f"VisionAttention SDPA call #{call_num} (request #{VisionAttention._current_request}): seq_len={seq_len}"
+                f"VisionAttention SDPA call #{call_num} (request #{VisionAttention._current_request}): seq_len={seq_len}, n_local_heads={self.n_local_heads}"
             )
 
         # Reshape for long sequences (only when divisible for memory optimization)
         if seq_len > 2048 and seq_len % 2048 == 0:
             x = ttnn.reshape(x, [1, seq_len // 2048, 2048, -1])
 
-        # QKV projection
+        # QKV projection (column-parallel: each device computes its local heads)
         qkv = ttnn.linear(
             x,
             self.wqkv,
@@ -261,7 +311,7 @@ class VisionAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Add bias
+        # Add bias (sharded for TP)
         qkv = qkv + self.bqkv
 
         # Reshape back if needed
@@ -270,11 +320,11 @@ class VisionAttention(LightweightModule):
 
         ttnn.deallocate(x)
 
-        # Split Q, K, V and reshape to heads
+        # Split Q, K, V and reshape to LOCAL heads (n_local_heads per device)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv,
-            num_heads=self.num_heads,
-            num_kv_heads=self.num_heads,  # Full attention, not GQA
+            num_heads=self.n_local_heads,  # TP: use local heads per device
+            num_kv_heads=self.n_local_heads,  # Full attention, not GQA
             transpose_k_heads=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -308,16 +358,16 @@ class VisionAttention(LightweightModule):
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        # Reshape attention output: [1, num_heads, seq_len, head_dim] -> [1, 1, seq_len, hidden_dim]
-        attn_output = ttnn.reshape(attn_output, [1, self.num_heads, -1, self.padded_head_dim])
+        # Reshape attention output: [1, n_local_heads, seq_len, head_dim] -> [1, 1, seq_len, local_hidden_dim]
+        attn_output = ttnn.reshape(attn_output, [1, self.n_local_heads, -1, self.padded_head_dim])
 
-        # Concatenate heads
+        # Concatenate LOCAL heads
         attn_output = ttnn.experimental.nlp_concat_heads(
             attn_output,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Output projection (reshape only when divisible for memory optimization)
+        # Output projection (row-parallel: each device has partial weights)
         if seq_len > 1024 and seq_len % 1024 == 0:
             attn_output = ttnn.reshape(attn_output, [1, seq_len // 1024, 1024, -1])
 
@@ -328,12 +378,22 @@ class VisionAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Add output bias
+        ttnn.deallocate(attn_output)
+
+        # TP=8: All-reduce to combine partial results from all devices
+        # Only needed when using tensor parallelism (not data parallelism)
+        if self.use_tensor_parallel and self.is_mesh_device and self.num_devices > 1:
+            output = ttnn.all_reduce(
+                output,
+                cluster_axis=1,
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        # Add output bias (replicated, added after all_reduce)
         output = output + self.bo
 
         if seq_len > 1024 and seq_len % 1024 == 0:
             output = ttnn.reshape(output, [1, 1, seq_len, -1])
-
-        ttnn.deallocate(attn_output)
 
         return output

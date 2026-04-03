@@ -218,9 +218,15 @@ class TextModel(LightweightModule):
         rot_mats: Optional[List[ttnn.Tensor]] = None,
         page_table: Optional[ttnn.Tensor] = None,
         user_id: int = 0,
+        chunk_page_table: Optional[ttnn.Tensor] = None,
+        chunk_start_idx: Optional[int] = None,
     ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]]]:
         """
         Forward pass through text model (without embedding).
+
+        Supports chunked prefill for long sequences (>64k tokens):
+            - When chunk_start_idx is provided, uses chunked attention
+            - Processes sequence in chunks to avoid OOM on attention matrix
 
         Args:
             hidden_states: Input embeddings of shape [1, 1, seq_len, hidden_dim]
@@ -231,6 +237,8 @@ class TextModel(LightweightModule):
             rot_mats: Optional pre-computed rotation matrices [cos, sin] for tracing
             page_table: Optional page table for paged attention (vLLM)
             user_id: Batch index for multi-user batching (which user's KV cache slot to fill)
+            chunk_page_table: Page table for current chunk (chunked prefill)
+            chunk_start_idx: Starting position of current chunk (enables chunked attention)
 
         Returns:
             Tuple of (logits, new_kv_caches)
@@ -253,7 +261,16 @@ class TextModel(LightweightModule):
 
             kv_cache = kv_caches[layer_idx] if kv_caches else None
             x, new_kv_cache = block(
-                x, rot_mats, self.transformation_mats, attn_mask, start_pos, kv_cache, page_table, user_id
+                x,
+                rot_mats,
+                self.transformation_mats,
+                attn_mask,
+                start_pos,
+                kv_cache,
+                page_table,
+                user_id,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start_idx,
             )
             new_kv_caches.append(new_kv_cache)
 
