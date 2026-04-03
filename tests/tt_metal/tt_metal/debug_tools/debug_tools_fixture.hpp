@@ -313,7 +313,6 @@ public:
 
 class DevicePrintFixture : public DebugToolsMeshFixture {
 protected:
-    std::string dprint_file_name;
     int memfd_;
 
     void SetUp() override {
@@ -367,6 +366,8 @@ protected:
     virtual void ExtraTearDown() {}
 
 public:
+    std::string dprint_file_name;
+
     std::string CompileKernel(const std::string& kernel_path, stl::Span<const uint32_t> runtime_args = {}) {
         // Get the first available mesh device
         auto mesh_device = this->devices_.at(0);
@@ -427,6 +428,21 @@ public:
         // up after running a test.
         DebugToolsMeshFixture::RunProgram(mesh_device, workload);
         MetalContext::instance().dprint_server()->await();
+    }
+
+    // A function to run a program, according to which dispatch mode is set.
+    void RunProgram(const std::shared_ptr<distributed::MeshDevice>& mesh_device, distributed::MeshWorkload& workload) {
+        // Only difference is that we need to wait for the print server to catch
+        // up after running a test.
+        DebugToolsMeshFixture::RunProgram(mesh_device, workload);
+        MetalContext::instance().dprint_server()->await();
+    }
+
+    void RunTestOnDevice(
+        const std::function<void(DevicePrintFixture*, std::shared_ptr<distributed::MeshDevice>)>& run_function,
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        DebugToolsMeshFixture::RunTestOnDevice(run_function, mesh_device);
+        MetalContext::instance().dprint_server()->clear_log_file();
     }
 };
 

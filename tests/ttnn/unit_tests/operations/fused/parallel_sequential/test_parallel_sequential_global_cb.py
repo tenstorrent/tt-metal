@@ -9,9 +9,9 @@ Tests that a fused kernel (produced by Sequential) can push data through
 a GlobalCircularBuffer to receiver cores running a separate consumer kernel.
 
 Architecture:
-    Sender core:  Sequential(identity_op, globalcb_sender_op).build()
+    Sender core:  Sequential(identity_op, globalcb_sender_op)
     Receiver core: consumer op (waits on GlobalCB, writes to DRAM)
-    Both run in a single program via fused.launch()
+    Both run in one program via Parallel(sender_chain, consumer).run()
 """
 
 import pytest
@@ -462,8 +462,7 @@ class TestFusedGlobalCB:
         sender = build_direct_sender_op(tt_input, sender_range, gcb, num_tiles)
         consumer = build_globalcb_consumer_op(tt_output, receiver_range, gcb, num_tiles)
 
-        fused = Parallel(sender, consumer).build(device)
-        fused.launch()
+        Parallel(sender, consumer).run()
 
         result = ttnn.to_torch(tt_output)
         passing, pcc = comp_pcc(torch_input, result, pcc=0.999)
@@ -474,9 +473,9 @@ class TestFusedGlobalCB:
         """Fused identity(OpA) + GlobalCB sender(OpB) → receiver consumer.
 
         Tests the full pipeline:
-        1. Sequential(identity, globalcb_sender).build() fuses two phases
+        1. Sequential(identity, globalcb_sender) fuses two phases in the sender branch
         2. Consumer on receiver cores reads from GlobalCB
-        3. Both run in one program via fused.launch()
+        3. Parallel(sender_chain, consumer).run() dispatches one fused program
         4. Verify receiver output == original input
         """
         torch.manual_seed(42)
@@ -524,8 +523,7 @@ class TestFusedGlobalCB:
         consumer = build_globalcb_consumer_op(tt_output, receiver_range, gcb, num_tiles)
 
         # Fuse sender chain + consumer into one program
-        fused = Parallel(Sequential(op_a, op_b), consumer).build(device)
-        fused.launch()
+        Parallel(Sequential(op_a, op_b), consumer).run()
 
         # Verify: receiver output should match original input
         result = ttnn.to_torch(tt_output)
@@ -599,8 +597,7 @@ class TestFusedGlobalCB:
         consumer = build_globalcb_consumer_op(tt_output_recv, receiver_range, gcb, num_tiles)
 
         # Fuse everything: Sequential(sender→identity) || consumer
-        fused = Parallel(Sequential(op_a, op_b), consumer).build(device)
-        fused.launch()
+        Parallel(Sequential(op_a, op_b), consumer).run()
 
         # Receiver got input_a via GlobalCB from Phase 0
         result_recv = ttnn.to_torch(tt_output_recv)

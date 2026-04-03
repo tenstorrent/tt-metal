@@ -87,15 +87,42 @@ class _BuildResult:
     outermost ``build()`` call.
     """
 
-    __slots__ = ("descriptor", "input_tensors", "output_tensors", "semaphores", "kernel_labels", "kernel_phase_map")
+    __slots__ = (
+        "descriptor",
+        "input_tensors",
+        "output_tensors",
+        "semaphores",
+        "kernel_labels",
+        "kernel_phase_map",
+        "cb_source_map",
+        "rebind_source_map",
+        "global_cb_source_map",
+        "output_source_map",
+    )
 
-    def __init__(self, descriptor, input_tensors, output_tensors, semaphores=(), kernel_labels=(), kernel_phase_map=()):
+    def __init__(
+        self,
+        descriptor,
+        input_tensors,
+        output_tensors,
+        semaphores=(),
+        kernel_labels=(),
+        kernel_phase_map=(),
+        cb_source_map=(),
+        rebind_source_map=(),
+        global_cb_source_map=(),
+        output_source_map=(),
+    ):
         self.descriptor = descriptor
         self.input_tensors = input_tensors
         self.output_tensors = output_tensors
         self.semaphores = semaphores
         self.kernel_labels = kernel_labels
         self.kernel_phase_map = kernel_phase_map
+        self.cb_source_map = cb_source_map
+        self.rebind_source_map = rebind_source_map
+        self.global_cb_source_map = global_cb_source_map
+        self.output_source_map = output_source_map
 
 
 # =============================================================================
@@ -225,6 +252,7 @@ _NOOP_OP = OpDescriptor(
     input_tensors=[],
     output_tensors=[],
     name="noop",
+    program_cache_key=0,
 )
 
 
@@ -233,7 +261,6 @@ __all__ = [
     "BarrierSegment",
     "MultiBarrierSpec",
     "_BuildResult",
-    "_NoOpProgramDescriptor",
     "_NOOP_OP",
     "_core_range_set_to_coords",
     "_core_ranges_key",
