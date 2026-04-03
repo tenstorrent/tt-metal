@@ -324,6 +324,8 @@ def test_mla(
         kvpe_cache=tt_kvpe_cache,
     )
     ttnn.synchronize_device(mesh_device)
+
+    logger.info("Second MLA run")
     ttnn.distributed_context_barrier()
 
     # Second forward to test program cache hit
