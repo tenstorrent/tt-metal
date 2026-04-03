@@ -40,13 +40,18 @@ jobs:
           git config --global --add safe.directory /work
 
       - name: 📦 Restore CPM source cache
-        uses: actions/cache@v4
+        id: cpm-cache
+        uses: actions/cache/restore@v4
         with:
-          path: .cpmcache
-          key: cpm-compile-tracker-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
+          path: .cpmcache.tar.zst
+          key: cpm-z22-compile-tracker-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
           restore-keys: |
-            cpm-compile-tracker-
-            cpm-
+            cpm-z22-compile-tracker-
+            cpm-z22-
+
+      - name: 📦 Unpack CPM cache
+        run: |
+          [ -f .cpmcache.tar.zst ] && tar -I 'zstd -T0' -xf .cpmcache.tar.zst || true
 
       - name: 🔧 CMake configure (no PCH, no Unity, no ccache)
         run: |
@@ -58,6 +63,18 @@ jobs:
             --disable-unity-builds \
             --build-all \
             --configure-only
+
+      - name: 📦 Pack CPM cache
+        if: steps.cpm-cache.outputs.cache-hit != 'true'
+        run: |
+          [ -d .cpmcache ] && tar -I 'zstd -T0 --ultra -22' -cf .cpmcache.tar.zst .cpmcache || true
+
+      - name: 📦 Save CPM source cache
+        if: steps.cpm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .cpmcache.tar.zst
+          key: ${{ steps.cpm-cache.outputs.cache-primary-key }}
 
       - name: 📦 Install GNU time
         run: |
