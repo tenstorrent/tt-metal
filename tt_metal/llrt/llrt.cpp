@@ -319,10 +319,23 @@ void wait_until_cores_done(
     auto start = std::chrono::high_resolution_clock::now();
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     bool is_simulator = rtoptions.get_simulator_enabled();
-    // For simulators, always disable timeout (infinite wait). For non-simulators, a 0
-    // timeout means: use the configured timeout for operations.
+
+    // Simulator: use cycle-count timeout instead of wall-clock timeout.
+    // Wall-clock time is meaningless on sim (runs at kHz, not GHz).
+    //
+    // Each read_from_device call invokes advance_clock(10) on the sim
+    // (tt_sim_tt_device.cpp), which runs libttsim_clock(10) — 10 iterations
+    // of the sim's outer loop, each incrementing g_clock by 1 and stepping
+    // ALL tiles.  So every core poll advances g_clock by exactly 10.
+    // We accumulate the total g_clock delta from polling and compare against
+    // the configured cycle budget (TT_METAL_SIM_CYCLE_TIMEOUT).
+    uint64_t sim_cycle_timeout = 0;
+    uint64_t sim_cycles_consumed = 0;
+    constexpr uint64_t SIM_CYCLES_PER_DEVICE_READ = 10;
+
     if (is_simulator) {
-        timeout_ms = 0;
+        sim_cycle_timeout = rtoptions.get_sim_cycle_timeout();
+        timeout_ms = 0;  // disable wall-clock timeout on sim
     } else if (timeout_ms == 0) {
         timeout_ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(rtoptions.get_timeout_duration_for_operations())
@@ -347,6 +360,17 @@ void wait_until_cores_done(
                     timeout_ms,
                     cores);
             }
+        } else if (sim_cycle_timeout > 0 && sim_cycles_consumed > sim_cycle_timeout) {
+            std::string cores = fmt::format("{}", fmt::join(not_done_phys_cores, ", "));
+
+            tt::tt_metal::MetalContext::instance().on_dispatch_timeout_detected();
+
+            TT_THROW(
+                "Device {}: Simulator cycle timeout (~{} cycles, budget {}) waiting for physical cores to finish: {}.",
+                device_id,
+                sim_cycles_consumed,
+                sim_cycle_timeout,
+                cores);
         }
 
 #ifdef DEBUG
@@ -357,6 +381,10 @@ void wait_until_cores_done(
             usleep(100000);
         }
 #endif
+
+        // Snapshot size before polling — each core gets one read_from_device
+        // regardless of whether it turns out to be done this iteration.
+        uint64_t cores_polled = not_done_phys_cores.size();
 
         for (auto it = not_done_phys_cores.begin(); it != not_done_phys_cores.end();) {
             const auto& phys_core = *it;
@@ -369,6 +397,8 @@ void wait_until_cores_done(
                 ++it;
             }
         }
+
+        sim_cycles_consumed += cores_polled * SIM_CYCLES_PER_DEVICE_READ;
         loop_count++;
 
         // Continuously polling cores here can cause other host-driven noc transactions (dprint, watcher) to drastically
