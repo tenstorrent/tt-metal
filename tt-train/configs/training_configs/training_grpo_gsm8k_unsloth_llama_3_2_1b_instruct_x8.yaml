@@ -15,7 +15,7 @@ training_config:
 
 grpo_config:
   group_size: 8
-  micro_batch_size: 32
+  micro_batch_size: 128
   warmup_steps: 100
   max_tokens_to_complete: 512
   prompts_to_train: 1536
