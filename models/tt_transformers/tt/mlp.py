@@ -40,7 +40,7 @@ class MLP(LightweightModule):
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
         torch_weight = lambda name: torch.transpose(state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
         pad_hidden_dim = lambda tensor, dim: pad_to_size(tensor, dim=dim, size=args.hidden_dim)
-        # If padding was applied (e.g. via env var), add the unpadded hidden dim to the cache name to avoid loading incorrect weights
+        # If pading was applied (e.g. via env var), add the unpadded hidden dim to the cache name to avoid loading incorrect weights
         hidden_dim_string = f".hidden_dim_{args.hidden_dim}" if args.hidden_dim != args.unpadded_hidden_dim else ""
 
         if args.dummy_weights:
@@ -76,10 +76,10 @@ class MLP(LightweightModule):
             return result
 
         # Sharded weights
-        w1_dims = (-1, -2) if args.is_galaxy else (-2, -1)
+        w1_dims = (-1, -2) if args.is_galaxy else (None, -1)
         w2_dims = (-2, -1) if args.is_galaxy else (-1, -2)
 
-        layer_num = max(layer_num, 0)  # cross_block uses the configuration of the first decoder
+        layer_num = max(layer_num, 0)  # cross_block uses the configutation of the first decoder
 
         # When prefetcher is enabled, use consistent dtypes across all layers to avoid
         # race conditions caused by different block sizes
@@ -124,7 +124,7 @@ class MLP(LightweightModule):
         """
         seq_len = x.shape[-2]
         TG = self.args.is_galaxy
-        layer_num = max(self.layer_num, 0)  # cross_block uses the configuration of the first decoder
+        layer_num = max(self.layer_num, 0)  # cross_block uses the configutation of the first decoder
         activation_dtype = self.decoders_optimizations.get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.ACTIVATION
         )
@@ -210,28 +210,9 @@ class MLP(LightweightModule):
                     num_buffers_per_channel=2,
                 )
             else:
-                # NOTE: In MLP All-reduce hard codes to 2 links, so we do not get the dynamic link count from the CCL class
-                # to avoid any performance regressions.
-                w1_out = tt_all_reduce(
-                    w1_out,
-                    self.mesh_device,
-                    self.tt_ccl,
-                    cluster_axis=1,
-                    num_all_gather_links=1,
-                    sharded=True if mode == Mode.DECODE else False,
-                    topology=self.args.ccl_topology(),
-                    memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == Mode.DECODE else None,
-                )
-                w3_out = tt_all_reduce(
-                    w3_out,
-                    self.mesh_device,
-                    self.tt_ccl,
-                    cluster_axis=1,
-                    num_all_gather_links=1,
-                    sharded=True if mode == Mode.DECODE else False,
-                    topology=self.args.ccl_topology(),
-                    memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == Mode.DECODE else None,
-                )
+                # With replicated FF1/FF3 weights (dims=(None,-1)), each device has full K
+                # and computes a complete result for its N-slice. No all-reduce needed.
+                pass
 
         w2_in = ttnn.mul(
             w1_out,
@@ -272,27 +253,19 @@ class MLP(LightweightModule):
             decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
         )
 
-        if seq_len > 128 and mode != Mode.DECODE:
-            w2_out = ttnn.experimental.minimal_matmul(
-                w2_in,
-                self.w2,
-                compute_kernel_config=li_ff2_compute_kernel_cfg,
-                config=pc_2,
-            )
-        else:
-            w2_out = ttnn.linear(
-                w2_in,
-                self.w2,
-                compute_kernel_config=li_ff2_compute_kernel_cfg,
-                dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
-                program_config=pc_2,
-                memory_config=self.args.get_mlp_ff2_mem_config(mode, self.prefetcher),
-                core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
-                global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
-                sub_device_id=self.prefetcher.worker_sub_device_id
-                if self.prefetcher is not None and mode == Mode.DECODE
-                else None,
-            )
+        w2_out = ttnn.linear(
+            w2_in,
+            self.w2,
+            compute_kernel_config=li_ff2_compute_kernel_cfg,
+            dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
+            program_config=pc_2,
+            memory_config=self.args.get_mlp_ff2_mem_config(mode, self.prefetcher),
+            core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
+            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
+            sub_device_id=self.prefetcher.worker_sub_device_id
+            if self.prefetcher is not None and mode == Mode.DECODE
+            else None,
+        )
         ttnn.deallocate(w2_in)
 
         w2_out_reduced = tt_all_reduce(
