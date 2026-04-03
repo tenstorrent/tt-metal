@@ -156,7 +156,7 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
             all_cores,
             tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     } else {
-        std::vector<uint32_t> reader_compile_time_args = {input_cb_index, scratch_cb_index, num_units_per_row, num_trids};
+        std::vector<uint32_t> reader_compile_time_args = {input_cb_index, scratch_cb_index, num_trids};
         tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
         unary_reader_kernel_id = tt::tt_metal::CreateKernel(
