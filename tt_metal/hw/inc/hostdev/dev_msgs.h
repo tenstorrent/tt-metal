@@ -158,10 +158,7 @@ struct kernel_config_msg_t {
     volatile uint8_t brisc_noc_mode;
     volatile uint8_t min_remote_cb_start_index;
     volatile uint8_t exit_erisc_kernel;
-    // 32 bit program/launch_msg_id used by the performance profiler
-    // [9:0]: physical device id
-    // [30:10]: program id
-    // [31:31]: 0 (specifies that this id corresponds to a program running on device)
+    // 32 bit program/launch_msg_id used by the performance profiler.
     volatile uint32_t host_assigned_id;
     // bit i set => processor i enabled
     volatile uint32_t enables;
