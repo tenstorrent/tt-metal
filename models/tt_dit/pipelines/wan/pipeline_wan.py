@@ -849,20 +849,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 max_sequence_length=max_sequence_length,
             )
 
-            # Cache text conditioning for both transformers to allow safe
-            self.prompt_t1_buffer = self.prepare_text_conditioning(
-                self.transformer, prompt_embeds, self.prompt_t1_buffer, traced
-            )
-            self.prompt_t2_buffer = self.prepare_text_conditioning(
-                self.transformer_2, prompt_embeds, self.prompt_t2_buffer, traced
-            )
-            self.negative_prompt_t1_buffer = self.prepare_text_conditioning(
-                self.transformer, negative_prompt_embeds, self.negative_prompt_t1_buffer, traced
-            )
-            self.negative_prompt_t2_buffer = self.prepare_text_conditioning(
-                self.transformer_2, negative_prompt_embeds, self.negative_prompt_t2_buffer, traced
-            )
-
         # 4. Prepare timesteps
         self.scheduler.set_timesteps(num_inference_steps, device=device)
         timesteps = self.scheduler.timesteps
@@ -902,6 +888,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         rope_args = None
 
         latent_frames, latent_height, latent_width = latents.shape[2], latents.shape[3], latents.shape[4]
+        prepared_prompts = [False, False]
 
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
@@ -914,6 +901,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     prompt_embeds_buffer = self.prompt_t1_buffer
                     negative_prompt_embeds_buffer = self.negative_prompt_t1_buffer
                     current_guidance_scale = guidance_scale
+                    prep_idx = 0
                 else:
                     # low-noise stage in wan2.2
                     self._prepare_transformer2()
@@ -921,6 +909,17 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     prompt_embeds_buffer = self.prompt_t2_buffer
                     negative_prompt_embeds_buffer = self.negative_prompt_t2_buffer
                     current_guidance_scale = guidance_scale_2
+                    prep_idx = 1
+
+                if not prepared_prompts[prep_idx]:
+                    # Prepare the text conditioning in an optional persistent buffer depending on traced
+                    prompt_embeds_buffer = self.prepare_text_conditioning(
+                        current_model, prompt_embeds, prompt_embeds_buffer, traced
+                    )
+                    negative_prompt_embeds_buffer = self.prepare_text_conditioning(
+                        current_model, negative_prompt_embeds, negative_prompt_embeds_buffer, traced
+                    )
+                    prepared_prompts[prep_idx] = True
 
                 if permuted_latent is None:
                     # First iteration, preprocess spatial input and prepare rope features
