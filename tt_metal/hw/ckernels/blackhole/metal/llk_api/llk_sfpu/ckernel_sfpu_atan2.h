@@ -21,14 +21,14 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
     sfpi::vFloat s;
 
     // Note: if x or y is ±NaN, this ensures that max=NaN, which is important for special case handling.
-    sfpi::vFloat min = sfpi::abs(x);
-    sfpi::vFloat max = sfpi::abs(y);
+    sfpi::vFloat min = sfpi::setsgn(x, 0);
+    sfpi::vFloat max = sfpi::setsgn(y, 0);
     sfpi::vec_min_max(min, max);
 
     // a = min(|x|, |y|) / max(|x|, |y|), i.e. a is on [0, 1].
     sfpi::vFloat a = min * sfpu_reciprocal<is_bf16>(max);
     // Note that due to register pressure on Wormhole, we compute |x| and |y| again.
-    sfpi::vFloat x_abs = sfpi::abs(x);
+    sfpi::vFloat x_abs = sfpi::setsgn(x, 0);
 
     // Next we compute the minimax approximation for atan(a).
     s = a * a;
@@ -54,7 +54,7 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
 
     // Special cases:
 
-    sfpi::vFloat y_abs = sfpi::abs(y);
+    sfpi::vFloat y_abs = sfpi::setsgn(y, 0);
     sfpi::vInt diff = sfpi::reinterpret<sfpi::vInt>(y_abs) - sfpi::reinterpret<sfpi::vInt>(x_abs);
     v_if(diff >= 0) {
         // if |y| ≥ |x| then r = π/2 - r
