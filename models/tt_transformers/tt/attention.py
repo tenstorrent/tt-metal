@@ -507,22 +507,24 @@ class Attention(LightweightModule):
             xqkv_fused_sharded = xqkv_fused_sharded + self.wqkv_bias_decode[num_tiles - 1]
 
         ttnn.deallocate(x)
-        qkv_all_reduce_mem_cfg = self.args.get_attn_qkv_all_reduce_output_mem_config(
-            Mode.DECODE, list(self.mesh_device.shape)[1], self.prefetcher
-        )
-        xqkv_fused = tt_all_reduce(
-            xqkv_fused_sharded,
-            self.mesh_device,
-            self.tt_ccl,
-            cluster_axis=1,
-            memory_config=qkv_all_reduce_mem_cfg
-            if qkv_all_reduce_mem_cfg is not None
-            else xqkv_fused_sharded.memory_config(),
-            sharded=True,
-            dtype=self.ccl_dtype,
-            topology=self.ccl_topology,
-            subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
-        )
+        if self.prefetcher is not None:
+            qkv_all_reduce_mem_cfg = self.args.get_attn_qkv_all_reduce_output_mem_config(
+                Mode.DECODE, list(self.mesh_device.shape)[1], self.prefetcher
+            )
+            xqkv_fused = tt_all_reduce(
+                xqkv_fused_sharded,
+                self.mesh_device,
+                self.tt_ccl,
+                cluster_axis=1,
+                memory_config=qkv_all_reduce_mem_cfg
+                if qkv_all_reduce_mem_cfg is not None
+                else xqkv_fused_sharded.memory_config(),
+                sharded=True,
+                dtype=self.ccl_dtype,
+                topology=self.ccl_topology,
+                subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
+            )
+        # For non-prefetcher: skip QKV all-reduce (result is discarded at line 537 anyway)
         if self.TG:
             # TODO: Slice the fused_query_key_value tensor get batch=8
             xqkv_fused = ttnn.matmul(
