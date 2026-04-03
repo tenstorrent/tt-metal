@@ -358,7 +358,8 @@ class JobManager:
         training_overrides_path = output_dir / "training_overrides.yaml"
 
         if training_config.run_command_override:
-            run_invocation = training_config.run_command_override
+            override = training_config.run_command_override
+            run_invocation = override(config) if callable(override) else override
         else:
             run_invocation = f"python {script_path}"
 

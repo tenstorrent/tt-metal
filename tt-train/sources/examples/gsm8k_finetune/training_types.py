@@ -27,8 +27,8 @@ class TrainingTypeConfig:
     param_validator: Callable[[dict], dict]  # Function to validate/normalize parameters
     config_builder: Callable[[dict, Path], Path]  # Function to build training config YAML
     # If set, replaces the default "python {script_path}" in the SLURM run step.
-    # May reference shell variables available in the SLURM environment (e.g. $TT_METAL_HOME).
-    run_command_override: Optional[str] = None
+    # May be a plain string or a callable (config: dict) -> str for model-specific commands.
+    run_command_override: Optional[Callable[[dict], str]] = None
 
 
 # ── Parameter Validators ──────────────────────────────────────────────────────
@@ -335,13 +335,42 @@ lora_training_config = TrainingTypeConfig(
 )
 
 
-def _build_pretrain_run_command() -> str:
-    """Build the SLURM run-step command for Pretrain / pipeline-parallel training."""
+# Per-model workload configuration for pipeline-parallel training.
+# Keys match model IDs in pretrain_training_config.supported_models.
+_PRETRAIN_WORKLOAD_CONFIGS = {
+    "llama8b": {
+        "config_file": "training_configs/training_shakespeare_llama8b_intrahost_pp4.yaml",
+        "host_config": "1galaxy_pp4",
+        "ranks_per_host": "4",
+    },
+    "llama70b": {
+        "config_file": "training_configs/training_shakespeare_llama70b_pp4_tp32_fabric_galaxy.yaml",
+        "host_config": "4galaxy_pp4",
+        "ranks_per_host": "1",
+    },
+    "llama405b": {
+        "config_file": "training_configs/training_shakespeare_llama405b_pp_fabric.yaml",
+        "host_config": "4galaxy_pp16",
+        "ranks_per_host": "4",
+    },
+}
+
+
+def _build_pretrain_run_command(config: dict) -> str:
+    """Build the SLURM run-step command for Pretrain / pipeline-parallel training.
+
+    Selects the correct training config file, host configuration, and ranks-per-host
+    based on the model ID in config["model"].
+    """
+    model_id = config.get("model", "llama70b")
+    workload = _PRETRAIN_WORKLOAD_CONFIGS.get(model_id, _PRETRAIN_WORKLOAD_CONFIGS["llama70b"])
+
     tt_train_root = f"${{TT_METAL_HOME}}/tt-train"
     pp_root = f"{tt_train_root}/sources/examples/python/multihost/pipeline_parallel_training"
-    config_file = "training_configs/training_shakespeare_llama70b_pp4_tp32_fabric_galaxy.yaml"
-    host_config = "4galaxy_pp4"
-    ranks_per_host = "1"
+    config_file = workload["config_file"]
+    host_config = workload["host_config"]
+    ranks_per_host = workload["ranks_per_host"]
+
     return (
         f"export TT_TRAIN_OUTPUT_FILE=$(pwd)/output.txt\n"
         f"cd {pp_root}\n"
@@ -354,7 +383,7 @@ def _build_pretrain_run_command() -> str:
 
 
 # Pretrain Training Type Configuration
-# Routes all requests to pipeline_parallel_training with llama70b_4stage config.
+# Routes requests to pipeline_parallel_training with per-model configs.
 pretrain_training_config = TrainingTypeConfig(
     name="pretrain",
     script_path="python/multihost/pipeline_parallel_training/training.py",
@@ -362,7 +391,7 @@ pretrain_training_config = TrainingTypeConfig(
     supported_models={"llama8b", "llama70b", "llama405b"},
     param_validator=validate_pretrain_params,
     config_builder=build_pretrain_config,
-    run_command_override=_build_pretrain_run_command(),
+    run_command_override=_build_pretrain_run_command,
 )
 
 
