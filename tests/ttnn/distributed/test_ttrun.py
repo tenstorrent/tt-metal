@@ -3,6 +3,7 @@
 
 """Unit tests for ttrun command-line utility."""
 
+import os
 import shlex
 import yaml
 import importlib
@@ -573,14 +574,14 @@ class TestRankfileInjection:
         assert args[1] == "rmaps_rankfile_path"
         assert args[2] == "rankfile"
 
-    def test_build_rankfile_args_uses_absolute_when_not_under_cwd(self, temp_dir):
-        """Test build_rankfile_args uses absolute path when rankfile is not under cwd."""
+    def test_build_rankfile_args_relpath_when_not_under_cwd(self, temp_dir):
+        """Rankfile outside cwd uses relpath (avoids PRRTE map-by issues with absolute paths)."""
         rankfile = Path("/other/path/rankfile")
 
         args = build_rankfile_args(RankfileSyntax.RANKFILE, rankfile, cwd=temp_dir)
 
         assert args[0] == "--rankfile"
-        assert args[1] == "/other/path/rankfile"
+        assert args[1] == os.path.relpath("/other/path/rankfile", str(temp_dir.resolve()))
 
     def test_build_rankfile_args_invalid_syntax(self, temp_dir):
         """Test build_rankfile_args raises ValueError for invalid syntax."""

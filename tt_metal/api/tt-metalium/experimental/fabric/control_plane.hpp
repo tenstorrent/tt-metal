@@ -256,6 +256,9 @@ public:
     // Collect router port directions map from all hosts via MPI and merge into local map
     void collect_and_merge_router_port_directions_from_all_hosts();
 
+    // Merge inter-mesh exit FabricNodeId sets from all hosts so local queries see every mesh pair.
+    void collect_and_merge_intermesh_exit_fabric_node_ids_from_all_hosts();
+
     // Get the mesh graph from the control plane
     const MeshGraph& get_mesh_graph() const;
 
@@ -279,6 +282,10 @@ public:
 
     /// Topology mapper for fabric node ↔ physical ASIC / host bindings (used by routing and pipeline layout).
     const TopologyMapper& get_topology_mapper() const;
+
+    // Exit fabric nodes on `src_mesh_id` with inter-mesh connectivity to `dst_mesh_id` (as assigned during intermesh
+    // setup). In multi-host runs, this is populated for source meshes local to this rank; other pairs return {}.
+    std::vector<FabricNodeId> get_exit_fabric_node_ids_between_meshes(MeshId src_mesh_id, MeshId dst_mesh_id) const;
 
     // Getters
     FabricConfig get_fabric_config() const { return fabric_config_; }
@@ -350,6 +357,9 @@ private:
     // For each FabricNode, store a mapping of the logical port (direction and logical channel id)
     // to the physical channel id
     std::map<FabricNodeId, std::unordered_map<port_id_t, chan_id_t>> logical_port_to_eth_chan_;
+    // Unique exit FabricNodeIds on src mesh for each dst mesh (inter-mesh edges)
+    std::unordered_map<MeshId, std::unordered_map<MeshId, std::unordered_set<FabricNodeId>>>
+        intermesh_exit_fabric_node_ids_;
     // Mapping from MeshId, MeshHostRankId to MPI rank
     std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, tt_metal::distributed::multihost::Rank>> mpi_ranks_;
     std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>

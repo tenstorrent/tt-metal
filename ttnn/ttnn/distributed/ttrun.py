@@ -106,26 +106,38 @@ def get_mpi_launcher() -> str:
     return mpi_launcher
 
 
+def rankfile_path_for_mpi_cli(rankfile: Union[str, Path], cwd: Optional[Path] = None) -> str:
+    """Path string for Open MPI / PRRTE rankfile options under ``mpirun``'s working directory.
+
+    PRRTE ``--map-by rankfile:file=...`` misparses absolute POSIX paths (extra ``/`` tokens look like
+    unsupported qualifiers). Always emit a path relative to ``cwd`` (default: launch directory).
+    """
+    cwd_resolved = (cwd or ORIGINAL_CWD).resolve()
+    rankfile_resolved = Path(rankfile).expanduser().resolve()
+    rel = os.path.relpath(str(rankfile_resolved), str(cwd_resolved))
+    if rel.startswith(".."):
+        logger.warning(
+            f"{TT_RUN_PREFIX} Rankfile {rankfile_resolved} is outside mpirun cwd {cwd_resolved}; "
+            f"using relative path {rel!r}"
+        )
+    return rel
+
+
 def build_rankfile_args(syntax: RankfileSyntax, rankfile: Path, cwd: Optional[Path] = None) -> List[str]:
     """Build MPI command-line arguments for rankfile based on syntax variant.
 
-    Uses a path relative to cwd when the rankfile is under cwd; otherwise uses absolute path.
+    Embeds a path **relative to cwd** (default ORIGINAL_CWD), matching :func:`subprocess.run`'s directory
+    for tt-run's mpirun invocations.
 
     Args:
         syntax: The rankfile syntax variant to use
         rankfile: Path to the rankfile
         cwd: Working directory for the MPI command (default: ORIGINAL_CWD).
-            When rankfile is under cwd, uses relative path; otherwise uses absolute.
 
     Returns:
         List of MPI command-line arguments (e.g., ["--map-by", "rankfile:file=generated/ttrun/rankfile"])
     """
-    cwd_resolved = (cwd or ORIGINAL_CWD).resolve()
-    rankfile_resolved = rankfile.resolve()
-    try:
-        rankfile_str = str(rankfile_resolved.relative_to(cwd_resolved))
-    except ValueError:
-        rankfile_str = str(rankfile_resolved)
+    rankfile_str = rankfile_path_for_mpi_cli(rankfile, cwd)
 
     if syntax == RankfileSyntax.MAP_BY_RANKFILE_FILE:
         return ["--map-by", f"rankfile:file={rankfile_str}"]
@@ -1363,6 +1375,21 @@ def extract_rankfile_path_from_map_by_policy(policy: str) -> Optional[str]:
     return path
 
 
+def _replace_rankfile_file_in_map_by_policy(policy: str, new_path: str) -> str:
+    """Swap the path in ``rankfile:file=`` inside a ``--map-by`` policy string for ``new_path``."""
+    idx = policy.lower().find("rankfile:file=")
+    if idx < 0:
+        return policy
+    start = idx + len("rankfile:file=")
+    rest = policy[start:]
+    end = len(rest)
+    for sep in (",", " "):
+        j = rest.find(sep)
+        if j >= 0:
+            end = min(end, j)
+    return policy[:idx] + f"rankfile:file={new_path}" + policy[start + end :]
+
+
 def extract_rankfile_hosts(rankfile_path: str) -> List[str]:
     """Extract unique hosts from an OpenMPI rankfile, preserving first-seen order."""
     hosts = []
@@ -1436,7 +1463,7 @@ def normalize_rankfile_mpi_args(
     if not mpi_args:
         return []
 
-    cwd_resolved = cwd if cwd is not None else ORIGINAL_CWD
+    cwd_resolved = (cwd if cwd is not None else ORIGINAL_CWD).resolve()
     normalized_args = []
     detected_rankfile_path: Optional[str] = None
     rewrote_rankfile_args = False
@@ -1476,9 +1503,10 @@ def normalize_rankfile_mpi_args(
             rankfile_path = extract_rankfile_path_from_map_by_policy(policy)
 
             if rankfile_path and rankfile_syntax == RankfileSyntax.MAP_BY_RANKFILE_FILE:
-                resolved_rankfile_path = resolve_rankfile_for_mpi(rankfile_path)
-                policy = policy.replace(f"rankfile:file={rankfile_path}", f"rankfile:file={resolved_rankfile_path}", 1)
-                detected_rankfile_path = resolved_rankfile_path
+                resolved_abs = Path(resolve_rankfile_for_mpi(rankfile_path)).resolve()
+                detected_rankfile_path = str(resolved_abs)
+                rel = rankfile_path_for_mpi_cli(resolved_abs, cwd_resolved)
+                policy = _replace_rankfile_file_in_map_by_policy(policy, rel)
                 normalized_args.extend(["--map-by", policy])
             elif rankfile_path and rankfile_syntax in (
                 RankfileSyntax.RANKFILE,
@@ -1501,9 +1529,10 @@ def normalize_rankfile_mpi_args(
             rankfile_path = extract_rankfile_path_from_map_by_policy(policy)
 
             if rankfile_path and rankfile_syntax == RankfileSyntax.MAP_BY_RANKFILE_FILE:
-                resolved_rankfile_path = resolve_rankfile_for_mpi(rankfile_path)
-                policy = policy.replace(f"rankfile:file={rankfile_path}", f"rankfile:file={resolved_rankfile_path}", 1)
-                detected_rankfile_path = resolved_rankfile_path
+                resolved_abs = Path(resolve_rankfile_for_mpi(rankfile_path)).resolve()
+                detected_rankfile_path = str(resolved_abs)
+                rel = rankfile_path_for_mpi_cli(resolved_abs, cwd_resolved)
+                policy = _replace_rankfile_file_in_map_by_policy(policy, rel)
                 normalized_args.append(f"--map-by={policy}")
             elif rankfile_path and rankfile_syntax in (
                 RankfileSyntax.RANKFILE,
