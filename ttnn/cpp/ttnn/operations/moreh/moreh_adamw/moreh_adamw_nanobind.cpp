@@ -43,29 +43,28 @@ void bind_moreh_adamw_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_adamw">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::moreh_adamw,
-            nb::arg("param_in"),
-            nb::arg("grad"),
-            nb::arg("exp_avg_in"),
-            nb::arg("exp_avg_sq_in"),
-            nb::arg("lr") = 0.001f,  // these defaults are set in moreh_adamw_device_operation.cpp
-            nb::arg("beta1") = 0.9f,
-            nb::arg("beta2") = 0.999f,
-            nb::arg("eps") = 1e-8f,
-            nb::arg("weight_decay") = 1e-2f,
-            nb::arg("step") = 0,
-            nb::arg("amsgrad") = false,
-            nb::kw_only(),
+        &ttnn::moreh_adamw,
+        nb::arg("param_in"),
+        nb::arg("grad"),
+        nb::arg("exp_avg_in"),
+        nb::arg("exp_avg_sq_in"),
+        nb::arg("lr") = 0.001f,  // these defaults are set in moreh_adamw_device_operation.cpp
+        nb::arg("beta1") = 0.9f,
+        nb::arg("beta2") = 0.999f,
+        nb::arg("eps") = 1e-8f,
+        nb::arg("weight_decay") = 1e-2f,
+        nb::arg("step") = 0,
+        nb::arg("amsgrad") = false,
+        nb::kw_only(),
 
-            nb::arg("max_exp_avg_sq_in") = nb::none(),
-            nb::arg("param_out") = nb::none(),
-            nb::arg("exp_avg_out") = nb::none(),
-            nb::arg("exp_avg_sq_out") = nb::none(),
-            nb::arg("max_exp_avg_sq_out") = nb::none(),
+        nb::arg("max_exp_avg_sq_in") = nb::none(),
+        nb::arg("param_out") = nb::none(),
+        nb::arg("exp_avg_out") = nb::none(),
+        nb::arg("exp_avg_sq_out") = nb::none(),
+        nb::arg("max_exp_avg_sq_out") = nb::none(),
 
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 void py_module(nb::module_& mod) { bind_moreh_adamw_operation(mod); }

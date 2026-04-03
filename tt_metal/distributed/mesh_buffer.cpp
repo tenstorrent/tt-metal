@@ -10,8 +10,12 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include "device.hpp"
 #include "mesh_device_impl.hpp"
+
+namespace per_core_allocation = tt::tt_metal::experimental::per_core_allocation;
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -133,6 +137,14 @@ void MeshBuffer::initialize_device_buffers() {
             device_local_config_.sharding_args,
             device_local_config_.bottom_up,
             /*sub_device_id=*/std::nullopt);  // TODO: sub_device_id is unsupported
+        // For per-core allocation, propagate per-core addresses from the backing buffer.
+        if (per_core_allocation::is_per_core_allocation(*buffer)) {
+            TT_FATAL(
+                std::holds_alternative<OwnedBufferState>(state_),
+                "Per-core allocation is not supported for externally-owned MeshBuffers");
+            auto& owned = std::get<OwnedBufferState>(state_);
+            per_core_allocation::copy_per_core_addresses(*buffer, *owned.backing_buffer);
+        }
         return buffer;
     };
 

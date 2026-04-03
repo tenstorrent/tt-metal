@@ -34,6 +34,7 @@ from triage import TTTriageError, triage_field, hex_serializer
 from run_checks import run as get_run_checks
 from run_checks import RunChecks, BlockType
 
+
 script_config = ScriptConfig(
     data_provider=True,
     depends=["inspector_data", "elfs_cache", "run_checks", "metal_device_id_mapping"],
@@ -123,6 +124,7 @@ class DispatcherData:
             device_unique_id = run_checks.devices[0].unique_id
 
             build_env = self._build_env_cache[device_unique_id]
+            self._drisc_enabled_flag: bool | None = bool(build_env.dramProgrammableCoresEnabled)
             # Use build_env for initial firmware paths
             brisc_elf_path = os.path.join(build_env.firmwarePath, "brisc", "brisc.elf")
             idle_erisc_elf_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
@@ -149,10 +151,23 @@ class DispatcherData:
         self._idle_erisc_elf = elfs_cache[idle_erisc_elf_path]
         self._active_erisc_elf = elfs_cache[active_erisc_elf_path]
 
+        self._is_blackhole = run_checks.devices[0].is_blackhole()
+
+        # Load DRISC ELF for DRAM cores (Blackhole only)
+        self._drisc_elf = None
+        if self._is_blackhole and self._drisc_enabled_flag:
+            try:
+                drisc_elf_path = os.path.join(build_env.firmwarePath, "drisc", "drisc.elf")
+                self._drisc_elf = elfs_cache[drisc_elf_path]
+            except Exception:
+                # DRISC firmware is optional; if it cannot be loaded, leave self._drisc_elf as None
+                pass
+
         # Access the value of enumerator for supported blocks
         self._ProgrammableCoreTypes_TENSIX = self._brisc_elf.get_enum_value("ProgrammableCoreType::TENSIX")
         self._ProgrammableCoreTypes_IDLE_ETH = self._brisc_elf.get_enum_value("ProgrammableCoreType::IDLE_ETH")
         self._ProgrammableCoreTypes_ACTIVE_ETH = self._brisc_elf.get_enum_value("ProgrammableCoreType::ACTIVE_ETH")
+        self._ProgrammableCoreTypes_DRAM = self._brisc_elf.get_enum_value("ProgrammableCoreType::DRAM")
 
         # Enumerators for tensix block
         self._enum_values_tenisx = {
@@ -181,6 +196,15 @@ class DispatcherData:
                 if self._is_2_erisc_mode
                 else self._idle_erisc_elf.get_enum_value("EthProcessorTypes::DM0")
             )
+
+        # Enumerators for DRAM block (Blackhole only)
+        self._enum_values_dram: dict = {}
+        if self._drisc_elf is not None:
+            self._enum_values_dram = {
+                "ProcessorTypes": {
+                    "DRISC": self._drisc_elf.get_enum_value("DramProcessorTypes::DM0"),
+                },
+            }
 
         # Go message states are constant values in the firmware elf, so we cache them
         def get_const_value(name) -> int:
@@ -250,6 +274,14 @@ class DispatcherData:
             return self.kernels[watcher_kernel_id]
         raise TTTriageError(f"Kernel {watcher_kernel_id} not found in inspector data.")
 
+    def drisc_enabled(self) -> bool:
+        return self._drisc_enabled_flag
+
+    def risc_enabled(self, risc_name: str) -> bool:
+        if risc_name == "drisc":
+            return self.drisc_enabled()
+        return True
+
     def get_cached_core_data(self, location: OnChipCoordinate, risc_name: str) -> DispatcherCoreData:
         key = (location, risc_name)
         with self.lock:
@@ -276,6 +308,10 @@ class DispatcherData:
                 fw_elf = self._idle_erisc_elf
             case "active_eth":
                 fw_elf = self._active_erisc_elf
+            case "dram":
+                if self._drisc_elf is None:
+                    raise TTTriageError("DRISC ELF not available for DRAM block type (Blackhole only)")
+                fw_elf = self._drisc_elf
             case _:
                 raise TTTriageError(f"Unsupported block type: {block_type}")
         return fw_elf.read_global("mailboxes", l1_mem_access)
@@ -294,6 +330,11 @@ class DispatcherData:
             case "active_eth":
                 programmable_core_type = self._ProgrammableCoreTypes_ACTIVE_ETH
                 enum_values = self._enum_values_eth
+            case "dram":
+                if self._drisc_elf is None or not self._enum_values_dram or not self._drisc_enabled_flag:
+                    raise TTTriageError("DRISC ELF not available for DRAM block type (Blackhole only)")
+                programmable_core_type = self._ProgrammableCoreTypes_DRAM
+                enum_values = self._enum_values_dram
             case _:
                 raise TTTriageError(f"Unsupported block type: {block_type}")
         # Get the build_env for the device to get the correct firmware path
@@ -443,8 +484,11 @@ class DispatcherData:
             # Tensix: "BNT" (B=BRISC, N=NCRISC, T=TRISC)
             # ETH Blackhole: "EE" (2 ERISCs)
             # ETH Wormhole: "E" (1 ERISC)
+            # DRAM: "D" (1 DRISC)
             if self._get_block_type(location) == "tensix":
                 symbols = "BNT"
+            elif self._get_block_type(location) == "dram":
+                symbols = "D"
             elif location.device.is_blackhole():
                 symbols = "EE"
             else:
@@ -495,7 +539,9 @@ class DispatcherData:
 
         # Construct the firmware path from the build_env instead of relative paths
         # This ensures we get the correct firmware path for this device and build config
-        if location in location.device.active_eth_block_locations:
+        if block_type == "dram":
+            firmware_path = os.path.join(build_env.firmwarePath, "drisc", "drisc.elf")
+        elif location in location.device.active_eth_block_locations:
             if proc_name.lower() == "erisc":
                 firmware_path = os.path.join(build_env.firmwarePath, "erisc", "erisc.elf")
             elif proc_name.lower() == "erisc0":
@@ -546,6 +592,10 @@ class DispatcherData:
                 kernel_offset = 0xFFC00000
             # In wormhole we only use text offset to calculate the kernel offset for active ETH
             elif location in location.device.active_eth_block_locations and location.device.is_wormhole():
+                kernel_offset = kernel_text_offset
+            elif block_type == "dram":
+                # DRAM kernel ELFs are linked at their actual load address (kernel_text_offset),
+                # not at address 0 like Tensix kernels, so no base adjustment is needed.
                 kernel_offset = kernel_text_offset
             else:
                 kernel_offset = kernel_config_base + kernel_text_offset
