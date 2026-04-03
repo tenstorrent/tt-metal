@@ -789,8 +789,21 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                 continue;
             }
 
+            // Determine chain role for this core
+            std::string role_tag;
+            const auto& chain = core_chain_info[i];
+            if (chain.participates) {
+                if (chain.is_injector) {
+                    role_tag = "[INJ]";
+                } else if (chain.is_sink) {
+                    role_tag = "[SNK]";
+                } else {
+                    role_tag = "[RCV]";
+                }
+            }
+
             std::string line = "Core " + std::to_string(i) + " (" + std::to_string(work.logical_core.y) + "," +
-                               std::to_string(work.logical_core.x) + "): ";
+                               std::to_string(work.logical_core.x) + ")" + role_tag + ": ";
 
             for (const auto& hw : work.head_work) {
                 uint32_t light_cnt = 0, heavy_cnt = 0;
@@ -828,8 +841,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
             const auto& segments = head_segments[head_id];
 
-            // Collect participating cores for this head
-            std::vector<std::pair<CoreCoord, uint32_t>> chain_cores;
+            // Collect participating cores for this head (store core_idx for role lookup)
+            std::vector<uint32_t> chain_core_indices;
             uint32_t total_chunks = 0;
             uint32_t max_chunks = 0;
 
@@ -842,24 +855,28 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                     continue;
                 }
 
-                chain_cores.push_back({core_work[seg.core_idx].logical_core, chain.q_chunk_count});
+                chain_core_indices.push_back(seg.core_idx);
                 total_chunks += chain.q_chunk_count;
                 max_chunks = std::max(max_chunks, chain.q_chunk_count);
             }
 
-            if (chain_cores.size() < 2) {
+            if (chain_core_indices.size() < 2) {
                 continue;
             }
             chain_count++;
 
-            // Format: Chain(head=N: (y,x)[cnt]->(y,x)[cnt], dram_ratio=X.XX)
+            // Format: Chain(head=N: (y,x)[cnt]ROLE->(y,x)[cnt]ROLE, dram_ratio=X.XX)
             std::string parts;
-            for (size_t i = 0; i < chain_cores.size(); ++i) {
+            for (size_t i = 0; i < chain_core_indices.size(); ++i) {
                 if (i > 0) {
                     parts += "->";
                 }
-                parts += "(" + std::to_string(chain_cores[i].first.y) + "," + std::to_string(chain_cores[i].first.x) +
-                         ")[" + std::to_string(chain_cores[i].second) + "]";
+                const uint32_t ci = chain_core_indices[i];
+                const auto& core = core_work[ci].logical_core;
+                const auto& chain = core_chain_info[ci];
+                std::string role = chain.is_injector ? "INJ" : (chain.is_sink ? "SNK" : "RCV");
+                parts += "(" + std::to_string(core.y) + "," + std::to_string(core.x) + ")[" +
+                         std::to_string(chain.q_chunk_count) + "]" + role;
             }
 
             float dram_ratio = total_chunks > 0 ? static_cast<float>(max_chunks) / total_chunks : 1.0f;
