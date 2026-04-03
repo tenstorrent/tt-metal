@@ -11,8 +11,8 @@ from models.demos.yolov11s.tt.ttnn_yolov11s_c3k import TtnnC3K
 
 
 def _align_spatial_for_concat(t, spatial_hw):
-    if t.is_sharded() and t.shape[2] > spatial_hw:
-        t = ttnn.sharded_to_interleaved(t, ttnn.L1_MEMORY_CONFIG)
+    # if t.is_sharded() and t.shape[2] > spatial_hw:
+    #     t = ttnn.sharded_to_interleaved(t, ttnn.L1_MEMORY_CONFIG)
     if t.shape[2] > spatial_hw:
         t = t[:, :, :spatial_hw, :]
     if t.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
@@ -27,15 +27,17 @@ def _cv1_ab_conv_pts(cv1_weights, out_channels):
     half = out_channels // 2
     c = cv1_weights.conv
     w = c.weight
-    o, i_, kh, kw = (int(w.shape[0]), int(w.shape[1]), int(w.shape[2]), int(w.shape[3]))
-    wa = ttnn.slice(w, (0, 0, 0, 0), (half, i_, kh, kw))
-    wb = ttnn.slice(w, (half, 0, 0, 0), (o, i_, kh, kw))
+    # o, i_, kh, kw = (int(w.shape[0]), int(w.shape[1]), int(w.shape[2]), int(w.shape[3]))
+    # wa = ttnn.slice(w, (0, 0, 0, 0), (half, i_, kh, kw))
+    # wb = ttnn.slice(w, (half, 0, 0, 0), (o, i_, kh, kw))
+    wa, wb = ttnn.split(w, half, dim=0)
     if "bias" in c:
         b = c.bias
-        b0, b1, b2 = int(b.shape[0]), int(b.shape[1]), int(b.shape[2])
-        bc = int(b.shape[3])
-        ba = ttnn.slice(b, (0, 0, 0, 0), (b0, b1, b2, half))
-        bb = ttnn.slice(b, (0, 0, 0, half), (b0, b1, b2, bc))
+        # b0, b1, b2 = int(b.shape[0]), int(b.shape[1]), int(b.shape[2])
+        # bc = int(b.shape[3])
+        # ba = ttnn.slice(b, (0, 0, 0, 0), (b0, b1, b2, half))
+        # bb = ttnn.slice(b, (0, 0, 0, half), (b0, b1, b2, bc))
+        ba, bb = ttnn.split(b, half, dim=3)
         a_inner = ParameterDict({"weight": wa, "bias": ba})
         b_inner = ParameterDict({"weight": wb, "bias": bb})
     else:
