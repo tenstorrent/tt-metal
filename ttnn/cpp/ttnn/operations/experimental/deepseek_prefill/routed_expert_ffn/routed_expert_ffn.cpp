@@ -6,6 +6,7 @@
 
 #include <array>
 
+#include "device/gate_up_matmul_device_op.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
@@ -17,34 +18,20 @@ ttnn::Tensor routed_expert_ffn(
     const ttnn::Tensor& gate_proj,
     const ttnn::Tensor& up_proj,
     const ttnn::Tensor& down_proj,
-    const std::optional<const ttnn::operations::matmul::MatmulProgramConfig>& gate_program_config,
-    const std::optional<const ttnn::operations::matmul::MatmulProgramConfig>& up_program_config,
+    const std::optional<const ttnn::operations::matmul::MatmulProgramConfig>& /*gate_program_config*/,
+    const std::optional<const ttnn::operations::matmul::MatmulProgramConfig>& /*up_program_config*/,
     const std::optional<const ttnn::operations::matmul::MatmulProgramConfig>& down_program_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<ttnn::Tensor> output) {
     // gate_out = x @ gate_proj
-    auto gate_out = ttnn::matmul(
-        x,
-        gate_proj,
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        /*memory_config=*/std::nullopt,
-        /*dtype=*/std::nullopt,
-        gate_program_config,
-        /*activation=*/std::nullopt,
-        compute_kernel_config);
-
-    // up_out = x @ up_proj
-    auto up_out = ttnn::matmul(
-        x,
-        up_proj,
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        /*memory_config=*/std::nullopt,
-        /*dtype=*/std::nullopt,
-        up_program_config,
-        /*activation=*/std::nullopt,
-        compute_kernel_config);
+    // up_out   = x @ up_proj
+    //
+    // The custom device op reads x tiles from DRAM once per (M_block, K_block)
+    // and reuses them for both matmuls before releasing, halving x DRAM traffic
+    // compared to two sequential ttnn::matmul calls.
+    auto dual = ttnn::prim::gate_up_matmul(x, gate_proj, up_proj, compute_kernel_config);
+    auto gate_out = dual[0];
+    auto up_out = dual[1];
 
     // activated = silu(gate_out) * up_out
     const std::array<unary::EltwiseUnaryWithParam, 1> lhs_acts{unary::EltwiseUnaryWithParam{unary::UnaryOpType::SILU}};
