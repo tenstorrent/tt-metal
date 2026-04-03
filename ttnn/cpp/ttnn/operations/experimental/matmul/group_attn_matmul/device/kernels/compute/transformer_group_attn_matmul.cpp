@@ -7,6 +7,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/tilize.h"
 #include "api/compute/pack_untilize.h"
+#include "experimental/circular_buffer.h"
 
 using std::uint32_t;
 
@@ -49,6 +50,12 @@ void kernel_main() {
     constexpr uint32_t cb_intermed1 = tt::CBIndex::c_4;
     constexpr uint32_t out_cb_id = tt::CBIndex::c_5;
 
+    experimental::CircularBuffer cb_in0_obj(cb_in0);
+    experimental::CircularBuffer cb_in1_obj(cb_in1);
+    experimental::CircularBuffer cb_intermed0_obj(cb_intermed0);
+    experimental::CircularBuffer cb_intermed1_obj(cb_intermed1);
+    experimental::CircularBuffer cb_out_obj(out_cb_id);
+
     constexpr uint32_t onetile = 1;
     constexpr uint32_t num_rows_in_one_tile = 32;
     constexpr uint32_t in0_num_blocks_w = 1; // TODO: Generalize
@@ -66,13 +73,13 @@ void kernel_main() {
 
         for (uint32_t m = 0; m < Mt; m++) {  // TODO: Must be 1; generalize to support batch > 32 (ie. Mt > 1)
             for (uint32_t in0_block = 0; in0_block < in0_num_blocks_w; in0_block++) { // TODO: Must be 1; generalize to support inner dim blocking
-                cb_wait_front(cb_in0, in0_block_num_tiles);
+                cb_in0_obj.wait_front(in0_block_num_tiles);
 
                 for (uint32_t in1_block = 0; in1_block < in1_num_blocks; in1_block++) {
                     uint32_t in0_index_subblock_offset = 0;
                     for (uint32_t tile_row_id = 0; tile_row_id < num_rows_in_one_tile; tile_row_id++) {
-                        cb_wait_front(cb_in1, in1_block_num_tiles);
-                        cb_pop_front(cb_in1, num_kv_heads_skip);
+                        cb_in1_obj.wait_front(in1_block_num_tiles);
+                        cb_in1_obj.pop_front(num_kv_heads_skip);
 
 			// This init changes DEST mapping, hence needs to be called before MATH does any processing, so that it has correct DEST mapping.
                         pack_untilize_dest_init<intermediate_num_tiles>(cb_intermed0);
@@ -134,16 +141,16 @@ void kernel_main() {
 
                             in1_index_subblock_offset += out_subblock_w;
                         } // in1_num_subblocks loop
-                        cb_pop_front(cb_in1, num_kv_heads_remaining);
+                        cb_in1_obj.pop_front(num_kv_heads_remaining);
                         // TODO: Review inner dim blocking, untilizing, and in1_num_subblocks > 1 (with pack_untilize, can only untilize up to dst num tiles)
                         // This should normally be inside subblock loop and we pack out out_subblock_num_tiles
-                        cb_reserve_back(cb_intermed0, intermediate_num_tiles);
+                        cb_intermed0_obj.reserve_back(intermediate_num_tiles);
                         tile_regs_wait();
                         pack_untilize_dest<intermediate_num_tiles>(cb_intermed0);
                         pack_untilize_uninit(cb_intermed0);
 
                         tile_regs_release();
-                        cb_push_back(cb_intermed0, intermediate_num_tiles);
+                        cb_intermed0_obj.push_back(intermediate_num_tiles);
 
                     }  // 32 tiles loop
 
@@ -154,19 +161,19 @@ void kernel_main() {
             // cb_intermed1 comes from reader; untilized row-major tile
             reconfig_data_format_srca(cb_in1, cb_intermed1);
             pack_reconfig_data_format(cb_intermed0, out_cb_id);
-            cb_wait_front(cb_intermed1, out_num_tiles);
+            cb_intermed1_obj.wait_front(out_num_tiles);
 
-            cb_reserve_back(out_cb_id, out_num_tiles);
+            cb_out_obj.reserve_back(out_num_tiles);
 
             // tilize CB::intermed1 and write to CBIndex::c_16
             tilize_init_short_with_dt(cb_in1, cb_intermed1, out_num_tiles, out_cb_id);
             tilize_block(cb_intermed1, out_num_tiles, out_cb_id);
-            cb_push_back(out_cb_id, out_num_tiles);
+            cb_out_obj.push_back(out_num_tiles);
 
-            cb_pop_front(cb_intermed1, out_num_tiles);
+            cb_intermed1_obj.pop_front(out_num_tiles);
             tilize_uninit(cb_intermed1, out_cb_id);
 
-            cb_pop_front(cb_in0, in0_block_num_tiles);
+            cb_in0_obj.pop_front(in0_block_num_tiles);
         } // Mt loop
     }  // batch
 

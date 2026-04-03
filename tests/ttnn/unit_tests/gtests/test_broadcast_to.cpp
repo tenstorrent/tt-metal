@@ -7,7 +7,7 @@
 #include "ttnn/device.hpp"
 #include "ttnn/operations/experimental/bcast_to/bcast_to.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn_test_fixtures.hpp"
 
 namespace ttnn::operations::experimental::broadcast_to::test {

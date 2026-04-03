@@ -16,7 +16,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "modules/linear_module.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
@@ -483,7 +483,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
     auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tt_tensor =
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, ttnn::Layout::TILE, mapper.get());
-    auto tensor = ttml::autograd::create_tensor(tt_tensor);
+    auto tensor = ttml::autograd::create_tensor(tt_tensor, /* requires_grad */ true);
     auto output = layer(tensor);
     auto ones_grad = ttnn::ones_like(output->get_value());
     ones_grad = ttnn::multiply(ones_grad, 1.F / static_cast<float>(ttml::autograd::ctx().get_device().num_devices()));
@@ -506,7 +506,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
     auto replicate_layer = ttml::modules::LinearLayer(in_features, out_features, has_bias);
     auto replicate_layer_parameters = replicate_layer.parameters();
     auto replicate_layer_weight = get_parameter(replicate_layer_parameters, "weight");
-    auto replicate_layer_input = ttml::autograd::create_tensor(tt_tensor);
+    auto replicate_layer_input = ttml::autograd::create_tensor(tt_tensor, /* requires_grad */ true);
     auto replicate_layer_output = replicate_layer(replicate_layer_input);
     // Use unscaled ones_grad for replicate layer because row parallel's all_reduce backward
     // does all_reduce on grad (noop_backward=false), effectively multiplying by num_devices
@@ -571,7 +571,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
     auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tt_tensor =
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, ttnn::Layout::TILE, mapper.get());
-    auto tensor = ttml::autograd::create_tensor(tt_tensor);
+    auto tensor = ttml::autograd::create_tensor(tt_tensor, /* requires_grad */ true);
     auto output = layer(tensor);
 
     auto ones_grad = ttnn::ones_like(output->get_value());
@@ -594,7 +594,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
     auto replicate_layer = ttml::modules::LinearLayer(in_features, out_features, has_bias);
     auto replicate_layer_parameters = replicate_layer.parameters();
     auto replicate_layer_weight = get_parameter(replicate_layer_parameters, "weight");
-    auto replicate_layer_input = ttml::autograd::create_tensor(tt_tensor);
+    auto replicate_layer_input = ttml::autograd::create_tensor(tt_tensor, /* requires_grad */ true);
     auto replicate_layer_output = replicate_layer(replicate_layer_input);
     replicate_layer_output->backward();
     auto replicate_output_xtensor =
@@ -666,7 +666,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
     auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tt_tensor =
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, ttnn::Layout::TILE, mapper.get());
-    auto tensor = ttml::autograd::create_tensor(tt_tensor);
+    auto tensor = ttml::autograd::create_tensor(tt_tensor, /* requires_grad */ true);
     auto output = layer(tensor);
 
     auto ones_grad = ttnn::ones_like(output->get_value());
@@ -690,7 +690,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
     auto replicate_layer = ttml::modules::LinearLayer(in_features, out_features, has_bias);
     auto replicate_layer_parameters = replicate_layer.parameters();
     auto replicate_layer_weight = get_parameter(replicate_layer_parameters, "weight");
-    auto replicate_layer_input = ttml::autograd::create_tensor(tt_tensor);
+    auto replicate_layer_input = ttml::autograd::create_tensor(tt_tensor, /* requires_grad */ true);
     auto replicate_layer_output = replicate_layer(replicate_layer_input);
     replicate_layer_output->backward();
     auto replicate_output_xtensor =

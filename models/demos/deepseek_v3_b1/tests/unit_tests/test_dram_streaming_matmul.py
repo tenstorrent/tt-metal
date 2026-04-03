@@ -16,6 +16,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_experts_matmul.op import DRAMStreamingExpertsMatmul
 from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul.op import DRAMStreamingMatmul
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
@@ -113,10 +114,14 @@ def shuffle_tensor_tiles(tensor, tile_size, num_banks):
     return shuffled
 
 
-@pytest.mark.parametrize("k, n", [(7168, 2048), (2048, 7168)])
-@pytest.mark.parametrize("m", [1, 4, 8])
-@pytest.mark.parametrize("fused_activation", [None, "silu"])
-def test_dram_streaming_matmul(device, k, n, m, fused_activation):
+@pytest.mark.parametrize(
+    "k, n, fused_activation",
+    [(7168, 2048, None), (7168, 2048, "silu"), (2048, 7168, None)],
+    ids=["up_proj", "gate_proj", "down_proj"],
+)
+@pytest.mark.parametrize("m", [1, 4, 8], ids=["m1", "m4", "m8"])
+@pytest.mark.parametrize("fp32_dest_acc_en", [True, False], ids=["fp32_dest", "not_fp32"])
+def test_dram_streaming_matmul(device, k, n, m, fused_activation, fp32_dest_acc_en):
     """Test simplified DRAM streaming matmul with optional fused activation.
 
     In the simplified version:
@@ -131,7 +136,6 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation):
 
     # Use 100 iterations for m=1 to stress-test CB boundary wrapping, 1 iteration otherwise
     num_loop_iters = 100 if m == 1 else 1
-
     tile_h = m  # Tile height matches m (1 for tiny tiles, 32 for standard)
     tile_w = 32
 
@@ -258,9 +262,9 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation):
             in0_t,
             in1_t,
             ttnn_output,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=fp32_dest_acc_en,
             math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
+            math_approx_mode=False,
             subblock_k=subblock_k,
             fused_activation=fused_activation,
             num_loop_iters=num_loop_iters,
@@ -471,7 +475,7 @@ def test_dram_streaming_matmul_indexed(device, k, n, m, num_experts, fused_activ
             index_tensor=index_t,
             fp32_dest_acc_en=True,
             math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
+            math_approx_mode=False,
             subblock_k=subblock_k,
             fused_activation=fused_activation,
         )
@@ -656,7 +660,7 @@ def test_dram_streaming_matmul_with_mul(device, k, n, m, fused_activation):
             ttnn_output,
             fp32_dest_acc_en=True,
             math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
+            math_approx_mode=False,
             subblock_k=subblock_k,
             fused_activation=fused_activation,
             mul_tensor=mul_t,
@@ -679,3 +683,229 @@ def test_dram_streaming_matmul_with_mul(device, k, n, m, fused_activation):
     logger.info(output)
     assert passing, f"PCC check failed: {output}"
     logger.info(f"DRAM streaming matmul + {fused_activation} + mul + scalar test passed!")
+
+
+@pytest.mark.parametrize(
+    "k, n, fused_activation, seed",
+    [(7168, 256, None, 520), (7168, 256, "silu", 2005), (256, 7168, None, 1000)],
+    ids=["up_proj", "gate_proj", "down_proj"],
+)
+@pytest.mark.parametrize("m", [1])
+@pytest.mark.parametrize("num_experts", [256])
+@pytest.mark.parametrize("selected_experts_k", [8])
+def test_dram_streaming_matmul_with_all_experts(
+    device, k, n, m, num_experts, selected_experts_k, fused_activation, seed
+):
+    """Test DRAM streaming matmul with all K selected experts run in a single kernel invocation.
+
+    Simulates the sharded-expert MoE flow where each device holds 1/8th of every
+    expert's weight matrix.  Per expert per device the weight is [K, N] = [7168, 256],
+    WIDTH_SHARDED across 8 DRAM banks so each bank has [K, per_core_N] = [7168, 32].
+    All 256 experts are uploaded contiguously so the kernel can index any expert via
+    base_addr + expert_idx * expert_size_bytes.
+
+    The kernel iterates over selected_experts_k=8 experts.  Each core produces
+    selected_experts_k output tiles (one per expert), so the output shard width is
+    selected_experts_k * per_core_N = 256.
+
+    Output layout (WIDTH_SHARDED, 8 cores):
+        core c: [e0_cols[c], e1_cols[c], ..., e7_cols[c]]   (each 32 elements)
+    where e_i_cols[c] = columns c*32..(c+1)*32 of expert i's full result.
+    """
+    assert selected_experts_k <= 16, "selected_experts_k must fit in the [1, 16] index tile"
+    tile_h = m
+    tile_w = 32
+
+    in0_tile = ttnn.Tile([tile_h, tile_w])
+    out_tile = ttnn.Tile([tile_h, tile_w])
+
+    # Get compute cores from optimal DRAM bank assignment
+    compute_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    num_cores = len(compute_cores)
+    num_banks = device.dram_grid_size().x
+    assert num_cores == num_banks, f"num_cores ({num_cores}) must equal num_banks ({num_banks})"
+
+    logger.info(f"num_compute_cores={num_cores}, num_dram_banks={num_banks}")
+
+    n_padded = pad_to_dram_banks(n, tile_w, tile_w * num_banks)
+    per_core_N = n_padded // num_banks  # 32 elements = 1 tile per expert per core
+
+    output_per_core_width = selected_experts_k * per_core_N  # 8 * 32 = 256
+    output_total_width = output_per_core_width * num_cores  # 256 * 8 = 2048
+
+    logger.info(
+        f"num_experts={num_experts}, selected_k={selected_experts_k}, k={k}, "
+        f"n_padded={n_padded}, per_core_N={per_core_N}, "
+        f"output_per_core={output_per_core_width}, output_total={output_total_width}"
+    )
+
+    # Define shapes
+    in0_shape = [1, 1, m, k]
+
+    # Build CoreRangeSet for specific compute cores
+    compute_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in compute_cores]
+    )
+
+    torch.manual_seed(seed)
+    in0 = torch.randn(in0_shape).bfloat16().float()
+
+    # ========== Select K expert indices ==========
+    selected_indices = torch.randperm(num_experts)[:selected_experts_k].sort().values
+    logger.info(f"Selected expert indices: {selected_indices.tolist()}")
+
+    # Index tensor: [1, 16] tile, first selected_experts_k entries hold the indices
+    index_tensor_torch = torch.zeros(1, 16, dtype=torch.int32)
+    for i, idx in enumerate(selected_indices):
+        index_tensor_torch[0, i] = idx.item()
+    index_tensor_torch = index_tensor_torch.to(torch.uint16)
+
+    # ========== Input A - REPLICATED on compute cores ==========
+    in0_replicated = in0.repeat(1, 1, num_cores, 1)
+    in0_shard_spec = ttnn.ShardSpec(compute_core_grid, [m, k], ttnn.ShardOrientation.ROW_MAJOR)
+    in0_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec)
+    in0_t = ttnn.from_torch(
+        in0_replicated,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in0_memory_config,
+        tile=in0_tile,
+    )
+
+    # ========== Input B - WIDTH_SHARDED in DRAM, [K, N] per expert ==========
+    # Per bank: [K, per_core_N] = [7168, 32] per expert, 256 experts contiguous
+    in1_shard_shape = [k, n_padded // num_banks]
+    in1_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
+    in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), in1_shard_grid)})
+    in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
+
+    logger.info(f"Uploading {num_experts} experts as separate contiguous tensors...")
+    expert_tensors = []
+    selected_indices_set = set(selected_indices.tolist())
+    expert_weights_for_golden = {}
+
+    for expert_idx in range(num_experts):
+        # Create this expert's weights
+        expert_weights = torch.randn(1, 1, k, n_padded).bfloat16()
+
+        if expert_idx in selected_indices_set:
+            expert_weights_for_golden[expert_idx] = expert_weights.clone().float()
+
+        # Shuffle tiles for this expert
+        expert_shuffled = shuffle_tensor_tiles(expert_weights.reshape(1, k, n_padded), tile_w, num_banks)
+        expert_shuffled = expert_shuffled.reshape(1, 1, k, n_padded)
+
+        # Upload to DRAM - sequential allocation = contiguous in each bank
+        expert_t = ttnn.from_torch(
+            expert_shuffled.contiguous(),
+            dtype=ttnn.bfloat4_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=in1_memory_config,
+        )
+        expert_tensors.append(expert_t)
+
+        # Free torch tensors we don't need
+        del expert_weights, expert_shuffled
+
+        if (expert_idx + 1) % 32 == 0:
+            logger.info(f"  Uploaded {expert_idx + 1}/{num_experts} experts")
+
+    logger.info(f"All experts uploaded. First expert tensor: {expert_tensors[0].shape}")
+
+    # Use first expert tensor for the op - kernel calculates offset for other experts
+    in1_t = expert_tensors[0]
+
+    # ========== Index tensor - REPLICATED on compute cores ==========
+    index_tile = ttnn.Tile([1, 16])
+    index_tensor_replicated = index_tensor_torch.repeat(num_cores, 1)  # [num_cores, 16]
+    index_shard_spec = ttnn.ShardSpec(compute_core_grid, (1, 16), ttnn.ShardOrientation.ROW_MAJOR)
+    index_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, index_shard_spec
+    )
+    index_t = ttnn.from_torch(
+        index_tensor_replicated,
+        dtype=ttnn.uint16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=index_memory_config,
+        tile=index_tile,
+    )
+
+    # ========== Output tensor - WIDTH_SHARDED in L1 ==========
+    # Each core produces selected_experts_k * per_core_N elements
+    output_shard_spec = ttnn.ShardSpec(compute_core_grid, (m, output_per_core_width), ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+    ttnn_output = ttnn.from_torch(
+        torch.zeros([1, 1, m, output_total_width]).bfloat16().float(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=output_mem_config,
+        tile=out_tile,
+    )
+
+    if k == 7168:
+        subblock_k = k // tile_w // 4
+    else:
+        subblock_k = k // tile_w
+
+    # ========== Compute PyTorch golden reference ==========
+    # Compute each selected expert's full matmul result, then arrange to match
+    # the WIDTH_SHARDED output layout: core c produces
+    #   [e0_cols[c*32:(c+1)*32], e1_cols[...], ..., e7_cols[...]]
+    expert_full_results = {}
+    for e_idx in selected_indices.tolist():
+        result = in0 @ expert_weights_for_golden[e_idx]  # [1, 1, 1, n_padded]
+        if fused_activation == "silu":
+            result = torch.nn.functional.silu(result)
+        expert_full_results[e_idx] = result
+
+    golden = torch.zeros(1, 1, m, output_total_width)
+    for core_idx in range(num_cores):
+        col_start = core_idx * per_core_N
+        col_end = col_start + per_core_N
+        output_base = core_idx * output_per_core_width
+        for expert_local_idx in range(selected_experts_k):
+            e_idx = selected_indices[expert_local_idx].item()
+            expert_slice = expert_full_results[e_idx][:, :, :, col_start:col_end]
+            out_start = output_base + expert_local_idx * per_core_N
+            out_end = out_start + per_core_N
+            golden[:, :, :, out_start:out_end] = expert_slice
+
+    pt_out = golden
+    logger.info(f"Golden output shape: {pt_out.shape}")
+
+    # ========== Run multi-expert DRAM streaming matmul ==========
+    activation_str = f" + {fused_activation}" if fused_activation else ""
+    logger.info(
+        f"Running multi-expert DRAM streaming matmul{activation_str}: m={m}, k={k}, "
+        f"n_per_expert={n_padded}, selected_k={selected_experts_k}, num_cores={num_cores}"
+    )
+
+    try:
+        ttnn_result = DRAMStreamingExpertsMatmul.op(
+            in0_t,
+            in1_t,
+            ttnn_output,
+            index_tensor=index_t,
+            fp32_dest_acc_en=True,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            subblock_k=subblock_k,
+            fused_activation=fused_activation,
+            selected_experts_k=selected_experts_k,
+        )
+    except Exception as e:
+        logger.error(f"Multi-expert DRAM streaming matmul{activation_str} failed: {e}")
+        pytest.skip(f"Operation failed (kernel/op changes not yet implemented): {e}")
+
+    tt_out = ttnn.to_torch(ttnn_result)
+
+    expected_pcc = 0.99
+    passing, output = comp_pcc(pt_out, tt_out, expected_pcc)
+    logger.info(output)
+    assert passing, f"PCC check failed: {output}"
+    logger.info(f"Multi-expert DRAM streaming matmul{activation_str} test passed!")

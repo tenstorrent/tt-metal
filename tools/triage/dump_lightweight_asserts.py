@@ -24,6 +24,7 @@ from callstack_provider import (
     run as get_callstack_provider,
     CallstackProvider,
 )
+from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from run_checks import run as get_run_checks
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
@@ -66,22 +67,29 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
         with open(file, "r") as f:
             lines = f.readlines()
             if not (0 <= line - 1 < len(lines)):
-                return "?wrong line number?"
+                return "?wrong line number? Check the first code line in the stack trace."
             code_line = lines[line - 1]
             start_index = -1
             while True:
                 new_index = code_line.find("ASSERT(", start_index + 1)
-                if new_index == -1 or (column is not None and new_index >= column):
+                if new_index == -1:
+                    break
+                # Walk backward to find the actual start of the macro name
+                # (e.g. "LLK_ASSERT(" -> position of 'L', not 'A')
+                macro_start = new_index
+                while macro_start > 0 and (code_line[macro_start - 1].isalnum() or code_line[macro_start - 1] == "_"):
+                    macro_start -= 1
+                if column is not None and macro_start >= column:
                     break
                 start_index = new_index
             if start_index == -1:
-                return "?ASSERT() not found?"
+                return "ASSERT() not found! Check the first code line in the stack trace."
             while start_index > 0 and (code_line[start_index - 1].isalnum() or code_line[start_index - 1] == "_"):
                 start_index -= 1
             # Find the matching closing parenthesis for ASSERT(
             open_paren_index = code_line.find("(", start_index)
             if open_paren_index == -1:
-                return "?ASSERT() not opened?"
+                return "ASSERT() not opened! Check the first code line in the stack trace."
             paren_count = 1
             i = open_paren_index + 1
             while i < len(code_line):
@@ -93,7 +101,31 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
                         break
                 i += 1
             if paren_count != 0:
-                return "?ASSERT() not closed?"
+                current_line_idx = line
+                while paren_count > 0 and current_line_idx < len(lines):
+                    next_line = lines[current_line_idx]
+                    code_line += " " + next_line.strip()
+                    for ch in next_line:
+                        if ch == "(":
+                            paren_count += 1
+                        elif ch == ")":
+                            paren_count -= 1
+                            if paren_count == 0:
+                                break
+                    current_line_idx += 1
+                if paren_count != 0:
+                    return "ASSERT() closing paren not found. Check the first code line in the stack trace."
+                # Re-scan the assembled string to find the closing paren position
+                i = open_paren_index + 1
+                scan_count = 1
+                while i < len(code_line):
+                    if code_line[i] == "(":
+                        scan_count += 1
+                    elif code_line[i] == ")":
+                        scan_count -= 1
+                        if scan_count == 0:
+                            break
+                    i += 1
             return code_line[start_index : i + 1].strip()
     except Exception:
         return "?"
@@ -115,9 +147,13 @@ def serialize_variables(variables: list[CallstackEntryVariable], assert_code: st
 def dump_lightweight_asserts(
     location: OnChipCoordinate,
     risc_name: str,
+    dispatcher_data: DispatcherData,
     callstack_provider: CallstackProvider,
 ) -> LightweightAssertInfo | None:
     try:
+        if not dispatcher_data.risc_enabled(risc_name):
+            return None
+
         risc_debug = location._device.get_block(location).get_risc_debug(risc_name)
 
         # We don't care about cores that are in reset
@@ -149,12 +185,13 @@ def dump_lightweight_asserts(
             if pc >= 4:
                 previous_instruction = read_word_from_device(location, pc - 4)
 
-        # Check if core hit ebreak
+        # Check if core hit ebreak or is spinning in a while(true) loop after an assert failure
+        while_true_instruction = 0x0000006F
         ebreak_instruction = 0x00100073
         rewind_pc_for_ebreak = False
         if previous_instruction == ebreak_instruction:
             rewind_pc_for_ebreak = True
-        elif current_instruction != ebreak_instruction:
+        elif current_instruction != ebreak_instruction and current_instruction != while_true_instruction:
             return None
 
         callstack_data = callstack_provider.get_cached_callstacks(
@@ -169,20 +206,23 @@ def dump_lightweight_asserts(
                 callstack_data.kernel_callstack_with_message.callstack[0].column,
             )
             arguments_and_locals = ""
-            if len(callstack_data.kernel_callstack_with_message.callstack[0].arguments) > 0:
-                arguments_and_locals += "\nArguments:\n"
-                arguments_and_locals += serialize_variables(
-                    callstack_data.kernel_callstack_with_message.callstack[0].arguments, assert_code
-                )
-                for var in callstack_data.kernel_callstack_with_message.callstack[0].arguments:
+            top_frame = callstack_data.kernel_callstack_with_message.callstack[0]
+            if len(top_frame.template_parameters) > 0:
+                arguments_and_locals += "\nTemplate parameters:\n"
+                arguments_and_locals += serialize_variables(top_frame.template_parameters, assert_code)
+                for var in top_frame.template_parameters:
                     if var.name is not None:
                         assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
-            if len(callstack_data.kernel_callstack_with_message.callstack[0].locals) > 0:
+            if len(top_frame.arguments) > 0:
+                arguments_and_locals += "\nRuntime arguments:\n"
+                arguments_and_locals += serialize_variables(top_frame.arguments, assert_code)
+                for var in top_frame.arguments:
+                    if var.name is not None:
+                        assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
+            if len(top_frame.locals) > 0:
                 arguments_and_locals += "\nLocals:\n"
-                arguments_and_locals += serialize_variables(
-                    callstack_data.kernel_callstack_with_message.callstack[0].locals, assert_code
-                )
-                for var in callstack_data.kernel_callstack_with_message.callstack[0].locals:
+                arguments_and_locals += serialize_variables(top_frame.locals, assert_code)
+                for var in top_frame.locals:
                     if var.name is not None:
                         assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
         return LightweightAssertInfo(
@@ -206,15 +246,17 @@ def dump_lightweight_asserts(
 
 
 def run(args, context: Context):
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth", "dram"]
 
     run_checks = get_run_checks(args, context)
     callstack_provider = get_callstack_provider(args, context)
+    dispatcher_data = get_dispatcher_data(args, context)
 
     callstacks_data = run_checks.run_per_core_check(
         lambda location, risc_name: dump_lightweight_asserts(
             location,
             risc_name,
+            dispatcher_data,
             callstack_provider,
         ),
         block_filter=BLOCK_TYPES_TO_CHECK,

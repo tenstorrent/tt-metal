@@ -27,7 +27,6 @@
 #include "llk_math_reduce_api.h"
 #endif
 #define MATH(x) x
-#define MAIN math_main()
 #else
 #define MATH(x)
 #endif
@@ -36,7 +35,6 @@
 #include "llk_pack_api.h"
 #include "llk_io_pack.h"
 #define PACK(x) x
-#define MAIN pack_main()
 #else
 #define PACK(x)
 #endif
@@ -53,7 +51,6 @@
 #endif
 #include "llk_io_unpack.h"
 #define UNPACK(x) x
-#define MAIN unpack_main()
 #else
 #define UNPACK(x)
 #endif

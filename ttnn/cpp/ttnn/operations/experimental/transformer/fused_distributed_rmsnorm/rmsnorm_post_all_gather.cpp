@@ -6,9 +6,9 @@
 
 #include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/fused_rmsnorm_post_all_gather_device_operation.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteFusedRMSNormPostAllGather::invoke(
+ttnn::Tensor wan_fused_rmsnorm_post_allgather(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& stats,
     float epsilon,
@@ -38,4 +38,4 @@ ttnn::Tensor ExecuteFusedRMSNormPostAllGather::invoke(
         dtype);
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental

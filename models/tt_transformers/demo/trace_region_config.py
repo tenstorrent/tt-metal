@@ -86,12 +86,12 @@ def get_supported_trace_region_size(request, mesh_device):
             "TG": 50000000,
         },
         "Llama-3.3-70B": {
-            "T3K": 30000000,
+            "T3K": 90000000,
             "TG": 80000000,
             "P150": 80000000,
             "P300": 80000000,
-            "P150x4": 80000000,
-            "P150x8": 80000000,
+            "P150x4": 95000000,
+            "P150x8": 83000000,
         },
         "Llama-3.1-70B": {
             "T3K": 90000000,
@@ -100,6 +100,9 @@ def get_supported_trace_region_size(request, mesh_device):
             "P300": 90000000,
             "P150x4": 90000000,
             "P150x8": 90000000,
+        },
+        "Llama-3.2-90B": {
+            "T3K": 20000000,
         },
         "Qwen3-32B": {
             "T3K": 90000000,

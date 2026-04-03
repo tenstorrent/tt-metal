@@ -42,6 +42,38 @@ void kernel_main() {
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
 
+#ifdef BALANCED_PARALLELISM
+    constexpr uint32_t pairs_per_seq = Ht / 2;
+
+    auto write_row = [&](const uint32_t global_row_idx) {
+        const uint32_t batch_idx = global_row_idx / (num_of_groups * Ht);
+        const uint32_t s_tile_idx = global_row_idx % Ht;
+        const uint32_t group_idx = (global_row_idx / Ht) % num_of_groups;
+
+        const uint32_t grad_v_row_base_tiles = ((batch_idx * num_of_groups + group_idx) * Ht + s_tile_idx) * kWt;
+        write_tiles_by_row(cb_grad_value, grad_value_addr_generator, grad_v_row_base_tiles, kWt, tile_bytes, kWt);
+
+        const uint32_t grad_k_row_base_tiles = ((batch_idx * num_of_groups + group_idx) * Ht + s_tile_idx) * kWt;
+        write_tiles_by_row(cb_grad_key, grad_key_addr_generator, grad_k_row_base_tiles, kWt, tile_bytes, kWt);
+    };
+
+    // Runtime args reuse: num_rows_to_process = num_pairs, start_row = start_pair_idx
+    for (uint32_t p = 0; p < num_rows_to_process; ++p) {
+        const uint32_t global_pair_idx = start_row + p;
+
+        const uint32_t seq_idx = global_pair_idx / pairs_per_seq;
+        const uint32_t pair_in_seq = global_pair_idx % pairs_per_seq;
+
+        const uint32_t light_row_in_seq = pair_in_seq;
+        const uint32_t heavy_row_in_seq = Ht - 1 - pair_in_seq;
+
+        const uint32_t light_global_row = seq_idx * Ht + light_row_in_seq;
+        const uint32_t heavy_global_row = seq_idx * Ht + heavy_row_in_seq;
+
+        write_row(light_global_row);
+        write_row(heavy_global_row);
+    }
+#else
     const uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; r++) {
         // Convert global row index to tensor coordinates
@@ -58,4 +90,5 @@ void kernel_main() {
         const uint32_t grad_k_row_base_tiles = ((batch_idx * num_of_groups + group_idx) * Ht + s_tile_idx) * kWt;
         write_tiles_by_row(cb_grad_key, grad_key_addr_generator, grad_k_row_base_tiles, kWt, tile_bytes, kWt);
     }
+#endif
 }

@@ -44,6 +44,7 @@ void AllocatorImpl::init_one_bank_per_channel() {
         bank_offsets,
         dram_bank_size,
         config_->dram_alignment,
+        config_->dram_alignment,
         config_->dram_unreserved_base,
         config_->disable_interleaved);
     for (uint32_t bank_id = 0; bank_id < config_->num_dram_channels; bank_id++) {
@@ -58,6 +59,7 @@ void AllocatorImpl::init_one_bank_per_channel() {
         BufferType::TRACE,
         bank_offsets,
         config_->trace_region_size,
+        config_->dram_alignment,
         config_->dram_alignment,
         dram_bank_size + config_->dram_unreserved_base,
         config_->disable_interleaved);
@@ -80,6 +82,7 @@ void AllocatorImpl::init_one_bank_per_l1() {
         bank_offsets,
         l1_bank_size,
         config_->l1_alignment,
+        config_->dram_alignment,
         config_->l1_unreserved_base,
         config_->disable_interleaved);
 
@@ -119,6 +122,32 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
     if (config_->disable_interleaved) {
         TT_FATAL(num_cores.has_value(), "Interleaved allocation is disabled, see validate_num_banks");
     }
+
+    // Per-core allocation path: each core gets an independent address
+    if (buffer->per_core_allocation_) {
+        TT_FATAL(
+            config_->allocator_mode == AllocatorMode::HYBRID,
+            "Per-core allocation requires AllocatorMode::HYBRID when opening the device");
+        TT_FATAL(buffer_type == BufferType::L1, "per_core_allocation is only supported for L1 buffers");
+        using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+        TT_FATAL(buffer->has_shard_spec(), "per_core_allocation requires a shard_spec with core grid");
+        const auto& grid = buffer->shard_spec().tensor_shard_spec.grid;
+        bool row_major = buffer->shard_spec().tensor_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+        auto cores = corerange_to_cores(grid, std::nullopt, row_major);
+        TT_FATAL(!cores.empty(), "per_core_allocation: shard grid resolved to zero cores");
+        DeviceAddr alloc_size = buffer->aligned_size_per_bank();
+
+        std::unordered_map<CoreCoord, DeviceAddr> addrs;
+        for (const auto& core : cores) {
+            auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0);
+            addrs[core] = l1_manager_->allocate_buffer(
+                alloc_size, page_size, bottom_up, config_->compute_grid, /*num_shards=*/1, AllocatorID{bank_id + 1});
+        }
+        buffer->set_per_core_addresses(std::move(addrs));
+        allocated_buffers_.insert(buffer);
+        return buffer->per_core_addresses_.at(cores[0]);
+    }
+
     switch (buffer_type) {
         case BufferType::DRAM:
             address = dram_manager_->allocate_buffer(size, page_size, bottom_up, config_->compute_grid, num_cores);
@@ -147,6 +176,19 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto address = buffer->address();
     auto buffer_type = buffer->buffer_type();
+
+    // Per-core deallocation path
+    if (buffer->per_core_allocation_) {
+        TT_FATAL(buffer_type == BufferType::L1, "per_core_allocation is only supported for L1 buffers");
+        using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+        for (const auto& [core, addr] : buffer->per_core_addresses_) {
+            auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0);
+            l1_manager_->deallocate_buffer(addr, AllocatorID{bank_id + 1});
+        }
+        allocated_buffers_.erase(buffer);
+        return;
+    }
+
     switch (buffer_type) {
         case BufferType::DRAM: dram_manager_->deallocate_buffer(address); break;
         case BufferType::L1: l1_manager_->deallocate_buffer(address); break;
@@ -415,6 +457,9 @@ AllocatorImpl::~AllocatorImpl() {
 
 AllocatorState AllocatorImpl::extract_state() const {
     std::lock_guard<std::mutex> lock(mutex_);
+    for (auto* buf : allocated_buffers_) {
+        TT_FATAL(!buf->per_core_allocation_, "extract_state does not yet support per-core L1 allocations");
+    }
 
     std::unordered_map<BufferType, AllocatorState::BufferTypeState> states_per_buffer_type;
 
@@ -445,6 +490,9 @@ AllocatorState AllocatorImpl::extract_state() const {
 
 void AllocatorImpl::override_state(const AllocatorState& state) {
     std::lock_guard<std::mutex> lock(mutex_);
+    for (auto* buf : allocated_buffers_) {
+        TT_FATAL(!buf->per_core_allocation_, "override_state does not yet support per-core L1 allocations");
+    }
 
     // Clear all buffer types
     dram_manager_->deallocate_all();

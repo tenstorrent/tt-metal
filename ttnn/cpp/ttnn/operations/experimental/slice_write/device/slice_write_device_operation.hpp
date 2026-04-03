@@ -7,8 +7,6 @@
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 #include "slice_write_device_operation_types.hpp"
 #include "slice_write_rm_sharded_input_program_factory.hpp"
@@ -36,7 +34,7 @@ struct SliceWriteDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
-    static tt::stl::hash::hash_t compute_program_hash(
+    static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
 };
 

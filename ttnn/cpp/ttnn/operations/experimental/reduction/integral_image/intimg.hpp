@@ -7,20 +7,10 @@
 #include <array>
 #include <cstdint>
 #include <optional>
-#include "ttnn/decorators.hpp"
+#include "ttnn/types.hpp"
 
-namespace ttnn {
-namespace operations::experimental::reduction {
+namespace ttnn::experimental {
 
-struct IntImgOperation {
-    static Tensor invoke(const Tensor& input_tensor);
-};
+Tensor intimg(const Tensor& input_tensor);
 
-}  // namespace operations::experimental::reduction
-
-namespace experimental {
-constexpr auto intimg = ttnn::
-    register_operation<"ttnn::experimental::intimg", ttnn::operations::experimental::reduction::IntImgOperation>();
-}
-
-}  // namespace ttnn
+}  // namespace ttnn::experimental

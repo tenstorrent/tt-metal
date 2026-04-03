@@ -40,26 +40,26 @@ constexpr const char* const kComputePath =
     "tt-train/sources/ttml/metal/ops/softmax_backward/device/kernels/compute/softmax_backward_kernel.cpp";
 
 struct CoreRowAssignment {
-    CoreCoord core;
+    tt::tt_metal::CoreCoord core;
     uint32_t start_row;
     uint32_t num_rows;
 };
 
-static std::vector<CoreCoord> get_worker_cores_in_order(
-    const std::optional<CoreRangeSet>& sub_core_grids, const tt::tt_metal::IDevice* device) {
+static std::vector<tt::tt_metal::CoreCoord> get_worker_cores_in_order(
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids, const tt::tt_metal::IDevice* device) {
     if (sub_core_grids.has_value()) {
-        const CoreRangeSet& sub = *sub_core_grids;
-        std::vector<CoreCoord> cores;
+        const tt::tt_metal::CoreRangeSet& sub = *sub_core_grids;
+        std::vector<tt::tt_metal::CoreCoord> cores;
         cores.reserve(sub.num_cores());
-        for (const CoreRange& range : sub.ranges()) {
-            for (CoreCoord core : range) {
+        for (const tt::tt_metal::CoreRange& range : sub.ranges()) {
+            for (tt::tt_metal::CoreCoord core : range) {
                 cores.push_back(core);
             }
         }
         return cores;
     }
-    const CoreCoord grid_size = device->compute_with_storage_grid_size();
-    std::vector<CoreCoord> cores;
+    const tt::tt_metal::CoreCoord grid_size = device->compute_with_storage_grid_size();
+    std::vector<tt::tt_metal::CoreCoord> cores;
     cores.reserve(grid_size.x * grid_size.y);
     for (uint32_t x = 0; x < grid_size.x; ++x) {
         for (uint32_t y = 0; y < grid_size.y; ++y) {
@@ -70,9 +70,9 @@ static std::vector<CoreCoord> get_worker_cores_in_order(
 }
 
 static void assign_rows_to_cores(
-    const std::vector<CoreCoord>& cores_in_order,
+    const std::vector<tt::tt_metal::CoreCoord>& cores_in_order,
     uint32_t num_rows,
-    std::vector<CoreRange>& worker_core_ranges,
+    std::vector<tt::tt_metal::CoreRange>& worker_core_ranges,
     std::vector<CoreRowAssignment>& core_row_assignments) {
     const uint32_t num_cores = static_cast<uint32_t>(cores_in_order.size());
     if (num_cores == 0)
@@ -86,8 +86,8 @@ static void assign_rows_to_cores(
         const uint32_t num_rows_this_core = end_row - start_row;
         if (num_rows_this_core == 0)
             continue;
-        const CoreCoord& core = cores_in_order[core_idx];
-        worker_core_ranges.push_back(CoreRange(core, core));
+        const tt::tt_metal::CoreCoord& core = cores_in_order[core_idx];
+        worker_core_ranges.push_back(tt::tt_metal::CoreRange(core, core));
         core_row_assignments.push_back({core, start_row, num_rows_this_core});
     }
 }
@@ -204,13 +204,13 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
         required_memory_bytes / 1024);
 
     // Collect worker cores in deterministic order and assign rows to each.
-    std::vector<CoreRange> worker_core_ranges;
+    std::vector<tt::tt_metal::CoreRange> worker_core_ranges;
     std::vector<CoreRowAssignment> core_row_assignments;
-    const std::vector<CoreCoord> cores_in_order =
+    const std::vector<tt::tt_metal::CoreCoord> cores_in_order =
         get_worker_cores_in_order(operation_attributes.sub_core_grids, device);
     assign_rows_to_cores(cores_in_order, num_rows, worker_core_ranges, core_row_assignments);
     TT_FATAL(!worker_core_ranges.empty(), "SoftmaxBackward: no cores have work");
-    const CoreRangeSet worker_cores(worker_core_ranges);
+    const tt::tt_metal::CoreRangeSet worker_cores(worker_core_ranges);
 
     const uint32_t block_cb_size_in0 = buffering_multiplier * tiles_per_block * input_tile_size;
     const uint32_t block_cb_size_out = buffering_multiplier * tiles_per_block * output_tile_size;

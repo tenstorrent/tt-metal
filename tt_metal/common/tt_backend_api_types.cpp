@@ -74,6 +74,7 @@ std::ostream& tt::operator<<(std::ostream& os, const DataFormat& format) {
         case DataFormat::Int8: os << "Int8"; break;
         case DataFormat::UInt8: os << "UInt8"; break;
         case DataFormat::Lf8: os << "Lf8"; break;
+        case DataFormat::Fp8_e4m3: os << "Fp8_e4m3"; break;
         case DataFormat::UInt16: os << "UInt16"; break;
         case DataFormat::UInt32: os << "UInt32"; break;
         case DataFormat::Int32: os << "Int32"; break;

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+#include <bit>
 #include <cstring>
 
 #include <tt-metalium/constants.hpp>
@@ -19,8 +20,26 @@ std::uniform_int_distribution distribution(1, std::numeric_limits<int32_t>::max(
 
 auto get_random_seed() -> uint32_t { return distribution(rng); }
 
-RandDeviceOperation::ProgramFactory::cached_program_t RandDeviceOperation::ProgramFactory::create(
+using Factory = RandDeviceOperation::RandMeshWorkloadFactory;
+
+Factory::cached_mesh_workload_t Factory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    for (const auto& coord : tensor_coords.coords()) {
+        auto cached_program = create_at(operation_attributes, coord, tensor_args, output);
+        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
+        shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
+    }
+    return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
+}
+
+Factory::cached_program_t Factory::create_at(
+    const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output) {
     IDevice* device = output.device();
@@ -86,6 +105,25 @@ RandDeviceOperation::ProgramFactory::cached_program_t RandDeviceOperation::Progr
             .compile_args = compute_compile_time_args,
         });
 
+    // Derive a per-device seed offset so that devices holding different shards
+    // generate distinct random sequences, while replicas share the same seed.
+    // Only mesh dimensions marked as sharded contribute to the index; replicate
+    // dimensions are ignored so that all replicas of the same shard are identical.
+    uint32_t device_seed_offset = 0;
+    const auto& shard_mask = operation_attributes.mesh_dim_is_sharded;
+    if (!shard_mask.empty()) {
+        const auto& mesh_shape = operation_attributes.device->shape();
+        size_t shard_linear_idx = 0;
+        size_t shard_stride = 1;
+        for (int i = static_cast<int>(shard_mask.size()) - 1; i >= 0; --i) {
+            if (shard_mask[i]) {
+                shard_linear_idx += mesh_coordinate[i] * shard_stride;
+                shard_stride *= mesh_shape[i];
+            }
+        }
+        device_seed_offset = static_cast<uint32_t>(shard_linear_idx) * static_cast<uint32_t>(cores.size());
+    }
+
     uint32_t tile_offset = 0;
     for (int i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
@@ -98,18 +136,17 @@ RandDeviceOperation::ProgramFactory::cached_program_t RandDeviceOperation::Progr
             TT_THROW("Core not in specified core ranges");
         }
 
-        const float eps = 1e-6;
-        union {
-            float f;
-            uint32_t u;
-        } f2u_from{}, f2u_to{};
-        f2u_from.f = operation_attributes.from;
-        f2u_to.f = operation_attributes.to - eps;  // -eps make sure that generated number is < operation_attributes.to
+        const float eps = 1e-6f;
+        const uint32_t from_bits = std::bit_cast<uint32_t>(operation_attributes.from);
+        const uint32_t to_bits = std::bit_cast<uint32_t>(operation_attributes.to - eps);
 
-        // Each core has its own seed to increase the number of generated random numbers
-        uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
+        // Each core gets its own seed to increase entropy across the output tensor.
+        // With a user-supplied seed (!=0) the value is deterministic; with seed==0
+        // a fresh random seed is drawn from the host RNG for every core invocation.
+        uint32_t seed =
+            operation_attributes.seed != 0 ? operation_attributes.seed + i + device_seed_offset : get_random_seed();
 
-        std::vector<uint32_t> compute_runtime_args = {seed, f2u_from.u, f2u_to.u, tile_offset, units_per_core};
+        std::vector<uint32_t> compute_runtime_args = {seed, from_bits, to_bits, tile_offset, units_per_core};
         SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
 
         std::vector<uint32_t> writer_runtime_args = {output.buffer()->address(), tile_offset, units_per_core};
@@ -123,26 +160,50 @@ RandDeviceOperation::ProgramFactory::cached_program_t RandDeviceOperation::Progr
         {.compute_kernel_id = compute_kernel_id, .writer_kernel_id = writer_kernel_id, .cores = cores}};
 }
 
-void RandDeviceOperation::ProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
+void Factory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output) {
-    auto& program = cached_program.program;
-    auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    auto& compute_kernel_id = cached_program.shared_variables.compute_kernel_id;
-    auto& cores = cached_program.shared_variables.cores;
+    const float eps = 1e-6f;
+    const uint32_t from_bits = std::bit_cast<uint32_t>(operation_attributes.from);
+    const uint32_t to_bits = std::bit_cast<uint32_t>(operation_attributes.to - eps);
 
-    const uint32_t output_addr = output.buffer()->address();
+    const auto& shard_mask = operation_attributes.mesh_dim_is_sharded;
+    const auto& mesh_shape = operation_attributes.device->shape();
 
-    for (int i = 0; i < cores.size(); ++i) {
-        {
-            auto& runtime_args = GetRuntimeArgs(program, compute_kernel_id, cores[i]);
-            runtime_args[0] = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
+    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+        auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
+        auto& cores = shared_vars.cores;
+
+        const uint32_t output_addr = output.buffer()->address();
+
+        uint32_t device_seed_offset = 0;
+        if (!shard_mask.empty()) {
+            const auto& coord = coordinate_range.start_coord();
+            size_t shard_linear_idx = 0;
+            size_t shard_stride = 1;
+            for (int i = static_cast<int>(shard_mask.size()) - 1; i >= 0; --i) {
+                if (shard_mask[i]) {
+                    shard_linear_idx += coord[i] * shard_stride;
+                    shard_stride *= mesh_shape[i];
+                }
+            }
+            device_seed_offset = static_cast<uint32_t>(shard_linear_idx) * static_cast<uint32_t>(cores.size());
         }
-        {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, cores[i]);
-            runtime_args[0] = output_addr;
+
+        for (int i = 0; i < cores.size(); ++i) {
+            {
+                auto& runtime_args = GetRuntimeArgs(program, shared_vars.compute_kernel_id, cores[i]);
+                runtime_args[0] = operation_attributes.seed != 0 ? operation_attributes.seed + i + device_seed_offset
+                                                                 : get_random_seed();
+                runtime_args[1] = from_bits;
+                runtime_args[2] = to_bits;
+            }
+            {
+                auto& runtime_args = GetRuntimeArgs(program, shared_vars.writer_kernel_id, cores[i]);
+                runtime_args[0] = output_addr;
+            }
         }
     }
 }

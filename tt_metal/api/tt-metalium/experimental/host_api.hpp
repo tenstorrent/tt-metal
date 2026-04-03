@@ -46,6 +46,15 @@ struct QuasarDataMovementConfig {
     //     CreateKernel(program, "kernel.cpp", core, QuasarDataMovementConfig{.compile_args = compile_args,
     //     .named_compile_args = named_compile_args})
     std::unordered_map<std::string, uint32_t> named_compile_args;
+
+    // Flag to enable rapid porting of kernels from WH/BH to Quasar.
+    // If set to true, global variables will be accessed as local variables
+    // to the kernel, functionally equivalent to how thread_local variables operate.
+    // Note that setting this flag will also duplicate the kernel binary
+    // for each thread, so it is recommended to rewrite the kernel to operate
+    // properly on Quasar as soon as possible.
+    bool is_legacy_kernel = false;
+
     // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2;
 };

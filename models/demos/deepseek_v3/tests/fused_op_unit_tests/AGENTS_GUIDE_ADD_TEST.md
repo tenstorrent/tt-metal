@@ -9,7 +9,7 @@ Before you start, please read the example test in models/demos/deepseek_v3/tests
 Example test command for test_mla.py:
 ```
 source ../setup_metal.sh
-export DEEPSEEK_V3_HF_MODEL="/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/" && export DEEPSEEK_V3_CACHE="/proj_sw/user_dev/deepseek-v3-cache2" && export TT_METAL_RUNTIME_ROOT=/proj_sw/user_dev/jrock/tt-metal && export MESH_DEVICE=TG && pytest /proj_sw/user_dev/jrock/tt-metal/models/demos/deepseek_v3/tests/test_mla.py::test_forward_pass -k "decode" 2>&1 | tee /proj_sw/user_dev/jrock/tt-metal/logs/ds_mla_$(date +%Y%m%d_%H%M%S).log
+export DEEPSEEK_V3_HF_MODEL="/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528-dequantized/" && export DEEPSEEK_V3_CACHE="/proj_sw/user_dev/deepseek-v3-cache2" && export TT_METAL_RUNTIME_ROOT=/proj_sw/user_dev/jrock/tt-metal && export MESH_DEVICE=TG && pytest /proj_sw/user_dev/jrock/tt-metal/models/demos/deepseek_v3/tests/test_mla.py::test_forward_pass -k "decode" 2>&1 | tee /proj_sw/user_dev/jrock/tt-metal/logs/ds_mla_$(date +%Y%m%d_%H%M%S).log
 ```
 
 Follow these steps to add a new fused op unit test:

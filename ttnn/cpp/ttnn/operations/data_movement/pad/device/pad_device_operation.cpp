@@ -3,14 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include "pad_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/full/device/full_device_operation.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 
 #include "ttnn/operations/data_movement/pad/device/pad_rm_reader_writer_multi_core_program_factory.hpp"
-#include "ttnn/operations/data_movement/pad/device/pad_rm_reader_writer_multi_core_v2_program_factory.hpp"
+#include "ttnn/operations/data_movement/pad/device/pad_rm_reader_writer_multi_core_default_program_factory.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_rm_reader_writer_program_factory.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_rm_sharded_height_only_program_factory.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_rm_sharded_width_only_program_factory.hpp"
@@ -20,6 +22,35 @@
 using namespace tt::tt_metal;
 namespace ttnn::prim {
 using ttnn::operations::data_movement::common_tm_bw_model;
+
+namespace {
+bool can_use_sharded_optimized_factory(const PadParams& operation_attributes, const Tensor& input_tensor) {
+    if (!input_tensor.shard_spec().has_value()) {
+        return false;
+    }
+    if (input_tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
+        return false;
+    }
+    if (!operation_attributes.output_mem_config.is_sharded()) {
+        return false;
+    }
+    if (operation_attributes.output_mem_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
+        return false;
+    }
+    if (operation_attributes.sub_core_grids.has_value()) {
+        return false;
+    }
+    if (operation_attributes.output_padded_shape[-1] != operation_attributes.output_mem_config.shard_spec()->shape[1]) {
+        return false;
+    }
+    if (operation_attributes.output_mem_config.shard_spec().value().shape[0] <
+        input_tensor.shard_spec().value().shape[0]) {
+        // Note this case causes the sharded optimized PadRmShardedWidthOnlyProgramFactory{} to hang.
+        return false;
+    }
+    return true;
+}
+}  // namespace
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> PadDeviceOperation::create_op_performance_model(
     const std::vector<Tensor>& input_tensors,
@@ -38,34 +69,32 @@ PadDeviceOperation::program_factory_t PadDeviceOperation::select_program_factory
     const auto& input_tensor = tensor_args.input;
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         if (input_tensor.is_sharded()) {
-            uint32_t input_tot_h = std::accumulate(
-                input_tensor.logical_shape().view().begin(),
-                input_tensor.logical_shape().view().end() - 1,
-                1,
-                std::multiplies<uint32_t>());
-            uint32_t input_w = input_tensor.logical_shape()[3];
+            if (can_use_sharded_optimized_factory(operation_attributes, input_tensor)) {
+                uint32_t input_w = input_tensor.logical_shape()[3];
+                uint32_t output_w = operation_attributes.output_logical_shape[3];
+                uint32_t input_tot_h = std::accumulate(
+                    input_tensor.logical_shape().view().begin(),
+                    input_tensor.logical_shape().view().end() - 1,
+                    1,
+                    std::multiplies<uint32_t>());
+                uint32_t output_tot_h = std::accumulate(
+                    operation_attributes.output_logical_shape.view().begin(),
+                    operation_attributes.output_logical_shape.view().end() - 1,
+                    1,
+                    std::multiplies<uint32_t>());
 
-            uint32_t output_tot_h = std::accumulate(
-                operation_attributes.output_logical_shape.view().begin(),
-                operation_attributes.output_logical_shape.view().end() - 1,
-                1,
-                std::multiplies<uint32_t>());
-            uint32_t output_w = operation_attributes.output_logical_shape[3];
-
-            if (input_w != output_w and input_tot_h != output_tot_h) {
-                TT_THROW(
-                    "ttnn.pad: Unsupported sharded row-major padding configuration: pad_impl did not decompose padding "
-                    "correctly.");
-                return {};
+                if (input_w != output_w && input_tot_h == output_tot_h) {
+                    return PadRmShardedWidthOnlyProgramFactory{};
+                }
+                if (input_w == output_w) {
+                    return PadRmShardedHeightOnlyProgramFactory{};
+                }
+                // Combined width+height padding: fall through to the default factory
             }
-            if (input_w != output_w) {
-                return PadRmShardedWidthOnlyProgramFactory{};
-            }
-            // height-only padding or no padding
-            return PadRmShardedHeightOnlyProgramFactory{};
+            return PadRmReaderWriterMultiCoreDefaultProgramFactory{};
         }
         if (operation_attributes.use_multicore) {
-            return PadRmReaderWriterMultiCoreV2ProgramFactory{};
+            return PadRmReaderWriterMultiCoreDefaultProgramFactory{};
         }
         return PadRmReaderWriterProgramFactory{};
     }
@@ -99,19 +128,19 @@ void PadDeviceOperation::validate_on_program_cache_miss(
             "On device padding only supports padding at end of dims");
     }
     TT_FATAL(
-        input_tensor.padded_shape()[0] + operation_attributes.input_tensor_start[0] <=
+        input_tensor.logical_shape()[0] + operation_attributes.input_tensor_start[0] <=
             operation_attributes.output_padded_shape[0],
         "Output size cannot fit input with offset");
     TT_FATAL(
-        input_tensor.padded_shape()[1] + operation_attributes.input_tensor_start[1] <=
+        input_tensor.logical_shape()[1] + operation_attributes.input_tensor_start[1] <=
             operation_attributes.output_padded_shape[1],
         "Output size cannot fit input with offset");
     TT_FATAL(
-        input_tensor.padded_shape()[2] + operation_attributes.input_tensor_start[2] <=
+        input_tensor.logical_shape()[2] + operation_attributes.input_tensor_start[2] <=
             operation_attributes.output_padded_shape[2],
         "Output size cannot fit input with offset");
     TT_FATAL(
-        input_tensor.padded_shape()[3] + operation_attributes.input_tensor_start[3] <=
+        input_tensor.logical_shape()[3] + operation_attributes.input_tensor_start[3] <=
             operation_attributes.output_padded_shape[3],
         "Output size cannot fit input with offset");
 
@@ -149,17 +178,32 @@ void PadDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (input_tensor.is_sharded()) {
+        uint32_t shard_width = input_tensor.shard_spec().has_value()
+                                   ? input_tensor.shard_spec().value().shape[1]
+                                   : input_tensor.nd_shard_spec().value().shard_shape[-1];
+        const uint32_t page_size_bytes = input_tensor.buffer()->page_size();
+        const uint32_t alignment_requirement = hal::get_l1_alignment();
         TT_FATAL(
-            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
-            "ttnn.pad: For sharded inputs, only height-sharding is supported.");
-        TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR, "ttnn.pad: Only row-major sharded inputs are supported.");
+            page_size_bytes == input_tensor.buffer()->aligned_page_size(),
+            "Input row-major shard width {} gives page size {} bytes, which must be aligned to {} bytes",
+            shard_width,
+            page_size_bytes,
+            alignment_requirement);
+    }
 
+    if (operation_attributes.output_mem_config.is_sharded()) {
+        uint32_t output_shard_width =
+            operation_attributes.output_mem_config.shard_spec().has_value()
+                ? operation_attributes.output_mem_config.shard_spec().value().shape[1]
+                : operation_attributes.output_mem_config.nd_shard_spec().value().shard_shape[-1];
+        uint32_t output_page_size_bytes = output_shard_width * input_tensor.element_size();
+        const uint32_t alignment_requirement = hal::get_l1_alignment();
         TT_FATAL(
-            operation_attributes.output_mem_config.is_sharded(),
-            "ttnn.pad: For sharded inputs, the output must be sharded.");
-        TT_FATAL(
-            operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
-            "ttnn.pad: for sharded inputs, only height-sharding is supported for the output.");
+            output_page_size_bytes == tt::align(output_page_size_bytes, alignment_requirement),
+            "Output row-major shard width {} gives page size {} bytes, which must be aligned to {} bytes",
+            output_shard_width,
+            output_page_size_bytes,
+            alignment_requirement);
     }
 }
 

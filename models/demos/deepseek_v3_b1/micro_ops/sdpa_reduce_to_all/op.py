@@ -39,6 +39,50 @@ def _get_element_size_bytes(dtype):
     raise ValueError(f"Unsupported dtype for sdpa_reduce_to_all: {dtype}")
 
 
+def compute_forwarder_scratch_size(
+    batch_size: int,
+    l_width: int,
+    num_cores: int,
+    tile_height: int = 8,
+    tile_width: int = 32,
+    bytes_per_element: int = 2,
+    num_links: int = 2,
+):
+    """
+    Compute the total forwarder scratch buffer size in bytes for SDPA reduce-to-all.
+
+    This matches the calculation in sdpa_reduce_to_all/op.py for proper L1 allocation.
+    """
+    input_page_size_bytes = tile_height * tile_width * bytes_per_element
+    input_l_num_pages = (batch_size // tile_height) * (l_width // tile_width)
+
+    PNH = 8
+    DH = input_l_num_pages * tile_width
+    DHt = DH // tile_width
+    PNHt = PNH // tile_height
+    out_tiles = PNHt * DHt
+
+    max_tiles_per_chunk = 8
+    min_num_l_chunks = (out_tiles + max_tiles_per_chunk - 1) // max_tiles_per_chunk
+    num_l_chunks = max(min_num_l_chunks, 4)
+    if out_tiles % num_l_chunks != 0:
+        raise ValueError("out_tiles must be divisible by num_l_chunks")
+
+    tiles_per_l_chunk = out_tiles // num_l_chunks
+    l_chunk_size_bytes = tiles_per_l_chunk * input_page_size_bytes
+
+    header_size = ttnn.get_tt_fabric_packet_header_size_bytes()
+    l1_alignment = 16
+    slot_size = _round_up(header_size + l_chunk_size_bytes, l1_alignment)
+
+    num_workers_per_link = num_cores // num_links
+    workers_per_type = num_workers_per_link // 2
+    slots_per_worker = 1 + num_l_chunks
+    slots_per_round = workers_per_type * slots_per_worker
+
+    return 2 * slots_per_round * slot_size * 2
+
+
 class SdpaReduceToAll:
     @staticmethod
     def golden(
@@ -309,7 +353,6 @@ class SdpaReduceToAll:
                 cb_r1_result_l = 4
                 cb_r1_result_ms = 5
                 cb_l_out = 6
-                cb_packet_slot = 7
 
                 # Scatter compile-time parameters
                 if scatter_enabled:
@@ -350,7 +393,6 @@ class SdpaReduceToAll:
                     ("cb_local_ms", cb_local_ms),
                     ("cb_r1_result_l", cb_r1_result_l),
                     ("cb_r1_result_ms", cb_r1_result_ms),
-                    ("cb_packet_slot", cb_packet_slot),
                     ("l1_alignment", l1_alignment),
                     ("page_size_bytes", input_page_size_bytes),
                     ("slot_size", slot_size),
@@ -430,19 +472,6 @@ class SdpaReduceToAll:
                             buffer_index=cb_r1_result_ms,
                             data_format=input_dtype,
                             page_size=aligned_page_size,
-                            tile=tile_desc,
-                        )
-                    ],
-                )
-
-                cb_packet_slot_desc = ttnn.CBDescriptor(
-                    total_size=2 * header_cb_size,
-                    core_ranges=shard_grid,
-                    format_descriptors=[
-                        ttnn.CBFormatDescriptor(
-                            buffer_index=cb_packet_slot,
-                            data_format=ttnn.uint32,
-                            page_size=header_cb_size,
                             tile=tile_desc,
                         )
                     ],
@@ -585,6 +614,14 @@ class SdpaReduceToAll:
                             else:
                                 r2_neighbor_r1_neighbor_idx = (r2_neighbor_device_idx - 1 + num_devices) % num_devices
 
+                            # Deterministic reduction order based on device indices so all devices produce identical results.
+                            # R1: swap so lower device index is always arg1 ("worker")
+                            swap_r1_reduction_order = 1 if device_idx < r1_neighbor_device_idx else 0
+                            # R2: swap so the R1 pair with lower min device index is always arg1 ("worker")
+                            r1_pair_min = min(device_idx, r1_neighbor_device_idx)
+                            r2_pair_min = min(r2_neighbor_device_idx, r2_neighbor_r1_neighbor_idx)
+                            swap_r2_reduction_order = 1 if r1_pair_min < r2_pair_min else 0
+
                             trisc_core_args.append(
                                 (
                                     core,
@@ -594,6 +631,8 @@ class SdpaReduceToAll:
                                         r1_neighbor_device_idx,
                                         r2_neighbor_device_idx,
                                         r2_neighbor_r1_neighbor_idx,
+                                        swap_r1_reduction_order,
+                                        swap_r2_reduction_order,
                                     ],
                                 )
                             )
@@ -701,7 +740,6 @@ class SdpaReduceToAll:
                         cb_r1_result_l_desc,
                         cb_r1_result_ms_desc,
                         cb_l_out_desc,
-                        cb_packet_slot_desc,
                     ],
                 )
 

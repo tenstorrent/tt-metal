@@ -12,9 +12,10 @@
 #include <vector>
 #include <deque>
 
-namespace ttnn::operations::ccl {
+namespace ttnn {
+using namespace ttnn::operations::ccl;
 
-std::vector<ttnn::Tensor> ExecuteAllBroadcast::invoke(
+std::vector<ttnn::Tensor> all_broadcast(
     const ttnn::Tensor& input_tensor,
     std::optional<uint32_t> cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
@@ -49,10 +50,10 @@ std::vector<ttnn::Tensor> ExecuteAllBroadcast::invoke(
     tt::tt_fabric::Topology topology_ = topology.value_or(
         ::ttnn::ccl::get_usable_topology(input_tensor, tt::tt_fabric::get_fabric_topology(), cluster_axis));
     topology_ = ::ttnn::ccl::convert_2d_to_1d_topology(topology_);
-    uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, cluster_axis));
+    uint32_t num_links_ = num_links.value_or(ttnn::common::get_num_links(*mesh_device, cluster_axis));
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
 
     return ttnn::prim::all_broadcast(input_tensor, cluster_axis, subdevice_id, memory_config_, num_links_, topology_);
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn

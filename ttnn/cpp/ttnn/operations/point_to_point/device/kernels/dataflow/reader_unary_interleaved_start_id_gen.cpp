@@ -27,7 +27,7 @@ void kernel_main() {
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
 
         const uint64_t src_noc_addr = get_noc_addr(i, s);
-        noc_async_read(src_noc_addr, l1_write_addr, s.page_size);
+        noc_async_read(src_noc_addr, l1_write_addr, s.get_aligned_page_size());
         noc_async_read_barrier();
 
         cb_push_back(cb_id_in0, onetile);

@@ -11,7 +11,6 @@ from .operations import (
     apply_expert_parallel_allreduce,
     apply_routing_weights,
     apply_sequence_parallel_allgather,
-    apply_swiglu,
     apply_tensor_parallel_allreduce,
     reduce_experts,
 )
@@ -105,6 +104,16 @@ def _process_prefill_chunk(
     bias_transposed = ttnn.transpose(weights.gate_proj_bias, 1, 0)
     gate = ttnn.add(gate, bias_transposed, output_tensor=gate)
 
+    # # Do partial swiglu before up projection to save memory (fused gate projection + swiglu gate activation)
+    # Part 1
+    gate = ttnn.clamp(gate, min=None, max=config.swiglu_limit, output_tensor=gate)
+    gate_alpha = ttnn.mul(gate, config.alpha)
+    gate_sigmoid = ttnn.sigmoid(gate_alpha)
+    gate_alpha.deallocate(True)
+    glu = ttnn.mul(gate, gate_sigmoid, output_tensor=gate)
+
+    gate_sigmoid.deallocate(True)
+
     # Up projection
     up = ttnn.sparse_matmul(
         hidden_states_4D,
@@ -127,7 +136,16 @@ def _process_prefill_chunk(
     up = ttnn.add(up, bias_transposed, output_tensor=up)
 
     # Apply SwiGLU (consumes gate and up internally)
-    down_input = apply_swiglu(gate, up, config)
+
+    # partial swiglu part 2
+    up = ttnn.clamp(up, min=-config.swiglu_limit, max=config.swiglu_limit, output_tensor=up)
+    up = ttnn.add(up, 1, output_tensor=up)
+    down_input = ttnn.mul(up, glu, output_tensor=up)
+    glu.deallocate(True)
+
+    # Disabled regular swiglu to save memory by deallocating gate early.
+    # down_input = apply_swiglu(gate, up, config)
+
     # Note: reshape returns a view - do not deallocate original
     down_input = ttnn.reshape(down_input, (1, config.num_experts, seq_len, weights.intermediate_size_per_device))
 
@@ -145,7 +163,7 @@ def _process_prefill_chunk(
     routing_weights = ttnn.reshape(routing_weights, (batch_size, config.num_experts, seq_len, 1))
 
     # Process down projection in splits if needed
-    split_size = program_config.down_split_size
+    split_size = program_config.get_down_split_size(seq_len)
     if seq_len > split_size:
         down_input_list = ttnn.split(down_input, split_size, dim=2)
         down_input.deallocate(True)
@@ -183,9 +201,12 @@ def _process_prefill_chunk(
 
         # Reduce across experts
         next_states_reduced = reduce_experts(next_states)
+        down.deallocate(True)
         if next_states_reduced_acc is None:
             next_states_reduced_acc = next_states_reduced
         else:
+            # ToDo: Replace with slice_write.
+            # Concat re-creates the output_tensor every iteration.
             next_states_concat = ttnn.concat([next_states_reduced_acc, next_states_reduced], dim=2)
             next_states_reduced_acc.deallocate(True)
             next_states_reduced.deallocate(True)

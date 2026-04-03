@@ -15,7 +15,6 @@
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
 #include "hal_types.hpp"
-#include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
@@ -56,11 +55,21 @@ constexpr static std::uint32_t get_dram_profiler_size(
 #endif
 }
 
-constexpr static std::uint32_t get_dram_unreserved_base(std::uint32_t dram_profiler_size) {
+constexpr static std::uint32_t get_dram_backed_command_queues_base(std::uint32_t dram_profiler_size) {
     return DRAM_PROFILER_BASE + dram_profiler_size;
 }
-constexpr static std::uint32_t get_dram_unreserved_size(std::uint32_t dram_profiler_size) {
-    return MEM_DRAM_SIZE - get_dram_unreserved_base(dram_profiler_size);
+
+constexpr static std::uint32_t get_dram_backed_command_queues_size(bool enable_dram_backed_cq) {
+    return enable_dram_backed_cq ? (1 << 28)  // 256 MB
+                                 : 0;
+}
+
+constexpr static std::uint32_t get_dram_unreserved_base(std::uint32_t dram_profiler_size, bool enable_dram_backed_cq) {
+    return get_dram_backed_command_queues_base(dram_profiler_size) +
+           get_dram_backed_command_queues_size(enable_dram_backed_cq);
+}
+constexpr static std::uint32_t get_dram_unreserved_size(std::uint32_t dram_profiler_size, bool enable_dram_backed_cq) {
+    return MEM_DRAM_SIZE - get_dram_unreserved_base(dram_profiler_size, enable_dram_backed_cq);
 }
 
 static constexpr float EPS_BH = 1.19209e-7f;
@@ -92,8 +101,10 @@ public:
         if ((params.core_type == HalProgrammableCoreType::TENSIX and
              params.processor_class == HalProcessorClassType::DM and params.processor_id == 0) or
             (params.core_type == HalProgrammableCoreType::IDLE_ETH and
+             params.processor_class == HalProcessorClassType::DM and params.processor_id == 0) or
+            (params.core_type == HalProgrammableCoreType::DRAM and
              params.processor_class == HalProcessorClassType::DM and params.processor_id == 0)) {
-            // Brisc and Idle Erisc.
+            // Brisc, Idle Erisc, and DRISC.
             objs.push_back("runtime/hw/lib/blackhole/noc.o");
         }
         objs.push_back("runtime/hw/lib/blackhole/substitutes.o");
@@ -127,7 +138,8 @@ public:
                 includes.push_back("tt_metal/hw/inc/ethernet");
                 break;
             }
-            case HalProgrammableCoreType::IDLE_ETH: break;
+            case HalProgrammableCoreType::IDLE_ETH:
+            case HalProgrammableCoreType::DRAM: break;
             default:
                 TT_THROW(
                     "Unsupported programmable core type {} to query includes", enchantum::to_string(params.core_type));
@@ -229,6 +241,11 @@ public:
                     return fmt::format("{}/{}_{}ierisc.ld", path, fork, params.processor_id ? "subordinate_" : "");
                 }
                 break;
+            case HalProgrammableCoreType::DRAM:
+                if (params.processor_id == 0) {
+                    return fmt::format("{}/{}_drisc.ld", path, fork);
+                }
+                break;
             default: break;
         }
         TT_THROW(
@@ -251,14 +268,18 @@ public:
     }
 };
 
-void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
+void Hal::initialize_bh(
+    bool enable_2_erisc_mode,
+    std::uint32_t profiler_dram_bank_size_per_risc_bytes,
+    bool enable_dram_backed_cq,
+    bool is_simulator,
+    bool enable_blackhole_dram_programmable_cores) {
     using namespace blackhole;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
         static_cast<int>(HalProgrammableCoreType::ACTIVE_ETH) == static_cast<int>(ProgrammableCoreType::ACTIVE_ETH));
     static_assert(
         static_cast<int>(HalProgrammableCoreType::IDLE_ETH) == static_cast<int>(ProgrammableCoreType::IDLE_ETH));
-
     HalCoreInfoType tensix_mem_map = blackhole::create_tensix_mem_map();
     this->core_info_.push_back(tensix_mem_map);
 
@@ -268,6 +289,12 @@ void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_ba
     HalCoreInfoType idle_eth_mem_map = blackhole::create_idle_eth_mem_map();
     this->core_info_.push_back(idle_eth_mem_map);
 
+    if (!is_simulator && enable_blackhole_dram_programmable_cores) {
+        // Dram cores are opt-in on Blackhole and are not yet supported in simulator.
+        HalCoreInfoType dram_mem_map = blackhole::create_dram_mem_map();
+        this->core_info_.push_back(dram_mem_map);
+    }
+
     this->dram_bases_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
     this->dram_sizes_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::BARRIER)] = DRAM_BARRIER_BASE;
@@ -275,10 +302,14 @@ void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_ba
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = DRAM_PROFILER_BASE;
     const std::uint32_t dram_profiler_size = get_dram_profiler_size(profiler_dram_bank_size_per_risc_bytes);
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = dram_profiler_size;
+    this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES)] =
+        get_dram_backed_command_queues_base(dram_profiler_size);
+    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES)] =
+        get_dram_backed_command_queues_size(enable_dram_backed_cq);
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] =
-        get_dram_unreserved_base(dram_profiler_size);
+        get_dram_unreserved_base(dram_profiler_size, enable_dram_backed_cq);
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] =
-        get_dram_unreserved_size(dram_profiler_size);
+        get_dram_unreserved_size(dram_profiler_size, enable_dram_backed_cq);
 
     this->mem_alignments_.resize(static_cast<std::size_t>(HalMemType::COUNT));
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::L1)] = L1_ALIGNMENT;
@@ -322,6 +353,7 @@ void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_ba
 
     this->erisc_iram_relocate_func_ = [](uint64_t addr) { return addr; };
 
+    // NOLINTBEGIN(misc-redundant-expression)
     this->valid_reg_addr_func_ = [](uint32_t addr) {
         return (
             ((addr >= NOC_OVERLAY_START_ADDR) &&
@@ -329,8 +361,11 @@ void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_ba
             ((addr >= NOC0_REGS_START_ADDR) && (addr < NOC0_REGS_START_ADDR + 0x1000)) ||
             ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
             (addr == RISCV_DEBUG_REG_SOFT_RESET_0) ||
-            (addr == IERISC_RESET_PC || addr == SUBORDINATE_IERISC_RESET_PC));  // used to program start addr for eth FW
+            (addr == IERISC_RESET_PC ||
+             addr == SUBORDINATE_IERISC_RESET_PC) ||  // used to program start addr for eth FW
+            (addr == DRISC_RESET_PC));                // used to program start addr for DRAM FW
     };
+    // NOLINTEND(misc-redundant-expression)
 
     this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ENCODING(x, y); };
     this->noc_xy_pcie64_encoding_func_ = [](uint32_t x, uint32_t y) {
@@ -393,6 +428,8 @@ void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_ba
         dev_msgs::AddressableCoreType::PCIE,
         dev_msgs::AddressableCoreType::DRAM};
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
+    this->has_tile_counter_registers_ = false;
+    this->supports_implicit_dfb_sync_ = false;
 
     this->eps_ = EPS_BH;
     this->nan_ = NAN_BH;

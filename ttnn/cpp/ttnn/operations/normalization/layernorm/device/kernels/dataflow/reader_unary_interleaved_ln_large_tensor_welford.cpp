@@ -20,9 +20,22 @@ void kernel_main() {
     uint32_t beta_addr = get_arg_val<uint32_t>(7);
     uint32_t b_addr = get_arg_val<uint32_t>(8);
 
-    constexpr uint32_t cb_id_in0 = 0, cb_id_in1 = 1;
-    constexpr uint32_t cb_id_gamma = 5;
-    constexpr uint32_t cb_id_beta = 6;
+    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in"),
+                       cb_id_in1 = get_named_compile_time_arg_val("cb_inb");
+    constexpr uint32_t cb_id_gamma = get_named_compile_time_arg_val("cb_gamma");
+    constexpr uint32_t cb_id_beta = get_named_compile_time_arg_val("cb_beta");
+
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in0(cb_id_in0);
+#ifdef FUSE_PRE_ADD
+    experimental::CircularBuffer cb_in1(cb_id_in1);
+#endif
+#ifdef FUSE_GAMMA
+    experimental::CircularBuffer cb_gamma(cb_id_gamma);
+#endif
+#ifdef FUSE_BETA
+    experimental::CircularBuffer cb_beta(cb_id_beta);
+#endif
 
     // ublocks size defined in tiles
     const uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
@@ -47,7 +60,7 @@ void kernel_main() {
     const auto src_b = TensorAccessor(src1_args, b_addr, src1_tile_bytes);
 #endif
 
-    constexpr uint32_t eps_cb_id = 3;
+    constexpr uint32_t eps_cb_id = get_named_compile_time_arg_val("cb_eps");
     const uint32_t eps = get_arg_val<uint32_t>(5);
     generate_bcast_col_scalar(eps_cb_id, eps);
 
@@ -58,10 +71,10 @@ void kernel_main() {
         // Calculate E[x] and Var[x]
         for (auto block : generic::blocks(Wt, blk)) {
             layernorm_dataflow_utils::read_block_to_cb(
-                cb_id_in0, src_a, src0_tile_bytes, offs + block.start() + tile_offset, block);
+                noc, cb_in0, src_a, src0_tile_bytes, offs + block.start() + tile_offset, block);
 #ifdef FUSE_PRE_ADD
             layernorm_dataflow_utils::read_block_to_cb(
-                cb_id_in1, src_b, src1_tile_bytes, offs + block.start() + tile_offset, block);
+                noc, cb_in1, src_b, src1_tile_bytes, offs + block.start() + tile_offset, block);
 #endif
         }  // wt loop
 
@@ -69,20 +82,21 @@ void kernel_main() {
         // Calculate final output
         for (auto block : generic::blocks(Wt, blk)) {
             layernorm_dataflow_utils::read_block_to_cb(
-                cb_id_in0, src_a, src0_tile_bytes, offs + block.start() + tile_offset, block);
+                noc, cb_in0, src_a, src0_tile_bytes, offs + block.start() + tile_offset, block);
 #ifdef FUSE_PRE_ADD
             layernorm_dataflow_utils::read_block_to_cb(
-                cb_id_in1, src_b, src1_tile_bytes, offs + block.start() + tile_offset, block);
+                noc, cb_in1, src_b, src1_tile_bytes, offs + block.start() + tile_offset, block);
 #endif
 #ifdef FUSE_GAMMA
             {
-                layernorm_dataflow_utils::read_block_to_cb(cb_id_gamma, addrg, gamma_tile_bytes, block.start(), block);
+                layernorm_dataflow_utils::read_block_to_cb(
+                    noc, cb_gamma, addrg, gamma_tile_bytes, block.start(), block);
             }
 #endif
 
 #ifdef FUSE_BETA
             {
-                layernorm_dataflow_utils::read_block_to_cb(cb_id_beta, addrb, beta_tile_bytes, block.start(), block);
+                layernorm_dataflow_utils::read_block_to_cb(noc, cb_beta, addrb, beta_tile_bytes, block.start(), block);
             }
 #endif
         }  // wt loop

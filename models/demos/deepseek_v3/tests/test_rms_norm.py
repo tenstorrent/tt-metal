@@ -12,7 +12,7 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3RMSNo
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
-from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
@@ -21,56 +21,26 @@ from models.demos.deepseek_v3.utils.test_utils import (
     run_module_forward,
 )
 
+pytestmark = pytest.mark.t3k_compat
+
 _max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
 _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DEFAULT_PREFILL_SEQ_LEN
 
 
-@pytest.mark.parametrize(
-    "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "mode, seq_len",
-    [
-        ("decode", 32),
-        ("prefill", _prefill_seq_len),
-    ],
-)
-@pytest.mark.parametrize(
-    "reference_layernorm_path, RMSNormClass, hf_config_size_attr",
-    [
-        (None, DistributedRMSNorm, "hidden_size"),
-        ("model.layers.0.input_layernorm", DistributedRMSNorm, "hidden_size"),
-        ("model.layers.0.post_attention_layernorm", DistributedRMSNorm, "hidden_size"),
-        (None, RMSNorm, "kv_lora_rank"),  # TODO: not properly tested here, needs fixing
-        (None, RMSNorm, "q_lora_rank"),  # TODO: not properly tested here, needs fixing
-        (
-            "model.layers.0.self_attn.kv_a_layernorm",
-            RMSNorm,
-            "kv_lora_rank",
-        ),  # TODO: not properly tested here, needs fixing
-        (
-            "model.layers.0.self_attn.q_a_layernorm",
-            RMSNorm,
-            "q_lora_rank",
-        ),  # TODO: not properly tested here, needs fixing
-    ],
-)
-def test_forward_pass(
+def run_test_forward_pass_rms_norm(
+    *,
     RMSNormClass,
     hf_config_size_attr,
     mode,
     seq_len,
+    batch_size_per_row,
     reference_layernorm_path,
-    model_path,
     hf_config,
     cache_path,
     mesh_device,
     ccl,
     force_recalculate_weight_config,
-    set_deterministic_env,
-    state_dict: dict[str, torch.Tensor],
+    state_dict,
 ):
     num_module_layers, _ = mesh_device.shape
 
@@ -107,7 +77,13 @@ def test_forward_pass(
         real_weights=reference_layernorm_path is not None,
         layer_id=reference_layernorm_path if reference_layernorm_path is not None else hf_config_size_attr,
     )
-    model_config = get_model_config(RMSNormClass, mode, hf_config, mesh_device)
+    model_config = get_model_config(
+        RMSNormClass,
+        mode,
+        hf_config,
+        mesh_device,
+        batch_size_per_row=batch_size_per_row,
+    )
     model_state = RMSNormClass.create_state(
         hf_config, mesh_device, *[ccl for _ in range(1) if RMSNormClass is DistributedRMSNorm]
     )
@@ -146,6 +122,110 @@ def test_forward_pass(
 
     # Check PCC
     assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.98)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": get_fabric_config()}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mode, seq_len",
+    [
+        ("decode", USERS_PER_ROW),
+        ("prefill", _prefill_seq_len),
+    ],
+)
+@pytest.mark.parametrize(
+    "reference_layernorm_path, RMSNormClass, hf_config_size_attr",
+    [
+        (None, DistributedRMSNorm, "hidden_size"),
+        ("model.layers.0.input_layernorm", DistributedRMSNorm, "hidden_size"),
+        ("model.layers.0.post_attention_layernorm", DistributedRMSNorm, "hidden_size"),
+        (None, RMSNorm, "kv_lora_rank"),  # TODO: not properly tested here, needs fixing
+        (None, RMSNorm, "q_lora_rank"),  # TODO: not properly tested here, needs fixing
+        (
+            "model.layers.0.self_attn.kv_a_layernorm",
+            RMSNorm,
+            "kv_lora_rank",
+        ),  # TODO: not properly tested here, needs fixing
+        (
+            "model.layers.0.self_attn.q_a_layernorm",
+            RMSNorm,
+            "q_lora_rank",
+        ),  # TODO: not properly tested here, needs fixing
+    ],
+)
+def test_forward_pass(
+    RMSNormClass,
+    hf_config_size_attr,
+    mode,
+    seq_len,
+    reference_layernorm_path,
+    model_path,
+    hf_config,
+    cache_path,
+    mesh_device,
+    ccl,
+    force_recalculate_weight_config,
+    set_deterministic_env,
+    state_dict: dict[str, torch.Tensor],
+):
+    run_test_forward_pass_rms_norm(
+        RMSNormClass=RMSNormClass,
+        hf_config_size_attr=hf_config_size_attr,
+        mode=mode,
+        seq_len=seq_len,
+        batch_size_per_row=USERS_PER_ROW,
+        reference_layernorm_path=reference_layernorm_path,
+        hf_config=hf_config,
+        cache_path=cache_path,
+        mesh_device=mesh_device,
+        ccl=ccl,
+        force_recalculate_weight_config=force_recalculate_weight_config,
+        state_dict=state_dict,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "reference_layernorm_path, RMSNormClass, hf_config_size_attr",
+    [
+        ("model.layers.0.input_layernorm", DistributedRMSNorm, "hidden_size"),
+        ("model.layers.0.self_attn.kv_a_layernorm", RMSNorm, "kv_lora_rank"),
+    ],
+)
+def test_mode_decode_forward_pass_batch_8_users_per_row(
+    RMSNormClass,
+    hf_config_size_attr,
+    device_params,
+    reference_layernorm_path,
+    hf_config,
+    cache_path,
+    mesh_device,
+    ccl,
+    force_recalculate_weight_config,
+    set_deterministic_env,
+    state_dict: dict[str, torch.Tensor],
+):
+    run_test_forward_pass_rms_norm(
+        RMSNormClass=RMSNormClass,
+        hf_config_size_attr=hf_config_size_attr,
+        mode="decode",
+        seq_len=8,
+        batch_size_per_row=8,
+        reference_layernorm_path=reference_layernorm_path,
+        hf_config=hf_config,
+        cache_path=cache_path,
+        mesh_device=mesh_device,
+        ccl=ccl,
+        force_recalculate_weight_config=force_recalculate_weight_config,
+        state_dict=state_dict,
+    )
 
 
 if __name__ == "__main__":

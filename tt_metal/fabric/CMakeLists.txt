@@ -79,7 +79,7 @@ target_link_libraries(
         protobuf::libprotobuf
 )
 
-target_precompile_headers(fabric REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(fabric TT::CommonPCH)
 
 target_compile_options(fabric PRIVATE -Wno-int-to-pointer-cast)
 

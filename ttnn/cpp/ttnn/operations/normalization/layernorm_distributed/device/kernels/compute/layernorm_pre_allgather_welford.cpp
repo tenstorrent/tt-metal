@@ -10,6 +10,7 @@
  */
 
 #include <cstdint>
+#include <cstring>
 
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
@@ -30,14 +31,9 @@ inline To _bit_cast_(const From& from) noexcept {
     static_assert(sizeof(To) == sizeof(From), "Types must have same size");
     static_assert(std::is_trivially_copyable_v<From>, "From must be trivially copyable");
     static_assert(std::is_trivially_copyable_v<To>, "To must be trivially copyable");
-
-    union {
-        From f;
-        To t;
-    } u;
-
-    u.f = from;
-    return u.t;
+    To to;
+    std::memcpy(&to, &from, sizeof(To));
+    return to;
 }
 void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
@@ -54,7 +50,9 @@ void kernel_main() {
     // Get pointer to the reciprocal LUT
     using recip_lut_t = std::array<uint32_t, W>;
     auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<recip_lut_t>(cb_reciprocals, 0);
-    // The number of valid rows in the last tile in width dimension
+    // The number of valid columns in the last tile in width dimension.
+    // Because the Welford's llk is given transposed data, skip some rows when
+    // we want to skip some columns from getting processed by layer_norm.
     constexpr uint32_t last_tile_rows = (W % 32) == 0 ? 32 : W % 32;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {

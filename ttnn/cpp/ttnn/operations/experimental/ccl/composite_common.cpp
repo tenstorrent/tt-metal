@@ -163,7 +163,7 @@ ttnn::Tensor composite_reduce_scatter(
     } else {
         const ttnn::SmallVector<int32_t> steps(output_shape.rank(), 1);
         ttnn::SmallVector<int32_t> begins(output_shape.rank(), 0), ends(output_shape.cbegin(), output_shape.cend());
-        const tt::stl::Span<const int32_t> sbegins(begins), ssteps(steps), sends(ends);
+        const ttsl::Span<const int32_t> sbegins(begins), ssteps(steps), sends(ends);
         rs_output_tensor =
             ttnn::slice(padded_native_rs_output_tensor, sbegins, sends, ssteps, native_rs_output_memory_config);
     }

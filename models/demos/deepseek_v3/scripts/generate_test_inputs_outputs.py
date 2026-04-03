@@ -14,8 +14,8 @@ from models.demos.deepseek_v3.utils.hf_model_utils import (
     add_dynamic_weight_loading_hooks,
     add_gc_hooks,
     add_model_io_logging_hooks,
+    index_model_weights,
     load_model_uninitialized,
-    load_model_weights,
     load_tokenizer,
 )
 
@@ -167,8 +167,8 @@ def main():
     print("Model loaded successfully")
 
     # Load the model weights
-    print("Loading model weights")
-    weights_dict = load_model_weights(args.local_model_path)
+    print("Indexing model weights lazily")
+    weights_dict = index_model_weights(args.local_model_path)
     add_dynamic_weight_loading_hooks(
         model,
         weights_dict,

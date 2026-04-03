@@ -10,7 +10,11 @@
 #include <exception>
 #include <functional>
 #include <limits>
+#include <map>
+#include <optional>
 #include <string>
+#include <utility>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -21,6 +25,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
 
@@ -172,9 +177,11 @@ TopologyMappingResult map_mesh_to_physical(
         }
     }
 
-    // Determine connection validation mode
-    ConnectionValidationMode validation_mode =
-        config.strict_mode ? ConnectionValidationMode::STRICT : ConnectionValidationMode::RELAXED;
+    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED;
+    auto mode_it = config.mesh_validation_modes.find(mesh_id);
+    if (mode_it != config.mesh_validation_modes.end()) {
+        validation_mode = mode_it->second;
+    }
 
     // Solve using topology solver
     // Catch exceptions from constraint validation and convert to failure result
@@ -262,13 +269,13 @@ get_requested_intermesh_from_mgd(const ::tt::tt_fabric::MeshGraphDescriptor& mgd
         if (is_device_level) {
             const auto& src_mesh_instance = mgd.get_instance(src_instance.hierarchy.back());
             const auto& dst_mesh_instance = mgd.get_instance(dst_instance.hierarchy.back());
-            uint32_t src_mesh_id_val = src_mesh_instance.local_id;
-            uint32_t dst_mesh_id_val = dst_mesh_instance.local_id;
+            const uint32_t src_mesh_id_val = src_mesh_instance.local_id;
+            const uint32_t dst_mesh_id_val = dst_mesh_instance.local_id;
             requested_intermesh_ports[src_mesh_id_val][dst_mesh_id_val].push_back(
                 {src_instance.local_id, dst_instance.local_id, connection_data.count});
         } else {
-            uint32_t src_mesh_id_val = src_instance.local_id;
-            uint32_t dst_mesh_id_val = dst_instance.local_id;
+            const uint32_t src_mesh_id_val = src_instance.local_id;
+            const uint32_t dst_mesh_id_val = dst_instance.local_id;
             requested_intermesh_connections[src_mesh_id_val][dst_mesh_id_val] = connection_data.count;
         }
     }
@@ -424,6 +431,7 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
     auto mesh_adjacency_graphs = ::tt::tt_fabric::build_adjacency_graph_logical(mesh_graph);
     const auto& requested_intermesh_connections = mesh_graph.get_requested_intermesh_connections();
     const auto& requested_intermesh_ports = mesh_graph.get_requested_intermesh_ports();
+
     return build_logical_multi_mesh_adjacency_graph_impl(
         mesh_adjacency_graphs, requested_intermesh_connections, requested_intermesh_ports);
 }
@@ -432,43 +440,17 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
  * @brief Build a flat PhysicalAdjacencyMap from PhysicalSystemDescriptor
  *
  * Builds a complete flat adjacency map including all connections (both intra-mesh and intermesh),
- * with multiple entries per channel. If asic_id_to_mesh_rank is empty, includes all ASICs from PSD.
+ * with multiple entries per channel (one edge per Ethernet link).
  */
 PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
     PhysicalAdjacencyMap flat_adj;
-
-    // Build a set of all ASIC IDs for quick lookup
-    std::unordered_set<tt::tt_metal::AsicID> all_asics;
-    if (!asic_id_to_mesh_rank.empty()) {
-        // Filter to only ASICs in the mesh assignment
-        for (const auto& [mesh_id, asic_map] : asic_id_to_mesh_rank) {
-            for (const auto& [asic_id, _] : asic_map) {
-                all_asics.insert(asic_id);
-            }
-        }
-    } else {
-        // Include all ASICs from PSD
-        for (const auto& [asic_id, _] : physical_system_descriptor.get_asic_descriptors()) {
-            all_asics.insert(asic_id);
-        }
-    }
 
     // Go through all connections in the physical system descriptor
     for (const auto& host_name : physical_system_descriptor.get_all_hostnames()) {
         for (const auto& [src_asic_id, asic_connections] : physical_system_descriptor.get_asic_topology(host_name)) {
-            // Skip ASICs not in any mesh assignment
-            if (!all_asics.contains(src_asic_id)) {
-                continue;
-            }
-
             for (const auto& asic_connection : asic_connections) {
                 auto dst_asic_id = asic_connection.first;
-                // Skip ASICs not in any mesh assignment
-                if (!all_asics.contains(dst_asic_id)) {
-                    continue;
-                }
 
                 // Skip self-connections
                 if (src_asic_id == dst_asic_id) {
@@ -489,18 +471,104 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
 
 PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
+    const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor) {
+    using namespace ::tt::tt_fabric;
+
+    log_info(tt::LogFabric, "Building flat adjacency map from PSD");
+
+    // Build flat adjacency once; reused for find_all_in_psd and build_hierarchical_from_flat_graph (avoids a second
+    // O(|PSD|) pass inside find_all_in_psd).
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(build_flat_adjacency_map_from_psd(physical_system_descriptor));
+
+    log_info(tt::LogFabric, "Getting valid groupings map from MGD and PGD");
+
+    // Get valid groupings map from MGD and PGD
+    auto valid_groupings_map =
+        physical_grouping_descriptor.get_valid_groupings_for_mgd(mesh_graph_descriptor, physical_system_descriptor);
+
+    log_info(tt::LogFabric, "Got {} valid groupings map from MGD and PGD", valid_groupings_map.size());
+
+    // Get groupings for mesh level mappings
+    TT_FATAL(valid_groupings_map.contains("MESH"), "Internal error: MESH grouping not found in valid groupings map");
+    TT_FATAL(
+        !valid_groupings_map.at("MESH").empty(),
+        "Internal error: Physical grouping descriptor was not able to find mesh groupings");
+
+    // Collect all mesh groupings from all instances into a single vector
+    std::vector<GroupingInfo> all_mesh_grouping_infos;
+    for (const auto& [instance_name, groupings] : valid_groupings_map.at("MESH")) {
+        for (const auto& grouping : groupings) {
+            log_info(tt::LogFabric, "Found mesh grouping from PGD file: {}", grouping.name);
+            all_mesh_grouping_infos.push_back(grouping);
+        }
+    }
+
+    // Find all possible mappings of mesh groupings to the PSD
+    std::vector<std::string> errors;
+    auto all_mesh_groupings = physical_grouping_descriptor.find_all_in_psd(
+        all_mesh_grouping_infos, physical_system_descriptor, flat_graph, errors);
+
+    log_info(
+        tt::LogFabric, "Found {} mesh grouping mappings in PSD (errors: {})", all_mesh_groupings.size(), errors.size());
+
+    PhysicalMultiMeshGraph result;
+    if (all_mesh_groupings.empty()) {
+        log_warning(tt::LogFabric, "No mesh groupings found in PSD - returning empty graph");
+        return result;
+    }
+
+    // Build hierarchical structure from the same flat graph; mesh groupings drive mesh partitioning
+    result = build_hierarchical_from_flat_graph(flat_graph, all_mesh_groupings);
+
+    return result;
+}
+
+PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
     // Build flat adjacency map from PhysicalSystemDescriptor
-    PhysicalAdjacencyMap flat_adj = build_flat_adjacency_map_from_psd(physical_system_descriptor, asic_id_to_mesh_rank);
+    PhysicalAdjacencyMap flat_adj = build_flat_adjacency_map_from_psd(physical_system_descriptor);
+
+    // Convert asic_id_to_mesh_rank to mesh_groupings format
+    // Find the maximum mesh ID to determine vector size
+    if (asic_id_to_mesh_rank.empty()) {
+        return PhysicalMultiMeshGraph{};
+    }
+    MeshId max_mesh_id{0};
+    for (const auto& [mesh_id, _] : asic_id_to_mesh_rank) {
+        if (mesh_id.get() > max_mesh_id.get()) {
+            max_mesh_id = mesh_id;
+        }
+    }
+    std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings(max_mesh_id.get() + 1);
+    for (const auto& [mesh_id, asic_map] : asic_id_to_mesh_rank) {
+        for (const auto& [asic_id, _] : asic_map) {
+            mesh_groupings[mesh_id.get()].insert(asic_id);
+        }
+    }
 
     // Convert to AdjacencyGraph and use the common algorithm
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
-    return build_hierarchical_from_flat_graph(flat_graph, asic_id_to_mesh_rank);
+    PhysicalMultiMeshGraph result = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
+
+    return result;
 }
 
 PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
     const AdjacencyGraph<tt::tt_metal::AsicID>& flat_adjacency_graph,
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
+    const std::vector<std::unordered_set<tt::tt_metal::AsicID>>& mesh_groupings) {
+    // Build asic_id_to_mesh_rank map from mesh groupings
+    // Each element in mesh_groupings represents one mesh, with index becoming the MeshId
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (size_t i = 0; i < mesh_groupings.size(); ++i) {
+        MeshId mesh_id{static_cast<uint32_t>(i)};
+        for (const auto& asic_id : mesh_groupings[i]) {
+            // Default to rank 0 - proper rank assignment would come from hostname_to_asics or other config
+            asic_id_to_mesh_rank[mesh_id][asic_id] = MeshHostRankId{0};
+        }
+    }
+
     // Build a map from AsicID to MeshId for quick lookup
     std::unordered_map<tt::tt_metal::AsicID, MeshId> asic_id_to_mesh_id;
     for (const auto& [mesh_id, asic_map] : asic_id_to_mesh_rank) {
@@ -592,48 +660,105 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
 }
 
 namespace {
-// Helper function to build inter-mesh constraints
-::tt::tt_fabric::MappingConstraints<MeshId, MeshId> build_inter_mesh_constraints(
-    const ::tt::tt_fabric::AdjacencyGraph<MeshId>& mesh_physical_graph, const TopologyMappingConfig& config) {
-    ::tt::tt_fabric::MappingConstraints<MeshId, MeshId> inter_mesh_constraints;
 
-    // Only add required constraints when rank bindings are enabled
-    if (!config.disable_rank_bindings) {
-        // TODO: Remove this once rank bindings file is removed from multi-host systems
-        // Use placeholder mesh id 1:1 mapping for physical to logical constraints for now
-        for (const auto& mesh_id : mesh_physical_graph.get_nodes()) {
-            if (!inter_mesh_constraints.add_required_constraint(mesh_id, mesh_id)) {
-                TT_THROW("Failed to add required constraint for mesh {}", mesh_id.get());
-            }
+std::optional<std::string> hostname_for_asic_from_hostname_map(
+    tt::tt_metal::AsicID asic_id, const std::map<std::string, std::set<tt::tt_metal::AsicID>>& hostname_to_asics) {
+    for (const auto& [hostname, asics] : hostname_to_asics) {
+        if (asics.contains(asic_id)) {
+            return hostname;
         }
     }
-    return inter_mesh_constraints;
+    return std::nullopt;
 }
 
-// Helper function to determine inter-mesh validation mode
-::tt::tt_fabric::ConnectionValidationMode determine_inter_mesh_validation_mode(const TopologyMappingConfig& config) {
-    if (config.inter_mesh_validation_mode.has_value()) {
-        return config.inter_mesh_validation_mode.value();
+// Minimal host cover for inter-mesh mapping: partition physical meshes by host, then apply.
+// `rank_bound_logical_to_physical`: logical meshes already fixed by rank bindings → skip those and their physical
+// meshes for host-alignment bias (empty when rank bindings are disabled).
+// TODO: THis can be removed and replaced with cost hieristics when using a SAT solver because preferred constraints
+// aren't very effective here
+// https://github.com/tenstorrent/tt-metal/issues/40640
+void add_inter_mesh_minimal_host_cover_from_hostname_map(
+    const TopologyMappingConfig& config,
+    const PhysicalMultiMeshGraph& physical_graph,
+    const AdjacencyGraph<MeshId>& mesh_logical_level_graph,
+    ::tt::tt_fabric::MappingConstraints<MeshId, MeshId>& inter_mesh_constraints,
+    const std::map<MeshId, MeshId>& rank_bound_logical_to_physical) {
+    if (config.hostname_to_asics.empty()) {
+        return;
     }
-    if (config.strict_mode) {
-        // Fallback for backward compatibility
-        return ::tt::tt_fabric::ConnectionValidationMode::STRICT;
-    }
-    return ::tt::tt_fabric::ConnectionValidationMode::RELAXED;
-}
 
-// Helper function to determine intra-mesh validation mode
-::tt::tt_fabric::ConnectionValidationMode determine_intra_mesh_validation_mode(
-    const TopologyMappingConfig& config, MeshId logical_mesh_id) {
-    auto config_mode_it = config.mesh_validation_modes.find(logical_mesh_id);
-    if (config_mode_it != config.mesh_validation_modes.end()) {
-        return config_mode_it->second;
+    std::set<MeshId> bound_physical_mesh_ids;
+    for (const auto& [_, physical_mesh_id] : rank_bound_logical_to_physical) {
+        bound_physical_mesh_ids.insert(physical_mesh_id);
     }
-    if (config.strict_mode) {
-        // Fallback for backward compatibility
-        return ::tt::tt_fabric::ConnectionValidationMode::STRICT;
+
+    std::set<MeshId> logical_target_set;
+    for (const MeshId& m : mesh_logical_level_graph.get_nodes()) {
+        if (!rank_bound_logical_to_physical.contains(m)) {
+            logical_target_set.insert(m);
+        }
     }
-    return ::tt::tt_fabric::ConnectionValidationMode::RELAXED;
+    if (logical_target_set.size() <= 1) {
+        return;
+    }
+
+    // Build global_mesh_groups in one pass: one group per host for single-host meshes, singleton for multi-host.
+    std::vector<std::set<MeshId>> global_mesh_groups;
+    std::map<std::string, std::size_t> host_group_index;
+    for (const auto& [phys_mesh_id, adj] : physical_graph.mesh_adjacency_graphs_) {
+        if (bound_physical_mesh_ids.contains(phys_mesh_id)) {
+            continue;
+        }
+        if (adj.get_nodes().empty()) {
+            continue;
+        }
+        std::set<std::string> hosts_for_mesh;
+        for (const auto& asic_id : adj.get_nodes()) {
+            auto hostname = hostname_for_asic_from_hostname_map(asic_id, config.hostname_to_asics);
+            if (hostname.has_value()) {
+                hosts_for_mesh.insert(*hostname);
+            }
+        }
+        if (hosts_for_mesh.size() == 1) {
+            auto [it, inserted] = host_group_index.try_emplace(*hosts_for_mesh.begin(), global_mesh_groups.size());
+            if (inserted) {
+                global_mesh_groups.emplace_back();
+            }
+            global_mesh_groups[it->second].insert(phys_mesh_id);
+        } else {
+            global_mesh_groups.push_back({phys_mesh_id});
+        }
+    }
+    if (global_mesh_groups.empty()) {
+        return;
+    }
+
+    const auto [single_group_fits, preferred_globals] =
+        ::tt::tt_fabric::PhysicalGroupingDescriptor::find_minimum_coverage_group(
+            logical_target_set, global_mesh_groups);
+    if (single_group_fits) {
+        std::vector<std::set<MeshId>> target_groups;
+        target_groups.push_back(logical_target_set);
+        if (inter_mesh_constraints.set_same_rank_groups_constraint(target_groups, global_mesh_groups)) {
+            return;
+        }
+        log_warning(
+            tt::LogFabric,
+            "Inter-mesh host alignment: failed to set same-rank groups constraint; falling back to preferred globals");
+    }
+    if (!preferred_globals.empty()) {
+        if (!single_group_fits) {
+            log_debug(
+                tt::LogFabric,
+                "Inter-mesh host alignment: target count {} exceeds largest single partition; preferring minimal host "
+                "cover ({} preferred globals)",
+                logical_target_set.size(),
+                preferred_globals.size());
+        }
+        for (const MeshId& target : logical_target_set) {
+            inter_mesh_constraints.add_preferred_constraint(target, preferred_globals);
+        }
+    }
 }
 
 // Helper function to build ASIC positions to ASIC IDs map
@@ -651,147 +776,248 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
     return asic_positions_to_asic_ids;
 }
 
-// Helper function to add rank binding constraints
+// Helper function to build inter-mesh constraints
+// Maps logical meshes to physical meshes based on matching mesh host ranks
+// A logical mesh maps to a physical mesh if the ASICs in that physical mesh have matching ranks
+::tt::tt_fabric::MappingConstraints<MeshId, MeshId> build_inter_mesh_constraints(
+    const TopologyMappingConfig& config,
+    const PhysicalMultiMeshGraph& physical_graph,
+    const AdjacencyGraph<MeshId>& mesh_logical_level_graph,
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
+    ::tt::tt_fabric::MappingConstraints<MeshId, MeshId> inter_mesh_constraints;
+
+    // Skip if rank bindings are disabled
+    if (config.disable_rank_bindings) {
+        add_inter_mesh_minimal_host_cover_from_hostname_map(
+            config, physical_graph, mesh_logical_level_graph, inter_mesh_constraints, {});
+        return inter_mesh_constraints;
+    }
+
+    std::map<MeshId, std::set<MeshId>> mesh_level_pinnings;
+    for (const auto& [pos, fabric_node] : config.pinnings) {
+        for (const auto& [physical_mesh_id, physical_mesh_graph] : physical_graph.mesh_adjacency_graphs_) {
+            auto asic_position_map = build_asic_positions_map(physical_mesh_graph, config);
+            if (asic_position_map.contains(pos)) {
+                mesh_level_pinnings[fabric_node.mesh_id].insert(physical_mesh_id);
+            }
+        }
+    }
+    for (const auto& [mesh_id, physical_meshes] : mesh_level_pinnings) {
+        if (!physical_meshes.empty()) {
+            inter_mesh_constraints.add_required_constraint(mesh_id, physical_meshes);
+        }
+    }
+
+    // Find the Physical graph mesh ID to asic id to mesh rank mapping based on the asics in the physical graph
+    // Map: mesh_id_from_rank_map -> physical_mesh_id (from asic_id_to_mesh_rank)
+    std::map<MeshId, MeshId> real_mesh_to_physical_mesh_id;
+    for (const auto& [physical_mesh_id, physical_mesh_graph] : physical_graph.mesh_adjacency_graphs_) {
+        const auto& asic_nodes = physical_mesh_graph.get_nodes();
+        // Check that every asic node in physical mesh has a rank in asic_id_to_mesh_rank
+        for (const auto& asic_id : asic_nodes) {
+            for (const auto& [real_mesh_id, asic_ranks] : asic_id_to_mesh_rank) {
+                if (asic_ranks.contains(asic_id)) {
+                    auto [it, inserted] = real_mesh_to_physical_mesh_id.try_emplace(real_mesh_id, physical_mesh_id);
+                    if (!inserted && it->second != physical_mesh_id) {
+                        TT_THROW(
+                            "Internal Error: Inter-mesh rank binding conflict: logical mesh {} is associated with "
+                            "physical mesh {}, "
+                            "but ASIC {} in physical mesh {} is also listed under that logical mesh in "
+                            "asic_id_to_mesh_rank. Each logical mesh must map to a single physical mesh.",
+                            real_mesh_id.get(),
+                            it->second.get(),
+                            asic_id.get(),
+                            physical_mesh_id.get());
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    std::map<MeshId, MeshId> rank_bound_logical_to_physical;
+    for (const auto& [logical_mesh_id, _] : fabric_node_id_to_mesh_rank) {
+        const auto physical_it = real_mesh_to_physical_mesh_id.find(logical_mesh_id);
+        if (physical_it == real_mesh_to_physical_mesh_id.end()) {
+            continue;
+        }
+        rank_bound_logical_to_physical.emplace(logical_mesh_id, physical_it->second);
+        inter_mesh_constraints.add_required_constraint(logical_mesh_id, physical_it->second);
+    }
+
+    add_inter_mesh_minimal_host_cover_from_hostname_map(
+        config, physical_graph, mesh_logical_level_graph, inter_mesh_constraints, rank_bound_logical_to_physical);
+    return inter_mesh_constraints;
+}
+
+// Helper function to determine inter-mesh validation mode
+::tt::tt_fabric::ConnectionValidationMode determine_inter_mesh_validation_mode(const TopologyMappingConfig& config) {
+    if (config.inter_mesh_validation_mode.has_value()) {
+        return config.inter_mesh_validation_mode.value();
+    }
+    return ::tt::tt_fabric::ConnectionValidationMode::RELAXED;
+}
+
+// Helper function to determine intra-mesh validation mode
+::tt::tt_fabric::ConnectionValidationMode determine_intra_mesh_validation_mode(
+    const TopologyMappingConfig& config, MeshId logical_mesh_id) {
+    auto config_mode_it = config.mesh_validation_modes.find(logical_mesh_id);
+    if (config_mode_it != config.mesh_validation_modes.end()) {
+        return config_mode_it->second;
+    }
+    return ::tt::tt_fabric::ConnectionValidationMode::RELAXED;
+}
+
+// Helper function to add rank binding constraints. Only called when config.disable_rank_bindings is false.
+//
+// Purpose: Build rank_to_asics so that fabric nodes of rank R can only map to ASICs in rank_to_asics[R].
+// The topology solver then chooses a valid 1:1 mapping respecting connectivity.
 void add_rank_binding_constraints(
     ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
     const TopologyMappingConfig& config,
     MeshId logical_mesh_id,
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
-    // Need fabric node rank data to constrain by rank
     if (!fabric_node_id_to_mesh_rank.contains(logical_mesh_id)) {
         return;
     }
     const auto& fabric_node_ranks = fabric_node_id_to_mesh_rank.at(logical_mesh_id);
+
+    // When asic_id_to_mesh_rank has no entry for this mesh, treat all physical ASICs as UNSET
+    std::map<tt::tt_metal::AsicID, MeshHostRankId> asic_ranks_unset;
+    if (!asic_id_to_mesh_rank.contains(logical_mesh_id)) {
+        for (const auto& [_, asic_set] : config.hostname_to_asics) {
+            for (const auto& asic_id : asic_set) {
+                asic_ranks_unset[asic_id] = ::tt::tt_fabric::MESH_HOST_RANK_UNSET;
+            }
+        }
+    }
+    const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_ranks =
+        asic_id_to_mesh_rank.contains(logical_mesh_id) ? asic_id_to_mesh_rank.at(logical_mesh_id) : asic_ranks_unset;
+
+    // Group fabric nodes by rank: rank_to_fabric_nodes[R] = { fabric nodes that must map to rank R's ASICs }
     std::map<MeshHostRankId, std::set<FabricNodeId>> rank_to_fabric_nodes;
     for (const auto& [fabric_node, rank] : fabric_node_ranks) {
         rank_to_fabric_nodes[rank].insert(fabric_node);
     }
 
+    // rank_to_asics[R] = { ASICs that fabric nodes of rank R may map to }
     std::map<MeshHostRankId, std::set<tt::tt_metal::AsicID>> rank_to_asics;
 
-    if (!config.hostname_to_asics.empty()) {
-        // Same-host constraint: all ASICs on the same host (from config.hostname_to_asics) must map to
-        // fabric nodes of one rank. Applied regardless of disable_rank_bindings.
-        if (config.disable_rank_bindings) {
-            // No rank bindings: assign each host to a rank deterministically so hosts are not split.
-            std::vector<MeshHostRankId> ranks_in_order;
-            for (const auto& [r, fn_set] : rank_to_fabric_nodes) {
-                if (!fn_set.empty()) {
-                    ranks_in_order.push_back(r);
-                }
+    if (config.hostname_to_asics.empty()) {
+        // Legacy path: no host grouping. Each ASIC with explicit rank goes to that rank's pool.
+        for (const auto& [asic_id, rank] : asic_ranks) {
+            if (rank != ::tt::tt_fabric::MESH_HOST_RANK_UNSET) {
+                rank_to_asics[rank].insert(asic_id);
             }
-            if (ranks_in_order.empty()) {
-                return;
-            }
-            size_t host_index = 0;
-            for (const auto& [hostname, asic_set] : config.hostname_to_asics) {
-                (void)hostname;
-                MeshHostRankId r = ranks_in_order[host_index % ranks_in_order.size()];
-                for (const auto& asic_id : asic_set) {
-                    rank_to_asics[r].insert(asic_id);
-                }
-                ++host_index;
-            }
-        } else {
-            // Rank bindings enabled: use rank bindings to assign each host to one rank, then constrain further.
-            if (!asic_id_to_mesh_rank.contains(logical_mesh_id)) {
-                return;
-            }
-            const auto& asic_ranks = asic_id_to_mesh_rank.at(logical_mesh_id);
-            std::set<MeshHostRankId> claimed_ranks;
-            std::unordered_set<tt::tt_metal::AsicID> asics_in_host_config;
-            for (const auto& [_, asic_set] : config.hostname_to_asics) {
-                for (const auto& a : asic_set) {
-                    asics_in_host_config.insert(a);
-                }
-            }
+        }
+    } else {
+        // Host-grouped path: config.hostname_to_asics defines which ASICs belong to which host.
+        // Constraint: all ASICs on the same host must map to fabric nodes of the same rank
+        // (ControlPlane/TopologyMapper "same-host same-rank" invariant).
 
-            // Legacy ASICs (not in host config): add non-UNSET by rank
-            for (const auto& [asic_id, rank] : asic_ranks) {
-                if (rank != ::tt::tt_fabric::MESH_HOST_RANK_UNSET && !asics_in_host_config.contains(asic_id)) {
-                    rank_to_asics[rank].insert(asic_id);
-                }
-            }
+        std::unordered_set<tt::tt_metal::AsicID> asics_in_host_config;
+        for (const auto& [_, asic_set] : config.hostname_to_asics) {
+            asics_in_host_config.insert(asic_set.begin(), asic_set.end());
+        }
 
-            // Per-host: use claimed rank from bindings or assign unset hosts to one unclaimed rank each
-            std::vector<std::pair<std::string, std::set<tt::tt_metal::AsicID>>> unset_hosts;
-            for (const auto& [hostname, asic_set] : config.hostname_to_asics) {
-                std::vector<std::pair<tt::tt_metal::AsicID, MeshHostRankId>> host_pairs;
-                for (const auto& asic_id : asic_set) {
-                    auto it = asic_ranks.find(asic_id);
-                    if (it != asic_ranks.end()) {
-                        host_pairs.emplace_back(asic_id, it->second);
-                    }
-                }
-                if (host_pairs.empty()) {
+        // Legacy ASICs (not in any host in config): add by explicit rank.
+        for (const auto& [asic_id, rank] : asic_ranks) {
+            if (rank != ::tt::tt_fabric::MESH_HOST_RANK_UNSET && !asics_in_host_config.contains(asic_id)) {
+                rank_to_asics[rank].insert(asic_id);
+            }
+        }
+
+        // Per-host: classify as explicitly bound (has rank) or UNSET (all ASICs have MESH_HOST_RANK_UNSET).
+        std::set<MeshHostRankId> claimed_ranks;
+        std::vector<std::set<tt::tt_metal::AsicID>> unset_hosts;
+
+        for (const auto& [hostname, asic_set] : config.hostname_to_asics) {
+            std::set<tt::tt_metal::AsicID> host_asics_in_mesh;
+            std::optional<MeshHostRankId> host_rank;
+            for (const auto& asic_id : asic_set) {
+                auto it = asic_ranks.find(asic_id);
+                if (it == asic_ranks.end()) {
                     continue;
                 }
-                std::optional<MeshHostRankId> host_rank;
-                for (const auto& [_, rank] : host_pairs) {
-                    if (rank != ::tt::tt_fabric::MESH_HOST_RANK_UNSET) {
-                        if (host_rank.has_value() && host_rank.value() != rank) {
-                            TT_THROW(
-                                "Host consistency violated: host {} has ASICs with inconsistent ranks ({} and {}). "
-                                "Each host in the PSD must have exactly one rank binding.",
-                                hostname,
-                                host_rank->get(),
-                                rank.get());
-                        }
-                        host_rank = rank;
+                host_asics_in_mesh.insert(asic_id);
+                if (it->second != ::tt::tt_fabric::MESH_HOST_RANK_UNSET) {
+                    if (host_rank.has_value() && host_rank.value() != it->second) {
+                        TT_THROW(
+                            "Host consistency violated: host {} has ASICs with inconsistent ranks ({} and {}). "
+                            "Each host in the PSD must have exactly one rank binding.",
+                            hostname,
+                            host_rank->get(),
+                            it->second.get());
                     }
-                }
-                if (host_rank.has_value()) {
-                    claimed_ranks.insert(host_rank.value());
-                    for (const auto& [asic_id, _] : host_pairs) {
-                        rank_to_asics[host_rank.value()].insert(asic_id);
-                    }
-                } else {
-                    std::set<tt::tt_metal::AsicID> host_asics;
-                    for (const auto& [asic_id, _] : host_pairs) {
-                        host_asics.insert(asic_id);
-                    }
-                    unset_hosts.emplace_back(hostname, std::move(host_asics));
+                    host_rank = it->second;
                 }
             }
+            if (host_asics_in_mesh.empty()) {
+                continue;
+            }
+
+            if (host_rank.has_value()) {
+                claimed_ranks.insert(host_rank.value());
+                for (const auto& asic_id : host_asics_in_mesh) {
+                    rank_to_asics[host_rank.value()].insert(asic_id);
+                }
+            } else {
+                unset_hosts.push_back(std::move(host_asics_in_mesh));
+            }
+        }
+
+        // -----------------------------------------------------------------------
+        // UNSET hosts: no pre-assignment of ranks. Solver picks assignment.
+        // -----------------------------------------------------------------------
+        // Constraint: each host's ASICs must all map to fabric nodes of the same rank
+        // (same-host same-rank). We add UNSET ASICs to all unclaimed ranks' pools and
+        // set a same-rank-groups constraint so the solver rejects splits during DFS.
+        // If large meshes hit DFS limits, consider pruning (e.g., host↔rank matching).
+        // -----------------------------------------------------------------------
+        if (!unset_hosts.empty()) {
             std::vector<MeshHostRankId> unclaimed_ranks;
             for (const auto& [r, fn_set] : rank_to_fabric_nodes) {
                 if (!fn_set.empty() && !claimed_ranks.contains(r)) {
                     unclaimed_ranks.push_back(r);
                 }
             }
-            if (!unset_hosts.empty() && unclaimed_ranks.empty()) {
+            if (unclaimed_ranks.empty()) {
                 TT_THROW(
                     "Rank bindings: {} host(s) have no rank binding but all mesh ranks are already claimed. "
                     "Either assign ranks to these hosts or ensure enough ranks exist.",
                     unset_hosts.size());
             }
-            for (size_t i = 0; i < unset_hosts.size(); ++i) {
-                const auto& [hostname, host_asics] = unset_hosts[i];
-                (void)hostname;
-                MeshHostRankId rank = unclaimed_ranks[i % unclaimed_ranks.size()];
-                for (const auto& asic_id : host_asics) {
-                    rank_to_asics[rank].insert(asic_id);
+
+            for (const auto& r : unclaimed_ranks) {
+                for (const auto& host_asics : unset_hosts) {
+                    rank_to_asics[r].insert(host_asics.begin(), host_asics.end());
                 }
             }
-        }
-    } else {
-        // No hostname_to_asics: only add rank constraints when rank bindings are enabled (legacy path)
-        if (config.disable_rank_bindings) {
-            return;
-        }
-        if (!asic_id_to_mesh_rank.contains(logical_mesh_id)) {
-            return;
-        }
-        const auto& asic_ranks = asic_id_to_mesh_rank.at(logical_mesh_id);
-        for (const auto& [asic_id, rank] : asic_ranks) {
-            if (rank != ::tt::tt_fabric::MESH_HOST_RANK_UNSET) {
-                rank_to_asics[rank].insert(asic_id);
+
+            // Same-group: fabric ranks that use UNSET host pools (unclaimed_ranks); one target group per such rank.
+            // Global partitions: UNSET hosts only (unset_hosts). Claimed ranks are pinned by rank_to_asics below and
+            // are not part of this host↔rank matching. Solver assigns target groups to distinct UNSET partitions
+            // (not index-aligned).
+            std::vector<std::set<FabricNodeId>> target_groups;
+            for (const auto& r : unclaimed_ranks) {
+                auto it = rank_to_fabric_nodes.find(r);
+                if (it != rank_to_fabric_nodes.end() && !it->second.empty()) {
+                    target_groups.push_back(it->second);
+                }
+            }
+            std::vector<std::set<tt::tt_metal::AsicID>> global_groups(unset_hosts.begin(), unset_hosts.end());
+            if (!intra_mesh_constraints.set_same_rank_groups_constraint(target_groups, global_groups)) {
+                TT_THROW(
+                    "Failed to set same-rank groups constraint for mesh {} (rank/host partition matching "
+                    "infeasible with current rank bindings).",
+                    logical_mesh_id.get());
             }
         }
     }
 
-    // Add required constraints: fabric nodes of a rank can only map to ASICs assigned to that rank
+    // Add required constraint: fabric nodes of rank R can only map to ASICs in rank_to_asics[R].
     for (const auto& [rank, fabric_nodes] : rank_to_fabric_nodes) {
         auto asic_it = rank_to_asics.find(rank);
         if (asic_it != rank_to_asics.end() && !asic_it->second.empty()) {
@@ -822,6 +1048,8 @@ void add_pinning_constraints(
         fabric_node_to_positions[fabric_node].push_back(position);
     }
 
+    bool success = true;
+
     // Apply pinning constraints
     for (const auto& [fabric_node, positions] : fabric_node_to_positions) {
         std::set<tt::tt_metal::AsicID> asic_ids;
@@ -830,6 +1058,15 @@ void add_pinning_constraints(
         for (const auto& position : positions) {
             auto it = asic_positions_to_asic_ids.find(position);
             if (it == asic_positions_to_asic_ids.end()) {
+                log_critical(
+                    tt::LogFabric,
+                    "Pinned ASIC position (tray_id: {}, asic_location: {}) to fabric node id (mesh_id: {}, chip_id: "
+                    "{}) from MGD not found in physical topology",
+                    position.first.get(),
+                    position.second.get(),
+                    fabric_node.mesh_id.get(),
+                    fabric_node.chip_id);
+                success = false;
                 continue;
             }
             asic_ids.insert(it->second.begin(), it->second.end());
@@ -844,6 +1081,37 @@ void add_pinning_constraints(
             }
         }
     }
+    TT_FATAL(success, "Failed to add pinning constraints");
+}
+
+// Parallel physical inter-mesh edges from one exit ASIC to a destination mesh (each edge is one link / channel).
+uint32_t max_physical_exit_edges_per_asic_toward_mesh(
+    const ::tt::tt_fabric::AdjacencyGraph<PhysicalExitNode>& physical_exit_node_graph, MeshId dst_physical_mesh_id) {
+    uint32_t max_toward_dst = 0;
+    for (const auto& src_exit : physical_exit_node_graph.get_nodes()) {
+        uint32_t count = 0;
+        for (const auto& dst_exit : physical_exit_node_graph.get_neighbors(src_exit)) {
+            if (dst_exit.mesh_id == dst_physical_mesh_id) {
+                count++;
+            }
+        }
+        max_toward_dst = std::max(max_toward_dst, count);
+    }
+    return max_toward_dst;
+}
+
+// Total physical inter-mesh links from this mesh toward dst_physical_mesh_id (sum over exit ASICs).
+uint32_t total_physical_exit_edges_toward_mesh(
+    const ::tt::tt_fabric::AdjacencyGraph<PhysicalExitNode>& physical_exit_node_graph, MeshId dst_physical_mesh_id) {
+    uint32_t total = 0;
+    for (const auto& src_exit : physical_exit_node_graph.get_nodes()) {
+        for (const auto& dst_exit : physical_exit_node_graph.get_neighbors(src_exit)) {
+            if (dst_exit.mesh_id == dst_physical_mesh_id) {
+                total++;
+            }
+        }
+    }
+    return total;
 }
 
 // Helper function to add exit node constraints
@@ -856,7 +1124,8 @@ bool add_exit_node_constraints(
     const std::unordered_map<MeshId, MeshId>& mesh_mappings,
     const ::tt::tt_fabric::AdjacencyGraph<FabricNodeId>& logical_graph,
     const ::tt::tt_fabric::AdjacencyGraph<LogicalExitNode>& logical_exit_node_graph,
-    const ::tt::tt_fabric::AdjacencyGraph<PhysicalExitNode>& physical_exit_node_graph) {
+    const ::tt::tt_fabric::AdjacencyGraph<PhysicalExitNode>& physical_exit_node_graph,
+    ::tt::tt_fabric::ConnectionValidationMode inter_mesh_validation_mode) {
     std::unordered_map<MeshId, std::set<tt::tt_metal::AsicID>> valid_physical_exit_nodes_by_mesh;
     std::set<FabricNodeId> valid_logical_exit_nodes(logical_graph.get_nodes().begin(), logical_graph.get_nodes().end());
 
@@ -892,55 +1161,119 @@ bool add_exit_node_constraints(
         }
     }
 
-    // Add cardinal constraints for each mesh
     for (const auto& src_exit_node : logical_exit_node_graph.get_nodes()) {
-        // Get the valid logical exit nodes for this source exit node
         const auto& dst_exit_nodes = logical_exit_node_graph.get_neighbors(src_exit_node);
 
-        // Loop through all destination exit nodes (can be multiple) and add a constraint for each
+        if (src_exit_node.fabric_node_id.has_value()) {
+            // Fabric node-level: parallel edges to the same destination mesh share one required constraint.
+            // num_logical_exit_nodes_assigned counts duplicate exit edges per (fabric node, logical dst mesh); it
+            // cannot exceed the number of physical exit ASICs toward that destination mesh.
+            std::map<std::pair<FabricNodeId, MeshId>, uint32_t> num_logical_exit_nodes_assigned_per_fabric_dst;
+            for (const auto& dst_exit_node : dst_exit_nodes) {
+                num_logical_exit_nodes_assigned_per_fabric_dst[{
+                    src_exit_node.fabric_node_id.value(), dst_exit_node.mesh_id}]++;
+            }
+            for (const auto& [fabric_dst_key, num_logical_exit_nodes_assigned] :
+                 num_logical_exit_nodes_assigned_per_fabric_dst) {
+                const auto& [fabric_node_id, dst_logical_mesh] = fabric_dst_key;
+                auto mesh_mapping_it = mesh_mappings.find(dst_logical_mesh);
+                TT_ASSERT(
+                    mesh_mapping_it != mesh_mappings.end(),
+                    "Mesh mapping missing for logical mesh ID {} (destination exit node mesh ID)",
+                    dst_logical_mesh.get());
+
+                const auto& mapped_physical_dst_mesh_id = mesh_mappings.at(dst_logical_mesh);
+                auto valid_physical_exit_nodes_it = valid_physical_exit_nodes_by_mesh.find(mapped_physical_dst_mesh_id);
+                if (valid_physical_exit_nodes_it == valid_physical_exit_nodes_by_mesh.end()) {
+                    return false;
+                }
+                const auto& valid_physical_exit_nodes = valid_physical_exit_nodes_it->second;
+                if (num_logical_exit_nodes_assigned > valid_physical_exit_nodes.size()) {
+                    return false;
+                }
+                if (!intra_mesh_constraints.add_required_constraint(fabric_node_id, valid_physical_exit_nodes)) {
+                    return false;
+                }
+            }
+            continue;
+        }
+
+        // Mesh-level: one cardinality constraint per destination logical mesh. Each duplicate neighbor is one logical
+        // inter-mesh channel. Per-ASIC parallel link counts and total link count come only from the physical exit graph
+        // toward the mapped physical destination mesh. In RELAXED mode, channel demand for pair math is capped by that
+        // physical link total (not logical multiplicity alone).
+        std::map<MeshId, uint32_t> num_logical_exit_nodes_assigned_per_dst_mesh;
         for (const auto& dst_exit_node : dst_exit_nodes) {
-            // Error if the mesh mapping doesn't include the destination exit node mesh ID
-            auto mesh_mapping_it = mesh_mappings.find(dst_exit_node.mesh_id);
+            num_logical_exit_nodes_assigned_per_dst_mesh[dst_exit_node.mesh_id]++;
+        }
+
+        for (const auto& [dst_logical_mesh, num_logical_exit_nodes_assigned] :
+             num_logical_exit_nodes_assigned_per_dst_mesh) {
+            auto mesh_mapping_it = mesh_mappings.find(dst_logical_mesh);
             TT_ASSERT(
                 mesh_mapping_it != mesh_mappings.end(),
                 "Mesh mapping missing for logical mesh ID {} (destination exit node mesh ID)",
-                dst_exit_node.mesh_id.get());
+                dst_logical_mesh.get());
 
-            // Get the valid physical exit nodes for this destination exit node
-            const auto& mapped_physical_dst_mesh_id = mesh_mappings.at(dst_exit_node.mesh_id);
-
-            // Check if there are valid physical exit nodes for this destination mesh
+            const auto& mapped_physical_dst_mesh_id = mesh_mappings.at(dst_logical_mesh);
             auto valid_physical_exit_nodes_it = valid_physical_exit_nodes_by_mesh.find(mapped_physical_dst_mesh_id);
             if (valid_physical_exit_nodes_it == valid_physical_exit_nodes_by_mesh.end()) {
-                // No physical exit nodes found for this destination mesh - constraints cannot be satisfied
-                // Return false to indicate failure, allowing caller to try next combination
+                return false;
+            }
+            const auto& valid_physical_exit_nodes = valid_physical_exit_nodes_it->second;
+
+            const size_t max_mappable_exit_pairs =
+                std::min(valid_logical_exit_nodes.size(), valid_physical_exit_nodes.size());
+
+            const uint32_t total_physical_links_toward_dst =
+                total_physical_exit_edges_toward_mesh(physical_exit_node_graph, mapped_physical_dst_mesh_id);
+            const uint32_t max_edges_per_exit_asic =
+                max_physical_exit_edges_per_asic_toward_mesh(physical_exit_node_graph, mapped_physical_dst_mesh_id);
+            const uint32_t physical_links_per_exit_asic = std::max(1u, max_edges_per_exit_asic);
+
+            uint32_t channels_for_pair_count = num_logical_exit_nodes_assigned;
+            if (inter_mesh_validation_mode == ::tt::tt_fabric::ConnectionValidationMode::RELAXED) {
+                channels_for_pair_count = std::min(num_logical_exit_nodes_assigned, total_physical_links_toward_dst);
+            }
+
+            const uint32_t required_exit_pair_count =
+                (channels_for_pair_count + physical_links_per_exit_asic - 1) / physical_links_per_exit_asic;
+
+            uint32_t effective_exit_pair_min_count = required_exit_pair_count;
+            if (inter_mesh_validation_mode == ::tt::tt_fabric::ConnectionValidationMode::RELAXED) {
+                effective_exit_pair_min_count = static_cast<uint32_t>(
+                    std::min(static_cast<size_t>(required_exit_pair_count), max_mappable_exit_pairs));
+                if (effective_exit_pair_min_count < num_logical_exit_nodes_assigned) {
+                    log_debug(
+                        tt::LogFabric,
+                        "Relaxed mode: mesh-level exit toward logical mesh {}: {} logical channel(s), {} physical "
+                        "link(s) toward mapped mesh → {} channel(s) for pair math (up to {} parallel link(s)/exit "
+                        "ASIC); need at least {} (fabric_node, exit-ASIC) pair(s); exit cardinality min_count {} "
+                        "(mappable pair cap {}).",
+                        dst_logical_mesh.get(),
+                        num_logical_exit_nodes_assigned,
+                        total_physical_links_toward_dst,
+                        channels_for_pair_count,
+                        physical_links_per_exit_asic,
+                        required_exit_pair_count,
+                        effective_exit_pair_min_count,
+                        max_mappable_exit_pairs);
+                }
+            } else if (required_exit_pair_count > max_mappable_exit_pairs) {
                 return false;
             }
 
-            const auto& valid_physical_exit_nodes = valid_physical_exit_nodes_it->second;
-
-            // Add cardinal constraints for this source exit node and destination exit node pair
-            // The API guarantees that if constraint addition fails, no partial state is added
-            bool constraint_success = false;
-            // If source exit node is fabric node-level, add cardinal constraint for the logical exit node
-            if (src_exit_node.fabric_node_id.has_value()) {
-                constraint_success = intra_mesh_constraints.add_required_constraint(
-                    src_exit_node.fabric_node_id.value(), valid_physical_exit_nodes);
-                // If source exit node is mesh-level, add cardinal constraint for all logical exit nodes
-            } else {
-                constraint_success = intra_mesh_constraints.add_cardinality_constraint(
-                    valid_logical_exit_nodes, valid_physical_exit_nodes, 1);
+            if (effective_exit_pair_min_count == 0) {
+                return false;
             }
 
-            if (!constraint_success) {
-                // Constraint addition failed (e.g., over-constrained) - return false to try next combination
-                // The API guarantees no partial state was added, so intra_mesh_constraints remains unchanged
+            if (!intra_mesh_constraints.add_cardinality_constraint(
+                    valid_logical_exit_nodes, valid_physical_exit_nodes, effective_exit_pair_min_count)) {
                 return false;
             }
         }
     }
 
-    // All constraints successfully added
     return true;
 }
 
@@ -1090,12 +1423,20 @@ TopologyMappingResult map_multi_mesh_to_physical(
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) {
     using namespace ::tt::tt_fabric;
 
+    if (config.strict_mode) {
+        log_warning(
+            tt::LogFabric,
+            "TopologyMappingConfig::strict_mode is deprecated and has no effect. "
+            "Set mesh_validation_modes and/or inter_mesh_validation_mode explicitly.");
+    }
+
     // Step 1: Run Mesh to Mesh mapping algorithm
     const auto& mesh_logical_graph = adjacency_map_logical.mesh_level_graph_;
     const auto& mesh_physical_graph = adjacency_map_physical.mesh_level_graph_;
 
     // Build inter-mesh constraints and determine validation mode
-    auto inter_mesh_constraints = build_inter_mesh_constraints(mesh_physical_graph, config);
+    auto inter_mesh_constraints = build_inter_mesh_constraints(
+        config, adjacency_map_physical, mesh_logical_graph, fabric_node_id_to_mesh_rank, asic_id_to_mesh_rank);
     auto inter_mesh_validation_mode = determine_inter_mesh_validation_mode(config);
 
     // Track statistics for error reporting
@@ -1195,7 +1536,14 @@ TopologyMappingResult map_multi_mesh_to_physical(
         // Step 2: For each mesh mapping, do the sub mapping for fabric node id to asic id
         std::unordered_map<MeshId, MeshId> mesh_mappings(
             solver_result.target_to_global.begin(), solver_result.target_to_global.end());
+        log_info(tt::LogFabric, "Attempt {}: Mapping {} mesh pair(s)", retry_attempt, mesh_mappings.size());
         for (const auto& [logical_mesh_id, physical_mesh_id] : mesh_mappings) {
+            log_info(
+                tt::LogFabric,
+                "Attempt {}: Mapping mesh {} -> {}",
+                retry_attempt,
+                logical_mesh_id.get(),
+                physical_mesh_id.get());
             // Get the logical graph and the physical graph
             const auto& logical_graph = adjacency_map_logical.mesh_adjacency_graphs_.at(logical_mesh_id);
             const auto& physical_graph = adjacency_map_physical.mesh_adjacency_graphs_.at(physical_mesh_id);
@@ -1229,9 +1577,11 @@ TopologyMappingResult map_multi_mesh_to_physical(
             // Build intra-mesh constraints
             ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID> intra_mesh_constraints;
 
-            // Add rank binding constraints
-            add_rank_binding_constraints(
-                intra_mesh_constraints, config, logical_mesh_id, fabric_node_id_to_mesh_rank, asic_id_to_mesh_rank);
+            // Add rank binding constraints only when rank bindings are enabled
+            if (!config.disable_rank_bindings) {
+                add_rank_binding_constraints(
+                    intra_mesh_constraints, config, logical_mesh_id, fabric_node_id_to_mesh_rank, asic_id_to_mesh_rank);
+            }
 
             // Add exit node constraints (only if exit node graphs are not empty)
             // Since we initialize empty graphs for all meshes, we check if they have nodes before adding constraints
@@ -1241,7 +1591,8 @@ TopologyMappingResult map_multi_mesh_to_physical(
                     mesh_mappings,
                     logical_graph,
                     logical_exit_node_graph,
-                    physical_exit_node_graph);
+                    physical_exit_node_graph,
+                    inter_mesh_validation_mode);
 
                 // If exit node constraints cannot be satisfied (no valid physical exit nodes or over-constrained),
                 // treat this as a mapping failure and try next combination

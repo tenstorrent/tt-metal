@@ -40,20 +40,24 @@ namespace tt::tt_fabric::fabric_tests {
 struct ConnectionKey {
     RoutingDirection direction;
     uint32_t link_idx;
+    uint8_t vc_id = 0;  // 0=VC0, 2=VC2
+
+    bool use_vc2() const { return vc_id == 2; }
 
     bool operator==(const ConnectionKey& other) const {
-        return direction == other.direction && link_idx == other.link_idx;
+        return direction == other.direction && link_idx == other.link_idx && vc_id == other.vc_id;
     }
 
     bool operator<(const ConnectionKey& other) const {
-        return std::tie(direction, link_idx) < std::tie(other.direction, other.link_idx);
+        return std::tie(direction, link_idx, vc_id) < std::tie(other.direction, other.link_idx, other.vc_id);
     }
 };
 
 // Hash function for ConnectionKey to enable unordered_map
 struct ConnectionKeyHash {
     std::size_t operator()(const ConnectionKey& key) const {
-        return std::hash<int>()(static_cast<int>(key.direction)) ^ (std::hash<uint32_t>()(key.link_idx) << 1);
+        return std::hash<int>()(static_cast<int>(key.direction)) ^ (std::hash<uint32_t>()(key.link_idx) << 1) ^
+               (std::hash<uint8_t>()(key.vc_id) << 2);
     }
 };
 
@@ -117,7 +121,11 @@ public:
 
     // Register a connection from a core in a specific direction and link
     void register_client(
-        const CoreCoord& core, RoutingDirection direction, uint32_t link_idx, TestWorkerType worker_type);
+        const CoreCoord& core,
+        RoutingDirection direction,
+        uint32_t link_idx,
+        TestWorkerType worker_type,
+        uint8_t vc_id = 0);
 
     // Processing: Call once at start of create_kernels()
     // local_alloc: allocator for on-demand mux core allocation
@@ -396,7 +404,8 @@ private:
         TestWorkerType worker_type,
         FabricConnectionManager& connection_mgr,
         RoutingDirection outgoing_direction,
-        uint32_t link_idx);
+        uint32_t link_idx,
+        uint8_t vc_id = 0);
 
     MeshCoordinate coord_;
     std::shared_ptr<IDeviceInfoProvider> device_info_provider_;

@@ -11,6 +11,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "full_program_factory_nd_sharded.hpp"
 #include "full_program_factory_common.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn::operations::full {
 
@@ -24,25 +25,16 @@ FullNDShardedProgramFactory::cached_program_t FullNDShardedProgramFactory::creat
     tensor_return_value_t& output) {
     auto fill_value = operation_attributes.fill_value;
     DataType dtype{operation_attributes.dtype};
-    MemoryConfig memory_config{operation_attributes.memory_config};
 
     Program program{};
 
     auto data_format = datatype_to_dataformat_converter(dtype);
     const auto& distribution_spec = output.buffer()->buffer_distribution_spec().value();
     uint32_t num_shards = distribution_spec.num_shards();
-    std::vector<CoreCoord> ordered_cores_with_data;
     uint32_t num_compute_cores = distribution_spec.cores_with_data().size();
 
-    if (memory_config.is_dram()) {  // For DRAM sharded tensors, we take one core that is optimal for each DRAM bank
-                                    // with a shard to use as our compute cores.
-        auto all_dram_workers =
-            output.device()->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
-        ordered_cores_with_data.assign(all_dram_workers.begin(), all_dram_workers.begin() + num_compute_cores);
-    } else {
-        ordered_cores_with_data = distribution_spec.cores_with_data();
-    }
-    const auto& compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(ordered_cores_with_data));
+    std::vector<CoreCoord> ordered_cores_with_data = get_optimal_worker_cores_for_sharded_tensor(output);
+    const auto& compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
     const auto& aligned_page_size = output.buffer()->aligned_page_size();
     const auto& page_size = output.buffer()->page_size();
 

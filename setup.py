@@ -299,7 +299,7 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["ls", "-hal", "runtime"], cwd=source_dir, env=build_env)
 
         # Copy needed C++ shared libraries and runtime assets into wheel (sfpi, FW etc)
-        lib_patterns = ["_ttnn.so", "_ttnncpp.so", "libtt_metal.so", "libdevice.so", "libtt_stl.so"]
+        lib_patterns = ["_ttnn.so", "_ttnncpp.so", "libtt_metal.so", "libtt-umd.so", "libtt_stl.so"]
         runtime_patterns = [
             "hw/**/*",
         ]
@@ -340,6 +340,7 @@ class CMakeBuild(build_ext):
             "ttnn/operations/data_movement/**/*",
             "ttnn/operations/moreh/**/*",
             "ttnn/kernel/*",
+            "ttnn/kernel_lib/*",
             "ttnn/operations/normalization/kernel_util/**/*",
         ]
         tt_metal_patterns = [
@@ -366,6 +367,7 @@ class CMakeBuild(build_ext):
             "tools/profiler/**/*",
             "soc_descriptors/*.yaml",
             "sfpi-version",
+            "pre-compiled/**/*",
         ]
         copy_tree_with_patterns(build_dir / get_lib_dir(), self.build_lib + f"/ttnn/build/lib", lib_patterns)
         copy_tree_with_patterns(build_dir, self.build_lib + "/ttnn/build/lib", ["sfpi-version.json"])

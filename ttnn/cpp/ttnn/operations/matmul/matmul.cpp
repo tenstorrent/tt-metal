@@ -11,7 +11,7 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
@@ -265,8 +265,8 @@ static ttnn::Tensor bound_matmul(
     if (parameters.user_fused_activation.has_value() && !parameters.user_core_coord.has_value()) {
         const UnaryWithParam& activation = parameters.user_fused_activation.value();
 
-        output_tensor = ttnn::operations::unary::Unary_chain::invoke(
-            output_tensor, {activation}, output_tensor.memory_config(), optional_output_tensor);
+        output_tensor =
+            ttnn::unary_chain(output_tensor, {activation}, output_tensor.memory_config(), optional_output_tensor);
     }
 
     return output_tensor;

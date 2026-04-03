@@ -47,7 +47,7 @@ namespace ckernel {
  * NOTE: Be extra careful when setting respect_trigger to true. This feature breaks the LLK API contract in
  * the following way: the llk-lib layer in reduce_block_max_row is waiting and acquiring the semaphore,
  * but posting it is expected to be done by the packer in the compute kernel, i.e. 2 layers above.
- * Number of semposts must math the number of calls to reduce_block_max_row.
+ * Number of semposts must match the number of calls to reduce_block_max_row_uninit.
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
@@ -88,7 +88,7 @@ ALWI void reduce_block_max_row_init() {
  * NOTE: Be extra careful when setting respect_trigger to true. This feature breaks the LLK API contract in
  * the following way: the llk-lib layer in reduce_block_max_row is waiting and acquiring the semaphore,
  * but posting it is expected to be done by the packer in the compute kernel, i.e. 2 layers above.
- * Number of semposts must math the number of calls to reduce_block_max_row.
+ * Number of semposts must match the number of calls to reduce_block_max_row_uninit.
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
@@ -120,7 +120,7 @@ ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_s
  * NOTE: Be extra careful when setting respect_trigger to true. This feature breaks the LLK API contract in
  * the following way: the llk-lib layer in reduce_block_max_row is waiting and acquiring the semaphore,
  * but posting it is expected to be done by the packer in the compute kernel, i.e. 2 layers above.
- * Number of semposts must math the number of calls to reduce_block_max_row.
+ * Number of semposts must match the number of calls to reduce_block_max_row_uninit.
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
@@ -131,8 +131,42 @@ ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_s
 template <uint32_t block_ct_dim, bool respect_trigger = false>
 ALWI void reduce_block_max_row_reinit_short() {
     UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger>()));
-    MATH((llk_math_reduce_block_max_row_mop_config<block_ct_dim, DST_ACCUM_MODE>()));
-    MATH((llk_math_reduce_block_max_row_reinit()));
+    MATH((llk_math_reduce_block_max_row_reinit_with_mop<block_ct_dim>()));
+    PACK((llk_pack_reduce_mask_config<false, ReduceDim::REDUCE_ROW>()));
+}
+#endif
+
+#ifdef ARCH_BLACKHOLE
+/**
+ * Minimal reinit: only ADDR_MOD_1 + ADDR_MOD_2 + ADDR_MOD_6. Requires copy_tile_custom
+ * (which uses ADDR_MOD_4) so ADDR_MOD_3 is preserved from the previous reduce.
+ */
+template <uint32_t block_ct_dim, bool respect_trigger = false>
+ALWI void reduce_block_max_row_reinit_minimal() {
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger>()));
+    MATH((llk_math_reduce_block_max_row_reinit_minimal()));
+    PACK((llk_pack_reduce_mask_config<false, ReduceDim::REDUCE_ROW>()));
+}
+
+/**
+ * Minimal reinit (runtime variant): only ADDR_MOD_1 + ADDR_MOD_2 + ADDR_MOD_6.
+ * Requires copy_tile_custom (which uses ADDR_MOD_4) so ADDR_MOD_3 is preserved
+ * from the previous reduce.
+ */
+ALWI void reduce_block_max_row_reinit_minimal_runtime(uint32_t block_ct_dim, bool respect_trigger = false) {
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger)));
+    MATH((llk_math_reduce_block_max_row_reinit_minimal_runtime()));
+    PACK((llk_pack_reduce_mask_config<false, ReduceDim::REDUCE_ROW>()));
+}
+
+/**
+ * Short reinit (runtime variant): Reprograms reduce MOP and restores addrmods.
+ * Used when reduce follows custom SDPA sub path with runtime block_ct_dim.
+ */
+ALWI void reduce_block_max_row_reinit_short_runtime(uint32_t block_ct_dim, bool respect_trigger = false) {
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger)));
+    MATH((llk_math_reduce_block_max_row_reinit_short_runtime<DST_ACCUM_MODE>(block_ct_dim)));
+    PACK((llk_pack_reduce_mask_config<false, ReduceDim::REDUCE_ROW>()));
 }
 #endif
 
@@ -160,7 +194,7 @@ ALWI void reduce_block_max_row_reinit_short() {
  * NOTE: Be extra careful when setting respect_trigger to true. This feature breaks the LLK API contract in
  * the following way: the llk-lib layer in reduce_block_max_row is waiting and acquiring the semaphore,
  * but posting it is expected to be done by the packer in the compute kernel, i.e. 2 layers above.
- * Number of semposts must math the number of calls to reduce_block_max_row.
+ * Number of semposts must match the number of calls to reduce_block_max_row_uninit.
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|

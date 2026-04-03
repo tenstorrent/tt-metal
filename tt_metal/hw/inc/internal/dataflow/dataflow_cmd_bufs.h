@@ -7,11 +7,16 @@
 #include "noc_nonblocking_api.h"
 
 #if defined(KERNEL_BUILD)
-#if defined(COMPILE_FOR_DM)
+#if defined(COMPILE_FOR_DM) && defined(NOC_API_V2)
 constexpr uint32_t read_cmd_buf = OVERLAY_RD_CMD_BUF;
 constexpr uint32_t write_cmd_buf = OVERLAY_WR_CMD_BUF;
 constexpr uint32_t write_reg_cmd_buf = OVERLAY_WR_CMD_BUF;
 constexpr uint32_t write_at_cmd_buf = OVERLAY_AT_CMD_BUF;
+#elif defined(COMPILE_FOR_DM)
+constexpr uint32_t read_cmd_buf = NCRISC_RD_CMD_BUF;
+constexpr uint32_t write_cmd_buf = NCRISC_WR_CMD_BUF;
+constexpr uint32_t write_reg_cmd_buf = NCRISC_WR_REG_CMD_BUF;
+constexpr uint32_t write_at_cmd_buf = NCRISC_AT_CMD_BUF;
 #elif (defined(COMPILE_FOR_BRISC)) || (defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0))
 constexpr uint32_t read_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? BRISC_RD_CMD_BUF : DYNAMIC_NOC_BRISC_RD_CMD_BUF;
 constexpr uint32_t write_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? BRISC_WR_CMD_BUF : DYNAMIC_NOC_BRISC_WR_CMD_BUF;

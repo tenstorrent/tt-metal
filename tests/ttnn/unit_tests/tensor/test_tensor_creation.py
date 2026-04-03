@@ -852,3 +852,38 @@ def test_tensor_creation_from_list_with_mem_config(shape, tt_dtype, data_type, m
             assert abs(a - b) < 1e-5, f"Mismatch at index {i}: expected {a}, got {b}"
     else:
         assert flattened == data
+
+
+@pytest.mark.parametrize(
+    "torch_tensor, shard_shape, memory_layout",
+    [
+        (torch.tensor(7, dtype=torch.int32), (1, 2), ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+        (torch.arange(8, dtype=torch.int32), (1, 3), ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+        (torch.arange(12, dtype=torch.int32).reshape(3, 4), (3, 4), ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (
+            torch.arange(1 * 1 * 5 * 96, dtype=torch.int32).reshape(1, 1, 5, 96),
+            (5, 64),
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+    ],
+    ids=["scalar", "1d", "2d", "nd"],
+)
+def test_legacy_shardspec_construction_across_tensor_ranks(device, torch_tensor, shard_shape, memory_layout):
+    """Constructing legacy ShardSpecs should succeed for scalar through higher-rank tensors."""
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))}),
+        shard_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    memory_config = ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1, shard_spec)
+
+    tt_tensor = ttnn.from_torch(
+        torch_tensor,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+
+    assert tt_tensor.memory_config().is_sharded()
+    assert tt_tensor.memory_config().shard_spec is not None

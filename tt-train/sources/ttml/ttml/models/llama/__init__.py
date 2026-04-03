@@ -5,17 +5,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, Dict
-
-import numpy as np
-import ml_dtypes
+from typing import Optional
 
 import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, ModuleList, LinearLayer
+from ttml.modules import AbstractModuleBase, Embedding, ModuleList, LinearLayer
 
 from .. import RunnerType, WeightTyingType, memory_efficient_runner
-from .embedding import Embedding
 from .transformer import LlamaBlock, RMSNormLayer
 
 
@@ -77,38 +73,25 @@ class LlamaConfig:
             )
 
 
-def initialize_parameters(parameters: Dict[str, ttml.autograd.Tensor]) -> None:
-    for name, tensor in parameters.items():
-        shape = tensor.shape()
-
-        if "weight" in name:
-            # Re-initialize weights with normal(0, 0.02)
-            weight_np = np.random.normal(0.0, 0.02, size=shape).astype(
-                ml_dtypes.bfloat16
-            )
-            new_tensor = ttml.autograd.Tensor.from_numpy(
-                weight_np, layout=ttnn.Layout.TILE
-            )
-            tensor.assign(new_tensor)
-        elif "bias" in name:
-            # Re-initialize biases with 0
-            bias_np = np.zeros(shape, dtype=ml_dtypes.bfloat16)
-            new_tensor = ttml.autograd.Tensor.from_numpy(
-                bias_np, layout=ttnn.Layout.TILE
-            )
-            tensor.assign(new_tensor)
-
-
 class Llama(AbstractModuleBase):
     def __init__(self, config: LlamaConfig) -> None:
         super().__init__()
 
         self.config = config
 
-        self.fc = LinearLayer(config.hidden_size, config.vocab_size, False)
+        self.fc = LinearLayer(
+            config.hidden_size,
+            config.vocab_size,
+            False,
+            weight_init=ttml.init.normal(0.0, 0.02),
+        )
 
         vocab_size_divisible_by_32 = (config.vocab_size + 31) // 32 * 32
-        self.tok_emb = Embedding(vocab_size_divisible_by_32, config.hidden_size)
+        self.tok_emb = Embedding(
+            vocab_size_divisible_by_32,
+            config.hidden_size,
+            weight_init=ttml.init.normal(0.0, 0.02),
+        )
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
             self.tok_emb.weight = self.fc.weight.tensor
@@ -116,16 +99,11 @@ class Llama(AbstractModuleBase):
         head_dim = config.hidden_size // config.num_attention_heads
 
         rope_scaling_params = ttml.ops.rope.RopeScalingParams()
-        if (
-            config.rope_scaling.scaling_factor != 0.0
-            and config.rope_scaling.original_context_length != 0
-        ):
+        if config.rope_scaling.scaling_factor != 0.0 and config.rope_scaling.original_context_length != 0:
             rope_scaling_params.scaling_factor = config.rope_scaling.scaling_factor
             rope_scaling_params.high_freq_factor = config.rope_scaling.high_freq_factor
             rope_scaling_params.low_freq_factor = config.rope_scaling.low_freq_factor
-            rope_scaling_params.original_context_length = (
-                config.rope_scaling.original_context_length
-            )
+            rope_scaling_params.original_context_length = config.rope_scaling.original_context_length
 
         rope_params = ttml.ops.rope.build_rope_params(
             config.max_position_embeddings,
@@ -152,7 +130,6 @@ class Llama(AbstractModuleBase):
         )
 
         self.ln_fc = RMSNormLayer(config.hidden_size)
-        initialize_parameters(self.parameters())
 
     def forward(
         self,
@@ -194,9 +171,7 @@ class Llama(AbstractModuleBase):
             elif self.config.runner_type == ttml.models.RunnerType.Default:
                 out = block(out, mask, *extra_args)
             else:
-                raise ValueError(
-                    "Unknown runner type. Supported runner types ['default', 'memory_efficient']"
-                )
+                raise ValueError("Unknown runner type. Supported runner types ['default', 'memory_efficient']")
 
         out = self.ln_fc(out)
         logits = self.fc(out)
@@ -204,11 +179,13 @@ class Llama(AbstractModuleBase):
 
 
 # C++ Llama bindings from _ttml.models.llama
-from ..._ttml.models.llama import (
+from _ttml.models.llama import (
     CppLlama,
     CppLlamaConfig,
     create_cpp_llama_model,
 )
+
+from .safetensors_loader import load_from_safetensors
 
 __all__ = [
     # C++ bindings
@@ -219,4 +196,5 @@ __all__ = [
     "Llama",
     "LlamaConfig",
     "LlamaRopeScalingConfig",
+    "load_from_safetensors",
 ]

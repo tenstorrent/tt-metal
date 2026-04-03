@@ -175,10 +175,12 @@ void kernel_main() {
         // After bitonic merging, the top Kt tiles contain the locally optimal
         // TopK elements. Extract these and prepare for sending to the final core.
 
-        // Configure data formats for tile copying and prepare value tiles
+        // Configure data formats for tile copying and prepare value tiles.
+        // Pack using values_cb format: input_transposed_cb may be bf16 (higher-precision
+        // intermediate) while values_cb is the original bfp8/bfp4 output format.
         reconfig_data_format_srca(input_transposed_cb_index);
         copy_tile_to_dst_init_short_with_dt(index_transposed_cb_index, input_transposed_cb_index);
-        pack_reconfig_data_format(input_transposed_cb_index);
+        pack_reconfig_data_format(values_cb_index);
 
         // Extract local TopK values (first Kt tiles contain best values)
         cb_wait_front(input_transposed_cb_index, Kt);

@@ -18,6 +18,7 @@ class ControlPlane;
 
 namespace tt::tt_metal {
 class MetalContext;
+class MetalEnvImpl;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
@@ -28,6 +29,7 @@ namespace tt::tt_metal::distributed {
 class SystemMesh {
 private:
     friend class tt::tt_metal::MetalContext;
+    friend class tt::tt_metal::MetalEnvImpl;
 
     class Impl;  // Forward declaration only
 

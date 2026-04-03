@@ -8,13 +8,15 @@
 #include <stdint.h>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <string>
+#include "impl/context/context_types.hpp"
+#include <tt-metalium/experimental/context/metal_env.hpp>
 
 struct metal_SocDescriptor;
 
 namespace tt::tt_metal {
 class WatcherServer {
 public:
-    WatcherServer();
+    WatcherServer(MetalEnv& env);
     ~WatcherServer();
 
     void init_devices();    // Always runs, puts watcher mailboxes in a default state

@@ -897,7 +897,7 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
 
         auto get_addr_args_str = [](std::stringstream& ss, CclCommandAddrArgs const& args) {
             std::visit(
-                tt::stl::overloaded{
+                ttsl::overloaded{
                     [&ss](CclCommandAddrRelativeAddress const& a) {
                         ss << fmt::format("(relative_address:{})", a.relative_address);
                     },
@@ -915,7 +915,7 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
         };
         auto get_cmd_args_str = [](std::stringstream& ss, CclCommandArgs const& args) {
             std::visit(
-                tt::stl::overloaded{
+                ttsl::overloaded{
                     [&ss](CclCommandStreamTensorSlice const& a) {
                         ss << fmt::format(
                             "(shape: (w:{},z:{},y:{},x:{}), slice_shape: (w:{},z:{},y:{},x:{}), slice_offset: "
@@ -957,7 +957,7 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
 
         auto get_core_desc_args_str = [](std::stringstream& ss, CclCommandCoreDescriptorArgs const& args) {
             std::visit(
-                tt::stl::overloaded{
+                ttsl::overloaded{
                     [&ss](CclCommandCoreDescriptorTypeAddrgen const&  /*a*/) { ss << fmt::format("(addrgen)"); },
                     [&ss](CclCommandCoreDescriptorTypeLocal const&  /*a*/) { ss << fmt::format("(local_core)"); },
                     [&ss](CclCommandCoreDescriptorTypeNocXY const& a) { ss << fmt::format("(x:{}, y:{})", a.x, a.y); },
@@ -976,7 +976,7 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
 
         auto get_fabric_transfer_args_str = [](std::stringstream& ss, CclCommandDestArgs const& args) {
             std::visit(
-                tt::stl::overloaded{
+                ttsl::overloaded{
                     [&ss](UnicastCommandDestArgs const& a) {
                         ss << fmt::format(
                             "(distance_in_hops:{}, is_forward_direction:{})",

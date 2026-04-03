@@ -140,7 +140,7 @@ void kernel_main() {
     constexpr uint32_t cb_l1_array = get_compile_time_arg_val(26);
     constexpr bool split_reader_enabled = get_compile_time_arg_val(27);
 
-    constexpr bool split_reader_cb_shared = get_compile_time_arg_val(32) == 1;
+    constexpr bool split_reader_cb_shared = get_compile_time_arg_val(33) == 1;
     volatile tt_l1_ptr uint32_t* act_split_reader_reserve_done_semaphore_addr_ptr = nullptr;
     volatile tt_l1_ptr uint32_t* act_split_reader_write_done_semaphore_addr_ptr = nullptr;
     if constexpr (split_reader_cb_shared) {  // When the split reader CB is shared, both readers write to the same
@@ -148,8 +148,8 @@ void kernel_main() {
                                              // buffer.
         // Synchronization is required: the main reader signals when CB space is reserved,
         // and the second reader signals when it has finished writing its portion.
-        const uint32_t act_split_reader_reserve_done_semaphore_addr = get_semaphore(get_compile_time_arg_val(33));
-        const uint32_t act_split_reader_write_done_semaphore_addr = get_semaphore(get_compile_time_arg_val(34));
+        const uint32_t act_split_reader_reserve_done_semaphore_addr = get_semaphore(get_compile_time_arg_val(34));
+        const uint32_t act_split_reader_write_done_semaphore_addr = get_semaphore(get_compile_time_arg_val(35));
 
         act_split_reader_reserve_done_semaphore_addr_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_reserve_done_semaphore_addr);

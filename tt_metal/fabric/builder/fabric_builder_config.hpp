@@ -41,7 +41,7 @@ struct FabricEriscDatamoverOptions {
 
 namespace builder_config {
 // Number of Virtual Channels supported (VC0 and VC1)
-static constexpr std::size_t MAX_NUM_VCS = 2;
+static constexpr std::size_t MAX_NUM_VCS = 3;
 
 // linear/mesh/ring/torus: for fabric with tensix extension, only one sender channel will be present on fabric router
 static constexpr std::size_t num_sender_channels_with_tensix_config = 1;
@@ -56,19 +56,46 @@ static constexpr std::size_t num_sender_channels_2d_mesh = 4;
 // VC1: 4 sender channels (Z→mesh, one per direction: 0=E, 1=W, 2=N, 3=S) + 0 receiver (skipped)
 static constexpr std::size_t num_sender_channels_z_router_vc0 = 5;
 static constexpr std::size_t num_sender_channels_z_router_vc1 = 4;
-static constexpr std::size_t num_sender_channels_z_router = num_sender_channels_z_router_vc0 + num_sender_channels_z_router_vc1;
+// VC2: 1 sender channel (worker-type, neighbour exchange) + 1 receiver (non-Z only)
+static constexpr std::size_t num_sender_channels_vc2 = 1;
+static constexpr std::size_t num_receiver_channels_vc2 = 1;
+static constexpr std::size_t num_sender_channels_z_router_vc2 = 1;
+// Aggregate without VC2 — VC2 channels are added dynamically by channel mapping when requires_vc2 is true
+static constexpr std::size_t num_sender_channels_z_router =
+    num_sender_channels_z_router_vc0 + num_sender_channels_z_router_vc1;
+// Max including VC2 — used only for array sizing
+static constexpr std::size_t num_sender_channels_z_router_with_vc2 =
+    num_sender_channels_z_router + num_sender_channels_z_router_vc2;
 static constexpr std::size_t num_receiver_channels_z_router = 2;  // 1 for VC0, 1 for VC1
 
 static constexpr std::size_t num_sender_channels_1d = 2;
 // VC0: Worker + 3 of [N/E/S/W] = 4 channels
 // VC1: Up to 3 of [N/E/S/W] for inter-mesh = 3 channels, 1 for Z→mesh
-// Total 2D: 4 + 3 +1 = 8 channels
+// Total 2D without VC2: 4 + 3 + 1 = 8 channels (VC2 added dynamically)
 static constexpr std::size_t num_sender_channels_2d = 8;
-static constexpr std::size_t num_max_sender_channels =
+// Max including VC2 — used only for array sizing
+static constexpr std::size_t num_sender_channels_2d_with_vc2 = num_sender_channels_2d + num_sender_channels_vc2;
+// Without VC2 — used for firmware CT args and L1 layout when VC2 is disabled
+static constexpr std::size_t num_max_sender_channels_without_vc2 =
     std::max({num_sender_channels_1d, num_sender_channels_2d, num_sender_channels_z_router});
+// = max(2, 8, 9) = 9
+// Absolute maximum — used for host-side array sizing (always big enough for any config)
+static constexpr std::size_t num_max_sender_channels =
+    std::max({num_sender_channels_1d, num_sender_channels_2d_with_vc2, num_sender_channels_z_router_with_vc2});
+// = max(2, 9, 10) = 10
 static constexpr std::size_t num_receiver_channels_1d = 1;
-static constexpr std::size_t num_receiver_channels_2d = 2;
-static constexpr std::size_t num_max_receiver_channels = std::max({num_receiver_channels_1d, num_receiver_channels_2d, num_receiver_channels_z_router});
+// Without VC2 — VC2 receiver added dynamically
+static constexpr std::size_t num_receiver_channels_2d = 2;  // VC0(1) + VC1(1)
+// Max including VC2 — used only for array sizing
+static constexpr std::size_t num_receiver_channels_2d_with_vc2 = num_receiver_channels_2d + num_receiver_channels_vc2;
+// Without VC2 — used for firmware CT args and L1 layout when VC2 is disabled
+static constexpr std::size_t num_max_receiver_channels_without_vc2 =
+    std::max({num_receiver_channels_1d, num_receiver_channels_2d, num_receiver_channels_z_router});
+// = max(1, 2, 2) = 2
+// Absolute maximum — used for host-side array sizing (always big enough for any config)
+static constexpr std::size_t num_max_receiver_channels =
+    std::max({num_receiver_channels_1d, num_receiver_channels_2d_with_vc2, num_receiver_channels_z_router});
+// = max(1, 3, 2) = 3
 
 static constexpr std::size_t num_downstream_edms_vc0 = 1;
 static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;

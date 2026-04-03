@@ -139,10 +139,11 @@ GridSampleNearestProgramFactory::cached_program_t GridSampleNearestProgramFactor
         0U,                                          // ct_arg[12]: reader_id (will be set per core)
         grid_nsticks_per_core,                       // ct_arg[13]: grid_nsticks_per_core
         is_sharded ? 1U : 0U,                        // ct_arg[14]: is_sharded
-        fill_cb_index                                // ct_arg[15]: fill_cb_index
+        fill_cb_index,                               // ct_arg[15]: fill_cb_index
+        input_shape[0]                               // ct_arg[16]: batch_size
     };
 
-    // Add tensor accessor args for input tensor (16 compile time args offset)
+    // Add tensor accessor args for input tensor (17 compile time args offset)
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(writer_compile_time_args);
     if (!is_sharded) {
         tt::tt_metal::TensorAccessorArgs(*grid_tensor.buffer()).append_to(writer_compile_time_args);

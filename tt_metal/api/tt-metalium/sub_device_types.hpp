@@ -10,7 +10,7 @@
 
 namespace tt::tt_metal {
 
-using SubDeviceId = tt::stl::StrongType<uint8_t, struct SubDeviceIdTag>;
-using SubDeviceManagerId = tt::stl::StrongType<uint64_t, struct SubDeviceManagerIdTag>;
+using SubDeviceId = ttsl::StrongType<uint8_t, struct SubDeviceIdTag>;
+using SubDeviceManagerId = ttsl::StrongType<uint64_t, struct SubDeviceManagerIdTag>;
 
 }  // namespace tt::tt_metal

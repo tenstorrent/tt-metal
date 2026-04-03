@@ -29,7 +29,8 @@ void kernel_main() {
 
     experimental::Noc noc(noc_index);
 
-    const auto shard_size_bytes = tensor_accessor_src.page_size * tensor_accessor_src.dspec().shard_volume();
+    const auto shard_size_bytes =
+        tensor_accessor_src.get_aligned_page_size() * tensor_accessor_src.dspec().shard_volume();
     for (uint32_t i = 0; i < num_shards; ++i) {
         uint32_t shard_id = first_shard_id + i * num_cores;
         // For the purpose of testing, every second shard is read, and every other is written.

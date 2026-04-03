@@ -24,6 +24,7 @@ class TtUNet2DConditionModel(LightweightModule):
         module_path,
         model_config,
         debug_mode=False,
+        lora_weights_manager=None,
     ):
         super().__init__()
 
@@ -152,6 +153,7 @@ class TtUNet2DConditionModel(LightweightModule):
                     640,
                     True,
                     debug_mode=debug_mode,
+                    lora_weights_manager=lora_weights_manager,
                 )
             )
             self.down_blocks.append(
@@ -165,6 +167,7 @@ class TtUNet2DConditionModel(LightweightModule):
                     1280,
                     False,
                     debug_mode=debug_mode,
+                    lora_weights_manager=lora_weights_manager,
                 )
             )
 
@@ -177,6 +180,7 @@ class TtUNet2DConditionModel(LightweightModule):
                 20,
                 1280,
                 debug_mode=debug_mode,
+                lora_weights_manager=lora_weights_manager,
             )
 
             self.up_blocks.append(
@@ -190,6 +194,7 @@ class TtUNet2DConditionModel(LightweightModule):
                     1280,
                     True,
                     debug_mode=debug_mode,
+                    lora_weights_manager=lora_weights_manager,
                 )
             )
             self.up_blocks.append(
@@ -203,6 +208,7 @@ class TtUNet2DConditionModel(LightweightModule):
                     640,
                     True,
                     debug_mode=debug_mode,
+                    lora_weights_manager=lora_weights_manager,
                 )
             )
             self.up_blocks.append(TtUpBlock2D(device, state_dict, "up_blocks.2", model_config, debug_mode=debug_mode))

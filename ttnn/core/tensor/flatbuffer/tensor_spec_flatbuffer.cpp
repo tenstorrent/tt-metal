@@ -45,6 +45,7 @@ tt::tt_metal::TensorMemoryLayout from_flatbuffer(flatbuffer::TensorMemoryLayout 
         case flatbuffer::TensorMemoryLayout::HeightSharded: return tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED;
         case flatbuffer::TensorMemoryLayout::WidthSharded: return tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED;
         case flatbuffer::TensorMemoryLayout::BlockSharded: return tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED;
+        case flatbuffer::TensorMemoryLayout::NdSharded: return tt::tt_metal::TensorMemoryLayout::ND_SHARDED;
     }
     TT_THROW("Unsupported TensorMemoryLayout from flatbuffer.");
 }
@@ -70,8 +71,9 @@ flatbuffer::TensorMemoryLayout to_flatbuffer(tt::tt_metal::TensorMemoryLayout la
         case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED: return flatbuffer::TensorMemoryLayout::HeightSharded;
         case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED: return flatbuffer::TensorMemoryLayout::WidthSharded;
         case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED: return flatbuffer::TensorMemoryLayout::BlockSharded;
+        case tt::tt_metal::TensorMemoryLayout::ND_SHARDED: return flatbuffer::TensorMemoryLayout::NdSharded;
+        default: TT_THROW("Unsupported TensorMemoryLayout to flatbuffer.");
     }
-    TT_THROW("Unsupported TensorMemoryLayout to flatbuffer.");
 }
 
 flatbuffer::BufferType to_flatbuffer(tt::tt_metal::BufferType type) {

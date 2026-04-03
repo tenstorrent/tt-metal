@@ -2,14 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params
 from models.demos.stable_diffusion_xl_base.vae.tt.tt_midblock2d import TtUNetMidBlock2D
 from models.demos.stable_diffusion_xl_base.vae.tt.tt_upblock2d import TtUpDecoderBlock2D
-from models.demos.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_GN_shape
+from models.demos.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_conv_slice_config, get_DRAM_GN_shape
 
 
 class TtDecoder(LightweightModule):
@@ -102,7 +105,7 @@ class TtDecoder(LightweightModule):
             conv_out_bias,
             self.conv_out_config.weights_dtype,
         )
-        self.conv_out_slice_config = None  # auto slicing
+        self.conv_out_slice_config = get_DRAM_conv_slice_config("decoder.conv_out")
         self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def forward(self, sample, input_shape):
@@ -162,6 +165,8 @@ class TtDecoder(LightweightModule):
             )
 
         hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
+        # NOTE: On Blackhole, using welford causes PCC drop in unit tests
+        use_welford_decoder = True
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
@@ -171,8 +176,8 @@ class TtDecoder(LightweightModule):
             bias=self.beta_t,
             epsilon=self.norm_eps,
             memory_config=hidden_states.memory_config(),
-            use_welford=True,
-            reciprocals=reciprocals_tensor,
+            use_welford=use_welford_decoder,
+            reciprocals=reciprocals_tensor if use_welford_decoder else None,
             **self.groupnorm_config,
         )
 
@@ -204,12 +209,26 @@ class TtDecoder(LightweightModule):
 
         # Move output to [1, 1, C, N*H*W]
         compute_grid_size = self.device.compute_with_storage_grid_size()
-        height_sharded_mem_config = ttnn.create_sharded_memory_config(
-            shape=hidden_states.padded_shape,
-            core_grid=ttnn.CoreGrid(y=compute_grid_size.y, x=compute_grid_size.x),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        )
+        if is_blackhole():
+            total_num_cores = compute_grid_size.x * compute_grid_size.y
+            _, _, height, width = hidden_states.padded_shape
+            height_padded = math.ceil(height / (total_num_cores * 32)) * (total_num_cores * 32)
+            shard_height = height_padded // total_num_cores
+
+            height_sharded_mem_config = ttnn.create_sharded_memory_config(
+                shape=[shard_height, width],
+                core_grid=ttnn.CoreGrid(y=compute_grid_size.y, x=compute_grid_size.x),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+        else:
+            height_sharded_mem_config = ttnn.create_sharded_memory_config(
+                shape=hidden_states.padded_shape,
+                core_grid=ttnn.CoreGrid(y=compute_grid_size.y, x=compute_grid_size.x),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            )
 
         hidden_states = ttnn.to_memory_config(hidden_states, height_sharded_mem_config)
         hidden_states = ttnn.experimental.convert_to_chw(hidden_states, dtype=ttnn.bfloat16)

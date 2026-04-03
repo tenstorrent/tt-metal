@@ -49,7 +49,7 @@ jobs:
           force-fresh: ${{ github.event.inputs.force-fresh || false }}
           workflow_ids: |
             [
-              ".github/workflows/all-post-commit-workflows.yaml",
+              ".github/workflows/sanity-tests.yaml",
               ".github/workflows/blackhole-post-commit.yaml",
               ".github/workflows/blackhole-e2e-tests.yaml",
               ".github/workflows/blackhole-demo-tests.yaml",
@@ -63,6 +63,7 @@ jobs:
               ".github/workflows/galaxy-stress-tests.yaml",
               ".github/workflows/galaxy-e2e-tests.yaml",
               ".github/workflows/galaxy-quick.yaml",
+              ".github/workflows/galaxy-health.yaml",
               ".github/workflows/t3000-perf-tests.yaml",
               ".github/workflows/t3000-e2e-tests.yaml",
               ".github/workflows/t3000-integration-tests.yaml",
@@ -79,7 +80,7 @@ jobs:
               ".github/workflows/ttnn-run-sweeps.yaml",
               ".github/workflows/vllm-nightly-tests.yaml",
               ".github/workflows/metal-run-microbenchmarks.yaml",
-              ".github/workflows/apc-nightly-debug.yaml",
+              ".github/workflows/sanity-tests-debug.yaml",
               ".github/workflows/merge-gate.yaml",
               ".github/workflows/pr-gate.yaml"
             ]

@@ -30,13 +30,10 @@ public:
     ~RiscFirmwareInitializer() override;
 
     // ControlPlane may change from init to teardown. use a getter function to always get the latest ControlPlane.
-    // DispatchIgnoreCores is used to skip cores to put into reset during teardown.
-    using GetDispatchIgnoreCoresFn = std::function<std::unordered_set<CoreCoord>(ChipId)>;
     RiscFirmwareInitializer(
         std::shared_ptr<const ContextDescriptor> descriptor,
         const GetControlPlaneFn& get_control_plane,
-        dispatch_core_manager& dispatch_core_manager,
-        std::optional<GetDispatchIgnoreCoresFn> get_dispatch_ignore_cores = std::nullopt);
+        dispatch_core_manager& dispatch_core_manager);
 
     void init(const std::vector<Device*>& devices, const std::unordered_set<InitializerKey>& init_done) override;
     void configure() override;
@@ -53,9 +50,11 @@ private:
     // Take the cores out of reset state. This should be called after setting the correct program counter for execution.
     void reset_cores(tt::ChipId device_id);
 
+    void terminate_active_ethernet_cores_on_all_chips();
     void assert_active_ethernet_cores_to_reset(tt::ChipId device_id);
-    void assert_tensix_workers_impl(tt::ChipId device_id, const std::unordered_set<CoreCoord>* ignore_virtual_cores);
+    void assert_tensix_workers_impl(tt::ChipId device_id);
     void assert_inactive_ethernet_cores(tt::ChipId device_id);
+    void assert_dram_cores(tt::ChipId device_id);
 
     CoreCoord virtual_noc0_coordinate(tt::ChipId device_id, uint8_t noc_index, CoreCoord coord);
     void generate_device_bank_to_noc_tables(tt::ChipId device_id);
@@ -91,12 +90,11 @@ private:
     bool erisc_app_still_running(tt::ChipId device_id, CoreCoord virtual_core);
     void erisc_send_exit_signal(tt::ChipId device_id, CoreCoord virtual_core, bool is_idle_eth);
 
-    void assert_cores(tt::ChipId device_id, std::unordered_set<CoreCoord>& ignore_virtual_cores);
+    void assert_cores(tt::ChipId device_id);
     void teardown_simulator_ethernet_cores();
 
     GetControlPlaneFn get_control_plane_;
     dispatch_core_manager& dispatch_core_manager_;
-    std::optional<GetDispatchIgnoreCoresFn> get_dispatch_ignore_cores_;
     uint8_t num_hw_cqs_;
     size_t worker_l1_unreserved_start_;
 

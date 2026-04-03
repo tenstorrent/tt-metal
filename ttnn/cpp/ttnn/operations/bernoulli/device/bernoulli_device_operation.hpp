@@ -4,8 +4,10 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/types.hpp"
+#include <tt_stl/reflection.hpp>  // For ttsl::hash::hash_t
 
 namespace ttnn::operations::bernoulli {
 
@@ -53,7 +55,7 @@ struct BernoulliDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::bernoulli

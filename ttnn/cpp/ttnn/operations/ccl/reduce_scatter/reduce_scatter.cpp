@@ -14,9 +14,10 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
-namespace ttnn::operations::ccl {
+namespace ttnn {
+using namespace ttnn::operations::ccl;
 
-ttnn::Tensor ExecuteReduceScatter::invoke(
+ttnn::Tensor reduce_scatter(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
     std::optional<uint32_t> cluster_axis,
@@ -96,4 +97,4 @@ ttnn::Tensor ExecuteReduceScatter::invoke(
         .at(1);  // first is the intermediate tensor
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn

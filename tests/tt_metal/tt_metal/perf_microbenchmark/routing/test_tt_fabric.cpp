@@ -83,6 +83,8 @@ int main(int argc, char** argv) {
     TestContext test_context;
     test_context.init(fixture, allocation_policies, use_dynamic_policies);
 
+    test_context.set_show_workers(cmdline_parser.show_workers());
+
     // Configure progress monitoring from cmdline flags
     if (cmdline_parser.show_progress()) {
         ProgressMonitorConfig progress_config;
@@ -172,6 +174,10 @@ int main(int argc, char** argv) {
         const auto& fabric_tensix_config = test_config.fabric_setup.fabric_tensix_config.value();
         if (test_config.performance_test_mode != PerformanceTestMode::NONE) {
             tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_bw_telemetry(true);
+        }
+
+        if (test_config.fabric_setup.use_vc2) {
+            tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_vc2(true);
         }
 
         log_info(

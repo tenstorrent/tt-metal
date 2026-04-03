@@ -125,10 +125,7 @@ def test_vision_attention_inference(
 
     tt_attention_input = pt_attention_input.clone()
     tt_attention_input = torch.nn.functional.pad(tt_attention_input, (0, 0, 0, seq_len - ref_seq_len))
-    attention_input = model_args.prepare_residual_tensor_prefill(
-        tt_attention_input,
-        force_replicated=False if model_args.is_galaxy else True,
-    )
+    attention_input = model_args.prepare_residual_tensor_prefill(tt_attention_input)
 
     tt_out = tt_model(
         attention_input,

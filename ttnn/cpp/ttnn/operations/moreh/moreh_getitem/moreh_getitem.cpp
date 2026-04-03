@@ -4,13 +4,13 @@
 
 #include "moreh_getitem.hpp"
 
-namespace ttnn::operations::moreh::moreh_getitem {
-Tensor MorehGetItem::invoke(
+namespace ttnn {
+
+Tensor moreh_getitem(
     const std::optional<const Tensor>& input,
     const std::vector<Tensor>& index_tensors,
     const ttnn::SmallVector<uint32_t>& index_dims,
     const std::optional<Tensor>& output,
-    // const CoreRange core_range,
     const std::optional<MemoryConfig>& memory_config) {
     if (!input.has_value()) {
         // FIXME: This is a hack to work around limitations in the decorator
@@ -21,4 +21,5 @@ Tensor MorehGetItem::invoke(
     }
     return ttnn::prim::moreh_getitem(input.value(), index_tensors, index_dims, output, memory_config);
 }
-}  // namespace ttnn::operations::moreh::moreh_getitem
+
+}  // namespace ttnn

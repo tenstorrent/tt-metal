@@ -11,6 +11,7 @@
 #include "llrt/tt_cluster.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/device/mock_device_util.hpp"
 
 namespace tt::tt_metal::experimental {
 
@@ -64,27 +65,15 @@ std::optional<std::string> get_mock_cluster_desc() {
         return std::nullopt;
     }
 
-    static const std::unordered_map<tt::ARCH, std::unordered_map<uint32_t, std::string>> cluster_configs = {
-        {tt::ARCH::WORMHOLE_B0,
-         {{1, "wormhole_N150.yaml"},
-          {2, "wormhole_N300.yaml"},
-          {4, "2x2_n300_cluster_desc.yaml"},
-          {8, "t3k_cluster_desc.yaml"}}},
-        {tt::ARCH::BLACKHOLE, {{1, "blackhole_P150.yaml"}, {2, "blackhole_P300_both_mmio.yaml"}}}};
-
-    const auto& config = *g_registered_mock_config;
-    auto arch_it = cluster_configs.find(config.arch);
-    if (arch_it != cluster_configs.end()) {
-        auto chip_it = arch_it->second.find(config.num_chips);
-        if (chip_it != arch_it->second.end()) {
-            return std::string(chip_it->second);
-        }
+    auto name = get_mock_cluster_desc_name(g_registered_mock_config->arch, g_registered_mock_config->num_chips);
+    if (!name.has_value()) {
+        TT_THROW(
+            "Unsupported mock device configuration: arch={}, num_chips={}",
+            static_cast<int>(g_registered_mock_config->arch),
+            g_registered_mock_config->num_chips);
     }
 
-    TT_THROW(
-        "Unsupported mock device configuration: arch={}, num_chips={}",
-        static_cast<int>(config.arch),
-        config.num_chips);
+    return name;
 }
 
 }  // namespace tt::tt_metal::experimental

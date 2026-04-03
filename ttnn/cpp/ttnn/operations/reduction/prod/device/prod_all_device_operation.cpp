@@ -5,8 +5,6 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include <tt-metalium/constants.hpp>
-
 namespace ttnn::prim {
 void ProdAllDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
@@ -33,7 +31,7 @@ ProdAllDeviceOperation::spec_return_value_t ProdAllDeviceOperation::compute_outp
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     return TensorSpec(
-        ttnn::Shape({1, 1, 1, tt::constants::TILE_HW}),
+        ttnn::Shape({1, 1, 1, input.tensor_spec().tile().get_tile_hw()}),
         tt::tt_metal::TensorLayout(
             input.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), args.output_mem_config));
 }

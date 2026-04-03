@@ -10,6 +10,8 @@ from models.common.tensor_utils import (
     pad_dim_to_size,
     pad_to_shape,
     parse_shard_dims_from_mesh_mapper_config,
+    program_config_to_dict,
+    program_config_to_str,
     zeros_like_kv_cache,
     zeros_like_paged_cache,
 )
@@ -243,6 +245,57 @@ def test_zeros_like_paged_cache():
     assert torch.all(result == 0)
 
 
+def test_program_config_to_dict_with_to_json():
+    """Test program_config_to_dict for a config that has to_json (matmul configs)."""
+    import json
+
+    cfg = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=4, per_core_M=1, per_core_N=2)
+    d = program_config_to_dict(cfg)
+
+    assert isinstance(d, dict)
+    assert d["type"] == "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+    assert d["in0_block_w"] == 4
+    assert d["per_core_M"] == 1
+    assert d["per_core_N"] == 2
+    assert "fused_activation" in d
+
+    json_str = json.dumps(d, sort_keys=True)
+    roundtrip = json.loads(json_str)
+    assert roundtrip == d
+
+
+def test_program_config_to_dict_without_to_json():
+    """Test program_config_to_dict for a config that lacks to_json (SDPAProgramConfig)."""
+    cfg = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+        q_chunk_size=256,
+        k_chunk_size=256,
+    )
+    d = program_config_to_dict(cfg)
+
+    assert isinstance(d, dict)
+    assert d["type"] == "SDPAProgramConfig"
+    assert "repr" in d
+    assert "SDPAProgramConfig" in d["repr"]
+    assert "q_chunk_size=256" in d["repr"]
+    assert "k_chunk_size=256" in d["repr"]
+
+
+def test_program_config_to_str():
+    """Test program_config_to_str returns valid sorted JSON."""
+    import json
+
+    cfg = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=2, per_core_M=3, per_core_N=4)
+    result = program_config_to_str(cfg)
+
+    parsed = json.loads(result)
+    assert parsed["in0_block_w"] == 2
+    assert parsed["per_core_M"] == 3
+    assert parsed["per_core_N"] == 4
+
+    assert result == json.dumps(parsed, sort_keys=True)
+
+
 if __name__ == "__main__":
     test_pad_dim_to_size()
     print("  ✓ test_pad_dim_to_size")
@@ -278,5 +331,14 @@ if __name__ == "__main__":
 
     test_zeros_like_paged_cache()
     print("  ✓ test_zeros_like_paged_cache")
+
+    test_program_config_to_dict_with_to_json()
+    print("  ✓ test_program_config_to_dict_with_to_json")
+
+    test_program_config_to_dict_without_to_json()
+    print("  ✓ test_program_config_to_dict_without_to_json")
+
+    test_program_config_to_str()
+    print("  ✓ test_program_config_to_str")
 
     print("\nAll tensor_utils tests passed! ✓")

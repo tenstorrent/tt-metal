@@ -46,9 +46,10 @@ public:
 
     uint32_t get_normalized_index(std::int64_t index) const;
 
-    // Needed for reflect / fmt
-    static constexpr auto attribute_names = std::forward_as_tuple("value");
-    auto attribute_values() const { return std::forward_as_tuple(this->value_); }
+    // Needed for reflect / fmt.
+    // Uses view() to hash/format the original (unpadded) dimensions.
+    static constexpr auto attribute_names = std::forward_as_tuple("shape");
+    auto attribute_values() const { return std::make_tuple(this->view()); }
 
     std::array<uint32_t, 4> to_array_4D() const;
     Shape to_rank(size_t new_rank) const;
@@ -58,7 +59,7 @@ public:
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Shape& shape);
 
-tt::stl::SmallVector<size_t> compute_strides(const tt::tt_metal::Shape& shape);
+ttsl::SmallVector<size_t> compute_strides(const tt::tt_metal::Shape& shape);
 
 /**
  * @brief Computes a flat (linear) index from multi-dimensional indices and strides.
@@ -74,7 +75,7 @@ tt::stl::SmallVector<size_t> compute_strides(const tt::tt_metal::Shape& shape);
  *
  * @note The `indices` and `strides` spans must have the same length.
  */
-std::size_t compute_flat_indices(tt::stl::Span<const uint32_t> indices, tt::stl::Span<const size_t> strides);
+std::size_t compute_flat_indices(ttsl::Span<const uint32_t> indices, ttsl::Span<const size_t> strides);
 
 }  // namespace tt::tt_metal
 

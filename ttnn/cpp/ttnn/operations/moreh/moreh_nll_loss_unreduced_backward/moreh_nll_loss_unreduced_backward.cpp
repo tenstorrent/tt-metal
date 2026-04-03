@@ -7,9 +7,9 @@
 
 #include "device/moreh_nll_loss_unreduced_backward_device_operation.hpp"
 
-namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward {
+namespace ttnn {
 
-Tensor MorehNllLossUnreducedBackward::invoke(
+Tensor moreh_nll_loss_unreduced_backward(
     const Tensor& target_tensor,
     const Tensor& output_grad_tensor,
     const std::optional<Tensor>& weight_tensor,
@@ -27,4 +27,4 @@ Tensor MorehNllLossUnreducedBackward::invoke(
         compute_kernel_config);
 }
 
-}  // namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward
+}  // namespace ttnn

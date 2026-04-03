@@ -164,7 +164,7 @@ FORCE_INLINE void init_persistent_mcast_sender(uint64_t mcast_flag_noc_addr, uin
 }
 
 template <uint32_t mcast_num_cores, bool loopback, bool is_part_of_receiver_grid>
-FORCE_INLINE void teardown_persistent_mcast_sender() {
+FORCE_INLINE void teardown_persistent_mcast_sender(uint32_t data_sender_semaphore_addr) {
     mcast_send_set_state<
         mcast_num_cores,
         loopback,
@@ -181,11 +181,11 @@ FORCE_INLINE void teardown_persistent_mcast_sender() {
         is_part_of_receiver_grid,
         false,
         false,
-        false,
-        false,
-        write_reg_cmd_buf>(0, 0, 0);
+        true,
+        mcast_is_shared_write_cmd_buf,
+        write_reg_cmd_buf>(data_sender_semaphore_addr, data_sender_semaphore_addr, 4);
     noc_async_write_barrier();
-    riscv_wait(1000);  // This is just to guarantee safety due to posted mcast hw bug
+    riscv_wait(10000);  // This is just to guarantee safety due to posted mcast hw bug
 }
 
 #endif  // defined(COMPILE_FOR_BRISC)
@@ -276,7 +276,7 @@ struct Mcast {
     //   Op op;
     //   op.init(args);      // Initialize persistent mcast sender (call once)
     //   op(args);           // Send data (can be called multiple times)
-    //   op.teardown();      // Teardown persistent mcast sender (call once)
+    //   op.teardown(args);  // Teardown persistent mcast sender (call once)
     //
     // Or use the legacy all-in-one call:
     //   op.init_send_teardown(args);  // Does init + send + teardown
@@ -311,6 +311,7 @@ struct Mcast {
                         CTArgsT::is_part_of_receiver_grid,
                         linked,
                         posted>(mcast_flag_noc_addr, args.data_sender_semaphore_addr);
+                    noc_async_posted_writes_flushed();
                 }
                 noc_semaphore_set(data_sender_semaphore_addr_ptr, VALID);
             }
@@ -329,14 +330,14 @@ struct Mcast {
         // Must be called after all operator() calls on sender core
         // No-op for NCRISC/TRISC
         // ====================================================================
-        void teardown() {
+        void teardown([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC)
             if constexpr (IsSenderCore) {
                 // Teardown persistent mcast sender
                 teardown_persistent_mcast_sender<
                     CTArgsT::mcast_num_cores,
                     CTArgsT::loopback,
-                    CTArgsT::is_part_of_receiver_grid>();
+                    CTArgsT::is_part_of_receiver_grid>(args.data_sender_semaphore_addr);
             }
 #endif
         }
@@ -367,6 +368,8 @@ struct Mcast {
                     true,
                     mcast_is_shared_write_cmd_buf,
                     write_reg_cmd_buf>(args.data_sender_semaphore_addr, args.data_receiver_semaphore_addr, 4);
+
+                noc_async_posted_writes_flushed();
 
                 // Pop the source CB after sending
                 if constexpr (pop_src) {

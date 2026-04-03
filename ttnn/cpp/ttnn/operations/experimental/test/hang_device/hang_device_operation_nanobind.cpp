@@ -6,7 +6,7 @@
 
 #include <nanobind/nanobind.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "hang_device_operation.hpp"
 
 namespace ttnn::operations::experimental::test {
@@ -19,16 +19,7 @@ void bind_test_hang_device_operation(nb::module_& mod) {
             Args:
                 * :attr:`input_tensor`: Input Tensor.
         )doc";
-    using OperationType = decltype(ttnn::hang_device_operation);
-    ttnn::bind_registered_operation(
-        mod,
-        ttnn::hang_device_operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self, const ttnn::Tensor& input_tensor) -> ttnn::Tensor {
-                return self(input_tensor);
-            },
-            nb::arg("input_tensor"),
-        });
+    ttnn::bind_function<"test_hang_device_operation">(
+        mod, doc, &ttnn::operations::experimental::test::test_hang_device_operation, nb::arg("input_tensor"));
 }
 }  // namespace ttnn::operations::experimental::test

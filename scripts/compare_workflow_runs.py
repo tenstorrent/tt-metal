@@ -21,7 +21,7 @@ Job categories:
     - PASSING: Passed on both branches
 
 Workflows checked (by category):
-    - core: all-post-commit-workflows
+    - core: sanity-tests
     - single-card: demo-tests, perf-models, perf-device-models
     - t3000: demo, e2e, fast, integration, perf, perplexity, profiler, unit tests
     - galaxy: apc-fast, deepseek, demo, e2e, frequent, model-perf, multi-user, profiler,
@@ -443,7 +443,7 @@ def main():
     # Default workflows to check - all board-level workflows with workflow_dispatch
     workflows = args.workflows or [
         # Core post-commit
-        "all-post-commit-workflows.yaml",
+        "sanity-tests.yaml",
         # Single-card
         "single-card-demo-tests.yaml",
         "perf-models.yaml",
@@ -479,7 +479,7 @@ def main():
     # Filter by category if specified
     if args.category != "all" and not args.workflows:
         category_filters = {
-            "core": ["all-post-commit"],
+            "core": ["sanity-tests"],
             "single-card": ["single-card", "perf-models", "perf-device-models"],
             "t3000": ["t3000-"],
             "galaxy": ["galaxy-", "tg-"],

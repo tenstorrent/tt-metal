@@ -59,6 +59,7 @@ from triage import (
     log_check_risc,
     triage_field,
     run_script,
+    ScriptPriority,
 )
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
@@ -67,10 +68,11 @@ from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "operation_runtime_map"],
+    priority=ScriptPriority.HIGH,
 )
 
 # Core filtering
-BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
+BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth", "dram"]
 
 # Display limits
 MAX_CORES_DISPLAYED = 5  # Maximum cores shown per operation
@@ -194,6 +196,9 @@ def _collect_dispatcher_data(
     Returns:
         DispatcherCoreData if relevant, None otherwise
     """
+    if not dispatcher_data.risc_enabled(risc_name):
+        return None
+
     try:
         dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
     except TimeoutDeviceRegisterError:

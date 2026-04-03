@@ -7,9 +7,9 @@
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/rotary_embedding_llama_fused_qk_device_operation.hpp"
 #include "ttnn/device.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::experimental {
 
-std::tuple<ttnn::Tensor, ttnn::Tensor> RotaryEmbeddingLlamaFusedQKOperation::invoke(
+std::tuple<ttnn::Tensor, ttnn::Tensor> rotary_embedding_llama_fused_qk(
     const Tensor& q_input_tensor,
     const Tensor& k_input_tensor,
     const Tensor& cos_cache,
@@ -37,4 +37,4 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> RotaryEmbeddingLlamaFusedQKOperation::inv
         row_major_QK);
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental

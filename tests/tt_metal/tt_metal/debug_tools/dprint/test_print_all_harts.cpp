@@ -37,8 +37,9 @@ const std::vector<std::string> golden_output = {
     R"(Test Debug Print: Data0
 Basic Types:
 101-1.618@0.122559
-e5551234569123456789
+1015551234569123456789
 -17-343-44444-5123456789
+10
 Pointer:
 123
 456
@@ -67,8 +68,9 @@ Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b)
     R"(Test Debug Print: Data1
 Basic Types:
 101-1.618@0.122559
-e5551234569123456789
+1015551234569123456789
 -17-343-44444-5123456789
+10
 Pointer:
 123
 456
@@ -97,8 +99,9 @@ Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b)
     R"(Test Debug Print: Unpack
 Basic Types:
 101-1.618@0.122559
-e5551234569123456789
+1015551234569123456789
 -17-343-44444-5123456789
+10
 Pointer:
 123
 456
@@ -127,8 +130,9 @@ Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b)
     R"(Test Debug Print: Math
 Basic Types:
 101-1.618@0.122559
-e5551234569123456789
+1015551234569123456789
 -17-343-44444-5123456789
+10
 Pointer:
 123
 456
@@ -150,8 +154,9 @@ Warning: MATH core does not support TileSlice printing, omitting print...
     R"(Test Debug Print: Pack
 Basic Types:
 101-1.618@0.122559
-e5551234569123456789
+1015551234569123456789
 -17-343-44444-5123456789
+10
 Pointer:
 123
 456

@@ -41,7 +41,6 @@ struct TraceDescriptor;
 class Program;
 class IDevice;
 class Trace;
-struct Event;
 class Buffer;
 class GlobalSemaphore;
 class CoreRange;
@@ -291,16 +290,6 @@ void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, co
 // clang-format on
 void UpdateDynamicCircularBufferAddressAndTotalSize(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size);
-
-[[deprecated(
-    "tt::tt_metal::CreateSemaphore(Program& program, const std::variant<CoreRange, CoreRangeSet>& core_spec, uint32_t "
-    "initial_value, CoreType core_type) is deprecated. Use tt::tt_metal::CreateSemaphore(Program& program, const "
-    "std::variant<CoreRange, CoreRangeSet>& core_spec, uint32_t initial_value) instead.")]]
-uint32_t CreateSemaphore(
-    Program& program,
-    const std::variant<CoreRange, CoreRangeSet>& core_spec,
-    uint32_t initial_value,
-    CoreType core_type);
 
 // clang-format off
 /**
@@ -623,18 +612,6 @@ void ReadMeshDeviceProfilerResults(
     distributed::MeshDevice& mesh_device,
     ProfilerReadState state = ProfilerReadState::NORMAL,
     const std::optional<ProfilerOptionalMetadata>& metadata = {});
-
-// clang-format off
-/**
- * Host will query an event for completion status on device.
- * Return value: bool.  True if event is completed, false otherwise.
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | event        | The event object that host will query for completion.                  | std::shared_ptr<Event>        |                                    | Yes      |
- */
-// clang-format on
-[[deprecated("Use distributed::EventQuery with distributed::MeshEvent instead.")]]
-bool EventQuery(const std::shared_ptr<Event>& event);
 
 // clang-format off
 /**

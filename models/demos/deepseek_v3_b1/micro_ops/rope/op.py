@@ -127,13 +127,11 @@ class RopeSingleCore:
 
         # CB indices (matching C++ implementation)
         input_cb = 0  # c_0
-        cos_cb = 1  # c_1
-        sin_cb = 2  # c_2
+        cos_sin_cb = 1  # c_1
         trans_mat_cb = 3  # c_3
         output_cb = 16  # c_16 (output operands start at 16)
         rotated_input_interm_cb = 24  # c_24
-        cos_interm_cb = 25  # c_25
-        sin_interm_cb = 26  # c_26
+        cos_sin_interm_cb = 25  # c_25
 
         # Create tile descriptor
         tile_descriptor = ttnn.TileDescriptor(tile)
@@ -145,30 +143,16 @@ class RopeSingleCore:
         # CB 0: Input (sharded tensor)
         input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(input_cb, input_tensor)
 
-        # CB 1: Cos (same tile format as input for broadcast compatibility)
-        cos_format = ttnn.CBFormatDescriptor(
-            buffer_index=cos_cb,
+        cos_sin_format = ttnn.CBFormatDescriptor(
+            buffer_index=cos_sin_cb,
             data_format=data_format,
             page_size=tile_size,
             tile=tile_descriptor,
         )
-        cos_cb_descriptor = ttnn.CBDescriptor(
-            total_size=head_dim_per_core_t * tile_size,
+        cos_sin_cb_descriptor = ttnn.CBDescriptor(
+            total_size=2 * head_dim_per_core_t * tile_size,
             core_ranges=core_grid,
-            format_descriptors=[cos_format],
-        )
-
-        # CB 2: Sin (same tile format as input for broadcast compatibility)
-        sin_format = ttnn.CBFormatDescriptor(
-            buffer_index=sin_cb,
-            data_format=data_format,
-            page_size=tile_size,
-            tile=tile_descriptor,
-        )
-        sin_cb_descriptor = ttnn.CBDescriptor(
-            total_size=head_dim_per_core_t * tile_size,
-            core_ranges=core_grid,
-            format_descriptors=[sin_format],
+            format_descriptors=[cos_sin_format],
         )
 
         # CB 3: Trans_mat (sharded tensor)
@@ -190,30 +174,16 @@ class RopeSingleCore:
             format_descriptors=[rotated_interm_format],
         )
 
-        # CB 25: Cos intermediate (not backed by tensor)
-        cos_interm_format = ttnn.CBFormatDescriptor(
-            buffer_index=cos_interm_cb,
+        cos_sin_interm_format = ttnn.CBFormatDescriptor(
+            buffer_index=cos_sin_interm_cb,
             data_format=data_format,
             page_size=tile_size,
             tile=tile_descriptor,
         )
-        cos_interm_cb_descriptor = ttnn.CBDescriptor(
-            total_size=num_interm_tiles * tile_size,
+        cos_sin_interm_cb_descriptor = ttnn.CBDescriptor(
+            total_size=2 * num_interm_tiles * tile_size,
             core_ranges=core_grid,
-            format_descriptors=[cos_interm_format],
-        )
-
-        # CB 26: Sin intermediate (not backed by tensor)
-        sin_interm_format = ttnn.CBFormatDescriptor(
-            buffer_index=sin_interm_cb,
-            data_format=data_format,
-            page_size=tile_size,
-            tile=tile_descriptor,
-        )
-        sin_interm_cb_descriptor = ttnn.CBDescriptor(
-            total_size=num_interm_tiles * tile_size,
-            core_ranges=core_grid,
-            format_descriptors=[sin_interm_format],
+            format_descriptors=[cos_sin_interm_format],
         )
 
         # ========================================================================
@@ -229,8 +199,7 @@ class RopeSingleCore:
             ("cos_tensor_address", cos_tensor.buffer_address()),
             ("sin_tensor_address", sin_tensor.buffer_address()),
             ("position_ids_tensor_address", position_ids_tensor.buffer_address()),
-            ("cos_cb", cos_cb),
-            ("sin_cb", sin_cb),
+            ("cos_sin_cb", cos_sin_cb),
             ("trans_mat_cb", trans_mat_cb),
             ("cos_sin_page_size", tile_size),
             ("Wt", head_dim_per_core_t),
@@ -248,12 +217,10 @@ class RopeSingleCore:
         # Named compile-time args for TRISC
         trisc_named_compile_time_args = [
             ("in_cb", input_cb),
-            ("cos_cb", cos_cb),
-            ("sin_cb", sin_cb),
+            ("cos_sin_cb", cos_sin_cb),
             ("trans_mat_cb", trans_mat_cb),
             ("rotated_in_interm_cb", rotated_input_interm_cb),
-            ("cos_interm_cb", cos_interm_cb),
-            ("sin_interm_cb", sin_interm_cb),
+            ("cos_sin_interm_cb", cos_sin_interm_cb),
             ("out_cb", output_cb),
             ("Wt", head_dim_per_core_t),
             ("Ht", 1),
@@ -296,13 +263,11 @@ class RopeSingleCore:
             kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[
                 input_cb_descriptor,
-                cos_cb_descriptor,
-                sin_cb_descriptor,
+                cos_sin_cb_descriptor,
                 trans_mat_cb_descriptor,
                 output_cb_descriptor,
                 rotated_interm_cb_descriptor,
-                cos_interm_cb_descriptor,
-                sin_interm_cb_descriptor,
+                cos_sin_interm_cb_descriptor,
             ],
         )
 

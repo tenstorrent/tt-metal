@@ -275,12 +275,18 @@ def _build_all_gather_embedding_inputs(
 
     input_seq_len = seq_len
 
-    torch_full_output = torch.randn(1, 1, input_seq_len, per_row_hidden, dtype=torch.bfloat16)
+    # Derive dtype and memory config from run_config, matching:
+    #   embeddings_tc = ttnn.typecast(embeddings, **cfg["typecast"])
+    ttnn_dtype = run_config["typecast"]["dtype"]
+    torch_dtype = torch.float32 if ttnn_dtype == ttnn.float32 else torch.bfloat16
+    input_memory_config = run_config["embedding"]["memory_config"]
+
+    torch_full_output = torch.randn(1, 1, input_seq_len, per_row_hidden, dtype=torch_dtype)
 
     # Reference output is the full gathered data
     ref_output = torch_full_output
 
-    torch_input_per_row = torch.zeros(num_rows, 1, input_seq_len, per_device_hidden, dtype=torch.bfloat16)
+    torch_input_per_row = torch.zeros(num_rows, 1, input_seq_len, per_device_hidden, dtype=torch_dtype)
     for r in range(num_rows):
         torch_input_per_row[r] = torch_full_output[:, :, :, r * per_device_hidden : (r + 1) * per_device_hidden]
 
@@ -289,8 +295,8 @@ def _build_all_gather_embedding_inputs(
         device=mesh_device,
         # Shard dim 0 across rows (4 rows), replicate across columns (8 cols)
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_device.shape),
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn_dtype,
+        memory_config=input_memory_config,
         layout=ttnn.TILE_LAYOUT,
     )
 
@@ -445,9 +451,8 @@ def test_ds_all_gather_embedding_device_perf(mode, seq_len):
     step_name = f"ds_all_gather_embedding_device_perf_{mode}_seq{seq_len}"
     test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/test_ds_all_gather_embedding.py"
     trace_filter = "trace" if mode == "decode" else "eager"
-    # Use substring matching in-k filter to select the right test variant
-    # This matches test IDs like: test_name[prefill-128-...-program_cache-eager]
-    command = f'pytest {test_path}::test_ds_all_gather_embedding -k "{mode}-{seq_len}"'
+    expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len}"
+    command = f'pytest {test_path}::test_ds_all_gather_embedding -k "{expr}"'
 
     perf_profiler.start("run")
     perf_profiler.start(step_name)

@@ -7,8 +7,9 @@
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/moreh/moreh_mean/device/moreh_mean_device_operation.hpp"
 
-namespace ttnn::operations::moreh::moreh_mean {
-Tensor MorehMean::invoke(
+namespace ttnn {
+
+Tensor moreh_mean(
     const Tensor& input,
     const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dim,
     const bool keepdim,
@@ -16,7 +17,7 @@ Tensor MorehMean::invoke(
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::SmallVector<int64_t> dims = get_dim(dim, input.logical_shape().rank());
+    ttnn::SmallVector<int64_t> dims = operations::get_dim(dim, input.logical_shape().rank());
     std::sort(dims.begin(), dims.end());
 
     auto temp_input = input;
@@ -30,4 +31,5 @@ Tensor MorehMean::invoke(
     return ttnn::prim::moreh_mean(
         temp_input, dims.front(), keepdim, divisor, output, memory_config, compute_kernel_config);
 }
-}  // namespace ttnn::operations::moreh::moreh_mean
+
+}  // namespace ttnn

@@ -9,6 +9,7 @@
 #include "experimental/llk_math_matmul_custom_api.h"
 #endif
 #ifdef TRISC_UNPACK
+#include "experimental/llk_unpack_AB_matmul_custom_api.h"
 #include "llk_unpack_AB_matmul_api.h"
 #endif
 #ifdef TRISC_PACK
@@ -87,19 +88,6 @@ ALWI void matmul_block_no_mop(
 
 // clang-format off
 /**
- * Reinitializes address modifiers for the no-MOP matmul operation without a full re-init.
- * Useful when resuming matmul after an interruption that may have modified address modifier registers.
- * Must be called from the math engine only (TRISC_MATH context).
- *
- * Return value: None
- */
-// clang-format on
-ALWI void mm_no_mop_configure_addrmod_reinit(const bool transpose = false) {
-    MATH((llk_math_matmul_configure_addrmod_reinit<MATH_FIDELITY, MM_THROTTLE>(transpose)));
-}
-
-// clang-format off
-/**
  * Lightweight no-MOP matmul reinit for steady-state loops where tile formats/dim assumptions
  * are unchanged. Reprograms unpack matmul setup and restores math addrmods without full init.
  *
@@ -117,17 +105,17 @@ ALWI void mm_no_mop_reinit_short(
     MATH((llk_math_matmul_reinit_no_mop<MATH_FIDELITY, MM_THROTTLE>(transpose)));
 }
 
-// clang-format off
-/**
- * Restores no-MOP matmul math-side state only (addrmods/counters), without unpack re-init
- * and without replay program reconfiguration. Use after ops that touch math addrmods while
- * matmul replay configuration remains valid.
- *
- * Return value: None
- */
-// clang-format on
-ALWI void mm_no_mop_reinit_addrmods_only(const bool transpose = false) {
-    MATH((llk_math_matmul_reinit_no_mop<MATH_FIDELITY, MM_THROTTLE>(transpose)));
+// Lightweight matmul reinit after sub_exp custom: only restores ADDR_MOD_5 (MATH)
+// and UNPACK config (haloize, x_end, kt_dim) without UNPACK MOP reprogramming.
+ALWI void mm_no_mop_reinit_after_sub(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    const bool transpose = false,
+    uint32_t ct_dim = 1,
+    uint32_t rt_dim = 1,
+    uint32_t kt_dim = 1) {
+    UNPACK((llk_unpack_AB_matmul_reinit_after_sub(in0_cb_id, in1_cb_id, transpose, kt_dim)));
+    MATH((llk_math_matmul_reinit_no_mop_after_sub<MATH_FIDELITY, MM_THROTTLE>()));
 }
 
 }  // namespace ckernel

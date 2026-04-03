@@ -5,11 +5,16 @@
 #include "node.hpp"
 #include "node_types.hpp"
 
+#include <umd/device/pcie/pci_device.hpp>
+#include <umd/device/tt_device/tt_device.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <enchantum/enchantum.hpp>
 #include <map>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace tt::scaleout_tools {
 
@@ -517,14 +522,37 @@ std::unique_ptr<NodeBase> create_node_instance(NodeType node_type) {
         case NodeType::P150_QB_AE_DEFAULT: return std::make_unique<P150QBAEDefaultNode>();
         case NodeType::P300_QB_GE: return std::make_unique<P300QBGENode>();
 
-        // Functionally alias BH_GALAXY to rev_AB to ensure back-compat for existing descriptors
         case NodeType::BH_GALAXY:
-        case NodeType::BH_GALAXY_REV_AB: return std::make_unique<BHGalaxyRevABNode>();
+            if (get_bh_glx_rev_from_system() == NodeType::BH_GALAXY_REV_C) {
+                return std::make_unique<BHGalaxyRevCNode>();
+            } else {
+                return std::make_unique<BHGalaxyRevABNode>();
+            }
+
         case NodeType::BH_GALAXY_X_TORUS:
-        case NodeType::BH_GALAXY_REV_AB_X_TORUS: return std::make_unique<BHGalaxyRevABXTorusNode>();
+            if (get_bh_glx_rev_from_system() == NodeType::BH_GALAXY_REV_C) {
+                return std::make_unique<BHGalaxyRevCXTorusNode>();
+            } else {
+                return std::make_unique<BHGalaxyRevABXTorusNode>();
+            }
+
         case NodeType::BH_GALAXY_Y_TORUS:
-        case NodeType::BH_GALAXY_REV_AB_Y_TORUS: return std::make_unique<BHGalaxyRevABYTorusNode>();
+            if (get_bh_glx_rev_from_system() == NodeType::BH_GALAXY_REV_C) {
+                return std::make_unique<BHGalaxyRevCYTorusNode>();
+            } else {
+                return std::make_unique<BHGalaxyRevABYTorusNode>();
+            }
+
         case NodeType::BH_GALAXY_XY_TORUS:
+            if (get_bh_glx_rev_from_system() == NodeType::BH_GALAXY_REV_C) {
+                return std::make_unique<BHGalaxyRevCXYTorusNode>();
+            } else {
+                return std::make_unique<BHGalaxyRevABXYTorusNode>();
+            }
+
+        case NodeType::BH_GALAXY_REV_AB: return std::make_unique<BHGalaxyRevABNode>();
+        case NodeType::BH_GALAXY_REV_AB_X_TORUS: return std::make_unique<BHGalaxyRevABXTorusNode>();
+        case NodeType::BH_GALAXY_REV_AB_Y_TORUS: return std::make_unique<BHGalaxyRevABYTorusNode>();
         case NodeType::BH_GALAXY_REV_AB_XY_TORUS: return std::make_unique<BHGalaxyRevABXYTorusNode>();
 
         case NodeType::BH_GALAXY_REV_C: return std::make_unique<BHGalaxyRevCNode>();
@@ -542,6 +570,44 @@ tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create_node_descrip
         throw std::runtime_error("Unknown node type: " + std::string(enchantum::to_string(node_type)));
     }
     return node->create();
+}
+
+NodeType get_bh_glx_rev_from_system() {
+    static std::optional<NodeType> cached;
+    if (cached.has_value()) {
+        return *cached;
+    }
+    uint64_t board_id;
+    try {
+        std::vector<int> pci_devices = tt::umd::PCIDevice::enumerate_devices();
+        if (pci_devices.empty()) {
+            log_warning(
+                tt::LogDistributed,
+                "PCIe device not accessible - cannot determine node type from system, defaulting to BH_GALAXY_REV_AB");
+            cached = NodeType::BH_GALAXY_REV_AB;
+            return *cached;
+        }
+        auto device = tt::umd::TTDevice::create(pci_devices[0]);
+        device->init_tt_device();
+        board_id = device->get_board_id();
+    } catch (const std::exception& e) {
+        log_warning(
+            tt::LogDistributed,
+            "Error accessing devices to determine BH Galaxy Rev ({}), defaulting to BH_GALAXY_REV_AB",
+            e.what());
+        cached = NodeType::BH_GALAXY_REV_AB;
+        return *cached;
+    }
+
+    uint32_t revision_bits = (board_id >> 32) & 0xF;  // bits [35:32]
+    if (revision_bits >= 3) {
+        log_info(tt::LogDistributed, "BH Galaxy Rev C detected, using in place of BH_GALAXY");
+        cached = NodeType::BH_GALAXY_REV_C;
+    } else {
+        log_info(tt::LogDistributed, "BH Galaxy Rev AB detected, using in place of BH_GALAXY");
+        cached = NodeType::BH_GALAXY_REV_AB;
+    }
+    return *cached;
 }
 
 // Helper function to get topology for a NodeType (uses virtual function from node instances)

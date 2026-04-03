@@ -71,12 +71,20 @@ FORCE_INLINE void check_worker_connections(
 
 // !!!FORCE_INLINE could potentially cause stack corruption as seen in the past
 template <bool RISC_CPU_DATA_CACHE_ENABLED>
-inline void wait_for_notification(uint32_t address, uint32_t value) {
+inline void wait_for_notification(
+    uint32_t address, uint32_t value, volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     volatile tt_l1_ptr uint32_t* poll_addr = (volatile tt_l1_ptr uint32_t*)address;
-    while (*poll_addr != value) {
+    while (*poll_addr != value
+#ifndef ARCH_WORMHOLE
+           && !got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)
+#endif
+    ) {
         router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
         // context switch while waiting to allow slow dispatch traffic to go through
+
+#if (defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)) || !defined(ARCH_BLACKHOLE)
         run_routing();
+#endif
     }
 }
 

@@ -11,16 +11,15 @@
 #include <nanobind/stl/optional.h>
 
 #include "minimal_matmul.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/constants.hpp>
 
 namespace ttnn::operations::experimental::minimal_matmul::detail {
 
 void bind_minimal_matmul(nb::module_& mod) {
-    bind_registered_operation(
+    ttnn::bind_function<"minimal_matmul", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::minimal_matmul,
         R"doc(
         minimal_matmul(input_tensor, weight_tensor, bias_tensor=None, *, fused_activation=None, config=None, memory_config=None, dtype=None, compute_kernel_config=None)
 
@@ -127,16 +126,16 @@ void bind_minimal_matmul(nb::module_& mod) {
         - K is processed in blocks of size `K_block_size`, with zero-padding as needed when K is not a multiple.
         - If `fused_activation` is provided, it is applied per tile just before packing to the output buffer.
         )doc",
-        ttnn::nanobind_arguments_t{
-            nb::arg("input_tensor"),
-            nb::arg("weight_tensor"),
-            nb::kw_only(),
-            nb::arg("bias_tensor") = nb::none(),
-            nb::arg("fused_activation") = nb::none(),
-            nb::arg("config") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+        &ttnn::experimental::minimal_matmul,
+        nb::arg("input_tensor"),
+        nb::arg("weight_tensor"),
+        nb::kw_only(),
+        nb::arg("bias_tensor") = nb::none(),
+        nb::arg("fused_activation") = nb::none(),
+        nb::arg("config") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 
     auto py_minimal_matmul_config = nb::class_<MinimalMatmulConfig>(
                                         mod,

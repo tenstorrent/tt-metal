@@ -5,6 +5,8 @@ set(UNIT_TESTS_API_SOURCES
     allocator/test_free_list_opt_allocator.cpp
     allocator/test_l1_banking_allocator.cpp
     allocator/test_overlapped_bank_manager.cpp
+    allocator/test_per_core_bank_manager.cpp
+    allocator/test_per_core_allocation.cpp
     circular_buffer/test_CircularBuffer_allocation.cpp
     circular_buffer/test_CircularBuffer_creation.cpp
     circular_buffer/test_CircularBuffer_non_blocking.cpp
@@ -21,9 +23,14 @@ set(UNIT_TESTS_API_SOURCES
     dataflow_buffer/test_dataflow_buffer.cpp
     dataflow_buffer/test_dataflow_buffer_configs.cpp
     distribution_spec/test_buffer_distribution_spec.cpp
+    metal2_host_api/test_program_spec.cpp
+    metal2_host_api/test_program_run_params.cpp
     tensor/test_tensor_sharding.cpp
+    tensor/test_host_tensor.cpp
+    tensor/test_mesh_tensor.cpp
     test_banked.cpp
     test_bit_utils.cpp
+    test_filesystem_utils.cpp
     test_buffer_region.cpp
     test_compile_time_args.cpp
     test_compile_defines.cpp
@@ -40,8 +47,10 @@ set(UNIT_TESTS_API_SOURCES
     test_runtime_args.cpp
     test_semaphores.cpp
     test_shape_base.cpp
+    test_shape.cpp
     test_sharded_l1_buffer.cpp
     test_simple_dram_buffer.cpp
+    test_tensor_accessor_default_page_size.cpp
     test_simple_l1_buffer.cpp
     test_soc_descriptor.cpp
     test_stream_scratch_register.cpp
@@ -50,4 +59,5 @@ set(UNIT_TESTS_API_SOURCES
     test_blockfloat_common.cpp
     test_duplicate_kernel.cpp
     test_core_local_mem_api.cpp
+    disaggregation/test_kv_chunk_address_table.cpp
 )

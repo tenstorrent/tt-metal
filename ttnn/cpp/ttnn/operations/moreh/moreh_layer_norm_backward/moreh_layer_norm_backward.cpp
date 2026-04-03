@@ -42,7 +42,11 @@ std::vector<std::optional<Tensor>> moreh_layer_norm_backward_gamma_beta_grad(
     return ret;
 }
 
-std::vector<std::optional<Tensor>> MorehLayerNormBackward::invoke(
+}  // namespace ttnn::operations::moreh::moreh_layer_norm_backward
+
+namespace ttnn {
+
+std::vector<std::optional<Tensor>> moreh_layer_norm_backward(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& mean,
@@ -64,12 +68,21 @@ std::vector<std::optional<Tensor>> MorehLayerNormBackward::invoke(
         outputs.push_back(std::nullopt);
     }
 
-    const auto& gamma_beta_grad = moreh_layer_norm_backward_gamma_beta_grad(
-        output_grad, input, mean, rstd, normalized_dims, gamma_grad, beta_grad, memory_config, compute_kernel_config);
+    const auto& gamma_beta_grad =
+        ttnn::operations::moreh::moreh_layer_norm_backward::moreh_layer_norm_backward_gamma_beta_grad(
+            output_grad,
+            input,
+            mean,
+            rstd,
+            normalized_dims,
+            gamma_grad,
+            beta_grad,
+            memory_config,
+            compute_kernel_config);
     outputs.push_back(gamma_beta_grad[0]);
     outputs.push_back(gamma_beta_grad[1]);
 
     return outputs;
 }
 
-}  // namespace ttnn::operations::moreh::moreh_layer_norm_backward
+}  // namespace ttnn

@@ -11,14 +11,15 @@ from datasets import load_dataset
 from loguru import logger
 from transformers import CLIPImageProcessor, CLIPTextModelWithProjection, CLIPTokenizer, CLIPVisionModelWithProjection
 
+from models.common.utility_functions import is_blackhole
 from models.demos.stable_diffusion_xl_base.conftest import get_device_name
 from models.demos.stable_diffusion_xl_base.demo.demo_img2img import test_demo
-from models.demos.stable_diffusion_xl_base.tests.test_common import (
-    SDXL_FABRIC_CONFIG,
-    SDXL_L1_SMALL_SIZE,
-    SDXL_TRACE_REGION_SIZE,
+from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_FABRIC_CONFIG
+from models.demos.stable_diffusion_xl_base.utils.accuracy_utils import (
+    accuracy_assert,
+    get_benchmark_summary,
+    save_report_json,
 )
-from models.demos.stable_diffusion_xl_base.utils.accuracy_utils import get_benchmark_summary, save_report_json
 from models.demos.stable_diffusion_xl_base.utils.clip_fid_ranges import accuracy_check_clip
 
 test_demo.__test__ = False
@@ -38,17 +39,12 @@ MAX_N_SAMPLES, MIN_N_SAMPLES = 10000, 2
     [
         (
             {
-                "l1_small_size": SDXL_L1_SMALL_SIZE,
-                "trace_region_size": SDXL_TRACE_REGION_SIZE,
                 "fabric_config": SDXL_FABRIC_CONFIG,
             },
             True,
         ),
         (
-            {
-                "l1_small_size": SDXL_L1_SMALL_SIZE,
-                "trace_region_size": SDXL_TRACE_REGION_SIZE,
-            },
+            {},
             False,
         ),
     ],
@@ -110,6 +106,8 @@ def test_accuracy_sdxl_img2img(
     validate_fabric_compatibility,
     mesh_device,
     is_ci_env,
+    is_ci_v2_env,
+    sdxl_refiner_pipeline_location,
     image_resolution,
     negative_prompt,
     num_inference_steps,
@@ -128,8 +126,8 @@ def test_accuracy_sdxl_img2img(
     timesteps,
     sigmas,
 ):
-    if image_resolution == (512, 512):
-        pytest.skip("Accuracy test on 512x512 image resolution is not yet supported for img2img pipeline.")
+    if vae_on_device and is_blackhole():
+        pytest.skip("Device VAE not supported on Blackhole")
 
     start_from, num_prompts = evaluation_range
 
@@ -140,11 +138,14 @@ def test_accuracy_sdxl_img2img(
         "imthanhlv/instructpix2pix-clip-filtered-10k",
         split=f"train[:{num_prompts}]",
     )
+    clip_models = load_clip_models()
 
     images = test_demo(
         validate_fabric_compatibility,
         mesh_device,
         is_ci_env,
+        is_ci_v2_env,
+        sdxl_refiner_pipeline_location,
         image_resolution,
         dataset["edit_prompt"],
         dataset["original_image"],
@@ -166,7 +167,6 @@ def test_accuracy_sdxl_img2img(
         sigmas,
     )
 
-    clip_models = load_clip_models()
     scores = []
     for i in range(num_prompts):
         score = compute_directional_similarity(
@@ -182,7 +182,7 @@ def test_accuracy_sdxl_img2img(
     deviation_clip_score = statistics.stdev(scores)
     logger.info(f"Average directional similarity: {average_clip_score}")
 
-    model_name = "sdxl-img2img-tp" if use_cfg_parallel else "sdxl-img2img"
+    model_name = f"sdxl-img2img-{image_resolution[0]}" + ("-tp" if use_cfg_parallel else "")
     metadata = {
         "model_name": model_name,
         "device": get_device_name(),
@@ -214,6 +214,7 @@ def test_accuracy_sdxl_img2img(
 
     save_report_json(report_json, metadata)
     print(json.dumps(report_json, indent=4))
+    accuracy_assert(metadata, {"average_clip_score": average_clip_score})
 
 
 def load_clip_models():

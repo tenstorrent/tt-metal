@@ -75,12 +75,13 @@ def run_clone(
         memory_config=input_memory_config,
     )
 
-    ttnn_output = ttnn.clone(
-        ttnn_input,
-        dtype=get_lib_dtype(ttnn, output_dtype),
-        memory_config=output_memory_config,
-        compute_kernel_config=get_compute_kernel_options(compute_kernel_options),
-    )
+    with device.cache_entries_counter.measure():
+        ttnn_output = ttnn.clone(
+            ttnn_input,
+            dtype=get_lib_dtype(ttnn, output_dtype),
+            memory_config=output_memory_config,
+            compute_kernel_config=get_compute_kernel_options(compute_kernel_options),
+        )
 
     torch_output = ttnn.to_torch(ttnn_output).reshape(shape)
 
@@ -253,7 +254,6 @@ def test_clone_callback(
     Test case to verify the clone operation with various input/output dtype combinations.
     """
     torch.manual_seed(2024)
-    num_program_cache_entries_list = []
     for i in range(2):
         run_clone(
             [1, 3, 320, 384],
@@ -267,10 +267,12 @@ def test_clone_callback(
         )
         torch_dummy = torch.randn([32, 32])
         ttnn_dummy = ttnn.from_torch(torch_dummy, device=device)
-        num_program_cache_entries_list.append(device.num_program_cache_entries())
-    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
-    assert num_program_cache_entries_list[0] > 0
-    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+        if i == 0:
+            first_count = device.cache_entries_counter.total
+        else:
+            assert device.cache_entries_counter.total == first_count
+    logger.info(f"cache_entries_counter.total={device.cache_entries_counter.total}")
+    assert device.cache_entries_counter.total > 0
 
 
 @pytest.mark.parametrize(

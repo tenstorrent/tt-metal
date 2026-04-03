@@ -4,6 +4,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
+#include "pcie_noc_utils.h"
 
 void kernel_main() {
     // Get this value from MeshSocket struct on host
@@ -29,8 +30,11 @@ void kernel_main() {
         // write_ptr is a relative offset, add downstream_fifo_addr to get the full low 32-bit address
         uint64_t pcie_data_addr = ((static_cast<uint64_t>(data_addr_hi) << 32) | sender_socket.downstream_fifo_addr) +
                                   sender_socket.write_ptr;
-        noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
-            noc_index, data_addr, pcie_xy_enc, pcie_data_addr, page_size, 1);
+        noc_write_page_chunked(
+            pcie_xy_enc,
+            data_addr,
+            (static_cast<uint64_t>(data_addr_hi) << 32) | sender_socket.downstream_fifo_addr + sender_socket.write_ptr,
+            page_size);
         data_addr += page_size;
         outstanding_data_size -= page_size;
         noc_async_write_barrier();

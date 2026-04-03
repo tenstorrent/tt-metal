@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstring>
 #include <cstdlib>
 #include <string>
 
@@ -13,7 +14,12 @@ std::string demangle(const char* name);
 inline bool is_watcher_enabled() {
     const char* watcher = std::getenv("TT_METAL_WATCHER");
     const char* asserts = std::getenv("TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS");
-    return (watcher != nullptr && watcher[0] != '\0') || (asserts != nullptr && std::string(asserts) == "1");
+    return (watcher != nullptr && watcher[0] != '\0') || (asserts != nullptr && std::strcmp(asserts, "1") == 0);
+}
+
+inline bool is_llk_assert_enabled() {
+    const char* llk_assert = std::getenv("TT_METAL_LLK_ASSERTS");
+    return llk_assert && std::strcmp(llk_assert, "1") == 0;
 }
 }  // namespace ttml::core
 
@@ -22,4 +28,11 @@ inline bool is_watcher_enabled() {
         if (ttml::core::is_watcher_enabled()) {                   \
             GTEST_SKIP() << "Skipping test with watcher enabled"; \
         }                                                         \
+    } while (0)
+
+#define SKIP_FOR_LLK_ASSERTS(reason)               \
+    do {                                           \
+        if (ttml::core::is_llk_assert_enabled()) { \
+            GTEST_SKIP() << reason;                \
+        }                                          \
     } while (0)
