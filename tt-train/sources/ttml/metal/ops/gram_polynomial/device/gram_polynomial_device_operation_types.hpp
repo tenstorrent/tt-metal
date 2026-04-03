@@ -11,6 +11,8 @@
 namespace ttml::metal::ops::gram_polynomial::device {
 
 struct operation_attributes_t {
+    float b = 0.0f;
+    float c = 1.0f;
     ttml::metal::OutputMode output_mode = ttml::metal::OutputMode::UpperTriangle;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 };

@@ -11,13 +11,15 @@
 
 namespace ttml::metal {
 
-// Compute G = X @ X^T using interleaved K-split multicast gram matmul.
-// Exploits symmetry: lower triangle computes even-K, upper computes odd-K, results are accumulated.
-// Uses min(device_grid.x - 1, device_grid.y) core grid + column of diagonal helper cores.
+// Compute bG + cG² for symmetric G using interleaved K-split multicast.
+// G must be square [M, M] with even M (in tiles). Output is symmetric [M, M].
+// Exploits symmetry: lower triangle computes even-K partial, upper computes odd-K, then reduce.
 //
-// output_mode: UpperTriangle writes G[i,j] for i<=j. Full also writes transposed mirror G[j,i].
+// output_mode: UpperTriangle writes result[i,j] for i<=j. Full also writes transposed mirror.
 ttnn::Tensor gram_polynomial(
-    const ttnn::Tensor& input,
+    const ttnn::Tensor& G,
+    float b,
+    float c,
     OutputMode output_mode = OutputMode::UpperTriangle,
     MathFidelity math_fidelity = MathFidelity::HiFi4,
     const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);

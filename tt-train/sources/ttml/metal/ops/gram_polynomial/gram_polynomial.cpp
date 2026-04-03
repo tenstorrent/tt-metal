@@ -11,14 +11,16 @@
 namespace ttml::metal {
 
 ttnn::Tensor gram_polynomial(
-    const ttnn::Tensor& input,
+    const ttnn::Tensor& G,
+    float b,
+    float c,
     OutputMode output_mode,
     MathFidelity math_fidelity,
     const std::optional<ttnn::Tensor>& preallocated_output) {
     using namespace ops::gram_polynomial::device;
-    operation_attributes_t attrs{.output_mode = output_mode, .math_fidelity = math_fidelity};
+    operation_attributes_t attrs{.b = b, .c = c, .output_mode = output_mode, .math_fidelity = math_fidelity};
     return ttnn::device_operation::launch<GramPolynomialDeviceOperation>(
-        attrs, tensor_args_t{.input_tensor = input, .preallocated_output = preallocated_output});
+        attrs, tensor_args_t{.input_tensor = G, .preallocated_output = preallocated_output});
 }
 
 }  // namespace ttml::metal
