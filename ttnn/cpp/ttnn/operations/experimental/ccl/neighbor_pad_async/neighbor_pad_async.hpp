@@ -9,6 +9,7 @@
 
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include <tt-metalium/sub_device_types.hpp>
 
 namespace ttnn::experimental {
 
@@ -24,6 +25,10 @@ ttnn::Tensor neighbor_pad_async(
     const std::optional<std::vector<size_t>>& num_preferred_links = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<ttnn::ccl::Topology> topology = std::nullopt,
-    const std::optional<ttnn::Tensor>& persistent_output_buffer = std::nullopt);
+    const std::optional<ttnn::Tensor>& persistent_output_buffer = std::nullopt,
+    const std::optional<GlobalSemaphore>& progress_semaphore = std::nullopt,
+    uint32_t progress_t_batch_size = 0,
+    bool fabric_only = false,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 }  // namespace ttnn::experimental

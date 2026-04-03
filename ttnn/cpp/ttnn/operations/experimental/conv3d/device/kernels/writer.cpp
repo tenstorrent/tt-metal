@@ -5,6 +5,9 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#if defined(PROFILE_ZONES)
+#include "tools/profiler/kernel_profiler.hpp"
+#endif
 
 void kernel_main() {
     constexpr uint32_t cb_matmul_result_rm = get_compile_time_arg_val(0);
@@ -79,9 +82,6 @@ void kernel_main() {
     constexpr uint32_t T_out_H_out_W_out = T_out * H_out * W_out;
 
     // Zero-fill the zero CB for FPU accumulate reduction (DST += tile + 0).
-    // The zero tile stays resident for the lifetime of the kernel.
-    // Clamp index to avoid constexpr OOB when cb_zero_tiled==32 (fp32 reduction disabled).
-    // The if constexpr discards this branch, but WH's compiler still evaluates get_tile_size.
     constexpr uint32_t cb_zero_safe = cb_zero_tiled < 32 ? cb_zero_tiled : 0;
     if constexpr (cb_zero_tiled < 32) {
         cb_reserve_back(cb_zero_tiled, 1);
@@ -110,21 +110,36 @@ void kernel_main() {
                 const uint32_t c_out_offset_t = c_out_block * matmul_N_t;
 
                 // Read weights and bias for this block
-                cb_reserve_back(cb_weight_tiled, weight_tiles);
-                uint32_t weight_write_ptr = get_write_ptr(cb_weight_tiled);
+                {
+#if defined(ABLATE_DM) || defined(ABLATE_WRITER_DM)
+                    // Skip DRAM reads, keep CB handshakes
+                    cb_reserve_back(cb_weight_tiled, weight_tiles);
+                    cb_push_back(cb_weight_tiled, weight_tiles);
+#else
+#if defined(PROFILE_ZONES)
+                    DeviceZoneScopedN("w-weight-read");
+#endif
+                    cb_reserve_back(cb_weight_tiled, weight_tiles);
+                    uint32_t weight_write_ptr = get_write_ptr(cb_weight_tiled);
 
-                for (uint32_t row = c_in_offset_t; row < c_in_offset_t + matmul_K_t; row++) {
-                    for (uint32_t col = c_out_offset_t; col < c_out_offset_t + matmul_N_t; col++) {
-                        uint32_t weight_idx = row * C_out_t + col;
-                        noc_async_read_tile(weight_idx, weight_reader, weight_write_ptr);
-                        weight_write_ptr += tile_bytes;
+                    for (uint32_t row = c_in_offset_t; row < c_in_offset_t + matmul_K_t; row++) {
+                        for (uint32_t col = c_out_offset_t; col < c_out_offset_t + matmul_N_t; col++) {
+                            uint32_t weight_idx = row * C_out_t + col;
+                            noc_async_read_tile(weight_idx, weight_reader, weight_write_ptr);
+                            weight_write_ptr += tile_bytes;
+                        }
                     }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_weight_tiled, weight_tiles);
+#endif
                 }
-                noc_async_read_barrier();
-                cb_push_back(cb_weight_tiled, weight_tiles);
 
                 if constexpr (use_bias) {
                     if (is_reducer) {
+#if defined(ABLATE_DM) || defined(ABLATE_WRITER_DM)
+                        cb_reserve_back(cb_bias_tiled, matmul_N_t);
+                        cb_push_back(cb_bias_tiled, matmul_N_t);
+#else
                         cb_reserve_back(cb_bias_tiled, matmul_N_t);
                         uint32_t bias_write_ptr = get_write_ptr(cb_bias_tiled);
                         for (uint32_t i = c_out_offset_t; i < c_out_offset_t + matmul_N_t; i++) {
@@ -134,6 +149,7 @@ void kernel_main() {
                         }
                         noc_async_read_barrier();
                         cb_push_back(cb_bias_tiled, matmul_N_t);
+#endif
                     }
                 }
 
@@ -149,68 +165,90 @@ void kernel_main() {
 
                             if (!is_reducer) {
                                 // I'm a worker.
-                                // Wait for compute to finish
                                 cb_wait_front(cb_reduction_tiled, output_tiles);
-
-                                // Reset our semaphore
                                 *local_semaphore_addr_ptr = 0;
-
-                                // Signal to reducer that we have data ready
                                 noc_semaphore_inc(reducer_semaphore_noc_addr, 1);
-
-                                // Wait for reducer to ack that it has read our data
                                 noc_semaphore_wait(local_semaphore_addr_ptr, 1);
-
-                                // Handshake with compute so it can continue
                                 cb_pop_front(cb_reduction_tiled, output_tiles);
                                 cb_reserve_back(cb_worker_ack_back, 1);
                                 cb_push_back(cb_worker_ack_back, 1);
                             } else {
                                 // I'm a reducer.
-                                // Wait for all workers to finish
-                                noc_semaphore_wait(local_semaphore_addr_ptr, num_workers);
-
-                                // Reset our semaphore
+                                {
+#if defined(PROFILE_ZONES)
+                                    DeviceZoneScopedN("w-wait-workers");
+#endif
+                                    noc_semaphore_wait(local_semaphore_addr_ptr, num_workers);
+                                }
                                 *local_semaphore_addr_ptr = 0;
 
-                                const uint32_t worker_output_read_ptr = get_read_ptr(cb_matmul_interm_tiled);
-                                for (uint32_t worker_idx = 0; worker_idx < num_workers; worker_idx++) {
-                                    // Read data from worker into reduction buffer
-                                    // Stall if compute has not cleared buffer
-                                    cb_reserve_back(cb_reduction_tiled, output_tiles);
-                                    uint32_t reduction_write_ptr = get_write_ptr(cb_reduction_tiled);
-                                    uint64_t worker_output_read_addr = get_noc_addr(
-                                        worker_core_xs[worker_idx], worker_core_ys[worker_idx], worker_output_read_ptr);
-                                    for (uint32_t tile = 0; tile < output_tiles; tile++) {
-                                        noc_async_read(
-                                            worker_output_read_addr, reduction_write_ptr, partials_tile_bytes);
-                                        worker_output_read_addr += partials_tile_bytes;
-                                        reduction_write_ptr += partials_tile_bytes;
+                                {
+#if defined(ABLATE_DM) || defined(ABLATE_WRITER_DM)
+                                    // Skip reducer gather — push empty tiles
+                                    const uint32_t worker_output_read_ptr = get_read_ptr(cb_matmul_interm_tiled);
+                                    for (uint32_t worker_idx = 0; worker_idx < num_workers; worker_idx++) {
+                                        cb_reserve_back(cb_reduction_tiled, output_tiles);
+                                        cb_push_back(cb_reduction_tiled, output_tiles);
+                                        const uint64_t worker_semaphore_noc_addr = get_noc_addr(
+                                            worker_core_xs[worker_idx], worker_core_ys[worker_idx], semaphore_addr);
+                                        noc_semaphore_inc(worker_semaphore_noc_addr, 1);
                                     }
-                                    noc_async_read_barrier();
-                                    cb_push_back(cb_reduction_tiled, output_tiles);
+#else
+#if defined(PROFILE_ZONES)
+                                    DeviceZoneScopedN("w-reducer-gather");
+#endif
+                                    const uint32_t worker_output_read_ptr = get_read_ptr(cb_matmul_interm_tiled);
+                                    for (uint32_t worker_idx = 0; worker_idx < num_workers; worker_idx++) {
+                                        cb_reserve_back(cb_reduction_tiled, output_tiles);
+                                        uint32_t reduction_write_ptr = get_write_ptr(cb_reduction_tiled);
+                                        uint64_t worker_output_read_addr = get_noc_addr(
+                                            worker_core_xs[worker_idx],
+                                            worker_core_ys[worker_idx],
+                                            worker_output_read_ptr);
+                                        for (uint32_t tile = 0; tile < output_tiles; tile++) {
+                                            noc_async_read(
+                                                worker_output_read_addr, reduction_write_ptr, partials_tile_bytes);
+                                            worker_output_read_addr += partials_tile_bytes;
+                                            reduction_write_ptr += partials_tile_bytes;
+                                        }
+                                        noc_async_read_barrier();
+                                        cb_push_back(cb_reduction_tiled, output_tiles);
 
-                                    const uint64_t worker_semaphore_noc_addr = get_noc_addr(
-                                        worker_core_xs[worker_idx], worker_core_ys[worker_idx], semaphore_addr);
-                                    noc_semaphore_inc(worker_semaphore_noc_addr, 1);
+                                        const uint64_t worker_semaphore_noc_addr = get_noc_addr(
+                                            worker_core_xs[worker_idx], worker_core_ys[worker_idx], semaphore_addr);
+                                        noc_semaphore_inc(worker_semaphore_noc_addr, 1);
+                                    }
+#endif
                                 }
 
-                                cb_wait_front(cb_matmul_result_rm, output_tiles);
+                                {
+#if defined(PROFILE_ZONES)
+                                    DeviceZoneScopedN("w-wait-compute");
+#endif
+                                    cb_wait_front(cb_matmul_result_rm, output_tiles);
+                                }
                                 uint32_t cb_read_ptr = get_read_ptr(cb_matmul_result_rm);
 
-                                for (uint32_t t = t_block; t < t_block_end; ++t) {
-                                    for (uint32_t h = h_block; h < h_block_end; ++h) {
-                                        for (uint32_t w = w_block; w < w_block_end; ++w) {
-                                            uint32_t out_page_idx =
-                                                batch_idx * T_out_H_out_W_out + t * H_out * W_out + h * W_out + w;
-                                            uint64_t dst_addr = out_writer.get_noc_addr(out_page_idx);
-                                            dst_addr += c_out_block * C_out_block_bytes;
-                                            noc_async_write(cb_read_ptr, dst_addr, C_out_block_bytes);
-                                            cb_read_ptr += C_out_block_bytes;
+                                {
+#if !defined(ABLATE_DM)
+#if defined(PROFILE_ZONES)
+                                    DeviceZoneScopedN("w-output-write");
+#endif
+                                    for (uint32_t t = t_block; t < t_block_end; ++t) {
+                                        for (uint32_t h = h_block; h < h_block_end; ++h) {
+                                            for (uint32_t w = w_block; w < w_block_end; ++w) {
+                                                uint32_t out_page_idx =
+                                                    batch_idx * T_out_H_out_W_out + t * H_out * W_out + h * W_out + w;
+                                                uint64_t dst_addr = out_writer.get_noc_addr(out_page_idx);
+                                                dst_addr += c_out_block * C_out_block_bytes;
+                                                noc_async_write(cb_read_ptr, dst_addr, C_out_block_bytes);
+                                                cb_read_ptr += C_out_block_bytes;
+                                            }
                                         }
                                     }
+                                    noc_async_write_barrier();
+#endif
                                 }
-                                noc_async_write_barrier();
                                 cb_pop_front(cb_matmul_result_rm, output_tiles);
                             }
                         }

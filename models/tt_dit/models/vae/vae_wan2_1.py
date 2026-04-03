@@ -298,6 +298,17 @@ class WanCausalConv3d(Module):
             H_out=H_out,
             W_out=W_out,
         )
+        # Enable halo-buffer mode when T_out_block > 1 and spatial halo needed.
+        # Fabric-only NeighborPad (4 cores, sub-device 0) runs concurrently with
+        # conv3d (116 cores, sub-device 1) via 2 CQs.
+        _needs_halo = (self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1) or (
+            self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
+        )
+        if _needs_halo and self.conv_config.T_out_block > 1:
+            self.conv_config.input_progress_t_batch_size = self.conv_config.T_out_block
+            self.conv_config.use_h_halo_buffer = True
+            # No sub_device_id — use full grid on CQ0 while NP runs on CQ1
+            # (no sub-device isolation, but 2 CQs allow independent dispatch)
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -398,6 +409,9 @@ class WanCausalConv3d(Module):
         h_pad_needed = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
         w_pad_needed = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
 
+        progress_sem = None
+        used_halo_path = False  # Tracks whether the fabric-only halo sub-device was activated.
+
         if h_pad_needed or w_pad_needed:
             dims, pad_left, pad_right = [], [], []
             axes, neighbor_sems, links = [], [], []
@@ -420,23 +434,81 @@ class WanCausalConv3d(Module):
                 )
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
 
-            x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
-                x_BTHWC,
-                dims=dims,
-                pad_left=pad_left,
-                pad_right=pad_right,
-                padding_mode="zeros",
-                axes=axes,
-                neighbor_sems=neighbor_sems,
-                num_links=links,
-            )
+            # Pipeline: NeighborPad publishes progress every T_out_block T-slices.
+            t_batch_size = self.conv_config.input_progress_t_batch_size  # 0 if disabled
+            if t_batch_size > 0:
+                progress_sem = self.ccl_manager.get_np_progress_semaphore(axes[0])
+                ttnn.reset_global_semaphore_value(progress_sem, 0)
+
+            if self.conv_config.use_h_halo_buffer:
+                # Halo-only path: fabric-only NeighborPad (SD0, CQ1) writes compact
+                # halo buffer. Conv3d (SD1, CQ0) reads interior from original tensor
+                # + halos from buffer. NP and conv3d use non-overlapping sub-devices,
+                # allowing concurrent dispatch via 2 CQs.
+                halo_tensor = self.ccl_manager.neighbor_pad_halo_only(
+                    x_BTHWC,
+                    dims=dims,
+                    pad_left=pad_left,
+                    pad_right=pad_right,
+                    padding_mode="zeros",
+                    axes=axes,
+                    neighbor_sems=neighbor_sems,
+                    num_links=links,
+                    progress_semaphore=progress_sem,
+                    progress_t_batch_size=t_batch_size,
+                )
+                # Update halo buffer runtime info in config (not hashed).
+                H_dev = x_BTHWC.shape[2]
+                W_dev = x_BTHWC.shape[3]
+                T_dev = x_BTHWC.shape[1]
+                ph = pad_left[0] if h_pad_needed else 0
+                pw = pad_left[1] if w_pad_needed and len(pad_left) > 1 else 0
+                self.conv_config.h_halo_buffer_addr = halo_tensor.buffer_address()
+                self.conv_config.h_halo_outer_dim_size = T_dev
+                self.conv_config.h_halo_H = H_dev
+                self.conv_config.h_halo_W = W_dev
+                self.conv_config.h_halo_padding_h = ph
+                self.conv_config.h_halo_padding_w = pw
+                # x_BTHWC stays as unpadded tensor; conv3d reads interior from it
+
+                used_halo_path = True
+
+                # Bind conv3d to SD1 (compute cores) once the halo manager is active.
+                if self.conv_config.sub_device_id is None:
+                    self.conv_config.sub_device_id = self.ccl_manager._conv3d_sd_id
+
+                # Ensure NP (CQ1) has finished writing halo data before conv3d (CQ0) reads it.
+                if self.ccl_manager._pending_np_event is not None:
+                    ttnn.wait_for_event(
+                        cq_id=ttnn.QueueId(0),
+                        mesh_event=self.ccl_manager._pending_np_event,
+                    )
+                    self.ccl_manager._pending_np_event = None
+            else:
+                x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
+                    x_BTHWC,
+                    dims=dims,
+                    pad_left=pad_left,
+                    pad_right=pad_right,
+                    padding_mode="zeros",
+                    axes=axes,
+                    neighbor_sems=neighbor_sems,
+                    num_links=links,
+                    progress_semaphore=progress_sem,
+                    progress_t_batch_size=t_batch_size,
+                )
+
+        # Update the progress semaphore address in-place on the existing config.
+        conv_config = self.conv_config
+        if progress_sem is not None:
+            conv_config.input_progress_sem_addr = ttnn.get_global_semaphore_address(progress_sem)
 
         x_BTHWC = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
             weight_tensor=self.weight.data,
             bias_tensor=self.bias.data,
             device=self.mesh_device,
-            config=self.conv_config,
+            config=conv_config,
             output_channels=self.out_channels,
             kernel_size=self.kernel_size,
             stride=self.stride,
@@ -445,6 +517,11 @@ class WanCausalConv3d(Module):
             dtype=self.dtype,
             compute_kernel_config=self.compute_kernel_config,
         )
+
+        # Restore the default full-grid sub-device manager so that subsequent ops
+        # (RMSNorm, residual add, etc.) can run on all cores without conflict.
+        if used_halo_path:
+            self.ccl_manager.deactivate_halo_sub_devices()
 
         return x_BTHWC
 

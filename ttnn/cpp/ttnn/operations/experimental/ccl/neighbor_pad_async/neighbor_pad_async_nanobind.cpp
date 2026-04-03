@@ -57,7 +57,11 @@ void bind_neighbor_pad_async(nb::module_& mod) {
         nb::arg("num_links") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Linear),
-        nb::arg("persistent_output_buffer") = nb::none());
+        nb::arg("persistent_output_buffer") = nb::none(),
+        nb::arg("progress_semaphore") = nb::none(),
+        nb::arg("progress_t_batch_size") = 0,
+        nb::arg("fabric_only") = false,
+        nb::arg("sub_device_id") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl

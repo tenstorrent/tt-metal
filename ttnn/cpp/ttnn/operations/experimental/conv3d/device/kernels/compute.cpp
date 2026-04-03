@@ -15,6 +15,10 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
+#if defined(PROFILE_ZONES)
+#include "tools/profiler/kernel_profiler.hpp"
+#endif
+
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
     const uint32_t in0_cb,
@@ -187,9 +191,9 @@ void kernel_main() {
         for (uint32_t c_in_block = c_in_block_start; c_in_block < c_in_block_end; c_in_block++) {
             // Process only assigned C_out blocks
             for (uint32_t c_out_block = c_out_block_start; c_out_block < c_out_block_end; c_out_block++) {
-                // Wait for new weights and bias
-                cb_wait_front(cb_weight_tiled, weight_tiles);
-
+                // Bias must be ready before the first spatial block's reduction.
+                // Weight wait is deferred to right before matmul so the first
+                // tilize overlaps with BRISC's DRAM weight read.
                 if constexpr (use_bias) {
                     if (is_reducer) {
                         cb_wait_front(cb_bias_tiled, matmul_N_t);
@@ -213,10 +217,34 @@ void kernel_main() {
                                                                           : patches_left;
 
                                     // Tilize one tile-row
+#if defined(ABLATE_TILIZE)
+                                    // Skip tilize: consume RM patches, push empty tiled data
+                                    cb_wait_front(cb_vol2col_rm, patches_this_row);
+                                    cb_pop_front(cb_vol2col_rm, patches_this_row);
+                                    cb_reserve_back(cb_vol2col_tiled, row_tiles);
+                                    cb_push_back(cb_vol2col_tiled, row_tiles);
+#else
                                     if constexpr (use_fp32_partials) {
                                         pack_reconfig_data_format(cb_vol2col_tiled);
                                         reconfig_data_format_srca(cb_vol2col_rm);
                                     }
+#if defined(PROFILE_ZONES)
+                                    {
+                                        DeviceZoneScopedN("c-wait-vol2col");
+                                        cb_wait_front(cb_vol2col_rm, patches_this_row);
+                                    }
+                                    {
+                                        DeviceZoneScopedN("c-tilize");
+                                        compute_kernel_lib::tilize<
+                                            matmul_K_t,
+                                            cb_vol2col_rm,
+                                            cb_vol2col_tiled,
+                                            compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                                            compute_kernel_lib::tilize_config::WaitMode::NoWait,
+                                            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::
+                                                NoReconfigure>(1, patches_this_row);
+                                    }
+#else
                                     compute_kernel_lib::tilize<
                                         matmul_K_t,
                                         cb_vol2col_rm,
@@ -225,26 +253,42 @@ void kernel_main() {
                                         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
                                         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::
                                             NoReconfigure>(1, patches_this_row);
-
+#endif
                                     if constexpr (use_fp32_partials) {
                                         pack_reconfig_data_format(cb_matmul_interm_tiled);
+                                    }
+#endif  // ABLATE_TILIZE
+
+                                    // Wait for weights — deferred from upfront to here so
+                                    // the tilize above overlaps with BRISC's weight DRAM read.
+                                    // First call stalls; subsequent calls are instant (weights cached).
+                                    {
+#if defined(PROFILE_ZONES)
+                                        DeviceZoneScopedN("c-wait-weights");
+#endif
+                                        cb_wait_front(cb_weight_tiled, weight_tiles);
                                     }
 
                                     // Matmul one tile-row: 1 x K_t @ K_t x N_t -> 1 x N_t
                                     cb_wait_front(cb_vol2col_tiled, row_tiles);
-                                    matmul_blocks(
-                                        cb_vol2col_tiled,
-                                        cb_weight_tiled,
-                                        cb_matmul_interm_tiled,
-                                        1,  // M = 1 tile-row
-                                        matmul_N_t,
-                                        matmul_K_t,
-                                        in0_num_subblocks,  // 1
-                                        in1_num_subblocks,
-                                        in0_block_w,
-                                        subblock_h,  // 1
-                                        subblock_w,
-                                        false /* transpose */);
+                                    {
+#if defined(PROFILE_ZONES)
+                                        DeviceZoneScopedN("c-matmul");
+#endif
+                                        matmul_blocks(
+                                            cb_vol2col_tiled,
+                                            cb_weight_tiled,
+                                            cb_matmul_interm_tiled,
+                                            1,  // M = 1 tile-row
+                                            matmul_N_t,
+                                            matmul_K_t,
+                                            in0_num_subblocks,  // 1
+                                            in1_num_subblocks,
+                                            in0_block_w,
+                                            subblock_h,  // 1
+                                            subblock_w,
+                                            false /* transpose */);
+                                    }
                                     cb_pop_front(cb_vol2col_tiled, row_tiles);
 
                                     patches_left -= patches_this_row;
@@ -271,6 +315,9 @@ void kernel_main() {
                             } else {
                                 // We are a reducer core.
                                 {
+#if defined(PROFILE_ZONES)
+                                    DeviceZoneScopedN("c-reduce");
+#endif
                                     if constexpr (use_fp32_partials) {
                                         cb_wait_front(cb_zero_tiled, 1);
                                         reconfig_data_format_srca(cb_matmul_interm_tiled);
@@ -315,6 +362,9 @@ void kernel_main() {
                                 }
                                 // Untilize result
                                 {
+#if defined(PROFILE_ZONES)
+                                    DeviceZoneScopedN("c-untilize");
+#endif
                                     constexpr auto untilize_reconfig_mode =
                                         use_fp32_partials ? compute_kernel_lib::untilize_config::
                                                                 ReconfigureRegisterDatatypeMode::UnpackReconfigure

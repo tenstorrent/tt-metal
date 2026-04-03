@@ -10,6 +10,8 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/global_semaphore.hpp"
+#include <tt-metalium/sub_device_types.hpp>
 
 namespace ttnn::experimental::prim {
 
@@ -46,6 +48,34 @@ struct Conv3dConfig {
     std::array<uint32_t, 3> dilation;
     uint32_t alignment;
     CoreCoord compute_with_storage_grid_size;
+
+    // Progress semaphore pipelining with NeighborPadAsync.
+    uint32_t input_progress_t_batch_size = 0;  // 0 = disabled; must match NeighborPad's t_batch_size
+    uint32_t input_progress_sem_addr = 0;      // set each call; not part of program hash
+
+    // Halo-buffer mode: conv3d reads H-boundary rows from a compact halo buffer
+    // (populated by fabric-only NeighborPad on 4 cores) instead of from the padded tensor.
+    // The interior is read from the ORIGINAL unpadded input tensor.
+    // use_h_halo_buffer=true sets CONV3D_H_HALO define (part of program hash).
+    // h_halo_* fields are updated each call (not part of hash).
+    // Sub-device: when set, conv3d program targets only these cores
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
+
+    // Halo buffer mode: reads H and W boundary rows from compact halo buffer
+    // (populated by fabric-only NeighborPad on 4 cores) instead of the padded tensor.
+    // Buffer layout: [H_top | H_bot | W_left | W_right], each T×dim sticks.
+    bool use_h_halo_buffer = false;      // compile-time: enables CONV3D_H_HALO path
+    uint32_t h_halo_buffer_addr = 0;     // compact halo buffer DRAM address (set each call)
+    uint32_t h_halo_outer_dim_size = 0;  // outer_dim (B*T per device)
+    uint32_t h_halo_H = 0;               // H_dev per device (for W halo index)
+    uint32_t h_halo_W = 0;               // W sticks per H halo row
+    uint32_t h_halo_padding_h = 0;       // H padding per side (1 for k3)
+    uint32_t h_halo_padding_w = 0;       // W padding per side (1 for k3, 0 if no W halo)
+    // Derived offsets into the compact buffer (set each call alongside h_halo_buffer_addr):
+    //   H-top base = 0
+    //   H-bot base = outer_dim * padding_h * W
+    //   W-left base = 2 * outer_dim * padding_h * W
+    //   W-right base = 2*outer_dim*pH*W + outer_dim*padding_w*H
 
     static constexpr auto attribute_names = std::make_tuple(
         "weights_dtype",

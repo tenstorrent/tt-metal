@@ -118,6 +118,29 @@ void bind_conv3d(nb::module_& mod) {
     py_conv3d_config.def_rw("dilation", &ttnn::experimental::prim::Conv3dConfig::dilation, "");
     py_conv3d_config.def_rw(
         "compute_with_storage_grid_size", &ttnn::experimental::prim::Conv3dConfig::compute_with_storage_grid_size, "");
+    py_conv3d_config.def_rw(
+        "sub_device_id",
+        &ttnn::experimental::prim::Conv3dConfig::sub_device_id,
+        "Optional SubDeviceId for concurrent execution with NeighborPad.");
+    py_conv3d_config.def_rw(
+        "use_h_halo_buffer",
+        &ttnn::experimental::prim::Conv3dConfig::use_h_halo_buffer,
+        "When true enables CONV3D_H_HALO: reader reads boundary rows from compact halo buffer.");
+    py_conv3d_config.def_rw("h_halo_buffer_addr", &ttnn::experimental::prim::Conv3dConfig::h_halo_buffer_addr, "");
+    py_conv3d_config.def_rw(
+        "h_halo_outer_dim_size", &ttnn::experimental::prim::Conv3dConfig::h_halo_outer_dim_size, "");
+    py_conv3d_config.def_rw("h_halo_H", &ttnn::experimental::prim::Conv3dConfig::h_halo_H, "");
+    py_conv3d_config.def_rw("h_halo_W", &ttnn::experimental::prim::Conv3dConfig::h_halo_W, "");
+    py_conv3d_config.def_rw("h_halo_padding_h", &ttnn::experimental::prim::Conv3dConfig::h_halo_padding_h, "");
+    py_conv3d_config.def_rw("h_halo_padding_w", &ttnn::experimental::prim::Conv3dConfig::h_halo_padding_w, "");
+    py_conv3d_config.def_rw(
+        "input_progress_sem_addr",
+        &ttnn::experimental::prim::Conv3dConfig::input_progress_sem_addr,
+        "L1 address of the progress semaphore from NeighborPadAsync (updated each call, not hashed).");
+    py_conv3d_config.def_rw(
+        "input_progress_t_batch_size",
+        &ttnn::experimental::prim::Conv3dConfig::input_progress_t_batch_size,
+        "T-batch size for progress semaphore signaling (determines compile-time path).");
 
     py_conv3d_config.def(
         "__repr__", [](const ttnn::experimental::prim::Conv3dConfig& config) { return fmt::format("{}", config); });

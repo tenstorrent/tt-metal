@@ -50,6 +50,13 @@ constexpr uint32_t recv_cb_id = get_compile_time_arg_val(ct_after_dst + 1);
 constexpr bool handle_incoming_writes = get_compile_time_arg_val(ct_after_dst + 2);
 constexpr bool is_w_fabric_writer = get_compile_time_arg_val(ct_after_dst + 3);
 constexpr uint32_t ring_size = get_compile_time_arg_val(ct_after_dst + 4);
+// progress_t_batch_size is only provided by neighbor_pad_async factory when NP_PROGRESS_SEM is defined.
+// Other users of this kernel (all_gather_async, slice_reshard_async) do NOT provide this arg.
+#if defined(NP_PROGRESS_SEM)
+constexpr uint32_t progress_t_batch_size = get_compile_time_arg_val(ct_after_dst + 5);
+#else
+constexpr uint32_t progress_t_batch_size = 0;
+#endif
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -60,6 +67,9 @@ void kernel_main() {
     const address_t output_tensor_address = get_common_arg_val<address_t>(1);
     const size_t neighbor_sem = get_common_arg_val<uint32_t>(2);
     const size_t barrier_sem = get_common_arg_val<uint32_t>(3);
+#if defined(NP_PROGRESS_SEM)
+    const size_t progress_sem = get_common_arg_val<uint32_t>(4);
+#endif
 
     // Per-core runtime args
     uint32_t arg_idx = 0;
@@ -394,6 +404,21 @@ void kernel_main() {
         // No local interior copy in this kernel. Dedicated local-copy kernels handle that work.
 
         outer_dim_offset += (num_sticks_per_halo_dim * output_halo_dim_size);
+
+#if defined(NP_PROGRESS_SEM)
+        // Progress semaphore: notify conv3d reader that this T-batch is ready.
+        // Only direction==0 (forward H writer, not W writer) increments to avoid double-counting.
+        if constexpr (progress_t_batch_size > 0) {
+            if (!direction && !is_w_fabric_writer) {
+                if ((outer_dim + 1) % progress_t_batch_size == 0) {
+                    noc_async_write_barrier();
+                    // Use local NOC address for L1 semaphore increment
+                    noc_semaphore_inc(get_noc_addr(progress_sem), 1);
+                    noc_async_atomic_barrier();
+                }
+            }
+        }
+#endif
     }
 
     // Ensure all DRAM writes from main loop are complete.

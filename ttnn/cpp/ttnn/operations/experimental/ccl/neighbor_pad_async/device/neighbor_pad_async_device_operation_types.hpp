@@ -12,6 +12,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include <tt-metalium/sub_device_types.hpp>
 
 namespace ttnn::experimental::prim {
 
@@ -36,6 +37,18 @@ struct NeighborPadAsyncParams {
     std::optional<uint32_t> pad2_cluster_axis;
     uint32_t pad2_num_links = 0;
     bool using_persistent_buffers = false;
+    // When true: skip local_copy kernels; output is a compact halo buffer
+    // (outer_dim × (padding_left+padding_right) × num_sticks_per_halo_dim sticks).
+    // Only the halo rows are written via fabric; the interior is NOT copied.
+    // Conv3d reads interior from the original unpadded tensor.
+    bool fabric_only = false;
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id;  // nullopt = use device default
+
+    // Optional progress semaphore: incremented by the H-fabric writer every
+    // progress_t_batch_size outer_dim iterations so that conv3d's reader can
+    // start processing T-slices before NeighborPad finishes all outer_dims.
+    std::optional<GlobalSemaphore> progress_semaphore;
+    uint32_t progress_t_batch_size = 0;  // 0 = disabled
 
     // Constructor required because GlobalSemaphore is not default constructible
     NeighborPadAsyncParams(
@@ -56,7 +69,11 @@ struct NeighborPadAsyncParams {
         uint32_t pad2_right = 0,
         std::optional<uint32_t> pad2_cluster_axis = std::nullopt,
         uint32_t pad2_num_links = 0,
-        bool using_persistent_buffers = false) :
+        bool using_persistent_buffers = false,
+        std::optional<GlobalSemaphore> progress_semaphore = std::nullopt,
+        uint32_t progress_t_batch_size = 0,
+        bool fabric_only = false,
+        std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt) :
         dim(dim),
         padding_left(padding_left),
         padding_right(padding_right),
@@ -74,7 +91,11 @@ struct NeighborPadAsyncParams {
         pad2_right(pad2_right),
         pad2_cluster_axis(pad2_cluster_axis),
         pad2_num_links(pad2_num_links),
-        using_persistent_buffers(using_persistent_buffers) {}
+        using_persistent_buffers(using_persistent_buffers),
+        fabric_only(fabric_only),
+        sub_device_id(sub_device_id),
+        progress_semaphore(progress_semaphore),
+        progress_t_batch_size(progress_t_batch_size) {}
 
     auto attributes() const {
         using ttsl::reflection::Attribute;
@@ -97,6 +118,8 @@ struct NeighborPadAsyncParams {
         attrs.emplace_back("pad2_cluster_axis", pad2_cluster_axis);
         attrs.emplace_back("pad2_num_links", pad2_num_links);
         attrs.emplace_back("using_persistent_buffers", using_persistent_buffers);
+        attrs.emplace_back("progress_t_batch_size", progress_t_batch_size);
+        attrs.emplace_back("fabric_only", fabric_only);
         return attrs;
     }
 };

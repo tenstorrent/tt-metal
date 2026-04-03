@@ -80,7 +80,7 @@ void NeighborPadAsyncDeviceOperation::validate_on_program_cache_miss(
     }
 
     // Validate preallocated output buffer if provided
-    if (tensor_args.preallocated_output.has_value()) {
+    if (tensor_args.preallocated_output.has_value() && !args.fabric_only) {
         const auto& output_tensor = tensor_args.preallocated_output.value();
         TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Preallocated output tensor must be on device.");
         TT_FATAL(
@@ -116,6 +116,35 @@ void NeighborPadAsyncDeviceOperation::validate_on_program_cache_miss(
 TensorSpec NeighborPadAsyncDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
+
+    if (args.fabric_only) {
+        // Compact halo buffer: only the exchanged halo rows, not the full padded tensor.
+        // Layout: [outer_dim_size × (padding_left + padding_right) × num_sticks_per_halo_dim] sticks.
+        const auto& input_shape = input_tensor.padded_shape();
+        uint32_t outer_dim_size = 1;
+        for (uint32_t d = 0; d < args.dim; d++) {
+            outer_dim_size *= input_shape[d];
+        }
+        uint32_t num_sticks_per_halo_dim = 1;
+        for (size_t d = args.dim + 1; d < input_shape.size() - 1; d++) {
+            num_sticks_per_halo_dim *= input_shape[d];
+        }
+        // Primary dim (H) sticks
+        uint32_t h_sticks = outer_dim_size * (args.padding_left + args.padding_right) * num_sticks_per_halo_dim;
+        // Secondary dim (W) sticks: T × 2×padding_w × H_dev
+        uint32_t w_sticks = 0;
+        if (args.pad_dim2.has_value()) {
+            uint32_t w_outer = outer_dim_size * input_shape[args.dim];  // T × H_dev
+            w_sticks = w_outer * (args.pad2_left + args.pad2_right);
+        }
+        uint32_t total_halo_sticks = h_sticks + w_sticks;
+        ttnn::SmallVector<uint32_t> halo_shape_vec = {total_halo_sticks};
+        ttnn::Shape halo_shape(halo_shape_vec);
+        return TensorSpec(
+            halo_shape,
+            TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), args.output_mem_config));
+    }
+
     auto shape = input_tensor.logical_shape();
     shape[args.dim] += (args.padding_left + args.padding_right);
     if (args.pad_dim2.has_value()) {
@@ -152,6 +181,7 @@ ttsl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
         args.pad2_right,
         args.pad2_cluster_axis,
         args.pad2_num_links,
+        args.fabric_only,
         tensor_args);
 }
 
@@ -177,7 +207,11 @@ Tensor neighbor_pad_async(
     uint32_t pad2_right,
     std::optional<uint32_t> pad2_cluster_axis,
     std::optional<size_t> pad2_num_links,
-    const std::optional<Tensor>& persistent_output_buffer) {
+    const std::optional<Tensor>& persistent_output_buffer,
+    const std::optional<GlobalSemaphore>& progress_semaphore,
+    uint32_t progress_t_batch_size,
+    bool fabric_only,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     using OperationType = ttnn::experimental::prim::NeighborPadAsyncDeviceOperation;
 
     auto* mesh_device = input_tensor.device();
@@ -206,7 +240,11 @@ Tensor neighbor_pad_async(
         pad2_right,
         pad2_cluster_axis,
         pad2_num_links.value_or(0),
-        persistent_output_buffer.has_value());
+        persistent_output_buffer.has_value(),
+        progress_semaphore,
+        progress_t_batch_size,
+        fabric_only,
+        sub_device_id);
 
     auto tensor_args =
         OperationType::tensor_args_t{.input_tensor = input_tensor, .preallocated_output = persistent_output_buffer};
