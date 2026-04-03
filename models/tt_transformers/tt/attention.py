@@ -534,12 +534,9 @@ class Attention(LightweightModule):
                 memory_config=self.args.get_attn_create_head_input_mem_config(Mode.DECODE),
             )
         else:
-            # bfloat16 is required by nlp_create_qkv_heads_decode
-            if self.prefetcher is None:
-                xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
-                ttnn.deallocate(xqkv_fused_sharded)
-            else:
-                xqkv_fused = xqkv_fused_sharded
+            # Pass sharded tensor directly (same as prefetcher path)
+            # nlp_create_qkv_heads_decode supports WIDTH_SHARDED input
+            xqkv_fused = xqkv_fused_sharded
         # Reshape such that true unpadded batch is tracked in shape
         fqkv_shape = xqkv_fused.shape
         xqkv_fused = ttnn.reshape(
