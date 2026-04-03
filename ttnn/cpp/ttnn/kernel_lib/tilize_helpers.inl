@@ -90,10 +90,6 @@ ALWI void tilize(
     uint32_t num_blocks,
     std::optional<uint32_t> total_input_pages) {
 
-    DPRINT_UNPACK({DPRINT << "UNPACK STARTED tilize()!!!" << ENDL(); });
-    DPRINT_MATH({DPRINT << "MATH STARTED tilize()!!!" << ENDL(); });
-    DPRINT_PACK({DPRINT << "PACK STARTED tilize()!!!" << ENDL(); });
-
     // Compile-time validation
     static_assert(block_width_tiles > 0,
         "block_width_tiles must be greater than 0");
@@ -134,10 +130,6 @@ ALWI void tilize(
     // Block floats have shared exponents that break row-major-to-tile reinterpretation.
     UNPACK(ASSERT(!is_block_float_format(unpack_src_format[input_cb])));
 
-    DPRINT_UNPACK({DPRINT << "UNPACK use_unpack_reconfig: " << use_unpack_reconfig << ", use_fast: " << use_fast << ENDL(); });
-    DPRINT_MATH({DPRINT << "MATH use_unpack_reconfig: " << use_unpack_reconfig << ", use_fast: " << use_fast << ENDL(); });
-    DPRINT_PACK({DPRINT << "PACK use_unpack_reconfig: " << use_unpack_reconfig << ", use_fast: " << use_fast << ENDL(); });
-
     // Reconfigure register datatypes if requested
     if constexpr (use_unpack_reconfig) {
         // Reconfigure srcA for unpack
@@ -166,10 +158,6 @@ ALWI void tilize(
         }
     }
 
-    DPRINT_UNPACK({DPRINT << "UNPACK finished tilize init!!!" << ENDL(); });
-    DPRINT_MATH({DPRINT << "MATH finished tilize init!!!" << ENDL(); });
-    DPRINT_PACK({DPRINT << "PACK finished tilize init!!!" << ENDL(); });
-
     // Validate CB capacity
     if (asymmetric_cb_pages) {
         uint32_t max_in = (*total_input_pages < 32) ? *total_input_pages : 32;
@@ -178,8 +166,6 @@ ALWI void tilize(
         UNPACK(ASSERT(get_cb_num_pages(input_cb) >= block_width_tiles));
     }
     PACK(ASSERT(get_cb_num_pages(output_cb) >= block_width_tiles));
-
-    DPRINT_UNPACK({DPRINT << "UNPACK passed asserts!!!" << ENDL(); });
 
     // Construct experimental::CircularBuffer objects for sync operations
     experimental::CircularBuffer in_cb(input_cb);
@@ -206,10 +192,6 @@ ALWI void tilize(
         }
 
         out_cb.reserve_back(block_width_tiles);
-
-        DPRINT_UNPACK({DPRINT << "UNPACK starting tilize_block - num_blocks: " << num_blocks << ", block_width_tiles: " << block_width_tiles << ENDL(); });
-        DPRINT_MATH({DPRINT << "MATH starting tilize_block - num_blocks: " << num_blocks << ", block_width_tiles: " << block_width_tiles << ENDL(); });
-        DPRINT_PACK({DPRINT << "PACK starting tilize_block - num_blocks: " << num_blocks << ", block_width_tiles: " << block_width_tiles << ENDL(); });
 
         if constexpr (use_fast) {
             fast_tilize_block(input_cb, block_width_tiles, output_cb);

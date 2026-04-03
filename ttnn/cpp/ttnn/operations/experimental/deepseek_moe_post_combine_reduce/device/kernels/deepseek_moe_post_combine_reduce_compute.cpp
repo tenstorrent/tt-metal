@@ -20,6 +20,7 @@ constexpr uint32_t num_experts = get_compile_time_arg_val(1);
 constexpr uint32_t emb_dim_tiles = get_compile_time_arg_val(2);
 
 void kernel_main() {
+    // SliceRange sr = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 2, .ws = 1};
     uint32_t token_start_idx = get_arg_val<uint32_t>(0);
 
     binary_op_init_common(cb_combine_input, cb_weights, cb_output);
@@ -73,6 +74,11 @@ void kernel_main() {
 
         // Copy accumulator result to row-major buffer
         cb_wait_front(cb_accumulator, emb_dim_tiles);
+        // DPRINT_UNPACK({ DPRINT << "data cb_accumulator for token " << i << ENDL(); });
+        // for (uint32_t j = 0; j < 7; ++j) {
+        //     DPRINT_UNPACK({ DPRINT << "tile " << j << " data: " << TileSlice(cb_accumulator, j, sr, true, false) <<
+        //     ENDL(); });
+        // }
 
         tile_regs_acquire();
 
@@ -96,24 +102,18 @@ void kernel_main() {
         cb_pop_front(cb_weights, num_experts);
     }
 
-    // cb_push_back(cb_rowmajor, TOKENS_PER_CORE);
+    cb_push_back(cb_rowmajor, TOKENS_PER_CORE);
 
-    DPRINT_UNPACK({ DPRINT << "UNPACK STARTING TILIZE!!!" << ENDL(); });
-    DPRINT_MATH({ DPRINT << "MATH STARTING TILIZE!!!" << ENDL(); });
-    DPRINT_PACK({ DPRINT << "PACK STARTING TILIZE!!!" << ENDL(); });
-    // Hardware tilize: convert 32 rows to 224 tiles
-    // cb_rowmajor has asymmetric pages (row-sized: 7168 elements each)
-    // tilize<> internally handles cb_reserve_back/push_back/pop_front
+    // DPRINT_UNPACK({ DPRINT << "data row major" << ENDL(); });
+    // for (uint32_t i = 0; i < 244; ++i) {
+    //     DPRINT_UNPACK({ DPRINT << "tile " << i << " data: " << TileSlice(cb_rowmajor, i, sr, true, false) << ENDL();
+    //     });
+    // }
     using namespace compute_kernel_lib::tilize_config;
-    compute_kernel_lib::tilize<
-        224,          // block_width_tiles (7168 ÷ 32 = 224)
-        cb_rowmajor,  // input CB (row-major, asymmetric pages)
-        cb_output,    // output CB (tiled)
-        InitUninitMode::InitAndUninit,
-        WaitMode::NoWait,
-        ReconfigureRegisterDatatypeMode::NoReconfigure,
-        Fp32Mode::Fast>(1, TOKENS_PER_CORE);  // 1 tile-row, 32 input pages
-    DPRINT_UNPACK({ DPRINT << "UNPACK FINISHED TILIZE!!!" << ENDL(); });
-    DPRINT_MATH({ DPRINT << "MATH FINISHED TILIZE!!!" << ENDL(); });
-    DPRINT_PACK({ DPRINT << "PACK FINISHED TILIZE!!!" << ENDL(); });
+    compute_kernel_lib::tilize<224, cb_rowmajor, cb_output>(1, TOKENS_PER_CORE);
+    // DPRINT_UNPACK({ DPRINT << "data tiled" << ENDL(); });
+    // for (uint32_t i = 0; i < 244; ++i) {
+    //     DPRINT_UNPACK({ DPRINT << "tile " << i << " data: " << TileSlice(cb_output, i, sr, true, false) << ENDL();
+    //     });
+    // }
 }

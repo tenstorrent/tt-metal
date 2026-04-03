@@ -138,43 +138,22 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
 // clang-format on
 ALWI void tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
-    DPRINT_UNPACK({ DPRINT << "UNPACK starting unpack!!!" << ENDL(); });
-    DPRINT_MATH({ DPRINT << "MATH starting unpack!!!" << ENDL(); });
-    DPRINT_PACK({ DPRINT << "PACK starting unpack!!!" << ENDL(); });
     UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));
 
-    DPRINT_UNPACK({ DPRINT << "UNPACK finished unpack!!!" << ENDL(); });
-    DPRINT_MATH({ DPRINT << "MATH finished unpack!!!" << ENDL(); });
-    DPRINT_PACK({ DPRINT << "PACK finished unpack!!!" << ENDL(); });
     for (uint32_t t = 0; t < block; t++) {
         // Acquire dst
         MATH((llk_math_wait_for_dest_available()));
-        // DPRINT_UNPACK({DPRINT << "UNPACK have dest available!!!" << ENDL(); });
-        // DPRINT_MATH({DPRINT << "MATH have dest available!!!" << ENDL(); });
-        // DPRINT_PACK({DPRINT << "PACK have dest available!!!" << ENDL(); });
         PACK((llk_packer_wait_for_math_done()));
 
         // Datacopy
-        // DPRINT_UNPACK({DPRINT << "UNPACK starting copy!!!" << ENDL(); });
-        // DPRINT_MATH({DPRINT << "MATH starting copy!!!" << ENDL(); });
-        // DPRINT_PACK({DPRINT << "PACK starting copy!!!" << ENDL(); });
         MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
             0 /*dst index*/)));
-        // DPRINT_UNPACK({DPRINT << "UNPACK finished copy!!!" << ENDL(); });
-        // DPRINT_MATH({DPRINT << "MATH finished copy!!!" << ENDL(); });
-        // DPRINT_PACK({DPRINT << "PACK finished copy!!!" << ENDL(); });
         PACK((llk_pack<DST_ACCUM_MODE, true, false>(0 /*tile index*/, ocb, t + output_tile_index)));
 
-        // DPRINT_UNPACK({DPRINT << "UNPACK finished pack!!!" << ENDL(); });
-        // DPRINT_MATH({DPRINT << "MATH finished copy!!!" << ENDL(); });
-        // DPRINT_PACK({DPRINT << "PACK finished copy!!!" << ENDL(); });
         // Release dest
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
         PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
     }
-    DPRINT_UNPACK({ DPRINT << "UNPACK finished tilize_block!!!" << ENDL(); });
-    DPRINT_MATH({ DPRINT << "MATH finished tilize_block!!!" << ENDL(); });
-    DPRINT_PACK({ DPRINT << "PACK finished tilize_block!!!" << ENDL(); });
 }
 
 // clang-format off
