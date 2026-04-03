@@ -641,6 +641,7 @@ class Molmo2Generator:
         # KV cache (initialized on first run)
         self.kv_caches = None
         self.current_pos = None
+        self.rot_mat_idxs = None  # set in init_kv_cache; reset_kv_cache may run earlier (e.g. batch driver)
         self.decode_position = 0  # Track position on host for trace updates
 
         # Mesh mapper

@@ -1,0 +1,130 @@
+[
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 1/32: name one object in the image (max 6 words)."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 2/32: what color dominates? One word."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 3/32: indoor or outdoor? One word."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 4/32: is there an animal? yes or no only."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 5/32: name one object in the image (max 6 words)."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 6/32: what color dominates? One word."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 7/32: indoor or outdoor? One word."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 8/32: is there an animal? yes or no only."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 9/32: name one object in the image (max 6 words)."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 10/32: what color dominates? One word."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 11/32: indoor or outdoor? One word."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 12/32: is there an animal? yes or no only."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 13/32: name one object in the image (max 6 words)."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 14/32: what color dominates? One word."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 15/32: indoor or outdoor? One word."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 16/32: is there an animal? yes or no only."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 17/32: name one object in the image (max 6 words)."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 18/32: what color dominates? One word."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 19/32: indoor or outdoor? One word."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 20/32: is there an animal? yes or no only."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 21/32: name one object in the image (max 6 words)."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 22/32: what color dominates? One word."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 23/32: indoor or outdoor? One word."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 24/32: is there an animal? yes or no only."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 25/32: name one object in the image (max 6 words)."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 26/32: what color dominates? One word."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 27/32: indoor or outdoor? One word."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 28/32: is there an animal? yes or no only."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 29/32: name one object in the image (max 6 words)."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 30/32: what color dominates? One word."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 31/32: indoor or outdoor? One word."
+  },
+  {
+    "image": "models/demos/molmo2/demo/dog.jpg",
+    "prompt": "<|image|> Request 32/32: is there an animal? yes or no only."
+  }
+]
