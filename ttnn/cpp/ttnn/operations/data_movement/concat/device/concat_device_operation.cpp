@@ -36,9 +36,14 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     const bool output_is_sharded = args.output_mem_config.is_sharded();
 
     if (output_is_sharded) {
-        // Sharded-to-sharded (s2s) cases
-        if (input_tensors.size() == 2) {
-            // Optimized 2-tensor case
+        const bool is_width_sharded =
+            input_tensors[0].memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+
+        // Route 2-tensor width-sharded to ConcatS2SMultiProgramFactory since the
+        // optimized 2-tensor kernels only support height-sharded.
+        // Original code:
+        //   if (input_tensors.size() == 2) {
+        if (input_tensors.size() == 2 && !is_width_sharded) {
             TT_FATAL(
                 input_tensors[0].layout() == input_tensors[1].layout(),
                 "Expected all input tensors to have the same layout for 2-tensor sharded concat");
@@ -49,8 +54,7 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
             }
             log_info(tt::LogAlways, "[TRACE] select_program_factory: ConcatS2STiledProgramFactory");
             return ConcatS2STiledProgramFactory{};
-
-        }  // Multi-tensor s2s case
+        }
         log_info(tt::LogAlways, "[TRACE] select_program_factory: ConcatS2SMultiProgramFactory");
         return ConcatS2SMultiProgramFactory{};
     }
@@ -101,10 +105,12 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 in_ref.memory_config().memory_layout() == first_input.memory_config().memory_layout(),
                 "Sharded tensors must have the same memory layout.");
+            // Removed: 2-tensor width-sharded now routed to ConcatS2SMultiProgramFactory
             // TODO(jerrysky3): Remove this when we replace the two tensors concat kernel with the general one.
-            TT_FATAL(
-                input_tensors.size() > 2 || in_ref.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
-                "Width sharded inputs are not supported for two tensors concat yet");
+            // TT_FATAL(
+            //     input_tensors.size() > 2 || in_ref.memory_config().memory_layout() !=
+            //     TensorMemoryLayout::WIDTH_SHARDED, "Width sharded inputs are not supported for two tensors concat
+            //     yet");
             TT_FATAL(
                 in_ref.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED,
                 "Block sharded inputs are not supported");
