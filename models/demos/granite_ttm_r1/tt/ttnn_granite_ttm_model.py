@@ -243,6 +243,8 @@ class TtnnGraniteTTMModel:
         }
 
         # --- Pre-allocate the input buffer (fixed address for trace replay) ---
+        # Also pre-allocate a pinned host tensor so execute_compiled() can
+        # avoid creating a new Python-level tensor on every call.
         dummy = torch.zeros(B, T, C, dtype=torch.float32)
         self._trace_input = ttnn.from_torch(
             dummy,
@@ -251,6 +253,14 @@ class TtnnGraniteTTMModel:
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        # Pre-allocated host buffer reused every execute_compiled() call,
+        # avoiding a new Python object allocation on each inference call.
+        # pin_memory() is used when available (CUDA host) for DMA-friendly
+        # transfers; falls back to a regular tensor on non-CUDA hosts.
+        try:
+            self._host_pinned = dummy.pin_memory()
+        except RuntimeError:
+            self._host_pinned = dummy.clone()
 
         # --- Warm-up: populate the TTNN program cache (kernel JIT compilation) ---
         _ = self._forward_ttnn(self._trace_input, device=device, _scaler_consts=self._scaler_consts)
@@ -289,20 +299,19 @@ class TtnnGraniteTTMModel:
         if not self._is_compiled:
             raise RuntimeError("Model not compiled. Call compile(device) first.")
 
-        # Convert history to a host-side bfloat16 tensor then copy into the
-        # pre-allocated DRAM buffer at the address captured in the trace.
+        # Copy new data into the pre-allocated pinned host buffer and then
+        # DMA it into the device buffer whose address is recorded in the trace.
+        # Reusing self._host_pinned avoids Python object allocation each call.
         if isinstance(history, ttnn.Tensor):
-            host_tensor = ttnn.from_torch(
-                ttnn.to_torch(history).to(torch.float32),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-            )
+            src = ttnn.to_torch(history).to(torch.float32)
         else:
-            host_tensor = ttnn.from_torch(
-                history.to(torch.float32),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-            )
+            src = history.float()
+        self._host_pinned.copy_(src)
+        host_tensor = ttnn.from_torch(
+            self._host_pinned,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
         ttnn.copy_host_to_device_tensor(host_tensor, self._trace_input)
 
         ttnn.execute_trace(self._trace_device, self._trace_id, cq_id=0, blocking=True)
