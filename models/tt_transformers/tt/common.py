@@ -204,6 +204,7 @@ def preprocess_inputs_prefill(
     """
     Run tokenizer on inputs, and create embeddings for the first token of each input
     """
+
     # To avoid going out of memory, clip the max prefill length by the maximum number of tokens that will be generated
 
     for m_args in model_args:
@@ -284,7 +285,16 @@ def preprocess_inputs_prefill(
     # To avoid issues, we keep track of the decoding position to decode correctly the user's prompt
     for i, encoded in enumerate(encoded_prompts):
         # Initial prefill tensors full of pad tokens
-        input_tokens_prefill_i = torch.full((1, max_prompt_len), 0, dtype=torch.int32)
+        from models.tt_transformers.tt.model_config import is_phi1
+
+        if is_phi1():
+            pad_id = getattr(tokenizer, "pad_token_id", None)
+            if pad_id is None:
+                pad_id = getattr(tokenizer, "eos_token_id", 0)
+            input_tokens_prefill_i = torch.full((1, max_prompt_len), pad_id, dtype=torch.int32)
+        else:
+            input_tokens_prefill_i = torch.full((1, max_prompt_len), 0, dtype=torch.int32)
+
         input_tokens_prefill_i[0, : len(encoded[:])] = torch.tensor(encoded[:]).to(input_tokens_prefill_i)
         input_tokens_prefill.append(input_tokens_prefill_i)
 
@@ -762,9 +772,6 @@ def pad_to_size(x: torch.Tensor, dim: int, size: int) -> torch.Tensor:
 
 
 def get_base_model_name(model_name: str) -> str:
-    # Explicitly handle phi-4 which doesn't follow the <Size>B format
-    if "phi-4" in model_name.lower():
-        return "Phi-4"
     # Remove the suffix after B- (case insensitive), e.g. "Llama-3.1-70B-Instruct" -> "Llama-3.1-70B"
     match = re.search(r"(.*?\d+[bB])-", model_name)
     return match.group(1) if match else model_name
@@ -811,7 +818,6 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
     use_prefetcher=False,
-    use_hf_rope=False,
 ):
     from models.tt_transformers.tt.model import Transformer
     from models.tt_transformers.tt.model_config import ModelArgs
@@ -827,7 +833,6 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
         prefetcher=prefetcher,
-        use_hf_rope=use_hf_rope,
     )
 
     if num_layers is not None:
@@ -839,7 +844,6 @@ def create_tt_model(
     # Avoid loading state_dict for every DP model
     if not state_dict:
         state_dict = tt_model_args.load_state_dict()
-
     model = Transformer(
         args=tt_model_args,
         mesh_device=mesh_device,
