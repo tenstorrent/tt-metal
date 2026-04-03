@@ -22,8 +22,11 @@ def register_ttnn_cpp_unary_function(unary_function):
             return result
 
         def torch_hardmish(x):
+            # Hard Mish: x * clamp(x + 2, 0, 2) / 2
+            # Ref: https://github.com/pytorch/pytorch/issues/25584
+            # Piecewise: 0 for x<-2, x*(x+2)/2 for -2<=x<=0, x for x>0
             x_f32 = x.to(torch.float32)
-            result_f32 = x_f32 * torch.clamp(x_f32 + 2.8, min=0.0, max=5.0) / 5
+            result_f32 = x_f32 * torch.clamp(x_f32 + 2.0, min=0.0, max=2.0) / 2
 
             if x.dtype == torch.bfloat16:
                 # Simulate SFPSTORE truncating
