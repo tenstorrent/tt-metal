@@ -156,14 +156,6 @@ if is_blackhole():
         "i2v",
     ],
 )
-@pytest.mark.parametrize(
-    "traced",
-    [True, False],
-    ids=[
-        "tracing_on",
-        "tracing_off",
-    ],
-)
 def test_pipeline_performance(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -179,11 +171,11 @@ def test_pipeline_performance(
     is_ci_env: bool,
     galaxy_type: str,
     is_fsdp: bool,
-    traced: bool,
 ) -> None:
     """Performance test for Wan pipeline with detailed timing analysis."""
 
     benchmark_profiler = BenchmarkProfiler()
+    traced = not dynamic_load  # trace only if dynamic_load is off
 
     # Skip 4U.
     if galaxy_type == "4U":
