@@ -782,8 +782,9 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             // Bitcast uses identity kernel (copy_tile + pack_tile) - no LLK needed
             // Parameters are input_dtype and output_dtype, but we don't need them for the kernel
         case UnaryOpType::TANHSHRINK:
-        case UnaryOpType::HARDSWISH:
-        case UnaryOpType::LOGSIGMOID: return {};
+        case UnaryOpType::HARDSWISH: return {};
+        case UnaryOpType::LOGSIGMOID:
+            return {"logsigmoid_tile_init();", fmt::format("logsigmoid_tile({});", idst)};
         case UnaryOpType::HARDMISH: return {"hardmish_tile_init();", fmt::format("hardmish_tile({});", idst)};
         default: TT_THROW("Undefined non-parametrized op type {}", op_type);
     }
@@ -1024,7 +1025,6 @@ std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<Data
             } else {
                 return "hardswish_kernel.cpp";
             }
-        case UnaryOpType::LOGSIGMOID: return "logsigmoid_kernel.cpp";
         default: return "eltwise_sfpu.cpp";
     }
 }
