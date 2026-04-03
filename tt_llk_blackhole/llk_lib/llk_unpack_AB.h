@@ -35,7 +35,7 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
     const std::uint32_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
     const std::uint32_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
     // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
-    validate_tensor_shape_tile_dependent_ops_(tensor_shape);
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
     if (transpose_of_faces)
     {
@@ -157,7 +157,7 @@ template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const std::uint32_t transpose = 0)
 {
     // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
-    validate_tensor_shape_tile_dependent_ops_(tensor_shape);
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose); // transpose within the face
 
     config_unpacker_x_end<p_setadc::UNP_AB>(tensor_shape.face_r_dim);

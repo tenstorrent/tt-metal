@@ -135,7 +135,7 @@ template <
     bool enforce_fp32_accumulation = false>
 inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape)
 {
-    validate_tensor_shape_tile_dependent_ops_(tensor_shape);
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
     // Supported narrow tiles per BH Tiny Tile Summary: [16]x16 (num_faces=1) and [32]x16 (num_faces=2) only
     LLK_ASSERT(

@@ -78,24 +78,19 @@ static_assert(sizeof(TensorShape) == 4, "TensorShape must be 4 bytes");
 constexpr TensorShape DEFAULT_TENSOR_SHAPE = {MAX_FACE_R_DIM, MAX_FACE_C_DIM, MAX_NUM_FACES_R_DIM, MAX_NUM_FACES_C_DIM};
 
 /**
- * @brief Operations that are dependent of face positioning within a tile will have this function called to validate the tensor shape.
- * Will start relaxing this constraint once we test larger tensor shapes
+ * @brief Validates tensor shape for operations that depend on face positioning within a tile.
+ * Will start relaxing this constraint once we test larger tensor shapes.
  *
  * @param tensor_shape: Tensor shape to validate
+ * @return true if tensor shape is valid, false otherwise
  **/
-inline void validate_tensor_shape_tile_dependent_ops_(const TensorShape &tensor_shape)
+__attribute__((noinline)) bool validate_tensor_shape_tile_dependent_ops_(const TensorShape &tensor_shape)
 {
-#ifdef ENABLE_LLK_ASSERT
-    // Intentionally use volatile to prevent the compiler from optimizing these locals out,
-    // so tt-triage/debugger can report their values when an LLK_ASSERT triggers. This block
-    // is guarded by ENABLE_LLK_ASSERT to avoid any runtime impact when asserts are off.
-    volatile const std::uint8_t num_faces  = tensor_shape.total_num_faces();
-    volatile const std::uint8_t face_r_dim = tensor_shape.face_r_dim;
-    volatile const std::uint8_t face_c_dim = tensor_shape.face_c_dim;
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "total num_faces must be 1, 2, or 4");
-    LLK_ASSERT(face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == 16, "face_r_dim must be 1, 2, 4, 8, 16");
-    LLK_ASSERT(face_c_dim == 16, "face_c_dim must be 16");
-#endif
+    const std::uint8_t num_faces  = tensor_shape.total_num_faces();
+    const std::uint8_t face_r_dim = tensor_shape.face_r_dim;
+    const std::uint8_t face_c_dim = tensor_shape.face_c_dim;
+    return (num_faces == 1 || num_faces == 2 || num_faces == 4) &&
+           (face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == 16) && (face_c_dim == 16);
 }
 
 } // namespace ckernel
