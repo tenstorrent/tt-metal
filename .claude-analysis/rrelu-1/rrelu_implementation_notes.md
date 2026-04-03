@@ -49,3 +49,76 @@ ttnn/ttnn/operations/unary.py
 - The eval mode (seed=0) still seeds the PRNG with 0 and generates random slopes. To get true eval behavior (fixed midpoint slope), the Python-level code should pass lower = upper = midpoint when seed == 0. The golden function handles this distinction.
 - No bfloat16 rounding in the raw TTI path (the raw TTI SFPSTORE uses IMPLIED format which handles format conversion automatically via the DEST accumulator format).
 - Each lane's PRNG advances independently, but all lanes advance unconditionally (even for positive elements where the random value is not used). This is by design and ensures consistent PRNG state progression.
+
+## Test Results
+- **Status**: PASS (after 7 attempts, 5 hypotheses)
+- **Test file**: tests/ttnn/unit_tests/operations/eltwise/test_rrelu.py
+- **Total tests**: 8 (6 eval mode + 2 training mode)
+- **Eval mode bfloat16** (3 param combos, is_fp32=False):
+  - **Max ULP**: 1.0 (threshold: 2)
+  - **allclose**: PASS (rtol=1.6e-2, atol=1e-2)
+- **Eval mode fp32** (3 param combos, is_fp32=True):
+  - **Max ULP**: 0.0 (threshold: 3)
+  - **allclose**: PASS (rtol=1e-3, atol=1e-4)
+- **Training mode bfloat16**: PASS (positive passthrough exact, negative values in [upper*x, lower*x])
+- **Training mode fp32**: PASS (positive passthrough exact, negative values in [upper*x, lower*x])
+
+### New Files (added by tester)
+tests/ttnn/unit_tests/operations/eltwise/test_rrelu.py
+
+### Modified Files (by tester during debugging)
+ttnn/cpp/ttnn/operations/eltwise/unary/unary.cpp - Added eval mode (seed==0) midpoint fix
+
+## Debug Log
+### Attempt 1
+- **Result**: FAIL
+- **Error type**: runtime_error
+- **Error**: TypeError: incompatible function arguments. Compiled binary had stale API (training:bool) not matching source (seed:uint32_t).
+- **Hypothesis**: H1 - Compiled binary has different Python API than source nanobind file.
+- **Fix**: Attempted to change test to use training=False/True (wrong approach).
+- **Files modified**: tests/ttnn/unit_tests/operations/eltwise/test_rrelu.py
+
+### Attempt 2
+- **Result**: FAIL
+- **Error type**: build_error
+- **Error**: rrelu_tile called with wrong number of args (stale binary dispatching wrong code).
+- **Hypothesis**: H2 - Compiled binary is stale, needs rebuild.
+- **Fix**: Ran build_metal.sh to recompile. Reverted test back to seed=0/42 API.
+- **Files modified**: tests/ttnn/unit_tests/operations/eltwise/test_rrelu.py (reverted)
+
+### Attempt 3
+- **Result**: FAIL
+- **Error type**: numerical_error
+- **Error**: Max ULP Delta 14483456.0 - large negative values had wrong slopes.
+- **Hypothesis**: H3 - Subnormal float32 artifacts (incorrect, root cause was different).
+- **Fix**: Added flush_subnormal_values_to_zero on comparison tensors.
+- **Files modified**: tests/ttnn/unit_tests/operations/eltwise/test_rrelu.py
+
+### Attempt 4
+- **Result**: FAIL
+- **Error type**: numerical_error
+- **Error**: Max ULP Delta 14745600.0 - still large errors, subnormal flush was not the issue.
+- **Hypothesis**: H4 - C++ rrelu() passes original lower/upper to kernel in eval mode (seed=0), but kernel always uses random slopes. Need to pass midpoint as both lower and upper when seed==0.
+- **Fix**: Modified unary.cpp to set effective_lower = effective_upper = midpoint when seed==0.
+- **Files modified**: ttnn/cpp/ttnn/operations/eltwise/unary/unary.cpp
+
+### Attempt 5
+- **Result**: FAIL
+- **Error type**: numerical_error
+- **Error**: Max ULP Delta 65536.0 - this equals exactly 2^16 = ratio between float32 and bfloat16 ULP granularity. Actual error was 1 bfloat16 ULP.
+- **Hypothesis**: H5 - Test compares float32 ULPs but data is bfloat16. Need to keep bfloat16 dtype for ULP comparison.
+- **Fix**: Changed bfloat16 branch to compare as bfloat16 tensors for ULP measurement.
+- **Files modified**: tests/ttnn/unit_tests/operations/eltwise/test_rrelu.py
+
+### Attempt 6
+- **Result**: FAIL (partial - 6 eval PASSED, 1 training bfloat16 FAILED)
+- **Error type**: numerical_error
+- **Error**: Training bfloat16 positive passthrough: hardware flushes subnormal positive inputs to zero, but test expected exact match with rtol=0, atol=0.
+- **Fix**: Added flush_subnormal_values_to_zero on both input and actual before passthrough comparison.
+- **Files modified**: tests/ttnn/unit_tests/operations/eltwise/test_rrelu.py
+
+### Attempt 7
+- **Result**: PASS
+- **All 8 tests passed**: 6 eval mode + 2 training mode
+- **bfloat16**: ULP 1.0, allclose PASS
+- **fp32**: ULP 0.0, allclose PASS

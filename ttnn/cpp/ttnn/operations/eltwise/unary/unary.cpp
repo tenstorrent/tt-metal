@@ -379,11 +379,20 @@ Tensor rrelu(
     uint32_t seed,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    // Eval mode (seed == 0): use deterministic midpoint slope.
+    // Set lower = upper = midpoint so that range = 0, making slope = rand*0 + midpoint = midpoint.
+    float effective_lower = lower;
+    float effective_upper = upper;
+    if (seed == 0) {
+        float midpoint = (lower + upper) / 2.0f;
+        effective_lower = midpoint;
+        effective_upper = midpoint;
+    }
     // Pack seed as float for transport through the UnaryWithParam system
     float seed_as_float = std::bit_cast<float>(seed);
     return ttnn::detail::unary_impl(
         input_tensor,
-        {UnaryWithParam{UnaryOpType::RRELU, {lower, upper, seed_as_float}}},
+        {UnaryWithParam{UnaryOpType::RRELU, {effective_lower, effective_upper, seed_as_float}}},
         memory_config,
         optional_output_tensor);
 }
