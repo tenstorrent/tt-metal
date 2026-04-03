@@ -69,14 +69,14 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
     }
     v_endif;
 
-    // If x=±NaN or y=±NaN, vec_min_max will ensure max=NaN as mentioned above.
+    // If |x| = NaN or |y| = NaN, vec_min_max will ensure max=NaN as mentioned above.
     sfpi::vInt diff_infinity = sfpi::reinterpret<sfpi::vInt>(infinity) - sfpi::reinterpret<sfpi::vInt>(max);
 
-    // if x=NaN or y=NaN, then r = NaN
+    // if |x| = NaN or |y| = NaN, then r = NaN
     v_if(diff_infinity < 0) { r = std::numeric_limits<float>::quiet_NaN(); }
     v_endif;
 
-    // if x==y, and y=inf, then both x and y are infinite, then r = π/4
+    // if |x| = |y| and |y| = inf, then r = π/4
     v_if(diff == 0) {
         v_if(diff_infinity == 0) { r = sfpi::addexp(half_pi, -1); }
         v_endif;
