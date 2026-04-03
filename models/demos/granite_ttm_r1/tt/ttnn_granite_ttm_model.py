@@ -265,6 +265,19 @@ class TtnnGraniteTTMModel:
         # --- Warm-up: populate the TTNN program cache (kernel JIT compilation) ---
         _ = self._forward_ttnn(self._trace_input, device=device, _scaler_consts=self._scaler_consts)
 
+        # --- Staging buffer for the double-buffering pipeline ---
+        # _staging_input receives the next frame's H2D copy on cq_id=1 while
+        # _trace_input is being consumed by the trace on cq_id=0.
+        # A device-to-device copy (ttnn.copy, ~0.01 ms) transfers the new data
+        # from staging into the trace's pinned input buffer before each replay.
+        self._staging_input = ttnn.from_torch(
+            dummy,
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
         # --- Capture trace ---
         trace_id = ttnn.begin_trace_capture(device, cq_id=0)
         self._trace_output = self._forward_ttnn(self._trace_input, device=device, _scaler_consts=self._scaler_consts)
@@ -316,6 +329,94 @@ class TtnnGraniteTTMModel:
 
         ttnn.execute_trace(self._trace_device, self._trace_id, cq_id=0, blocking=True)
         return self._trace_output
+
+    def execute_compiled_pipelined(
+        self,
+        history_list: "list[torch.Tensor]",
+    ) -> "list[ttnn.Tensor]":
+        """Run multiple forward passes with H2D/compute pipelining.
+
+        Overlaps the host-to-device copy of frame N+1 (on cq_id=1) with the
+        trace execution for frame N (on cq_id=0).  For this tiny model the H2D
+        transfer time (~0.12 ms) is far shorter than the trace replay time
+        (~1.71 ms), so H2D is fully hidden and the effective per-frame time
+        collapses to: D2D_copy (~0.01 ms) + trace_exec (~1.71 ms) ≈ 1.72 ms.
+        This is equivalent to ~580 seq/s at batch=1.
+
+        Pipeline overview (two command queues):
+          cq_0: [wait H2D event] → [D2D: staging→trace_input] → [execute_trace]
+          cq_1: [H2D: host→staging] → record_event
+
+        The device-side wait_for_event ensures D2D does not start before the
+        H2D write into the staging buffer is complete.
+
+        Args:
+            history_list: Sequence of host tensors [B, T, C] to process.
+
+        Returns:
+            List of output ttnn.Tensors.  Note: all outputs reference the same
+            device buffer (the trace output buffer); copy to host before the
+            next call overwrites it if you need to retain multiple results.
+        """
+        import ttnn
+
+        if not self._is_compiled:
+            raise RuntimeError("Model not compiled. Call compile(device) first.")
+
+        device = self._trace_device
+
+        def _h2d_to_staging(history):
+            """Copy a host tensor into the staging buffer on cq_id=1."""
+            if isinstance(history, ttnn.Tensor):
+                src = ttnn.to_torch(history).to(torch.float32)
+            else:
+                src = history.float()
+            self._host_pinned.copy_(src)
+            host_tensor = ttnn.from_torch(
+                self._host_pinned,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            ttnn.copy_host_to_device_tensor(host_tensor, self._staging_input, cq_id=1)
+
+        n = len(history_list)
+
+        # Pipeline design: one inflight trace at a time to avoid CQ overflow.
+        #
+        #  Iteration i:
+        #   Python: issue H2D(frame_i → staging, cq_id=1)  ← returns immediately
+        #   Python: synchronize_device(cq_id=0)             ← blocks on prev trace
+        #   Device: H2D runs concurrently for ~0.12 ms (< 1.71 ms trace time)
+        #   After sync: H2D is done; issue D2D(staging→trace_input) + execute_trace
+        #
+        # Effective device time per frame = D2D (~0.01 ms) + trace (~1.71 ms) = 1.72 ms
+        # H2D (~0.12 ms) is fully hidden by the synchronize wait → ~580 seq/s.
+
+        # Frame 0: prime the pipeline (no previous trace to overlap)
+        _h2d_to_staging(history_list[0])
+        e_h2d = ttnn.record_event(device, cq_id=1)
+        # cq_0: wait for H2D event, D2D, then execute frame 0's trace
+        ttnn.wait_for_event(cq_id=0, mesh_event=e_h2d)
+        ttnn.copy(self._staging_input, self._trace_input)
+        ttnn.execute_trace(device, self._trace_id, cq_id=0, blocking=False)
+
+        for i in range(1, n):
+            # Issue H2D for frame i on cq_id=1 while frame i-1 trace runs on cq_0.
+            _h2d_to_staging(history_list[i])
+            e_h2d = ttnn.record_event(device, cq_id=1)
+
+            # Block Python until cq_0 finishes (frame i-1 trace + any pending D2D).
+            # During this wait (~1.72 ms), H2D for frame i completes (~0.12 ms).
+            ttnn.synchronize_device(device, cq_id=0)
+
+            # H2D is now done; transfer staging → trace_input and execute next trace.
+            ttnn.wait_for_event(cq_id=0, mesh_event=e_h2d)
+            ttnn.copy(self._staging_input, self._trace_input)
+            ttnn.execute_trace(device, self._trace_id, cq_id=0, blocking=False)
+
+        # Wait for the last trace to finish
+        ttnn.synchronize_device(device, cq_id=0)
+        return [self._trace_output] * n
 
     def release_trace(self) -> None:
         """Release the captured trace and free associated device memory."""

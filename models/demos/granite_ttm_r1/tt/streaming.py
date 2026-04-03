@@ -65,12 +65,15 @@ class GraniteTTMStreamingForecaster:
         self._use_compiled = use_compiled
         self._dtype = dtype
 
-        # Rolling buffer: [context_length, num_channels]
+        # Circular buffer: [context_length, num_channels]
+        # _write_pos points to the next slot to be overwritten (oldest data).
+        # Reading the buffer in logical order requires slicing at _write_pos.
         self._buffer = torch.zeros(
             config.context_length,
             config.num_channels,
             dtype=dtype,
         )
+        self._write_pos: int = 0  # index of oldest slot (next to overwrite)
 
         # Track how many real observations have been fed (for cold-start info)
         self._n_observations: int = 0
@@ -106,9 +109,22 @@ class GraniteTTMStreamingForecaster:
             new_values = new_values[-self._config.context_length :]
             n_new = self._config.context_length
 
-        # Shift buffer left, append new values at the right
-        self._buffer = torch.roll(self._buffer, shifts=-n_new, dims=0)
-        self._buffer[-n_new:] = new_values.to(self._dtype)
+        # Write new observations into the circular buffer in-place.
+        # This avoids the torch.roll allocation (which creates a new tensor
+        # on every step) — instead we overwrite slots directly and track the
+        # write position.  For n_new <= context_length - _write_pos the write
+        # fits in a single contiguous slice; otherwise it wraps around.
+        T = self._config.context_length
+        new_values_typed = new_values.to(self._dtype)
+        end = self._write_pos + n_new
+        if end <= T:
+            self._buffer[self._write_pos : end] = new_values_typed
+        else:
+            # Wrap-around: fill tail then head
+            tail = T - self._write_pos
+            self._buffer[self._write_pos :] = new_values_typed[:tail]
+            self._buffer[: n_new - tail] = new_values_typed[tail:]
+        self._write_pos = end % T
         self._n_observations += n_new
 
         return self._run_inference()
@@ -136,6 +152,8 @@ class GraniteTTMStreamingForecaster:
                 dtype=self._dtype,
             )
             self._n_observations = 0
+        # Reset the write pointer: buffer is in chronological order after reset.
+        self._write_pos = 0
 
     @property
     def n_observations(self) -> int:
@@ -156,8 +174,14 @@ class GraniteTTMStreamingForecaster:
         import ttnn
         from models.demos.granite_ttm_r1.tt.common import to_torch_tensor
 
-        # history: [1, context_length, num_channels]
-        history = self._buffer.unsqueeze(0)
+        # Reconstruct chronological view from the circular buffer.
+        # _write_pos points to the oldest slot; the logical order is:
+        #   [_write_pos:] ++ [:_write_pos]
+        # When _write_pos == 0 the buffer is already in order (no-copy fast path).
+        if self._write_pos == 0:
+            history = self._buffer.unsqueeze(0)
+        else:
+            history = torch.cat([self._buffer[self._write_pos :], self._buffer[: self._write_pos]], dim=0).unsqueeze(0)
 
         if self._use_compiled and getattr(self._model, "_is_compiled", False):
             # Trace path: single host command

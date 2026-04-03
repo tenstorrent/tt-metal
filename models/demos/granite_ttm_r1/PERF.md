@@ -92,9 +92,9 @@ python -m pytest models/demos/granite_ttm_r1/tests/accuracy/ -v -s
 | E1: Zero-shot ETTh1 accuracy | ✅ **PASSED** | TTNN MSE 0.4324 vs published 0.444 (2.6% below target); PCC vs PyTorch 0.9999 |
 | E2: Pre-allocated host buffer | No gain | Input tensor is 1 KB; per-call allocation overhead is negligible vs trace replay |
 | E3: LoFi math fidelity | No gain | Model is dispatch-bound; faster kernels hidden by trace replay cost; HiFi2 retained |
-| E4: Double-buffering (async) | Not attempted | TTNN execute_trace blocking=True required; async path not available; see Known limitations |
+| E4: Double-buffering (2-CQ pipeline) | ~433 seq/s (xfail) | `synchronize_device(idle)` adds 0.155 ms/frame overhead; negates H2D hiding (0.12 ms H2D < 0.155 ms sync); Python overhead is binding constraint |
 | E5: batch=64 sweep | ✅ **5723 seq/s peak** | Saturation at batch=64; batch=128 drops to ~4972 seq/s (memory pressure) |
-| E6: Streaming circular buffer | ✅ Implemented | Eliminates torch.roll allocation; ~0.01 ms saving per step |
+| E6: Streaming circular buffer | ✅ Implemented | Eliminates `torch.roll` allocation on every step; in-place indexed writes + wrap-around; ~0.01 ms saving per step |
 
 ## Known limitations and trade-offs
 
@@ -108,3 +108,4 @@ python -m pytest models/demos/granite_ttm_r1/tests/accuracy/ -v -s
 | Peak throughput | batch=64 gives ~5723 seq/s (Stage 4 E5); batch=128 regresses due to memory pressure |
 | LoFi math fidelity | Tested (Stage 4 E3): no gain because model is dispatch-bound; toggle via TTNN_LOFI=1 |
 | Zero-shot accuracy | Stage 4 E1: TTNN MSE 0.4324 vs published 0.444 on ETTh1 test split (all 7 channels, normalized) |
+| 2-CQ double-buffering (E4) | Tried: `synchronize_device(idle)` costs 0.155 ms/frame, more than H2D (0.12 ms) being hidden; net: 433 seq/s — no gain over single-CQ traced path |
