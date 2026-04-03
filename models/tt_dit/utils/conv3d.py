@@ -4,6 +4,7 @@
 
 import collections
 import hashlib
+import math
 from itertools import repeat
 
 import torch
@@ -23,8 +24,88 @@ def _ntuple(x, n):
     return tuple(repeat(x, n))
 
 
-_conv3d_blocking_configs = {
-    # (in_channels, out_channels, kernel_size) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
+def compute_decoder_stage_dims(target_height, target_width, h_factor, w_factor, num_stages=3):
+    """Compute per-device (H_out, W_out) at each VAE decoder stage.
+
+    Returns a list of (H, W) tuples from latent resolution to full resolution.
+    Height is rounded up (padded), width is rounded down (fractured evenly).
+    """
+    vae_scale = 2**num_stages  # 8 for 3 upsample stages
+    # Height rounds up to handle fractured padding; width rounds down (exact fracturing).
+    h_dev = math.ceil(target_height / vae_scale / h_factor) * vae_scale
+    w_dev = (target_width // vae_scale // w_factor) * vae_scale
+    stages = [(h_dev // vae_scale, w_dev // vae_scale)]
+    for _ in range(num_stages):
+        prev_h, prev_w = stages[-1]
+        stages.append((prev_h * 2, prev_w * 2))
+    return stages
+
+
+# Blocking table: (h_factor, w_factor, C_in, C_out, kernel, H_out, W_out) -> blocking
+# Each production (mesh, resolution, layer) combination gets its own entry.
+# Blockings are (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block).
+# See models/tt_dit/tests/models/wan2_2/sweep_results.md for sweep methodology.
+_BLOCKINGS = {
+    # --- BH Galaxy 6U 4x32, 720p — v4: T_out_block > 1 + joint spatial sweep ---
+    # conv_in: 32→384 k333, T=1 optimal (small shape)
+    (4, 32, 32, 384, (3, 3, 3), 23, 5): (32, 128, 1, 16, 2),
+    # lat_res + mid_res: 384→384 k333, T=3 hides weight stall (-10% lat_res)
+    (4, 32, 384, 384, (3, 3, 3), 23, 5): (96, 96, 3, 32, 1),
+    # up0_tconv: 384→768 k311, T=3 gives -8%
+    (4, 32, 384, 768, (3, 1, 1), 23, 5): (128, 256, 3, 8, 4),
+    # up0_spatial: 384→192 k133, T=1 (kT=1, no T blocking possible)
+    (4, 32, 384, 192, (1, 3, 3), 46, 10): (96, 96, 1, 16, 4),
+    # up1_res0: 192→384 k333, T=3 gives -4%
+    (4, 32, 192, 384, (3, 3, 3), 46, 10): (96, 128, 3, 8, 4),
+    # up1_res: 384→384 k333, T=3 hides weight stall (-5%)
+    (4, 32, 384, 384, (3, 3, 3), 46, 10): (96, 128, 3, 16, 2),
+    # up1_tconv: 384→768 k311, T=3 gives -6%
+    (4, 32, 384, 768, (3, 1, 1), 46, 10): (192, 384, 3, 16, 2),
+    # up1_spatial: 384→192 k133, T=1 (kT=1)
+    (4, 32, 384, 192, (1, 3, 3), 92, 20): (192, 96, 1, 32, 4),
+    # up2_res: 192→192 k333, T=9 gives -6% over T=3 (hides weight stall)
+    (4, 32, 192, 192, (3, 3, 3), 92, 20): (96, 96, 9, 8, 4),
+    # up2_spatial: 192→96 k133, T=1 (kT=1)
+    (4, 32, 192, 96, (1, 3, 3), 184, 40): (192, 96, 1, 4, 8),
+    # up3_res: 96→96 k333, T=6 gives -19%
+    (4, 32, 96, 96, (3, 3, 3), 184, 40): (96, 96, 6, 8, 4),
+    # conv_out: 96→3 k333, T=9 gives -55%
+    (4, 32, 96, 3, (3, 3, 3), 184, 40): (96, 32, 9, 8, 4),
+    # --- BH Galaxy / WH Galaxy 4x8, 720p — v2 (shared key, not per-layer swept) ---
+    # h_dev=184, w_dev=160. Stages: lat(23,20) up0(46,40) up1(92,80) up2(184,160)
+    # --- BH Galaxy 4x8, 720p — v3: T_out_block > 1 where L1 fits ---
+    (4, 8, 32, 384, (3, 3, 3), 23, 20): (32, 128, 1, 16, 16),  # conv_in: T=1 optimal
+    (4, 8, 384, 384, (3, 3, 3), 23, 20): (96, 96, 3, 8, 4),  # lat_res: cin=96 T=3 (-38%)
+    (4, 8, 384, 768, (3, 1, 1), 23, 20): (192, 256, 1, 4, 4),  # up0_tc: T=1 (k311, no gain)
+    (4, 8, 384, 192, (1, 3, 3), 46, 40): (96, 96, 1, 16, 16),  # up0_sp: T=1 (kT=1)
+    (4, 8, 192, 384, (3, 3, 3), 46, 40): (96, 128, 3, 8, 4),  # up1_r0: T=3 (-25%)
+    (4, 8, 384, 384, (3, 3, 3), 46, 40): (96, 96, 3, 8, 8),  # up1_res: cin=96 T=3 (-41%)
+    (4, 8, 384, 768, (3, 1, 1), 46, 40): (192, 256, 3, 4, 4),  # up1_tc: T=3 (-44%)
+    (4, 8, 384, 192, (1, 3, 3), 92, 80): (96, 96, 1, 16, 16),  # up1_sp: T=1 (kT=1)
+    (4, 8, 192, 192, (3, 3, 3), 92, 80): (96, 96, 3, 8, 8),  # up2_res: T=3 H=8 W=8 (-45%)
+    (4, 8, 192, 96, (1, 3, 3), 184, 160): (192, 96, 1, 4, 32),  # up2_sp: T=1 (kT=1)
+    (4, 8, 96, 96, (3, 3, 3), 184, 160): (96, 96, 5, 8, 8),  # up3_res: T=5 H=8 W=8 (-42%)
+    (4, 8, 96, 3, (3, 3, 3), 184, 160): (96, 32, 3, 8, 16),  # conv_out: T=3 (-40%)
+    # --- BH Loud Box 2x4, 480p — v3: T_out_block > 1 for k333 layers ---
+    # h_dev=240, w_dev=208. Stages: lat(30,26) up0(60,52) up1(120,104) up2(240,208)
+    (2, 4, 32, 384, (3, 3, 3), 30, 26): (32, 128, 1, 16, 16),  # conv_in
+    (2, 4, 384, 384, (3, 3, 3), 30, 26): (128, 128, 1, 8, 2),  # lat_res/mid_res
+    (2, 4, 384, 768, (3, 1, 1), 30, 26): (128, 384, 3, 8, 2),  # up0_tconv (T=3)
+    (2, 4, 384, 192, (1, 3, 3), 60, 52): (128, 96, 1, 16, 16),  # up0_spatial
+    (2, 4, 192, 384, (3, 3, 3), 60, 52): (96, 128, 3, 4, 8),  # up1_res0 (T=3)
+    (2, 4, 384, 384, (3, 3, 3), 60, 52): (128, 128, 1, 8, 2),  # up1_res
+    (2, 4, 384, 768, (3, 1, 1), 60, 52): (128, 384, 3, 8, 2),  # up1_tconv (T=3)
+    (2, 4, 384, 192, (1, 3, 3), 120, 104): (128, 96, 1, 16, 16),  # up1_spatial
+    (2, 4, 192, 192, (3, 3, 3), 120, 104): (96, 96, 3, 8, 8),  # up2_res (T=3)
+    (2, 4, 192, 96, (1, 3, 3), 240, 208): (192, 96, 1, 16, 8),  # up2_spatial
+    (2, 4, 96, 96, (3, 3, 3), 240, 208): (96, 96, 3, 4, 16),  # up3_res (T=3)
+    (2, 4, 96, 3, (3, 3, 3), 240, 208): (96, 32, 6, 16, 8),  # conv_out (T=6)
+}
+
+# Fallback table: (C_in, C_out, kernel) -> blocking.
+# Used when no exact (mesh, spatial) match exists.
+# MUST match main branch blockings — this is the safe fallback path.
+_DEFAULT_BLOCKINGS = {
     (96, 3, (3, 3, 3)): (96, 32, 1, 16, 8),
     (96, 32, (3, 3, 3)): (96, 32, 1, 16, 8),
     (192, 96, (1, 3, 3)): (192, 96, 1, 4, 8),
@@ -38,38 +119,41 @@ _conv3d_blocking_configs = {
 }
 
 
-def register_conv3d_configs(configs: dict) -> None:
-    """Register additional conv3d blocking configs from external models.
-
-    Args:
-        configs: Mapping from ``(in_channels, out_channels, kernel_size)``
-            to ``(C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)``.
-
-    Example::
-
-        register_conv3d_configs({
-            (32, 96, (3, 3, 3)): (32, 96, 1, 8, 16),
-            (384, 768, (3, 1, 1)): (384, 384, 1, 16, 4),
-        })
+def get_conv3d_config(
+    in_channels, out_channels, kernel_size, weights_dtype, grid_size, *, h_factor=1, w_factor=1, H_out=0, W_out=0
+):
     """
-    _conv3d_blocking_configs.update(configs)
+    Get optimized Conv3dConfig for a conv3d layer.
 
-
-def get_conv3d_config(in_channels, out_channels, kernel_size, weights_dtype, grid_size):
+    Lookup chain: exact (mesh, spatial) match → fallback (channel, kernel) match → default.
+    Pass h_factor, w_factor, H_out, W_out for best results. When these are not available
+    the fallback table is used.
+    """
     if weights_dtype == ttnn.float32:
-        # Use smaller block size to reduce memory use.
-        config_to_blocking = {(in_channels, out_channels, kernel_size): (32, 32, 1, 1, 1)}
-    else:
-        config_to_blocking = _conv3d_blocking_configs
+        return ttnn.Conv3dConfig(
+            weights_dtype=weights_dtype,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT,
+            T_out_block=1,
+            W_out_block=1,
+            H_out_block=1,
+            C_out_block=32,
+            C_in_block=32,
+            compute_with_storage_grid_size=grid_size,
+        )
 
-    blocking = config_to_blocking.get((in_channels, out_channels, kernel_size), None)
+    key = (h_factor, w_factor, in_channels, out_channels, kernel_size, H_out, W_out)
+    shape_key = (in_channels, out_channels, kernel_size)
+    blocking = _BLOCKINGS.get(key) or _DEFAULT_BLOCKINGS.get(shape_key)
+
     if blocking is None:
         C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = in_channels, 32, 1, 1, 1
         logger.warning(
-            f"No blocking found for {(in_channels, out_channels, kernel_size)}. Using default blocking: {C_in_block}, {C_out_block}, {T_out_block}, {H_out_block}, {W_out_block}"
+            f"No blocking found for {shape_key} on mesh ({h_factor}x{w_factor}). "
+            f"Using default: {C_in_block}, {C_out_block}, {T_out_block}, {H_out_block}, {W_out_block}"
         )
     else:
         C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
+
     return ttnn.Conv3dConfig(
         weights_dtype=weights_dtype,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
