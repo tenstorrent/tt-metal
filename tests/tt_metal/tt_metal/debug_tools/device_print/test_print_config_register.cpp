@@ -517,12 +517,7 @@ TEST_F(DevicePrintFixture, ConfigRegPackCountersTestPrint) {
     std::vector<std::string> field_names_pack_counters = field_names_pack_counters_all;
     std::vector<uint32_t> field_values_pack_counters = field_values_pack_counters_all;
 
-    int num_of_registers;
-    if (this->arch_ == ARCH::BLACKHOLE) {
-        num_of_registers = 1;
-    } else {
-        num_of_registers = 4;
-    }
+    int num_of_registers = (this->arch_ == ARCH::BLACKHOLE) ? 1 : 4;
 
     // Setup test configuration
     ConfigRegPrintTestConfig test_config = {
