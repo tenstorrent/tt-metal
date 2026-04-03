@@ -104,27 +104,31 @@ def train_grpo(run, yaml_config_path, checkpoint_interval, start_checkpoint_path
                 )
                 adv_tt.set_requires_grad(False)
 
+                run.logger.info("calling compute_nlog_probs")
                 nlog_old, mask_old, Tp = probs_old_list[i]
                 nlog_probs_new, mask_new, _ = compute_nlog_probs(ctx, p, c)
+                run.logger.info("compute nlog probs done")
 
+                run.logger.info("computing grpo loss")
                 loss = compute_grpo_loss(
-                    nlog_old,
-                    nlog_probs_new,
-                    mask_old,
-                    adv_tt,
-                    B,
-                    Tp,
-                    len(prompts_batch),
-                    grpo_cfg.clip_eps,
-                    ctx.dp_mapper,
-                    ctx.dp_composer,
+                    nlog_old, nlog_probs_new, mask_old, adv_tt, B, Tp, len(prompts_batch), grpo_cfg.clip_eps, ctx
                 )
+                run.logger.info("grpo loss computed")
+
+                run.logger.info("calling .backward")
                 loss.backward(retain_graph=False)
+                run.logger.info(".backward done")
+
                 deallocate_tensors([nlog_probs_new, mask_new, adv_tt, loss])
 
+            run.logger.info("synchronizing gradients")
             if ctx.dp_mapper is not None:
                 ttml.core.distributed.synchronize_gradients(ctx.tt_model.parameters())
+            run.logger.info("gradients synchronized")
+
+            run.logger.info("optimizer.step()")
             optimizer.step()
+            run.logger.info("optimizer.step() done")
 
             num_steps += 1
             run.logger.info(f"optimizer.step() called, {num_steps=}")
