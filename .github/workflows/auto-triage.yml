@@ -64,7 +64,5 @@ jobs:
                    | grep -oE '/job/[0-9]+' | grep -oE '[0-9]+')
           jq -n --arg job_id "$JOB_ID" \
              --arg run_id "$GITHUB_RUN_ID" \
-             --arg run_link "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
              '{github_job_id: ($job_id|tonumber),
-               auto_triage_run_id: ($run_id|tonumber),
-               auto_triage_run_link: $run_link}' > output/auto_triage_result.json
+               auto_triage_run_id: ($run_id|tonumber)}' > output/auto_triage_result.json

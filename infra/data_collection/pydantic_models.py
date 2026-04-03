@@ -635,7 +635,3 @@ class JobFailureCluster(BaseModel):
         None,
         description="GitHub run ID of the auto-triage workflow that analyzed this job failure.",
     )
-    auto_triage_run_link: Optional[str] = Field(
-        None,
-        description="Link to the auto-triage workflow run that analyzed this job failure.",
-    )
