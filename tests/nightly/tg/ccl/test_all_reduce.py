@@ -9,6 +9,7 @@ import ttnn
 import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.nightly.tg.ccl.test_all_reduce_async import run_all_reduce_with_mesh_tensor_along_row
+from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 
 
 # Enumerate the post-commit cases explicitly
@@ -178,6 +179,7 @@ def test_line_all_reduce_training(
     else:
         submesh_device = mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
+    submesh_device.cache_entries_counter = CacheEntriesCounter(submesh_device)
     run_all_reduce_with_mesh_tensor_along_row(
         submesh_device,
         num_devices,

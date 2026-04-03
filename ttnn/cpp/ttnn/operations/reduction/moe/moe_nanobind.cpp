@@ -71,15 +71,14 @@ void bind_reduction_moe_operation(nb::module_& mod) {
     ttnn::bind_function<"moe">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::moe,
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("expert_mask_tensor").noconvert(),
-            nb::arg("topk_mask_tensor").noconvert(),
-            nb::arg("k") = 32,
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()));
+        &ttnn::moe,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("expert_mask_tensor").noconvert(),
+        nb::arg("topk_mask_tensor").noconvert(),
+        nb::arg("k") = 32,
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
 }  // namespace ttnn::operations::reduction::detail

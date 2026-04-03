@@ -103,7 +103,7 @@ void ManualSeedDeviceOperation::validate_on_program_cache_miss(
 
 ManualSeedDeviceOperation::spec_return_value_t ManualSeedDeviceOperation::compute_output_specs(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    // NOTE: This OP does not return anything, but register_operation currently does not handle void return types.
+    // NOTE: This OP does not return anything, but the device operation framework does not handle void return types.
     const TensorSpec tensor_spec(
         ttnn::Shape{1}, TensorLayout{DataType::UINT32, PageConfig{Layout::ROW_MAJOR}, MemoryConfig()});
     return tensor_spec;
@@ -112,7 +112,7 @@ ManualSeedDeviceOperation::spec_return_value_t ManualSeedDeviceOperation::comput
 ManualSeedDeviceOperation::tensor_return_value_t ManualSeedDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto output_specs = compute_output_specs(operation_attributes, tensor_args);
-    // NOTE: This OP does not return anything, but register_operation currently does not handle void return types.
+    // NOTE: This OP does not return anything, but the device operation framework does not handle void return types.
     return create_device_tensor(output_specs, operation_attributes.device);
 }
 

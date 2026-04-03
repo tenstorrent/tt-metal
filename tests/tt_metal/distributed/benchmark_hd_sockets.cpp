@@ -669,7 +669,7 @@ void BM_D2HSocketThroughput(benchmark::State& state) {
         return;
     }
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto [per_page_us, per_page_cycles] =
             run_d2h_throughput(fx.mesh_device, fifo_size, page_size, ctx->num_iterations, ctx->core);
 
@@ -702,7 +702,7 @@ void BM_D2HSocketLatency(benchmark::State& state) {
         return;
     }
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto cycles = run_d2h_latency(fx.mesh_device, fifo_size, page_size, kLatencyIters, *target_core);
         auto stats = summarize_latency_cycles(cycles, get_cycles_per_us(*fx.mesh_device));
 
@@ -733,7 +733,7 @@ void BM_D2HSocketPing(benchmark::State& state) {
         return;
     }
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto cycles = measure_d2h_handshake_overhead(fx.mesh_device, fifo_size, page_size, kLatencyIters, *target_core);
 
         double cycles_per_us = get_cycles_per_us(*fx.mesh_device);
@@ -761,7 +761,7 @@ void BM_D2HSocketMultiChipThroughput(benchmark::State& state) {
         return;
     }
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto [per_page_us, per_page_cycles] =
             run_d2h_throughput(fx.mesh_device, fifo_size, page_size, ctx->num_iterations, ctx->core);
 
@@ -798,7 +798,7 @@ void BM_H2DSocketThroughput(benchmark::State& state) {
         return;
     }
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto [per_page_us, per_page_cycles] =
             run_h2d_throughput(fx.mesh_device, fifo_size, page_size, ctx->num_iterations, h2d_mode, ctx->core);
 
@@ -836,7 +836,7 @@ void BM_H2DSocketLatency(benchmark::State& state) {
         return;
     }
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto latencies_us =
             run_h2d_latency_us(fx.mesh_device, fifo_size, page_size, kLatencyIters, h2d_mode, *target_core);
         auto stats = summarize_latency_us(latencies_us, get_cycles_per_us(*fx.mesh_device));
@@ -873,7 +873,7 @@ void BM_H2DSocketPing(benchmark::State& state) {
         return;
     }
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto latencies_us =
             measure_h2d_handshake_overhead(fx.mesh_device, fifo_size, page_size, kLatencyIters, h2d_mode, *target_core);
         double cycles_per_us = get_cycles_per_us(*fx.mesh_device);
@@ -901,7 +901,7 @@ void BM_H2DSocketMultiChipThroughput(benchmark::State& state) {
         return;
     }
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto [per_page_us, per_page_cycles] = run_h2d_throughput(
             fx.mesh_device, fifo_size, page_size, ctx->num_iterations, H2DMode::DEVICE_PULL, ctx->core);
 

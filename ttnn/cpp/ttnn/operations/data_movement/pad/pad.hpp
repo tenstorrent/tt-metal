@@ -6,8 +6,8 @@
 
 #include "ttnn/tensor/types.hpp"
 #include <ranges>
-#include "ttnn/decorators.hpp"
 #include <tt-metalium/core_coord.hpp>
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace operations::data_movement {
