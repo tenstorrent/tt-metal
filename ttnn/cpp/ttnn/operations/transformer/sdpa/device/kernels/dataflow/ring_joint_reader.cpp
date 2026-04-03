@@ -236,7 +236,7 @@ void kernel_main() {
 
             // Chain forwarding conditions are k_chunk-invariant — compute once before the KV loop
             // For balanced mode: only forward in ring_iter > 0 (when using gathered KV, not local KV)
-            const uint32_t q_iter_local = global_q_chunk - global_q_start;
+            const uint32_t q_iter_local = q_iter;
             const bool should_forward = (ring_iter > 0) && is_chain_participant && !is_sink &&
                                         (nb == chain_batch && nq == chain_head) && (q_iter_local < next_core_q_chunks);
             const bool should_receive =
