@@ -49,7 +49,7 @@ The `TT_METAL_PROFILE_PERF_COUNTERS` value selects which counter banks to enable
 
 **Wormhole** has `PACK_COUNT=4` (4 packer engines), active `o_math_instrnbuf_rden`, and all TDMA counters live. 3 RTL-confirmed dead counters are automatically filtered: `PACK_BANK6_GRANT`, `PACK_BANK7_GRANT` (tied to `2'b00`), and `FIDELITY_PHASE_STALLS` (`fidelity_phases_ongoing = 1'b0` — no multi-phase fidelity on WH). The TDMA_UNPACK grant bank 0 (counter_sel 256) measures 4-HF-cycle instructions on WH (vs math-not-blocked-by-src on BH). Grant banks 4-6 (counter_sels 260-262) map to srcB/srcA write-port and overwrite signals in a different order than BH. The L1 mux is 1-bit (2 positions: ports 0-7 and 8-15).
 
-**Blackhole** has fewer active TDMA counters due to `PACK_COUNT=1` (single packer engine) and `o_math_instrnbuf_rden` being inactive. 15 RTL-confirmed dead counters are automatically filtered from BH output in `perf_counter_analysis.py`. Three metrics (Packer Efficiency, Math Pipeline Utilization, Math-to-Pack Handoff) use BH-specific fallback formulas since their WH denominators (`PACKER_BUSY`, `MATH_INSTRN_STARTED`) are always 0 on BH. Blackhole has more L1 mux positions (5 vs 2 for Tensix, 4 vs 1 for Ethernet).
+**Blackhole** has fewer active TDMA counters due to `PACK_COUNT=1` (single packer engine) and `o_math_instrnbuf_rden` being inactive on silicon. 15 RTL-confirmed dead counters are automatically filtered from BH output in `perf_counter_analysis.py`. Three metrics (Packer Efficiency, Math Pipeline Utilization, Math-to-Pack Handoff) use BH-specific fallback formulas since their WH denominators (`PACKER_BUSY`, `MATH_INSTRN_STARTED`) are always 0 on BH. TDMA_UNPACK grant banks 4-6 (sels 260-262) have different signal wiring on BH silicon than on WH — the `unpack_counters` array uses separate `#if defined(ARCH_BLACKHOLE)` mappings for each. Blackhole has more L1 mux positions (5 vs 2 for Tensix, 4 vs 1 for Ethernet).
 
 **INSTRN_THREAD bank** — The `perf_cnt_instrn_thread` flat array (built from a Verilog concatenation in `tt_instruction_thread.sv`) has architecture-specific counter_sel mappings for sel 27+. On WH, the shared stall conditions (srcA/B valid/cleared) are broadcast to 3 slots (sels 27-38), while on BH they occupy 1 slot each (sels 27-30). Per-thread stall reasons (thcon, unpack, pack, math, sem_zero, sem_max, move, trisc_reg_access, sfpu) start at sel 39 on WH and sel 31 on BH. The `instrn_counters` array is split by `#if defined(ARCH_BLACKHOLE)` to handle this difference.
 
@@ -518,7 +518,7 @@ SrcA Write Actual Efficiency = SRCA_WRITE_ACTUAL / SRCA_WRITE_AVAILABLE * 100
 - **High value (100%)**: Every srcA write attempt succeeds. No write port blocking.
 - **Low value (<80%)**: Significant fraction of srcA writes are blocked.
 
-**Note:** SrcB Write Actual Efficiency is Wormhole-only (see WH-only metrics section).
+**Note:** SrcB Write Actual Efficiency works on both Wormhole and Blackhole.
 
 **Use case:** Measures effective srcA write throughput. Low values indicate write port contention.
 
@@ -852,9 +852,9 @@ TDMA vs NOC = (TDMA_Bundle_0 + TDMA_Bundle_1) / (TDMA + NOC_Out + NOC_In) * 100
 
 ---
 
-### Wormhole-Only Metrics
+### Architecture-Specific Metrics
 
-These metrics depend on hardware signals that are inactive on Blackhole. They are only computed when the required counters are present in the profiler data.
+Some of these metrics use BH-specific fallback formulas. Others are truly Wormhole-only (marked below) because the required hardware signal is inactive on Blackhole.
 
 **39. Math Pipeline Utilization**
 
@@ -862,7 +862,7 @@ Measures math instruction flow efficiency through the pipeline.
 
 | | |
 |---|---|
-| **Architectures** | Wormhole only |
+| **Architectures** | Wormhole, Blackhole |
 | **Counter group** | UNPACK |
 
 ```
@@ -908,7 +908,7 @@ Fraction of srcB write attempts that actually succeeded.
 
 | | |
 |---|---|
-| **Architectures** | Wormhole only |
+| **Architectures** | Wormhole, Blackhole |
 | **Counter group** | UNPACK |
 
 ```
@@ -917,8 +917,6 @@ SrcB Write Actual Efficiency = SRCB_WRITE_ACTUAL / SRCB_WRITE_AVAILABLE * 100
 
 - **High value (100%)**: Every srcB write attempt succeeds.
 - **Low value (<80%)**: Significant fraction of srcB writes are blocked.
-
-**Not available on Blackhole**: `SRCB_WRITE_ACTUAL` (counter_sel 259, bank 3 grant) is inactive on BH because `o_math_instrnbuf_rden` is tied off.
 
 **Use case:** Measures effective srcB write throughput.
 
