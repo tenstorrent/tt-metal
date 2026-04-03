@@ -13,6 +13,15 @@ is bound incorrectly and the same name can also appear in ``**kwargs``, causing:
 
 This module patches the talker to call the mixin with explicit keyword arguments.
 
+This file does **not** implement PyTorch fallback for TTNN attention. Silent PyTorch fallback
+(``torch_layer``) is controlled by symbiote ``TT_SYMBIOTE_RUN_MODE=NORMAL_WITH_FALLBACK`` in
+``run_config.py``; Qwen3-Omni tests allow only ``NORMAL`` or ``CPU`` so code-predictor
+``TTNNQwen3Attention`` is not masked by that path.
+
+The class-level ``device`` / ``dtype`` placeholders on
+``Qwen3OmniMoeTalkerCodePredictorModelForConditionalGeneration`` satisfy HuggingFace
+``GenerationMixin`` (``self.device`` during ``generate``); they are not an attention fallback.
+
 **Audio vs text:** Thinker text uses greedy or sampling from ``generate`` as configured.
 The talker honors ``talker_do_sample``, but Hugging Face still calls ``code_predictor.generate``
 with hard-coded ``do_sample=True`` on each decode step. That keeps **speech-code** decoding
@@ -33,6 +42,8 @@ def _patch_talkers_code_predictor_class_device_dtype() -> None:
     ``Qwen3OmniMoeTalkerCodePredictorModelForConditionalGeneration`` is not the same module as ``talker``; tests
     that only patched ``thinker``/``talker``/``code2wav`` left ``code_predictor`` without the symbiote placeholders,
     which can surface as ``AttributeError: ... has no attribute 'device'``.
+
+    Unrelated to symbiote's ``NORMAL_WITH_FALLBACK`` (that path is not enabled by this module).
     """
     from transformers.models.qwen3_omni_moe import modeling_qwen3_omni_moe as omni_mod
 
