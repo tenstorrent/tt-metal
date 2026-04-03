@@ -205,7 +205,7 @@ void kernel_main() {
                 Sk_chunk_t,
                 0,  // Skt — not used for ring
                 DHt,
-                DHt,  // vDHt = DHt for ring
+                vDHt,
                 scale_fp32,
                 qk_subblock_h,
                 qk_subblock_w,
