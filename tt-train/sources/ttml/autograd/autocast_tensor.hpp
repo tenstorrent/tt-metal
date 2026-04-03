@@ -12,8 +12,8 @@ namespace ttml::autograd {
 enum class PreferredPrecision : uint8_t { HALF = 0, FULL = 1 };
 
 class AutocastTensor {
-    tt::tt_metal::Tensor m_half_precision_tensor{};
-    tt::tt_metal::Tensor m_full_precision_tensor{};
+    mutable tt::tt_metal::Tensor m_half_precision_tensor{};
+    mutable tt::tt_metal::Tensor m_full_precision_tensor{};
 
 public:
     AutocastTensor() = default;
