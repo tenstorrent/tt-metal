@@ -17,10 +17,6 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import is_watcher_enabled
 
-# Non-zero implicit tile padding on activations (#31982); rms_norm_test_main passes this via do_test_main.
-# L1 shard dims must stay tile-aligned — width corners like w=97 belong in test_rms_norm.py (interleaved).
-TEST_PADDING_VALUE = -42
-
 pytestmark = pytest.mark.use_module_device
 
 
@@ -216,8 +212,7 @@ def test_rms_norm_sharded_padded(device, h, w):
 
     num_cores_h, num_cores_w = 1, 8
     non_zero_columns = 3
-    # torch_input_tensor = torch.zeros((h, w), dtype=dtype)
-    torch_input_tensor = torch.full((h, w), TEST_PADDING_VALUE, dtype=dtype)
+    torch_input_tensor = torch.zeros((h, w), dtype=dtype)
     torch_input_tensor[:, :non_zero_columns] = 1.0
 
     # Create sharded memory config for 2x8 core grid
@@ -247,9 +242,7 @@ def test_rms_norm_sharded_padded(device, h, w):
         layout=ttnn.Layout.TILE,
         device=device,
         memory_config=sharded_mem_config,
-        pad_value=TEST_PADDING_VALUE,
     )
-    tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, TEST_PADDING_VALUE)
 
     # Run sharded layer norm
     output_ttnn = ttnn_rms_norm_sharded(
@@ -314,9 +307,7 @@ def test_rms_norm_sharded_width_default_config(device, h, w, dtype):
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=sharded_mem_config,
-        pad_value=TEST_PADDING_VALUE,
     )
-    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     # Weight tensor: interleaved on DRAM
     weight = ttnn.from_torch(

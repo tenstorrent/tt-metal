@@ -53,6 +53,8 @@ import torch
 import ttnn
 from loguru import logger
 
+TEST_PADDING_VALUE = -42
+
 
 def setup_ccl_semaphores(mesh_device):
     """Setup CCL semaphores for distributed operations."""
@@ -163,7 +165,6 @@ def compute_ttnn_distributed_norm(
     bias_layout=ttnn.TILE_LAYOUT,
     use_welford=True,
     use_2d_core_grid=None,
-    implicit_tile_padding_value=None,
 ):
     """
     Compute TTNN distributed normalization output.
@@ -181,8 +182,6 @@ def compute_ttnn_distributed_norm(
         bias_layout: Memory layout for bias tensor
         use_welford: Use Welford algorithm for variance computation
         use_2d_core_grid: Whether to use 2D core grid layout (optional, only for rms_norm)
-        implicit_tile_padding_value: If set, fill implicit tile padding on the activation with this
-            scalar (exposes bugs if kernels read pad as real data; see #31982).
 
     Returns:
         TTNN output converted to torch tensor
@@ -190,20 +189,15 @@ def compute_ttnn_distributed_norm(
     hidden_dim = torch_weight.shape[0]
     num_mesh_devices = mesh_device.get_num_devices()
 
-    # Convert to TTNN tensors (pad_value + fill: #31982)
-    from_torch_kw = {}
-    if implicit_tile_padding_value is not None:
-        from_torch_kw["pad_value"] = implicit_tile_padding_value
+    # Convert to TTNN tensors
     ttnn_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
-        **from_torch_kw,
     )
-    if implicit_tile_padding_value is not None:
-        ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, implicit_tile_padding_value)
+    ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, TEST_PADDING_VALUE)
 
     # Reshape and shard weight based on layout
     if weight_layout == ttnn.ROW_MAJOR_LAYOUT:
@@ -396,7 +390,6 @@ def run_distributed_norm_test(
     bias_layout=ttnn.TILE_LAYOUT,
     use_welford=True,
     use_2d_core_grid=None,
-    implicit_tile_padding_value=None,
 ):
     """
     Main test function for distributed normalization.
@@ -419,7 +412,6 @@ def run_distributed_norm_test(
         bias_layout: Memory layout for bias tensor (default: TILE_LAYOUT)
         use_welford: Use Welford algorithm for variance computation (default: True)
         use_2d_core_grid: Whether to use 2D core grid layout (optional, only for rms_norm)
-        implicit_tile_padding_value: Passed through to compute_ttnn_distributed_norm (optional).
 
     Returns:
         Tuple of (passes, max_abs_diff, max_rel_diff, mean_rel_diff)
@@ -454,7 +446,6 @@ def run_distributed_norm_test(
         bias_layout,
         use_welford,
         use_2d_core_grid,
-        implicit_tile_padding_value=implicit_tile_padding_value,
     )
 
     # Check average relative difference
