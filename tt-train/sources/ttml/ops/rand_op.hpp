@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <ttnn/distributed/distributed_configs.hpp>
 
 #include "autograd/tensor.hpp"
 
@@ -17,6 +18,7 @@ autograd::TensorPtr rand(
     float b = 1.0f,
     std::optional<uint32_t> seed = std::nullopt,
     tt::tt_metal::DataType dtype = tt::tt_metal::DataType::BFLOAT16,
-    tt::tt_metal::Layout layout = tt::tt_metal::Layout::TILE);
+    tt::tt_metal::Layout layout = tt::tt_metal::Layout::TILE,
+    const std::optional<tt::tt_metal::distributed::MeshMapperConfig>& mapper = std::nullopt);
 
 }  // namespace ttml::ops

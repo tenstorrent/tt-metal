@@ -39,9 +39,7 @@ class AbstractModuleBase(CppModuleBase):
                 continue
             if isinstance(value, CppModuleBase):
                 self._bind_module(value, name)
-            elif isinstance(value, Parameter) and not isinstance(
-                value.tensor, TensorMetadata
-            ):
+            elif isinstance(value, Parameter) and not isinstance(value.tensor, TensorMetadata):
                 self._bind_parameter(value.tensor, name)
             elif isinstance(value, Buffer):
                 self._bind_buffer(value.tensor, name)
@@ -182,9 +180,10 @@ class TransformerBase(AbstractModuleBase):
                 super().__init__(**kwargs)
     """
 
-    def __init__(self, mesh_device=None, tp_plan=None, **kwargs) -> None:
+    def __init__(self, mesh_device=None, tp_plan=None, on_device_init=False, **kwargs) -> None:
         self._mesh_device = mesh_device
         self._tp_plan = tp_plan.resolve(mesh_device) if tp_plan is not None else None
+        self._on_device_init = on_device_init
         super().__init__(**kwargs)
         self._materialize_tree()
 
@@ -198,9 +197,7 @@ class TransformerBase(AbstractModuleBase):
             if isinstance(module, AbstractModuleBase):
                 self._materialize_module_params(module, prefix)
 
-    def _materialize_module_params(
-        self, module: AbstractModuleBase, prefix: str
-    ) -> None:
+    def _materialize_module_params(self, module: AbstractModuleBase, prefix: str) -> None:
         """Materialize a single module's own TensorMetadata Parameters."""
         for name in list(vars(module)):
             attr = getattr(module, name, None)
@@ -208,15 +205,16 @@ class TransformerBase(AbstractModuleBase):
                 full_path = f"{prefix}.{name}" if prefix else name
                 self._materialize_param(module, name, attr, full_path)
 
-    def _materialize_param(
-        self, module: AbstractModuleBase, name: str, param: Parameter, full_path: str
-    ) -> None:
+    def _materialize_param(self, module: AbstractModuleBase, name: str, param: Parameter, full_path: str) -> None:
         """Convert a single TensorMetadata Parameter into a device tensor."""
         metadata = param.tensor
         layout = _match_policy(full_path, self._tp_plan)
 
         tensor = metadata.init_fn(
-            metadata.shape, layout=layout, mesh_device=self._mesh_device
+            metadata.shape,
+            layout=layout,
+            mesh_device=self._mesh_device,
+            on_device_init=self._on_device_init,
         )
         tensor.set_requires_grad(metadata.requires_grad)
         param.tensor = tensor
@@ -433,9 +431,7 @@ class ModuleDict(AbstractModuleBase):
 
     def __init__(
         self,
-        modules: Optional[
-            Union[dict[str, CppModuleBase], Iterable[tuple[str, CppModuleBase]]]
-        ] = None,
+        modules: Optional[Union[dict[str, CppModuleBase], Iterable[tuple[str, CppModuleBase]]]] = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
