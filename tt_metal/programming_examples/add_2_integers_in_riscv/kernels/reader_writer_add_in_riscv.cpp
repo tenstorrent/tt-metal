@@ -37,7 +37,6 @@ void kernel_main() {
     uint32_t* out0 = (uint32_t*)dst_l1;
 
     DPRINT << "Adding integers: " << *dat0 << " + " << *dat1 << "\n";
-    DEVICE_PRINT("Adding integers: {} + {}\n", *dat0, *dat1);
 
     (*out0) = (*dat0) + (*dat1);
 

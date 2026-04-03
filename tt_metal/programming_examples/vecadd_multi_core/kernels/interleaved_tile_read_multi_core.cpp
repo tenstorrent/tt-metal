@@ -24,7 +24,6 @@ void kernel_main() {
     // buffers. (This is most of the cases)
     const uint32_t tile_size_bytes = get_tile_size(cb_in0);
     // DPRINT_DATA0(DPRINT << "tile_size_bytes " <<  tile_size_bytes << ENDL());
-    // DEVICE_PRINT_DATA0("tile_size_bytes {}\n", tile_size_bytes);
     //  Create address generators for the input buffers. This is much faster
     //  then doing plain DRAM reads.
     //  Setting the page size to be tile_size_bytes works because we set it up
@@ -60,7 +59,6 @@ void kernel_main() {
         // engines. But useful for debugging.
         // uint16_t* ptr = (uint16_t*)cb_in0_addr;
         // DPRINT << "cb_in0_addr: " << ptr << " " << *ptr;
-        // DEVICE_PRINT("cb_in0_addr: {} {}\n", ptr, *ptr);
 
         noc_async_read_barrier();  // Wait until tile reads are done
         cb_push_back(cb_in0, 1);
