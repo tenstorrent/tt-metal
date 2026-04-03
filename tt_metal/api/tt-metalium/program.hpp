@@ -14,6 +14,7 @@ namespace tt::tt_metal {
 // Fwd declares
 struct ProgramDescriptor;
 class CircularBuffer;
+class Program;
 
 namespace detail {
 class ProgramImpl;
@@ -25,8 +26,12 @@ class Program {
 public:
     Program();
 
-    // TODO (#34009): Change to free function and move impl to experimental
+    // Alternative "ProgramDescriptor" API, created for TTNN generic op
     explicit Program(const ProgramDescriptor& descriptor);
+
+    // Internal: construct from an already-built ProgramImpl.
+    explicit Program(std::shared_ptr<detail::ProgramImpl> impl);
+
     ~Program() noexcept;
 
     Program(const Program& other) = delete;

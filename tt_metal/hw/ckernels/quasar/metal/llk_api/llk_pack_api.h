@@ -31,7 +31,7 @@
 inline void llk_pack_init(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
 
-    _llk_pack_init_<p_pacr::PACK0>(output_id);
+    _llk_pack_init_(output_id);
 }
 
 /**
@@ -86,7 +86,7 @@ inline void llk_pack(
     const std::uint8_t output_id = get_output_id(pack_output);
     const std::uint32_t l1_tile_index = get_output_tile_index<out_of_order_output, false>(output_id, output_tile_index);
 
-    _llk_pack_<p_pacr::PACK0>(tile_index, l1_tile_index);
+    _llk_pack_(tile_index, l1_tile_index);
 }
 
 /**

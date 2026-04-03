@@ -22,6 +22,11 @@ std::optional<std::string> get_mock_cluster_desc_name(tt::ARCH arch, uint32_t nu
                 case 2: return "blackhole_P300_both_mmio.yaml";
                 default: return std::nullopt;
             }
+        case tt::ARCH::QUASAR:
+            switch (num_chips) {
+                case 1: return "quasar_Q1.yaml";
+                default: return std::nullopt;
+            }
         default: return std::nullopt;
     }
 }

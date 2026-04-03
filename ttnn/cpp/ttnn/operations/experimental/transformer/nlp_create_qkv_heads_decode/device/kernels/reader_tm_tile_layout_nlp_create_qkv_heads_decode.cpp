@@ -75,7 +75,12 @@ void kernel_main() {
     // Skip Q section if PROCESS_QV is False
     if constexpr (PROCESS_QV == 1) {
         for (uint32_t q = 0; q < num_q_heads; ++q) {
-            uint32_t wptr_offset = q < SUBTILE_ROWS ? q * SUBTILE_LINE_BYTES : (q - SUBTILE_ROWS) * SUBTILE_LINE_BYTES + HALF_TILE_ELEMENTS * ELEMENT_SIZE;
+            uint32_t tile_row_index = q / TILE_HEIGHT;
+            uint32_t row_in_tile = q % TILE_HEIGHT;
+            uint32_t offset_in_tile = row_in_tile < SUBTILE_ROWS ? row_in_tile * SUBTILE_LINE_BYTES
+                                                                 : (row_in_tile - SUBTILE_ROWS) * SUBTILE_LINE_BYTES +
+                                                                       HALF_TILE_ELEMENTS * ELEMENT_SIZE;
+            uint32_t wptr_offset = tile_row_index * head_size + offset_in_tile;
             uint32_t q_write_addr = get_write_ptr(cb_id_q_out) + wptr_offset;
             for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
                 // Read first phase
@@ -116,7 +121,12 @@ void kernel_main() {
 
         // Read 2 phases per tile, where there are num_q_heads * q_num_tiles tiles
         for (uint32_t k = 0; k < num_kv_heads; ++k) {
-            uint32_t wptr_offset = k < SUBTILE_ROWS ? k * SUBTILE_LINE_BYTES : (k - SUBTILE_ROWS) * SUBTILE_LINE_BYTES + HALF_TILE_ELEMENTS * ELEMENT_SIZE;
+            uint32_t tile_row_index = k / TILE_HEIGHT;
+            uint32_t row_in_tile = k % TILE_HEIGHT;
+            uint32_t offset_in_tile = row_in_tile < SUBTILE_ROWS ? row_in_tile * SUBTILE_LINE_BYTES
+                                                                 : (row_in_tile - SUBTILE_ROWS) * SUBTILE_LINE_BYTES +
+                                                                       HALF_TILE_ELEMENTS * ELEMENT_SIZE;
+            uint32_t wptr_offset = tile_row_index * head_size + offset_in_tile;
             uint32_t k_write_addr = get_write_ptr(cb_id_k_out) + wptr_offset;
             for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
                 // Read first phase
@@ -156,7 +166,12 @@ void kernel_main() {
 
         // Read 2 phases per tile, where there are num_q_heads * q_num_tiles tiles
         for (uint32_t v = 0; v < num_kv_heads; ++v) {
-            uint32_t wptr_offset = v < SUBTILE_ROWS ? v * SUBTILE_LINE_BYTES : (v - SUBTILE_ROWS) * SUBTILE_LINE_BYTES + HALF_TILE_ELEMENTS * ELEMENT_SIZE;
+            uint32_t tile_row_index = v / TILE_HEIGHT;
+            uint32_t row_in_tile = v % TILE_HEIGHT;
+            uint32_t offset_in_tile = row_in_tile < SUBTILE_ROWS ? row_in_tile * SUBTILE_LINE_BYTES
+                                                                 : (row_in_tile - SUBTILE_ROWS) * SUBTILE_LINE_BYTES +
+                                                                       HALF_TILE_ELEMENTS * ELEMENT_SIZE;
+            uint32_t wptr_offset = tile_row_index * head_size + offset_in_tile;
             uint32_t v_write_addr = get_write_ptr(cb_id_v_out) + wptr_offset;
             for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
                 // Read first phase

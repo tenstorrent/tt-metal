@@ -566,6 +566,7 @@ class PreSDPA:
         kv_cache_output_cb = 32  # Output CB for KV Cache Branch
         kv_cache_intermed_cb = 33  # Intermed CB for KV Cache Branch
         kv_cache_input_cb = 34  # Input CB for KV Cache Branch
+        kv_cache_intermed_sync_cb = 30  # Sync CB overlapping intermed CB for NCRISC->TRISC signaling
 
         # MLA parameters
         mla_q_in_cb = create_q_heads_out_cb  # In for MLA q heads
@@ -1030,11 +1031,10 @@ class PreSDPA:
             ("dkv_gather_sender_grid_end_x", dkv_gather_sender_grid_end_x),
             ("dkv_gather_sender_grid_end_y", dkv_gather_sender_grid_end_y),
             ("dkv_gather_row_major", 1),  # 1 = row-major linearization
-            ("dkv_gather_dst_cb", kv_rmsnorm_input_cb),  # Destination CB: write directly to kv_rmsnorm_input_cb
         ]
 
-        # Gather receiver compile-time args (named args for BRISC on kv rmsnorm core)
-        # ReceiverCTArgs: noc0_num_senders, noc1_num_senders, noc0_receiver_semaphore_id, noc1_receiver_semaphore_id
+        # Gather receiver compile-time args (now on NCRISC via ReceiverOnNCRISC mode)
+        # ReceiverCTArgs: noc0_num_senders, noc1_num_senders, noc0_receiver_semaphore_addr, noc1_receiver_semaphore_addr
         # Plus destination CB info for reserve/push
         # Writes directly to kv_rmsnorm_input_cb
         dkv_gather_receiver_named_compile_time_args = [
@@ -1076,15 +1076,13 @@ class PreSDPA:
         # KVCacheUpdate compile-time args split across NCRISC (patch + writeback) and BRISC (DRAM read)
         flash_mla_program_config = FlashMLADecode.ProgramConfig()
         device_chunk_size = flash_mla_program_config.device_chunk_size
+        # k_chunk_size and num_cores_per_head are shared with MLA args (set in mla_ncrisc section)
+        # mla_sender_noc_x/y args are appended after MLA core group is built (depends on num_s_blocks)
         kv_cache_ncrisc_named_compile_time_args = [
             ("kv_cache_intermed_cb", kv_cache_intermed_cb),
+            ("kv_cache_intermed_sync_cb", kv_cache_intermed_sync_cb),
             ("kv_cache_output_cb", kv_cache_output_cb),
             ("kv_cache_grid_start_y", list(krope_grid.ranges())[0].start.y),
-            ("full_grid_mcast_start_x", mcast_dest_noc_start_core.x),
-            ("full_grid_mcast_start_y", mcast_dest_noc_start_core.y),
-            ("full_grid_mcast_end_x", mcast_dest_noc_end_core.x),
-            ("full_grid_mcast_end_y", mcast_dest_noc_end_core.y),
-            ("full_grid_mcast_num_dests", mcast_num_cores - 1),
             ("kv_cache_cur_pos_ready_semaphore_addr", mla_kv_cache_cur_pos_ready_semaphore_addr),
         ]
         kv_cache_brisc_named_compile_time_args = [
@@ -1096,6 +1094,7 @@ class PreSDPA:
             ("kv_cache_output_cb", kv_cache_output_cb),
             ("kv_cache_input_cb", kv_cache_input_cb),
             ("kv_cache_intermed_cb", kv_cache_intermed_cb),
+            ("kv_cache_intermed_sync_cb", kv_cache_intermed_sync_cb),
         ]
 
         # Flash MLA named compile-time args
@@ -1200,6 +1199,20 @@ class PreSDPA:
 
         # Create core group with the same layout
         mla_core_group = [ttnn.CoreCoord(x, y) for x, y in mla_all_cores]
+
+        # Physical NOC coordinates of mcast sender cores (first batch, one per S block).
+        # Used by kv_cache_update to unicast the cache-ready signal to the specific
+        # MLA reader core that handles the last KV chunk.
+        mla_sender_noc_xs = []
+        mla_sender_noc_ys = []
+        for s_idx in range(num_s_blocks):
+            phys = device.worker_core_from_logical_core(mla_core_group[s_idx])
+            mla_sender_noc_xs.append(phys.x)
+            mla_sender_noc_ys.append(phys.y)
+
+        kv_cache_ncrisc_named_compile_time_args += [
+            (f"mla_sender_noc_x_{i}", mla_sender_noc_xs[i]) for i in range(num_s_blocks)
+        ] + [(f"mla_sender_noc_y_{i}", mla_sender_noc_ys[i]) for i in range(num_s_blocks)]
 
         # Multicast: each S block's first core (Q1) reads KV and multicasts to others in that S block
         # Since all S blocks have 8 cores, num_mcast_dests is the same for all (7 = 8-1)
@@ -1785,11 +1798,16 @@ class PreSDPA:
                     page_size=TILE_32x32.get_tile_size(ttnn.bfloat16),
                     tile=ttnn.TileDescriptor(TILE_32x32),
                 )
-                # One extra tile for syncing, can optimize to remove
+                kv_cache_intermed_sync_cb_format = ttnn.CBFormatDescriptor(
+                    buffer_index=kv_cache_intermed_sync_cb,
+                    data_format=ttnn.bfloat16,
+                    page_size=TILE_32x32.get_tile_size(ttnn.bfloat16),
+                    tile=ttnn.TileDescriptor(TILE_32x32),
+                )
                 kv_cache_intermed_cb_descriptor = ttnn.CBDescriptor(
-                    total_size=(kv_cache_num_tiles + 1) * TILE_32x32.get_tile_size(ttnn.bfloat16),
+                    total_size=kv_cache_num_tiles * TILE_32x32.get_tile_size(ttnn.bfloat16),
                     core_ranges=kv_cache_update_grid,
-                    format_descriptors=[kv_cache_intermed_cb_format],
+                    format_descriptors=[kv_cache_intermed_cb_format, kv_cache_intermed_sync_cb_format],
                 )
 
                 # Flash MLA cb descriptors
@@ -2047,7 +2065,8 @@ class PreSDPA:
                     kv_cache_input_cb,  # idx 4
                     kv_cache_output_cb,  # idx 5
                     kv_cache_intermed_cb,  # idx 6
-                    position_ids_tensor_addr,  # idx 7
+                    kv_cache_intermed_sync_cb,  # idx 7
+                    position_ids_tensor_addr,  # idx 8
                 ]
 
                 qrope_ncrisc_addr_args = [
@@ -2085,6 +2104,7 @@ class PreSDPA:
                     + dkv_matmul_ncrisc_named_compile_time_args
                     + kv_rmsnorm_ncrisc_named_compile_time_args
                     + dkv_gather_sender_named_compile_time_args
+                    + dkv_gather_receiver_named_compile_time_args
                     + krope_ncrisc_named_compile_time_args
                     + krope_ncrisc_addr_args
                     + kv_cache_ncrisc_named_compile_time_args
@@ -2105,7 +2125,6 @@ class PreSDPA:
                     + mcast2_brisc_named_compile_time_args
                     + matmul3_brisc_named_compile_time_args
                     + qrope_brisc_named_compile_time_args
-                    + dkv_gather_receiver_named_compile_time_args
                     + kv_rmsnorm_brisc_named_compile_time_args
                     + kv_cache_brisc_named_compile_time_args
                     + kv_cache_sp_named_compile_time_args

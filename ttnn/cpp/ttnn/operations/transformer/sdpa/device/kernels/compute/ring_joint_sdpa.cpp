@@ -54,6 +54,7 @@ void kernel_main() {
     constexpr bool uniform_dataformat = get_compile_time_arg_val(36) == 1;
     constexpr bool is_causal = get_compile_time_arg_val(37) == 1;
     constexpr bool is_balanced = get_compile_time_arg_val(38) == 1;
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(39) == 1;
 
     // Lightweight mask: all mask tiles live in cb_mask_in (c_3).
     // Layout: [neginf(0)] [global_n_partial?(1)] [joint_l_partial?(1 or 2)]
@@ -302,7 +303,8 @@ void kernel_main() {
                 lw_mask,
                 causality,
                 balancing,
-                is_last_ring_iter);
+                is_last_ring_iter,
+                use_zigzag_balancing);
         }
     }
 }
