@@ -16,11 +16,11 @@ See `tt-agent/skills/` for available skills. Each skill declares its layer via
 ## Codebase Research
 
 When you need to understand how something works in a TT codebase — APIs, test
-patterns, build steps, op structure, model architecture — use `/tt:learn` first.
-Do not launch ad-hoc research agents or do broad codebase exploration yourself.
+patterns, build steps, op structure, model architecture — use `/tt:learn`.
 tt-learn follows `knowledge/references/` as starting pointers, uses deepwiki for
 semantic search, and writes dated context notes to `~/.tt-agent/notes/`. These
-notes are reusable across sessions.
+notes are reusable across sessions. Subagents doing research should also follow
+the tt-learn protocol (use references, write notes, use deepwiki).
 
 **Check notes before researching.** If `~/.tt-agent/notes/context-<topic>.md`
 exists and is recent, read it instead of re-researching.
