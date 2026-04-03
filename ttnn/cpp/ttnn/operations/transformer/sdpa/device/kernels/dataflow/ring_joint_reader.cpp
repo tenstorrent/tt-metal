@@ -237,10 +237,9 @@ void kernel_main() {
             // Chain forwarding conditions are k_chunk-invariant — compute once before the KV loop
             // For balanced mode: only forward in ring_iter > 0 (when using gathered KV, not local KV)
             const uint32_t q_iter_local = q_iter;
-            const bool should_forward = (ring_iter > 0) && is_chain_participant && !is_sink &&
-                                        (nb == chain_batch && nq == chain_head) && (q_iter_local < next_core_q_chunks);
-            const bool should_receive =
-                (ring_iter > 0) && is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
+            const bool should_forward = is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
+                                        (q_iter_local < next_core_q_chunks);
+            const bool should_receive = is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
 
             // When q_per_core == 1, Q is identical across ring iterations: compute keeps it
             // fronted in the CB, so we only need to read it once on the first active ring iteration.
