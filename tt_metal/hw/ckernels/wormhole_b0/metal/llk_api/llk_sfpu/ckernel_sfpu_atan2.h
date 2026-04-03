@@ -9,8 +9,6 @@
 #include "ckernel_sfpu_recip.h"
 #include "sfpi.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
