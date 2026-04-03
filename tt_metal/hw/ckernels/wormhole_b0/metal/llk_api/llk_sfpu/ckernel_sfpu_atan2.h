@@ -14,6 +14,8 @@ namespace sfpu {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
+    constexpr bool is_bf16 = !is_fp32_dest_acc_en || APPROXIMATION_MODE;
+
     sfpi::vFloat r;
     sfpi::vFloat q;
     sfpi::vFloat s;
@@ -24,7 +26,7 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
     sfpi::vec_min_max(min, max);
 
     // a = min(|x|, |y|) / max(|x|, |y|), i.e. a is on [0, 1].
-    sfpi::vFloat a = min * sfpu_reciprocal < APPROXIMATION_MODE || !is_fp32_dest_acc_en > (max);
+    sfpi::vFloat a = min * sfpu_reciprocal<is_bf16>(max);
     // Note that due to register pressure on Wormhole, we compute |x| and |y| again.
     sfpi::vFloat x_abs = sfpi::abs(x);
 
