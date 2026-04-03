@@ -39,7 +39,6 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from models.demos.qwen3_tts.demo.reference_icl_utils import trim_reference_for_icl_conditioning
 
 
 def allocate_kv_cache(
@@ -2168,6 +2167,14 @@ def run_full_ttnn_tts(
             inputs_embeds_cpu = cpu_data["inputs_embeds"].float()
             trailing_text_hidden = cpu_data["trailing_text_hidden"].float()
             tts_pad_embed = cpu_data["tts_pad_embed"].float()
+            # Load ref_codes if saved, otherwise encode reference audio for HF-style trim
+            if "ref_codes" in cpu_data:
+                ref_codes_original = cpu_data["ref_codes"]
+            else:
+                # Need ref_codes for HF-style trim - encode reference audio (get original)
+                ref_codes_original, _ = encode_reference_audio(ref_audio, main_weights, cache_path=ref_cache)
+            # ICL-trimmed version (not used for decode, only for ICL if needed)
+            ref_codes = ref_codes_original
             inputs_embeds_tt = ttnn.from_torch(
                 inputs_embeds_cpu.unsqueeze(1),
                 device=device,
@@ -2189,10 +2196,9 @@ def run_full_ttnn_tts(
         else:
             # Encode reference audio (speech tokenizer encoder - reference impl, cached)
             encode_start = time.time()
-            ref_codes, audio_data = encode_reference_audio(ref_audio, main_weights, cache_path=ref_cache)
-            ref_codes, audio_data = trim_reference_for_icl_conditioning(
-                ref_codes, audio_data, tokenizer, ref_text, text
-            )
+            ref_codes_original, audio_data = encode_reference_audio(ref_audio, main_weights, cache_path=ref_cache)
+            # Don't trim ref_codes - let ICL handle codec > text by padding text (like HF)
+            ref_codes = ref_codes_original
             timings["encode_ref"] = time.time() - encode_start
 
             # Extract speaker embedding (TTNN)
@@ -2238,19 +2244,29 @@ def run_full_ttnn_tts(
             print("ERROR: Failed to generate codes")
             return
 
-        # Trim reference echo: ICL TTS models briefly "echo" the reference
-        # speaker's last word before the target text. Remove leading frames.
-        if config.trim_codec_frames > 0 and len(codes) > config.trim_codec_frames:
-            print(f"  Trimming {config.trim_codec_frames} leading codec frames (reference echo removal)")
-            codes = codes[config.trim_codec_frames :]
+        # HF-style trim: prepend ORIGINAL ref_codes, decode full sequence, trim proportionally
+        # This matches HF's generate_voice_clone behavior exactly
+        # Note: We use ref_codes_original (before ICL trim) not ref_codes (after ICL trim)
+        ref_codes_len = ref_codes_original.shape[0]  # Original reference codec frames
 
-        # Decode to audio (reference impl)
+        # Prepend ORIGINAL reference codes to generated codes (like HF does)
+        codes_for_decode = torch.cat([ref_codes_original, codes], dim=0)
+        total_codes_len = codes_for_decode.shape[0]
+
+        print(f"  Decoding: {ref_codes_len} ref (original) + {len(codes)} gen = {total_codes_len} total frames")
+
+        # Decode full sequence to audio (reference impl)
         decode_start = time.time()
-        audio = decode_audio(codes, decoder_weights)
+        audio = decode_audio(codes_for_decode, decoder_weights)
         timings["decode"] = time.time() - decode_start
 
-        # Save audio
+        # Trim reference portion from audio (HF formula)
         audio_np = audio.squeeze().detach().cpu().float().numpy()
+        cut_samples = int(ref_codes_len / total_codes_len * len(audio_np))
+        audio_np = audio_np[cut_samples:]
+        print(f"  HF-style trim: removed {cut_samples} samples ({cut_samples/24000:.2f}s) of reference")
+
+        # Save trimmed audio
         sf.write(output_path, audio_np, 24000)
 
         # Auto-trim bleed if requested
