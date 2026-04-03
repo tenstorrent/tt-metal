@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk {
@@ -18,7 +19,7 @@ struct MoeGroupedTopkDeviceOperation {
         float route_scale;
         float epsilon;
         bool stable_sort;
-        MemoryConfig output_mem_config;
+        tt::tt_metal::MemoryConfig output_mem_config;
     };
 
     struct tensor_args_t {
@@ -78,6 +79,6 @@ moe_grouped_topk(
     float route_scale,
     float epsilon,
     bool stable_sort = false,
-    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+    const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt);
 
 }  // namespace ttnn::prim

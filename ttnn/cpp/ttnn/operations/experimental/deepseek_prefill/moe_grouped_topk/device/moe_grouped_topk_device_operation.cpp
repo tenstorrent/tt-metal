@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moe_grouped_topk_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk {
@@ -12,15 +13,15 @@ void MoeGroupedTopkDeviceOperation::validate_on_program_cache_miss(
     const auto& scores = tensor_args.scores;
     const auto& bias = tensor_args.bias;
 
-    TT_FATAL(scores.storage_type() == StorageType::DEVICE, "Scores tensor must be on device");
-    TT_FATAL(bias.storage_type() == StorageType::DEVICE, "Bias tensor must be on device");
+    TT_FATAL(scores.storage_type() == tt::tt_metal::StorageType::DEVICE, "Scores tensor must be on device");
+    TT_FATAL(bias.storage_type() == tt::tt_metal::StorageType::DEVICE, "Bias tensor must be on device");
     TT_FATAL(scores.buffer() != nullptr, "Scores tensor must be allocated");
     TT_FATAL(bias.buffer() != nullptr, "Bias tensor must be allocated");
 
-    TT_FATAL(scores.dtype() == DataType::FLOAT32, "Scores tensor must be FLOAT32");
-    TT_FATAL(scores.layout() == Layout::TILE, "Scores tensor must be TILE layout");
-    TT_FATAL(bias.dtype() == DataType::FLOAT32, "Bias tensor must be FLOAT32");
-    TT_FATAL(bias.layout() == Layout::TILE, "Bias tensor must be TILE layout");
+    TT_FATAL(scores.dtype() == tt::tt_metal::DataType::FLOAT32, "Scores tensor must be FLOAT32");
+    TT_FATAL(scores.layout() == tt::tt_metal::Layout::TILE, "Scores tensor must be TILE layout");
+    TT_FATAL(bias.dtype() == tt::tt_metal::DataType::FLOAT32, "Bias tensor must be FLOAT32");
+    TT_FATAL(bias.layout() == tt::tt_metal::Layout::TILE, "Bias tensor must be TILE layout");
     TT_FATAL(scores.logical_shape() == bias.logical_shape(), "Scores and bias must have the same shape");
 
     TT_FATAL(
@@ -51,11 +52,15 @@ MoeGroupedTopkDeviceOperation::spec_return_value_t MoeGroupedTopkDeviceOperation
         TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
-                DataType::BFLOAT16, tt::tt_metal::PageConfig(scores.layout()), attributes.output_mem_config)),
+                tt::tt_metal::DataType::BFLOAT16,
+                tt::tt_metal::PageConfig(scores.layout()),
+                attributes.output_mem_config)),
         TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
-                DataType::UINT16, tt::tt_metal::PageConfig(scores.layout()), attributes.output_mem_config))};
+                tt::tt_metal::DataType::UINT16,
+                tt::tt_metal::PageConfig(scores.layout()),
+                attributes.output_mem_config))};
 }
 
 MoeGroupedTopkDeviceOperation::tensor_return_value_t MoeGroupedTopkDeviceOperation::create_output_tensors(
@@ -81,7 +86,7 @@ moe_grouped_topk(
     float route_scale,
     float epsilon,
     bool stable_sort,
-    const std::optional<MemoryConfig>& output_mem_config) {
+    const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk::MoeGroupedTopkDeviceOperation;
 

@@ -19,8 +19,8 @@ void bind_moe_grouped_topk(nb::module_& mod) {
             Gating mechanism for routing inputs in a mixture-of-experts (MoE) model, specifically optimized for DeepSeek. This operation post-processes the scores and bias from the linear gate projection. To each score, it applies a sigmoid, adds the bias, and reshapes the scores into groups. It then sorts the scores within each group, sums the scores of the top p experts in each group, and selects the top k groups. It then selects the top n experts from the selected groups and gathers the unbiased scores (original sigmoid output) based on the top k experts indices. It then normalizes the chosen scores and scales the normalized scores by the scales.
 
             Args:
-                scores (ttnn.Tensor): Input scores tensor. The shape should be [N, B, S, 256]. N, B and S can be any value. 256 is the number of experts in DeepSeek at each layer.
-                bias (ttnn.Tensor): Bias tensor. The shape should be [N, B, S, 256]. N, B and S can be any value. 256 is the number of experts in DeepSeek at each layer.
+                scores (ttnn.Tensor): Input scores tensor (dtype must be FLOAT32, layout must be TILE). The shape should be [N, B, S, 256]. N, B and S can be any value. 256 is the number of experts in DeepSeek at each layer.
+                bias (ttnn.Tensor): Bias tensor (dtype must be FLOAT32, layout must be TILE). The shape should be [N, B, S, 256]. N, B and S can be any value. 256 is the number of experts in DeepSeek at each layer.
                 route_scale (float): Routing scale factor to scale the scores after normalization.
                 epsilon (float): Epsilon for numerical stability when normalizing the scores.
                 n_groups (int): Number of groups to partition the experts into. Right now this number must be 8.
@@ -31,7 +31,7 @@ void bind_moe_grouped_topk(nb::module_& mod) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. Defaults to None, which results in auto-selection.
 
             Returns:
-                Tuple[ttnn.Tensor, ttnn.Tensor]: A tuple containing the scaled expert scores and selected expert indices. The shape of the scores tensor should be [N, B, S, 8]. The shape of the indices tensor should be [N, B, S, 8]. N, B and S can be any value. 8 is the number of experts in the final selected groups.
+                Tuple[ttnn.Tensor, ttnn.Tensor]: A tuple containing the scaled expert scores (dtype BFLOAT16) and selected expert indices (dtype UINT16). The shape of the scores tensor should be [N, B, S, 8]. The shape of the indices tensor should be [N, B, S, 8]. N, B and S can be any value. 8 is the number of experts in the final selected groups.
         )doc",
         &ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk::moe_grouped_topk,
         nb::arg("scores").noconvert(),
