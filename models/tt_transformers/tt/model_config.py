@@ -1452,7 +1452,7 @@ class ModelArgs:
             )
         else:
             return ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
+                compute_with_storage_grid_size=(8, 8),
                 exp_approx_mode=True,
                 q_chunk_size=0,
                 k_chunk_size=0,
