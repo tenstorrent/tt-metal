@@ -1372,7 +1372,7 @@ class WanDecoder(Module):
             for t_start in range(0, T, t_chunk_size):
                 self._conv_idx = [0]
                 out_BTHWC, new_logical_h = self.decoder(
-                    x_BTHWC[:, t_start : t_start + t_chunk_size, :, :, :],
+                    x_BTHWC[:, t_start : min(t_start + t_chunk_size, T), :, :, :],
                     logical_h,
                     feat_cache=self._feat_cache,
                     feat_idx=self._conv_idx,
