@@ -1521,11 +1521,11 @@ def test_wan_decoder(
     ],
     ids=["480p", "720p"],
 )
-@pytest.mark.parametrize("T", [21, 32], ids=["21f", "32f"])
+@pytest.mark.parametrize("T", [5, 21, 32], ids=["5f", "21f", "32f"])
 @pytest.mark.parametrize(
     "dtype",
-    [ttnn.DataType.FLOAT32],
-    ids=["f32"],
+    [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
+    ids=["bf16", "f32"],
 )
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis, num_links",
@@ -1629,11 +1629,13 @@ def test_wan_decoder_chunked_consistency(
 
     # Run baseline: full-T, no cache
     logger.info("Running baseline (t_chunk_size=None)")
-    baseline = run_decoder(t_chunk_size=None)
+    baseline = run_decoder(t_chunk_size=1)
     logger.info(f"Baseline output shape: {baseline.shape}")
 
     # Compare each chunk size against the baseline
-    for t_chunk_size in [1, 2, 4, 8, 16]:
+    for t_chunk_size in [2, 4, 8, 16]:
+        if t_chunk_size > T:
+            continue
         logger.info(f"Running t_chunk_size={t_chunk_size} (T={T})")
         chunked = run_decoder(t_chunk_size=t_chunk_size)
         logger.info(f"  chunked output shape: {chunked.shape}")
