@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -44,7 +44,7 @@ _ARRAY_INCLUDE = "#include <array>"
 def _spdx_header() -> List[str]:
     """Return SPDX license header lines."""
     return [
-        f"// SPDX-FileCopyrightText: \u00a9 {datetime.date.today().year} Tenstorrent AI ULC",
+        f"// SPDX-FileCopyrightText: \u00a9 {datetime.date.today().year} Tenstorrent USA, Inc.",
         "//",
         "// SPDX-License-Identifier: Apache-2.0",
     ]
