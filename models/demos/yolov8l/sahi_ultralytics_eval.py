@@ -182,9 +182,18 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         metavar="N",
-        help="TT mesh width for SAHI sliced mode: use a 1×N submesh so each of N simultaneous 640×640 inputs is sharded "
-        "to one wormhole chip (data parallel on batch dim). Requires a parent mesh with ≥N devices (e.g. T3K 1×8 with "
-        "N=4). Omit for legacy behavior (full parent mesh, same slice replicated on all devices per forward).",
+        help="One 1280 (or other) image: use a 1×N submesh so N different tiles run in one batched forward (tile-parallel). "
+        "Incompatible with --tt-slice-dp-batch.",
+    )
+    parser.add_argument(
+        "--tt-slice-dp-batch",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Throughput mode: open the full N-device mesh (e.g. 8 on T3K). Process N images at a time; each image is "
+        "1280×1280 (after --pre-resize-to) with the same SAHI tiling—run tile index 0..K-1 as K separate batched "
+        "forwards (each forward is batch=N, one tile per device). Requires len(--input) divisible by N after collection. "
+        "Incompatible with --tt-slice-parallel-devices.",
     )
     parser.add_argument(
         "--confidence-threshold",
@@ -324,8 +333,20 @@ class TTYoloBackend:
 
         self.ttnn = ttnn
 
+        self.slice_dp_batch = getattr(args, "tt_slice_dp_batch", None)
         n_par = getattr(args, "tt_slice_parallel_devices", None)
-        if n_par is not None:
+        if self.slice_dp_batch is not None and n_par is not None:
+            raise ValueError("Use either --tt-slice-parallel-devices or --tt-slice-dp-batch, not both.")
+        if self.slice_dp_batch is not None:
+            self.slice_dp_batch = int(self.slice_dp_batch)
+            self.device, self._is_mesh_device = _open_tt_yolo_device(ttnn, args)
+            nd = self.device.get_num_devices()
+            if nd != self.slice_dp_batch:
+                raise ValueError(
+                    f"--tt-slice-dp-batch {self.slice_dp_batch} requires exactly that many mesh devices "
+                    f"(found {nd}). Set e.g. --tt-mesh-shape 1 {self.slice_dp_batch} on T3K."
+                )
+        elif n_par is not None:
             n_par = int(n_par)
             max_devices = _system_or_configured_mesh_device_count(ttnn, args)
             if n_par > 1 and max_devices <= 1:
@@ -369,7 +390,9 @@ class TTYoloBackend:
             raise ValueError(f"Unsupported --tt-model: {args.tt_model}")
         self.names = load_coco_class_names()
         self.confidence_threshold = args.confidence_threshold
-        self.slice_parallel_devices = getattr(args, "tt_slice_parallel_devices", None)
+        self.slice_parallel_devices = (
+            None if self.slice_dp_batch is not None else getattr(args, "tt_slice_parallel_devices", None)
+        )
 
     def close(self):
         try:
@@ -464,6 +487,127 @@ def run_tt_full_prediction(tt_backend: TTYoloBackend, image_path: Path):
     )
     elapsed = time.perf_counter() - start
     return PredictionResult(object_prediction_list=obj_preds, image=str(image_path)), elapsed
+
+
+def run_tt_full_prediction_dp_batch(tt_backend: TTYoloBackend, image_paths: list[Path]):
+    """One letterboxed full-frame forward per device; batch dim = len(image_paths) == num_devices."""
+    start = time.perf_counter()
+    if len(image_paths) != tt_backend.num_devices:
+        raise ValueError(f"DP full batch wants {tt_backend.num_devices} images, got {len(image_paths)}")
+    images_bgr = []
+    for p in image_paths:
+        try:
+            images_bgr.append(load_image_bgr_sahi(p))
+        except Exception as e:
+            raise ValueError(f"Failed to read image: {p}") from e
+    batch_results = tt_backend.infer_bgr_images_distinct(images_bgr, "full_dp_batch")
+    elapsed = time.perf_counter() - start
+    results = []
+    for j, p in enumerate(image_paths):
+        obj_preds = result_to_object_predictions(
+            batch_results[j],
+            shift_xy=(0, 0),
+            full_shape=[images_bgr[j].shape[0], images_bgr[j].shape[1]],
+            confidence_threshold=tt_backend.confidence_threshold,
+        )
+        results.append((PredictionResult(object_prediction_list=obj_preds, image=str(p)), elapsed))
+    return results
+
+
+def run_tt_sliced_prediction_dp_batch(
+    tt_backend: TTYoloBackend,
+    image_paths: list[Path],
+    slice_height: int,
+    slice_width: int,
+    overlap_height_ratio: float,
+    overlap_width_ratio: float,
+    postprocess_type: str,
+    postprocess_match_metric: str,
+    postprocess_match_threshold: float,
+    postprocess_class_agnostic: bool,
+):
+    """
+    N images × K tiles: K batched forwards, each forward runs one tile index across all N devices
+    (throughput: devices hold different images; tiles are sequential in time).
+    """
+    if len(image_paths) != tt_backend.num_devices:
+        raise ValueError(f"DP sliced batch wants {tt_backend.num_devices} images, got {len(image_paths)}")
+
+    start = time.perf_counter()
+    slice_entries_list = []
+    full_shapes = []
+    for p in image_paths:
+        slice_result = slice_image(
+            image=str(p),
+            slice_height=slice_height,
+            slice_width=slice_width,
+            overlap_height_ratio=overlap_height_ratio,
+            overlap_width_ratio=overlap_width_ratio,
+            auto_slice_resolution=False,
+        )
+        entries = list(zip(slice_result.starting_pixels, slice_result.images))
+        slice_entries_list.append(entries)
+        full_shapes.append([slice_result.original_image_height, slice_result.original_image_width])
+
+    num_tiles = len(slice_entries_list[0])
+    for idx, ent in enumerate(slice_entries_list[1:], start=1):
+        if len(ent) != num_tiles:
+            raise ValueError(
+                f"Inconsistent SAHI slice count: image 0 has {num_tiles} tiles, image {idx} has {len(ent)} "
+                "(use same --pre-resize-to / slice sizes for all paths in the batch)."
+            )
+
+    print(f"DP batch ({len(image_paths)} images): {num_tiles} tile forwards × batch {len(image_paths)}.")
+
+    all_obj_per_img = [[] for _ in image_paths]
+    tt_forward_passes = 0
+    for t in range(num_tiles):
+        batch_bgr = []
+        shifts = []
+        for entries in slice_entries_list:
+            (sx, sy), slice_img = entries[t]
+            batch_bgr.append(cv2.cvtColor(slice_img, cv2.COLOR_RGB2BGR))
+            shifts.append((sx, sy))
+        batch_results = tt_backend.infer_bgr_images_distinct(batch_bgr, f"dp_tile{t}")
+        tt_forward_passes += 1
+        for j, p in enumerate(image_paths):
+            all_obj_per_img[j].extend(
+                result_to_object_predictions(
+                    batch_results[j],
+                    shift_xy=shifts[j],
+                    full_shape=full_shapes[j],
+                    confidence_threshold=tt_backend.confidence_threshold,
+                )
+            )
+
+    postprocess_merge = build_postprocess(
+        postprocess_type=postprocess_type,
+        match_metric=postprocess_match_metric,
+        match_threshold=postprocess_match_threshold,
+        class_agnostic=postprocess_class_agnostic,
+    )
+    elapsed = time.perf_counter() - start
+    out = []
+    for j, p in enumerate(image_paths):
+        shifted = [x.get_shifted_object_prediction() for x in all_obj_per_img[j]]
+        merged = postprocess_merge(shifted)
+        pre_ct = len(shifted)
+        meta = {
+            "sliced_num_slices": num_tiles,
+            "tt_devices_per_sliced_forward": tt_backend.num_devices,
+            "tt_sliced_forward_passes": tt_forward_passes,
+            "sliced_merged_boxes_before_merge": pre_ct,
+            "sliced_boxes_after_merge": len(merged),
+            "tt_slice_dp_batch": tt_backend.num_devices,
+        }
+        out.append(
+            (
+                PredictionResult(object_prediction_list=merged, image=str(p)),
+                elapsed,
+                meta,
+            )
+        )
+    return out
 
 
 def run_tt_sliced_prediction(
@@ -646,6 +790,8 @@ def resize_images_for_processing(
 
 def main():
     args = parse_args()
+    if args.tt_slice_dp_batch is not None and args.backend != "tt":
+        raise ValueError("--tt-slice-dp-batch requires --backend tt")
     input_path = Path(args.input)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -694,40 +840,10 @@ def main():
         processing_images = resize_images_for_processing(images, resize_width, resize_height, preresize_dir)
 
     rows = []
-    for image in processing_images:
-        if args.backend == "ultralytics":
-            full_result, full_time = run_prediction(detection_model, str(image))
-            sliced_result, sliced_time = run_sliced_prediction(
-                detection_model=detection_model,
-                image_path=str(image),
-                slice_height=args.slice_height,
-                slice_width=args.slice_width,
-                overlap_height_ratio=args.overlap_height_ratio,
-                overlap_width_ratio=args.overlap_width_ratio,
-                perform_standard_pred=args.perform_standard_pred,
-                postprocess_type=args.postprocess_type,
-                postprocess_match_metric=args.postprocess_match_metric,
-                postprocess_match_threshold=args.postprocess_match_threshold,
-                postprocess_class_agnostic=args.postprocess_class_agnostic,
-            )
-        else:
-            full_result, full_time = run_tt_full_prediction(tt_backend, image)
-            sliced_result, sliced_time, sliced_pipeline = run_tt_sliced_prediction(
-                tt_backend=tt_backend,
-                image_path=image,
-                slice_height=args.slice_height,
-                slice_width=args.slice_width,
-                overlap_height_ratio=args.overlap_height_ratio,
-                overlap_width_ratio=args.overlap_width_ratio,
-                postprocess_type=args.postprocess_type,
-                postprocess_match_metric=args.postprocess_match_metric,
-                postprocess_match_threshold=args.postprocess_match_threshold,
-                postprocess_class_agnostic=args.postprocess_class_agnostic,
-            )
 
+    def process_one_image(image, full_result, full_time, sliced_result, sliced_time, sliced_pipeline):
         full_count = len(full_result.object_prediction_list)
         sliced_count = len(sliced_result.object_prediction_list)
-
         row = {
             "image": str(image),
             "full_time_sec": round(full_time, 4),
@@ -740,7 +856,6 @@ def main():
         if args.backend == "tt":
             row.update(sliced_pipeline)
         rows.append(row)
-
         if args.save_visuals:
             maybe_export_visuals(full_result, output_dir, f"{image.stem}_full")
             maybe_export_visuals(sliced_result, output_dir, f"{image.stem}_sliced")
@@ -753,12 +868,86 @@ def main():
                 overlap_height_ratio=args.overlap_height_ratio,
                 overlap_width_ratio=args.overlap_width_ratio,
             )
-
         print(
             f"[{image.name}] full={full_count} ({full_time:.3f}s), "
             f"sliced={sliced_count} ({sliced_time:.3f}s), "
             f"delta={sliced_count - full_count}"
         )
+
+    if args.backend == "tt" and args.tt_slice_dp_batch is not None:
+        N = int(args.tt_slice_dp_batch)
+        if len(processing_images) % N != 0:
+            raise ValueError(
+                f"--tt-slice-dp-batch {N} requires len(processed images) divisible by N "
+                f"(got {len(processing_images)})."
+            )
+        for i in range(0, len(processing_images), N):
+            chunk = processing_images[i : i + N]
+            full_batch = run_tt_full_prediction_dp_batch(tt_backend, chunk)
+            sliced_batch = run_tt_sliced_prediction_dp_batch(
+                tt_backend=tt_backend,
+                image_paths=chunk,
+                slice_height=args.slice_height,
+                slice_width=args.slice_width,
+                overlap_height_ratio=args.overlap_height_ratio,
+                overlap_width_ratio=args.overlap_width_ratio,
+                postprocess_type=args.postprocess_type,
+                postprocess_match_metric=args.postprocess_match_metric,
+                postprocess_match_threshold=args.postprocess_match_threshold,
+                postprocess_class_agnostic=args.postprocess_class_agnostic,
+            )
+            wall_full = full_batch[0][1]
+            wall_sliced = sliced_batch[0][1]
+            amort_full = wall_full / N
+            amort_sliced = wall_sliced / N
+            print(
+                f"[DP batch {i // N + 1}] wall full={wall_full:.3f}s, wall sliced={wall_sliced:.3f}s "
+                f"({N} images; per-row times amortized /{N})"
+            )
+            for j, image in enumerate(chunk):
+                full_result, _ = full_batch[j]
+                sliced_result, _, sliced_pipeline = sliced_batch[j]
+                process_one_image(
+                    image,
+                    full_result,
+                    amort_full,
+                    sliced_result,
+                    amort_sliced,
+                    sliced_pipeline,
+                )
+    else:
+        for image in processing_images:
+            if args.backend == "ultralytics":
+                full_result, full_time = run_prediction(detection_model, str(image))
+                sliced_result, sliced_time = run_sliced_prediction(
+                    detection_model=detection_model,
+                    image_path=str(image),
+                    slice_height=args.slice_height,
+                    slice_width=args.slice_width,
+                    overlap_height_ratio=args.overlap_height_ratio,
+                    overlap_width_ratio=args.overlap_width_ratio,
+                    perform_standard_pred=args.perform_standard_pred,
+                    postprocess_type=args.postprocess_type,
+                    postprocess_match_metric=args.postprocess_match_metric,
+                    postprocess_match_threshold=args.postprocess_match_threshold,
+                    postprocess_class_agnostic=args.postprocess_class_agnostic,
+                )
+                sliced_pipeline = {}
+            else:
+                full_result, full_time = run_tt_full_prediction(tt_backend, image)
+                sliced_result, sliced_time, sliced_pipeline = run_tt_sliced_prediction(
+                    tt_backend=tt_backend,
+                    image_path=image,
+                    slice_height=args.slice_height,
+                    slice_width=args.slice_width,
+                    overlap_height_ratio=args.overlap_height_ratio,
+                    overlap_width_ratio=args.overlap_width_ratio,
+                    postprocess_type=args.postprocess_type,
+                    postprocess_match_metric=args.postprocess_match_metric,
+                    postprocess_match_threshold=args.postprocess_match_threshold,
+                    postprocess_class_agnostic=args.postprocess_class_agnostic,
+                )
+            process_one_image(image, full_result, full_time, sliced_result, sliced_time, sliced_pipeline)
 
     summary = {
         "config": {
@@ -766,6 +955,10 @@ def main():
             "backend": args.backend,
             "tt_model": args.tt_model if args.backend == "tt" else None,
             "tt_slice_parallel_devices": args.tt_slice_parallel_devices if args.backend == "tt" else None,
+            "tt_slice_dp_batch": args.tt_slice_dp_batch if args.backend == "tt" else None,
+            "tt_slice_dp_batch_times_amortized_per_image": bool(
+                args.backend == "tt" and args.tt_slice_dp_batch is not None
+            ),
             "tt_mesh_shape": list(args.tt_mesh_shape) if args.backend == "tt" and args.tt_mesh_shape else None,
             "confidence_threshold": args.confidence_threshold,
             "device": args.device if args.backend == "ultralytics" else f"tt:{args.tt_device_id}",
@@ -820,6 +1013,12 @@ def main():
         print(
             f"Sliced TT path: {args.tt_slice_parallel_devices} devices per forward; "
             "see per_image.sliced_num_slices / tt_sliced_forward_passes in summary.json."
+        )
+    if args.backend == "tt" and args.tt_slice_dp_batch:
+        print(
+            f"DP batch path: {args.tt_slice_dp_batch}-wide mesh batch; "
+            "K tile indices ⇒ K batched forwards; per_image full/sliced times are amortized chunk wall/N "
+            "(see stdout [DP batch] lines for chunk wall times)."
         )
 
     if tt_backend is not None:
