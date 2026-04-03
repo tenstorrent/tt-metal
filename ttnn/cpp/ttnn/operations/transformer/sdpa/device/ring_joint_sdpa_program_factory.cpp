@@ -1037,7 +1037,11 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             uint32_t ref_q_chunks;
         };
         std::vector<McastCandidate> candidates;
-        bool all_eligible = true;
+        // Disable multicast when zigzag is enabled - iteration patterns differ
+        bool all_eligible = !enable_zigzag_balancing;
+        if (!all_eligible) {
+            log_debug(tt::LogOp, "Multicast disabled: zigzag balancing enabled");
+        }
 
         for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
             const auto& segments = head_segments[head_id];
