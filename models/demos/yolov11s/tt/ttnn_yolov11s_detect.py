@@ -135,6 +135,8 @@ class TtnnDetect:
         self.dfl = Yolov11sConv2D(parameter.dfl.conv, conv_pt.dfl.conv, device=device, is_dfl=True, config_override=dfl)
         self.anchors = conv_pt.anchors
         self.strides = conv_pt.strides
+        # self.anchors = ttnn.to_memory_config(conv_pt.anchors, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # self.strides = ttnn.to_memory_config(conv_pt.strides, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     def __call__(self, device, y1, y2, y3, tile_size=32):
         x1 = self.cv2_0_0(device, y1)
@@ -177,6 +179,7 @@ class TtnnDetect:
         if y3.is_sharded():
             y3 = ttnn.sharded_to_interleaved(y3, memory_config=ttnn.L1_MEMORY_CONFIG)
         y = ttnn.concat((y1, y2, y3), dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+
         y = ttnn.to_layout(y, layout=ttnn.TILE_LAYOUT)
         y = ttnn.squeeze(y, dim=0)
         ya, yb = y[:, :, :64], y[:, :, 64:144]
@@ -205,9 +208,8 @@ class TtnnDetect:
         yb = ttnn.permute(yb, (0, 2, 1))
         yb = ttnn.sigmoid(yb)
         deallocate_tensors(c, z1, z2, c1, c2, anchor, strides)
-        z = ttnn.to_layout(z, layout=ttnn.ROW_MAJOR_LAYOUT)
-        yb = ttnn.to_layout(yb, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # z = ttnn.to_layout(z, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # yb = ttnn.to_layout(yb, layout=ttnn.ROW_MAJOR_LAYOUT)
         out = ttnn.concat((z, yb), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
-
         deallocate_tensors(yb, z)
         return out

@@ -232,7 +232,7 @@ class C3k2(nn.Module):
                 padding=padding[0],
                 dilation=dilation[0],
                 groups=groups[0],
-                split_weights=False,
+                split_weights=True,
             )
             self.cv2 = Conv(
                 in_channel[1],
@@ -266,7 +266,7 @@ class C3k2(nn.Module):
                 padding=padding[0],
                 dilation=dilation[0],
                 groups=groups[0],
-                split_weights=False,
+                split_weights=True,
             )
             self.cv2 = Conv(
                 in_channel[1],
