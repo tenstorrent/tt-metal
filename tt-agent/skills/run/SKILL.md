@@ -50,7 +50,8 @@ When in doubt: if the command needs a TT device attached, use MCP.
 
 | Sub-task | Load |
 |---|---|
-| Detect repo, platform, architecture | `workspace-detect.md` |
+| Detect workspace, repo, platform, arch | `workspace-detect.md` |
+| Workspace setup and activation | `knowledge/recipes/workspace.md` |
 | Command routing, job monitoring, recovery | `job-lifecycle.md` |
 | Build steps for detected repo | `knowledge/recipes/<repo>/build.md` |
 | Test invocation for detected repo | `knowledge/recipes/<repo>/test.md` |
