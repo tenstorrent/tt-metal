@@ -802,8 +802,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                 }
             }
 
-            std::string line = "Core " + std::to_string(i) + " (" + std::to_string(work.logical_core.y) + "," +
-                               std::to_string(work.logical_core.x) + ")" + role_tag + ": ";
+            std::string line = "Core " + std::to_string(i) + " (" + std::to_string(work.logical_core.x) + "," +
+                               std::to_string(work.logical_core.y) + ")" + role_tag + ": ";
 
             for (const auto& hw : work.head_work) {
                 uint32_t light_cnt = 0, heavy_cnt = 0;
@@ -837,6 +837,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         log_debug(tt::LogOp, "============================================================");
 
         uint32_t chain_count = 0;
+        uint32_t total_max_workload = 0;
+        uint32_t total_total_workload = 0;
 
         for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
             const auto& segments = head_segments[head_id];
@@ -864,8 +866,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                 continue;
             }
             chain_count++;
+            total_max_workload += max_chunks;
+            total_total_workload += total_chunks;
 
-            // Format: Chain(head=N: (y,x)[cnt]ROLE->(y,x)[cnt]ROLE, dram_ratio=X.XX)
+            // Format: Chain(head=N: (x,y)[cnt]ROLE->(x,y)[cnt]ROLE, dram_ratio=X.XX)
             std::string parts;
             for (size_t i = 0; i < chain_core_indices.size(); ++i) {
                 if (i > 0) {
@@ -875,7 +879,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                 const auto& core = core_work[ci].logical_core;
                 const auto& chain = core_chain_info[ci];
                 std::string role = chain.is_injector ? "INJ" : (chain.is_sink ? "SNK" : "RCV");
-                parts += "(" + std::to_string(core.y) + "," + std::to_string(core.x) + ")[" +
+                parts += "(" + std::to_string(core.x) + "," + std::to_string(core.y) + ")[" +
                          std::to_string(chain.q_chunk_count) + "]" + role;
             }
 
@@ -888,6 +892,18 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         }
 
         log_debug(tt::LogOp, "Total chains: {}", chain_count);
+        if (chain_count > 0) {
+            float total_dram_ratio =
+                total_total_workload > 0 ? static_cast<float>(total_max_workload) / total_total_workload : 1.0f;
+            char total_ratio_buf[16];
+            std::snprintf(total_ratio_buf, sizeof(total_ratio_buf), "%.2f", total_dram_ratio);
+            log_debug(
+                tt::LogOp,
+                "Total DRAM access ratio: {} ({}/{})",
+                total_ratio_buf,
+                total_max_workload,
+                total_total_workload);
+        }
     };
 
     // ===== END CHAIN VISUALIZATION HELPERS =====
