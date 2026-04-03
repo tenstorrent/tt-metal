@@ -20,20 +20,26 @@ void print_row_major_subset(
 
     DPRINT << "=== Row-major [" << start_row << ":" << end_row << ", " << start_col << ":" << end_col
            << "] ===" << ENDL();
+    DEVICE_PRINT("=== Row-major [{}:{}, {}:{}] ===\n", start_row, end_row, start_col, end_col);
 
     for (uint32_t r = start_row; r < end_row; r++) {
         DPRINT << r << ": ";
+        DEVICE_PRINT("{}: ", r);
         for (uint32_t c = start_col; c < end_col; c++) {
             uint32_t idx = r * BufferWidth + c;
             uint16_t val = data[idx];
             DPRINT << BF16(val);
+            DEVICE_PRINT("{}", bf16_t(val));
             if (c < end_col - 1) {
                 DPRINT << " ";
+                DEVICE_PRINT(" ");
             }
         }
         DPRINT << ENDL();
+        DEVICE_PRINT("\n");
     }
     DPRINT << "++++++" << ENDL();
+    DEVICE_PRINT("++++++\n");
 }
 
 void print_tile_rows(
@@ -45,7 +51,9 @@ void print_tile_rows(
     uint8_t start_col = 0,
     uint8_t end_col = 32) {
     DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
+    DEVICE_PRINT("cb_idx: {} tile_idx: {}\n", cb_idx, tile_idx);
     DPRINT << "======" << ENDL();
+    DEVICE_PRINT("======\n");
     for (uint16_t r = start_row; r < end_row; ++r) {
         DPRINT << (uint)r << " : "
                << TileSlice(
@@ -61,8 +69,24 @@ void print_tile_rows(
                       true,
                       untilize)
                << ENDL();
+        DEVICE_PRINT(
+            "{} : {}\n",
+            r,
+            TileSlice(
+                cb_idx,
+                tile_idx,
+                SliceRange{
+                    .h0 = (uint8_t)r,
+                    .h1 = (uint8_t)(r + 1),
+                    .hs = (uint8_t)1,
+                    .w0 = (uint8_t)start_col,
+                    .w1 = (uint8_t)end_col,
+                    .ws = (uint8_t)1},
+                true,
+                untilize));
     }
     DPRINT << "++++++" << ENDL();
+    DEVICE_PRINT("++++++\n");
 }
 
 // Compute kernel for tilizing incoming tokens from the reader.
@@ -108,6 +132,7 @@ void kernel_main() {
         //     uint32_t operand_id = get_operand_id(tilize_input_cb_id);
         //     uint32_t cb_addr = get_local_cb_interface(operand_id).fifo_rd_ptr << 4;  // Convert to byte address
         //     DPRINT << "=== CHUNK " << chunk << " INPUT ===" << ENDL();
+        //     DEVICE_PRINT("=== CHUNK {} INPUT ===\n", chunk);
         //     print_row_major_subset<buffer_width>(cb_addr, 0, 1, 0, 1);  // first 4 rows x 8 cols
         //     print_row_major_subset<buffer_width>(cb_addr, 0, 4, buffer_width - 8, buffer_width);  // last 4x8
         // }));
@@ -121,6 +146,7 @@ void kernel_main() {
         // DEBUG: Print first and last tiles of output (tilized format)
         // PACK(({
         //     DPRINT << "=== CHUNK " << chunk << " OUTPUT ===" << ENDL();
+        //     DEVICE_PRINT("=== CHUNK {} OUTPUT ===\n", chunk);
         //     print_tile_rows(tilize_output_cb_id, 0, true, 0, 1, 0, 1);                    // First tile, 4x8
         //     // print_tile_rows(tilize_output_cb_id, tiles_per_local_chunk - 1, true, 0, 1, 0, 1);  // Last tile, 4x8
         // }));

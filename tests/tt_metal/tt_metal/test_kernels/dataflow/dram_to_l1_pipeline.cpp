@@ -31,6 +31,12 @@ void kernel_main() {
         DPRINT << "Reading " << sizeof(uint32_t) << " bytes from DRAM address " << dram_src_address + offset
                << " in bank " << dram_src_bank_id << " and writing it to L1 address " << l1_dst_address + offset
                << ENDL();
+        DEVICE_PRINT(
+            "Reading {} bytes from DRAM address {} in bank {} and writing it to L1 address {}\n",
+            sizeof(uint32_t),
+            dram_src_address + offset,
+            dram_src_bank_id,
+            l1_dst_address + offset);
         experimental::CoreLocalMem<uint32_t> l1_buf(l1_dst_address + offset);
         noc.async_read(
             src_dram, l1_buf, sizeof(uint32_t), {.bank_id = dram_src_bank_id, .addr = dram_src_address + offset}, {});

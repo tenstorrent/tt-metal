@@ -36,16 +36,38 @@ void kernel_main() {
     DPRINT << "src_addr: " << src_addr << ", num_dims: " << num_dims << ", start_id: " << start_id
            << ", num_tiles_per_core: " << num_tiles_per_core << ", num_tiles_per_barrier: " << num_tiles_per_barrier
            << ENDL();
+    DEVICE_PRINT(
+        "src_addr: {}, num_dims: {}, start_id: {}, num_tiles_per_core: {}, num_tiles_per_barrier: {}\n",
+        src_addr,
+        num_dims,
+        start_id,
+        num_tiles_per_core,
+        num_tiles_per_barrier);
 
     DPRINT << "tile_size: " << tile_size << ", src_stick_id: " << src_stick_id << ", tiles_read: " << tiles_read
            << ENDL();
+    DEVICE_PRINT("tile_size: {}, src_stick_id: {}, tiles_read: {}\n", tile_size, src_stick_id, tiles_read);
 
     DPRINT << "num_unpadded_sticks: " << num_unpadded_sticks[0] << " " << num_unpadded_sticks[1] << " "
            << num_unpadded_sticks[2] << " " << num_unpadded_sticks[3] << " " << ENDL();
+    DEVICE_PRINT(
+        "num_unpadded_sticks: {} {} {} {}\n",
+        num_unpadded_sticks[0],
+        num_unpadded_sticks[1],
+        num_unpadded_sticks[2],
+        num_unpadded_sticks[3]);
     DPRINT << "num_padded_sticks: " << num_padded_sticks[0] << " " << num_padded_sticks[1] << " "
            << num_padded_sticks[2] << " " << num_padded_sticks[3] << " " << ENDL();
+    DEVICE_PRINT(
+        "num_padded_sticks: {} {} {} {}\n",
+        num_padded_sticks[0],
+        num_padded_sticks[1],
+        num_padded_sticks[2],
+        num_padded_sticks[3]);
     DPRINT << "num_tiles_per_row_this_core: " << num_tiles_per_row_this_core
            << " extra_tiles_per_row: " << extra_tiles_per_row << ENDL();
+    DEVICE_PRINT(
+        "num_tiles_per_row_this_core: {} extra_tiles_per_row: {}\n", num_tiles_per_row_this_core, extra_tiles_per_row);
 #endif
     const uint32_t base_src_buffer_l1_addr = get_write_ptr(cb_id_in0);
     const uint64_t base_noc_addr = get_noc_addr(0, s0);
@@ -55,7 +77,9 @@ void kernel_main() {
         uint32_t src_buffer_l1_addr = get_write_ptr(cb_id_in0);
 #ifdef DEBUG
         DPRINT << "Src Buffer L1 Addr: " << src_buffer_l1_addr << ENDL();
+        DEVICE_PRINT("Src Buffer L1 Addr: {}\n", src_buffer_l1_addr);
         DPRINT << "Tiles read " << tiles_read << ", Num tiles pushed: " << num_tiles_pushed << ENDL();
+        DEVICE_PRINT("Tiles read {} Num tiles pushed: {}\n", tiles_read, num_tiles_pushed);
 #endif
         for (uint32_t i = 0; i < num_tiles_per_barrier and tiles_read < num_tiles_per_core; ++i) {
             tiles_read++;
@@ -64,6 +88,14 @@ void kernel_main() {
                 DPRINT << "Skipping read for src_stick_id: " << src_stick_id << ", id_per_dim: " << id_per_dim[0] << ","
                        << id_per_dim[1] << "," << id_per_dim[2] << "," << id_per_dim[3]
                        << ", tiles_read: " << tiles_read << ENDL();
+                DEVICE_PRINT(
+                    "Skipping read for src_stick_id: {}, id_per_dim: {} {} {} {}, tiles_read: {}\n",
+                    src_stick_id,
+                    id_per_dim[0],
+                    id_per_dim[1],
+                    id_per_dim[2],
+                    id_per_dim[3],
+                    tiles_read);
 #endif
                 src_buffer_l1_addr += tile_size;
                 src_stick_id++;
@@ -75,6 +107,15 @@ void kernel_main() {
                 DPRINT << "src_stick_id: " << src_stick_id << ", src_buffer_l1_addr: " << src_buffer_l1_addr
                        << ", tiles_read: " << tiles_read << "id " << id_per_dim[0] << "," << id_per_dim[1] << ","
                        << id_per_dim[2] << "," << id_per_dim[3] << ENDL();
+                DEVICE_PRINT(
+                    "src_stick_id: {}, src_buffer_l1_addr: {}, tiles_read: {}, id {} {} {} {}\n",
+                    src_stick_id,
+                    src_buffer_l1_addr,
+                    tiles_read,
+                    id_per_dim[0],
+                    id_per_dim[1],
+                    id_per_dim[2],
+                    id_per_dim[3]);
 #endif
                 src_buffer_l1_addr += tile_size;
                 src_stick_id++;

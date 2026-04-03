@@ -31,6 +31,7 @@ FORCE_INLINE void master_sync_slaves(
         master_l1_semaphore_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sync_sem_addr);
         noc_semaphore_wait(master_l1_semaphore_addr, num_workers_to_sync - 1);
         // DPRINT << "MASTER SYNCED WITH SLAVES" << ENDL();
+        // DEVICE_PRINT("MASTER SYNCED WITH SLAVES\n");
     }
 
     // Send signal to op
@@ -48,6 +49,7 @@ FORCE_INLINE void master_sync_slaves(
         noc_semaphore_inc(remote_fused_op_l1_semaphore_addr, 1);
     }
     // DPRINT << "MASTER SIGNALED REMOTE OP" << ENDL();
+    // DEVICE_PRINT("MASTER SIGNALED REMOTE OP\n");
 
     if (num_workers_to_sync > 1) {
         // Clear the master semaphore, so that it can be used again
@@ -60,6 +62,7 @@ FORCE_INLINE void master_sync_slaves(
                 get_noc_addr(worker_noc_coords[i * 2], worker_noc_coords[i * 2 + 1], worker_sync_sem_addr);
             noc_semaphore_inc(remote_slave_l1_sem_addr, 1);
             // DPRINT << "MASTER CLEAREED A SLAVE SEMAPHORE" << ENDL();
+            // DEVICE_PRINT("MASTER CLEAREED A SLAVE SEMAPHORE\n");
         }
     }
 }
@@ -71,12 +74,14 @@ FORCE_INLINE void slave_sync_master(const uint32_t* worker_noc_coords, const uin
         get_noc_addr(worker_noc_coords[0], worker_noc_coords[1], worker_sync_sem_addr);
     noc_semaphore_inc(remote_master_l1_semaphore_addr, 1);
     // DPRINT << "SLAVE SYNCED WITH MASTER" << ENDL();
+    // DEVICE_PRINT("SLAVE SYNCED WITH MASTER\n");
 
     // Wait for the master to signal that this slave is ready to continue
     volatile tt_l1_ptr uint32_t* slave_l1_semaphore_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sync_sem_addr);
     noc_semaphore_wait(slave_l1_semaphore_addr, 1);
     // DPRINT << "SLAVE SEMAPHORE CLEARED BY MASTER" << ENDL();
+    // DEVICE_PRINT("SLAVE SEMAPHORE CLEARED BY MASTER\n");
 
     // Clear the slave semaphore, so that it can be used again
     noc_semaphore_set(slave_l1_semaphore_addr, 0);

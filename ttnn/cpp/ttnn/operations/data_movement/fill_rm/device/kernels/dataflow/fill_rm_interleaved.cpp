@@ -27,6 +27,7 @@ void kernel_main() {
 
     // DPRINT << "fill_rm_8bank: NC=" << NC << " H=" << H << " W=" << W << " fillH=" << fillH << " fillW=" << fillW <<
     // ENDL();
+    // DEVICE_PRINT("fill_rm_8bank: NC={} H={} W={} fillH={} fillW={}\n", NC, H, W, fillH, fillW);
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
     // How many bytes along a row in the original tensor

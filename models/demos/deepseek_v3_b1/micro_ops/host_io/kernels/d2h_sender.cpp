@@ -33,6 +33,7 @@ FORCE_INLINE bool cb_wait_for_pages_with_termination(
 
 void kernel_main() {
     DPRINT << "Starting d2h sender kernel" << ENDL();
+    DEVICE_PRINT("Starting d2h sender kernel\n");
     // Get this value from MeshSocket struct on host
     constexpr uint32_t send_socket_config_addr = get_compile_time_arg_val(0);
     constexpr uint32_t termination_semaphore_addr = get_compile_time_arg_val(1);

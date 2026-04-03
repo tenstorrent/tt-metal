@@ -22,8 +22,18 @@ void kernel_main() {
     DPRINT << "num_units: " << num_units << ", num_elements_per_row: " << num_elements_per_row
            << ", unpadded_row_size_bytes: " << unpadded_row_size_bytes
            << ", padded_row_size_bytes: " << padded_row_size_bytes << ", pad_size_bytes: " << pad_size_bytes << ENDL();
+    DEVICE_PRINT(
+        "num_units: {}, num_elements_per_row: {}, unpadded_row_size_bytes: {}, padded_row_size_bytes: {}, "
+        "pad_size_bytes: {}\n",
+        num_units,
+        num_elements_per_row,
+        unpadded_row_size_bytes,
+        padded_row_size_bytes,
+        pad_size_bytes);
     DPRINT << "CB Temp Pad " << cb_temp_pad << "pad_addr: " << pad_addr << ", out_addr: " << out_addr << ENDL();
+    DEVICE_PRINT("CB Temp Pad {}, pad_addr: {}, out_addr: {}\n", cb_temp_pad, pad_addr, out_addr);
     DPRINT << "Output Elem Size " << output_elem_size << ENDL();
+    DEVICE_PRINT("Output Elem Size {}\n", output_elem_size);
 #endif
 
     if constexpr (output_elem_size == 2) {
