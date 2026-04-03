@@ -2594,7 +2594,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     fabric_telemetry);
             }
 
-            *fabric_heartbeat_ptr = 0xDCBA0000 | (++fabric_heartbeat_counter);
+            if ((++fabric_heartbeat_counter & 0x3F) == 0) {
+                *fabric_heartbeat_ptr = 0xDCBA0000 | fabric_heartbeat_counter;
+            }
 
             if constexpr (enable_context_switch) {
                 // shouldn't do noc counter sync since we are not incrementing them
