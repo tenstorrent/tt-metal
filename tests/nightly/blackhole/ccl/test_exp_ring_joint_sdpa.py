@@ -294,8 +294,7 @@ def run_exp_ring_joint_sdpa_nightly(
 
         persistent_buffer_k = [
             ttnn.from_torch(
-                # torch.zeros(b, nh, total_seq, d),
-                K,
+                torch.zeros(b, nh, total_seq, d),
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
@@ -308,8 +307,7 @@ def run_exp_ring_joint_sdpa_nightly(
         ]
         persistent_buffer_v = [
             ttnn.from_torch(
-                # torch.zeros(b, nh, total_seq, d),
-                V,
+                torch.zeros(b, nh, total_seq, d),
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
@@ -388,7 +386,6 @@ def run_exp_ring_joint_sdpa_nightly(
             return out[:, :, :total_seq, :]
 
         if num_iterations > 1:
-            pass_determinism = True
             reference_output = to_torch_out(tt_out_list[0])
             for i in range(1, num_iterations):
                 tt_out_torch = to_torch_out(tt_out_list[i])
@@ -396,17 +393,11 @@ def run_exp_ring_joint_sdpa_nightly(
                     diff_mask = reference_output != tt_out_torch
                     num_diffs = diff_mask.sum().item()
                     max_diff = (reference_output - tt_out_torch).abs().max().item()
-                    logger.error(
+                    pytest.fail(
                         f"Exp ring joint SDPA output at iteration {i} differs from iteration 0: "
                         f"{num_diffs} differing elements, max_diff={max_diff}"
                     )
-                    pass_determinism = False
-                    # pytest.fail(
-                    #     f"Exp ring joint SDPA output at iteration {i} differs from iteration 0: "
-                    #     f"{num_diffs} differing elements, max_diff={max_diff}"
-                    # )
             logger.info(f"Exp ring joint SDPA determinism verified: all {num_iterations} outputs are exactly equal")
-            assert pass_determinism, f"Exp ring joint SDPA determinism failed"
             return
 
         if not do_check:
