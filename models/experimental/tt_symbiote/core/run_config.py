@@ -89,11 +89,11 @@ class DistributedConfig:
                 print(
                     f"Could not determine tensor config for {module_name} with shape {tensor.shape}. Assuming replication to all devices. Override set_output_tensors_config_impl in the module to set the correct config for this tensor."
                 )
+                # Replicated mesh: compose with dim=0 only. Do not use MeshComposerConfig([0, len(shape)]);
+                # the second entry is a dimension index, so rank 3 yields [0, 3] which is invalid (dims 0..2).
                 return DistributedTensorConfig(
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                    mesh_composer=ttnn.create_mesh_composer(
-                        self.mesh_device, ttnn.MeshComposerConfig([0, len(tensor.shape)])
-                    ),
+                    mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
                 )
         return self.tensor_config
 

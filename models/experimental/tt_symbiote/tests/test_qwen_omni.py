@@ -14,6 +14,7 @@ from transformers.activations import GELUActivation, GELUTanh, SiLUActivation
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeAudioAttention,
     Qwen3OmniMoeCode2WavAttention,
+    Qwen3OmniMoeCode2WavDecoderResidualUnit,
     Qwen3OmniMoeCode2WavRMSNorm,
     Qwen3OmniMoeRMSNorm,
     Qwen3OmniMoeTalkerResizeMLP,
@@ -28,6 +29,7 @@ from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeMLP,
     Qwen3OmniMoeCode2WavMlp,
     Qwen3OmniMoeTalkerCodePredictorAttention,
+    SnakeBeta,
 )
 from qwen_omni_utils import process_mm_info
 
@@ -42,7 +44,12 @@ from models.experimental.tt_symbiote.modules.attention import TTNNQwen3Attention
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3OmniAttention
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3VLMoeVisionAttention
 from models.experimental.tt_symbiote.modules.moe import TTNNGlm4MoeMLP
-from models.experimental.tt_symbiote.modules.activation import TTNNGelu, TTNNSilu
+from models.experimental.tt_symbiote.modules.activation import (
+    TTNNGelu,
+    TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
+    TTNNSilu,
+    TTNNSnakeBeta,
+)
 
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNQwen3OmniTalkerResizeMLP,
@@ -57,12 +64,14 @@ _ALLOWED_SYMBIOTE_RUN_MODES = frozenset({"CPU", "NORMAL", "NORMAL_WITH_FALLBACK"
 _QWEN_OMNI_AUDIO_SAMPLE_RATE_HZ = 24000
 
 # HF ``ACT2FN`` / ``nn.*`` activations → TTNN (``GELUTanh`` uses ``ttnn.gelu`` as a practical stand-in for vision).
+# ``SnakeBeta`` is used in Qwen3-Omni-MoE ``code2wav`` decoder blocks (see ``modeling_qwen3_omni_moe``).
 _QWEN_OMNI_ACTIVATION_NN_TO_TTNN = {
     torch.nn.SiLU: TTNNSilu,
     torch.nn.GELU: TTNNGelu,
     SiLUActivation: TTNNSilu,
     GELUActivation: TTNNGelu,
     GELUTanh: TTNNGelu,
+    SnakeBeta: TTNNSnakeBeta,
 }
 
 # HF ``nn.LayerNorm`` (audio encoder, vision merger/blocks, code2wav ConvNeXt). ``TTNNQwenLayerNorm.from_torch``
@@ -176,12 +185,15 @@ NN_TO_TTNN_CODE2WAV = {
     Qwen3OmniMoeCode2WavAttention: TTNNQwen3OmniMoeCode2WavAttention,
     Qwen3OmniMoeCode2WavRMSNorm: TTNNDistributedRMSNorm,
     Qwen3OmniMoeCode2WavMlp: TTNNGlm4MoeMLP,
+    Qwen3OmniMoeCode2WavDecoderResidualUnit: TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
     **_QWEN_OMNI_ACTIVATION_NN_TO_TTNN,
     **_QWEN_OMNI_LAYERNORM_NN_TO_TTNN,
 }
 NN_TO_TTNN_TALKER = {
     Qwen3OmniMoeTalkerTextSparseMoeBlock: TTNNQwen3TalkerMoE,
     Qwen3OmniMoeThinkerTextAttention: TTNNQwen3Attention,
+    Qwen3OmniMoeThinkerTextRMSNorm: TTNNDistributedRMSNorm,
+    Qwen3OmniMoeThinkerTextMLP: TTNNGlm4MoeMLP,
     Qwen3OmniMoeTalkerCodePredictorAttention: TTNNQwen3Attention,
     Qwen3OmniMoeTalkerResizeMLP: TTNNQwen3OmniTalkerResizeMLP,
     Qwen3OmniMoeRMSNorm: TTNNDistributedRMSNorm,
