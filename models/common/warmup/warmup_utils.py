@@ -7,6 +7,7 @@ from itertools import product
 import torch
 from loguru import logger
 
+import ttnn
 from models.common.sampling.sampling_params import SamplingParams
 
 
@@ -104,7 +105,7 @@ class WarmupForwardMixin:
 
         for param in sampling_params:
             logger.info(f"Warming up decode for sampling params: {param}")
-            self.decode_forward(
+            tt_output = self.decode_forward(
                 tokens=tokens,
                 start_pos=start_pos,
                 page_table=page_table,
@@ -113,5 +114,23 @@ class WarmupForwardMixin:
                 read_from_device=read_from_device,
                 sampling_params=param,
             )
+
+            # On some devices (e.g. P150/Blackhole), ttnn.synchronize_device()
+            # hangs unless a PCIe DMA has already been initiated.  Issue a
+            # non-blocking read on the output tensors first, then synchronize.
+            host_tensors = []
+            if isinstance(tt_output, list):
+                for item in tt_output:
+                    tensor = item[0] if isinstance(item, tuple) else item
+                    if isinstance(tensor, ttnn.Tensor):
+                        logger.info("decode warmup: issuing cpu(blocking=False) on output tensor")
+                        host_tensors.append(tensor.cpu(blocking=False))
+                        logger.info("decode warmup: cpu(blocking=False) issued")
+
+            for model_instance in self.model:
+                logger.info("decode warmup: synchronize_device start")
+                ttnn.synchronize_device(model_instance.mesh_device)
+                logger.info("decode warmup: synchronize_device done")
+            host_tensors.clear()
 
         logger.info("Decode warmup completed")

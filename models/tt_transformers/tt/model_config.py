@@ -2893,6 +2893,10 @@ class ModelArgs:
             and num_cached_tokens == 0
         )
 
+    def supports_decode_trace(self) -> bool:
+        """Whether decode-step `ttnn` trace capture/execute is valid on this model/device."""
+        return True
+
     def is_llama_vision(self):
         return self.CKPT_DIR is not None and ("llama" in self.CKPT_DIR.lower()) and ("vision" in self.CKPT_DIR.lower())
 

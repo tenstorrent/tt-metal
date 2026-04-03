@@ -568,7 +568,10 @@ class Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
-        return self.forward(
+        from loguru import logger as _logger
+
+        _logger.info(f"ttnn_prefill_forward: forward start (get_last_token={get_last_token})")
+        result = self.forward(
             x,
             current_pos=None,
             rot_mats_global=rot_mats_global,
@@ -582,6 +585,8 @@ class Transformer(LightweightModule):
             kv_cache=kv_cache,
             batch_size=batch_size,
         )
+        _logger.info("ttnn_prefill_forward: forward done")
+        return result
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
         ttnn.plus_one(current_pos, skip_negative_entries=True)
@@ -601,11 +606,16 @@ class Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        from loguru import logger as _logger
+
+        _logger.info("ttnn_decode_forward: get_rot_mats start")
         rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs)
         rot_mats_local = self.rope_local_setup.get_rot_mats(rot_mat_idxs) if hasattr(self, "rope_local_setup") else None
 
+        _logger.info("ttnn_decode_forward: _transform_decode_inputs_device start")
         x_embed = self._transform_decode_inputs_device(x)
 
+        _logger.info("ttnn_decode_forward: forward start")
         tt_logits = self.forward(
             x_embed,
             current_pos,
@@ -615,6 +625,7 @@ class Transformer(LightweightModule):
             page_table=page_table,
             kv_cache=kv_cache,
         )
+        _logger.info("ttnn_decode_forward: forward done")
 
         if sampling_on_device and self.sampling is not None:
             self._increment_decode_positions_device(current_pos, rot_mat_idxs)
@@ -632,6 +643,7 @@ class Transformer(LightweightModule):
         if self.args.num_devices > 1:
             cluster_axis = 0 if self.args.is_galaxy else None
             num_links = 2 if self.args.is_galaxy else 1
+            _logger.info("ttnn_decode_forward: all_gather_async start")
             tt_logits = ttnn.experimental.all_gather_async(
                 tt_logits,
                 persistent_output_buffer=None,
@@ -648,12 +660,14 @@ class Transformer(LightweightModule):
                 subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )
 
+        _logger.info("ttnn_decode_forward: untilize start")
         tt_logits = ttnn.untilize(
             tt_logits,
             use_multicore=True,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             sub_core_grids=self.prefetcher.all_worker_cores_range_set if self.prefetcher is not None else None,
         )
+        _logger.info("ttnn_decode_forward: done")
 
         return tt_logits, None
 
