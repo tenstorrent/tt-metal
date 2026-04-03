@@ -1,78 +1,80 @@
-# Yolov8s
+# YOLOv8l
 
-## Platforms:
-Wormhole (n150, n300)
+## Platforms
+Wormhole (n150, n300, multi-device / T3K).
 
 ## Introduction
-YOLOv8 is one of the recent iterations in the YOLO series of real-time object detectors, offering cutting-edge performance in terms of accuracy and speed.
+YOLOv8l is the large Ultralytics YOLOv8 detection variant run on TT-NN at **640×640** per inference (letterboxed).
 
-Resource link - [source](https://github.com/ultralytics/ultralytics/blob/main/ultralytics/models/yolo/model.py)
+Resource: [Ultralytics YOLO](https://github.com/ultralytics/ultralytics/blob/main/ultralytics/models/yolo/model.py).
 
 ## Prerequisites
-- Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
-- Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
+- [tt-metal](https://github.com/tenstorrent/tt-metal) checkout and [install](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md).
+- For host reference / weights: `ultralytics` (PCC and demo load `yolov8l.pt` unless CI weights are used).
 
-## How to Run
-Use the following command(s) to run the model:
-```
-pytest --disable-warnings models/demos/yolov8s/tests/pcc/test_yolov8s.py::test_yolov8s_640
-```
+## How to verify
 
-### Model performant running with Trace+2CQ
-#### Single Device (BS=1):
-- end-2-end perf is `215` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
-```
-pytest --disable-warnings models/demos/yolov8s/tests/perf/test_e2e_performant.py
+### 1) Correctness (PCC vs Torch)
+Runs TT against Ultralytics reference on random **640×640** input (needs device):
+
+```bash
+pytest --disable-warnings models/demos/yolov8l/tests/pcc/test_yolov8l.py::test_yolov8l_640
 ```
 
-#### Multi Device (DP=2, n300):
-- end-2-end perf is `368` FPS
+### 2) Trace + 2 CQ performance smoke
+Single device:
+
+```bash
+pytest --disable-warnings models/demos/yolov8l/tests/perf/test_e2e_performant.py::test_run_yolov8l_trace_2cqs_inference
 ```
-pytest --disable-warnings models/demos/yolov8s/tests/perf/test_e2e_performant.py::test_run_yolov8s_trace_2cqs_dp_inference[wormhole_b0-1-device_params0]
+
+Multi-device / mesh (data-parallel):
+
+```bash
+pytest --disable-warnings models/demos/yolov8l/tests/perf/test_e2e_performant.py::test_run_yolov8l_trace_2cqs_dp_inference
 ```
 
-### Demo
-Note: Output images will be saved in the `models/demos/yolov8s/demo/runs/<model_type>` folder.
+### 3) End-to-end demo (images on disk)
+Outputs under `models/demos/yolov8l/demo/runs/<model_type>/`.
 
-### Single Device (BS=1):
-- Use the following command to run the Demo with Trace+2CQs:
-    ```
-    pytest models/demos/yolov8s/demo/demo.py::test_demo[res0-True-tt_model-1-models/demos/yolov8s/demo/images-device_params0]
-    ```
+Single device:
 
-### Multi Device (DP=2, n300):
-- Use the following command to run the Demo with Trace+2CQs on Multi Device:
-    ```
-    pytest models/demos/yolov8s/demo/demo.py::test_demo_dp[wormhole_b0-res0-True-tt_model-1-models/demos/yolov8s/demo/images-device_params0]
-    ```
+```bash
+pytest models/demos/yolov8l/demo/demo.py::test_demo[res0-True-tt_model-1-models/demos/yolov8l/demo/images-device_params0]
+```
 
-- To use a other image(s) for demo, replace your image(s) in the image path `models/demos/yolov8s/demo/images` and run the following to use demo running on multi-device:
-  ```
-  pytest pytest models/demos/yolov8s/demo/demo.py::test_demo_dp[wormhole_b0-res0-True-tt_model-1-models/demos/yolov8s/demo/images-device_params0]
-  ```
+Multi-device:
 
-### Performant evaluation with Trace+2CQ
+```bash
+pytest models/demos/yolov8l/demo/demo.py::test_demo_dp[wormhole_b0-res0-True-tt_model-1-models/demos/yolov8l/demo/images-device_params0]
+```
 
-- Use the following command to run the performant evaluation with Trace+2CQs:
+Place test images in `models/demos/yolov8l/demo/images/`.
 
-  ```
-  pytest models/demos/yolo_eval/evaluate.py::test_yolov8s[res0-device_params0-tt_model]
-  ```
+### 4) Large images (e.g. 1280×1280 on T3K)
+TT still runs **640×640** tiles; use SAHI slicing (install `sahi`, plus a `ttnn`-compatible `numpy`/OpenCV stack):
 
-Note: The model is evaluated with 500 samples.
+```bash
+python models/demos/yolov8l/sahi_ultralytics_eval.py --backend tt --tt-eth-dispatch \
+  --tt-slice-parallel-devices 4 --pre-resize-to 1280 1280 \
+  --slice-height 640 --slice-width 640 --overlap-height-ratio 0 --overlap-width-ratio 0 \
+  --postprocess-type GREEDYNMM --postprocess-match-metric IOS --postprocess-match-threshold 0.1 \
+  --confidence-threshold 0.55 --input /path/to/image.jpg
+```
 
-### Web Demo
-- Try the interactive web demo at [yolov8s/web_demo](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov8s/web_demo/README.md)
+`--tt-model` defaults to **yolov8l**; omit it for this demo. Other values (`yolov8s`, `yolov8x`) select those TT runners for comparison only.
+
+### 5) Offline tests (no device)
+```bash
+pytest models/demos/yolov8l/tests/test_sahi_parallel_chunks.py
+```
 
 ## Details
-- The entry point to the yolov8s is located at:`models/demos/yolov8s/tt/ttnn_yolov8s.py`
-- Batch Size :1
-- Supported Input Resolution - (640,640) (Height,Width)
-- Dataset used for evaluation - **COCO-2017**
-- The post-processing is performed using PyTorch.
+- **Entry point:** `models/demos/yolov8l/tt/ttnn_yolov8l.py`
+- **Batch size:** 1 per device (effective batch scales with mesh in DP).
+- **Resolution:** **(640, 640)** per TT forward; larger scenes via `sahi_ultralytics_eval.py` above.
+- **Post-processing:** PyTorch (`models/demos/utils/common_demo_utils.py`).
 
-### Inputs
-The demo receives inputs from `models/demos/yolov8s/demo/images` dir by default. To test the model on different input data, it is recommended to add a new image file to this directory.
-
-### Outputs
-A runs folder will be created inside the `models/demos/yolov8s/demo/` directory. For reference, the model output will be stored in the torch_model directory, while the TTNN model output will be stored in the tt_model directory.
+## Inputs / outputs
+- **Inputs:** `models/demos/yolov8l/demo/images/` for the pytest demo.
+- **Outputs:** `models/demos/yolov8l/demo/runs/` (Torch vs TT subfolders per `model_type`).
