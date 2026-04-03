@@ -145,3 +145,80 @@ The prelu kernel is one of the simplest SFPU kernels -- it uses clean SFPI abstr
 - CC pattern: one SFPSETCC per iteration (negative test) -> CC-guarded SFPMUL -> SFPENCC reset
 - Slope loaded as 32-bit float via two SFPLOADI (16-bit each) before the loop
 - WH and BH implementations are functionally identical; only ADDR_MOD index differs
+
+---
+
+# Execution Log: ttnn-unary-sfpu-operation-analyzer (dropout)
+
+## Metadata
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Operation**: dropout
+- **Status**: SUCCESS
+- **Model**: Claude Opus 4.6 (1M context)
+
+## Input Interpretation
+| Field | Value | Confidence |
+|-------|-------|------------|
+| Operation name | dropout | HIGH |
+| Output directory | `.claude-analysis/rrelu-1/` | HIGH (explicit override) |
+| Breadcrumb path | `.claude-analysis/rrelu-1/` | HIGH (explicit override) |
+
+## Execution Timeline
+
+### Phase 1: Dispatch Tracing
+1. Searched `unary_op_types.hpp` -- DROPOUT found in enum at line 108
+2. Searched `unary_op_utils.cpp` for DROPOUT handling -- NOT found
+3. **Non-standard discovery**: dropout has its own experimental program factory at `ttnn/cpp/ttnn/operations/experimental/dropout/`
+4. Traced: `dropout_kernel.cpp` -> `dropout_tile()` -> `SFPU_UNARY_PARAMS_KERNEL_EXTRA_ARGS(calculate_dropout, RC, APPROX, ...)` -> `_llk_math_eltwise_unary_sfpu_params_` -> `_calculate_dropout_`
+5. Resolved `math_approx_mode = false` (hardcoded in program factory line 240)
+6. Traced `APPROX` JIT generation: `genfiles.cpp:394` -> `constexpr bool APPROX = false`
+
+### Phase 2: Kernel Source Reading
+1. Read `ckernel_sfpu_dropout.h` for both WH and BH -- **implementations are identical**
+2. Identified kernel style: `B_raw_TTI` (raw TTI instructions with CC manipulation)
+3. Identified PRNG access via `SFPMOV(mod1=8, VC=9)` reading from RS[9] (PRNG Counter)
+4. Read init function: `_init_dropout_` -> `init_prng_seed(seed)` (writes seed to PRNG_SEED config register + 600 SFPNOP delay)
+5. Read LLK wrapper `ckernel_sfpu_dropout.h` in `hw/ckernels/` -- thin wrapper calling `_calculate_dropout_<APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, probability, scale)`
+
+### Phase 3: Instruction Semantics Research (Confluence SFPU ISA)
+1. **SFPMOV (PRNG mode)**: InstrMod=8 reads from RS view; RS[9] = PRNG Counter; reading advances PRNG by one step
+2. **RS View table**: Confirmed RS[9] maps to PRNG Counter
+3. **PRNG specification**: 32-bit LFSR per lane, XNOR taps at 31/30/10/0, period >= 2^32-1
+4. **SFPSETSGN**: InstrMod[0]=1 sets sign from Imm12[0]; used to clear sign bit for unsigned comparison
+5. **SFPIADD**: InstrMod=10 = CC_GTE0 | ARG_2SCOMP = subtraction with inverted CC sense
+6. **SFPENCC**: InstrMod=0 sets CC.Res=1, keeps CC.En unchanged
+7. **CC State analysis**: Extensive investigation of CC.En behavior. ISA states SFPIADD "Sets CC Enable? N", but the kernel relies on SFPIADD CC updates for conditional execution. Documented discrepancy.
+
+### Phase 4: Verification
+1. Verified `_calculate_dropout_` exists in both WH and BH (2 results)
+2. Verified `_init_dropout_` exists in both WH and BH (2 results)
+3. Verified all 7 cited file paths exist (7/7)
+4. Verified all SFPU instructions in kernel file: TT_SFPLOADI(4), TTI_SFPLOAD(1), TTI_SFPMUL(1), TTI_SFPMOV(2), TTI_SFPSETSGN(1), TTI_SFPIADD(1), TTI_SFPENCC(1), TTI_SFPSTORE(1)
+
+## Verification Summary
+| Check | Result |
+|-------|--------|
+| `_calculate_dropout_` function exists (WH) | PASS |
+| `_calculate_dropout_` function exists (BH) | PASS |
+| `_init_dropout_` function exists (WH) | PASS |
+| `_init_dropout_` function exists (BH) | PASS |
+| All cited file paths exist | PASS (7/7) |
+| All SFPU instructions verified in kernel | PASS |
+
+## External Service Results
+| Service | Status | Notes |
+|---------|--------|-------|
+| DeepWiki | UNAVAILABLE | Repository not indexed |
+| Confluence SFPU ISA | SUCCESS | Retrieved SFPMOV, SFPSETSGN, SFPIADD, SFPENCC, PRNG, RS View documentation |
+| Glean | Not used | N/A |
+
+## Artifacts
+- `.claude-analysis/rrelu-1/dropout_analysis.md` -- SFPU kernel analysis for dropout
+
+## Key Findings
+- Dropout uses a **non-standard dispatch** (experimental program factory, not UnaryProgramFactory)
+- The SFPU kernel uses PRNG hardware (RS[9]) for per-lane random number generation
+- CC mechanism uses SFPIADD with inverted sense (CC_GTE0) to mark lanes for zeroing
+- ISA documentation inconsistency: SFPIADD "Sets CC Enable? N" but the kernel relies on CC-guarded execution after SFPIADD -- suggests implicit CC enable not documented in ISA table
+- WH and BH implementations are **identical** -- no architecture-specific differences
+- APPROXIMATION_MODE template parameter is accepted but completely unused (no conditional branches)
