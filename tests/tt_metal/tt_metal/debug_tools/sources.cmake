@@ -6,6 +6,7 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     device_print/test_format_updates.cpp
     device_print/test_print_config_register.cpp
     device_print/test_print_output.cpp
+    device_print/test_print_tensix_dest.cpp
     device_print/test_print_tile.cpp
     dprint/test_dprint_mesh_coords.cpp
     dprint/test_eth_cores.cpp

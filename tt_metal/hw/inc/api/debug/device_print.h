@@ -58,6 +58,13 @@ struct bf16_t {
     bf16_t(uint16_t val) : val(val) {}
 };
 
+template <uint16_t len>
+struct dp_typed_array_t {
+    uint32_t* ptr;
+    uint16_t type;
+    dp_typed_array_t(uint16_t type, uint32_t* ptr) : ptr(ptr), type(type) {}
+};
+
 #ifdef UCK_CHLKC_UNPACK
 #define DEVICE_PRINT_UNPACK(format, ...) DEVICE_PRINT(format, ##__VA_ARGS__)
 #else
@@ -861,6 +868,20 @@ struct device_print_type<TileSlice<128>> {
         for (uint32_t i = 0; i < sizeof(TileSlice<128>); i += 4) {
             *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset + i) =
                 argument_as_uint32_ptr[i / 4];
+        }
+    }
+};
+
+// dp_typed_array_t: serialized as (len + 1) uint32_t elements: [(len << 16) | type, data[0..len-1]]
+template <uint16_t len>
+struct device_print_type<dp_typed_array_t<len>> {
+    static constexpr device_print_type_info value = {'A', (len + 1) * sizeof(uint32_t)};
+    static void serialize(
+        device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, dp_typed_array_t<len> argument) {
+        auto* dst = reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset);
+        dst[0] = (len << 16) | (argument.type);  // Pack len and type into first uint32_t
+        for (uint32_t i = 0; i < len; ++i) {
+            dst[i + 1] = argument.ptr[i];
         }
     }
 };

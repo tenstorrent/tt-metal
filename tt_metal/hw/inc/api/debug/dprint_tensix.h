@@ -36,9 +36,11 @@ constexpr uint16_t NUM_ROWS_PER_FACE = 16;
 constexpr uint16_t NUM_ROWS_PER_TILE = NUM_FACES_PER_TILE * NUM_ROWS_PER_FACE;
 
 // Helper function to print array
-inline void dprint_array_with_data_type(uint32_t data_format, uint32_t* data, uint32_t count) {
+template <uint32_t count>
+inline void dprint_array_with_data_type(uint32_t data_format, uint32_t* data) {
     DPRINT << TYPED_U32_ARRAY(TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type, data_format, data, count)
            << ENDL();
+    DEVICE_PRINT("{}\n", dp_typed_array_t<count>(data_format, data));
 }
 
 // Dprints data format as string given an uint
@@ -212,7 +214,7 @@ inline void dprint_tensix_dest_reg_row_float32(uint16_t row) {
     }
 #endif
 
-    dprint_array_with_data_type((uint32_t)DataFormat::Float32, rd_data, ARRAY_LEN);
+    dprint_array_with_data_type<ARRAY_LEN>((uint32_t)DataFormat::Float32, rd_data);
 }
 
 // Helper function that prints one row from dest when dest is configured for storing float16 values.
@@ -222,7 +224,7 @@ inline void dprint_tensix_dest_reg_row_float16(uint32_t data_format, uint16_t ro
     uint32_t rd_data[ARRAY_LEN + 1];  // data + array type
     row = get_dest_row_id(row, false);
     dbg_read_dest_acc_row(row, rd_data);
-    dprint_array_with_data_type(data_format, rd_data, 8);
+    dprint_array_with_data_type<ARRAY_LEN>(data_format, rd_data);
 }
 
 inline void dprint_tensix_dest_reg_row_int32(uint16_t row) {
@@ -233,7 +235,7 @@ inline void dprint_tensix_dest_reg_row_int32(uint16_t row) {
     for (int i = 0; i < ARRAY_LEN; ++i) {
         rd_data[i] = addr[i + (row << 4)];
     }
-    dprint_array_with_data_type((uint32_t)DataFormat::Int32, rd_data, ARRAY_LEN);
+    dprint_array_with_data_type<ARRAY_LEN>((uint32_t)DataFormat::Int32, rd_data);
 #else
     DPRINT << "Int32 format not supported on this architecture" << ENDL();
     DEVICE_PRINT("Int32 format not supported on this architecture\n");
@@ -247,7 +249,7 @@ inline void dprint_tensix_dest_reg_row_uint16(uint32_t data_format, uint16_t row
     uint32_t rd_data[ARRAY_LEN + 1];  // data + array type
     row = get_dest_row_id(row, false);
     dbg_read_dest_acc_row(row, rd_data);
-    dprint_array_with_data_type(data_format, rd_data, 8);
+    dprint_array_with_data_type<ARRAY_LEN>(data_format, rd_data);
 }
 
 // Helper function that prints one row from dest when dest is configured for storing uint8 values.
@@ -257,7 +259,7 @@ inline void dprint_tensix_dest_reg_row_uint8(uint32_t data_format, uint16_t row)
     uint32_t rd_data[ARRAY_LEN + 1];  // data + array type
     row = get_dest_row_id(row, false);
     dbg_read_dest_acc_row(row, rd_data);
-    dprint_array_with_data_type(data_format, rd_data, 8);
+    dprint_array_with_data_type<ARRAY_LEN>(data_format, rd_data);
 }
 
 inline void dprint_tensix_dest_reg_row_int8(uint32_t data_format, uint16_t row) {
@@ -265,7 +267,7 @@ inline void dprint_tensix_dest_reg_row_int8(uint32_t data_format, uint16_t row) 
     uint32_t rd_data[ARRAY_LEN + 1];  // data + array type
     row = get_dest_row_id(row, false);
     dbg_read_dest_acc_row(row, rd_data);
-    dprint_array_with_data_type(data_format, rd_data, 8);
+    dprint_array_with_data_type<ARRAY_LEN>(data_format, rd_data);
 }
 
 // Print the contents of tile with index tile_id within the destination register
