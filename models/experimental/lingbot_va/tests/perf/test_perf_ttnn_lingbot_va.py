@@ -17,7 +17,7 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 
 def _run_device_profiler_op_support_count(*args, **kwargs):
     # Default cap is low; Lingbot-VA graphs exceed it without this override.
-    kwargs.setdefault("op_support_count", 8000)
+    kwargs.setdefault("op_support_count", 8500)
     return run_device_profiler(*args, **kwargs)
 
 
