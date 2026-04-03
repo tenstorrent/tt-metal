@@ -215,3 +215,348 @@ class TTNNDistributedRMSNorm(TTNNModule):
             tt_out = ttnn.reshape(tt_out, [tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]])
 
         return tt_out
+
+
+@trace_enabled
+class TTNNQwenLayerNorm(TTNNModule):
+    """HF ``nn.LayerNorm`` → ``ttnn.layer_norm`` (single device) or distributed pre/all_gather/post (mesh)."""
+
+    @staticmethod
+    def _normalized_numel(normalized_shape) -> int:
+        if isinstance(normalized_shape, int):
+            return int(normalized_shape)
+        n = 1
+        for d in normalized_shape:
+            n *= int(d)
+        return n
+
+    @property
+    def _is_distributed(self) -> bool:
+        return self.device is not None and self.device.get_num_devices() > 1
+
+    def __init__(
+        self,
+        normalized_shape,
+        eps: float = 1e-5,
+        elementwise_affine: bool = True,
+        bias: bool = True,
+        use_row_major_workaround: bool = False,
+    ):
+        super().__init__()
+        if isinstance(normalized_shape, int):
+            self.normalized_shape = (normalized_shape,)
+        else:
+            self.normalized_shape = tuple(normalized_shape)
+        self.embedding_dim = self._normalized_numel(self.normalized_shape)
+        self.eps = eps
+        self.elementwise_affine = elementwise_affine
+        self.use_bias = elementwise_affine and bias
+        self.use_row_major_workaround = use_row_major_workaround
+        self.compute_kernel_config = None
+        self.tt_weight = None
+        self.tt_bias = None
+        self.weight_distributed = None
+        self.bias_distributed = None
+        # Mesh: True when (emb//32) % mesh_width != 0 — use all_gather + full-width replicated LN (vision 1152 on 1×8).
+        self._distributed_gather_layernorm = False
+        if self.embedding_dim % 32 != 0:
+            raise ValueError(
+                f"TTNNQwenLayerNorm: embedding_dim ({self.embedding_dim}) must be divisible by 32 for TTNN tile ops"
+            )
+        if self.elementwise_affine:
+            self.torch_weight = nn.Parameter(torch.ones(self.normalized_shape))
+            self.torch_bias = nn.Parameter(torch.zeros(self.normalized_shape)) if self.use_bias else None
+        else:
+            self.torch_weight = None
+            self.torch_bias = None
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        """Col-sharded last dim on mesh, or replicated full hidden when using gather + full ``layer_norm``."""
+
+        def set_gather_output_config(e):
+            """Replicated activations on mesh; ConcatMeshToTensor(dim=0) for host unwrap (no MeshComposerConfig([0, rank]))."""
+            if isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None and self.device is not None:
+                e.set_distributed_tensor_config(
+                    DistributedTensorConfig(
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+                        mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
+                    )
+                )
+            return e
+
+        def materialize_merger_ln_q_one_replica(e):
+            """Vision merger ``ln_q`` then HF ``.view``: avoid mesh compose; match ``TTNNQwen3OmniVisionMLP`` slice-after-concat."""
+            if not isinstance(e, TorchTTNNTensor) or e.ttnn_tensor is None:
+                return e
+            t = e.ttnn_tensor
+            n = int(t.shape[0])
+            pt = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+            if pt.shape[0] > n:
+                pt = pt[:n]
+            e.elem = pt.contiguous()
+            e.ttnn_tensor = None
+            if getattr(e, "_distributed_tensor_config", None) is not None:
+                e._distributed_tensor_config = None
+            return e
+
+        def set_col_sharded_config(e):
+            if isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None:
+                if self._is_distributed and self.device is not None:
+                    mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=-1)
+                    mesh_mapper = ttnn.ShardTensorToMesh(self.device, dim=-1)
+
+                    def logical_shape_for_col_sharded(shape):
+                        shape_list = list(shape)
+                        num_devices = self.device.get_num_devices()
+                        shape_list[-1] = shape_list[-1] * num_devices
+                        return tuple(shape_list)
+
+                    e.set_distributed_tensor_config(
+                        DistributedTensorConfig(
+                            mesh_mapper=mesh_mapper,
+                            mesh_composer=mesh_composer,
+                            logical_shape_fn=logical_shape_for_col_sharded,
+                        )
+                    )
+            return e
+
+        if not self._is_distributed:
+            return super().set_output_tensors_config_impl(output_tensors)
+        if getattr(self, "_distributed_gather_layernorm", False):
+            name = self.module_name or ""
+            # Do not dim-0-shard LN output: vision rotary cos/sin stay full seq length; sharding breaks q*cos broadcast.
+            if "merger" in name and "ln_q" in name:
+                return tree_map(materialize_merger_ln_q_one_replica, output_tensors)
+            return tree_map(set_gather_output_config, output_tensors)
+        return tree_map(set_col_sharded_config, output_tensors)
+
+    @classmethod
+    def from_torch(cls, layer_norm: nn.LayerNorm, use_row_major_workaround: bool = False):
+        """Symbiote calls ``from_torch(hf_module)`` only — use ``set_device`` for the mesh."""
+        if not layer_norm.elementwise_affine:
+            return layer_norm
+        emb = cls._normalized_numel(layer_norm.normalized_shape)
+        if emb % 32 != 0:
+            return layer_norm
+        new_layer = cls(
+            normalized_shape=layer_norm.normalized_shape,
+            eps=layer_norm.eps,
+            elementwise_affine=layer_norm.elementwise_affine,
+            bias=layer_norm.bias is not None,
+            use_row_major_workaround=use_row_major_workaround,
+        )
+        if layer_norm.weight is not None:
+            new_layer.torch_weight = nn.Parameter(layer_norm.weight.data.clone())
+        if layer_norm.bias is not None:
+            new_layer.torch_bias = nn.Parameter(layer_norm.bias.data.clone())
+        new_layer._fallback_torch_layer = layer_norm
+        return new_layer
+
+    def preprocess_weights_impl(self):
+        if not self.elementwise_affine:
+            self.tt_weight = None
+            self.tt_bias = None
+            return
+        # Mesh: sharded ROW_MAJOR gamma in ``move_weights_to_device_impl``, or TILE + replicate when ntiles % width != 0.
+        if self.device is not None and self.device.get_num_devices() > 1:
+            ncol = int(list(self.device.shape)[-1])
+            ntiles = self.embedding_dim // 32
+            if ntiles % ncol != 0:
+                self._distributed_gather_layernorm = True
+                # Host TT tensors without mesh placement; ``move_weights_to_device_impl`` uses
+                # ``from_torch(..., device=..., mesh_mapper=...)`` (``to_device`` has no mesh_mapper).
+                self.tt_weight = None
+                self.tt_bias = None
+                self.weight_distributed = None
+                self.bias_distributed = None
+                return
+            self._distributed_gather_layernorm = False
+            self.tt_weight = None
+            self.tt_bias = None
+            return
+        weight = self.torch_weight
+        bias = self.torch_bias
+        if self.use_row_major_workaround:
+            layout = ttnn.ROW_MAJOR_LAYOUT
+            weight_reshaped = weight.reshape(-1, 32)
+            bias_reshaped = bias.reshape(-1, 32) if bias is not None else None
+        else:
+            layout = ttnn.TILE_LAYOUT
+            weight_reshaped = weight.reshape(1, -1)
+            bias_reshaped = bias.reshape(1, -1) if bias is not None else None
+        self.tt_weight = ttnn.from_torch(weight_reshaped, dtype=ttnn.bfloat16, layout=layout)
+        if bias_reshaped is not None:
+            self.tt_bias = ttnn.from_torch(bias_reshaped, dtype=ttnn.bfloat16, layout=layout)
+        else:
+            self.tt_bias = None
+
+    def _build_sharded_gamma_beta_row_major(self):
+        """``[1,1,ntiles,32]`` + ``ShardTensor2dMesh`` on tile dim — matches ``TTNNDistributedRMSNorm``."""
+        emb = self.embedding_dim
+        mesh_shape = list(self.device.shape)
+        ncol = int(mesh_shape[-1])
+        ntiles = emb // 32
+        assert ntiles % ncol == 0, "gather path should not call _build_sharded_gamma_beta_row_major"
+        w_bf16 = self.torch_weight.reshape(-1).to(torch.bfloat16)
+        relayout_w = w_bf16.view(1, 1, ntiles, 32)
+        mesh_mapper = ttnn.ShardTensor2dMesh(self.device, dims=(None, 2), mesh_shape=mesh_shape)
+        self.weight_distributed = ttnn.as_tensor(
+            relayout_w,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=mesh_mapper,
+        )
+        self.weight_distributed = ttnn.to_device(self.weight_distributed, self.device)
+        if self.use_bias and self.torch_bias is not None:
+            b_bf16 = self.torch_bias.reshape(-1).to(torch.bfloat16)
+            relayout_b = b_bf16.view(1, 1, ntiles, 32)
+            self.bias_distributed = ttnn.as_tensor(
+                relayout_b,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mesh_mapper,
+            )
+            self.bias_distributed = ttnn.to_device(self.bias_distributed, self.device)
+        else:
+            z = torch.zeros(emb, dtype=torch.bfloat16)
+            relayout_z = z.view(1, 1, ntiles, 32)
+            self.bias_distributed = ttnn.as_tensor(
+                relayout_z,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mesh_mapper,
+            )
+            self.bias_distributed = ttnn.to_device(self.bias_distributed, self.device)
+
+    def move_weights_to_device_impl(self):
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        if not self.elementwise_affine:
+            return
+        if self.device.get_num_devices() > 1:
+            if getattr(self, "_distributed_gather_layernorm", False):
+                rep = ttnn.ReplicateTensorToMesh(self.device)
+                w = self.torch_weight.reshape(1, -1).to(torch.bfloat16)
+                self.tt_weight = ttnn.from_torch(
+                    w,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    mesh_mapper=rep,
+                )
+                if self.use_bias and self.torch_bias is not None:
+                    b = self.torch_bias.reshape(1, -1).to(torch.bfloat16)
+                    self.tt_bias = ttnn.from_torch(
+                        b,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.device,
+                        mesh_mapper=rep,
+                    )
+                else:
+                    self.tt_bias = None
+                return
+            self._build_sharded_gamma_beta_row_major()
+            return
+        if self.tt_weight is not None:
+            self.tt_weight = ttnn.to_device(self.tt_weight, self.device)
+        if self.tt_bias is not None:
+            self.tt_bias = ttnn.to_device(self.tt_bias, self.device)
+
+    def _forward_distributed(self, x: ttnn.Tensor, original_shape: tuple) -> ttnn.Tensor:
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        rank = len(original_shape)
+        if rank == 2:
+            x = ttnn.unsqueeze(x, 0)
+            x = ttnn.unsqueeze(x, 0)
+        elif rank == 3:
+            x = ttnn.unsqueeze(x, 1)
+        elif rank != 4:
+            raise RuntimeError(f"TTNNQwenLayerNorm: expected rank 2–4 activations, got rank {rank}")
+
+        tt_stats = ttnn.layer_norm_pre_all_gather(
+            x,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        tt_stats = ttnn.all_gather(
+            tt_stats,
+            dim=-1,
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+        )
+        tt_out = ttnn.layer_norm_post_all_gather(
+            x,
+            tt_stats,
+            epsilon=self.eps,
+            weight=self.weight_distributed,
+            bias=self.bias_distributed,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        tt_stats.deallocate(True)
+
+        if rank == 3 and len(tt_out.shape) == 4:
+            tt_out = ttnn.reshape(tt_out, [tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]])
+        elif rank == 2 and len(tt_out.shape) == 4:
+            tt_out = ttnn.reshape(tt_out, [int(tt_out.shape[2]), int(tt_out.shape[3])])
+        return tt_out
+
+    def _forward_distributed_gather_ln(self, x: ttnn.Tensor, original_shape: tuple) -> ttnn.Tensor:
+        """Col-shard width does not tile-shard evenly on mesh (e.g. vision 1152 on 8 devices): gather, full LN, replicate out."""
+        emb = self.embedding_dim
+        n_dev = int(self.device.get_num_devices())
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        wloc = int(x.shape[-1])
+        if wloc * n_dev == emb:
+            x = ttnn.all_gather(
+                x,
+                dim=-1,
+                num_links=1,
+                topology=ttnn.Topology.Linear,
+            )
+        elif wloc != emb:
+            raise RuntimeError(
+                f"TTNNQwenLayerNorm gather path: need col-shard {emb}/{n_dev} or full width {emb}, got last dim {wloc}"
+            )
+
+        rank = len(original_shape)
+        if rank == 2:
+            x = ttnn.unsqueeze(ttnn.unsqueeze(x, 0), 0)
+        elif rank == 3:
+            x = ttnn.unsqueeze(x, 1)
+        elif rank != 4:
+            raise RuntimeError(f"TTNNQwenLayerNorm: gather path expected rank 2–4 activations, got rank {rank}")
+
+        tt_out = ttnn.layer_norm(
+            x,
+            weight=self.tt_weight,
+            bias=self.tt_bias,
+            epsilon=self.eps,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+
+        if rank == 3 and len(tt_out.shape) == 4:
+            tt_out = ttnn.reshape(tt_out, [tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]])
+        elif rank == 2 and len(tt_out.shape) == 4:
+            tt_out = ttnn.reshape(tt_out, [int(tt_out.shape[2]), int(tt_out.shape[3])])
+        return tt_out
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        original_shape = tuple(int(d) for d in x.shape)
+        if self._is_distributed and self.elementwise_affine:
+            if getattr(self, "_distributed_gather_layernorm", False):
+                return self._forward_distributed_gather_ln(x, original_shape)
+            return self._forward_distributed(x, original_shape)
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.layer_norm(
+            x,
+            weight=self.tt_weight,
+            bias=self.tt_bias,
+            epsilon=self.eps,
+            compute_kernel_config=self.compute_kernel_config,
+        )
