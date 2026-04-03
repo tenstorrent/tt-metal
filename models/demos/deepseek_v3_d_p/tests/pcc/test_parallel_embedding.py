@@ -53,7 +53,6 @@ def test_parallel_embedding(mesh_device, isl_per_chip, vocab_size, emb_dim):
     sp_factor = mesh_device.shape[0]
     tp_factor = mesh_device.shape[1]
     seq_per_chip = isl_per_chip
-    seq_len = isl_per_chip * sp_factor
 
     signpost(f"embedding-{mesh_device.shape}-isl_per_chip{isl_per_chip}-v{vocab_size}-e{emb_dim}")
 
