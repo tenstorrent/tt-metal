@@ -387,3 +387,126 @@ Profiling data is collected automatically on `CloseDevice`. For runs with >1000 
 ```cpp
 tt::tt_metal::detail::ReadDeviceProfilerResults(device);
 ```
+
+## Full VAE Op-Type Breakdown
+
+To get the per-op breakdown table (NeighborPadAsync, Conv3d, LayerNorm, etc.) across the full
+decoder, combine two measurements: **non-conv ops** (timed once) and **conv3d** (timed with
+ablation). The script `run_vae_decoder_ablation.py` runs the full decoder with a warmup + timed
+pass; `CONV3D_ABLATE=tilize_dm` zeroes out tilize and DM overhead in conv3d so you can isolate
+pure matmul time.
+
+### Scripts
+
+| Script | Purpose |
+|---|---|
+| `run_vae_decoder_ablation.py` | Full decoder wall time (warmup + timed run) |
+| `run_vae_all_ops.py` | Conv3d-only: 35 ops in decoder order, reports device kernel time |
+| `TT_METAL_DEVICE_PROFILER=1 run_vae_all_ops.py` | Conv3d device time (68.2ms baseline) |
+| `CONV3D_ABLATE=tilize python run_vae_all_ops.py` | Conv3d with tilize zeroed |
+| `CONV3D_ABLATE=dm python run_vae_all_ops.py` | Conv3d with DRAM gather zeroed |
+| `CONV3D_ABLATE=tilize_dm python run_vae_all_ops.py` | Conv3d with both zeroed (pure matmul) |
+
+### Collecting the breakdown
+
+```bash
+# 1. Baseline full decoder (includes NP, LayerNorm, Pad, etc.)
+python run_vae_decoder_ablation.py                        # note wall time
+
+# 2. Conv3d breakdown (device kernel time)
+TT_METAL_DEVICE_PROFILER=1 python run_vae_all_ops.py      # 68.2ms device
+CONV3D_ABLATE=tilize_dm TT_METAL_DEVICE_PROFILER=1 \
+    python run_vae_all_ops.py                             # 43.6ms = pure matmul
+
+# 3. Non-conv op times
+# Measured once from the decoder run:
+#   total_wall = run_vae_decoder_ablation output
+#   conv3d_wall = run_vae_all_ops wall time
+#   nonconv = total_wall - conv3d_wall  (then profiled per-op via tracy below)
+```
+
+### Getting per-op host-side times with Tracy
+
+The table (NeighborPadAsync, Conv3d, LayerNorm, BinaryNg ...) comes from host-side Tracy op
+zones. Each ttnn op records its dispatch-to-completion time as a host zone named after the op.
+
+```bash
+# In terminal 1, start tracy capture:
+./build/tools/profiler/bin/capture-release -o vae_baseline.tracy -s 60
+
+# In terminal 2, run the decoder:
+python -m tracy run_vae_decoder_ablation.py
+
+# Open vae_baseline.tracy in Tracy GUI (port-forward 8086 for remote machines).
+# In the Statistics view, group by zone name — sum all occurrences of each op to get total ms.
+# Or export as CSV and parse with the script below.
+```
+
+### Parsing Tracy host CSV
+
+When Tracy GUI exports a CSV (Statistics → Export), each row is an op type with total duration.
+Parse to build the breakdown table:
+
+```python
+import csv
+
+# Tracy Statistics CSV export (File → Export Statistics)
+ops = {}
+with open('tracy_stats.csv') as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        name = row['Name'].strip()
+        total_ms = float(row['Total time (ms)'])
+        ops[name] = ops.get(name, 0) + total_ms
+
+# Bucket op names → canonical category
+BUCKETS = {
+    'NeighborPadAsync': 'NeighborPadAsync',
+    'Conv3d':           'Conv3d',
+    'RMSNorm':          'LayerNorm',
+    'Pad':              'Pad',
+    'BinaryNg':         'BinaryNg',
+    'AllGatherAsync':   'AllGather',
+    'TilizeWithValPadding': 'TilizeWithValPadding',
+    'UntilizeWithUnpadding': 'UntilizeWithUnpadding',
+    'SDPA':             'SDPA',
+    'Upsample':         'Upsample',
+    'Permute':          'Permute',
+    'MinimalMatmul':    'MinimalMatmul',
+    'ConcatDevice':     'ConcatDevice',
+}
+bucketed = {}
+other = 0.0
+for name, ms in ops.items():
+    matched = next((v for k, v in BUCKETS.items() if k in name), None)
+    if matched:
+        bucketed[matched] = bucketed.get(matched, 0) + ms
+    else:
+        other += ms
+bucketed['Other'] = other
+
+total = sum(bucketed.values())
+print(f"{'Op':<30} {'ms':>8} {'%':>7}")
+for op, ms in sorted(bucketed.items(), key=lambda x: -x[1]):
+    print(f"{op:<30} {ms:>8.1f} {ms/total*100:>6.1f}%")
+print(f"{'TOTAL':<30} {total:>8.1f}")
+```
+
+### Reference numbers — bh_4x32 720p uncached, 2×4 BH LB
+
+| Op | Baseline (ms) | Baseline (%) | Ablate Both (ms) | Saved |
+|---|---|---|---|---|
+| NeighborPadAsync | 203.5 | 56.4% | 203.5 | 0.0 |
+| Conv3d | 68.4 | 19.0% | 43.6 | **24.8** |
+| LayerNorm | 24.0 | 6.7% | 24.0 | 0.0 |
+| Pad | 16.4 | 4.5% | 16.4 | 0.0 |
+| Host overhead | 13.7 | 3.8% | 13.7 | 0.0 |
+| TilizeWithValPadding | 10.1 | 2.8% | 10.1 | 0.0 |
+| UntilizeWithUnpadding | 8.3 | 2.3% | 8.3 | 0.0 |
+| BinaryNg | 7.2 | 2.0% | 7.2 | 0.0 |
+| Other | 9.2 | 2.5% | 9.2 | 0.0 |
+| **TOTAL** | **360.8** | 100% | **336.0** | **24.8** |
+
+Ablate Both = `CONV3D_ABLATE=tilize_dm` (tilize + DRAM gather zeroed, only matmul remains).
+Conv3d = 24.8ms of the 68.4ms is overhead that is hidden in the reader pipeline. The remaining
+43.6ms is pure matmul time that cannot be further reduced without changing the arithmetic.
