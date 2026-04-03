@@ -12,10 +12,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "1": {
@@ -30,10 +27,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "2": {
@@ -48,10 +42,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "3": {
@@ -66,10 +57,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "4": {
@@ -84,10 +72,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "5": {
@@ -102,10 +87,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "6": {
@@ -120,10 +102,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "7": {
@@ -138,10 +117,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "8": {
@@ -156,10 +132,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "9": {
@@ -174,10 +147,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "10": {
@@ -192,10 +162,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "11": {
@@ -210,10 +177,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "12": {
@@ -228,10 +192,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "13": {
@@ -246,10 +207,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "14": {
@@ -264,10 +222,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "15": {
@@ -282,10 +237,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "16": {
@@ -300,10 +252,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "17": {
@@ -318,10 +267,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "18": {
@@ -336,10 +282,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "19": {
@@ -354,10 +297,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "20": {
@@ -372,10 +312,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "21": {
@@ -390,10 +327,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "22": {
@@ -408,10 +342,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "23": {
@@ -426,10 +357,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "24": {
@@ -444,10 +372,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "25": {
@@ -462,10 +387,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "26": {
@@ -480,10 +402,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "27": {
@@ -498,10 +417,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "28": {
@@ -516,10 +432,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "29": {
@@ -534,10 +447,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "30": {
@@ -552,10 +462,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "31": {
@@ -570,10 +477,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "32": {
@@ -588,10 +492,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "33": {
@@ -606,10 +507,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "34": {
@@ -624,10 +522,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "35": {
@@ -642,10 +537,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "36": {
@@ -660,10 +552,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "37": {
@@ -678,10 +567,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "38": {
@@ -696,10 +582,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "39": {
@@ -714,10 +597,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "40": {
@@ -732,10 +612,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "41": {
@@ -750,10 +627,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "42": {
@@ -768,10 +642,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "43": {
@@ -786,10 +657,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "44": {
@@ -804,10 +672,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "45": {
@@ -822,10 +687,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "46": {
@@ -840,10 +702,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "47": {
@@ -858,10 +717,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "48": {
@@ -876,10 +732,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "49": {
@@ -894,10 +747,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "50": {
@@ -912,10 +762,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "51": {
@@ -930,10 +777,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "52": {
@@ -948,10 +792,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "53": {
@@ -966,10 +807,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "54": {
@@ -984,10 +822,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "55": {
@@ -1002,10 +837,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "56": {
@@ -1020,10 +852,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "57": {
@@ -1038,10 +867,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "58": {
@@ -1056,10 +882,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "59": {
@@ -1074,10 +897,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "60": {
@@ -1092,10 +912,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "61": {
@@ -1110,10 +927,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "62": {
@@ -1128,10 +942,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     },
     "63": {
@@ -1146,10 +957,7 @@
         "LI_FF2": "LOFI",
         "LI_QKV_DECODE": "LOFI",
         "LI_O_DECODE": "LOFI",
-        "SDPA_DECODE": "LOFI",
-        "LI_QKV_PREFILL": "LOFI",
-        "LI_O_PREFILL": "LOFI",
-        "SDPA_PREFILL": "LOFI"
+        "SDPA_DECODE": "LOFI"
       }
     }
   }
