@@ -478,9 +478,9 @@ class VectorExportSource(VectorSource):
         capability_profile = (
             get_test_group_capability_profile(run_type, test_group_name)
             if test_group_name
-            else {"allowed_mesh_shapes": (), "hardware_rules": ()}
-        )
-
+                f"Current machine: board_type={current_machine_info.get('board_type', 'unknown')}, "
+                f"device_series={current_machine_info.get('device_series', 'unknown')}, "
+                f"card_count={current_machine_info.get('card_count', 'unknown')}"
         if filter_kind in {"hardware", "mesh"} and current_machine_info:
             logger.info(
                 f"Current machine: board_type={current_machine_info['board_type']}, "
