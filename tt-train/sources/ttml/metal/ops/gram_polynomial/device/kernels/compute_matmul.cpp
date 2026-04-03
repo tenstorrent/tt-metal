@@ -12,6 +12,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh.h"
@@ -72,10 +73,9 @@ void matmul_blocks(
 }
 
 // Pack c_2 → c_5 in row-major order for DM to send to reduction partner.
-// Scales each tile by c_scalar before packing.
 // REDUCE_SENDER_TRANSPOSE: transpose tile content + swap indices so receiver can add directly.
 // REDUCE_SENDER: identity copy with FP32 → BF16 format conversion.
-void pack_subblock_pernsb(uint32_t in_cb, uint32_t out_cb, uint32_t current_M, uint32_t current_N, uint32_t c_scalar) {
+void pack_subblock_pernsb(uint32_t in_cb, uint32_t out_cb, uint32_t current_M, uint32_t current_N) {
 #ifdef REDUCE_SENDER_TRANSPOSE
     transpose_wh_init(in_cb, out_cb);
     reconfig_data_format_srca(in_cb);
@@ -87,7 +87,6 @@ void pack_subblock_pernsb(uint32_t in_cb, uint32_t out_cb, uint32_t current_M, u
             uint32_t out_tile = n * current_M + m;
             acquire_dst();
             transpose_wh_tile(in_cb, in_tile, 0);
-            mul_unary_tile(0, c_scalar);
             pack_tile<true>(0, out_cb, out_tile);
             release_dst();
         }
@@ -100,7 +99,6 @@ void pack_subblock_pernsb(uint32_t in_cb, uint32_t out_cb, uint32_t current_M, u
     for (uint32_t t = 0; t < current_M * current_N; t++) {
         acquire_dst();
         copy_tile(in_cb, t, 0);
-        mul_unary_tile(0, c_scalar);
         pack_tile<true>(0, out_cb, t);
         release_dst();
     }
@@ -108,7 +106,11 @@ void pack_subblock_pernsb(uint32_t in_cb, uint32_t out_cb, uint32_t current_M, u
 }
 
 #ifdef REDUCE_ACCUMULATOR
-void add_reduce_block(uint32_t own_cb, uint32_t recv_cb, uint32_t out_cb, uint32_t M_rows, uint32_t N_cols) {
+// Add c * own_partial + c * partner_partial, pack to output.
+// Both partials are unscaled; c is applied to the sum: result = c * (own + partner).
+// Implementation: add_tiles produces (own + partner) in DST, then mul_unary_tile scales by c.
+void add_reduce_block(
+    uint32_t own_cb, uint32_t recv_cb, uint32_t out_cb, uint32_t M_rows, uint32_t N_cols, uint32_t c_scalar) {
     add_tiles_init(own_cb, recv_cb);
     reconfig_data_format(own_cb, recv_cb);
     pack_reconfig_data_format(out_cb);
@@ -119,6 +121,7 @@ void add_reduce_block(uint32_t own_cb, uint32_t recv_cb, uint32_t out_cb, uint32
         for (uint32_t n = 0; n < N_cols; n++) {
             acquire_dst();
             add_tiles(own_cb, recv_cb, tile_id, tile_id, 0);
+            mul_unary_tile(0, c_scalar);
             pack_tile(0, out_cb);
             release_dst();
             tile_id++;
@@ -239,18 +242,18 @@ void kernel_main() {
 
             // Pack or reduce immediately after each (m_sub, n_sub) block
 #ifndef REDUCE_ACCUMULATOR
-            // REDUCE_SENDER path: pack c_2 → c_5 for DM to send to partner
+            // REDUCE_SENDER path: pack c_2 → c_5 for DM to send to partner (unscaled)
             cb_reserve_back(out_cb, intermed_tiles);
             cb_wait_front(intermed_cb, intermed_tiles);
-            binop_with_scalar_tile_init();
-            pack_subblock_pernsb(intermed_cb, out_cb, current_M_block, current_N, c_bits);
+            pack_subblock_pernsb(intermed_cb, out_cb, current_M_block, current_N);
             cb_pop_front(intermed_cb, intermed_tiles);
             cb_push_back(out_cb, intermed_tiles);
 #else
-            // REDUCE_ACCUMULATOR: add c_2(FP32) + c_5(BF16) → c_6
+            // REDUCE_ACCUMULATOR: c * (c_2 + c_5) → c_6
             cb_wait_front(intermed_cb, intermed_tiles);
             cb_wait_front(reduce_cb, intermed_tiles);
-            add_reduce_block(intermed_cb, reduce_cb, combined_cb, current_M_block, current_N);
+            binop_with_scalar_tile_init();
+            add_reduce_block(intermed_cb, reduce_cb, combined_cb, current_M_block, current_N, c_bits);
 #ifdef MIRROR_OUTPUT
             add_transpose_block(intermed_cb, reduce_cb, tt::CBIndex::c_4, current_M_block, current_N, current_M_block);
 #endif
