@@ -1220,6 +1220,19 @@ jobs:
           fi
           echo "RUN_TYPE=$RUN_TYPE" >> $GITHUB_ENV
           python3 tests/sweep_framework/run_collective_update.py --run-type "$RUN_TYPE"
+      - name: Print sweep run stats
+        continue-on-error: true
+        run: |
+          python3 tests/sweep_framework/print_run_stats.py \
+            --results-dir /work/tests/sweep_framework/results_export \
+            --run-type "$RUN_TYPE"
+      - name: Publish sweep run stats summary
+        continue-on-error: true
+        run: |
+          python3 tests/sweep_framework/print_run_stats.py \
+            --results-dir /work/tests/sweep_framework/results_export \
+            --run-type "$RUN_TYPE" \
+            --format markdown >> "$GITHUB_STEP_SUMMARY"
       - name: Upload runs
         uses: actions/upload-artifact@v4
         with:
