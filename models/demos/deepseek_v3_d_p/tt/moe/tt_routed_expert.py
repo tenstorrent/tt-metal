@@ -267,29 +267,17 @@ class TtRoutedExpert(LightweightModule):
         Returns:
             Output tensor matching the shape of ``x``.
         """
-        # gate_out = x @ gate_proj
-        gate_out = ttnn.matmul(
-            x, gate_proj, program_config=self.gate_program_config, compute_kernel_config=self.compute_kernel_config
-        )
-
-        # up_out = x @ up_proj
-        up_out = ttnn.matmul(
-            x, up_proj, program_config=self.up_program_config, compute_kernel_config=self.compute_kernel_config
-        )
-
-        # activated = silu(gate_out) * up_out - SiLU fused with multiply
-        activated = ttnn.mul(gate_out, up_out, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
-
-        # output = activated @ down_proj
-        output = ttnn.matmul(
-            activated,
+        return ttnn.experimental.deepseek_prefill.routed_expert_ffn(
+            x,
+            gate_proj,
+            up_proj,
             down_proj,
-            program_config=self.down_program_config,
+            gate_program_config=self.gate_program_config,
+            up_program_config=self.up_program_config,
+            down_program_config=self.down_program_config,
             compute_kernel_config=self.compute_kernel_config,
-            optional_output_tensor=out,
+            output=out,
         )
-
-        return output
 
     def _bh_forward_impl(
         self,
