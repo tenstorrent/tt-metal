@@ -16,4 +16,4 @@ fi
 echo "Using MPI command: $MPIRUN" >&2
 
 # Execute with all passed arguments
-exec $MPIRUN "$@"
+exec "$MPIRUN" "$@"
