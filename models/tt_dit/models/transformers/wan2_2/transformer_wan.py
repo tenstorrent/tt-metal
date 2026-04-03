@@ -648,7 +648,7 @@ class WanTransformer3DModel(Module):
         rope_cos_1HND: ttnn.Tensor,
         rope_sin_1HND: ttnn.Tensor,
         trans_mat: ttnn.Tensor,
-        timestep: torch.Tensor,
+        timestep: ttnn.Tensor,
         guidance_scale: float,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         cond = self.inner_step(
