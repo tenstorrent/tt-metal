@@ -31,6 +31,8 @@ from models.tt_dit.utils.test import line_params
 
 os.environ.setdefault("TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT", "0")
 
+pytestmark = pytest.mark.timeout(600)
+
 CHECKPOINT_PATH = "models/experimental/lingbot_va/reference/checkpoints/vae"
 MIN_PCC = 0.985
 MAX_RELATIVE_RMSE = 0.25
@@ -48,28 +50,23 @@ def vae_ccl_manager(mesh_device, num_links, topology):
     )
 
 
-def decode_torch(vae, latents):
+def _denormalize_latents_for_decode(vae, latents: torch.Tensor) -> torch.Tensor:
+    """Match HF ``AutoencoderKLWan`` latent scaling (shared by torch and TTNN decode paths)."""
     latents = latents.to(vae.dtype)
-    latents_mean = (
-        torch.tensor(vae.config.latents_mean).view(1, vae.config.z_dim, 1, 1, 1).to(latents.device, latents.dtype)
-    )
-    latents_std = 1.0 / torch.tensor(vae.config.latents_std).view(1, vae.config.z_dim, 1, 1, 1).to(
-        latents.device, latents.dtype
-    )
-    latents = latents / latents_std + latents_mean
+    z_dim = vae.config.z_dim
+    latents_mean = torch.tensor(vae.config.latents_mean).view(1, z_dim, 1, 1, 1).to(latents.device, latents.dtype)
+    latents_std = 1.0 / torch.tensor(vae.config.latents_std).view(1, z_dim, 1, 1, 1).to(latents.device, latents.dtype)
+    return latents / latents_std + latents_mean
+
+
+def decode_torch(vae, latents):
+    latents = _denormalize_latents_for_decode(vae, latents)
     with torch.no_grad():
         return vae.decode(latents, return_dict=False)[0]
 
 
 def decode_ttnn(vae, latents, mesh_device, ccl_manager):
-    latents = latents.to(vae.dtype)
-    latents_mean = (
-        torch.tensor(vae.config.latents_mean).view(1, vae.config.z_dim, 1, 1, 1).to(latents.device, latents.dtype)
-    )
-    latents_std = 1.0 / torch.tensor(vae.config.latents_std).view(1, vae.config.z_dim, 1, 1, 1).to(
-        latents.device, latents.dtype
-    )
-    latents = latents / latents_std + latents_mean
+    latents = _denormalize_latents_for_decode(vae, latents)
 
     vae_parallel_config = vae_hw_parallel_config_for_mesh(mesh_device)
 
@@ -141,7 +138,6 @@ def decode_ttnn(vae, latents, mesh_device, ccl_manager):
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.timeout(600)
 def test_decode_one_video_pcc(mesh_device, num_links, topology, vae_ccl_manager):
     assert num_links >= 1
     assert topology == ttnn.Topology.Linear

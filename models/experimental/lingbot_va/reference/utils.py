@@ -231,6 +231,13 @@ va_robotwin_cfg.norm_stat = {
 
 VA_CONFIGS = {"robotwin": va_robotwin_cfg}
 
+# (config attribute name, env var for fallback when kwarg is None)
+_INFERENCE_OVERRIDE_SPECS: tuple[tuple[str, str], ...] = (
+    ("num_inference_steps", "LINGBOT_VA_NUM_INFERENCE_STEPS"),
+    ("action_num_inference_steps", "LINGBOT_VA_ACTION_NUM_INFERENCE_STEPS"),
+    ("frame_chunk_size", "LINGBOT_VA_FRAME_CHUNK_SIZE"),
+)
+
 
 def apply_robotwin_inference_overrides(
     config,
@@ -240,24 +247,19 @@ def apply_robotwin_inference_overrides(
     frame_chunk_size: int | None = None,
 ) -> None:
     """Set inference fields on ``config`` from kwargs; when ``None``, optional ``LINGBOT_VA_*`` env fallbacks."""
-    if num_inference_steps is not None:
-        config.num_inference_steps = num_inference_steps
-    else:
-        env = os.environ.get("LINGBOT_VA_NUM_INFERENCE_STEPS", "").strip()
-        if env:
-            config.num_inference_steps = int(env)
-    if action_num_inference_steps is not None:
-        config.action_num_inference_steps = action_num_inference_steps
-    else:
-        env = os.environ.get("LINGBOT_VA_ACTION_NUM_INFERENCE_STEPS", "").strip()
-        if env:
-            config.action_num_inference_steps = int(env)
-    if frame_chunk_size is not None:
-        config.frame_chunk_size = frame_chunk_size
-    else:
-        env = os.environ.get("LINGBOT_VA_FRAME_CHUNK_SIZE", "").strip()
-        if env:
-            config.frame_chunk_size = int(env)
+    kw_values = {
+        "num_inference_steps": num_inference_steps,
+        "action_num_inference_steps": action_num_inference_steps,
+        "frame_chunk_size": frame_chunk_size,
+    }
+    for attr, env_var in _INFERENCE_OVERRIDE_SPECS:
+        val = kw_values[attr]
+        if val is not None:
+            setattr(config, attr, val)
+        else:
+            env = os.environ.get(env_var, "").strip()
+            if env:
+                setattr(config, attr, int(env))
 
 
 def _local_path(p):
@@ -334,11 +336,8 @@ class WanVAEStreamingWrapper:
         if hasattr(self.vae, "_cached_conv_counts"):
             self.enc_conv_num = self.vae._cached_conv_counts["encoder"]
         else:
-            count = 0
-            for m in self.encoder.modules():
-                if m.__class__.__name__ == "WanCausalConv3d":
-                    count += 1
-            self.enc_conv_num = count
+            # Fallback when HF model has no _cached_conv_counts (count causal conv layers once).
+            self.enc_conv_num = sum(1 for m in self.encoder.modules() if m.__class__.__name__ == "WanCausalConv3d")
 
         self.clear_cache()
 

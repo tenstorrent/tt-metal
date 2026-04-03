@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""E2E perf: ``TtLingbotVA`` + ``tt_cnn`` pipeline with 2 command queues and **no** trace."""
+"""E2E perf: ``TtLingbotVA`` + ``tt_cnn`` pipeline with 2 command queues and trace enabled."""
 
 from __future__ import annotations
 
@@ -31,9 +31,7 @@ OBS_H, OBS_W = 256, 320
 
 def _make_message():
     rng = np.random.default_rng(42)
-    cam_high = rng.integers(0, 256, size=(OBS_H, OBS_W, 3), dtype=np.uint8)
-    cam_left = rng.integers(0, 256, size=(OBS_H, OBS_W, 3), dtype=np.uint8)
-    cam_right = rng.integers(0, 256, size=(OBS_H, OBS_W, 3), dtype=np.uint8)
+    cam_high, cam_left, cam_right = (rng.integers(0, 256, size=(OBS_H, OBS_W, 3), dtype=np.uint8) for _ in range(3))
     return build_infer_message(
         cam_high=cam_high,
         cam_left_wrist=cam_left,
@@ -47,9 +45,9 @@ def _host_input_tensor_for_pipeline(mesh_device):
     torch.manual_seed(0)
     host_torch = torch.randn(1, 1, 32, 32, dtype=torch.bfloat16)
     host = ttnn.from_torch(host_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    image_shape = host_torch.shape
-    width = image_shape[-1]
-    volume = image_shape[0] * image_shape[1] * image_shape[2] * image_shape[3]
+    shp = host_torch.shape
+    width = shp[-1]
+    volume = shp[0] * shp[1] * shp[2] * shp[3]
     physical_height = volume // width
     dram_grid_size = mesh_device.dram_grid_size()
     max_cores = dram_grid_size.x
@@ -134,24 +132,24 @@ def test_perf_lingbot_va_e2e_2cq_trace(
         l1_input_memory_config=l1_input_memory_config,
     )
 
+    # Same host tensor each iteration; pipeline treats inputs as read-only for this perf case.
     host_inputs = [image_host] * num_iterations
 
-    start = time.time()
+    t0 = time.time()
     pipeline.compile(image_host)
-    end = time.time()
-    compile_time = end - start
+    compile_time = time.time() - t0
 
     pipeline.preallocate_output_tensors_on_host(num_iterations)
 
-    start = time.time()
+    t1 = time.time()
     outputs = pipeline.enqueue(host_inputs).pop_all()
-    end = time.time()
+    elapsed = time.time() - t1
     pipeline.cleanup()
 
     assert outputs is not None
-    inference_time = (end - start) / num_iterations
+    inference_time = elapsed / num_iterations
     logger.info("Average model time={:.2f} ms", 1000.0 * inference_time)
-    logger.info("Average model performance={:.2f} fps", num_iterations * batch_size / (end - start))
+    logger.info("Average model performance={:.2f} fps", num_iterations * batch_size / elapsed)
 
     prep_perf_report(
         model_name="lingbot_va-2cq-trace",

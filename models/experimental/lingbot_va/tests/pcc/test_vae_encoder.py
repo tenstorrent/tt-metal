@@ -74,20 +74,23 @@ def _patchify(x, patch_size):
     return x.view(B, C * patch_size * patch_size, F, H // patch_size, W // patch_size)
 
 
-def encode_torch(vae, video):
+def _prepare_rgb_video_for_encode(vae, video: torch.Tensor) -> torch.Tensor:
+    """Dtype + optional HF patchify (shared by reference and TTNN encoder paths)."""
     video = video.to(vae.dtype)
     ps = getattr(vae.config, "patch_size", None)
     if ps and ps > 1:
         video = _patchify(video, ps)
+    return video
+
+
+def encode_torch(vae, video):
+    video = _prepare_rgb_video_for_encode(vae, video)
     with torch.no_grad():
         return vae.encoder(video)
 
 
 def encode_ttnn(vae, video, mesh_device, ccl_manager):
-    video = video.to(vae.dtype)
-    ps = getattr(vae.config, "patch_size", None)
-    if ps and ps > 1:
-        video = _patchify(video, ps)
+    video = _prepare_rgb_video_for_encode(vae, video)
 
     parallel_config = vae_hw_parallel_config_for_mesh(mesh_device)
 
@@ -151,16 +154,15 @@ def test_encode_one_video_pcc(mesh_device, num_links, topology, vae_ccl_manager,
     torch_out = encode_torch(vae, video.clone())
     ttnn_out = encode_ttnn(vae, video.clone(), mesh_device, vae_ccl_manager)
 
-    torch_out = torch_out.float()
-    ttnn_out = ttnn_out.float()
-
-    min_c = min(torch_out.shape[1], ttnn_out.shape[1])
-    min_t = min(torch_out.shape[2], ttnn_out.shape[2])
-    min_h = min(torch_out.shape[3], ttnn_out.shape[3])
-    min_w = min(torch_out.shape[4], ttnn_out.shape[4])
-
-    torch_trim = torch_out[:, :min_c, :min_t, :min_h, :min_w]
-    ttnn_trim = ttnn_out[:, :min_c, :min_t, :min_h, :min_w]
+    torch_f = torch_out.float()
+    ttnn_f = ttnn_out.float()
+    # Align spatial/channel bounds once (sharded TT path can differ in padded dims).
+    min_c = min(torch_f.shape[1], ttnn_f.shape[1])
+    min_t = min(torch_f.shape[2], ttnn_f.shape[2])
+    min_h = min(torch_f.shape[3], ttnn_f.shape[3])
+    min_w = min(torch_f.shape[4], ttnn_f.shape[4])
+    torch_trim = torch_f[:, :min_c, :min_t, :min_h, :min_w]
+    ttnn_trim = ttnn_f[:, :min_c, :min_t, :min_h, :min_w]
     assert torch_trim.shape == ttnn_trim.shape
 
     assert_quality(torch_trim, ttnn_trim, pcc=MIN_PCC, relative_rmse=MAX_RELATIVE_RMSE)

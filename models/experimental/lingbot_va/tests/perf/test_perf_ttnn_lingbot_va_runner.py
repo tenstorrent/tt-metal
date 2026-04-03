@@ -41,34 +41,20 @@ def create_config() -> LingbotVaInferenceConfig:
 
 
 def create_test_inputs(config: LingbotVaInferenceConfig, batch_size: int = 1):
-    """Build observation arrays and the infer ``message`` dict."""
+    """Build random camera frames and the infer ``message`` dict for ``run_inference``."""
     if batch_size != 1:
         raise ValueError("Lingbot VA run_inference supports batch_size=1.")
     rng = np.random.default_rng(config.obs_seed)
-    cam_high = rng.integers(0, 256, size=(config.obs_h, config.obs_w, 3), dtype=np.uint8)
-    cam_left = rng.integers(0, 256, size=(config.obs_h, config.obs_w, 3), dtype=np.uint8)
-    cam_right = rng.integers(0, 256, size=(config.obs_h, config.obs_w, 3), dtype=np.uint8)
+    cam_high, cam_left, cam_right = (
+        rng.integers(0, 256, size=(config.obs_h, config.obs_w, 3), dtype=np.uint8) for _ in range(3)
+    )
     message = lingbot_demo.build_infer_message(
         cam_high=cam_high,
         cam_left_wrist=cam_left,
         cam_right_wrist=cam_right,
         prompt=config.prompt,
     )
-    return {
-        "message": message,
-        "cam_high": cam_high,
-        "cam_left": cam_left,
-        "cam_right": cam_right,
-    }
-
-
-def _inference_kwargs_from_config(config: LingbotVaInferenceConfig) -> dict:
-    """Keyword args for ``demo.run_inference``."""
-    return {
-        "num_inference_steps": config.num_inference_steps,
-        "action_num_inference_steps": config.action_num_inference_steps,
-        "frame_chunk_size": config.frame_chunk_size,
-    }
+    return {"message": message}
 
 
 def _run_lingbot_va_ttnn_forward() -> None:
@@ -82,12 +68,13 @@ def _run_lingbot_va_ttnn_forward() -> None:
 
     config = create_config()
     inputs = create_test_inputs(config, batch_size=BATCH_SIZE)
-    kw = _inference_kwargs_from_config(config)
 
     out = lingbot_demo.run_inference(
         message=inputs["message"],
         checkpoint_path=checkpoint_path,
-        **kw,
+        num_inference_steps=config.num_inference_steps,
+        action_num_inference_steps=config.action_num_inference_steps,
+        frame_chunk_size=config.frame_chunk_size,
     )
 
     assert isinstance(out, dict), "run_inference returns {'action': ndarray}"

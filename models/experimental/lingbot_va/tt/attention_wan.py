@@ -125,10 +125,7 @@ class WanAttention(Module):
             exp_approx_mode=False,
         )
         self.sdpa_worker_grid = (grid.x, grid.y - 1)
-        ring_chunks = self.sdpa_chunk_size_map.get(
-            (sp, parallel_config.tensor_parallel.factor),
-            self.default_sdpa_chunk_size,
-        )
+        ring_chunks = self.sdpa_chunk_size_map.get((sp, tp), self.default_sdpa_chunk_size)
         self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.sdpa_worker_grid,
             q_chunk_size=ring_chunks[0],
