@@ -95,7 +95,7 @@ TEST_F(BlackholeSingleCardFixture, DramKernelOnMultipleCores) {
         for (uint32_t col = 0; col < num_banks; col++) {
             CoreCoord logical_dram_core{col, row};
             auto virtual_dram_core = mesh_device->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
-            uint32_t expected_value = kMagicBase + row * num_banks + col;
+            uint32_t expected_value = kMagicBase + (row * num_banks) + col;
 
             distributed::MeshWorkload workload;
             Program program = CreateProgram();
