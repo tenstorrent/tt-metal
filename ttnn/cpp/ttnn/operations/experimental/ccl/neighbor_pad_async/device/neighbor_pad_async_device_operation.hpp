@@ -48,6 +48,10 @@ Tensor neighbor_pad_async(
     uint32_t pad2_right = 0,
     std::optional<uint32_t> pad2_cluster_axis = std::nullopt,
     std::optional<size_t> pad2_num_links = std::nullopt,
-    const std::optional<Tensor>& persistent_output_buffer = std::nullopt);
+    const std::optional<Tensor>& persistent_output_buffer = std::nullopt,
+    const std::optional<GlobalSemaphore>& progress_semaphore = std::nullopt,
+    uint32_t progress_t_batch_size = 0,
+    bool fabric_only = false,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 }  // namespace ttnn::prim

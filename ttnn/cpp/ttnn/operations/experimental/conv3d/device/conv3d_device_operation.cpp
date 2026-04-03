@@ -212,8 +212,15 @@ TensorSpec Conv3dDeviceOperation::compute_output_specs(
     uint32_t C_out = args.output_channels;
     uint32_t padded_C_out = tt::round_up(C_out, tt::constants::TILE_WIDTH);
 
+    // When halo-buffer mode is active the reader provides h_halo_padding_{h,w}
+    // extra rows/cols at the H/W boundaries, equivalent to additional padding.
+    std::array<uint32_t, 3> effective_padding = args.padding;
+    if (args.config.use_h_halo_buffer) {
+        effective_padding[1] += args.config.h_halo_padding_h;
+        effective_padding[2] += args.config.h_halo_padding_w;
+    }
     auto [T_out, H_out, W_out] =
-        detail::compute_output_dims(T_in, H_in, W_in, args.padding, args.stride, args.kernel_size, args.dilation);
+        detail::compute_output_dims(T_in, H_in, W_in, effective_padding, args.stride, args.kernel_size, args.dilation);
 
     ttnn::Shape output_shape({N, T_out, H_out, W_out, C_out});
     ttnn::Shape padded_output_shape({N, T_out, H_out, W_out, padded_C_out});

@@ -9,6 +9,9 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include <algorithm>
+#include <cstdlib>
+#include <map>
+#include <string>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal.hpp>
 
@@ -27,19 +30,41 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     auto grid_size = config.compute_with_storage_grid_size;
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-    auto num_cores = core_grid.size();
+    // If sub_device_id is set, restrict to that sub-device's cores for concurrent execution
+    // with NeighborPad on a different sub-device. Otherwise use the full config grid.
+    CoreRangeSet core_range_set;
+    if (config.sub_device_id.has_value()) {
+        auto* device = input_tensor.device();
+        auto sd_cores = device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, *config.sub_device_id);
+        core_range_set = sd_cores;
+    } else {
+        core_range_set = CoreRangeSet(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
+    }
+    // core_grid is used for CB/kernel creation (accepts CoreRange or CoreRangeSet via variant)
+    // Use core_range_set throughout so sub-device non-rectangular grids work correctly.
+    auto& core_grid = core_range_set;
+    auto num_cores = core_range_set.num_cores();
     auto input_tensor_shape = input_tensor.logical_shape();
     uint32_t N = input_tensor_shape[0];
     uint32_t T_in = input_tensor_shape[1];
     uint32_t H_in = input_tensor_shape[2];
     uint32_t W_in = input_tensor_shape[3];
     uint32_t C_in = input_tensor_shape[4];
+    // When halo-buffer mode is active, the reader reads boundary rows/cols from
+    // the compact halo buffer instead of zero-padding.  From the kernel's
+    // perspective this is identical to adding config.h_halo_padding_{h,w}
+    // zeros on each side, so we must inflate the padding before computing the
+    // output spatial dims so that H_out / W_out are calculated correctly.
+    std::array<uint32_t, 3> effective_padding = operation_attributes.padding;
+    if (config.use_h_halo_buffer) {
+        effective_padding[1] += config.h_halo_padding_h;
+        effective_padding[2] += config.h_halo_padding_w;
+    }
     auto [T_out, H_out, W_out] = detail::compute_output_dims(
         T_in,
         H_in,
         W_in,
-        operation_attributes.padding,
+        effective_padding,
         operation_attributes.stride,
         operation_attributes.kernel_size,
         operation_attributes.dilation);
@@ -336,9 +361,9 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         H_out,
         W_out,
         C_out,
-        operation_attributes.padding[0],
-        operation_attributes.padding[1],
-        operation_attributes.padding[2],
+        effective_padding[0],
+        effective_padding[1],
+        effective_padding[2],
         operation_attributes.kernel_size[0],
         operation_attributes.kernel_size[1],
         operation_attributes.kernel_size[2],
@@ -364,11 +389,36 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         patch_pad_bytes};
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
 
+    // Parse CONV3D_ABLATE env var to selectively enable profiling zones or ablate kernel phases.
+    std::map<std::string, std::string> ablation_defines;
+    {
+        const char* ablate_env = std::getenv("CONV3D_ABLATE");
+        if (ablate_env != nullptr) {
+            std::string ablate_str(ablate_env);
+            if (ablate_str == "tilize") {
+                ablation_defines["ABLATE_TILIZE"] = "1";
+            } else if (ablate_str == "dm") {
+                ablation_defines["ABLATE_DM"] = "1";
+            } else if (ablate_str == "tilize_dm") {
+                ablation_defines["ABLATE_TILIZE"] = "1";
+                ablation_defines["ABLATE_DM"] = "1";
+            } else if (ablate_str == "profile") {
+                ablation_defines["PROFILE_ZONES"] = "1";
+            }
+        }
+    }
+    if (config.input_progress_t_batch_size > 0) {
+        ablation_defines["CONV3D_INPUT_PROGRESS_SEM"] = "1";
+    }
+    if (config.use_h_halo_buffer) {
+        ablation_defines["CONV3D_H_HALO"] = "1";
+    }
+
     auto reader_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/reader_vol2col.cpp",
         core_grid,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, ablation_defines));
 
     // Matmul parameters
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
@@ -432,7 +482,8 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_time_args});
+            .compile_args = compute_compile_time_args,
+            .defines = ablation_defines});
 
     std::vector<uint32_t> writer_compile_time_args = {
         cb_matmul_result_rm_id,
@@ -467,7 +518,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         program,
         "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp",
         core_grid,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, ablation_defines));
 
     uint32_t input_addr = input_tensor.buffer()->address();
     uint32_t out_addr = output_tensor.buffer()->address();
@@ -671,6 +722,16 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
             h_out_end,
             w_out_start,
             w_out_end,
+            // Progress semaphore: addr (0 if disabled) and t_batch_size
+            config.input_progress_sem_addr,
+            config.input_progress_t_batch_size,
+            // H+W halo buffer: addr, outer_dim, H, W, padding_h, padding_w
+            config.h_halo_buffer_addr,
+            config.h_halo_outer_dim_size,
+            config.h_halo_H,
+            config.h_halo_W,
+            config.h_halo_padding_h,
+            config.h_halo_padding_w,
         };
 
         compute_args_per_core[core_id] = {
@@ -802,7 +863,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
 
 void Conv3dProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const Conv3dParams& /*operation_attributes*/,
+    const Conv3dParams& operation_attributes,
     const Conv3dInputs& tensor_args,
     Tensor& tensor_return_value) {
     using namespace tt::tt_metal;
@@ -827,6 +888,21 @@ void Conv3dProgramFactory::override_runtime_arguments(
         auto& reader_args = reader_args_by_core[core.x][core.y];
         auto& writer_args = writer_args_by_core[core.x][core.y];
         reader_args[0] = input_addr;
+        // Update progress semaphore address (ping-pong changes it each call)
+        if (operation_attributes.config.input_progress_t_batch_size > 0) {
+            reader_args[11] = operation_attributes.config.input_progress_sem_addr;
+        }
+        // Update halo buffer address (changes each call due to ping-pong)
+        if (operation_attributes.config.use_h_halo_buffer) {
+            reader_args[13] = operation_attributes.config.h_halo_buffer_addr;
+            // Indices 14-18 (outer_dim, H, W, padding_h, padding_w) are also updated
+            // since they may change across calls (different layer shapes)
+            reader_args[14] = operation_attributes.config.h_halo_outer_dim_size;
+            reader_args[15] = operation_attributes.config.h_halo_H;
+            reader_args[16] = operation_attributes.config.h_halo_W;
+            reader_args[17] = operation_attributes.config.h_halo_padding_h;
+            reader_args[18] = operation_attributes.config.h_halo_padding_w;
+        }
         writer_args[0] = output_addr;
         writer_args[1] = weight_addr;
         writer_args[2] = bias_addr;
