@@ -66,6 +66,8 @@
 #include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.hpp"
+#include "ttnn/operations/experimental/deltanet/deltanet_nanobind.hpp"
+#include "ttnn/operations/experimental/sparse_moe/sparse_moe_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -153,6 +155,10 @@ void py_module(nb::module_& mod) {
     deepseek_prefill::detail::bind_combine(mod);
 
     deepseek_moe_post_combine_tilize::detail::bind_deepseek_moe_post_combine_tilize(mod);
+
+    deltanet::detail::bind_deltanet_recurrence(mod);
+
+    sparse_moe::detail::bind_sparse_moe_expert(mod);
 }
 
 }  // namespace ttnn::operations::experimental
