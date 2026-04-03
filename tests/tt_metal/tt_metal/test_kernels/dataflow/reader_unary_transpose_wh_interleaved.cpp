@@ -62,7 +62,7 @@ void kernel_main() {
             mem_zero_endpoint,
             experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(cb2),
             MEM_ZEROS_SIZE,
-            {.noc_x = NOC_X(my_x()), .noc_y = NOC_Y(my_y()), .addr = MEM_ZEROS_BASE},
+            {.noc_x = my_x[noc_index], .noc_y = my_y[noc_index], .addr = MEM_ZEROS_BASE},
             {.offset_bytes = i * MEM_ZEROS_SIZE});
 #endif
     }
