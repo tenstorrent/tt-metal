@@ -30,6 +30,9 @@ ALWI void i1_tile(uint32_t idst) { MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void i1_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(i1, APPROX)); }
+ALWI void i1_tile_init() {
+    MATH(SFPU_UNARY_KERNEL_INIT(i1, APPROX));
+    MATH(ckernel::sfpu::sfpu_reciprocal_init<APPROX>());
+}
 
 }  // namespace ckernel
