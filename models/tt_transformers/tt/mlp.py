@@ -40,7 +40,7 @@ class MLP(LightweightModule):
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
         torch_weight = lambda name: torch.transpose(state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
         pad_hidden_dim = lambda tensor, dim: pad_to_size(tensor, dim=dim, size=args.hidden_dim)
-        # If padding was applied (e.g. via env var), add the unpadded hidden dim to the cache name to avoid loading incorrect weights
+        # If pading was applied (e.g. via env var), add the unpadded hidden dim to the cache name to avoid loading incorrect weights
         hidden_dim_string = f".hidden_dim_{args.hidden_dim}" if args.hidden_dim != args.unpadded_hidden_dim else ""
 
         if args.dummy_weights:
@@ -76,10 +76,10 @@ class MLP(LightweightModule):
             return result
 
         # Sharded weights
-        w1_dims = (-1, -2) if args.is_galaxy else (-2, -1)
-        w2_dims = (-2, -1) if args.is_galaxy else (-1, -2)
+        w1_dims = (-1, -2) if args.is_galaxy else (-1, -1)
+        w2_dims = (-2, -1) if args.is_galaxy else (-2, -2)
 
-        layer_num = max(layer_num, 0)  # cross_block uses the configuration of the first decoder
+        layer_num = max(layer_num, 0)  # cross_block uses the configutation of the first decoder
 
         # When prefetcher is enabled, use consistent dtypes across all layers to avoid
         # race conditions caused by different block sizes
@@ -124,7 +124,7 @@ class MLP(LightweightModule):
         """
         seq_len = x.shape[-2]
         TG = self.args.is_galaxy
-        layer_num = max(self.layer_num, 0)  # cross_block uses the configuration of the first decoder
+        layer_num = max(self.layer_num, 0)  # cross_block uses the configutation of the first decoder
         activation_dtype = self.decoders_optimizations.get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.ACTIVATION
         )
@@ -210,28 +210,9 @@ class MLP(LightweightModule):
                     num_buffers_per_channel=2,
                 )
             else:
-                # NOTE: In MLP All-reduce hard codes to 2 links, so we do not get the dynamic link count from the CCL class
-                # to avoid any performance regressions.
-                w1_out = tt_all_reduce(
-                    w1_out,
-                    self.mesh_device,
-                    self.tt_ccl,
-                    cluster_axis=1,
-                    num_all_gather_links=1,
-                    sharded=True if mode == Mode.DECODE else False,
-                    topology=self.args.ccl_topology(),
-                    memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == Mode.DECODE else None,
-                )
-                w3_out = tt_all_reduce(
-                    w3_out,
-                    self.mesh_device,
-                    self.tt_ccl,
-                    cluster_axis=1,
-                    num_all_gather_links=1,
-                    sharded=True if mode == Mode.DECODE else False,
-                    topology=self.args.ccl_topology(),
-                    memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == Mode.DECODE else None,
-                )
+                # With N-only sharding (dims=(-1,-1)), FF1/FF3 produce complete
+                # results per device. No all-reduce needed.
+                pass
 
         w2_in = ttnn.mul(
             w1_out,
@@ -272,51 +253,75 @@ class MLP(LightweightModule):
             decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
         )
 
-        if seq_len > 128 and mode != Mode.DECODE:
-            w2_out = ttnn.experimental.minimal_matmul(
-                w2_in,
-                self.w2,
-                compute_kernel_config=li_ff2_compute_kernel_cfg,
-                config=pc_2,
-            )
-        else:
-            w2_out = ttnn.linear(
-                w2_in,
-                self.w2,
-                compute_kernel_config=li_ff2_compute_kernel_cfg,
-                dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
-                program_config=pc_2,
-                memory_config=self.args.get_mlp_ff2_mem_config(mode, self.prefetcher),
-                core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
-                global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
-                sub_device_id=self.prefetcher.worker_sub_device_id
-                if self.prefetcher is not None and mode == Mode.DECODE
-                else None,
-            )
-        ttnn.deallocate(w2_in)
-
-        w2_out_reduced = tt_all_reduce(
-            w2_out,
-            self.mesh_device,
-            self.tt_ccl,
-            cluster_axis=0,
-            dim=0 if (TG and self.dim < 8192) else 3,
-            sharded=(mode == Mode.DECODE),
-            memory_config=self.args.get_mlp_ff2_all_reduce_mem_config(mode, w2_out),
-            rs_memory_config=self.model_config["MLP_RS_CONFIG"]["rs_memory_config"]
-            if mode == Mode.DECODE
-            else ttnn.DRAM_MEMORY_CONFIG,
-            dtype=self.args.ccl_dtype,
-            use_composite=True if self.dim == 8192 else False,
-            topology=self.args.ccl_topology(),
-            chunks_per_sync=self.model_config["MLP_RS_CONFIG"]["chunks_per_sync"] if mode == Mode.DECODE else 10,
-            num_workers_per_link=self.model_config["MLP_RS_CONFIG"]["num_workers_per_link"]
-            if mode == Mode.DECODE
-            else 2,
-            subdevice_id=self.prefetcher.worker_sub_device_id
-            if mode == Mode.DECODE and self.prefetcher is not None
+        w2_out = ttnn.linear(
+            w2_in,
+            self.w2,
+            compute_kernel_config=li_ff2_compute_kernel_cfg,
+            dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
+            program_config=pc_2,
+            memory_config=self.args.get_mlp_ff2_mem_config(mode, self.prefetcher),
+            core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
+            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
+            sub_device_id=self.prefetcher.worker_sub_device_id
+            if self.prefetcher is not None and mode == Mode.DECODE
             else None,
         )
+        ttnn.deallocate(w2_in)
+
+        # With N-only FF1/FF3 sharding, FF2 K is split across ALL devices (both axes)
+        # Need to reduce across both axes: axis=0 (2-way) then axis=1 (4-way)
+        if not TG and mode == Mode.DECODE:
+            # Axis=0 reduce first
+            w2_out_reduced = tt_all_reduce(
+                w2_out,
+                self.mesh_device,
+                self.tt_ccl,
+                cluster_axis=0,
+                dim=3,
+                sharded=True,
+                memory_config=self.args.get_mlp_ff2_all_reduce_mem_config(mode, w2_out),
+                dtype=self.args.ccl_dtype,
+                topology=self.args.ccl_topology(),
+                chunks_per_sync=self.model_config["MLP_RS_CONFIG"]["chunks_per_sync"],
+                num_workers_per_link=self.model_config["MLP_RS_CONFIG"]["num_workers_per_link"],
+            )
+            # Axis=1 reduce
+            w2_out_reduced = tt_all_reduce(
+                w2_out_reduced,
+                self.mesh_device,
+                self.tt_ccl,
+                cluster_axis=1,
+                dim=3,
+                sharded=True,
+                memory_config=self.args.get_mlp_ff2_all_reduce_mem_config(mode, w2_out_reduced),
+                dtype=self.args.ccl_dtype,
+                topology=self.args.ccl_topology(),
+                chunks_per_sync=self.model_config["MLP_RS_CONFIG"]["chunks_per_sync"],
+                num_workers_per_link=self.model_config["MLP_RS_CONFIG"]["num_workers_per_link"],
+            )
+        else:
+            w2_out_reduced = tt_all_reduce(
+                w2_out,
+                self.mesh_device,
+                self.tt_ccl,
+                cluster_axis=0,
+                dim=0 if (TG and self.dim < 8192) else 3,
+                sharded=(mode == Mode.DECODE),
+                memory_config=self.args.get_mlp_ff2_all_reduce_mem_config(mode, w2_out),
+                rs_memory_config=self.model_config["MLP_RS_CONFIG"]["rs_memory_config"]
+                if mode == Mode.DECODE
+                else ttnn.DRAM_MEMORY_CONFIG,
+                dtype=self.args.ccl_dtype,
+                use_composite=True if self.dim == 8192 else False,
+                topology=self.args.ccl_topology(),
+                chunks_per_sync=self.model_config["MLP_RS_CONFIG"]["chunks_per_sync"] if mode == Mode.DECODE else 10,
+                num_workers_per_link=self.model_config["MLP_RS_CONFIG"]["num_workers_per_link"]
+                if mode == Mode.DECODE
+                else 2,
+                subdevice_id=self.prefetcher.worker_sub_device_id
+                if mode == Mode.DECODE and self.prefetcher is not None
+                else None,
+            )
         # Ensure dim 0 and 1 are 1
         original_shape = w2_out_reduced.shape
         w2_out_reduced = ttnn.reshape(
