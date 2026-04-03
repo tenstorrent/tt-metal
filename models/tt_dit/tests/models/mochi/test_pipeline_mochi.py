@@ -110,6 +110,13 @@ def test_mochi_diffusers_pipeline():
 
 
 @pytest.mark.parametrize(
+    "traced",
+    [
+        pytest.param(True, id="tracing_on"),
+        pytest.param(False, id="tracing_off"),
+    ],
+)
+@pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, vae_mesh_shape, vae_sp_axis, vae_tp_axis, num_links",
     [
         [(2, 2), 0, 1, (1, 4), 0, 1, 2],  # VAE mesh shape = (1, 4) is more memory efficient.
@@ -125,8 +132,18 @@ def test_mochi_diffusers_pipeline():
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 25000000,
+        }
+    ],
+    indirect=True,
+)
 def test_tt_mochi_pipeline(
+    *,
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
     tp_axis: int,
@@ -136,6 +153,7 @@ def test_tt_mochi_pipeline(
     num_links: int,
     is_ci_env: bool,
     monkeypatch: pytest.MonkeyPatch,
+    traced: bool,
 ):
     """
     Test that creates the modified TT MochiPipeline and runs it on a prompt.
@@ -205,6 +223,7 @@ def test_tt_mochi_pipeline(
         height=480,  # Reduced resolution for faster testing
         width=848,  # Reduced resolution for faster testing
         seed=0,  # Make deterministic
+        traced=traced,
     ).frames[0]
 
     # Validate output
@@ -219,8 +238,13 @@ def test_tt_mochi_pipeline(
     try:
         from diffusers.utils import export_to_video
 
-        export_to_video(frames, "tt_mochi_test_output.mp4", fps=30)
-        logger.info("TT Pipeline video exported to tt_mochi_test_output.mp4")
+        filename = "tt_mochi_test_output"
+        if traced:
+            filename += "_traced"
+        filename += ".mp4"
+
+        export_to_video(frames, filename, fps=30)
+        logger.info(f"TT Pipeline video exported to {filename}")
     except ImportError:
         logger.info("Could not export video - diffusers.utils.export_to_video not available")
     except AttributeError as e:

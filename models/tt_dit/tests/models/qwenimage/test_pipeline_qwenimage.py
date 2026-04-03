@@ -47,7 +47,7 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
     "traced",
     [
         pytest.param(True, id="traced"),
-        # pytest.param(False, id="not_traced"),
+        pytest.param(False, id="not_traced"),
     ],
 )
 def test_qwenimage_pipeline(
@@ -133,6 +133,8 @@ def test_qwenimage_pipeline(
             cfg_scale=4.0,
             seed=seed,
             traced=traced,
+            vae_traced=False,
+            encoder_traced=False,
         )
 
         output_filename = f"{filename_prefix}_{number}.png"

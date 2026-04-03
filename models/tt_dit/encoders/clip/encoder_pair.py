@@ -14,6 +14,7 @@ import ttnn
 
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
+from ...utils.tracing import Tracer
 from .model_clip import CLIPConfig, CLIPEncoder
 
 if TYPE_CHECKING:
@@ -40,6 +41,11 @@ class CLIPTokenizerEncoderPair:
 
         self._tokenizer = AutoTokenizer.from_pretrained(checkpoint)
         self._encoder = self._load_encoder(checkpoint, use_torch=use_torch)
+        self._tracer = (
+            None
+            if use_torch
+            else Tracer(self._encoder.forward, device=device, clone_prep_inputs=False)
+        )
 
         self._sequence_length = sequence_length if sequence_length is not None else self._tokenizer.model_max_length
         self._skip_norm = skip_norm
@@ -79,13 +85,19 @@ class CLIPTokenizerEncoderPair:
         return model
 
     def encode(
-        self, prompts: Iterable[str], *, num_images_per_prompt: int, true_clip_skip: int | None = None
+        self,
+        prompts: Iterable[str],
+        *,
+        num_images_per_prompt: int,
+        true_clip_skip: int | None = None,
+        enable_tracing: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         return _get_clip_prompt_embeds(
             prompts=prompts,
             num_images_per_prompt=num_images_per_prompt,
             tokenizer=self._tokenizer,
             text_encoder=self._encoder,
+            tracer=self._tracer if enable_tracing else None,
             sequence_length=self._sequence_length,
             skip_norm=self._skip_norm,
             true_clip_skip=true_clip_skip if true_clip_skip is not None else self._true_clip_skip,
@@ -99,6 +111,7 @@ def _get_clip_prompt_embeds(
     *,
     prompts: Iterable[str],
     text_encoder: CLIPEncoder | CLIPTextModel,
+    tracer: Tracer | None = None,
     tokenizer: PreTrainedTokenizerBase,
     sequence_length: int,
     num_images_per_prompt: int,
@@ -144,11 +157,11 @@ def _get_clip_prompt_embeds(
             mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
 
-        tt_prompt_embeds, tt_pooled_prompt_embeds, tt_normalized = text_encoder(
+        tt_prompt_embeds, tt_normalized = (tracer or text_encoder.forward)(
             prompt_tokenized=tt_tokens,
-            mesh_device=mesh_device,
-            return_normalized_state=True,
+            skip_pooling=True,
         )
+        tt_pooled_prompt_embeds = text_encoder.pooled_output(tt_tokens, tt_normalized)
         tt_prompt_embeds = tt_prompt_embeds[-(true_clip_skip + 1)] if skip_norm else tt_normalized
 
         prompt_embeds = ttnn.to_torch(ttnn.get_device_tensors(tt_prompt_embeds)[0])
