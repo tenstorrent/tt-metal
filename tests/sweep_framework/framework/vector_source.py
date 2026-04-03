@@ -4,10 +4,22 @@
 
 import ast
 import json
+import os
 import pathlib
 from abc import ABC, abstractmethod
 
-from framework.sweeps_logger import sweeps_logger as logger
+from .constants import parse_hardware_suffix, parse_mesh_suffix, strip_grouping_suffix
+from .matrix_runner_config import (
+    GENERATION_MANIFEST_FILENAME,
+    SUPPORTED_VECTOR_GROUPING_MODES,
+    get_allowed_mesh_shapes_for_local_hardware_group,
+    get_lead_models_test_group_name_for_hardware_group,
+    get_test_group_capability_profile,
+    get_test_group_name_for_hardware_group,
+    get_vector_load_filter_policy,
+    hardware_group_matches_any_rule,
+)
+from .sweeps_logger import sweeps_logger as logger
 
 
 class VectorSource(ABC):
@@ -103,46 +115,272 @@ class VectorExportSource(VectorSource):
             self.export_dir = pathlib.Path(__file__).parent.parent / "vectors_export"
         else:
             self.export_dir = export_dir
+        self._cached_generation_manifest = None
+        self._cached_manifest_vector_paths = None
+
+    def _load_generation_manifest(self) -> dict:
+        """Load and validate the generation manifest used as the sole file index."""
+        if self._cached_generation_manifest is not None:
+            return self._cached_generation_manifest
+
+        manifest_path = self.export_dir / GENERATION_MANIFEST_FILENAME
+        if not manifest_path.exists():
+            raise FileNotFoundError(
+                f"Missing generation manifest at {manifest_path}. "
+                "vectors_export lookups require generation_manifest.json."
+            )
+
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as file:
+                manifest = json.load(file)
+        except (OSError, json.JSONDecodeError) as e:
+            raise RuntimeError(f"Failed to read generation manifest at {manifest_path}: {e}") from e
+
+        if not isinstance(manifest, dict):
+            raise RuntimeError(f"Generation manifest at {manifest_path} is not a JSON object")
+
+        grouping_mode = manifest.get("vector_grouping_mode")
+        if grouping_mode not in SUPPORTED_VECTOR_GROUPING_MODES:
+            raise RuntimeError(
+                f"Generation manifest at {manifest_path} must contain vector_grouping_mode set to 'mesh' or 'hw'"
+            )
+
+        vector_files = manifest.get("vector_files")
+        if not isinstance(vector_files, list) or not vector_files:
+            raise RuntimeError(f"Generation manifest at {manifest_path} must contain a non-empty 'vector_files' list")
+
+        validated_vector_files = []
+        for index, file_name in enumerate(vector_files):
+            if not isinstance(file_name, str) or not file_name.endswith(".json"):
+                raise RuntimeError(
+                    f"Generation manifest at {manifest_path} has invalid vector_files[{index}]={file_name!r}"
+                )
+            if pathlib.Path(file_name).name == GENERATION_MANIFEST_FILENAME:
+                raise RuntimeError(
+                    f"Generation manifest at {manifest_path} must not list {GENERATION_MANIFEST_FILENAME} as a vector file"
+                )
+            validated_vector_files.append(file_name)
+
+        manifest["vector_files"] = validated_vector_files
+        self._cached_generation_manifest = manifest
+        return manifest
+
+    def _get_manifest_vector_paths(self) -> list[pathlib.Path]:
+        """Resolve manifest vector file names to concrete existing paths."""
+        if self._cached_manifest_vector_paths is not None:
+            return self._cached_manifest_vector_paths
+
+        manifest = self._load_generation_manifest()
+        manifest_vector_paths = []
+
+        for file_name in manifest["vector_files"]:
+            vector_path = self.export_dir / file_name
+            if not vector_path.exists():
+                raise FileNotFoundError(
+                    f"Generation manifest references missing vector file '{file_name}' in {self.export_dir}"
+                )
+            if not vector_path.is_file():
+                raise RuntimeError(
+                    f"Generation manifest entry '{file_name}' in {self.export_dir} does not resolve to a file"
+                )
+            manifest_vector_paths.append(vector_path)
+
+        self._cached_manifest_vector_paths = manifest_vector_paths
+        return manifest_vector_paths
+
+    @staticmethod
+    def _get_grouping_kind(module_name: str) -> str | None:
+        """Classify a manifest module name by shared suffix parsing rules."""
+        if parse_mesh_suffix(module_name) is not None:
+            return "mesh"
+        if parse_hardware_suffix(module_name) is not None:
+            return "hw"
+        return None
+
+    def _manifest_entry_matches_module(
+        self, requested_module_name: str, manifest_module_name: str, grouping_mode: str
+    ) -> bool:
+        """Apply one file-list rule for exact or grouped manifest entries."""
+        if manifest_module_name == requested_module_name:
+            return True
+
+        if strip_grouping_suffix(requested_module_name) != requested_module_name:
+            return False
+
+        if strip_grouping_suffix(manifest_module_name) != requested_module_name:
+            return False
+
+        return self._get_grouping_kind(manifest_module_name) == grouping_mode
 
     def _find_module_files(self, module_name: str) -> list[pathlib.Path]:
-        """Find all JSON files for a given module (including grouped variants)."""
-        all_files = []
+        """Find all manifest-declared JSON files for a given module."""
+        manifest = self._load_generation_manifest()
+        manifest_vector_paths = self._get_manifest_vector_paths()
+        grouping_mode = manifest["vector_grouping_mode"]
+        module_files = sorted(
+            {
+                vector_path
+                for vector_path in manifest_vector_paths
+                if self._manifest_entry_matches_module(module_name, vector_path.stem, grouping_mode)
+            }
+        )
 
-        # First try exact match
-        exact_match = list(self.export_dir.glob(f"{module_name}.json"))
-        if exact_match:
-            all_files.extend(exact_match)
+        if module_files:
+            grouped_count = sum(1 for vector_path in module_files if vector_path.stem != module_name)
+            if grouped_count:
+                logger.info(
+                    f"Resolved {grouped_count} grouped vector file(s) for module '{module_name}' from "
+                    f"{GENERATION_MANIFEST_FILENAME} using grouping mode '{grouping_mode}'"
+                )
+            return module_files
 
-        # Also look for grouped variants using the dotted suffix format.
-        mesh_variants = list(self.export_dir.glob(f"{module_name}.mesh_*.json"))
-        if mesh_variants:
-            logger.info(f"Found {len(mesh_variants)} mesh variant file(s) for module '{module_name}'")
-            all_files.extend(sorted(mesh_variants))  # Sort for consistent ordering
+        available_modules = sorted(vector_path.stem for vector_path in manifest_vector_paths)
+        preview = available_modules[:5]
+        raise FileNotFoundError(
+            f"No vector file for module '{module_name}' found in generation manifest {self.export_dir / GENERATION_MANIFEST_FILENAME}. "
+            f"Manifest grouping mode is '{grouping_mode}'. Available manifest entries include: {preview}"
+        )
 
-        hardware_variants = list(self.export_dir.glob(f"{module_name}.hw_*.json"))
-        if hardware_variants:
-            logger.info(f"Found {len(hardware_variants)} hardware variant file(s) for module '{module_name}'")
-            all_files.extend(sorted(hardware_variants))
-
-        if all_files:
-            return sorted(set(all_files))
-
-        logger.warning(f"No vector file found for module '{module_name}' in {self.export_dir}")
+    @staticmethod
+    def _parse_mesh_shape_string(mesh_shape: str) -> tuple[int, int] | None:
+        """Parse 'rowsxcols' mesh shape strings."""
         try:
-            tail = module_name.split(".")[-1]
-            similar_files = list(self.export_dir.glob(f"*{tail}*.json"))
-            if similar_files:
-                top_names = [f.name for f in similar_files[:5]]
-                logger.info(f"Similar files found: {top_names}")
-        except Exception:
-            pass
+            rows, cols = map(int, mesh_shape.lower().split("x"))
+            return (rows, cols)
+        except (AttributeError, ValueError):
+            return None
+
+    def _get_run_type(self, module_name: str, is_lead_models: bool) -> str | None:
+        """Infer sweep run type relevant for vector filtering."""
+        if is_lead_models:
+            return "lead_models"
+        if "model_traced" in module_name:
+            return "model_traced"
+        return None
+
+    def _get_current_hardware_group(self, current_machine_info: dict | None) -> tuple[str, str, int] | None:
+        """Convert current machine info into the normalized hardware-group tuple."""
+        if not current_machine_info:
+            return None
+
+        board_type = current_machine_info.get("board_type")
+        device_series = current_machine_info.get("device_series")
+        card_count = current_machine_info.get("card_count")
+        if not board_type or not device_series or not isinstance(card_count, int):
+            return None
+
+        return (str(board_type).lower(), str(device_series).lower(), card_count)
+
+    @staticmethod
+    def _normalize_traced_machine_entries(vector_data: dict) -> list[dict]:
+        """Normalize traced_machine_info to a list of machine entry dictionaries."""
+        traced_machine_info = vector_data.get("traced_machine_info")
+        if isinstance(traced_machine_info, dict):
+            return [traced_machine_info]
+        if isinstance(traced_machine_info, list):
+            return [entry for entry in traced_machine_info if isinstance(entry, dict)]
         return []
+
+    @staticmethod
+    def _extract_mesh_shape(entry: dict) -> tuple[int, int] | None:
+        """Extract mesh shape from machine entry when present."""
+        mesh = entry.get("mesh_device_shape")
+        if isinstance(mesh, list) and len(mesh) == 2:
+            return (mesh[0], mesh[1])
+        if isinstance(mesh, str):
+            try:
+                parsed = ast.literal_eval(mesh)
+                if isinstance(parsed, list) and len(parsed) == 2:
+                    return (parsed[0], parsed[1])
+            except (SyntaxError, ValueError):
+                pass
+
+        placements = entry.get("tensor_placements")
+        if isinstance(placements, list) and placements:
+            placement_mesh = placements[0].get("mesh_device_shape")
+            if isinstance(placement_mesh, list) and len(placement_mesh) == 2:
+                return (placement_mesh[0], placement_mesh[1])
+            if isinstance(placement_mesh, str):
+                try:
+                    parsed = ast.literal_eval(placement_mesh)
+                    if isinstance(parsed, list) and len(parsed) == 2:
+                        return (parsed[0], parsed[1])
+                except (SyntaxError, ValueError):
+                    pass
+        return None
+
+    @staticmethod
+    def _get_entry_hardware_group(entry: dict) -> tuple[str | None, str | None, int | None] | None:
+        """Convert traced machine entry to normalized hardware tuple with optional fields."""
+        board_type = entry.get("board_type")
+        device_series = entry.get("device_series")
+        card_count = entry.get("card_count")
+
+        if not board_type and not device_series and card_count is None:
+            return None
+
+        normalized_board = str(board_type).lower() if board_type else None
+        normalized_series = str(device_series).lower() if device_series else None
+        normalized_cards = card_count if isinstance(card_count, int) else None
+        return (normalized_board, normalized_series, normalized_cards)
+
+    def _resolve_runtime_test_group_name(self, run_type: str | None, current_machine_info: dict | None) -> str | None:
+        """Determine the logical runner lane for CI or local execution.
+
+        When TEST_GROUP_NAME is present, we are in a CI-like mode where the
+        matrix has already chosen the owning lane. Without TEST_GROUP_NAME we
+        fall back to hardware inference so local/manual runs still work.
+        """
+        explicit_test_group_name = os.environ.get("TEST_GROUP_NAME", "").strip()
+        if explicit_test_group_name:
+            return explicit_test_group_name
+
+        hardware_group = self._get_current_hardware_group(current_machine_info)
+        if hardware_group is None:
+            return None
+
+        if run_type == "lead_models":
+            return get_lead_models_test_group_name_for_hardware_group(hardware_group)
+        if run_type == "model_traced":
+            return get_test_group_name_for_hardware_group(hardware_group)
+        return None
+
+    def _resolve_allowed_mesh_shapes(
+        self, capability_profile: dict, current_machine_info: dict | None
+    ) -> set[tuple[int, int]]:
+        """Resolve allowed mesh shapes from explicit env, CI ownership, or local capability.
+
+        Resolution order:
+        1. ``MESH_DEVICE_SHAPE`` explicit override for manual targeting
+        2. Strict CI ownership when ``TEST_GROUP_NAME`` is set
+        3. Broader local hardware capability inferred from the current machine
+        """
+        mesh_filter = os.environ.get("MESH_DEVICE_SHAPE", "").strip()
+        if mesh_filter:
+            parsed = self._parse_mesh_shape_string(mesh_filter)
+            if parsed is None:
+                logger.warning(f"Invalid MESH_DEVICE_SHAPE format: {mesh_filter}, expected NxM (e.g., 1x2)")
+                return set()
+            return {parsed}
+
+        explicit_test_group_name = os.environ.get("TEST_GROUP_NAME", "").strip()
+        allowed_meshes = set()
+        if explicit_test_group_name:
+            mesh_shape_strings = capability_profile.get("allowed_mesh_shapes", ())
+        else:
+            current_hardware_group = self._get_current_hardware_group(current_machine_info)
+            mesh_shape_strings = get_allowed_mesh_shapes_for_local_hardware_group(current_hardware_group)
+
+        for mesh_shape in mesh_shape_strings:
+            parsed = self._parse_mesh_shape_string(mesh_shape)
+            if parsed is not None:
+                allowed_meshes.add(parsed)
+        return allowed_meshes
 
     def _get_machine_info(self):
         """Get machine info using get_machine_info from generic_ops_tracer."""
         try:
             import sys
-            import os
 
             # Add model_tracer to path if not already there
             # Go up 4 levels from this file (tests/sweep_framework/framework/vector_source.py)
@@ -212,41 +450,62 @@ class VectorExportSource(VectorSource):
         """
         import os
 
+        manifest = self._load_generation_manifest()
         module_files = self._find_module_files(module_name)
         if not module_files:
             return []
 
-        # Check if this is a model_traced run (resource filtering only applies to model_traced)
+        # Determine which traced sweep mode this module belongs to.
         is_model_traced = "model_traced" in module_name
         is_lead_models = os.environ.get("LEAD_MODELS_RUN", "").strip() == "1"
+        run_type = self._get_run_type(module_name, is_lead_models)
+        filter_policy = get_vector_load_filter_policy(manifest["vector_grouping_mode"])
+        filter_kind = filter_policy["kind"]
 
-        # Get current machine info (for device/card filtering in model_traced runs)
+        # Get current machine info when runtime capability may be needed.
         current_machine_info = None
         if is_model_traced:
             current_machine_info = self._get_machine_info()
 
-        # Check if mesh filtering is enabled via environment variable
-        mesh_filter = os.environ.get("MESH_DEVICE_SHAPE", "").strip()
-        target_mesh = None
+        test_group_name = self._resolve_runtime_test_group_name(run_type, current_machine_info)
+        explicit_test_group_name = os.environ.get("TEST_GROUP_NAME", "").strip()
+        capability_profile = (
+            get_test_group_capability_profile(run_type, test_group_name)
+            if test_group_name
+            else {"allowed_mesh_shapes": (), "hardware_rules": ()}
+        )
 
-        if mesh_filter:
-            logger.info(f"Mesh filtering enabled: MESH_DEVICE_SHAPE={mesh_filter}")
+        if filter_kind in {"hardware", "mesh"} and current_machine_info:
+            logger.info(
+                f"Current machine: board_type={current_machine_info['board_type']}, "
+                f"device_series={current_machine_info['device_series']}, "
+                f"card_count={current_machine_info['card_count']}"
+            )
 
-            if current_machine_info:
+        allowed_mesh_shapes = set()
+        if filter_policy["enforce_mesh_capability"]:
+            allowed_mesh_shapes = self._resolve_allowed_mesh_shapes(capability_profile, current_machine_info)
+            if allowed_mesh_shapes:
+                mesh_labels = sorted(f"{rows}x{cols}" for rows, cols in allowed_mesh_shapes)
+                mode_label = "CI ownership" if explicit_test_group_name else "local hardware capability"
                 logger.info(
-                    f"Current machine: board_type={current_machine_info['board_type']}, "
-                    f"device_series={current_machine_info['device_series']}, "
-                    f"card_count={current_machine_info['card_count']}"
+                    f"Manifest-selected mesh filtering enabled for module '{module_name}' via {mode_label}: "
+                    f"{mesh_labels}"
                 )
             else:
-                logger.warning("Could not determine current machine info from tt-smi")
+                logger.warning(
+                    f"Manifest grouping mode is 'mesh' for module '{module_name}', but no mesh capability was "
+                    "derived. Set TEST_GROUP_NAME for strict CI ownership or MESH_DEVICE_SHAPE for a manual override."
+                )
 
-            # Parse target mesh shape from the env var (e.g., "1x2" -> (1, 2))
-            try:
-                target_rows, target_cols = map(int, mesh_filter.lower().split("x"))
-                target_mesh = (target_rows, target_cols)
-            except (ValueError, AttributeError):
-                logger.warning(f"Invalid MESH_DEVICE_SHAPE format: {mesh_filter}, expected NxM (e.g., 1x2)")
+        strict_ci_mesh_ownership = filter_policy["enforce_mesh_capability"] and bool(explicit_test_group_name)
+
+        hardware_rules = capability_profile.get("hardware_rules", ())
+        if filter_policy["enforce_hardware_capability"] and not hardware_rules:
+            logger.warning(
+                f"Manifest grouping mode is 'hw' for module '{module_name}', but no hardware capability profile "
+                "was derived. Set TEST_GROUP_NAME or run on a system whose hardware can infer one."
+            )
 
         all_vectors = []
         filtered_count = 0
@@ -287,149 +546,58 @@ class VectorExportSource(VectorSource):
                             if "sweep_name" not in vector_data:
                                 vector_data["sweep_name"] = module_name
 
-                            # Normalize traced_machine_info to a list of dict entries.
-                            # Some vectors carry multiple machine descriptors; filtering
-                            # should accept a vector if ANY entry matches.
-                            traced_machine_info = vector_data.get("traced_machine_info")
-                            traced_machine_entries = []
-                            if isinstance(traced_machine_info, dict):
-                                traced_machine_entries = [traced_machine_info]
-                            elif isinstance(traced_machine_info, list):
-                                traced_machine_entries = [
-                                    entry for entry in traced_machine_info if isinstance(entry, dict)
-                                ]
+                            traced_machine_entries = self._normalize_traced_machine_entries(vector_data)
 
-                            def _extract_mesh_shape(entry: dict) -> tuple[int, int] | None:
-                                """Extract mesh shape from machine entry when present."""
-                                mesh = entry.get("mesh_device_shape")
-                                if isinstance(mesh, list) and len(mesh) == 2:
-                                    return (mesh[0], mesh[1])
-                                if isinstance(mesh, str):
-                                    try:
-                                        parsed = ast.literal_eval(mesh)
-                                        if isinstance(parsed, list) and len(parsed) == 2:
-                                            return (parsed[0], parsed[1])
-                                    except (SyntaxError, ValueError):
-                                        pass
-
-                                # Legacy location used by some vectors
-                                placements = entry.get("tensor_placements")
-                                if isinstance(placements, list) and placements:
-                                    placement_mesh = placements[0].get("mesh_device_shape")
-                                    if isinstance(placement_mesh, list) and len(placement_mesh) == 2:
-                                        return (placement_mesh[0], placement_mesh[1])
-                                    if isinstance(placement_mesh, str):
-                                        try:
-                                            parsed = ast.literal_eval(placement_mesh)
-                                            if isinstance(parsed, list) and len(parsed) == 2:
-                                                return (parsed[0], parsed[1])
-                                        except (SyntaxError, ValueError):
-                                            pass
-                                return None
-
-                            # Filter vectors based on hardware compatibility for all model_traced runs.
-                            # CI now routes model_traced work by traced hardware, so vectors should
-                            # only load when their traced machine metadata matches the current runner.
-                            skip_for_resources = False
-                            if current_machine_info and traced_machine_entries:
-                                current_board = current_machine_info.get("board_type", "").lower()
-                                current_series = current_machine_info.get("device_series", "").lower()
-                                current_card_count = current_machine_info.get("card_count")
-                                current_device_count = current_machine_info.get("device_count")
-
-                                has_matching_hardware = False
-                                for entry in traced_machine_entries:
-                                    traced_board = entry.get("board_type", "").lower()
-                                    traced_series = entry.get("device_series", "").lower()
-                                    traced_card_count = entry.get("card_count")
-                                    traced_device_count = entry.get("device_count")
-
-                                    board_match = (
-                                        not traced_board
-                                        or not current_board
-                                        or traced_board == current_board
-                                        or ("wormhole" in traced_board and "wormhole" in current_board)
+                            if (
+                                filter_policy["enforce_hardware_capability"]
+                                and hardware_rules
+                                and traced_machine_entries
+                            ):
+                                has_matching_hardware = any(
+                                    hardware_group_matches_any_rule(
+                                        self._get_entry_hardware_group(entry),
+                                        hardware_rules,
                                     )
-                                    series_match = (
-                                        not traced_series or not current_series or traced_series == current_series
-                                    )
-                                    card_match = traced_card_count is None or traced_card_count == current_card_count
-                                    device_match = True
-                                    if is_lead_models:
-                                        device_match = (
-                                            traced_device_count is None or traced_device_count == current_device_count
-                                        )
-
-                                    if board_match and series_match and card_match and device_match:
-                                        has_matching_hardware = True
-                                        break
+                                    for entry in traced_machine_entries
+                                )
 
                                 if not has_matching_hardware:
                                     logger.debug(
-                                        f"Skipping vector - traced hardware does not match current machine "
-                                        f"(current: board_type={current_machine_info.get('board_type')}, "
-                                        f"device_series={current_machine_info.get('device_series')}, "
-                                        f"card_count={current_machine_info.get('card_count')}, "
-                                        f"device_count={current_machine_info.get('device_count')})"
+                                        f"Skipping vector - traced hardware is outside the capability profile for "
+                                        f"test_group_name='{test_group_name}'"
                                     )
                                     machine_mismatch_count += 1
-                                    skip_for_resources = True
+                                    continue
 
-                            if skip_for_resources:
-                                continue
-
-                            # Apply mesh filtering if enabled
-                            if mesh_filter and target_mesh:
+                            # Apply mesh filtering when manifest grouping mode says ownership is by mesh.
+                            if filter_policy["enforce_mesh_capability"] and (
+                                allowed_mesh_shapes or strict_ci_mesh_ownership
+                            ):
                                 # If mesh shape is missing in JSON, do not filter out.
-                                # Otherwise, accept when ANY traced entry matches target mesh.
+                                # Otherwise, accept when ANY traced entry matches an allowed mesh.
                                 traced_mesh_entries = []
                                 for entry in traced_machine_entries:
-                                    mesh_shape = _extract_mesh_shape(entry)
+                                    mesh_shape = self._extract_mesh_shape(entry)
                                     if mesh_shape is not None:
                                         traced_mesh_entries.append((entry, mesh_shape))
 
                                 if traced_mesh_entries:
                                     matching_entries = [
-                                        entry for entry, mesh_shape in traced_mesh_entries if mesh_shape == target_mesh
+                                        entry
+                                        for entry, mesh_shape in traced_mesh_entries
+                                        if mesh_shape in allowed_mesh_shapes
                                     ]
                                     if not matching_entries:
                                         filtered_count += 1
                                         continue
-
-                                    # Optional machine compatibility check: require at least one compatible entry.
-                                    if current_machine_info:
-                                        current_board = current_machine_info.get("board_type", "").lower()
-                                        current_series = current_machine_info.get("device_series", "").lower()
-                                        has_compatible_entry = False
-                                        for entry in matching_entries:
-                                            traced_board = entry.get("board_type", "").lower()
-                                            traced_series = entry.get("device_series", "").lower()
-
-                                            board_match = True
-                                            if traced_board and current_board:
-                                                board_match = traced_board == current_board or (
-                                                    "wormhole" in traced_board and "wormhole" in current_board
-                                                )
-
-                                            series_match = True
-                                            if traced_series and current_series:
-                                                series_match = traced_series == current_series
-
-                                            if board_match and series_match:
-                                                has_compatible_entry = True
-                                                break
-
-                                        if not has_compatible_entry:
-                                            machine_mismatch_count += 1
-                                            continue
 
                             all_vectors.append(vector_data)
 
             except (json.JSONDecodeError, IOError) as e:
                 logger.error(f"Error loading vectors from {module_file}: {e}")
 
-        # Log filtering results if filtering was enabled
-        if mesh_filter and (filtered_count > 0 or machine_mismatch_count > 0):
+        # Log filtering results when manifest-selected compatibility filtering applied.
+        if filter_kind in {"hardware", "mesh"} and (filtered_count > 0 or machine_mismatch_count > 0):
             total_filtered = filtered_count + machine_mismatch_count
             logger.info(
                 f"Filtered out {total_filtered} vectors "

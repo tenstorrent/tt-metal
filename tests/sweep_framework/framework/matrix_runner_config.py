@@ -40,6 +40,21 @@ SCHEDULE_TYPES = {
 # ``vector_grouping_mode`` so the matrix step does not infer policy from scans alone.
 
 GENERATION_MANIFEST_FILENAME = "generation_manifest.json"
+SUPPORTED_VECTOR_GROUPING_MODES = ("mesh", "hw")
+DEFAULT_MODEL_TRACED_GROUPING_MODE = "hw"
+
+VECTOR_LOAD_FILTER_POLICIES = {
+    "mesh": {
+        "kind": "mesh",
+        "enforce_mesh_capability": True,
+        "enforce_hardware_capability": False,
+    },
+    "hw": {
+        "kind": "hardware",
+        "enforce_mesh_capability": False,
+        "enforce_hardware_capability": True,
+    },
+}
 
 
 # ── Physical runner profiles ──────────────────────────────────────────────────
@@ -147,11 +162,17 @@ LEAD_MODELS_BATCH_POLICY = {
 
 
 # ── Model-traced sweep: mesh suffix → logical test group ─────────────────────
-# Used when ``generation_manifest`` says the exported vector files were grouped
-# by mesh. The values are logical test group names, not raw machine payloads.
+# These maps answer the CI ownership question:
+# "Which logical lane owns a mesh-grouped vector file?"
+#
+# IMPORTANT:
+# - In CI, ownership should stay strict so one vector file maps to one lane.
+# - On local/manual runs, physical hardware may be able to run a broader set of
+#   meshes than the CI ownership map allows. That broader capability is modeled
+#   separately below so we do not overload ownership with capability.
 
 MODEL_TRACED_MESH_TEST_GROUPS = {
-    "1x1": "wormhole-n150-sweeps",
+    "1x1": "wormhole-n300-sweeps",
     "1x2": "wormhole-n300-sweeps",
     "1x4": "wormhole-t3k-sweeps",
     "1x8": "wormhole-galaxy-sweeps",
@@ -161,6 +182,54 @@ MODEL_TRACED_MESH_TEST_GROUPS = {
     "2x16": "wormhole-galaxy-sweeps",
     "16x2": "wormhole-galaxy-sweeps",
 }
+
+
+TEST_GROUP_HARDWARE_CAPABILITY_RULES = {
+    "wormhole-n150-sweeps": ({"board_type": "wormhole", "device_series": "n150", "card_count": 1},),
+    "wormhole-n300-sweeps": ({"board_type": "wormhole", "device_series": "n300", "card_count": 1},),
+    "blackhole-p150b-sweeps": (
+        {"board_type": "blackhole", "card_count": 1},
+        {"device_series": "p150b", "card_count": 1},
+    ),
+    "wormhole-t3k-sweeps": ({"device_series": "n300", "card_count": 4},),
+    "wormhole-galaxy-sweeps": ({"device_series": "tt_galaxy_wh"},),
+    "lead-models-single-chip": ({"max_card_count": 1, "excluded_device_series": ("tt_galaxy_wh",)},),
+    "lead-models-galaxy": (
+        {"device_series": "tt_galaxy_wh"},
+        {"min_card_count": 2},
+    ),
+}
+
+
+# ── Local/manual mesh capability by physical hardware ────────────────────────
+# This answers a different question from the ownership maps above:
+# "What meshes can this machine reasonably run when no explicit TEST_GROUP_NAME
+# has been pinned for CI scheduling?"
+#
+# We keep this separate from CI ownership so local/manual execution can be more
+# permissive without reintroducing duplicate execution in CI.
+LOCAL_HARDWARE_MESH_CAPABILITY_RULES = (
+    {
+        "match": {"board_type": "wormhole", "device_series": "n150", "card_count": 1},
+        "allowed_mesh_shapes": ("1x1",),
+    },
+    {
+        "match": {"board_type": "wormhole", "device_series": "n300", "card_count": 1},
+        "allowed_mesh_shapes": ("1x1", "1x2"),
+    },
+    {
+        "match": {"device_series": "n300", "card_count": 4},
+        "allowed_mesh_shapes": ("1x1", "1x2", "1x4"),
+    },
+    {
+        "match": {"device_series": "tt_galaxy_wh"},
+        "allowed_mesh_shapes": ("1x1", "1x2", "1x4", "1x8", "2x4", "4x8", "8x4", "2x16", "16x2"),
+    },
+    {
+        "match": {"board_type": "blackhole", "device_series": "p150b", "card_count": 1},
+        "allowed_mesh_shapes": ("1x1",),
+    },
+)
 
 
 # ── Routing helpers ───────────────────────────────────────────────────────────
@@ -214,6 +283,113 @@ def get_lead_models_test_group_name_for_hardware_group(hardware_group):
     _, device_series, card_count = hardware_group
     wants_galaxy = device_series == "tt_galaxy_wh" or card_count > 1
     return "lead-models-galaxy" if wants_galaxy else LEAD_MODELS_DEFAULT_TEST_GROUP
+
+
+def get_mesh_test_group_map(run_type):
+    """Return the mesh-shape ownership map for a run type."""
+    if run_type == "lead_models":
+        return LEAD_MODELS_MESH_TEST_GROUPS
+    if run_type == "model_traced":
+        return MODEL_TRACED_MESH_TEST_GROUPS
+    return {}
+
+
+def get_vector_load_filter_policy(grouping_mode):
+    """Return the runtime filtering policy implied by manifest grouping mode."""
+    return VECTOR_LOAD_FILTER_POLICIES.get(
+        grouping_mode,
+        {
+            "kind": None,
+            "enforce_mesh_capability": False,
+            "enforce_hardware_capability": False,
+        },
+    )
+
+
+def get_vector_load_filter_kind(grouping_mode):
+    """Return which compatibility filter should be enforced from manifest grouping mode."""
+    return get_vector_load_filter_policy(grouping_mode)["kind"]
+
+
+def get_allowed_mesh_shapes_for_test_group(run_type, test_group_name):
+    """Return manifest mesh-shape strings owned by a logical test group.
+
+    This is the strict CI ownership view. A runner lane should only claim the
+    meshes routed to it by the matrix so we avoid duplicate execution.
+    """
+    mesh_test_groups = get_mesh_test_group_map(run_type)
+    if not mesh_test_groups:
+        return ()
+
+    return tuple(sorted(mesh for mesh, group_name in mesh_test_groups.items() if group_name == test_group_name))
+
+
+def get_allowed_mesh_shapes_for_local_hardware_group(hardware_group):
+    """Return broader mesh capability for a locally inferred physical machine.
+
+    Unlike ``get_allowed_mesh_shapes_for_test_group()``, this helper is for
+    local/manual runs where no explicit CI lane was selected. In that case we
+    prefer hardware capability over CI ownership so a machine can run meshes it
+    is physically capable of supporting.
+    """
+    for capability_rule in LOCAL_HARDWARE_MESH_CAPABILITY_RULES:
+        if hardware_group_matches_rule(hardware_group, capability_rule["match"]):
+            return capability_rule["allowed_mesh_shapes"]
+    return ()
+
+
+def get_allowed_hardware_rules_for_test_group(run_type, test_group_name):
+    """Return hardware capability rules for a logical test group."""
+    del run_type
+    return TEST_GROUP_HARDWARE_CAPABILITY_RULES.get(test_group_name, ())
+
+
+def get_test_group_capability_profile(run_type, test_group_name):
+    """Return derived mesh + hardware capabilities for a logical test group."""
+    return {
+        "allowed_mesh_shapes": get_allowed_mesh_shapes_for_test_group(run_type, test_group_name),
+        "hardware_rules": get_allowed_hardware_rules_for_test_group(run_type, test_group_name),
+    }
+
+
+def hardware_group_matches_rule(hardware_group, rule):
+    """Return whether a normalized hardware tuple satisfies one capability rule."""
+    if hardware_group is None:
+        return False
+
+    board_type, device_series, card_count = hardware_group
+    required_board = rule.get("board_type")
+    required_series = rule.get("device_series")
+    required_count = rule.get("card_count")
+    min_card_count = rule.get("min_card_count")
+    max_card_count = rule.get("max_card_count")
+    excluded_device_series = tuple(rule.get("excluded_device_series", ()))
+
+    if device_series and device_series in excluded_device_series:
+        return False
+
+    if required_board and board_type:
+        wormhole_compatible = "wormhole" in required_board and "wormhole" in board_type
+        if required_board != board_type and not wormhole_compatible:
+            return False
+
+    if required_series and device_series and required_series != device_series:
+        return False
+
+    if card_count is not None:
+        if required_count is not None and card_count != required_count:
+            return False
+        if min_card_count is not None and card_count < min_card_count:
+            return False
+        if max_card_count is not None and card_count > max_card_count:
+            return False
+
+    return True
+
+
+def hardware_group_matches_any_rule(hardware_group, rules):
+    """Return whether a hardware tuple satisfies any declared capability rule."""
+    return any(hardware_group_matches_rule(hardware_group, rule) for rule in rules)
 
 
 # ── Derived: split combined matrix into per-hardware workflow outputs ────────
