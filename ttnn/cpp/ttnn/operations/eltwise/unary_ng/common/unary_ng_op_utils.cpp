@@ -133,6 +133,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::SOFTSHRINK:
         case UnaryOpType::CELU: return "SFPU_OP_ACTIVATIONS_INCLUDE";
         case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
+        case UnaryOpType::DIGAMMA: return "SFPU_OP_DIGAMMA_INCLUDE";
         case UnaryOpType::LOGSIGMOID: return "SFPU_OP_LOGSIGMOID_INCLUDE";
         case UnaryOpType::CBRT: return "SFPU_OP_CBRT_INCLUDE";
         case UnaryOpType::EXP: return "SFPU_OP_EXP_INCLUDE";
@@ -578,6 +579,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::TANH: return make_simple("tanh", idst);
         case UnaryOpType::SIGMOID: return make_simple("sigmoid", idst);
         case UnaryOpType::HARDMISH: return make_simple("hardmish", idst);
+        case UnaryOpType::DIGAMMA: return make_simple("digamma", idst);
         case UnaryOpType::HARDSWISH:
         case UnaryOpType::LGAMMA:
         case UnaryOpType::TANHSHRINK:
