@@ -139,8 +139,6 @@ def _completion_batched_impl(ctx: InferenceCtx, prompt_tokens_np, pad_lengths: L
         ctx.transformer_config.max_sequence_length - N,
     )
 
-    stop_ids = get_stop_ids(ctx)
-
     generated_columns = []
     chunk_columns = []
 
