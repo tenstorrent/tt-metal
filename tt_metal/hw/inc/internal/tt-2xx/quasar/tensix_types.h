@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,7 @@
 //  tensix_types.h
 //  This file contains tensix structures used by RISCV firmware and test-bench/tests
 //
-//  Copyright © 2018 Tenstorrent. All rights reserved.
+//  Copyright © 2018 Tenstorrent USA, Inc. All rights reserved.
 //
 
 /////////////

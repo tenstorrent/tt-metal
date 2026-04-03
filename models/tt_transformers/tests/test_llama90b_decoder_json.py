@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Llama 3.2 90B decoder JSON must match ModelOptimizations baseline except LI_QKV_DECODE (issue #36378)."""
 from pathlib import Path
