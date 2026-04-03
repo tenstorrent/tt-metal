@@ -207,7 +207,7 @@ def tt_all_reduce(
             topology=topology,
             chunks_per_sync=chunks_per_sync,
             num_workers_per_link=num_workers_per_link,
-            num_buffers_per_channel=1,
+            num_buffers_per_channel=2,
             subdevice_id=subdevice_id,
         )
         input_tensor.deallocate(True)
@@ -237,7 +237,7 @@ def tt_all_reduce(
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
             chunks_per_sync=chunks_per_sync,
             num_workers_per_link=num_workers_per_link,
-            num_buffers_per_channel=1,
+            num_buffers_per_channel=2,
             subdevice_id=subdevice_id,
         )
 
@@ -269,7 +269,7 @@ def tt_all_reduce(
             topology=topology,
             chunks_per_sync=1,
             num_workers_per_link=1,
-            num_buffers_per_channel=1,
+            num_buffers_per_channel=2,
             subdevice_id=subdevice_id,
         )
 
@@ -285,7 +285,7 @@ def tt_all_reduce(
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
             chunks_per_sync=1,
             num_workers_per_link=1,
-            num_buffers_per_channel=1,
+            num_buffers_per_channel=2,
             subdevice_id=subdevice_id,
         )
 
@@ -357,7 +357,7 @@ def tt_all_gather(
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
             chunks_per_sync=1,
             num_workers_per_link=1,
-            num_buffers_per_channel=1,
+            num_buffers_per_channel=2,
             subdevice_id=subdevice_id,
         )
     else:
@@ -373,7 +373,7 @@ def tt_all_gather(
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
             chunks_per_sync=1,
             num_workers_per_link=1,
-            num_buffers_per_channel=1,
+            num_buffers_per_channel=2,
             subdevice_id=subdevice_id,
         )
     input_tensor.deallocate(True)
@@ -478,7 +478,7 @@ def tt_sharded_distributed_rmsnorm(
         barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
         chunks_per_sync=1,
         num_workers_per_link=1,
-        num_buffers_per_channel=1,
+        num_buffers_per_channel=2,
     )
 
     # Run distributed rmsnorm part 2
