@@ -480,6 +480,7 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         global_n_partial_col,
         joint_l_partial_col,
         (std::uint32_t)use_streaming_compute,
+        (std::uint32_t)out_out_subblock_h,
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -583,26 +584,26 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     // compute and writer can pop independently from the same address space.
     // Non-fabric columns get single-handle CBs to avoid the unused second handle blocking
     // space reclamation.
-    CoreRange non_fabric_core_range({0, 0}, {grid_size.x - 3, grid_size.y - 1});
-    CoreRange fabric_core_range({grid_size.x - 2, 0}, {grid_size.x - 1, grid_size.y - 1});
+    // CoreRange non_fabric_core_range({0, 0}, {grid_size.x - 3, grid_size.y - 1});
+    // CoreRange fabric_core_range({grid_size.x - 2, 0}, {grid_size.x - 1, grid_size.y - 1});
     {
         // DANGEROUS
         // K input: non-fabric cores (single handle)
-        auto c_in1_config = CircularBufferConfig(k_tiles * k_tile_size, {{tt::CBIndex::c_1, k_df}})
-                                .set_page_size(tt::CBIndex::c_1, k_tile_size);
-        CreateCircularBuffer(program, non_fabric_core_range, c_in1_config);
+        // auto c_in1_config = CircularBufferConfig(k_tiles * k_tile_size, {{tt::CBIndex::c_1, k_df}})
+        //                         .set_page_size(tt::CBIndex::c_1, k_tile_size);
+        // CreateCircularBuffer(program, core_grid, c_in1_config);
         // K input: fabric cores (overlapping handles for compute + writer)
         uint32_t k_cbs[] = {tt::CBIndex::c_1, tt::CBIndex::c_14};
-        tt::tt_metal::create_cb(k_cbs, program, fabric_core_range, k_tile_size, k_tiles, k_df);
+        tt::tt_metal::create_cb(k_cbs, program, core_grid, k_tile_size, k_tiles, k_df);
     }
     {
         // V input: non-fabric cores (single handle)
-        auto c_in2_config = CircularBufferConfig(v_tiles * v_tile_size, {{tt::CBIndex::c_2, v_df}})
-                                .set_page_size(tt::CBIndex::c_2, v_tile_size);
-        CreateCircularBuffer(program, non_fabric_core_range, c_in2_config);
+        // auto c_in2_config = CircularBufferConfig(v_tiles * v_tile_size, {{tt::CBIndex::c_2, v_df}})
+        //                         .set_page_size(tt::CBIndex::c_2, v_tile_size);
+        // CreateCircularBuffer(program, core_grid, c_in2_config);
         // V input: fabric cores (overlapping handles for compute + writer)
         uint32_t v_cbs[] = {tt::CBIndex::c_2, tt::CBIndex::c_15};
-        tt::tt_metal::create_cb(v_cbs, program, fabric_core_range, v_tile_size, v_tiles, v_df);
+        tt::tt_metal::create_cb(v_cbs, program, core_grid, v_tile_size, v_tiles, v_df);
     }
 
     // Lightweight mask: single CB holds 1 neginf tile + up to 2 partial mask tiles
@@ -708,6 +709,16 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         auto c_sum_in_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_11, stats_df}})
                                    .set_page_size(tt::CBIndex::c_11, stats_tile_size);
         CreateCircularBuffer(program, core_grid, c_sum_in_config);
+
+        // Signal CB (c_12): compute signals writer when the last K-chunk starts (for multi-Q).
+        // Needed so the writer knows when to drain accumulators to DRAM; avoids UB from
+        // cb_reserve_back on an unallocated CB (introduced by compute_streaming.hpp in
+        // upstream commit 19a05c2fb0).  Fabric-writer cores already have c_12 allocated as the
+        // AG-scratch CB, so only create it here for non-fabric cores.
+        constexpr uint32_t signal_page_size = 16;
+        auto c_signal_config = CircularBufferConfig(signal_page_size, {{tt::CBIndex::c_12, tt::DataFormat::UInt16}})
+                                   .set_page_size(tt::CBIndex::c_12, signal_page_size);
+        CreateCircularBuffer(program, core_grid, c_signal_config);
     }
 
     uint32_t q_addr = input_tensor_q.buffer()->address();
@@ -1223,19 +1234,19 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         tt::tt_metal::WriterDataMovementConfig(writer_fabric_compile_time_args, writer_fabric_defines));
 
     // K/V staging scratch CB and packet header CB for all-gather on fabric writer cores
-    const tt::DataFormat ag_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
-    const uint32_t ag_cb_pages = 3 * ag_packet_size_in_pages;
-    tt::tt_metal::CreateCircularBuffer(
-        program,
-        fabric_writer_range,
-        tt::tt_metal::CircularBufferConfig(ag_cb_pages * ag_page_size, {{ag_kv_scratch_cb_id, ag_df}})
-            .set_page_size(ag_kv_scratch_cb_id, ag_page_size));
-    const uint32_t ag_pkt_hdr_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    tt::tt_metal::CreateCircularBuffer(
-        program,
-        fabric_writer_range,
-        tt::tt_metal::CircularBufferConfig(8 * ag_pkt_hdr_size, {{ag_pkt_hdr_cb_id, tt::DataFormat::RawUInt32}})
-            .set_page_size(ag_pkt_hdr_cb_id, ag_pkt_hdr_size));
+    // const tt::DataFormat ag_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
+    // const uint32_t ag_cb_pages = 3 * ag_packet_size_in_pages;
+    // tt::tt_metal::CreateCircularBuffer(
+    //     program,
+    //     fabric_writer_range,
+    //     tt::tt_metal::CircularBufferConfig(ag_cb_pages * ag_page_size, {{ag_kv_scratch_cb_id, ag_df}})
+    //         .set_page_size(ag_kv_scratch_cb_id, ag_page_size));
+    // const uint32_t ag_pkt_hdr_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    // tt::tt_metal::CreateCircularBuffer(
+    //     program,
+    //     fabric_writer_range,
+    //     tt::tt_metal::CircularBufferConfig(8 * ag_pkt_hdr_size, {{ag_pkt_hdr_cb_id, tt::DataFormat::RawUInt32}})
+    //         .set_page_size(ag_pkt_hdr_cb_id, ag_pkt_hdr_size));
 
     auto compute_kernels_id = CreateKernel(
         program,

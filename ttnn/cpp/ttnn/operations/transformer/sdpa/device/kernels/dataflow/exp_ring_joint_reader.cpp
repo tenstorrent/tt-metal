@@ -420,7 +420,7 @@ void kernel_main() {
             cb_reserve_back(cb_v_in, k_chunk_tiles);
             cb_push_back(cb_k_in, k_chunk_tiles);
             cb_push_back(cb_v_in, k_chunk_tiles);
-            if (mux_forward_this_iter) {
+            if (is_mux_writer) {
                 cb_reserve_back(cb_k_writer_in, k_chunk_tiles);
                 cb_reserve_back(cb_v_writer_in, v_chunk_tiles);
                 cb_push_back(cb_k_writer_in, k_chunk_tiles);
@@ -432,6 +432,7 @@ void kernel_main() {
     // Reset all per-link out-ready semaphores so they are clean for the next invocation
     if (is_injector) {
         for (uint32_t lnk = 0; lnk < num_links; ++lnk) {
+            // noc_semaphore_wait_min(per_link_sem_ptrs[lnk], chunks_signaled_by_remote+1);
             noc_semaphore_set(per_link_sem_ptrs[lnk], 0);
         }
     }

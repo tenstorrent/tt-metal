@@ -178,6 +178,7 @@ void kernel_main() {
         }
 
         const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
+        static_assert(use_streaming_compute, "Streaming compute must be enabled for ring joint SDPA");
         if constexpr (use_streaming_compute) {
             sdpa_ring_v2<
                 Sq_chunk_t,

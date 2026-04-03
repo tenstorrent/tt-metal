@@ -192,6 +192,41 @@ void write_accumulators(
     cb_pop_front(cb_sum_out, Sq_chunk_t);
 }
 
+// Row-by-row drain of output tiles from cb_out to DRAM.
+// Waits for each row group (sbh tile-rows), writes to DRAM, pops.
+// Overlaps DMA with compute: writes issue as soon as each row is ready.
+template <typename ReaderType>
+void write_out_row_by_row(
+    const PaddedAddrGenerator<ReaderType>& cat_out_generator,
+    const Slice& out_slice,
+    const uint32_t end_seq_tile,
+    const uint32_t cb_out,
+    const uint32_t tile_bytes,
+    const uint32_t sbh) {
+    const uint32_t out_rows = out_slice.get_d2_size();
+    const uint32_t out_cols = out_slice.get_d3_size();
+    const uint32_t row_tiles = sbh * out_cols;
+    const uint32_t num_row_groups = out_rows / sbh;
+
+    for (uint32_t rg = 0; rg < num_row_groups; ++rg) {
+        cb_wait_front(cb_out, row_tiles);
+        uint32_t read_ptr = get_read_ptr(cb_out);
+        for (uint32_t r = 0; r < sbh; r++) {
+            for (uint32_t col = 0; col < out_cols; ++col) {
+                cat_out_generator.maybe_write_tile(
+                    out_slice.d0,
+                    out_slice.d1,
+                    out_slice.d2_start + rg * sbh + r,
+                    out_slice.d3_start + col,
+                    end_seq_tile,
+                    read_ptr);
+                read_ptr += tile_bytes;
+            }
+        }
+        cb_pop_front(cb_out, row_tiles);
+    }
+}
+
 // Eager-path writer: writes normalized output and LSE to DRAM every ring iteration.
 // Used by the non-streaming (old sdpa_ring) path.
 // Reads from: cb_out (c_16), cb_lse_out (c_17).
@@ -314,8 +349,9 @@ void kernel_main() {
     constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(19);
     constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(20);
     constexpr bool use_streaming_compute = get_compile_time_arg_val(21) == 1;
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(22);
 
-    constexpr auto out_args = TensorAccessorArgs<22>();
+    constexpr auto out_args = TensorAccessorArgs<23>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto stats_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
 
@@ -478,6 +514,7 @@ void kernel_main() {
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t cb_sum_out = tt::CBIndex::c_10;
     constexpr uint32_t cb_sum_in = tt::CBIndex::c_11;
+    constexpr uint32_t cb_signal = tt::CBIndex::c_12;
     constexpr uint32_t cb_k_writer_in = tt::CBIndex::c_14;
     constexpr uint32_t cb_v_writer_in = tt::CBIndex::c_15;
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
@@ -747,6 +784,11 @@ void kernel_main() {
                         cb_pop_front(cb_v_writer_in, v_chunk_tiles);
 
                         if (!is_last_ring_iter) {
+                            // invalidate_l1_cache();
+                            // while (mux_conn.buffer_slot_write_counter.counter !=
+                            //     *mux_conn.edm_buffer_local_free_slots_read_ptr) {
+                            //     invalidate_l1_cache();
+                            // }
                             fabric_unicast_noc_unicast_atomic_inc_with_state(&mux_conn, pkt_hdr_sem_inc);
                             noc_async_writes_flushed();
                         }
@@ -761,13 +803,23 @@ void kernel_main() {
                 }
 #endif
 
+                // Wait for compute to signal last K-chunk start (multi-Q only).
+                // Must be consumed for every Q chunk — both last-ring and non-last-ring paths —
+                // otherwise the 1-page CB fills up and compute deadlocks on the next Q chunk.
+                if (!single_q_chunk) {
+                    cb_wait_front(cb_signal, 1);
+                    cb_pop_front(cb_signal, 1);
+                }
+
                 if (is_last_ring_iter) {
-                    write_block(
+                    write_out_row_by_row(
                         qi.is_joint_q ? joint_out_generator : out_generator,
                         qi.out_slice,
                         qi.end_seq_tile,
                         cb_out,
-                        tile_bytes);
+                        tile_bytes,
+                        out_subblock_h);
+                    noc_async_write_barrier();
                 } else if (!single_q_chunk) {
                     write_accumulators(
                         qi.is_joint_q ? joint_out_generator : out_generator,
@@ -841,6 +893,9 @@ void kernel_main() {
 
 #ifdef USE_MUX
     if (mux_connection_valid) {
+        // fabric_unicast_noc_unicast_atomic_inc_with_state(&mux_conn, pkt_hdr_sem_inc);
+        // noc_async_writes_flushed();
+        noc_async_atomic_barrier();
         tt::tt_fabric::fabric_client_disconnect(mux_conn);
         if (is_termination_master) {
             auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_sem_addr);
@@ -854,4 +909,5 @@ void kernel_main() {
         }
     }
 #endif
+    noc_async_write_barrier();
 }

@@ -292,22 +292,34 @@ def run_exp_ring_joint_sdpa_nightly(
         if tp_size > 1:
             kv_shard_dims[tp_axis] = 1
 
-        persistent_buffer_k = ttnn.from_torch(
-            torch.zeros(b, nh, total_seq, d),
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_shard_dims),
-        )
-        persistent_buffer_v = ttnn.from_torch(
-            torch.zeros(b, nh, total_seq, d),
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_shard_dims),
-        )
+        persistent_buffer_k = [
+            ttnn.from_torch(
+                # torch.zeros(b, nh, total_seq, d),
+                K,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_shard_dims
+                ),
+            )
+            for _ in range(num_iterations)
+        ]
+        persistent_buffer_v = [
+            ttnn.from_torch(
+                # torch.zeros(b, nh, total_seq, d),
+                V,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_shard_dims
+                ),
+            )
+            for _ in range(num_iterations)
+        ]
 
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=sdpa_compute_grid,
@@ -346,8 +358,8 @@ def run_exp_ring_joint_sdpa_nightly(
                 tt_joint_Q,
                 tt_joint_K,
                 tt_joint_V,
-                persistent_output_buffer_k=persistent_buffer_k,
-                persistent_output_buffer_v=persistent_buffer_v,
+                persistent_output_buffer_k=persistent_buffer_k[i],
+                persistent_output_buffer_v=persistent_buffer_v[i],
                 joint_strategy="rear",
                 logical_n=total_seq,
                 program_config=program_config,
@@ -376,6 +388,7 @@ def run_exp_ring_joint_sdpa_nightly(
             return out[:, :, :total_seq, :]
 
         if num_iterations > 1:
+            pass_determinism = True
             reference_output = to_torch_out(tt_out_list[0])
             for i in range(1, num_iterations):
                 tt_out_torch = to_torch_out(tt_out_list[i])
@@ -383,11 +396,17 @@ def run_exp_ring_joint_sdpa_nightly(
                     diff_mask = reference_output != tt_out_torch
                     num_diffs = diff_mask.sum().item()
                     max_diff = (reference_output - tt_out_torch).abs().max().item()
-                    pytest.fail(
+                    logger.error(
                         f"Exp ring joint SDPA output at iteration {i} differs from iteration 0: "
                         f"{num_diffs} differing elements, max_diff={max_diff}"
                     )
+                    pass_determinism = False
+                    # pytest.fail(
+                    #     f"Exp ring joint SDPA output at iteration {i} differs from iteration 0: "
+                    #     f"{num_diffs} differing elements, max_diff={max_diff}"
+                    # )
             logger.info(f"Exp ring joint SDPA determinism verified: all {num_iterations} outputs are exactly equal")
+            assert pass_determinism, f"Exp ring joint SDPA determinism failed"
             return
 
         if not do_check:
