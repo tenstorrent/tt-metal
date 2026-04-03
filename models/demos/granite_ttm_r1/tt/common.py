@@ -67,17 +67,36 @@ def custom_preprocessor(torch_model, name):
     return parameters
 
 
+import os as _os
+
 _LINEAR_COMPUTE_CONFIG = None
+_LINEAR_COMPUTE_CONFIG_LOFI = None
+
+# Set TTNN_LOFI=1 in the environment to switch all linear layers to LoFi
+# math fidelity.  Used for the E3 experiment in Stage 4.
+_USE_LOFI = _os.getenv("TTNN_LOFI", "0") == "1"
 
 
 def get_linear_compute_config():
     """Return a WormholeComputeKernelConfig tuned for TTM-R1 linear layers.
 
-    HiFi2 math fidelity keeps bfloat16 accumulation accurate enough for
-    PCC ≥ 0.99 while enabling packer L1 accumulation for lower memory traffic.
-    math_approx_mode=True allows faster transcendentals (GELU, softmax).
+    HiFi2 math fidelity (default) keeps bfloat16 accumulation accurate enough
+    for PCC ≥ 0.99 while enabling packer L1 accumulation for lower memory
+    traffic.  math_approx_mode=True allows faster transcendentals.
+
+    Set env var ``TTNN_LOFI=1`` to switch to LoFi (4-bit mantissa) which is
+    5–10% faster but must be verified to preserve PCC ≥ 0.99.
     """
-    global _LINEAR_COMPUTE_CONFIG
+    global _LINEAR_COMPUTE_CONFIG, _LINEAR_COMPUTE_CONFIG_LOFI
+    if _USE_LOFI:
+        if _LINEAR_COMPUTE_CONFIG_LOFI is None:
+            _LINEAR_COMPUTE_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+        return _LINEAR_COMPUTE_CONFIG_LOFI
     if _LINEAR_COMPUTE_CONFIG is None:
         _LINEAR_COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
