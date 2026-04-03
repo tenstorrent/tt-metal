@@ -202,7 +202,9 @@ std::map<std::string, std::string> get_defines_fp32(
             } else if (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) {
                 new_defines.insert({"ADD_INT_INIT", fmt::format("add_int_tile_init();")});
                 op_name = "add_int_tile<DataFormat::UInt32>";
-            } else if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
+            } else if ((input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                       (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8)) {
+                // UINT8 is treated like UINT16 - values are zero-extended when loaded
                 new_defines.insert({"ADD_INT_INIT", fmt::format("add_int_tile_init();")});
                 op_name = "add_int_tile<DataFormat::UInt16>";
             } else {
@@ -217,7 +219,9 @@ std::map<std::string, std::string> get_defines_fp32(
             } else if (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) {
                 new_defines.insert({"SUB_INT_INIT", fmt::format("sub_int_tile_init();")});
                 op_name = "sub_int_tile<DataFormat::UInt32>";
-            } else if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
+            } else if ((input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                       (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8)) {
+                // UINT8 is treated like UINT16 - values are zero-extended when loaded
                 new_defines.insert({"SUB_INT_INIT", fmt::format("sub_int_tile_init();")});
                 op_name = "sub_int_tile<DataFormat::UInt16>";
             } else {
@@ -226,7 +230,9 @@ std::map<std::string, std::string> get_defines_fp32(
             }
             break;
         case BinaryOpType::MUL:
-            if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
+            if ((input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8)) {
+                // UINT8 is treated like UINT16 - values are zero-extended when loaded
                 new_defines.insert({"MUL_INT_INIT", fmt::format("mul_int_tile_init<DataFormat::UInt16>();")});
                 op_name = "mul_int_tile<DataFormat::UInt16>";
             } else if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
@@ -247,7 +253,9 @@ std::map<std::string, std::string> get_defines_fp32(
             } else if (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) {
                 new_defines.insert({"BINOP_INIT", fmt::format("rsub_int_tile_init();")});
                 op_name = "rsub_int_tile<DataFormat::UInt32>";
-            } else if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
+            } else if ((input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                       (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8)) {
+                // UINT8 is treated like UINT16 - values are zero-extended when loaded
                 new_defines.insert({"BINOP_INIT", fmt::format("rsub_int_tile_init();")});
                 op_name = "rsub_int_tile<DataFormat::UInt16>";
             } else {
@@ -269,7 +277,8 @@ std::map<std::string, std::string> get_defines_fp32(
             }
             break;
         case BinaryOpType::BITWISE_AND:
-            if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
+            if ((input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8)) {
                 new_defines.insert({"BITWISE_UINT16_INIT", fmt::format("binary_bitwise_tile_init();")});
                 op_name = "bitwise_and_binary_tile<DataFormat::UInt16>";
             } else if (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) {
@@ -281,7 +290,8 @@ std::map<std::string, std::string> get_defines_fp32(
             }
             break;
         case BinaryOpType::BITWISE_OR:
-            if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
+            if ((input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8)) {
                 new_defines.insert({"BITWISE_UINT16_INIT", fmt::format("binary_bitwise_tile_init();")});
                 op_name = "bitwise_or_binary_tile<DataFormat::UInt16>";
             } else if (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) {
@@ -293,7 +303,8 @@ std::map<std::string, std::string> get_defines_fp32(
             }
             break;
         case BinaryOpType::BITWISE_XOR:
-            if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
+            if ((input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8)) {
                 new_defines.insert({"BITWISE_UINT16_INIT", fmt::format("binary_bitwise_tile_init();")});
                 op_name = "bitwise_xor_binary_tile<DataFormat::UInt16>";
             } else if (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) {
@@ -306,27 +317,33 @@ std::map<std::string, std::string> get_defines_fp32(
             break;
         case BinaryOpType::LEFT_SHIFT: {
             const char* data_format =
-                (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32)   ? "UInt32"
-                : (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ? "UInt16"
-                                                                                           : "Int32";
+                (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) ? "UInt32"
+                : ((input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                   (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8))
+                    ? "UInt16"
+                    : "Int32";
             new_defines.insert({"SHIFT_INIT", fmt::format("binary_shift_tile_init();")});
             op_name = fmt::format("binary_left_shift_tile<DataFormat::{}>", data_format);
             break;
         }
         case BinaryOpType::RIGHT_SHIFT: {
             const char* data_format =
-                (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32)   ? "UInt32"
-                : (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ? "UInt16"
-                                                                                           : "Int32";
+                (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) ? "UInt32"
+                : ((input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                   (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8))
+                    ? "UInt16"
+                    : "Int32";
             new_defines.insert({"SHIFT_INIT", fmt::format("binary_shift_tile_init();")});
             op_name = fmt::format("binary_right_shift_tile<DataFormat::{}>", data_format);
             break;
         }
         case BinaryOpType::LOGICAL_RIGHT_SHIFT: {
             const char* data_format =
-                (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32)   ? "UInt32"
-                : (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ? "UInt16"
-                                                                                           : "Int32";
+                (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) ? "UInt32"
+                : ((input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                   (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8))
+                    ? "UInt16"
+                    : "Int32";
             new_defines.insert({"SHIFT_INIT", fmt::format("binary_shift_tile_init();")});
             op_name = fmt::format("binary_logical_right_shift_tile<DataFormat::{}>", data_format);
             break;
@@ -388,7 +405,9 @@ std::map<std::string, std::string> get_defines_fp32(
                 op_name = "sub_int_tile<DataFormat::Int32>";
             } else if (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) {
                 op_name = "sub_int_tile<DataFormat::UInt32>";
-            } else if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
+            } else if ((input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                       (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8)) {
+                // UINT8 is treated like UINT16 - values are zero-extended when loaded
                 op_name = "sub_int_tile<DataFormat::UInt16>";
             } else {
                 op_name = "sub_binary_tile";
@@ -409,7 +428,9 @@ std::map<std::string, std::string> get_defines_fp32(
             } else if (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) {
                 new_defines.insert({"ADD_INT_INIT", fmt::format("add_int_tile_init();")});
                 op_name = "add_int_tile<DataFormat::UInt32>";
-            } else if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
+            } else if ((input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                       (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8)) {
+                // UINT8 is treated like UINT16 - values are zero-extended when loaded
                 new_defines.insert({"ADD_INT_INIT", fmt::format("add_int_tile_init();")});
                 op_name = "add_int_tile<DataFormat::UInt16>";
             } else {
@@ -425,7 +446,9 @@ std::map<std::string, std::string> get_defines_fp32(
                 op_name = "sub_int_tile<DataFormat::Int32>";
             } else if (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) {
                 op_name = "sub_int_tile<DataFormat::UInt32>";
-            } else if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
+            } else if ((input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                       (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8)) {
+                // UINT8 is treated like UINT16 - values are zero-extended when loaded
                 op_name = "sub_int_tile<DataFormat::UInt16>";
             } else {
                 op_name = "sub_binary_tile";
@@ -441,7 +464,9 @@ std::map<std::string, std::string> get_defines_fp32(
             } else if (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) {
                 new_defines.insert({"MUL_INT_INIT", fmt::format("mul_int_tile_init<DataFormat::UInt32>();")});
                 op_name = "mul_int_tile<DataFormat::UInt32>";
-            } else if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
+            } else if ((input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                       (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8)) {
+                // UINT8 is treated like UINT16 - values are zero-extended when loaded
                 new_defines.insert({"MUL_INT_INIT", fmt::format("mul_int_tile_init<DataFormat::UInt16>();")});
                 op_name = "mul_int_tile<DataFormat::UInt16>";
             } else {
@@ -452,7 +477,9 @@ std::map<std::string, std::string> get_defines_fp32(
             break;
         // applied on A-B
         case BinaryOpType::GT:
-            if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
+            if ((input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) ||
+                (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8)) {
                 new_defines.insert({"GT_INT32_INIT", fmt::format("gt_int32_tile_init();")});
                 op_name = "gt_int32_tile";
             } else {
@@ -461,7 +488,9 @@ std::map<std::string, std::string> get_defines_fp32(
             }
             break;
         case BinaryOpType::LT:
-            if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
+            if ((input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) ||
+                (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8)) {
                 new_defines.insert({"LT_INT32_INIT", fmt::format("lt_int32_tile_init();")});
                 op_name = "lt_int32_tile";
             } else {
@@ -470,7 +499,9 @@ std::map<std::string, std::string> get_defines_fp32(
             }
             break;
         case BinaryOpType::GE:
-            if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
+            if ((input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) ||
+                (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8)) {
                 new_defines.insert({"GE_INT32_INIT", fmt::format("ge_int32_tile_init();")});
                 op_name = "ge_int32_tile";
             } else {
@@ -479,7 +510,9 @@ std::map<std::string, std::string> get_defines_fp32(
             }
             break;
         case BinaryOpType::LE:
-            if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
+            if ((input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) ||
+                (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8)) {
                 new_defines.insert({"LE_INT32_INIT", fmt::format("le_int32_tile_init();")});
                 op_name = "le_int32_tile";
             } else {
@@ -492,7 +525,9 @@ std::map<std::string, std::string> get_defines_fp32(
                 op_name = "sub_int_tile<DataFormat::Int32>";
             } else if (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) {
                 op_name = "sub_int_tile<DataFormat::UInt32>";
-            } else if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
+            } else if ((input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                       (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8)) {
+                // UINT8 is treated like UINT16 - values are zero-extended when loaded
                 op_name = "sub_int_tile<DataFormat::UInt16>";
             } else {
                 op_name = "sub_binary_tile";
@@ -504,7 +539,9 @@ std::map<std::string, std::string> get_defines_fp32(
                 op_name = "sub_int_tile<DataFormat::Int32>";
             } else if (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) {
                 op_name = "sub_int_tile<DataFormat::UInt32>";
-            } else if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
+            } else if ((input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                       (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8)) {
+                // UINT8 is treated like UINT16 - values are zero-extended when loaded
                 op_name = "sub_int_tile<DataFormat::UInt16>";
             } else {
                 op_name = "sub_binary_tile";
