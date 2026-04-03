@@ -139,11 +139,7 @@ def _completion_batched_impl(ctx: InferenceCtx, prompt_tokens_np, pad_lengths: L
         ctx.transformer_config.max_sequence_length - N,
     )
 
-    # check every 32 steps if all completions are sampled. This reduces the host transfer overhead
-    chunk_size = 32
-
     stop_ids = get_stop_ids(ctx)
-    done_mask = np.full((B,), False)
 
     generated_columns = []
     chunk_columns = []
@@ -192,13 +188,6 @@ def _completion_batched_impl(ctx: InferenceCtx, prompt_tokens_np, pad_lengths: L
         N += 1
 
         deallocate_tensors([token_tensor, mask, logits, next_token_tensor])
-
-        # if i != 0 and i % chunk_size == 0:
-        #     chunk_np = to_np(chunk_columns)
-
-        #     done_mask |= np.isin(chunk_np, list(stop_ids)).any(axis=1)
-        #     if done_mask.all():
-        #         break
 
     completions_np = to_np(generated_columns)
     deallocate_tensors(generated_columns)

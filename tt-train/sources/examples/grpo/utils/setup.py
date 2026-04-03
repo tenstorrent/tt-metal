@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from transformers import AutoTokenizer
 from huggingface_hub import snapshot_download
-from ttml.common.utils import initialize_device, set_seed, get_tt_metal_runtime_root
+from ttml.common.utils import initialize_device, get_tt_metal_runtime_root
 from ttml.common.config import TransformerConfig, DeviceConfig, load_config
 from ttml.optimizers import create_optimizer
 from ttml.models import RunnerType, WeightTyingType
@@ -9,7 +9,6 @@ from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_saf
 from .llama_overrides import LlamaCompositeKV
 import logging
 import os
-import ttml
 
 
 @dataclass
