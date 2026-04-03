@@ -30,6 +30,15 @@ from models.experimental.pi0.common.configs import SigLIPConfig
 from models.experimental.pi0.tt.ttnn_common import tensor_1d_to_2d_ttnn
 
 
+# Shared compute kernel config for all SigLIP ops
+_SIGLIP_CKC = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_approx_mode=True,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
+
+
 # ============================================================================
 # Helper Functions
 # ============================================================================
@@ -198,6 +207,7 @@ class PatchEmbeddingTTNN:
             bias=self._linear_bias,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=_SIGLIP_CKC,
         )
 
         ttnn.deallocate(x)
@@ -356,6 +366,7 @@ class SigLIPAttentionTTNN:
         xqkv_fused = ttnn.linear(
             hidden_states,
             self.wqkv,
+            compute_kernel_config=_SIGLIP_CKC,
             bias=self.bqkv,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -410,6 +421,7 @@ class SigLIPAttentionTTNN:
         output = ttnn.linear(
             attn_concat,
             self.wo,
+            compute_kernel_config=_SIGLIP_CKC,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
@@ -495,6 +507,7 @@ class SigLIPMLPTTNN:
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             activation="gelu",
+            compute_kernel_config=_SIGLIP_CKC,
         )
 
         # FC2 - use L1 for intermediate computation
@@ -503,6 +516,7 @@ class SigLIPMLPTTNN:
             self.fc2_weight,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=_SIGLIP_CKC,
         )
         ttnn.deallocate(x)
 
@@ -883,6 +897,7 @@ class MultiModalProjectorTTNN:
             self.weight,
             bias=self.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=_SIGLIP_CKC,
         )
 
 
