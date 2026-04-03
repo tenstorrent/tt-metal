@@ -58,19 +58,11 @@ constexpr std::array<float, 53> DIGAMMA_LUT = {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_digamma() {
-    // Use approximate reciprocal (SFPARECIP seed, fewer NR iterations) for P(x)/Q(x) division.
-    // Verified: no accuracy loss on bf16 (PCC 0.99991, ATOL 0.031) or fp32 (PCC 0.99999923, ATOL 0.0005).
-    constexpr bool approx_recip = true;
-
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::vFloat result = piecewise_rational_eval<
-            DIGAMMA_NUM_DEGREE,
-            DIGAMMA_DEN_DEGREE,
-            DIGAMMA_NUM_SEGMENTS,
-            DIGAMMA_LUT_SIZE,
-            false,
-            approx_recip>(DIGAMMA_LUT, x);
+        sfpi::vFloat result =
+            piecewise_rational_eval<DIGAMMA_NUM_DEGREE, DIGAMMA_DEN_DEGREE, DIGAMMA_NUM_SEGMENTS, DIGAMMA_LUT_SIZE>(
+                DIGAMMA_LUT, x);
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
