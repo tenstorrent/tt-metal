@@ -351,10 +351,13 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 3> fpu_counters = {
 constexpr size_t NUM_FPU_COUNTERS = 3;
 #if defined(ARCH_BLACKHOLE)
 // BH TDMA_UNPACK: 11 banks, 22 counter_sels (11 req + 11 grant).
-// RTL-confirmed dead (o_math_instrnbuf_rden inactive on BH):
-//   3(MATH_INSTRN_STARTED), 256(MATH_INSTRN_NOT_BLOCKED_SRC),
-//   257(INSTRN_2_HF_CYCLES), 258(INSTRN_1_HF_CYCLE)
-// All other 18 counter_sels are LIVE (verified on silicon).
+// BH grant banks 4-6 (sels 260-262) have DIFFERENT wiring than WH despite identical RTL source.
+// Empirically verified on BH silicon — the original BH mapping is correct:
+//   grant[4] (sel 260) = srcA not blocked by overwrite
+//   grant[5] (sel 261) = srcA write actual (not blocked by port)
+//   grant[6] (sel 262) = srcB not blocked by port
+// On WH, these are swapped: 260=srcB port, 261=srcA overwrite, 262=srcA port.
+// fidelity_phases_ongoing = 1'b0 on BH, so FIDELITY_PHASE_STALLS (sel 2) is always 0.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
      {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
@@ -367,12 +370,12 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters =
      {PerfCounterType::UNPACK1_BUSY_THREAD0, 8},
      {PerfCounterType::UNPACK0_BUSY_THREAD1, 9},
      {PerfCounterType::UNPACK1_BUSY_THREAD1, 10},
-     {PerfCounterType::MATH_INSTRN_NOT_BLOCKED_SRC, 256},
-     {PerfCounterType::INSTRN_2_HF_CYCLES, 257},
+     {PerfCounterType::MATH_INSTRN_NOT_BLOCKED_SRC, 256},  // dead: hf_cycles never 2'b11
+     {PerfCounterType::INSTRN_2_HF_CYCLES, 257},           // dead: hf_cycles never 2'b01
      {PerfCounterType::INSTRN_1_HF_CYCLE, 258},
      {PerfCounterType::SRCB_WRITE_ACTUAL, 259},
-     {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_OVR, 260},
-     {PerfCounterType::SRCA_WRITE_ACTUAL, 261},
+     {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_OVR, 260},   // BH grant wiring differs from WH
+     {PerfCounterType::SRCA_WRITE_ACTUAL, 261},             // empirically verified on BH silicon
      {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_PORT, 262},
      {PerfCounterType::SRCA_WRITE_THREAD0, 263},
      {PerfCounterType::SRCB_WRITE_THREAD0, 264},
