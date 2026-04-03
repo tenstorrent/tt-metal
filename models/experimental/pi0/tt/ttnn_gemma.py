@@ -274,7 +274,25 @@ class GemmaAttentionTTNN:
         self.cos_meta = cos_meta
         self.sin_meta = sin_meta
 
-        # Note: compute_kernel_config removed for Blackhole compatibility
+        # WormholeComputeKernelConfig works for expert shapes (1024 hidden)
+        # but fails for SigLIP shapes (608 dim) due to Blackhole kernel bug.
+        # Only enable for expert-sized tensors.
+        if config.width <= 1024:
+            self.compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+            self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+        else:
+            self.compute_kernel_config_hifi4 = None
+            self.compute_kernel_config_hifi2 = None
 
     def forward(
         self,
@@ -316,12 +334,13 @@ class GemmaAttentionTTNN:
         # OPTIMIZATION 1: Single fused QKV linear (instead of 3 separate)
         # Output: [batch, 1, seq, Q_dim + K_dim + V_dim]
 
-        # QKV linear (use L1 interleaved for Blackhole compatibility)
+        # QKV linear with HiFi2 for fast projection
         xqkv = ttnn.linear(
             hidden_states,
             self.wqkv,
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
         )
 
         # OPTIMIZATION 2: Native TTNN head splitting (no PyTorch transfers!)
@@ -384,12 +403,13 @@ class GemmaAttentionTTNN:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-        # Output projection - use bfloat16 for residual add compatibility
+        # Output projection with HiFi4 for precision-critical residual path
         output = ttnn.linear(
             attn_concat,
             self.o_proj,
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config_hifi4,
         )
 
         # Reshape back to 3D: [batch, 1, seq, hidden] -> [batch, seq, hidden]
@@ -433,6 +453,17 @@ class GemmaMLPTTNN:
         """
         self.config = config
         self.device = device
+
+        # HiFi2 for MLP (speed over precision)
+        try:
+            self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+        except Exception:
+            self.compute_kernel_config_hifi2 = None
 
         # Convert weights to TTNN if they're PyTorch tensors
         # Use bfloat8_b for MLP weights to reduce memory and improve throughput
@@ -498,21 +529,21 @@ class GemmaMLPTTNN:
         # Fast path: small sequences (e.g., expert with ~50 tokens) — no chunking
         seq_dim = x.shape[1] if was_3d else x.shape[2]
         if seq_dim <= self.chunk_size:
+            mlp_ckc = self.compute_kernel_config_hifi2
             if self.fused_gate_up is not None:
-                # Fused gate+up: single matmul instead of 2
-                gate_up = ttnn.linear(x, self.fused_gate_up, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+                gate_up = ttnn.linear(x, self.fused_gate_up, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=mlp_ckc)
                 gate = ttnn.slice(gate_up, [0, 0, 0], [gate_up.shape[0], gate_up.shape[1], self.mlp_dim])
                 up = ttnn.slice(gate_up, [0, 0, self.mlp_dim], [gate_up.shape[0], gate_up.shape[1], self.mlp_dim * 2])
                 ttnn.deallocate(gate_up)
             else:
-                gate = ttnn.linear(x, self.gate_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
-                up = ttnn.linear(x, self.up_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+                gate = ttnn.linear(x, self.gate_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=mlp_ckc)
+                up = ttnn.linear(x, self.up_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=mlp_ckc)
             gate_activated = ttnn.gelu(gate)
             ttnn.deallocate(gate)
             hidden_out = ttnn.multiply(gate_activated, up)
             ttnn.deallocate(gate_activated)
             ttnn.deallocate(up)
-            output = ttnn.linear(hidden_out, self.down_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+            output = ttnn.linear(hidden_out, self.down_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=mlp_ckc)
             ttnn.deallocate(hidden_out)
             if was_torch:
                 output = ttnn.to_torch(output)
