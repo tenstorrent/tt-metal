@@ -1775,8 +1775,8 @@ void py_module(nb::module_& mod) {
     bind_unary_operation_subcoregrids<"hardmish">(
         mod,
         &ttnn::hardmish,
-        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor}}_i \times \frac{{\min(\max(\mathrm{{input\_tensor}}_i + 2.8, 0), 5)}}{{5}})doc",
-        "[Supported range -20 to inf]",
+        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor}}_i \times \frac{{\min(\max(\mathrm{{input\_tensor}}_i + 2, 0), 2)}}{{2}})doc",
+        "[Supported range -inf to inf]",
         R"doc(BFLOAT16, BFLOAT8_B)doc",
         R"doc(Computes the Hard Mish activation function. Hard Mish is a piecewise-linear approximation of the Mish activation function, offering improved computational efficiency while maintaining similar performance characteristics.)doc");
     bind_unary_operation_subcoregrids<"gez">(

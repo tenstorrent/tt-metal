@@ -1804,7 +1804,7 @@ def test_unary_hardmish(input_shapes, torch_dtype, ttnn_dtype, device):
     in_data1 = create_full_range_tensor(input_shapes, torch_dtype)
 
     # limit the range to avoid overflow in hardmish
-    in_data1 = in_data1[(in_data1 + 2.8).abs() < 3.3e38 / 5]
+    in_data1 = in_data1[(in_data1 + 2.0).abs() < 3.3e38 / 2]
 
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -1828,7 +1828,6 @@ def test_hardmish_bfloat16_ulp(device):
         torch.isnan(input_tensor)
         | ((input_tensor >= -2.0847e-23) & (input_tensor <= 2.0939e-23))
         | (input_tensor == -0.0)
-        | (input_tensor >= 6.8122e37)
         | (input_tensor == -torch.inf)
     )
     input_tensor[mask] = 0.0
