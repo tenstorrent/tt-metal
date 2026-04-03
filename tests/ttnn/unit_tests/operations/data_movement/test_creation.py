@@ -436,6 +436,95 @@ def test_empty_multi_device(mesh_device, input_shapes):
 @pytest.mark.parametrize(
     "input_shapes",
     [
+        [1, 1, 32, 32],
+        [2, 640, 64, 64],
+    ],
+)
+def test_empty_with_mesh_mapper_replicate(mesh_device, input_shapes):
+    # Reference
+    torch_ref = torch.ones(input_shapes, dtype=torch.bfloat16)
+    ref_tensor = ttnn.from_torch(
+        torch_ref,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    # TTNN empty
+    output_tensor = ttnn.empty(
+        input_shapes,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    assert output_tensor.tensor_topology() == ref_tensor.tensor_topology()
+
+    # Each device shard should have the full shape (replicated)
+    shards = ttnn.get_device_tensors(output_tensor)
+    for shard in shards:
+        assert list(shard.shape) == input_shapes
+
+
+@pytest.mark.parametrize(
+    "input_shapes, dims",
+    [
+        ([4, 4, 32, 32], (0, 1)),
+        ([4, 8, 64, 64], (0, 2)),
+    ],
+)
+def test_empty_with_mesh_mapper_shard(mesh_device, input_shapes, dims):
+    mesh_shape = mesh_device.shape
+
+    # Reference
+    torch_ref = torch.ones(input_shapes, dtype=torch.bfloat16)
+    ref_tensor = ttnn.from_torch(
+        torch_ref,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device,
+            mesh_shape=mesh_shape,
+            dims=dims,
+        ),
+    )
+
+    # TTNN empty
+    output_tensor = ttnn.empty(
+        input_shapes,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device,
+            mesh_shape=mesh_shape,
+            dims=dims,
+        ),
+    )
+
+    assert output_tensor.tensor_topology() == ref_tensor.tensor_topology()
+
+    # Compute expected shard shape: each dims entry shards the corresponding tensor dim
+    # by the corresponding mesh dimension size
+    expected_shard_shape = list(input_shapes)
+    expected_shard_shape[dims[0]] //= mesh_shape[0]
+    expected_shard_shape[dims[1]] //= mesh_shape[1]
+
+    shards = ttnn.get_device_tensors(output_tensor)
+    for shard in shards:
+        assert list(shard.shape) == expected_shard_shape
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
         [2, 1, 4, 4],
         [2, 1280, 8, 8],
         [2, 640, 16, 16],
