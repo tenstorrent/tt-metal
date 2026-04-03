@@ -45,11 +45,18 @@ pip install git+https://github.com/tenstorrent/tt-topology
 
 ## tt-device-mcp (for agent-driven development)
 
+Requires manual setup — the agent cannot install MCP servers or restart itself.
+The developer must do this before starting a Claude Code session:
+
 ```bash
 pip install git+https://github.com/tenstorrent/tt-device-mcp.git
 tt-device-mcp daemon start
-tt-device-mcp claude-add-mcp
+tt-device-mcp claude-add-mcp   # adds MCP config to Claude Code settings
+# Then restart Claude Code
 ```
+
+If tt-run detects that tt-device-mcp tools are unavailable, it should tell the
+developer to run these steps and restart, not attempt to install it.
 
 ## Shell profile
 
