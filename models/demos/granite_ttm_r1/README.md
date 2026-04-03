@@ -10,20 +10,32 @@ a compact (805K-parameter) univariate time-series forecasting model from IBM.
 
 ## Architecture Summary
 
+All components run natively on TTNN (no `TorchModuleFallback` in the forward path).
+
 ```
 TinyTimeMixerForPrediction (805,280 params)
-  backbone.scaler              # TinyTimeMixerStdScaler  [B,T,C] → [B,T,C]
-  backbone.patching            # TinyTimeMixerPatchify   [B,512,1] → [B,1,8,64]
-  backbone.encoder.patcher     # Linear(64→192)          [B,1,8,192]     TTNN ✓
-  backbone.encoder.mlp_mixer_encoder  # 3× AdaptivePatchingBlock    TorchFallback
-  decoder.adapter              # Linear(192→128)                    TTNN ✓
-  decoder.decoder_block        # 2× TinyTimeMixerLayer              TorchFallback
-  head                         # Flatten + Linear(1024→96)          TTNN ✓
+  backbone.scaler              # TinyTimeMixerStdScaler  [B,T,C] → [B,T,C]     TTNN ✓
+  backbone.patching            # TinyTimeMixerPatchify   [B,512,1] → [B,1,8,64] TTNN ✓
+  backbone.encoder.patcher     # Linear(64→192)                                 TTNN ✓
+  backbone.encoder.mlp_mixer_encoder  # 3× AdaptivePatchingBlock                TTNN ✓
+  decoder.adapter              # Linear(192→128)                                 TTNN ✓
+  decoder.decoder_block        # 2× TinyTimeMixerLayer                          TTNN ✓
+  head                         # Flatten + Linear(1024→96)                      TTNN ✓
 ```
 
-Key dimensions:
-- context_length=512, patch_length=64, num_patches=8
-- d_model=192, decoder_d_model=128, forecast_length=96
+Key dimensions: context_length=512, patch_length=64, num_patches=8,
+d_model=192, decoder_d_model=128, forecast_length=96.
+
+## Performance (Wormhole N300s)
+
+| Mode | Latency | Throughput |
+|------|---------|------------|
+| Eager (batch=1) | ~8.5 ms | ~117 seq/s |
+| Traced (batch=1) | **~2.3 ms** | ~440 seq/s |
+| Traced (batch=8) | ~3.1 ms | **~2620 seq/s** |
+| Traced (batch=32) | ~6.2 ms | ~5200 seq/s |
+
+See [PERF.md](PERF.md) for the full throughput-vs-batch table and methodology.
 
 ## Layout
 
@@ -39,14 +51,16 @@ models/demos/granite_ttm_r1/
     model_summary.py           # Architecture inspection script
   tt/
     config.py                  # GraniteTTMModelConfig dataclass
-    common.py                  # preprocess_parameters, TTNN tensor utilities
-    ttnn_granite_ttm_patching.py    # TorchModuleFallback (unfold op)
-    ttnn_granite_ttm_embedding.py   # TTNN Linear (patch projection)
-    ttnn_granite_ttm_time_mixer.py  # TTNN PatchMixerBlock
-    ttnn_granite_ttm_channel_mixer.py # TTNN FeatureMixerBlock
-    ttnn_granite_ttm_block.py       # TTNN TinyTimeMixerLayer (time+channel)
-    ttnn_granite_ttm_head.py        # TTNN head (flatten+linear)
-    ttnn_granite_ttm_model.py       # Full model wiring
+    common.py                  # preprocess_parameters, get_linear_compute_config
+    ttnn_granite_ttm_patching.py      # TTNN reshape+permute patchify
+    ttnn_granite_ttm_embedding.py     # TTNN Linear (patch projection)
+    ttnn_granite_ttm_time_mixer.py    # TTNN PatchMixerBlock (LN+MLP+gate)
+    ttnn_granite_ttm_channel_mixer.py # TTNN FeatureMixerBlock (LN+MLP+gate)
+    ttnn_granite_ttm_block.py         # TTNN TinyTimeMixerLayer (time+channel)
+    ttnn_granite_ttm_adaptive_block.py # TTNN 3-level AdaptivePatchingBlock
+    ttnn_granite_ttm_head.py          # TTNN head (flatten+linear)
+    ttnn_granite_ttm_model.py         # Full model wiring + trace compile API
+    streaming.py                      # GraniteTTMStreamingForecaster
   demo/
     demo.py                    # Benchmark demo: PCC, latency, throughput
   tests/
@@ -58,9 +72,11 @@ models/demos/granite_ttm_r1/
       test_pcc_channel_mixer.py
       test_pcc_block.py
       test_pcc_head.py
-      test_pcc_full_model.py
+      test_pcc_full_model.py   # parametrized over batch_size=[1, 4, 8]
     perf/
-      test_perf.py             # Throughput + latency + model size
+      test_perf.py             # Eager + traced latency/throughput, batch sweep,
+                               # multi-model serving (100 shared-weight instances)
+      test_streaming.py        # Rolling-window streaming inference tests
     accuracy/
       test_accuracy_etthi.py   # Zero-shot ETTh1 benchmark (slow)
   scripts/
@@ -70,8 +86,8 @@ models/demos/granite_ttm_r1/
 ## Setup
 
 ```bash
-# Install dependencies (requires Python 3.10+ with TT-Metal env active)
-pip install granite-tsfm
+source python_env/bin/activate
+uv pip install granite-tsfm
 
 # Download ETTh1 for accuracy tests (optional)
 python models/demos/granite_ttm_r1/scripts/prepare_assets.py --datasets etthi
@@ -80,26 +96,76 @@ python models/demos/granite_ttm_r1/scripts/prepare_assets.py --datasets etthi
 ## Running Tests
 
 ```bash
-# PCC tests (require Wormhole device)
+export PYTHONPATH=/root/tt/tt-metal
+
+# All PCC tests (require Wormhole device)
 pytest models/demos/granite_ttm_r1/tests/pcc/ -v
 
-# Performance tests
-pytest models/demos/granite_ttm_r1/tests/perf/ -v
-
-# Model size test (no device needed)
+# Model size only (no device needed)
 pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_model_size -v
 
-# Zero-shot accuracy (slow, requires ETTh1 data)
-pytest models/demos/granite_ttm_r1/tests/accuracy/ -v -m slow
+# Stage 3 traced latency / throughput (batch=1)
+pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_throughput_and_latency_traced -v -s
 
-# Demo
-python -c "
+# Throughput vs batch size sweep (batch=1–32)
+pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_throughput_batch -v -s
+
+# Multi-model serving (100 shared-weight instances)
+pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_multi_model_serving -v
+
+# Streaming inference tests
+pytest models/demos/granite_ttm_r1/tests/perf/test_streaming.py -v
+
+# Zero-shot accuracy (slow, requires ETTh1 data)
+pytest models/demos/granite_ttm_r1/tests/accuracy/ -v -s
+```
+
+## Trace-Compiled Inference
+
+For lowest latency, compile the model after construction:
+
+```python
 import ttnn
-from models.demos.granite_ttm_r1.demo.demo import run_granite_ttm_demo
+from models.demos.granite_ttm_r1.tt.ttnn_granite_ttm_model import TtnnGraniteTTMModel
+
 device = ttnn.open_device(device_id=0)
-result = run_granite_ttm_demo(device=device)
+
+# Build model (once)
+model = TtnnGraniteTTMModel(parameters=parameters, config=model_config)
+model.compile(device, batch_size=1)   # warm-up + trace capture
+
+# Inference (fast path — single host command per call)
+output = model.execute_compiled(history_tensor)
+
+model.release_trace()
 ttnn.close_device(device)
-"
+```
+
+## Multi-Model Serving
+
+Share a single pre-processed weight tree across many model instances:
+
+```python
+parameters = preprocess_parameters(hf_model, device)  # once
+
+instances = [
+    TtnnGraniteTTMModel.from_shared_parameters(parameters, model_config)
+    for _ in range(100)
+]
+# All 100 instances share the same device weight tensors.
+```
+
+## Streaming Inference
+
+For online (rolling-window) forecasting:
+
+```python
+from models.demos.granite_ttm_r1.tt.streaming import GraniteTTMStreamingForecaster
+
+forecaster = GraniteTTMStreamingForecaster(model, model_config, device)
+
+for new_obs in sensor_stream:          # new_obs: [n_new, num_channels]
+    forecast = forecaster.step(new_obs)  # [forecast_len, num_channels]
 ```
 
 ## Architecture Inspection
