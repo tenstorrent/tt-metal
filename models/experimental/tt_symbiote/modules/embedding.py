@@ -13,10 +13,12 @@ from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.core.run_config import (
     DistributedTensorConfig,
     logical_shape_for_batch_channel_sharding,
+    trace_enabled,
 )
 from models.experimental.tt_symbiote.modules.decoder_layer import _next_power_of_2
 
 
+@trace_enabled
 class TTNNEmbedding(TTNNModule):
     """TTNN-accelerated embedding lookup for Ling/Bailing models.
 
