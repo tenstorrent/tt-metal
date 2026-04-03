@@ -1,23 +1,25 @@
 # Workspace Setup
 
-A workspace is an isolated development environment containing multiple TT repos
-(tt-metal, vLLM, tt-inference-server) with a shared python venv. Workspaces
-enable parallel work — each has its own branches, build artifacts, and environment.
+A workspace is an isolated development environment with its own tt-metal clone,
+branch, build artifacts, and python venv. Multiple workspaces enable parallel work.
+
+Some developers also clone vLLM, tt-inference-server, or other repos alongside
+tt-metal — that's fine but not required. The workspace concept doesn't impose
+which repos are present.
 
 ## Layout
 
 ```
 $LOCAL_DEV/workspaces/
-  main/                          # Tracks upstream branches
-    tt-metal/                    # branch: main
-      python_env/                # Shared venv (created by create_venv.sh)
+  main/
+    tt-metal/                    # The only required repo
+      python_env/                # Created by create_venv.sh
       build/                     # cmake build artifacts
-    vllm/                        # branch: dev
-    tt-inference-server/         # branch: dev
-  my-feature/                    # Feature workspace
-    tt-metal/                    # branch: $USER/my-feature (from main)
-    vllm/                        # branch: $USER/my-feature (from dev)
-    tt-inference-server/         # branch: $USER/my-feature (from dev)
+    vllm/                        # Optional — if working on vLLM
+    tt-inference-server/         # Optional — if working on inference
+  my-feature/
+    tt-metal/                    # branch: $USER/my-feature
+    ...                          # Whatever else this task needs
 ```
 
 ## Create a workspace
@@ -25,19 +27,11 @@ $LOCAL_DEV/workspaces/
 ```bash
 WORKSPACE=$LOCAL_DEV/workspaces/<name>
 mkdir -p $WORKSPACE && cd $WORKSPACE
-
-# Clone repos
 git clone git@github.com:tenstorrent/tt-metal.git
-cd tt-metal && git checkout -b $USER/<name> && git submodule update --init --recursive && cd ..
-
-git clone git@github.com:tenstorrent/vllm.git
-cd vllm && git checkout -b $USER/<name> dev && cd ..
-
-git clone git@github.com:tenstorrent/tt-inference-server.git
-cd tt-inference-server && git checkout -b $USER/<name> dev && cd ..
+cd tt-metal
+git checkout -b $USER/<name>    # or stay on main
+git submodule update --init --recursive
 ```
-
-For "main" workspace, skip branch creation — use upstream branches directly.
 
 ## First-time build
 
@@ -52,11 +46,10 @@ bash create_venv.sh             # creates python_env/ with all deps
 ```bash
 export TT_METAL_HOME=$WORKSPACE/tt-metal
 export PYTHONPATH=$TT_METAL_HOME
-export VLLM_TARGET_DEVICE=tt
 source $TT_METAL_HOME/python_env/bin/activate
 ```
 
-## Incremental rebuild (after code changes)
+## Incremental rebuild
 
 ```bash
 cd $TT_METAL_HOME && bash build_metal.sh
@@ -74,21 +67,3 @@ bash build_metal.sh
 
 Kernels (`tt_metal/kernels/`) are compiled JIT at runtime. If you're only
 editing kernel code, skip the rebuild — just re-run the test.
-
-## Install vLLM into workspace
-
-```bash
-source $TT_METAL_HOME/python_env/bin/activate
-cd $WORKSPACE/vllm
-pip install -e .                # or: source tt_metal/install-vllm-tt.sh
-```
-
-## Key env vars set by activation
-
-| Variable | Value |
-|---|---|
-| `TT_METAL_HOME` | `$WORKSPACE/tt-metal` |
-| `PYTHONPATH` | `$TT_METAL_HOME` |
-| `VLLM_TARGET_DEVICE` | `tt` |
-| `VIRTUAL_ENV` | `$TT_METAL_HOME/python_env` |
-| `HF_HOME` | `$LOCAL_DEV/hf_data/` |
