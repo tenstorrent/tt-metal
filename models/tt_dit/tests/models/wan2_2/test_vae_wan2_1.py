@@ -1160,6 +1160,7 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
         ((1, 8), 0, 1, 1),
         ((1, 4), 1, 0, 1),
         ((4, 8), 0, 1, 4),
+        ((4, 32), 0, 1, 2),
     ],
     ids=[
         "2x4_h0_w1",
@@ -1167,6 +1168,7 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
         "1x8_h0_w1",
         "1x4_h1_w0",
         "4x8_h0_w1",
+        "bh_quad_4x32_h0_w1",
     ],
     indirect=["mesh_device"],
 )
@@ -1357,7 +1359,7 @@ def test_wan_decoder3d(
 @pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize("real_weights", [True, False], ids=["real_weights", "fake_weights"])
 @pytest.mark.parametrize("skip_check", [True, False], ids=["skip_check", "check_output"])
-@pytest.mark.parametrize("use_cache", [True, False], ids=["cached", "no_cache_full_T"])
+@pytest.mark.parametrize("t_chunk_size", [1, 2, 4, None], ids=["chunk_1", "chunk_2", "chunk_4", "no_cache_full_T"])
 @pytest.mark.parametrize(
     "dtype, MIN_PCC, MAX_RMSE",
     [
@@ -1405,7 +1407,7 @@ def test_wan_decoder(
     num_links,
     real_weights,
     skip_check,
-    use_cache,
+    t_chunk_size,
     dtype,
     MIN_PCC,
     MAX_RMSE,
@@ -1477,9 +1479,9 @@ def test_wan_decoder(
         dtype=tt_input_dtype,
     )
 
-    logger.info(f"running tt model (use_cache={use_cache})")
+    logger.info(f"running tt model (t_chunk_size={t_chunk_size})")
     start = time.time()
-    tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, use_cache=use_cache)
+    tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, t_chunk_size=t_chunk_size)
 
     concat_dims = [None, None]
     concat_dims[h_axis] = 3
