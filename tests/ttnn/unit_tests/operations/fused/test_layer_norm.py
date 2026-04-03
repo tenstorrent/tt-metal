@@ -490,3 +490,11 @@ def test_layer_norm_with_padding(device, h, w, use_welford, dtype):
     golden_output = golden(torch_input_tensor, weight=None, bias=None, eps=1e-5)
 
     assert_output_accuracy(golden_output, output_ttnn)
+
+
+def test_layer_norm_inputs_requires_input_tensor():
+    """``LayerNormInputs()`` without an input tensor must raise."""
+    import pytest
+
+    with pytest.raises(TypeError):
+        ttnn.LayerNormInputs()

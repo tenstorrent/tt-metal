@@ -6,8 +6,6 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
-#include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/mesh_device.hpp>
 
 #include "generic_op_program_factory.hpp"
 
