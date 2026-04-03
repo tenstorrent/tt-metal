@@ -23,32 +23,9 @@ Usage:
 
     # Run with tracing enabled
     python -m models.demos.molmo2.demo.demo --use-trace
-
-Frame-level vision parallelism (T3K / multi-device), via ``models.demos.molmo2.tt.frame_parallel_config``:
-
-    MOLMO2_VISION_PARALLEL_MILESTONE
-        ``0`` legacy ViT (no cross-device frame split). ``1`` (default) frame DP on mesh.
-        ``2`` like ``1`` plus align max frames to device count before extraction.
-
-    MOLMO2_FRAME_DP_LOG_ROUNDS
-        Log each ViT parallel round (frame ranges).
-
-    MOLMO2_FRAME_DP_LOG_DEVICE_FRAMES
-        Log per-shard mapping: physical device id and global frame index (sharded vs replicated tail).
-
-    MOLMO2_FRAME_DP_REMAINDER
-        ``tail`` (default): replicated sequential path for leftover frames. ``pad``: zero-pad
-        to a full last round then strip tokens. ``gather``: partial sharded round + concat gather.
-
-    MOLMO2_VIDEO_ALIGN_FRAMES
-        Align max frames to ``len(get_device_ids())`` without requiring milestone 2.
-
-    MOLMO2_VIDEO_MAX_FRAMES
-        Default cap when not passing ``--max-video-frames`` (otherwise CLI wins).
 """
 
 import argparse
-import logging
 import os
 import time
 from pathlib import Path
@@ -79,26 +56,15 @@ FRAME_START_TOKEN = "<frame_start>"
 FRAME_END_TOKEN = "<frame_end>"
 VIDEO_PROMPT = "<|video|>"
 
-# Default video parameters (32 frames fits 4×8-way ViT rounds on T3K; override with CLI or env)
-VIDEO_MAX_FRAMES = 32
+# Default video parameters matching HF Molmo2 video processor defaults
+VIDEO_MAX_FRAMES = 8
 VIDEO_MAX_FPS = 2.0
 
-
-def _configure_molmo2_stdlib_logging_to_stderr() -> None:
-    """
-    TT modules under ``models.demos.molmo2`` (e.g. ``vision_transformer``) use stdlib ``logging``.
-    The demo uses Loguru for its own messages, so stdlib INFO was previously invisible (default
-    WARNING threshold). Attach one INFO StreamHandler for the package subtree.
-    """
-    molmo_log = logging.getLogger("models.demos.molmo2")
-    molmo_log.setLevel(logging.INFO)
-    if molmo_log.handlers:
-        return
-    handler = logging.StreamHandler()
-    handler.setLevel(logging.INFO)
-    handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)-8s | %(name)s: %(message)s"))
-    molmo_log.addHandler(handler)
-
+# Unified Vision+Prefill trace records ViT + pooling + projector + full text prefill. With
+# DEFAULT_TRACE_REGION_SIZE=0, DRAM allocations during capture overlap the trace buffer (TT_FATAL:
+# "Trace buffer ... overlaps ... set a non-zero trace_region_size"). Reserve a large region when
+# opening the mesh for unified trace (see open_molmo_mesh_device).
+DEFAULT_UNIFIED_TRACE_REGION_SIZE = 256 * 1024 * 1024
 
 # Molmo2 normalization constants (from HuggingFace Molmo2ImageProcessor)
 # These differ from standard ImageNet normalization
@@ -106,35 +72,26 @@ IMAGENET_MEAN = [0.48145466, 0.4578275, 0.40821073]
 IMAGENET_STD = [0.26862954, 0.26130258, 0.27577711]
 
 
-def effective_video_max_frames(requested: int) -> int:
+def open_molmo_mesh_device(
+    use_unified_trace: bool = False,
+    trace_region_size: Optional[int] = None,
+):
     """
-    Apply ``MOLMO2_VIDEO_MAX_FRAMES`` if set, then optional alignment to device count
-    (milestone 2 or ``MOLMO2_VIDEO_ALIGN_FRAMES``).
+    Open the T3K (1x8) mesh used by this demo.
+
+    When ``use_unified_trace`` is True, pass a non-zero ``trace_region_size`` so unified
+    capture does not overlap intermediate allocations (required for long video sequences).
     """
-    from models.demos.molmo2.tt.frame_parallel_config import video_align_frames_to_mesh_width
-
-    cap = requested
-    raw = os.environ.get("MOLMO2_VIDEO_MAX_FRAMES", "").strip()
-    if raw:
-        try:
-            cap = max(1, int(raw))
-        except ValueError:
-            logger.warning(f"Invalid MOLMO2_VIDEO_MAX_FRAMES={raw!r}; using {cap}")
-
-    if not video_align_frames_to_mesh_width():
-        return cap
-    try:
-        n = len(ttnn.get_device_ids())
-    except Exception:
-        return cap
-    if n <= 1:
-        return cap
-    aligned = (cap // n) * n
-    if aligned <= 0:
-        return cap
-    if aligned != cap:
-        logger.info(f"Aligning max video frames {cap} -> {aligned} for multiple of {n} devices")
-    return aligned
+    mesh_shape = ttnn.MeshShape(1, 8)
+    if use_unified_trace:
+        trs = trace_region_size if trace_region_size is not None else DEFAULT_UNIFIED_TRACE_REGION_SIZE
+        logger.info(
+            f"Opening mesh device {mesh_shape} with trace_region_size={trs} "
+            f"({trs // (1024 * 1024)} MiB) for unified Vision+Prefill trace capture"
+        )
+        return ttnn.open_mesh_device(mesh_shape, trace_region_size=trs)
+    logger.info(f"Opening TTNN mesh device with shape {mesh_shape}")
+    return ttnn.open_mesh_device(mesh_shape)
 
 
 def load_processor():
@@ -375,7 +332,7 @@ def preprocess_image_molmo2(
     pooling_idx = pooling_idx.reshape(-1, pool_h * pool_w)
 
     # Build low-res (global) image
-    resized = resize_image(image_np, [base_size, base_size], torchvision.transforms.InterpolationMode.BILINEAR)
+    resized = resize_image(image_np, [base_size, base_size])
     resized = normalize_image(resized, IMAGENET_MEAN, IMAGENET_STD)
     resized = np.expand_dims(resized, 0)
 
@@ -670,6 +627,7 @@ class Molmo2Generator:
 
         # Separate trace state for prefill and decode
         self.prefill_traces = {}  # {seq_len: (trace_id, trace_inputs, trace_output)}
+        self.unified_traces = {}  # {(seq_len, ...): (trace_id, trace_tensors, trace_output)}
         self.decode_trace_id = None
         self.decode_trace_tensors = None
         self.decode_trace_output = None
@@ -678,6 +636,7 @@ class Molmo2Generator:
         self.vision_trace_id = None
         self.vision_trace_tensors = None
         self.vision_trace_outputs = None  # [feature_layer_18, feature_layer_24]
+        self.vision_trace_config_key = None  # invalidates trace when shape/mode changes
 
         # KV cache (initialized on first run)
         self.kv_caches = None
@@ -739,6 +698,41 @@ class Molmo2Generator:
             ttnn.copy(rot_idxs_ttnn, self.rot_mat_idxs)
             ttnn.deallocate(rot_idxs_ttnn)
 
+    def release_all_traces(self):
+        """
+        Release every captured TTNN trace on this generator.
+
+        Call before starting a new video/generation when trace program keys may change
+        (e.g. different prompt length), so the next run can capture without CQ/trace conflicts.
+        """
+        mesh = self.mesh_device
+
+        # Finish any in-flight work before releasing trace programs (safe sync requires no active capture).
+        ttnn.synchronize_device(mesh)
+
+        for _key, (trace_id, _trace_tensors, _trace_output) in list(self.unified_traces.items()):
+            ttnn.release_trace(mesh, trace_id)
+        self.unified_traces = {}
+
+        for _seq_len, (trace_id, _trace_tensors, _trace_output) in list(self.prefill_traces.items()):
+            ttnn.release_trace(mesh, trace_id)
+        self.prefill_traces = {}
+
+        if self.decode_trace_id is not None:
+            ttnn.release_trace(mesh, self.decode_trace_id)
+            self.decode_trace_id = None
+            self.decode_trace_tensors = None
+            self.decode_trace_output = None
+
+        if self.vision_trace_id is not None:
+            ttnn.release_trace(mesh, self.vision_trace_id)
+            self.vision_trace_id = None
+            self.vision_trace_tensors = None
+            self.vision_trace_outputs = None
+            self.vision_trace_config_key = None
+
+        ttnn.synchronize_device(mesh)
+
     def _prepare_text_inputs(
         self,
         input_ids: torch.Tensor,
@@ -798,9 +792,22 @@ class Molmo2Generator:
         n_out = pooled_patches_idx.shape[1]
         k_pool = pooled_patches_idx.shape[2]
 
-        # 1. Patch embedding on TTNN (unfold on CPU, linear+pos_embed on device)
+        # 1. Per-crop patch embedding (L1 in patch_embed_ttnn on T3K), concat; ViT runs inside vision trace.
         vit = self.model.vision_backbone.image_vit
-        embedded_ttnn = vit.patch_embed_ttnn(pixel_values)  # [1, 1, B*N, hidden_dim] on device
+        _, _, height, width = pixel_values.shape
+        patches_h = height // vit.patch_size
+        patches_w = width // vit.patch_size
+        native_patch_grid = patches_h == patches_w == vit.base_num_patches_per_side
+
+        if batch_size > 1 and native_patch_grid:
+            emb_chunks = []
+            for i in range(batch_size):
+                emb_chunks.append(vit.patch_embed_ttnn(pixel_values[i : i + 1]))
+            embedded_ttnn = ttnn.concat(emb_chunks, dim=2)
+            for e in emb_chunks:
+                ttnn.deallocate(e)
+        else:
+            embedded_ttnn = vit.patch_embed_ttnn(pixel_values)  # [1, 1, B*N, hidden_dim] on device
 
         # 2. Prepare indices for TTNN gather
         # Identify valid indices (>= 0) and clip negative to 0
@@ -814,7 +821,7 @@ class Molmo2Generator:
         # Create valid mask: [1, 1, B*N_out*K_pool, 1]
         valid_mask = valid.reshape(1, 1, -1, 1).float()
 
-        # 3. Convert remaining tensors to TTNN (embedded_ttnn already on device)
+        # 3. Convert remaining tensors to TTNN
 
         idx_ttnn = ttnn.from_torch(
             flat_idx,
@@ -860,11 +867,9 @@ class Molmo2Generator:
         hidden_dim: int = 1152,
         n_out: int = 169,
         k_pool: int = 4,
-        pool_dim: int = 2304,
         batch_size: int = 1,
     ) -> dict:
-        """Allocate tensors for vision trace."""
-        # Input: embedded patches
+        """Allocate tensors for vision trace (DRAM; fused ViT uses DRAM attention linears when seq > 1024)."""
         trace_embedded = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, batch_size * num_patches, hidden_dim]),
             ttnn.bfloat16,
@@ -939,7 +944,6 @@ class Molmo2Generator:
         vision_inputs: dict,
     ) -> ttnn.Tensor:
         """Execute vision trace with new inputs."""
-        # Copy new inputs to trace tensors
         ttnn.copy(vision_inputs["embedded"], trace_tensors["embedded"])
         ttnn.copy(vision_inputs["idx"], trace_tensors["idx"])
         ttnn.copy(vision_inputs["valid_mask"], trace_tensors["valid_mask"])
@@ -1151,11 +1155,7 @@ class Molmo2Generator:
         k_pool: int = 4,
         batch_size: int = 1,
     ) -> dict:
-        """Allocate all tensors needed for unified vision + prefill trace.
-
-        This includes input_ids so embed_tokens can be called inside the trace.
-        """
-        # Vision inputs
+        """Allocate tensors for unified vision + prefill trace (ViT + pool + projector inside capture)."""
         trace_embedded = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, batch_size * num_patches, vit_hidden_dim]),
             ttnn.bfloat16,
@@ -1257,58 +1257,66 @@ class Molmo2Generator:
         """
         logger.info("Capturing unified vision + prefill trace...")
 
-        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        # Ensure prior CQ work is finished so begin_trace_capture does not stack on pending state.
+        ttnn.synchronize_device(self.mesh_device)
 
-        # Step 1: Vision backbone (ViT + pooling + projection)
-        visual_embeddings = self.model.vision_backbone.forward_ttnn(
-            images_embedded=trace_tensors["embedded"],
-            pooled_patches_idx_ttnn=trace_tensors["idx"],
-            valid_mask_ttnn=trace_tensors["valid_mask"],
-            valid_token_ttnn=trace_tensors["valid_token"],
-            n_out=trace_tensors["n_out"],
-            k_pool=trace_tensors["k_pool"],
-            batch_size=trace_tensors["batch_size"],
-        )
-        # visual_embeddings shape: [1, 1, num_visual_tokens, 4096]
-
-        # Step 2: Text embeddings (INSIDE trace - this is key for performance)
-        text_embeddings = self.model.text_model.embed_tokens(trace_tensors["input_ids"])
-        # text_embeddings shape: [1, 1, seq_len, 4096]
-
-        # Step 3: On-device fusion using matmul with selector matrix
-        # selector_matrix: [1, 1, seq_len, num_visual_tokens] - one-hot rows indicating placement
-        # visual_part = selector_matrix @ visual_embeddings => [1, 1, seq_len, 4096]
-        # fused = text_embeddings + visual_part
-        visual_part = ttnn.matmul(
-            trace_tensors["selector_matrix"],
-            visual_embeddings,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        # visual_part: [1, 1, seq_len, 4096]
-
-        # Add visual part to text embeddings
-        fused_embed = ttnn.add(
-            text_embeddings,
-            visual_part,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # Step 3: Text model prefill
-        rot_mats = [trace_tensors["cos"], trace_tensors["sin"]]
-        logits, _ = self.model.text_model.forward(
-            hidden_states=fused_embed,
-            start_pos=0,
-            attn_mask=None,
-            kv_caches=self.kv_caches,
-            rot_mats=rot_mats,
-            trace_id=trace_id,
-        )
         first_run_env = os.getenv("First_run", "false").lower() == "true"
-        if not first_run_env and not current_run_trace:
-            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
-            logger.info("Unified vision + prefill trace captured")
+        trace_id = None
+        try:
+            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
 
-        return trace_id, logits
+            # Step 1: Vision — full ViT + pooling + projector (embedded buffer filled before capture).
+            visual_embeddings = self.model.vision_backbone.forward_ttnn(
+                images_embedded=trace_tensors["embedded"],
+                pooled_patches_idx_ttnn=trace_tensors["idx"],
+                valid_mask_ttnn=trace_tensors["valid_mask"],
+                valid_token_ttnn=trace_tensors["valid_token"],
+                n_out=trace_tensors["n_out"],
+                k_pool=trace_tensors["k_pool"],
+                batch_size=trace_tensors["batch_size"],
+            )
+            # visual_embeddings shape: [1, 1, batch_size * n_out, 4096]
+
+            # Step 2: Text embeddings (INSIDE trace - this is key for performance)
+            text_embeddings = self.model.text_model.embed_tokens(trace_tensors["input_ids"])
+            # text_embeddings shape: [1, 1, seq_len, 4096]
+
+            # Step 3: On-device fusion using matmul with selector matrix
+            visual_part = ttnn.matmul(
+                trace_tensors["selector_matrix"],
+                visual_embeddings,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            fused_embed = ttnn.add(
+                text_embeddings,
+                visual_part,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            rot_mats = [trace_tensors["cos"], trace_tensors["sin"]]
+            logits, _ = self.model.text_model.forward(
+                hidden_states=fused_embed,
+                start_pos=0,
+                attn_mask=None,
+                kv_caches=self.kv_caches,
+                rot_mats=rot_mats,
+                trace_id=trace_id,
+            )
+            # When First_run=two-pass: layer 0 may call end_trace_capture inside text_attention (before RoPE).
+            # When not First_run, or second pass of two-pass: end here.
+            if not first_run_env and not current_run_trace:
+                ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+                logger.info("Unified vision + prefill trace captured")
+            return trace_id, logits
+        except BaseException:
+            # Failed mid-capture: close capture so the next video/clips do not hit "active trace" / write errors.
+            if trace_id is not None:
+                try:
+                    ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+                except BaseException:
+                    pass
+            raise
 
     def _prepare_unified_inputs(
         self,
@@ -1325,9 +1333,23 @@ class Molmo2Generator:
         batch_size = pooled_patches_idx.shape[0]
         seq_len = input_ids.shape[1]
 
-        # Prepare vision inputs -- patch embedding on TTNN (no CPU matmul)
+        # Vision: per-crop patch embedding (L1 in patch_embed_ttnn on T3K), concat patches;
+        # full ViT + pooling + projector run inside unified trace (DRAM linears when seq > 1024).
         vit = self.model.vision_backbone.image_vit
-        embedded_ttnn = vit.patch_embed_ttnn(pixel_values)  # [1, 1, B*N, hidden_dim] on device
+        _, _, height, width = pixel_values.shape
+        patches_h = height // vit.patch_size
+        patches_w = width // vit.patch_size
+        native_patch_grid = patches_h == patches_w == vit.base_num_patches_per_side
+
+        if batch_size > 1 and native_patch_grid:
+            emb_chunks = []
+            for i in range(batch_size):
+                emb_chunks.append(vit.patch_embed_ttnn(pixel_values[i : i + 1]))
+            embedded_ttnn = ttnn.concat(emb_chunks, dim=2)
+            for e in emb_chunks:
+                ttnn.deallocate(e)
+        else:
+            embedded_ttnn = vit.patch_embed_ttnn(pixel_values)  # [1, 1, B*N, hidden_dim] on device
 
         n_out = pooled_patches_idx.shape[1]
         k_pool = pooled_patches_idx.shape[2]
@@ -1428,13 +1450,10 @@ class Molmo2Generator:
         inputs: dict,
     ) -> ttnn.Tensor:
         """Execute unified trace with new inputs."""
-        # Copy vision inputs to trace tensors
         ttnn.copy(inputs["embedded"], trace_tensors["embedded"])
         ttnn.copy(inputs["idx"], trace_tensors["idx"])
         ttnn.copy(inputs["valid_mask"], trace_tensors["valid_mask"])
         ttnn.copy(inputs["valid_token"], trace_tensors["valid_token"])
-
-        # Copy text/fusion inputs
         ttnn.copy(inputs["input_ids"], trace_tensors["input_ids"])
         ttnn.copy(inputs["selector_matrix"], trace_tensors["selector_matrix"])
 
@@ -1468,17 +1487,12 @@ class Molmo2Generator:
         # Check if we have a cached trace for this configuration
         trace_key = (seq_len, inputs["num_visual_tokens"], inputs["n_out"], inputs["k_pool"])
 
-        if not hasattr(self, "unified_traces"):
-            self.unified_traces = {}
-
         if trace_key not in self.unified_traces:
             # First run: warmup + capture trace
             logger.info("Running unified warmup (compile)...")
             warmup_start = time.perf_counter()
 
-            # Run full pipeline once for compilation (same ops as trace)
-            # Step 1: Vision
-            visual_embeddings = self.model.vision_backbone.forward_ttnn(
+            vb_warm_kwargs = dict(
                 images_embedded=inputs["embedded"],
                 pooled_patches_idx_ttnn=inputs["idx"],
                 valid_mask_ttnn=inputs["valid_mask"],
@@ -1487,6 +1501,10 @@ class Molmo2Generator:
                 k_pool=inputs["k_pool"],
                 batch_size=inputs["batch_size"],
             )
+
+            # Run full pipeline once for compilation (same ops as trace)
+            # Step 1: Vision
+            visual_embeddings = self.model.vision_backbone.forward_ttnn(**vb_warm_kwargs)
 
             # Step 2: Text embeddings (compile embed_tokens)
             text_embeddings = self.model.text_model.embed_tokens(inputs["input_ids"])
@@ -1535,7 +1553,6 @@ class Molmo2Generator:
                 batch_size=inputs["batch_size"],
             )
 
-            # Copy initial data to trace tensors
             ttnn.copy(inputs["embedded"], trace_tensors["embedded"])
             ttnn.copy(inputs["idx"], trace_tensors["idx"])
             ttnn.copy(inputs["valid_mask"], trace_tensors["valid_mask"])
@@ -1546,12 +1563,17 @@ class Molmo2Generator:
             # Synchronize before trace capture to ensure all copies are complete
             ttnn.synchronize_device(self.mesh_device)
 
-            # Capture trace (double capture when First_run=true: first pass ends in attention, second ends here)
-            first_run = os.getenv("First_run", "false").lower() == "true"
-            num_runs = 2 if first_run else 1
-            for run_idx in range(num_runs):
-                current_run_trace = bool(first_run and run_idx == 0)
-                trace_id, trace_output = self._capture_unified_trace(trace_tensors, current_run_trace=current_run_trace)
+            # Two-pass capture for every new trace_key: pass 0 uses First_run so layer 0 ends capture
+            # before RoPE (text_attention); pass 1 records the full graph and ends in _capture_unified_trace.
+            os.environ["First_run"] = "true"
+            try:
+                for run_idx in range(2):
+                    current_run_trace = run_idx == 0
+                    trace_id, trace_output = self._capture_unified_trace(
+                        trace_tensors, current_run_trace=current_run_trace
+                    )
+            finally:
+                os.environ["First_run"] = "false"
             self.unified_traces[trace_key] = (trace_id, trace_tensors, trace_output)
 
         trace_id, trace_tensors, trace_output = self.unified_traces[trace_key]
@@ -1731,51 +1753,48 @@ class Molmo2Generator:
         seq_len = input_ids.shape[1]
         timing = {}
 
-        vision_batch = pooled_patches_idx.shape[0] if pixel_values is not None else 1
-        effective_unified = use_unified_trace
-        effective_vision_trace = use_vision_trace
-        if vision_batch > 1:
-            if effective_unified:
-                logger.info(
-                    "Unified vision+prefill trace disabled for vision batch %s (multi-frame / frame-DP path).",
-                    vision_batch,
-                )
-                effective_unified = False
-            if effective_vision_trace:
-                logger.info(
-                    "Vision trace disabled for vision batch %s; using eager vision forward.",
-                    vision_batch,
-                )
-                effective_vision_trace = False
-
         # Unified trace path: Vision + embed_tokens + Fusion + Prefill in single trace
-        if effective_unified and pixel_values is not None:
+        # This eliminates CPU roundtrip between vision and text prefill
+        if use_unified_trace and pixel_values is not None:
             return self._run_unified_prefill(input_ids, pixel_values, pooled_patches_idx, timing)
 
         # Start end-to-end TTFT timer (vision + fusion + prefill)
         e2e_ttft_start = None
 
-        if effective_vision_trace and pixel_values is not None:
+        if use_vision_trace and pixel_values is not None:
             # Vision tracing path - uses forward_ttnn with TTNN-native gather
             logger.info("Preparing vision inputs for tracing...")
             vision_prep_start = time.perf_counter()
             vision_inputs = self._prepare_vision_inputs_for_trace(pixel_values, pooled_patches_idx)
             timing["vision_prep_ms"] = (time.perf_counter() - vision_prep_start) * 1000
 
+            trace_cfg_key = (
+                vision_inputs["batch_size"],
+                vision_inputs["n_out"],
+                vision_inputs["k_pool"],
+            )
+            if self.vision_trace_id is not None and self.vision_trace_config_key != trace_cfg_key:
+                ttnn.release_trace(self.mesh_device, self.vision_trace_id)
+                self.vision_trace_id = None
+                self.vision_trace_tensors = None
+                self.vision_trace_outputs = None
+
+            vb_warm_kwargs = dict(
+                images_embedded=vision_inputs["embedded"],
+                pooled_patches_idx_ttnn=vision_inputs["idx"],
+                valid_mask_ttnn=vision_inputs["valid_mask"],
+                valid_token_ttnn=vision_inputs["valid_token"],
+                n_out=vision_inputs["n_out"],
+                k_pool=vision_inputs["k_pool"],
+                batch_size=vision_inputs["batch_size"],
+            )
+
             # Check if we need to capture a new trace
             if self.vision_trace_id is None:
                 # First run: warmup + capture trace
                 logger.info("Running vision warmup (compile)...")
                 warmup_start = time.perf_counter()
-                warmup_output = self.model.vision_backbone.forward_ttnn(
-                    images_embedded=vision_inputs["embedded"],
-                    pooled_patches_idx_ttnn=vision_inputs["idx"],
-                    valid_mask_ttnn=vision_inputs["valid_mask"],
-                    valid_token_ttnn=vision_inputs["valid_token"],
-                    n_out=vision_inputs["n_out"],
-                    k_pool=vision_inputs["k_pool"],
-                    batch_size=vision_inputs["batch_size"],
-                )
+                warmup_output = self.model.vision_backbone.forward_ttnn(**vb_warm_kwargs)
                 ttnn.synchronize_device(self.mesh_device)
                 timing["vision_compile_ms"] = (time.perf_counter() - warmup_start) * 1000
                 logger.info(f"Vision compile completed in {timing['vision_compile_ms']:.2f}ms")
@@ -1789,7 +1808,6 @@ class Molmo2Generator:
                     batch_size=vision_inputs["batch_size"],
                 )
 
-                # Copy initial data to trace tensors
                 ttnn.copy(vision_inputs["embedded"], self.vision_trace_tensors["embedded"])
                 ttnn.copy(vision_inputs["idx"], self.vision_trace_tensors["idx"])
                 ttnn.copy(vision_inputs["valid_mask"], self.vision_trace_tensors["valid_mask"])
@@ -1797,11 +1815,11 @@ class Molmo2Generator:
 
                 # Capture trace
                 self.vision_trace_id, self.vision_trace_outputs = self._capture_vision_trace(self.vision_trace_tensors)
+                self.vision_trace_config_key = trace_cfg_key
 
             # Execute vision trace - START of end-to-end TTFT measurement
             e2e_ttft_start = time.perf_counter()
             vision_trace_start = time.perf_counter()
-            # Copy new inputs to trace tensors
             ttnn.copy(vision_inputs["embedded"], self.vision_trace_tensors["embedded"])
             ttnn.copy(vision_inputs["idx"], self.vision_trace_tensors["idx"])
             ttnn.copy(vision_inputs["valid_mask"], self.vision_trace_tensors["valid_mask"])
@@ -1823,7 +1841,6 @@ class Molmo2Generator:
             )
             timing["fuse_ms"] = (time.perf_counter() - fuse_start) * 1000
 
-            # Cleanup temporary vision input tensors (trace tensors are reused)
             ttnn.deallocate(vision_inputs["embedded"])
             ttnn.deallocate(vision_inputs["idx"])
             ttnn.deallocate(vision_inputs["valid_mask"])
@@ -2264,7 +2281,6 @@ def run_video_demo(
     video_path: str,
     prompt: str = "<|video|> Describe what happens in this video.",
     max_new_tokens: int = 200,
-    device_id: int = 0,
     num_layers: Optional[int] = None,
     max_seq_len: int = 16384,
     max_frames: int = VIDEO_MAX_FRAMES,
@@ -2273,6 +2289,7 @@ def run_video_demo(
     use_decode_trace: bool = False,
     use_vision_trace: bool = False,
     use_unified_trace: bool = False,
+    trace_region_size: Optional[int] = None,
 ):
     """
     Run the Molmo2 demo with video input.
@@ -2290,6 +2307,7 @@ def run_video_demo(
         use_decode_trace: Whether to use tracing for decode
         use_vision_trace: Whether to use tracing for vision backbone
         use_unified_trace: Whether to use unified Vision+Prefill trace
+        trace_region_size: Bytes reserved for unified trace capture (default: DEFAULT_UNIFIED_TRACE_REGION_SIZE)
     """
     logger.info("=" * 60)
     logger.info("Molmo2-8B Video Demo")
@@ -2298,13 +2316,18 @@ def run_video_demo(
     # Load tokenizer
     tokenizer = load_processor()
 
-    # Preprocess video
-    logger.info(f"Preprocessing video: {video_path}")
+    # Preprocess video: use absolute local paths so decord/molmo-utils open the correct file
+    video_for_preprocess = video_path
+    if video_path.startswith("http://") or video_path.startswith("https://"):
+        pass
+    else:
+        local = video_path[7:] if video_path.startswith("file://") else video_path
+        video_for_preprocess = str(Path(local).resolve())
+    logger.info(f"Preprocessing video: {video_for_preprocess}")
     video_extraction_start = time.perf_counter()
-    max_frames_eff = effective_video_max_frames(max_frames)
     video_inputs = preprocess_video_molmo2(
-        video_path,
-        max_frames=max_frames_eff,
+        video_for_preprocess,
+        max_frames=max_frames,
         max_fps=max_fps,
     )
     video_extraction_ms = (time.perf_counter() - video_extraction_start) * 1000
@@ -2316,31 +2339,11 @@ def run_video_demo(
     state_dict = load_model_weights()
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    mesh_shape = ttnn.MeshShape(1, 8)
-    logger.info(f"Opening TTNN mesh device with shape {mesh_shape}")
-    device = ttnn.open_mesh_device(mesh_shape)
+    device = open_molmo_mesh_device(
+        use_unified_trace=use_unified_trace,
+        trace_region_size=trace_region_size,
+    )
     logger.info(f"Opened mesh device with {device.get_num_devices()} devices")
-    from models.demos.molmo2.tt.frame_parallel_config import (
-        molmo2_vision_parallel_milestone,
-        video_align_frames_to_mesh_width,
-        vision_frame_dp_enabled,
-        vision_frame_dp_remainder_mode,
-    )
-
-    milestone = molmo2_vision_parallel_milestone()
-    frame_dp = vision_frame_dp_enabled()
-    align = video_align_frames_to_mesh_width()
-    remainder = vision_frame_dp_remainder_mode()
-    mesh_devices = device.get_num_devices()
-
-    logger.info(
-        f"Vision parallel config: milestone={milestone} (frame_dp={frame_dp}), "
-        f"align_frames={align}, remainder={remainder}, mesh_devices={mesh_devices}"
-    )
-    logger.info(
-        f"Vision parallel env: effective remainder={remainder} (MOLMO2_FRAME_DP_REMAINDER); "
-        f"effective align_frames={align} (milestone>=2 or MOLMO2_VIDEO_ALIGN_FRAMES=1)"
-    )
 
     try:
         model = create_model(device, state_dict, num_layers)
@@ -2354,15 +2357,6 @@ def run_video_demo(
             batch_size=1,
             max_seq_len=max_seq_len,
         )
-
-        nd = device.get_num_devices()
-        rem_mode = vision_frame_dp_remainder_mode()
-        if nd > 1 and n_frames % nd != 0 and rem_mode == "tail":
-            logger.warning(
-                f"Video has {n_frames} frames (not divisible by {nd} devices): default remainder mode `tail` uses a "
-                "slower replicated sequential path for the last frames. Set MOLMO2_FRAME_DP_REMAINDER=pad or gather, or "
-                f"MOLMO2_VISION_PARALLEL_MILESTONE=2 / MOLMO2_VIDEO_ALIGN_FRAMES=1, or --max-video-frames multiple of {nd}."
-            )
 
         logger.info("\n" + "=" * 60)
         logger.info(f"Prompt: {prompt}")
@@ -2417,6 +2411,7 @@ def run_demo(
     use_decode_trace: bool = False,
     use_vision_trace: bool = False,
     use_unified_trace: bool = False,
+    trace_region_size: Optional[int] = None,
 ):
     """
     Run the Molmo2 demo.
@@ -2425,13 +2420,13 @@ def run_demo(
         image_path: Path to input image (uses default if None)
         prompt: Text prompt for the model (must include <|image|>)
         max_new_tokens: Maximum tokens to generate
-        device_id: TTNN device ID
         num_layers: Number of text layers (default: 36)
         max_seq_len: Maximum sequence length for KV cache (default: 2048 for image)
         use_trace: Whether to use tracing for text prefill
         use_decode_trace: Whether to use tracing for decode
         use_vision_trace: Whether to use tracing for vision backbone
         use_unified_trace: Whether to use unified Vision+Prefill trace (eliminates CPU roundtrip)
+        trace_region_size: Optional override for unified-trace DRAM region (bytes)
     """
     if image_path is None:
         image_path = str(DEFAULT_IMAGE)
@@ -2454,9 +2449,10 @@ def run_demo(
     # Open multi-device mesh for T3K (8 devices) to enable bfloat16 weight sharding
     # This prevents numerical overflow during decode by using higher precision weights
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    mesh_shape = ttnn.MeshShape(1, 8)
-    logger.info(f"Opening TTNN mesh device with shape {mesh_shape}")
-    device = ttnn.open_mesh_device(mesh_shape)
+    device = open_molmo_mesh_device(
+        use_unified_trace=use_unified_trace,
+        trace_region_size=trace_region_size,
+    )
     logger.info(f"Opened mesh device with {device.get_num_devices()} devices")
 
     try:
@@ -2527,7 +2523,6 @@ def run_demo(
 
 
 def main():
-    _configure_molmo2_stdlib_logging_to_stderr()
     parser = argparse.ArgumentParser(description="Molmo2-8B Demo")
     parser.add_argument(
         "--image",
@@ -2575,10 +2570,7 @@ def main():
         "--max-video-frames",
         type=int,
         default=VIDEO_MAX_FRAMES,
-        help=(
-            f"Maximum video frames to sample (default: {VIDEO_MAX_FRAMES}). "
-            "For T3K frame DP, prefer a multiple of 8; use milestone 2 or MOLMO2_VIDEO_ALIGN_FRAMES=1 to trim."
-        ),
+        help=f"Maximum video frames to sample (default: {VIDEO_MAX_FRAMES})",
     )
     parser.add_argument(
         "--max-video-fps",
@@ -2606,6 +2598,12 @@ def main():
         action="store_true",
         help="Enable unified Vision+Prefill trace (eliminates CPU roundtrip, best TTFT)",
     )
+    parser.add_argument(
+        "--trace-region-size",
+        type=int,
+        default=None,
+        help="Trace region size in bytes when using unified trace (default: 256 MiB; avoids trace/alloc overlap)",
+    )
 
     args = parser.parse_args()
 
@@ -2625,6 +2623,7 @@ def main():
             use_decode_trace=args.use_decode_trace,
             use_vision_trace=args.use_vision_trace,
             use_unified_trace=args.use_unified_trace,
+            trace_region_size=args.trace_region_size,
         )
     else:
         prompt = args.prompt if args.prompt is not None else "<|image|> Describe this image in detail."
@@ -2633,13 +2632,13 @@ def main():
             image_path=args.image,
             prompt=prompt,
             max_new_tokens=args.max_tokens,
-            device_id=args.device,
             num_layers=args.num_layers,
             max_seq_len=max_seq_len,
             use_trace=args.use_trace,
             use_decode_trace=args.use_decode_trace,
             use_vision_trace=args.use_vision_trace,
             use_unified_trace=args.use_unified_trace,
+            trace_region_size=args.trace_region_size,
         )
 
 

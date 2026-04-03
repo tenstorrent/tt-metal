@@ -88,7 +88,7 @@ def run_eval(
     num_samples: Optional[int] = None,
     max_new_tokens: int = 16,
     max_seq_len: int = 16384,
-    max_frames: int = 32,
+    max_frames: int = 8,
     max_fps: float = 2.0,
     num_layers: Optional[int] = None,
     use_trace: bool = False,
@@ -96,6 +96,7 @@ def run_eval(
     use_vision_trace: bool = False,
     use_unified_trace: bool = False,
     skip_download: bool = False,
+    trace_region_size: Optional[int] = None,
 ):
     """
     Run batch video evaluation.
@@ -114,21 +115,23 @@ def run_eval(
         use_vision_trace: Enable vision backbone tracing
         use_unified_trace: Enable unified Vision+Prefill trace
         skip_download: Skip downloading videos (assume they are already cached)
+        trace_region_size: Bytes reserved for trace capture when unified trace is on (default: 256 MiB)
     """
     import ttnn
 
     # Import demo functions here to avoid circular imports
     from models.demos.molmo2.demo.demo import (
+        DEFAULT_UNIFIED_TRACE_REGION_SIZE,
         VIDEO_PROMPT,
         Molmo2Generator,
         create_model,
-        effective_video_max_frames,
         load_model_weights,
         load_processor,
+        open_molmo_mesh_device,
         preprocess_video_molmo2,
     )
 
-    cache_path = Path(cache_dir)
+    cache_path = Path(cache_dir).resolve()
     test_path = Path(test_jsonl)
 
     # Load test entries
@@ -187,8 +190,13 @@ def run_eval(
     state_dict = load_model_weights()
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    mesh_shape = ttnn.MeshShape(1, 8)
-    device = ttnn.open_mesh_device(mesh_shape)
+    device = open_molmo_mesh_device(
+        use_unified_trace=use_unified_trace,
+        trace_region_size=trace_region_size,
+    )
+    if use_unified_trace:
+        trs = trace_region_size if trace_region_size is not None else DEFAULT_UNIFIED_TRACE_REGION_SIZE
+        logger.info(f"Unified trace: trace_region_size={trs} bytes ({trs // (1024 * 1024)} MiB)")
     logger.info(f"Opened mesh device with {device.get_num_devices()} devices")
 
     try:
@@ -224,12 +232,15 @@ def run_eval(
             logger.info(f"\n[{idx+1}/{len(runnable)}] {Path(video_path).name}")
             logger.info(f"  Question: {question_text[:100]}...")
 
+            # Absolute path so decord/molmo-utils do not resolve relative file:// to the wrong cwd
+            video_path_resolved = str(Path(video_path).resolve())
+
             try:
                 # Preprocess video
                 t0 = time.perf_counter()
                 video_inputs = preprocess_video_molmo2(
-                    video_path,
-                    max_frames=effective_video_max_frames(max_frames),
+                    video_path_resolved,
+                    max_frames=max_frames,
                     max_fps=max_fps,
                 )
                 extract_ms = (time.perf_counter() - t0) * 1000
@@ -238,11 +249,14 @@ def run_eval(
                 # Build prompt with video token + question
                 prompt = f"{VIDEO_PROMPT} {question_text}"
 
+                # Each clip starts with no stale traces (new capture or replay is isolated per video)
+                generator.release_all_traces()
+
                 # Reset KV cache for new video
                 generator.init_kv_cache()
                 generator.reset_kv_cache(start_pos=0)
 
-                # Run inference
+                # Run inference (capture + execute + decode for this video only)
                 response, perf = generator.run_video_inference(
                     video_inputs=video_inputs,
                     prompt=prompt,
@@ -292,6 +306,12 @@ def run_eval(
             except Exception as e:
                 logger.error(f"  ERROR: {e}")
                 results.append({"idx": idx, "url": url, "error": str(e)})
+            finally:
+                # Tear down all captured traces after each video so the next clip gets a clean CQ/trace state
+                try:
+                    generator.release_all_traces()
+                except Exception:
+                    pass
 
         # Aggregate report
         logger.info("\n" + "=" * 70)
@@ -353,8 +373,8 @@ def main():
     parser.add_argument(
         "--max-video-frames",
         type=int,
-        default=32,
-        help="Maximum frames to extract per video (use multiple of mesh width for even DP)",
+        default=8,
+        help="Maximum frames to extract per video",
     )
     parser.add_argument(
         "--max-video-fps",
@@ -394,6 +414,15 @@ def main():
         help="Enable unified Vision+Prefill trace",
     )
     parser.add_argument(
+        "--trace-region-size",
+        type=int,
+        default=None,
+        help=(
+            "Trace region size in bytes for unified capture (default when unified: 256 MiB). "
+            "Non-zero avoids trace buffer vs allocation overlap on long video graphs."
+        ),
+    )
+    parser.add_argument(
         "--output-json",
         type=str,
         default=None,
@@ -416,6 +445,7 @@ def main():
         use_vision_trace=args.use_vision_trace,
         use_unified_trace=args.use_unified_trace,
         skip_download=args.skip_download,
+        trace_region_size=args.trace_region_size,
     )
 
     if results and args.output_json:
