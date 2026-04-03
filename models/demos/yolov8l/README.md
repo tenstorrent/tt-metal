@@ -64,6 +64,8 @@ python models/demos/yolov8l/sahi_ultralytics_eval.py --backend tt --tt-eth-dispa
 
 `--tt-model` defaults to **yolov8l**; omit it for this demo. Other values (`yolov8s`, `yolov8x`) select those TT runners for comparison only.
 
+Throughput on **T3K (1×8 mesh):** eight **1280×1280** images at a time—each chip runs one image; SAHI runs **four** sequential batched forwards (tile 0…3), each forward batch **8**. Requires **8** images (directory or repeated inputs), `--tt-mesh-shape 1 8`, and `--tt-slice-dp-batch 8` (omit `--tt-slice-parallel-devices`). `summary.json` marks amortized per-image timings when this mode is on.
+
 ### 5) Offline tests (no device)
 ```bash
 pytest models/demos/yolov8l/tests/test_sahi_parallel_chunks.py
