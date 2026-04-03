@@ -817,16 +817,6 @@ bool ShouldProfileChip(uint32_t device_id) {
     return !filter_chips.has_value() || filter_chips->contains(device_id);
 }
 
-// Temporary: controls whether chip filter also skips DRAM read.
-// Default: true (skip read). Set TT_METAL_PROFILER_FILTER_SKIP_READ=0 to disable.
-static bool shouldSkipFilteredChipRead() {
-    static const bool skip = []() {
-        const char* val = std::getenv("TT_METAL_PROFILER_FILTER_SKIP_READ");
-        return !val || std::string(val) != "0";
-    }();
-    return skip;
-}
-
 #if defined(TRACY_ENABLE)
 // Shared implementation for reading device profiler results
 static void ReadDeviceProfilerResultsImpl(
@@ -841,7 +831,7 @@ static void ReadDeviceProfilerResultsImpl(
         return;
     }
 
-    if (!ShouldProfileChip(device->id()) && shouldSkipFilteredChipRead()) {
+    if (!ShouldProfileChip(device->id())) {
         return;
     }
 
@@ -986,7 +976,7 @@ void ProcessDeviceProfilerResults(
         return;
     }
 
-    if (!ShouldProfileChip(device->id()) && shouldSkipFilteredChipRead()) {
+    if (!ShouldProfileChip(device->id())) {
         return;
     }
 
