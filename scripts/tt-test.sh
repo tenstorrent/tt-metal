@@ -150,10 +150,10 @@ rm -f "$TRIAGE_LOG"
 if [[ "$SIM_MODE" == true ]]; then
     export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="echo HANG > ${TRIAGE_LOG}"
 else
-    # Requires tt-exalens: scripts/install_debugger.sh
+    # Requires tt-exalens: uv pip install -r tools/triage/requirements.txt
     if ! python3 -c "import ttexalens" 2>/dev/null; then
         echo "TT_TEST: WARNING: tt-exalens not installed — triage on hang will be unavailable." >&2
-        echo "TT_TEST: Install with: scripts/install_debugger.sh" >&2
+        echo "TT_TEST: Install with: uv pip install -r tools/triage/requirements.txt" >&2
     fi
     export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress > ${TRIAGE_LOG} 2>&1"
 fi
