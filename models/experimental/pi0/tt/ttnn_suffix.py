@@ -23,7 +23,7 @@ import torch
 import ttnn
 
 from models.experimental.pi0.common.configs import SuffixConfig
-from .ttnn_common import create_sinusoidal_pos_embedding_ttnn, tensor_1d_to_2d_ttnn
+from .ttnn_common import create_sinusoidal_pos_embedding_ttnn, precompute_sinusoidal_scaling_factor, tensor_1d_to_2d_ttnn
 
 
 class SuffixEmbeddingTTNN:
@@ -88,6 +88,11 @@ class SuffixEmbeddingTTNN:
         self.indices = ttnn.arange(0, 512, 1, device=device, dtype=ttnn.float32)
         self.indices = ttnn.to_layout(self.indices, ttnn.TILE_LAYOUT)  # Pre-convert for trace compatibility
 
+        # Pre-compute sinusoidal scaling factor (constant across timesteps, saves ~8 ops per call)
+        self._sin_scaling_factor = precompute_sinusoidal_scaling_factor(
+            config.expert_width, min_period=4e-3, max_period=4.0, device=device, indices=self.indices
+        )
+
     def embed_actions(self, noisy_actions: ttnn.Tensor) -> ttnn.Tensor:
         """
         Embed noisy actions using ttnn.linear.
@@ -146,6 +151,7 @@ class SuffixEmbeddingTTNN:
             max_period=4.0,
             device=self.device,
             indices=self.indices,
+            precomputed_scaling_factor=self._sin_scaling_factor,
         )
 
     def fuse_action_time(
