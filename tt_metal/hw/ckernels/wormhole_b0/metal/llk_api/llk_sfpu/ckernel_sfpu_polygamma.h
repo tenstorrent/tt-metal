@@ -9,6 +9,7 @@
 
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "sfpu/ckernel_sfpu_polyval.h"
 
 namespace ckernel::sfpu {
 
@@ -53,10 +54,12 @@ inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
     float n4 = static_cast<float>(n + 4);
     float n5 = static_cast<float>(n + 5);
     float nf = static_cast<float>(n);
+    float inv_nf = 1.0f / nf;
     float c_b2 = n1 / 12.0f;                           // B_2 term coefficient
     float c_b4 = -(n1 * n2 * n3) / 720.0f;             // B_4 term coefficient
     float c_b6 = (n1 * n2 * n3 * n4 * n5) / 30240.0f;  // B_6 term coefficient
 
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         sfpi::vFloat sum = sfpi::vFloat(0.0f);
@@ -66,48 +69,50 @@ inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
         for (int k = 0; k < NUM_TERMS; k++) {
             sfpi::vFloat xi = x + static_cast<float>(k);
 
-            // Compute xi^(n+1) by repeated multiplication
-            sfpi::vFloat power = xi;
-            for (int j = 1; j < n_plus_1; j++) {
-                power = power * xi;
+            // Compute reciprocal first, then raise to power (avoids overflow of large intermediates)
+            sfpi::vFloat inv_xi;
+            if constexpr (APPROXIMATION_MODE) {
+                inv_xi = _sfpu_reciprocal_<0>(xi);
+            } else if constexpr (is_fp32_dest_acc_en) {
+                inv_xi = _sfpu_reciprocal_<2>(xi);
+            } else {
+                inv_xi = _sfpu_reciprocal_<1>(xi);
             }
 
-            // 1 / xi^(n+1)
-            sum = sum + _sfpu_reciprocal_<2>(power);
+            sfpi::vFloat inv_power = inv_xi;
+            for (int j = 1; j < n_plus_1; j++) {
+                inv_power = inv_power * inv_xi;
+            }
+
+            sum = sum + inv_power;
         }
 
         // Part 2: Euler-Maclaurin asymptotic tail correction
         // For the remaining sum Σ_{k=NUM_TERMS}^{∞} 1/(x+k)^(n+1)
         // at z = x + NUM_TERMS:
         sfpi::vFloat z = x + static_cast<float>(NUM_TERMS);
-        sfpi::vFloat inv_z = _sfpu_reciprocal_<2>(z);
+
+        sfpi::vFloat inv_z;
+        if constexpr (APPROXIMATION_MODE) {
+            inv_z = _sfpu_reciprocal_<0>(z);
+        } else if constexpr (is_fp32_dest_acc_en) {
+            inv_z = _sfpu_reciprocal_<2>(z);
+        } else {
+            inv_z = _sfpu_reciprocal_<1>(z);
+        }
+
         sfpi::vFloat inv_z2 = inv_z * inv_z;
 
-        // z^n = z^(n+1) / z, but we compute inv_z^n = inv_z^(n+1) * z
-        // Compute inv_z^n and inv_z^(n+1) by repeated multiplication
+        // Compute inv_z^n by repeated multiplication
         sfpi::vFloat inv_z_n = inv_z;  // inv_z^1
         for (int j = 1; j < n; j++) {
             inv_z_n = inv_z_n * inv_z;  // inv_z^n
         }
-        sfpi::vFloat inv_z_np1 = inv_z_n * inv_z;  // inv_z^(n+1)
 
-        // Integral term: 1/(n * z^n)
-        sfpi::vFloat tail = inv_z_n * (1.0f / nf);
-
-        // Half-endpoint: 1/(2 * z^(n+1))
-        tail = tail + inv_z_np1 * 0.5f;
-
-        // B_2 Bernoulli correction: (n+1)/(12 * z^(n+2))
-        sfpi::vFloat inv_z_np2 = inv_z_np1 * inv_z;
-        tail = tail + inv_z_np2 * c_b2;
-
-        // B_4 Bernoulli correction: -(n+1)(n+2)(n+3)/(720 * z^(n+4))
-        sfpi::vFloat inv_z_np4 = inv_z_np2 * inv_z2;
-        tail = tail + inv_z_np4 * c_b4;
-
-        // B_6 Bernoulli correction: (n+1)(n+2)(n+3)(n+4)(n+5)/(30240 * z^(n+6))
-        sfpi::vFloat inv_z_np6 = inv_z_np4 * inv_z2;
-        tail = tail + inv_z_np6 * c_b6;
+        // Use PolynomialEvaluator for the Bernoulli polynomial in the tail:
+        // E = inv_nf + c_b2*inv_z2 + c_b4*inv_z2^2 + c_b6*inv_z2^3
+        sfpi::vFloat E = PolynomialEvaluator::eval(inv_z2, inv_nf, c_b2, c_b4, c_b6);
+        sfpi::vFloat tail = inv_z_n * (E + 0.5f * inv_z);
 
         sum = sum + tail;
 

@@ -13,14 +13,15 @@ namespace ckernel {
 
 // clang-format off
 /**
- * Performs the elementwise polygamma function ψ^(n)(x) using a truncated harmonic-like sum
- * plus an Euler–Maclaurin tail correction:
+ * Performs the elementwise polygamma function ψ^(n)(x) using a finite-sum plus
+ * Euler–Maclaurin tail approximation:
  *
  *   ψ^(n)(x) ≈ (-1)^(n+1) * n! * [ Σ_{k=0}^{10} 1 / (x + k)^(n+1)
- *                                  + R_EM(x, n; B2, B4, B6) ],
+ *                                  + R_EM(x, n; B₂, B₄, B₆) ],
  *
- * where R_EM is an Euler–Maclaurin remainder approximation using Bernoulli numbers B₂, B₄, and B₆
- * to approximate the infinite series tail. The kernel is intended for positive real inputs x and
+ * where R_EM is an Euler–Maclaurin remainder using Bernoulli numbers B₂, B₄, and B₆
+ * to approximate the infinite tail Σ_{k=11}^{∞} 1/(x+k)^(n+1), rather than performing
+ * a hard truncation at k = 10. The kernel is intended for positive real inputs x and
  * integer orders 1 ≤ n ≤ 11.
  *
  * polygamma_tile(idst, n_packed, scale_packed);
