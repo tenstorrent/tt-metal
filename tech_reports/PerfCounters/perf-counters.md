@@ -1064,4 +1064,3 @@ These counters have real hardware signals but were always 0 across all 8 test wo
 - Various `INSTRN_AVAILABLE` counters for instructions that issue immediately
 
 These are kept in the counter set and reported normally — they may become active with different workloads.
-

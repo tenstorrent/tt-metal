@@ -1172,7 +1172,11 @@ def _enrich_ops_from_device_logs(
                 r1 = get_counter_series(req_ch1)
                 g0 = get_counter_series(grant_ch0)
                 g1 = get_counter_series(grant_ch1)
-                bp = (((r0 - g0) + (r1 - g1)) / (r0 + r1) * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
+                bp = (
+                    (((r0 - g0) + (r1 - g1)) / (r0 + r1) * 100)
+                    .clip(lower=0)
+                    .replace([float("inf"), -float("inf")], nan)
+                )
                 grouped = bp.groupby(level=["run_host_id", "trace_id_count"])
                 return {
                     "min": grouped.min().to_dict(),
@@ -1261,7 +1265,9 @@ def _enrich_ops_from_device_logs(
                 # Use FIDELITY_PHASE_STALLS as a proxy: it counts cycles where
                 # math_instrn_valid & fidelity_phases_ongoing, i.e. math pipeline active.
                 fidelity = get_counter_series("FIDELITY_PHASE_STALLS") if has_counter("FIDELITY_PHASE_STALLS") else None
-                fidelity_ref = get_counter_ref_cnt("FIDELITY_PHASE_STALLS") if has_counter("FIDELITY_PHASE_STALLS") else None
+                fidelity_ref = (
+                    get_counter_ref_cnt("FIDELITY_PHASE_STALLS") if has_counter("FIDELITY_PHASE_STALLS") else None
+                )
                 if fidelity is not None and fidelity_ref is not None:
                     math_pipe_util = (fidelity / fidelity_ref * 100).replace([float("inf"), -float("inf")], nan)
                 else:
@@ -1659,7 +1665,11 @@ def _enrich_ops_from_device_logs(
             # === NEW: Fidelity analysis ===
             hifi4_rate = {}
             fidelity_overhead = {}
-            if has_counter("MATH_INSTRN_STARTED") and has_counter("INSTRN_2_HF_CYCLES") and has_counter("INSTRN_1_HF_CYCLE"):
+            if (
+                has_counter("MATH_INSTRN_STARTED")
+                and has_counter("INSTRN_2_HF_CYCLES")
+                and has_counter("INSTRN_1_HF_CYCLE")
+            ):
                 total = get_counter_series("MATH_INSTRN_STARTED")
                 hf2 = get_counter_series("INSTRN_2_HF_CYCLES")
                 hf1 = get_counter_series("INSTRN_1_HF_CYCLE")
@@ -1727,47 +1737,86 @@ def _enrich_ops_from_device_logs(
 
             if has_counter("L1_0_UNPACKER_0") and has_counter("L1_0_NOC_RING0_OUTGOING_0"):
                 # L1 Total Bandwidth Util: sum of all 8 port reqs / (8 * ref_cnt)
-                packer_key = "L1_0_UNIFIED_PACKER" if has_counter("L1_0_UNIFIED_PACKER") else "L1_0_UNPACKER_1_ECC_PACK1"
-                port_keys = ["L1_0_UNPACKER_0", packer_key, "L1_0_TDMA_BUNDLE_0_RISC", "L1_0_TDMA_BUNDLE_1_TRISC",
-                             "L1_0_NOC_RING0_OUTGOING_0", "L1_0_NOC_RING0_OUTGOING_1",
-                             "L1_0_NOC_RING0_INCOMING_0", "L1_0_NOC_RING0_INCOMING_1"]
+                packer_key = (
+                    "L1_0_UNIFIED_PACKER" if has_counter("L1_0_UNIFIED_PACKER") else "L1_0_UNPACKER_1_ECC_PACK1"
+                )
+                port_keys = [
+                    "L1_0_UNPACKER_0",
+                    packer_key,
+                    "L1_0_TDMA_BUNDLE_0_RISC",
+                    "L1_0_TDMA_BUNDLE_1_TRISC",
+                    "L1_0_NOC_RING0_OUTGOING_0",
+                    "L1_0_NOC_RING0_OUTGOING_1",
+                    "L1_0_NOC_RING0_INCOMING_0",
+                    "L1_0_NOC_RING0_INCOMING_1",
+                ]
                 total_req = sum(get_counter_series(k) for k in port_keys if has_counter(k))
                 ref = get_counter_ref_cnt("L1_0_UNPACKER_0")
                 ratio = (total_req / (8 * ref) * 100).replace([float("inf"), -float("inf")], nan)
                 grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
-                l1_total_bw = {"min": grouped.min().to_dict(), "median": grouped.median().to_dict(),
-                               "max": grouped.max().to_dict(), "avg": grouped.mean().to_dict()}
+                l1_total_bw = {
+                    "min": grouped.min().to_dict(),
+                    "median": grouped.median().to_dict(),
+                    "max": grouped.max().to_dict(),
+                    "avg": grouped.mean().to_dict(),
+                }
 
                 # L1 Read vs Write Ratio
-                reads = get_counter_series("L1_0_UNPACKER_0") + get_counter_series("L1_0_NOC_RING0_OUTGOING_0") + get_counter_series("L1_0_NOC_RING0_OUTGOING_1")
-                writes = get_counter_series(packer_key) + get_counter_series("L1_0_NOC_RING0_INCOMING_0") + get_counter_series("L1_0_NOC_RING0_INCOMING_1")
+                reads = (
+                    get_counter_series("L1_0_UNPACKER_0")
+                    + get_counter_series("L1_0_NOC_RING0_OUTGOING_0")
+                    + get_counter_series("L1_0_NOC_RING0_OUTGOING_1")
+                )
+                writes = (
+                    get_counter_series(packer_key)
+                    + get_counter_series("L1_0_NOC_RING0_INCOMING_0")
+                    + get_counter_series("L1_0_NOC_RING0_INCOMING_1")
+                )
                 ratio = (reads / (reads + writes) * 100).replace([float("inf"), -float("inf")], nan)
                 grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
-                l1_rw_ratio = {"min": grouped.min().to_dict(), "median": grouped.median().to_dict(),
-                               "max": grouped.max().to_dict(), "avg": grouped.mean().to_dict()}
+                l1_rw_ratio = {
+                    "min": grouped.min().to_dict(),
+                    "median": grouped.median().to_dict(),
+                    "max": grouped.max().to_dict(),
+                    "avg": grouped.mean().to_dict(),
+                }
 
                 # NOC Ring 0 Asymmetry
-                noc_out = get_counter_series("L1_0_NOC_RING0_OUTGOING_0") + get_counter_series("L1_0_NOC_RING0_OUTGOING_1")
-                noc_in = get_counter_series("L1_0_NOC_RING0_INCOMING_0") + get_counter_series("L1_0_NOC_RING0_INCOMING_1")
+                noc_out = get_counter_series("L1_0_NOC_RING0_OUTGOING_0") + get_counter_series(
+                    "L1_0_NOC_RING0_OUTGOING_1"
+                )
+                noc_in = get_counter_series("L1_0_NOC_RING0_INCOMING_0") + get_counter_series(
+                    "L1_0_NOC_RING0_INCOMING_1"
+                )
                 ratio = (noc_out / (noc_out + noc_in) * 100).replace([float("inf"), -float("inf")], nan)
                 grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
-                noc_asymmetry = {"min": grouped.min().to_dict(), "median": grouped.median().to_dict(),
-                                 "max": grouped.max().to_dict(), "avg": grouped.mean().to_dict()}
+                noc_asymmetry = {
+                    "min": grouped.min().to_dict(),
+                    "median": grouped.median().to_dict(),
+                    "max": grouped.max().to_dict(),
+                    "avg": grouped.mean().to_dict(),
+                }
 
                 # TDMA vs NOC L1 Share
                 tdma = get_counter_series("L1_0_TDMA_BUNDLE_0_RISC") + get_counter_series("L1_0_TDMA_BUNDLE_1_TRISC")
                 ratio = (tdma / (tdma + noc_out + noc_in) * 100).replace([float("inf"), -float("inf")], nan)
                 grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
-                tdma_vs_noc = {"min": grouped.min().to_dict(), "median": grouped.median().to_dict(),
-                               "max": grouped.max().to_dict(), "avg": grouped.mean().to_dict()}
+                tdma_vs_noc = {
+                    "min": grouped.min().to_dict(),
+                    "median": grouped.median().to_dict(),
+                    "max": grouped.max().to_dict(),
+                    "avg": grouped.mean().to_dict(),
+                }
 
             if has_counter("L1_0_UNPACKER_0_GRANT") and has_counter("L1_0_NOC_RING0_OUTGOING_0_GRANT"):
                 # L1 Contention Index
-                bp_pairs = [("L1_0_UNPACKER_0", "L1_0_UNPACKER_0_GRANT"),
-                            ("L1_0_NOC_RING0_OUTGOING_0", "L1_0_NOC_RING0_OUTGOING_0_GRANT"),
-                            ("L1_0_NOC_RING0_OUTGOING_1", "L1_0_NOC_RING0_OUTGOING_1_GRANT"),
-                            ("L1_0_NOC_RING0_INCOMING_0", "L1_0_NOC_RING0_INCOMING_0_GRANT"),
-                            ("L1_0_NOC_RING0_INCOMING_1", "L1_0_NOC_RING0_INCOMING_1_GRANT")]
+                bp_pairs = [
+                    ("L1_0_UNPACKER_0", "L1_0_UNPACKER_0_GRANT"),
+                    ("L1_0_NOC_RING0_OUTGOING_0", "L1_0_NOC_RING0_OUTGOING_0_GRANT"),
+                    ("L1_0_NOC_RING0_OUTGOING_1", "L1_0_NOC_RING0_OUTGOING_1_GRANT"),
+                    ("L1_0_NOC_RING0_INCOMING_0", "L1_0_NOC_RING0_INCOMING_0_GRANT"),
+                    ("L1_0_NOC_RING0_INCOMING_1", "L1_0_NOC_RING0_INCOMING_1_GRANT"),
+                ]
                 bp_sum = None
                 bp_count = 0
                 for req_k, grant_k in bp_pairs:
@@ -1780,8 +1829,12 @@ def _enrich_ops_from_device_logs(
                 if bp_count > 0:
                     avg_bp = bp_sum / bp_count
                     grouped = avg_bp.groupby(level=["run_host_id", "trace_id_count"])
-                    l1_contention = {"min": grouped.min().to_dict(), "median": grouped.median().to_dict(),
-                                     "max": grouped.max().to_dict(), "avg": grouped.mean().to_dict()}
+                    l1_contention = {
+                        "min": grouped.min().to_dict(),
+                        "median": grouped.median().to_dict(),
+                        "max": grouped.max().to_dict(),
+                        "avg": grouped.mean().to_dict(),
+                    }
 
             if has_counter("L1_0_UNPACKER_0_GRANT") and has_counter("UNPACK0_BUSY_THREAD0"):
                 unpacker_l1_eff = compute_ratio_metric("L1_0_UNPACKER_0_GRANT", "UNPACK0_BUSY_THREAD0")
@@ -1792,17 +1845,29 @@ def _enrich_ops_from_device_logs(
                 busy = get_counter_series("PACKER_BUSY")
                 ratio = (grant / busy * 100).clip(upper=100).replace([float("inf"), -float("inf")], nan)
                 grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
-                packer_l1_eff = {"min": grouped.min().to_dict(), "median": grouped.median().to_dict(),
-                                 "max": grouped.max().to_dict(), "avg": grouped.mean().to_dict()}
+                packer_l1_eff = {
+                    "min": grouped.min().to_dict(),
+                    "median": grouped.median().to_dict(),
+                    "max": grouped.max().to_dict(),
+                    "avg": grouped.mean().to_dict(),
+                }
 
             if has_counter("FPU_COUNTER") and has_counter("L1_0_NOC_RING0_OUTGOING_0"):
-                noc_total = get_counter_series("L1_0_NOC_RING0_OUTGOING_0") + get_counter_series("L1_0_NOC_RING0_OUTGOING_1") + \
-                            get_counter_series("L1_0_NOC_RING0_INCOMING_0") + get_counter_series("L1_0_NOC_RING0_INCOMING_1")
+                noc_total = (
+                    get_counter_series("L1_0_NOC_RING0_OUTGOING_0")
+                    + get_counter_series("L1_0_NOC_RING0_OUTGOING_1")
+                    + get_counter_series("L1_0_NOC_RING0_INCOMING_0")
+                    + get_counter_series("L1_0_NOC_RING0_INCOMING_1")
+                )
                 fpu = get_counter_series("FPU_COUNTER")
                 ratio = (noc_total / (fpu + noc_total) * 100).replace([float("inf"), -float("inf")], nan)
                 grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
-                noc_vs_compute = {"min": grouped.min().to_dict(), "median": grouped.median().to_dict(),
-                                  "max": grouped.max().to_dict(), "avg": grouped.mean().to_dict()}
+                noc_vs_compute = {
+                    "min": grouped.min().to_dict(),
+                    "median": grouped.median().to_dict(),
+                    "max": grouped.max().to_dict(),
+                    "avg": grouped.mean().to_dict(),
+                }
 
         # Enrich ops with device data and perf counters
         for device_op, device_op_time in zip(host_ops_by_device[device], device_ops_time):
@@ -2205,49 +2270,66 @@ def get_device_data_generate_report(
 
                     # Calculate per-core efficiency metrics
                     eff_pivot["SFPU Util"] = eff_pivot.apply(
-                        lambda x: (x.get("value_SFPU_COUNTER", 0) / x.get("ref_cnt_SFPU_COUNTER", 1) * 100)
-                        if x.get("ref_cnt_SFPU_COUNTER", 0) > 0
-                        else nan,
+                        lambda x: (
+                            (x.get("value_SFPU_COUNTER", 0) / x.get("ref_cnt_SFPU_COUNTER", 1) * 100)
+                            if x.get("ref_cnt_SFPU_COUNTER", 0) > 0
+                            else nan
+                        ),
                         axis=1,
                     )
                     eff_pivot["FPU Util"] = eff_pivot.apply(
-                        lambda x: (x.get("value_FPU_COUNTER", 0) / x.get("ref_cnt_FPU_COUNTER", 1) * 100)
-                        if x.get("ref_cnt_FPU_COUNTER", 0) > 0
-                        else nan,
+                        lambda x: (
+                            (x.get("value_FPU_COUNTER", 0) / x.get("ref_cnt_FPU_COUNTER", 1) * 100)
+                            if x.get("ref_cnt_FPU_COUNTER", 0) > 0
+                            else nan
+                        ),
                         axis=1,
                     )
                     eff_pivot["MATH Util"] = eff_pivot.apply(
-                        lambda x: (x.get("value_MATH_COUNTER", 0) / x.get("ref_cnt_MATH_COUNTER", 1) * 100)
-                        if x.get("ref_cnt_MATH_COUNTER", 0) > 0
-                        else nan,
+                        lambda x: (
+                            (x.get("value_MATH_COUNTER", 0) / x.get("ref_cnt_MATH_COUNTER", 1) * 100)
+                            if x.get("ref_cnt_MATH_COUNTER", 0) > 0
+                            else nan
+                        ),
                         axis=1,
                     )
                     # Unpacker Write Efficiency — WH only (SRCA_WRITE/SRCB_WRITE counters not on BH)
                     if "value_SRCA_WRITE" in eff_pivot.columns:
                         eff_pivot["Unpacker0 Write Efficiency"] = eff_pivot.apply(
-                            lambda x: safe_div(x.get("value_SRCA_WRITE", 0), x.get("value_UNPACK0_BUSY_THREAD0", 0)), axis=1
+                            lambda x: safe_div(x.get("value_SRCA_WRITE", 0), x.get("value_UNPACK0_BUSY_THREAD0", 0)),
+                            axis=1,
                         )
                         eff_pivot["Unpacker1 Write Efficiency"] = eff_pivot.apply(
-                            lambda x: safe_div(x.get("value_SRCB_WRITE", 0), x.get("value_UNPACK1_BUSY_THREAD0", 0)), axis=1
+                            lambda x: safe_div(x.get("value_SRCB_WRITE", 0), x.get("value_UNPACK1_BUSY_THREAD0", 0)),
+                            axis=1,
                         )
                     # Packer Efficiency: On WH, PACKER_DEST_READ_AVAILABLE / PACKER_BUSY.
                     # On BH, PACKER_BUSY is always 0. Fallback: DEST_READ_GRANTED_1 / PACKER_DEST_READ_AVAILABLE
                     # (grant rate for dest reads — both signals track the same event on BH silicon).
-                    has_packer_busy = "value_PACKER_BUSY" in eff_pivot.columns and eff_pivot["value_PACKER_BUSY"].sum() > 0
+                    has_packer_busy = (
+                        "value_PACKER_BUSY" in eff_pivot.columns and eff_pivot["value_PACKER_BUSY"].sum() > 0
+                    )
                     if has_packer_busy:
                         eff_pivot["Packer Efficiency"] = eff_pivot.apply(
-                            lambda x: safe_div(x.get("value_PACKER_DEST_READ_AVAILABLE", 0), x.get("value_PACKER_BUSY", 0)),
+                            lambda x: safe_div(
+                                x.get("value_PACKER_DEST_READ_AVAILABLE", 0), x.get("value_PACKER_BUSY", 0)
+                            ),
                             axis=1,
                         )
                     elif "value_DEST_READ_GRANTED_1" in eff_pivot.columns:
                         eff_pivot["Packer Efficiency"] = eff_pivot.apply(
-                            lambda x: safe_div(x.get("value_DEST_READ_GRANTED_1", 0), x.get("value_PACKER_DEST_READ_AVAILABLE", 0)),
+                            lambda x: safe_div(
+                                x.get("value_DEST_READ_GRANTED_1", 0), x.get("value_PACKER_DEST_READ_AVAILABLE", 0)
+                            ),
                             axis=1,
                         )
 
                     # Math Pipeline Utilization: On BH, MATH_INSTRN_STARTED is always 0.
                     # Fall back to FIDELITY_PHASE_STALLS / ref_cnt.
-                    if "value_MATH_INSTRN_STARTED" in eff_pivot.columns and eff_pivot["value_MATH_INSTRN_STARTED"].sum() > 0:
+                    if (
+                        "value_MATH_INSTRN_STARTED" in eff_pivot.columns
+                        and eff_pivot["value_MATH_INSTRN_STARTED"].sum() > 0
+                    ):
                         eff_pivot["Math Pipeline Utilization"] = eff_pivot.apply(
                             lambda x: safe_div(
                                 x.get("value_MATH_INSTRN_STARTED", 0), x.get("value_MATH_INSTRN_AVAILABLE", 0)
@@ -2270,7 +2352,8 @@ def get_device_data_generate_report(
                         )
                     elif "ref_cnt_AVAILABLE_MATH" in eff_pivot.columns:
                         eff_pivot["Math-to-Pack Handoff Efficiency"] = eff_pivot.apply(
-                            lambda x: safe_div(x.get("value_AVAILABLE_MATH", 0), x.get("ref_cnt_AVAILABLE_MATH", 0)), axis=1
+                            lambda x: safe_div(x.get("value_AVAILABLE_MATH", 0), x.get("ref_cnt_AVAILABLE_MATH", 0)),
+                            axis=1,
                         )
                     eff_pivot["Unpacker-to-Math Data Flow"] = eff_pivot.apply(
                         lambda x: safe_div(
@@ -2284,9 +2367,11 @@ def get_device_data_generate_report(
                             ["Unpacker0 Write Efficiency", "Unpacker1 Write Efficiency"]
                         ].mean(axis=1, skipna=True)
                     eff_pivot["FPU Execution Efficiency"] = eff_pivot.apply(
-                        lambda x: (x.get("value_FPU_COUNTER", 0) / x.get("value_FPU_INSTRN_AVAILABLE_1", 1) * 100)
-                        if x.get("value_FPU_INSTRN_AVAILABLE_1", 0) > 0
-                        else nan,
+                        lambda x: (
+                            (x.get("value_FPU_COUNTER", 0) / x.get("value_FPU_INSTRN_AVAILABLE_1", 1) * 100)
+                            if x.get("value_FPU_INSTRN_AVAILABLE_1", 0) > 0
+                            else nan
+                        ),
                         axis=1,
                     )
 
@@ -2476,6 +2561,7 @@ def get_device_data_generate_report(
                             n = x.get(num_key, 0)
                             d = x.get(den_key, 0)
                             return (n / d * 100) if d > 0 else nan
+
                         return fn
 
                     def safe_complement(counter_key, total_key):
@@ -2483,6 +2569,7 @@ def get_device_data_generate_report(
                             v = x.get(counter_key, 0)
                             t = x.get(total_key, 0)
                             return max(0.0, (t - v) / t * 100) if t > 0 else nan
+
                         return fn
 
                     def safe_util(counter_key, ref_key):
@@ -2490,24 +2577,32 @@ def get_device_data_generate_report(
                             v = x.get(counter_key, 0)
                             r = x.get(ref_key, 0)
                             return (v / r * 100) if r > 0 else nan
+
                         return fn
 
                     # Instruction availability rate = cycles available / ref_cnt * 100
                     # Shows what % of time each instruction type was ready to issue
                     eff_pivot["CFG Instrn Avail Rate T0"] = eff_pivot.apply(
-                        safe_util("value_CFG_INSTRN_AVAILABLE_0", "ref_cnt_CFG_INSTRN_AVAILABLE_0"), axis=1)
+                        safe_util("value_CFG_INSTRN_AVAILABLE_0", "ref_cnt_CFG_INSTRN_AVAILABLE_0"), axis=1
+                    )
                     eff_pivot["SYNC Instrn Avail Rate T0"] = eff_pivot.apply(
-                        safe_util("value_SYNC_INSTRN_AVAILABLE_0", "ref_cnt_SYNC_INSTRN_AVAILABLE_0"), axis=1)
+                        safe_util("value_SYNC_INSTRN_AVAILABLE_0", "ref_cnt_SYNC_INSTRN_AVAILABLE_0"), axis=1
+                    )
                     eff_pivot["THCON Instrn Avail Rate T0"] = eff_pivot.apply(
-                        safe_util("value_THCON_INSTRN_AVAILABLE_0", "ref_cnt_THCON_INSTRN_AVAILABLE_0"), axis=1)
+                        safe_util("value_THCON_INSTRN_AVAILABLE_0", "ref_cnt_THCON_INSTRN_AVAILABLE_0"), axis=1
+                    )
                     eff_pivot["MOVE Instrn Avail Rate T0"] = eff_pivot.apply(
-                        safe_util("value_MOVE_INSTRN_AVAILABLE_0", "ref_cnt_MOVE_INSTRN_AVAILABLE_0"), axis=1)
+                        safe_util("value_MOVE_INSTRN_AVAILABLE_0", "ref_cnt_MOVE_INSTRN_AVAILABLE_0"), axis=1
+                    )
                     eff_pivot["MATH Instrn Avail Rate T1"] = eff_pivot.apply(
-                        safe_util("value_FPU_INSTRN_AVAILABLE_1", "ref_cnt_FPU_INSTRN_AVAILABLE_1"), axis=1)
+                        safe_util("value_FPU_INSTRN_AVAILABLE_1", "ref_cnt_FPU_INSTRN_AVAILABLE_1"), axis=1
+                    )
                     eff_pivot["UNPACK Instrn Avail Rate T0"] = eff_pivot.apply(
-                        safe_util("value_UNPACK_INSTRN_AVAILABLE_0", "ref_cnt_UNPACK_INSTRN_AVAILABLE_0"), axis=1)
+                        safe_util("value_UNPACK_INSTRN_AVAILABLE_0", "ref_cnt_UNPACK_INSTRN_AVAILABLE_0"), axis=1
+                    )
                     eff_pivot["PACK Instrn Avail Rate T2"] = eff_pivot.apply(
-                        safe_util("value_PACK_INSTRN_AVAILABLE_2", "ref_cnt_PACK_INSTRN_AVAILABLE_2"), axis=1)
+                        safe_util("value_PACK_INSTRN_AVAILABLE_2", "ref_cnt_PACK_INSTRN_AVAILABLE_2"), axis=1
+                    )
 
                     # Stall breakdown pct metrics removed: WAITING_FOR_X counts cycles the
                     # hardware unit was busy, not cycles the thread was stalled by that unit.
@@ -2515,13 +2610,17 @@ def get_device_data_generate_report(
 
                     # Write port blocking
                     eff_pivot["SrcA Write Port Blocked Rate"] = eff_pivot.apply(
-                        safe_complement("value_SRCA_WRITE_NOT_BLOCKED_OVR", "value_SRCA_WRITE_AVAILABLE"), axis=1)
+                        safe_complement("value_SRCA_WRITE_NOT_BLOCKED_OVR", "value_SRCA_WRITE_AVAILABLE"), axis=1
+                    )
                     eff_pivot["SrcB Write Port Blocked Rate"] = eff_pivot.apply(
-                        safe_complement("value_SRCB_WRITE_NOT_BLOCKED_PORT", "value_SRCB_WRITE_AVAILABLE"), axis=1)
+                        safe_complement("value_SRCB_WRITE_NOT_BLOCKED_PORT", "value_SRCB_WRITE_AVAILABLE"), axis=1
+                    )
                     eff_pivot["SrcA Write Actual Efficiency"] = eff_pivot.apply(
-                        safe_ratio("value_SRCA_WRITE_ACTUAL", "value_SRCA_WRITE_AVAILABLE"), axis=1)
+                        safe_ratio("value_SRCA_WRITE_ACTUAL", "value_SRCA_WRITE_AVAILABLE"), axis=1
+                    )
                     eff_pivot["SrcB Write Actual Efficiency"] = eff_pivot.apply(
-                        safe_ratio("value_SRCB_WRITE_ACTUAL", "value_SRCB_WRITE_AVAILABLE"), axis=1)
+                        safe_ratio("value_SRCB_WRITE_ACTUAL", "value_SRCB_WRITE_AVAILABLE"), axis=1
+                    )
 
                     # Dest read and math stall metrics
                     def safe_bp_single(req_key, grant_key):
@@ -2529,28 +2628,55 @@ def get_device_data_generate_report(
                             r = x.get(req_key, 0)
                             g = x.get(grant_key, 0)
                             return max(0.0, (r - g) / r * 100) if r > 0 else nan
+
                         return fn
+
                     # BH uses DEST_READ_GRANTED_1 (268), WH uses DEST_READ_GRANTED_0 (267)
-                    dest_grant_col = "value_DEST_READ_GRANTED_1" if "value_DEST_READ_GRANTED_1" in eff_pivot.columns \
+                    dest_grant_col = (
+                        "value_DEST_READ_GRANTED_1"
+                        if "value_DEST_READ_GRANTED_1" in eff_pivot.columns
                         else "value_DEST_READ_GRANTED_0"
+                    )
                     eff_pivot["Dest Read Backpressure"] = eff_pivot.apply(
-                        safe_bp_single("value_PACKER_DEST_READ_AVAILABLE", dest_grant_col), axis=1)
-                    if "value_MATH_NOT_STALLED_DEST_WR_PORT" in eff_pivot.columns and eff_pivot["value_MATH_NOT_STALLED_DEST_WR_PORT"].sum() > 0:
+                        safe_bp_single("value_PACKER_DEST_READ_AVAILABLE", dest_grant_col), axis=1
+                    )
+                    if (
+                        "value_MATH_NOT_STALLED_DEST_WR_PORT" in eff_pivot.columns
+                        and eff_pivot["value_MATH_NOT_STALLED_DEST_WR_PORT"].sum() > 0
+                    ):
                         eff_pivot["Math Dest Write Port Stall Rate"] = eff_pivot.apply(
-                            safe_complement("value_MATH_NOT_STALLED_DEST_WR_PORT", "value_MATH_INSTRN_AVAILABLE"), axis=1)
+                            safe_complement("value_MATH_NOT_STALLED_DEST_WR_PORT", "value_MATH_INSTRN_AVAILABLE"),
+                            axis=1,
+                        )
                     eff_pivot["Math Scoreboard Stall Rate"] = eff_pivot.apply(
-                        safe_complement("value_AVAILABLE_MATH", "value_MATH_INSTRN_AVAILABLE"), axis=1)
+                        safe_complement("value_AVAILABLE_MATH", "value_MATH_INSTRN_AVAILABLE"), axis=1
+                    )
 
                     # Instruction issue rates (per cycle, not %)
                     eff_pivot["Unpack Instrn Issue Rate T0"] = eff_pivot.apply(
-                        lambda x: x.get("value_UNPACK_INSTRN_ISSUED_0", 0) / x.get("ref_cnt_UNPACK_INSTRN_ISSUED_0", 1)
-                        if x.get("ref_cnt_UNPACK_INSTRN_ISSUED_0", 0) > 0 else nan, axis=1)
+                        lambda x: (
+                            x.get("value_UNPACK_INSTRN_ISSUED_0", 0) / x.get("ref_cnt_UNPACK_INSTRN_ISSUED_0", 1)
+                            if x.get("ref_cnt_UNPACK_INSTRN_ISSUED_0", 0) > 0
+                            else nan
+                        ),
+                        axis=1,
+                    )
                     eff_pivot["Math Instrn Issue Rate T1"] = eff_pivot.apply(
-                        lambda x: x.get("value_FPU_INSTRN_ISSUED_1", 0) / x.get("ref_cnt_FPU_INSTRN_ISSUED_1", 1)
-                        if x.get("ref_cnt_FPU_INSTRN_ISSUED_1", 0) > 0 else nan, axis=1)
+                        lambda x: (
+                            x.get("value_FPU_INSTRN_ISSUED_1", 0) / x.get("ref_cnt_FPU_INSTRN_ISSUED_1", 1)
+                            if x.get("ref_cnt_FPU_INSTRN_ISSUED_1", 0) > 0
+                            else nan
+                        ),
+                        axis=1,
+                    )
                     eff_pivot["Pack Instrn Issue Rate T2"] = eff_pivot.apply(
-                        lambda x: x.get("value_PACK_INSTRN_ISSUED_2", 0) / x.get("ref_cnt_PACK_INSTRN_ISSUED_2", 1)
-                        if x.get("ref_cnt_PACK_INSTRN_ISSUED_2", 0) > 0 else nan, axis=1)
+                        lambda x: (
+                            x.get("value_PACK_INSTRN_ISSUED_2", 0) / x.get("ref_cnt_PACK_INSTRN_ISSUED_2", 1)
+                            if x.get("ref_cnt_PACK_INSTRN_ISSUED_2", 0) > 0
+                            else nan
+                        ),
+                        axis=1,
+                    )
 
                     # Fidelity analysis
                     def hifi4_rate_fn(x):
@@ -2564,56 +2690,79 @@ def get_device_data_generate_report(
                         hf2 = x.get("value_INSTRN_2_HF_CYCLES", 0)
                         hf1 = x.get("value_INSTRN_1_HF_CYCLE", 0)
                         return max(0.0, (total - hf2 - hf1) / total * 100)
+
                     eff_pivot["HiFi4 Instrn Rate"] = eff_pivot.apply(hifi4_rate_fn, axis=1)
                     eff_pivot["Fidelity Phase Overhead"] = eff_pivot.apply(
-                        safe_util("value_FIDELITY_PHASE_STALLS", "ref_cnt_FIDELITY_PHASE_STALLS"), axis=1)
+                        safe_util("value_FIDELITY_PHASE_STALLS", "ref_cnt_FIDELITY_PHASE_STALLS"), axis=1
+                    )
 
                     # Packer engine granularity (WH only — BH has PACK_COUNT=1, counters not collected)
                     if "value_PACKER_BUSY_0" in eff_pivot.columns:
                         eff_pivot["Packer Engine 0 Util"] = eff_pivot.apply(
-                            safe_util("value_PACKER_BUSY_0", "ref_cnt_PACKER_BUSY_0"), axis=1)
+                            safe_util("value_PACKER_BUSY_0", "ref_cnt_PACKER_BUSY_0"), axis=1
+                        )
                         eff_pivot["Packer Engine 1 Util"] = eff_pivot.apply(
-                            safe_util("value_PACKER_BUSY_1", "ref_cnt_PACKER_BUSY_1"), axis=1)
+                            safe_util("value_PACKER_BUSY_1", "ref_cnt_PACKER_BUSY_1"), axis=1
+                        )
                         eff_pivot["Packer Engine 2 Util"] = eff_pivot.apply(
-                            safe_util("value_PACKER_BUSY_2", "ref_cnt_PACKER_BUSY_2"), axis=1)
+                            safe_util("value_PACKER_BUSY_2", "ref_cnt_PACKER_BUSY_2"), axis=1
+                        )
 
                     # Low priority waits
                     eff_pivot["MMIO Idle Wait T0"] = eff_pivot.apply(
-                        safe_util("value_WAITING_FOR_MMIO_IDLE_0", "ref_cnt_WAITING_FOR_MMIO_IDLE_0"), axis=1)
+                        safe_util("value_WAITING_FOR_MMIO_IDLE_0", "ref_cnt_WAITING_FOR_MMIO_IDLE_0"), axis=1
+                    )
                     eff_pivot["SFPU Idle Wait T1"] = eff_pivot.apply(
-                        safe_util("value_WAITING_FOR_SFPU_IDLE_1", "ref_cnt_WAITING_FOR_SFPU_IDLE_1"), axis=1)
+                        safe_util("value_WAITING_FOR_SFPU_IDLE_1", "ref_cnt_WAITING_FOR_SFPU_IDLE_1"), axis=1
+                    )
                     eff_pivot["THCON Idle Wait T0"] = eff_pivot.apply(
-                        safe_util("value_WAITING_FOR_THCON_IDLE_0", "ref_cnt_WAITING_FOR_THCON_IDLE_0"), axis=1)
+                        safe_util("value_WAITING_FOR_THCON_IDLE_0", "ref_cnt_WAITING_FOR_THCON_IDLE_0"), axis=1
+                    )
                     eff_pivot["MOVE Idle Wait T0"] = eff_pivot.apply(
-                        safe_util("value_WAITING_FOR_MOVE_IDLE_0", "ref_cnt_WAITING_FOR_MOVE_IDLE_0"), axis=1)
+                        safe_util("value_WAITING_FOR_MOVE_IDLE_0", "ref_cnt_WAITING_FOR_MOVE_IDLE_0"), axis=1
+                    )
                     eff_pivot["RISC Core L1 Util"] = eff_pivot.apply(
-                        safe_util("value_L1_1_RISC_CORE", "ref_cnt_L1_1_RISC_CORE"), axis=1)
+                        safe_util("value_L1_1_RISC_CORE", "ref_cnt_L1_1_RISC_CORE"), axis=1
+                    )
 
                     # === L1 composite metrics (multi-counter) ===
                     def l1_total_bw(x):
                         """Sum of all 8 L1_0 port req counts / (8 * ref_cnt)."""
-                        ports = ["value_L1_0_UNPACKER_0",
-                                 "value_L1_0_UNIFIED_PACKER" if "value_L1_0_UNIFIED_PACKER" in eff_pivot.columns
-                                 else "value_L1_0_UNPACKER_1_ECC_PACK1",
-                                 "value_L1_0_TDMA_BUNDLE_0_RISC", "value_L1_0_TDMA_BUNDLE_1_TRISC",
-                                 "value_L1_0_NOC_RING0_OUTGOING_0", "value_L1_0_NOC_RING0_OUTGOING_1",
-                                 "value_L1_0_NOC_RING0_INCOMING_0", "value_L1_0_NOC_RING0_INCOMING_1"]
+                        ports = [
+                            "value_L1_0_UNPACKER_0",
+                            (
+                                "value_L1_0_UNIFIED_PACKER"
+                                if "value_L1_0_UNIFIED_PACKER" in eff_pivot.columns
+                                else "value_L1_0_UNPACKER_1_ECC_PACK1"
+                            ),
+                            "value_L1_0_TDMA_BUNDLE_0_RISC",
+                            "value_L1_0_TDMA_BUNDLE_1_TRISC",
+                            "value_L1_0_NOC_RING0_OUTGOING_0",
+                            "value_L1_0_NOC_RING0_OUTGOING_1",
+                            "value_L1_0_NOC_RING0_INCOMING_0",
+                            "value_L1_0_NOC_RING0_INCOMING_1",
+                        ]
                         total = sum(x.get(p, 0) for p in ports)
                         ref = x.get("ref_cnt_L1_0_UNPACKER_0", 0)
                         return (total / (8 * ref) * 100) if ref > 0 else nan
+
                     eff_pivot["L1 Total Bandwidth Util"] = eff_pivot.apply(l1_total_bw, axis=1)
 
                     def l1_rw_ratio(x):
                         """(read ports) / (write ports). Read = Unpacker + NOC Out, Write = Packer + NOC In."""
-                        reads = (x.get("value_L1_0_UNPACKER_0", 0) +
-                                 x.get("value_L1_0_NOC_RING0_OUTGOING_0", 0) +
-                                 x.get("value_L1_0_NOC_RING0_OUTGOING_1", 0))
-                        writes = (x.get("value_L1_0_UNIFIED_PACKER",
-                                  x.get("value_L1_0_UNPACKER_1_ECC_PACK1", 0)) +
-                                  x.get("value_L1_0_NOC_RING0_INCOMING_0", 0) +
-                                  x.get("value_L1_0_NOC_RING0_INCOMING_1", 0))
+                        reads = (
+                            x.get("value_L1_0_UNPACKER_0", 0)
+                            + x.get("value_L1_0_NOC_RING0_OUTGOING_0", 0)
+                            + x.get("value_L1_0_NOC_RING0_OUTGOING_1", 0)
+                        )
+                        writes = (
+                            x.get("value_L1_0_UNIFIED_PACKER", x.get("value_L1_0_UNPACKER_1_ECC_PACK1", 0))
+                            + x.get("value_L1_0_NOC_RING0_INCOMING_0", 0)
+                            + x.get("value_L1_0_NOC_RING0_INCOMING_1", 0)
+                        )
                         total = reads + writes
                         return (reads / total * 100) if total > 0 else nan
+
                     eff_pivot["L1 Read vs Write Ratio"] = eff_pivot.apply(l1_rw_ratio, axis=1)
 
                     def noc_asymmetry(x):
@@ -2622,6 +2771,7 @@ def get_device_data_generate_report(
                         in0 = x.get("value_L1_0_NOC_RING0_INCOMING_0", 0) + x.get("value_L1_0_NOC_RING0_INCOMING_1", 0)
                         total = out0 + in0
                         return (out0 / total * 100) if total > 0 else nan
+
                     eff_pivot["NOC Ring 0 Asymmetry"] = eff_pivot.apply(noc_asymmetry, axis=1)
 
                     def l1_contention_index(x):
@@ -2640,6 +2790,7 @@ def get_device_data_generate_report(
                             if req > 0:
                                 bp_values.append(max(0.0, (req - grant) / req * 100))
                         return sum(bp_values) / len(bp_values) if bp_values else nan
+
                     eff_pivot["L1 Contention Index"] = eff_pivot.apply(l1_contention_index, axis=1)
 
                     def unpacker_l1_eff(x):
@@ -2647,6 +2798,7 @@ def get_device_data_generate_report(
                         grant = x.get("value_L1_0_UNPACKER_0_GRANT", 0)
                         busy = x.get("value_UNPACK0_BUSY_THREAD0", 0)
                         return (grant / busy * 100) if busy > 0 else nan
+
                     eff_pivot["Unpacker L1 Efficiency"] = eff_pivot.apply(unpacker_l1_eff, axis=1)
 
                     def packer_l1_eff(x):
@@ -2654,29 +2806,35 @@ def get_device_data_generate_report(
                         grant = x.get("value_L1_0_PORT1_GRANT", 0)
                         busy = x.get("value_PACKER_BUSY", 0)
                         return min(100.0, grant / busy * 100) if busy > 0 else nan
+
                     eff_pivot["Packer L1 Efficiency"] = eff_pivot.apply(packer_l1_eff, axis=1)
 
                     def noc_vs_compute(x):
                         """NOC cycles / (FPU + NOC cycles). >50% = NOC-bound, <50% = compute-bound."""
-                        noc = (x.get("value_L1_0_NOC_RING0_OUTGOING_0", 0) +
-                               x.get("value_L1_0_NOC_RING0_OUTGOING_1", 0) +
-                               x.get("value_L1_0_NOC_RING0_INCOMING_0", 0) +
-                               x.get("value_L1_0_NOC_RING0_INCOMING_1", 0))
+                        noc = (
+                            x.get("value_L1_0_NOC_RING0_OUTGOING_0", 0)
+                            + x.get("value_L1_0_NOC_RING0_OUTGOING_1", 0)
+                            + x.get("value_L1_0_NOC_RING0_INCOMING_0", 0)
+                            + x.get("value_L1_0_NOC_RING0_INCOMING_1", 0)
+                        )
                         fpu = x.get("value_FPU_COUNTER", 0)
                         total = fpu + noc
                         return (noc / total * 100) if total > 0 else nan
+
                     eff_pivot["NOC vs Compute Balance"] = eff_pivot.apply(noc_vs_compute, axis=1)
 
                     def tdma_vs_noc_share(x):
                         """TDMA L1 share = TDMA / (TDMA + NOC). Shows RISC vs NOC memory traffic split."""
-                        tdma = (x.get("value_L1_0_TDMA_BUNDLE_0_RISC", 0) +
-                                x.get("value_L1_0_TDMA_BUNDLE_1_TRISC", 0))
-                        noc = (x.get("value_L1_0_NOC_RING0_OUTGOING_0", 0) +
-                               x.get("value_L1_0_NOC_RING0_OUTGOING_1", 0) +
-                               x.get("value_L1_0_NOC_RING0_INCOMING_0", 0) +
-                               x.get("value_L1_0_NOC_RING0_INCOMING_1", 0))
+                        tdma = x.get("value_L1_0_TDMA_BUNDLE_0_RISC", 0) + x.get("value_L1_0_TDMA_BUNDLE_1_TRISC", 0)
+                        noc = (
+                            x.get("value_L1_0_NOC_RING0_OUTGOING_0", 0)
+                            + x.get("value_L1_0_NOC_RING0_OUTGOING_1", 0)
+                            + x.get("value_L1_0_NOC_RING0_INCOMING_0", 0)
+                            + x.get("value_L1_0_NOC_RING0_INCOMING_1", 0)
+                        )
                         total = tdma + noc
                         return (tdma / total * 100) if total > 0 else nan
+
                     eff_pivot["TDMA vs NOC L1 Share"] = eff_pivot.apply(tdma_vs_noc_share, axis=1)
 
                     # Aggregate metrics per operation (min, median, max, avg)

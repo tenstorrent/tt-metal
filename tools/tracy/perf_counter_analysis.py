@@ -22,32 +22,36 @@ DeviceOpsDict = Dict[int, List[OpDict]]
 # - MATH_INSTRN_STARTED: o_math_instrnbuf_rden inactive on BH
 # - HF cycle counters: gated by o_math_instrnbuf_rden (inactive on BH)
 # - SFPU_IDLE counters: slice indices 58-60 are out of bounds (RTL has 58 slices: 0-57)
-BH_RTL_DEAD_COUNTERS = frozenset({
-    "PACKER_DEST_READ_2",
-    "PACKER_DEST_READ_3",
-    "PACKER_BUSY_0",
-    "PACKER_BUSY_1",
-    "PACKER_BUSY_2",
-    "DEST_READ_GRANTED_2",
-    "DEST_READ_GRANTED_3",
-    "PACK_BANK7_GRANT",
-    "MATH_INSTRN_STARTED",
-    "MATH_INSTRN_NOT_BLOCKED_SRC",
-    "INSTRN_2_HF_CYCLES",
-    "INSTRN_1_HF_CYCLE",
-    "WAITING_FOR_SFPU_IDLE_0",
-    "WAITING_FOR_SFPU_IDLE_1",
-    "WAITING_FOR_SFPU_IDLE_2",
-})
+BH_RTL_DEAD_COUNTERS = frozenset(
+    {
+        "PACKER_DEST_READ_2",
+        "PACKER_DEST_READ_3",
+        "PACKER_BUSY_0",
+        "PACKER_BUSY_1",
+        "PACKER_BUSY_2",
+        "DEST_READ_GRANTED_2",
+        "DEST_READ_GRANTED_3",
+        "PACK_BANK7_GRANT",
+        "MATH_INSTRN_STARTED",
+        "MATH_INSTRN_NOT_BLOCKED_SRC",
+        "INSTRN_2_HF_CYCLES",
+        "INSTRN_1_HF_CYCLE",
+        "WAITING_FOR_SFPU_IDLE_0",
+        "WAITING_FOR_SFPU_IDLE_1",
+        "WAITING_FOR_SFPU_IDLE_2",
+    }
+)
 
 # WH RTL-confirmed dead counters: signals tied to constant 0 in Wormhole RTL.
 # - PACK_BANK6/7_GRANT: bank 6-7 grant tied to 2'b00 (same as BH)
 # - FIDELITY_PHASE_STALLS: fidelity_phases_ongoing = 1'b0 on WH (no multi-phase fidelity)
-WH_RTL_DEAD_COUNTERS = frozenset({
-    "PACK_BANK6_GRANT",
-    "PACK_BANK7_GRANT",
-    "FIDELITY_PHASE_STALLS",
-})
+WH_RTL_DEAD_COUNTERS = frozenset(
+    {
+        "PACK_BANK6_GRANT",
+        "PACK_BANK7_GRANT",
+        "FIDELITY_PHASE_STALLS",
+    }
+)
 
 # Counter type enum from perf_counters.hpp — auto-generated, must match C++ enum order
 COUNTER_TYPE_NAMES = {
