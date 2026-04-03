@@ -10,10 +10,8 @@
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/tile_move_copy.h"
 #include "experimental/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/sfpu_helpers.hpp"
 
-#ifdef REDUCE_POST_MUL
-#include "api/compute/eltwise_unary/binop_with_scalar.h"
-#endif
 
 void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);
@@ -46,17 +44,14 @@ void kernel_main() {
             // reducing in W means out[h][0] = sum(w=0..W-1, in[h][w])
             // in this case we just sequentially add to accumulator all the W-tiles in a row
             for (uint32_t wt = 0; wt < Wt; ++wt) {
-                acquire_dst();
-                cb_input_obj.wait_front(onetile);
-                copy_tile_init(cb_input);
-                copy_tile(cb_input, 0, reduce_dst_idx);
-                negative_tile_init();
-                negative_tile(reduce_dst_idx);
-                cb_input_obj.pop_front(onetile);
-                cb_ineg_obj.reserve_back(onetile);
-                pack_tile(reduce_dst_idx, cb_ineg);
-                cb_ineg_obj.push_back(onetile);
-                release_dst();
+                // Negate input tile: cb_input -> -x -> cb_ineg
+                // OUTPUT reconfig needed: packer was configured for cb_output/cb_acc by startup/reduce
+                compute_kernel_lib::sfpu_op<
+                    cb_input,
+                    compute_kernel_lib::SfpuBatching::Disabled,
+                    compute_kernel_lib::SfpuInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::SfpuOutputPolicy::PerTile,
+                    compute_kernel_lib::SfpuDataFormatReconfig::OUTPUT>(cb_ineg, 1, compute_kernel_lib::Neg<>{});
 
                 acquire_dst();
                 if (wt > 0 || ht > 0) {
@@ -80,23 +75,19 @@ void kernel_main() {
             }  // wt
         }  // ht
 
-        acquire_dst();
-        cb_acc_obj.wait_front(onetile);
-        copy_tile_init(cb_acc);
-        copy_tile(cb_acc, 0, reduce_dst_idx);
-        negative_tile_init();
-        negative_tile(reduce_dst_idx);
 #ifdef REDUCE_POST_MUL
         // GMPOOL only respects the scaler's exponent for MAX/MIN, so the host requests reduction
-        // with scaler=1.0 and then applies the user scalar via mul_unary_tile (SFPU) on each
-        // output DEST register.
-        binop_with_scalar_tile_init();
-        mul_unary_tile(reduce_dst_idx, post_mul_scaler_bits);
+        // with scaler=1.0 and then applies the user scalar via mul_unary_tile (SFPU). Fused
+        // with the post-reduce negate into a single SFPU pass: cb_acc -> -acc -> *scaler -> cb_output.
+        auto chain = compute_kernel_lib::sfpu_chain(
+            compute_kernel_lib::Load<cb_acc, compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::Neg<compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::MulScalar<compute_kernel_lib::Dst::D0>{post_mul_scaler_bits});
+        compute_kernel_lib::sfpu_pipeline(chain, cb_output, 1);
+#else
+        // Negate accumulated result: cb_acc -> -acc -> cb_output
+        // INPUT_AND_OUTPUT (default): reduce left unpacker/packer on different CBs
+        compute_kernel_lib::sfpu_op<cb_acc>(cb_output, 1, compute_kernel_lib::Neg<>{});
 #endif
-        cb_acc_obj.pop_front(onetile);
-        cb_output_obj.reserve_back(onetile);
-        pack_tile(reduce_dst_idx, cb_output);
-        cb_output_obj.push_back(onetile);
-        release_dst();
     }  // nc
 }
