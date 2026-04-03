@@ -119,7 +119,8 @@ struct CheckDeviceBufferIsAllocated {
 
     void operator()(const Tensor& tensor) {
         if (not tensor.is_allocated()) {
-            log_debug(tt::LogOp, "Tensor at index {} is not allocated", index);
+            // log_warning(tt::LogOp, "Tensor at index {} is not allocated", index);
+            TT_THROW("Tensor at index {} is not allocated", index);
         }
         index++;
     }
