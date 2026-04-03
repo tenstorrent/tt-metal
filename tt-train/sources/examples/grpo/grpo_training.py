@@ -48,10 +48,12 @@ def iter_micro_batch(prompts, answers, completions, micro_batch_size=16):
         yield prompts[start:end], answers[start:end], completions[start:end]
 
 
-def train_grpo(run, yaml_config_path, checkpoint_interval):
+def train_grpo(run, yaml_config_path, checkpoint_interval, start_checkpoint_path: str | None):
     metrics = TrainingMetricsTracker(run.output_dir)
 
-    ctx = setup_inference(yaml_config_path, hf_model_id="unsloth/Llama-3.2-1B-Instruct", checkpoint_path=None)
+    ctx = setup_inference(
+        yaml_config_path, hf_model_id="unsloth/Llama-3.2-1B-Instruct", checkpoint_path=start_checkpoint_path
+    )
     grpo_cfg = setup_grpo_config(yaml_config_path)
     optimizer = setup_training_optimizer(yaml_config_path, ctx.tt_model)
 
@@ -161,9 +163,13 @@ if __name__ == "__main__":
         default="tt-train/configs/training_configs/training_grpo_gsm8k_unsloth_llama_3_2_1b_instruct.yaml",
     )
     parser.add_argument("--checkpoint-interval", type=int, default=50)
+    parser.add_argument(
+        "--start-checkpoint-path", type=str, default=None
+    )  # start training from a checkpoint instead of hugging face model
+    parser.add_argument("--output-dir", type=str, default=None)
     args, _ = parser.parse_known_args()
 
-    run = setup_training_run()
+    run = setup_training_run(output_dir=args.output_dir)
     run.logger.info(f"args: {vars(args)}")
 
-    train_grpo(run, args.yaml_path, args.checkpoint_interval)
+    train_grpo(run, args.yaml_path, args.checkpoint_interval, args.start_checkpoint_path)
