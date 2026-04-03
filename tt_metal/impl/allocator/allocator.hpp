@@ -79,6 +79,16 @@ public:
 
     void mark_allocations_unsafe();
     void mark_allocations_safe();
+    bool allocations_unsafe() const;
+
+    // Unsafe allocation tracking: tracks buffer IDs allocated while traces are live.
+    // Each tracked buffer stores the allocation context string (op name + compile args) that was
+    // active when the allocation occurred.
+    std::unordered_map<size_t, std::string> get_unsafe_tracked_ids() const;
+    void clear_unsafe_tracked_ids();
+    static std::vector<size_t> drain_pending_traceback_ids();
+
+    // See <tt-metalium/allocation_context.hpp> for the thread-local context stack API.
 
     // High water mark tracking for DRAM allocations during trace capture
     // Delegates to BankManager to account for banking properly
@@ -128,6 +138,11 @@ private:
     // Set to true if allocating a buffer is unsafe. This happens when a live trace on device can corrupt
     // memory allocated by the user (memory used by trace is not tracked in the allocator once the trace is captured).
     bool allocations_unsafe_ = false;
+    bool tracking_enabled_ = false;
+    bool traceback_capture_enabled_ = false;
+    bool skip_program_cache_ = false;
+    std::unordered_map<size_t, std::string> unsafe_tracked_ids_;
+
     std::unique_ptr<BankManager> dram_manager_;
     std::unique_ptr<BankManager> l1_manager_;
     std::unique_ptr<BankManager> l1_small_manager_;
