@@ -302,7 +302,7 @@ class DeepseekGenerator(WarmupForwardMixin):
 
     def _validate_and_initialize_sampling(
         self,
-        sampling_params: SamplingParams | None,
+        new_sampling_params: SamplingParams | None,
         sample_on_device: bool,
         enable_trace: bool = False,
         enable_mtp: bool = False,
@@ -310,60 +310,47 @@ class DeepseekGenerator(WarmupForwardMixin):
         if enable_mtp and sample_on_device:
             raise SystemExit("MTP with sampling on device is not supported. Disable MTP or sample on host.")
 
-        current_sampling_params = getattr(self, "sampling_params", None)
-        params_same = (
-            sampling_params is not None
-            and current_sampling_params is not None
-            and self._are_sampling_params_same(sampling_params, current_sampling_params)
-        )
-        if not params_same:
-            self.sampling_generator = None
-            self.sampling_params = None
-
-        if not sample_on_device:
-            self.sampling_generator = None
-
-        if getattr(self, "sampling_generator", None) is not None:
-            return
-
         self.sample_on_device = sample_on_device
+        previous_sampling_params = getattr(self, "sampling_params", None)
+
         # sampling params of all users are assumed to be the same default values if not provided.
-        self.sampling_params = (
-            self._to_local_sampling_params(sampling_params)
-            if sampling_params is not None
+        normalized_sampling_params = (
+            self._to_local_sampling_params(new_sampling_params)
+            if new_sampling_params is not None
             else SamplingParams(
                 temperature=[DEFAULT_SAMPLING_TEMPERATURE] * self.batch_size,
                 top_p=[DEFAULT_SAMPLING_TOP_P] * self.batch_size,
                 top_k=[DEFAULT_SAMPLING_TOP_K] * self.batch_size,
             )
         )
-        if self._get_sampling_value(self.sampling_params.top_k, 0) == 0 and sample_on_device:
-            raise SystemExit(
-                "top-k=0 is not supported when sampling on device. Sampling on host instead. See https://github.com/tenstorrent/tt-metal/issues/40236"
-            )
-        if sample_on_device:
-            enable_internal_trace_sampling = enable_trace and self.sample_on_device
-            self.sampling_args = make_deepseek_sampling_args(
-                self.mesh_device,
-                self.hf_config.vocab_size,
-                max_batch_size=self.batch_size_per_row,
-            )
-            self.sampling_generator = SamplingGenerator(
-                args=self.sampling_args,
-                mesh_device=self.mesh_device,
-                tt_ccl=self.ccl,
-                enable_internal_trace=enable_internal_trace_sampling,
+
+        if self.sample_on_device:
+            params_same = previous_sampling_params is not None and self._are_sampling_params_same(
+                normalized_sampling_params, previous_sampling_params
             )
 
-            self._reset_sampling_state(self.sampling_params, self.batch_size, self.batch_size_per_row)
+            if self._get_sampling_value(normalized_sampling_params.top_k, 0) == 0 and sample_on_device:
+                raise SystemExit(
+                    "top-k=0 is not supported when sampling on device. Sampling on host instead. See https://github.com/tenstorrent/tt-metal/issues/40236"
+                )
 
-        logger.info(f"Sampling mode: {'device' if sample_on_device else 'host'}")
-        logger.info(
-            f"Sampling parameters for first user (other users may have different values): "
-            + f"temperature={self._get_sampling_value(self.sampling_params.temperature, 0)}, "
-            + f"top_p={self._get_sampling_value(self.sampling_params.top_p, 0)}, "
-            + f"top_k={self._get_sampling_value(self.sampling_params.top_k, 0)}"
-        )
+            if hasattr(self, "sampling_generator") and self.sampling_generator is not None:
+                # sampling generator exists; reset if params are different
+                if not params_same:
+                    self._reset_sampling_state(normalized_sampling_params, self.batch_size, self.batch_size_per_row)
+            else:
+                # create new sampling generator
+                enable_internal_trace_sampling = enable_trace
+                self.sampling_args = make_deepseek_sampling_args(self.mesh_device, self.hf_config.vocab_size)
+                self.sampling_generator = SamplingGenerator(
+                    args=self.sampling_args,
+                    mesh_device=self.mesh_device,
+                    tt_ccl=self.ccl,
+                    enable_internal_trace=enable_internal_trace_sampling,
+                )
+                self._reset_sampling_state(normalized_sampling_params, self.batch_size, self.batch_size_per_row)
+
+        self.sampling_params = normalized_sampling_params
 
     def _to_local_sampling_params(self, params_obj) -> SamplingParams:
         """Project duck-typed sampling params to local SamplingParams fields."""
