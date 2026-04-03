@@ -34,6 +34,7 @@ void kernel_main() {
         for (uint32_t z = 0; z < num_total_Z; ++z) {
             for (uint32_t y = 0; y < num_local_Y; ++y) {
                 // DPRINT << "WR: " << w << ", " << z << ", " << y << ENDL();
+                // DEVICE_PRINT("WR: w={} z={} y={}\n", w, z, y);
                 cb_wait_front(cb_id, 1);
                 uint32_t l1_addr = get_read_ptr(cb_id);
                 uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, s1, dst_stick_offset);

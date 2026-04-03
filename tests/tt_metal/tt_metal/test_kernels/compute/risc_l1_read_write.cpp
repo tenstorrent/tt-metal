@@ -23,6 +23,7 @@ void kernel_main() {
     const uint32_t l1_dst_address = base_dst_l1_address + neo_id * sizeof(uint32_t);
 
     DPRINT << "Reading from " << l1_src_address << " and writing to " << l1_dst_address << ENDL();
+    DEVICE_PRINT("Reading from {} and writing to {}\n", l1_src_address, l1_dst_address);
 
     *((uint32_t*)(l1_dst_address + MEM_L1_UNCACHED_BASE)) = *((uint32_t*)(l1_src_address + MEM_L1_UNCACHED_BASE));
 

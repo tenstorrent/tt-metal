@@ -25,6 +25,12 @@ void kernel_main() {
 
     DPRINT << "Reading " << dram_buffer_size << " bytes from DRAM address " << dram_src_address << " in bank "
            << dram_src_bank_id << " and writing it to L1 address " << l1_dst_address << ENDL();
+    DEVICE_PRINT(
+        "Reading {} bytes from DRAM address {} in bank {} and writing it to L1 address {}\n",
+        dram_buffer_size,
+        dram_src_address,
+        dram_src_bank_id,
+        l1_dst_address);
 
     noc.async_read(src_dram, l1_buffer, dram_buffer_size, {.bank_id = dram_src_bank_id, .addr = dram_src_address}, {});
     noc.async_read_barrier();

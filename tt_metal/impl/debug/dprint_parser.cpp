@@ -188,19 +188,27 @@ void DPrintParser::PrintTileSlice(const uint8_t* ptr) {
 // Create a float from a given bit pattern, given the number of bits for the exponent and mantissa.
 // Assumes the following order of bits in the input data:
 //   [sign bit][mantissa bits][exponent bits]
-float DPrintParser::make_float(uint8_t exp_bit_count, uint8_t mantissa_bit_count, uint32_t data) {
+inline float make_float(uint8_t exp_bit_count, uint8_t mantissa_bit_count, uint32_t data) {
     int sign = (data >> (exp_bit_count + mantissa_bit_count)) & 0x1;
     const int exp_mask = (1 << (exp_bit_count)) - 1;
     int exp_bias = (1 << (exp_bit_count - 1)) - 1;
     int exp_val = (data & exp_mask) - exp_bias;
     const int mantissa_mask = ((1 << mantissa_bit_count) - 1) << exp_bit_count;
     int mantissa_val = (data & mantissa_mask) >> exp_bit_count;
+    // Zero exponent and zero mantissa means zero (IEEE 754 convention)
+    if ((data & exp_mask) == 0 && mantissa_val == 0) {
+        return sign ? -0.0f : 0.0f;
+    }
     float result = 1.0 + ((float)mantissa_val / (float)(1 << mantissa_bit_count));
     result = result * pow(2, exp_val);
     if (sign) {
         result = -result;
     }
     return result;
+}
+
+float DPrintParser::make_float(uint8_t exp_bit_count, uint8_t mantissa_bit_count, uint32_t data) {
+    return ::tt::tt_metal::make_float(exp_bit_count, mantissa_bit_count, data);
 }
 
 // Prints a given datum in the array, given the data_format
@@ -988,6 +996,99 @@ std::string_view DevicePrintParser::format_message(
 
                 break;
             }
+            case 'A':  // dp_typed_array_t
+            {
+                const auto& arr = std::get<TypedArray>(buffer.argument_values[placeholder.arg_id]);
+                std::string elements_format = "{" + std::string(placeholder.format_spec) + "} ";
+                switch (arr.type) {
+                    case tt::DataFormat::Float16:
+                    case tt::DataFormat::Bfp8:
+                    case tt::DataFormat::Bfp4:
+                    case tt::DataFormat::Bfp2:
+                    case tt::DataFormat::Lf8:
+                    case tt::DataFormat::Bfp8_b:
+                    case tt::DataFormat::Bfp4_b:
+                    case tt::DataFormat::Bfp2_b:
+                    case tt::DataFormat::Float16_b:
+                    case tt::DataFormat::UInt16: elements_format = elements_format + elements_format; break;
+                    case tt::DataFormat::Int8:
+                    case tt::DataFormat::UInt8:
+                        elements_format = elements_format + elements_format + elements_format + elements_format;
+                        break;
+                    default:
+                    case tt::DataFormat::Tf32:
+                    case tt::DataFormat::Float32:
+                    case tt::DataFormat::UInt32:
+                    case tt::DataFormat::Int32:
+                        // Do nothing, single element format is sufficient
+                        break;
+                }
+                format = fmt::runtime(elements_format);
+                for (uint32_t datum : arr.data) {
+                    switch (arr.type) {
+                        case tt::DataFormat::Float16:
+                        case tt::DataFormat::Bfp8:
+                        case tt::DataFormat::Bfp4:
+                        case tt::DataFormat::Bfp2:
+                        case tt::DataFormat::Lf8:
+                            fmt::format_to(
+                                std::back_inserter(buffer.buffer),
+                                format,
+                                make_float(5, 10, datum & 0xffff),
+                                make_float(5, 10, (datum >> 16) & 0xffff));
+                            break;
+                        case tt::DataFormat::Bfp8_b:
+                        case tt::DataFormat::Bfp4_b:
+                        case tt::DataFormat::Bfp2_b:
+                        case tt::DataFormat::Float16_b:
+                            fmt::format_to(
+                                std::back_inserter(buffer.buffer),
+                                format,
+                                make_float(8, 7, datum & 0xffff),
+                                make_float(8, 7, (datum >> 16) & 0xffff));
+                            break;
+                        case tt::DataFormat::Tf32:
+                            fmt::format_to(std::back_inserter(buffer.buffer), format, make_float(8, 10, datum));
+                            break;
+                        case tt::DataFormat::Float32: {
+                            float value;
+                            memcpy(&value, &datum, sizeof(float));
+                            fmt::format_to(std::back_inserter(buffer.buffer), format, value);
+                        } break;
+                        case tt::DataFormat::UInt32:
+                            fmt::format_to(std::back_inserter(buffer.buffer), format, datum);
+                            break;
+                        case tt::DataFormat::UInt16:
+                            fmt::format_to(std::back_inserter(buffer.buffer), format, datum & 0xffff, datum >> 16);
+                            break;
+                        case tt::DataFormat::Int32:
+                            fmt::format_to(std::back_inserter(buffer.buffer), format, static_cast<int32_t>(datum));
+                            break;
+                        case tt::DataFormat::Int8:
+                            fmt::format_to(
+                                std::back_inserter(buffer.buffer),
+                                format,
+                                static_cast<int>(static_cast<int8_t>(datum & 0xff)),
+                                static_cast<int>(static_cast<int8_t>((datum >> 8) & 0xff)),
+                                static_cast<int>(static_cast<int8_t>((datum >> 16) & 0xff)),
+                                static_cast<int>(static_cast<int8_t>((datum >> 24) & 0xff)));
+                            break;
+                        case tt::DataFormat::UInt8:
+                            fmt::format_to(
+                                std::back_inserter(buffer.buffer),
+                                format,
+                                static_cast<unsigned int>(datum & 0xff),
+                                static_cast<unsigned int>((datum >> 8) & 0xff),
+                                static_cast<unsigned int>((datum >> 16) & 0xff),
+                                static_cast<unsigned int>((datum >> 24) & 0xff));
+                            break;
+                        default:
+                            fmt::format_to(std::back_inserter(buffer.buffer), "Unknown data format {} ", arr.type);
+                            break;
+                    }
+                }
+                break;
+            }
             case '/':  // Long type: '/' followed by sub-type character
             {
                 TT_ASSERT(placeholder.enum_base_type_id != 0, "Unsupported long type in format placeholder");
@@ -1131,6 +1232,18 @@ DevicePrintParser::ArgumentValue DevicePrintParser::read_argument_from_payload(
                 tile_slice.data[i] = read_value_from_payload<uint8_t>(payload_bytes, offset);
             }
             return tile_slice;
+        }
+        case 'A':  // dp_typed_array_t: [len, type, data[0..len-1]]
+        {
+            TypedArray arr;
+            uint32_t packed_len_type = read_value_from_payload<uint32_t>(payload_bytes, offset);
+            uint16_t len = static_cast<uint16_t>(packed_len_type >> 16);
+            arr.type = static_cast<tt::DataFormat>(packed_len_type & 0xffff);
+            arr.data.resize(len);
+            for (uint32_t i = 0; i < len; ++i) {
+                arr.data[i] = read_value_from_payload<uint32_t>(payload_bytes, offset);
+            }
+            return arr;
         }
         default: TT_THROW("Unsupported type_id in format placeholder (read_argument_from_payload): {}", type_id);
     }

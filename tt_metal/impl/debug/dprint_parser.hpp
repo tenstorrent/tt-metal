@@ -72,6 +72,11 @@ public:
         std::vector<uint8_t> data;
     };
 
+    struct TypedArray {
+        tt::DataFormat type;
+        std::vector<uint32_t> data;
+    };
+
     using ArgumentValue = std::variant<
         bool,
         int8_t,
@@ -84,7 +89,8 @@ public:
         uint64_t,
         float,
         double,
-        TileSliceDynamic>;
+        TileSliceDynamic,
+        TypedArray>;
     struct FormatMessageBuffer {
         fmt::memory_buffer buffer;
         std::vector<ArgumentValue> argument_values;

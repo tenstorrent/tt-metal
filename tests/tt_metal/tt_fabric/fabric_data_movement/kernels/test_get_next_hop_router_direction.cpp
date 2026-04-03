@@ -24,5 +24,12 @@ void kernel_main() {
 
         DPRINT << "Routing: [" << src_mesh_id << "/" << src_fabric_dev_id << "] -> [" << dst_mesh_id << "/"
                << dst_fabric_dev_id << "] direction:" << static_cast<uint32_t>(direction) << "\n";
+        DEVICE_PRINT(
+            "Routing: [{}/{}] -> [{}/{}] direction:{}\n",
+            src_mesh_id,
+            src_fabric_dev_id,
+            dst_mesh_id,
+            dst_fabric_dev_id,
+            static_cast<uint32_t>(direction));
     }
 }
