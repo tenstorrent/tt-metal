@@ -1255,6 +1255,64 @@ def test_slice_subcores(input_shape, dim, start, end, step, layout, args_as_tens
 
 
 @pytest.mark.parametrize(
+    "input_shape, begins, ends, num_cores_x, num_cores_y, shard_shape, shard_layout",
+    [
+        # Single core: slice height from 32 to 18 (non-tile-aligned)
+        [[1, 1, 32, 64], [0, 0, 0, 0], [1, 1, 18, 64], 1, 1, [32, 64], "HEIGHT_SHARDED"],
+        # Multi-core: slice height from 128 to 64 (4 cores -> 2 cores worth)
+        [[1, 1, 128, 64], [0, 0, 0, 0], [1, 1, 64, 64], 2, 2, [32, 64], "HEIGHT_SHARDED"],
+        # Single core: slice height from 64 to 48 (non-tile-aligned logical, tile-aligned padded)
+        [[1, 1, 64, 64], [0, 0, 0, 0], [1, 1, 48, 64], 1, 1, [64, 64], "HEIGHT_SHARDED"],
+        # Non-zero begins: slice from middle of height dimension
+        [[1, 1, 128, 64], [0, 0, 32, 0], [1, 1, 96, 64], 2, 2, [32, 64], "HEIGHT_SHARDED"],
+        # Width-sharded: slice width from 128 to 64
+        [[1, 1, 32, 128], [0, 0, 0, 0], [1, 1, 32, 64], 1, 2, [32, 64], "WIDTH_SHARDED"],
+    ],
+)
+def test_slice_sharded_auto_shard_spec_recomputation(
+    input_shape, begins, ends, num_cores_x, num_cores_y, shard_shape, shard_layout, device
+):
+    """Regression test for issue #38016: ttnn.slice on a sharded tensor
+    without specifying output memory_config should produce correct logical output shape.
+
+    Previously, the output inherited the input's shard spec, causing the output shape
+    to retain the input's padded dimensions instead of the sliced dimensions."""
+
+    torch.manual_seed(2005)
+
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+
+    tt_input = ttnn.from_torch(
+        torch_input, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    tensor_memory_layout = (
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED
+        if shard_layout == "HEIGHT_SHARDED"
+        else ttnn.types.TensorMemoryLayout.WIDTH_SHARDED
+    )
+    grid_coord = ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
+    tt_input_sharded = ttnn.to_memory_config(tt_input, sharded_mem_config)
+
+    # Key: no memory_config argument -- this is the bug scenario from issue #38016
+    tt_output = ttnn.slice(tt_input_sharded, begins, ends)
+
+    expected_shape = [ends[i] - begins[i] for i in range(len(begins))]
+    assert (
+        list(tt_output.shape) == expected_shape
+    ), f"Expected output shape {expected_shape}, got {list(tt_output.shape)}"
+
+    tt_output_cpu = ttnn.to_memory_config(tt_output, ttnn.DRAM_MEMORY_CONFIG)
+    tt_output_torch = ttnn.to_torch(tt_output_cpu)
+    torch_expected = torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : ends[3]]
+
+    assert_with_pcc(torch_expected, tt_output_torch, 0.9999)
+
+
+@pytest.mark.parametrize(
     "input_shape, begins, ends, layout, use_sharding, description",
     [
         # Test 1: Slicing within a tile (should use RM path)

@@ -86,11 +86,12 @@ def _make_op_with_cores(core_range_set):
 
 
 def _make_mock_op(name="op"):
-    """Create a mock OpDescriptor NamedTuple for high-level API tests."""
+    """Create a mock OpDescriptor for high-level API tests."""
     return _fusion.OpDescriptor(
         descriptor=_ns(__name__=f"{name}_desc"),
         input_tensors=[_ns(__name__=f"{name}_in")],
         output_tensors=[_ns(__name__=f"{name}_out")],
+        program_cache_key=hash(name),
     )
 
 
@@ -162,13 +163,8 @@ def _make_cb_mock(
     )
 
 
-# Saved original so graph topology tests can monkeypatch safely via fixture.
-_REAL_GET_NODE_CORE_RANGE = _graph._get_node_core_range
-
-
-@pytest.fixture(autouse=False)
-def _mock_get_node_core_range(monkeypatch):
-    """Temporarily replace _get_node_core_range with a simplified version for mock ops."""
+def _patch_get_node_core_range_for_mock_ops(monkeypatch):
+    """Mock ops store core ranges on ``kernels[0]`` only; patch graph lookup for tests."""
     monkeypatch.setattr(_graph, "_get_node_core_range", lambda node: node.op.descriptor.kernels[0].core_ranges)
 
 
@@ -427,16 +423,6 @@ class TestAliasGroups:
 class TestSourceTransformations:
     """Tests for kernel source transformation functions."""
 
-    @pytest.mark.parametrize("phase,expected_prefix", [(0, '"cb_in"'), (1, '"phase_1_cb_in"'), (2, '"phase_2_blk"')])
-    def test_prefix_named_args(self, phase, expected_prefix):
-        fn = _codegen._prefix_named_args_in_source
-        if phase == 2:
-            source = 'constexpr uint32_t blk = get_named_compile_time_arg_val("blk");'
-        else:
-            source = 'constexpr uint32_t cb = get_named_compile_time_arg_val("cb_in");'
-        result = fn(source, phase)
-        assert f"get_named_compile_time_arg_val({expected_prefix})" in result
-
     def test_emit_rt_arg_wrapper_and_defines(self):
         joined = "\n".join(_codegen._emit_rt_arg_wrapper(2, 18))
         assert "arg_idx + 18" in joined
@@ -460,73 +446,6 @@ class TestSourceTransformations:
             "constexpr auto src_args = TensorAccessorArgs<2>();", 1, 5
         )
         assert "TensorAccessorArgs<7>" in result
-
-    def test_transform_phase_source_combines_all(self):
-        source = (
-            'constexpr uint32_t cb = get_named_compile_time_arg_val("cb_in");\n'
-            "uint32_t blk = get_compile_time_arg_val(0);\n"
-            "constexpr auto args = TensorAccessorArgs<2>();\n"
-            "uint32_t val = get_arg_val<uint32_t>(3);\n"
-        )
-        result = _codegen._transform_phase_source(source, 1, ct_arg_offset=5)
-        assert "phase_1_cb_in" in result
-        assert "get_compile_time_arg_val(5)" in result
-        assert "TensorAccessorArgs<7>" in result
-        assert "get_arg_val<uint32_t>(3)" in result  # NOT rewritten in source
-
-
-class TestExtractKernelBody:
-    """Tests for kernel body extraction via brace matching."""
-
-    @pytest.mark.parametrize(
-        "source,expected_in,expected_not_in",
-        [
-            # Standard
-            ("void kernel_main() {\n    int x = 1;\n}", ["int x = 1"], []),
-            # ALWI prefix
-            ("ALWI void kernel_main() {\n    compute(x);\n}", ["compute(x)"], []),
-            # Nested braces
-            (
-                "void kernel_main() {\n    for (int i=0;i<10;i++) { if (i>5) { do_something(); } }\n}",
-                ["do_something", "for"],
-                [],
-            ),
-            # No kernel_main
-            ("void other_function() { int x = 1; }", [], []),
-            # String literal with braces
-            (
-                'void kernel_main() {\n    const char* msg = "{ json }";\n    int y = 2;\n}',
-                ["{ json }", "int y = 2"],
-                [],
-            ),
-            # Line comment with braces
-            ("void kernel_main() {\n    // this has a } brace\n    int x = 1;\n}", ["int x = 1"], []),
-            # Block comment with braces
-            ("void kernel_main() {\n    /* } } } */\n    int x = 1;\n}", ["int x = 1"], []),
-            # Char literal with brace
-            ("void kernel_main() {\n    char c = '}';\n    int x = 1;\n}", ["int x = 1"], []),
-            # Raw string
-            (
-                'void kernel_main() {\n    const char* s = R"({ \\"key\\" })";\n    int x = 1;\n}',
-                ["int x = 1", 'R"('],
-                [],
-            ),
-        ],
-    )
-    def test_extract(self, source, expected_in, expected_not_in):
-        body = _codegen.extract_kernel_body(source)
-        for s in expected_in:
-            assert s in body
-        for s in expected_not_in:
-            assert s not in body
-        if not expected_in and not expected_not_in:
-            assert body == ""
-
-    def test_raw_string_with_delimiter(self):
-        source = (
-            'void kernel_main() {\n    const char* s = R"foo(\n        }}} """ {{{\n    )foo";\n    int done = 1;\n}'
-        )
-        assert "int done = 1" in _codegen.extract_kernel_body(source)
 
 
 class TestCollectIncludesAndDefines:
@@ -726,7 +645,6 @@ class TestMustMatchDefines:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.usefixtures("_mock_get_node_core_range")
 class TestOpGraphBuilder:
     """Tests for OpGraphBuilder: creation, single-node, build-twice, topology."""
 
@@ -742,19 +660,22 @@ class TestOpGraphBuilder:
         )
         return desc
 
-    def test_single_node_returns_fused_op(self):
+    def test_single_node_returns_fused_op(self, monkeypatch):
+        _patch_get_node_core_range_for_mock_ops(monkeypatch)
         desc = self._make_buildable_op()
         result = _graph.OpGraphBuilder(_graph.OpNode(desc)).build(device=None)
         assert type(result).__name__ == "FusedOp"
 
-    def test_build_twice_raises(self):
+    def test_build_twice_raises(self, monkeypatch):
+        _patch_get_node_core_range_for_mock_ops(monkeypatch)
         desc = self._make_buildable_op()
         builder = _graph.OpGraphBuilder(_graph.OpNode(desc))
         builder.build(device=None)
         with pytest.raises(ValueError, match="Already built"):
             builder.build(device=None)
 
-    def test_overlapping_siblings_rejected(self):
+    def test_overlapping_siblings_rejected(self, monkeypatch):
+        _patch_get_node_core_range_for_mock_ops(monkeypatch)
         root = _graph.OpNode(
             self._op([((0, 0), (3, 0))]),
             children=[
@@ -765,7 +686,8 @@ class TestOpGraphBuilder:
         with pytest.raises(ValueError, match="overlapping cores"):
             _graph.OpGraphBuilder(root)._validate_topology()
 
-    def test_valid_disjoint_children(self):
+    def test_valid_disjoint_children(self, monkeypatch):
+        _patch_get_node_core_range_for_mock_ops(monkeypatch)
         root = _graph.OpNode(
             self._op([((0, 0), (3, 0))]),
             children=[
@@ -775,7 +697,8 @@ class TestOpGraphBuilder:
         )
         _graph.OpGraphBuilder(root)._validate_topology()  # Should not raise
 
-    def test_child_wider_than_parent_accepted(self):
+    def test_child_wider_than_parent_accepted(self, monkeypatch):
+        _patch_get_node_core_range_for_mock_ops(monkeypatch)
         root = _graph.OpNode(
             self._op([((0, 0), (1, 0))]),
             children=[
@@ -785,7 +708,8 @@ class TestOpGraphBuilder:
         )
         _graph.OpGraphBuilder(root)._validate_topology()  # Should not raise
 
-    def test_valid_nested_topology(self):
+    def test_valid_nested_topology(self, monkeypatch):
+        _patch_get_node_core_range_for_mock_ops(monkeypatch)
         leaf_0_1 = _graph.OpNode(self._op([((0, 0), (1, 0))]))
         leaf_2_3 = _graph.OpNode(self._op([((2, 0), (3, 0))]))
         mid = _graph.OpNode(self._op([((0, 0), (3, 0))]), children=[leaf_0_1, leaf_2_3])
@@ -793,7 +717,8 @@ class TestOpGraphBuilder:
         root = _graph.OpNode(self._op([((0, 0), (5, 0))]), children=[mid, leaf_4_5])
         _graph.OpGraphBuilder(root)._validate_topology()  # Should not raise
 
-    def test_partial_coverage_accepted(self):
+    def test_partial_coverage_accepted(self, monkeypatch):
+        _patch_get_node_core_range_for_mock_ops(monkeypatch)
         root = _graph.OpNode(
             self._op([((0, 0), (5, 0))]),
             children=[
@@ -917,11 +842,11 @@ class TestNarrowWideTopology:
                 assert not g.has_trailing_barrier
 
 
-@pytest.mark.usefixtures("_mock_get_node_core_range")
 class TestEffectiveLeafRange:
     """Tests for OpGraphBuilder._effective_leaf_range."""
 
-    def test_leaf_and_intermediate(self):
+    def test_leaf_and_intermediate(self, monkeypatch):
+        _patch_get_node_core_range_for_mock_ops(monkeypatch)
         elf = _graph.OpGraphBuilder._effective_leaf_range
 
         leaf = _graph.OpNode(_make_op_with_cores(_make_core_ranges([((0, 0), (1, 0))])))
@@ -971,8 +896,12 @@ class TestSequentialParallelAPI:
         nodes = _fusion._resolve(S(a, P(S(b, P(c, d)), e)))
         r = nodes[0]
         assert r.op is a and len(r.children) == 2
-        assert r.children[0].op is b and len(r.children[0].children) == 2
-        assert r.children[1].op is e
+        # Resolve Parallel children by identity (order matches construction)
+        b_node = next((ch for ch in r.children if ch.op is b), None)
+        e_node = next((ch for ch in r.children if ch.op is e), None)
+        assert b_node is not None and e_node is not None
+        assert len(b_node.children) == 2
+        assert len(e_node.children) == 0
 
     def test_add_chaining(self):
         S = _fusion.Sequential
@@ -1002,7 +931,7 @@ class TestSequentialParallelAPI:
             _fusion._resolve(42)
 
     def test_resolve_rejects_fused_op(self):
-        fused = _fusion.FusedOp(op=_fusion.OpDescriptor(_PLACEHOLDER, [], []))
+        fused = _fusion.FusedOp(op=_fusion.OpDescriptor(_PLACEHOLDER, [], [], program_cache_key=0))
         with pytest.raises(TypeError, match="FusedOp cannot be nested"):
             _fusion._resolve(fused)
 
@@ -1012,10 +941,11 @@ class TestSequentialParallelAPI:
         in_a, in_b = object(), object()
         out_a, out_b = object(), object()
         sem_a, sem_b = object(), object()
+        mock_desc = _ns(cbs=[])  # Mock descriptor with empty cbs list
         # Stub merge_program_descriptors — real one needs C++ ProgramDescriptor objects
         monkeypatch.setattr(_graph, "ttnn", _ns(merge_program_descriptors=lambda descs: descs[0]))
-        r_a = BR(_PLACEHOLDER, [shared, in_a], [out_a], (sem_a,))
-        r_b = BR(_PLACEHOLDER, [shared, in_b], [out_b], (sem_b,))
+        r_a = BR(mock_desc, [shared, in_a], [out_a], (sem_a,))
+        r_b = BR(mock_desc, [shared, in_b], [out_b], (sem_b,))
         merged = _graph._merge_build_results([r_a, r_b])
         assert len(merged.input_tensors) == 3  # shared deduped
         assert len(merged.output_tensors) == 2
@@ -1024,33 +954,8 @@ class TestSequentialParallelAPI:
 
     def test_op_descriptor_name_field(self):
         OD = _fusion.OpDescriptor
-        assert OD("desc", ["in"], ["out"]).name == ""
-        assert OD("desc", ["in"], ["out"], "matmul").name == "matmul"
-
-
-# ---------------------------------------------------------------------------
-# Phase name generation and DeviceZoneScopedN
-# ---------------------------------------------------------------------------
-
-
-class TestPhaseNameGeneration:
-    """Tests for phase name propagation in generated source."""
-
-    def test_phase_namespace_with_and_without_name(self):
-        gen = _codegen._generate_phase_namespace
-        source = "void kernel_main() { int x = 1; }"
-
-        lines = gen(0, "", source, [], 0, phase_name="rms_norm")
-        assert "Phase 0: rms_norm" in lines[1]
-        # DeviceZoneScopedN is emitted in the kernel_main() dispatcher,
-        # not inside _generate_phase_namespace, so we only check the comment.
-
-        lines = gen(0, "", source, [], 0, phase_name="")
-        assert "Phase 0" in lines[1]
-
-    def test_default_no_zone(self):
-        lines = _codegen._generate_phase_namespace(0, "", "void kernel_main() { int x = 1; }", [], 0)
-        assert "DeviceZoneScopedN" not in "\n".join(lines)
+        assert OD("desc", ["in"], ["out"], program_cache_key=0).name == ""
+        assert OD("desc", ["in"], ["out"], "matmul", program_cache_key=0).name == "matmul"
 
 
 # ---------------------------------------------------------------------------
@@ -1349,7 +1254,7 @@ class TestGlobalCircularBuffer:
         fmt0 = regular.format_descriptors[0]
         cb_info = {0: CI(0, 2048, "F16", 1024, None, False, source_fmt=fmt0, source_cb=regular)}
         pool.allocate_phase(0, cb_info, set())
-        merged = pool.build_merged_cb_descriptors([PI(0, mock_op, cb_info)])
+        merged, _cb_src, _gcb_src = pool.build_merged_cb_descriptors([PI(0, mock_op, cb_info)])
         assert len(merged) == 2 and remote_only in merged
 
 

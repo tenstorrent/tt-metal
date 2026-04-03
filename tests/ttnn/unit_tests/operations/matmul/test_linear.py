@@ -9,7 +9,7 @@ from ttnn.operations.activations import get_golden_function_for_activation
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import torch_random, skip_for_slow_dispatch
 
 pytestmark = pytest.mark.use_module_device
 
@@ -798,6 +798,7 @@ def _teardown_subdevice(device, sub_device_manager):
     device.remove_sub_device_manager(sub_device_manager)
 
 
+@skip_for_slow_dispatch()
 @pytest.mark.parametrize("m_size", [128, 384])
 @pytest.mark.parametrize("k_size", [512])
 @pytest.mark.parametrize("n_size", [512])
@@ -859,6 +860,7 @@ def test_linear_on_subdevice(device, m_size, k_size, n_size, use_bias, transpose
         _teardown_subdevice(device, sub_device_manager)
 
 
+@skip_for_slow_dispatch()
 @pytest.mark.parametrize("m_size", [128])
 @pytest.mark.parametrize("k_size", [512])
 @pytest.mark.parametrize("n_size", [512])

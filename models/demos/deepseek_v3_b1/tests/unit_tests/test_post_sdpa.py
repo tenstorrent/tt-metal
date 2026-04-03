@@ -45,57 +45,8 @@ from models.demos.deepseek_v3_b1.blitz_decode_weights import (
 )
 from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import PostSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
-from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import SdpaReduceToAll
+from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import SdpaReduceToAll, compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
-
-
-def _round_up(value: int, alignment: int) -> int:
-    """Round up value to the nearest multiple of alignment."""
-    return ((value + alignment - 1) // alignment) * alignment
-
-
-def compute_forwarder_scratch_size(
-    batch_size: int,
-    l_width: int,
-    num_cores: int,
-    tile_height: int = 8,
-    tile_width: int = 32,
-    bytes_per_element: int = 2,
-    num_links: int = 2,
-):
-    """
-    Compute the total forwarder scratch buffer size in bytes for SDPA reduce-to-all.
-
-    This matches the calculation in sdpa_reduce_to_all/op.py for proper L1 allocation.
-    """
-    input_page_size_bytes = tile_height * tile_width * bytes_per_element
-    input_l_num_pages = (batch_size // tile_height) * (l_width // tile_width)
-
-    PNH = 8
-    DH = input_l_num_pages * tile_width
-    DHt = DH // tile_width
-    PNHt = PNH // tile_height
-    out_tiles = PNHt * DHt
-
-    max_tiles_per_chunk = 8
-    min_num_l_chunks = (out_tiles + max_tiles_per_chunk - 1) // max_tiles_per_chunk
-    num_l_chunks = max(min_num_l_chunks, 4)
-    if out_tiles % num_l_chunks != 0:
-        raise ValueError("out_tiles must be divisible by num_l_chunks")
-
-    tiles_per_l_chunk = out_tiles // num_l_chunks
-    l_chunk_size_bytes = tiles_per_l_chunk * input_page_size_bytes
-
-    header_size = ttnn.get_tt_fabric_packet_header_size_bytes()
-    l1_alignment = 16
-    slot_size = _round_up(header_size + l_chunk_size_bytes, l1_alignment)
-
-    num_workers_per_link = num_cores // num_links
-    workers_per_type = num_workers_per_link // 2
-    slots_per_worker = 1 + num_l_chunks
-    slots_per_round = workers_per_type * slots_per_worker
-
-    return 2 * slots_per_round * slot_size * 2
 
 
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(1, 1), (4, 2)], ids=["single_device", "multi_device"])
@@ -1022,10 +973,9 @@ def test_post_sdpa_with_sdpa_phase(
         num_cores=NUM_SDPA_WORKERS,
     )
     # Total elements (bfloat16 = 2 bytes per element)
-    sdpa_fwd_total_elements = sdpa_fwd_buffer_bytes // 2
-    # WIDTH_SHARDED across 2 forwarder cores, each gets half
+    sdpa_fwd_per_forwarder = sdpa_fwd_buffer_bytes // 2
     num_forwarders = 2
-    sdpa_fwd_per_forwarder = sdpa_fwd_total_elements // num_forwarders
+    sdpa_fwd_total_elements = sdpa_fwd_per_forwarder * num_forwarders
     sdpa_forwarder_shard_shape = (1, sdpa_fwd_per_forwarder)
     sdpa_forwarder_shard_spec = ttnn.ShardSpec(
         sdpa_forwarder_grid, sdpa_forwarder_shard_shape, ttnn.ShardOrientation.ROW_MAJOR
