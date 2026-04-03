@@ -70,6 +70,10 @@ inline void _llk_unpack_tilize_init_(
     const bool unpack_to_dest =
         (unpack_source_format == DataFormat::UInt32) || (unpack_source_format == DataFormat::Int32) || (unpack_dest_format == DataFormat::Float32);
 
+    LLK_ASSERT(
+        is_unpacker_format_conversion_supported_dest(static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), unpack_to_dest),
+        "Unsupported unpacker format conversion.");
+
     // Set face dim
     TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
 

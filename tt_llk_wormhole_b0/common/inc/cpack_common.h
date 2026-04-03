@@ -161,6 +161,145 @@ inline void packer_addr_counter_init()
     TTI_SETADCZW(0b100, 0, 0, 0, 0, 0b1111);
 }
 
+/**
+ * \brief Returns true if `out_l1` is a valid output of the FP32 late-conversion column.
+ *
+ * Ref: Wormhole Packers/FormatConversion.md, late table "From FP32".
+ */
+__attribute__((noinline)) bool is_packer_fp32_late_column_output(const DataFormat out_l1)
+{
+    switch (out_l1)
+    {
+        case DataFormat::Float32:
+        case DataFormat::Float16_b:
+        case DataFormat::Float16:
+        case DataFormat::Lf8:
+        case DataFormat::Bfp8:
+        case DataFormat::Bfp4:
+        case DataFormat::Bfp2:
+        case DataFormat::Bfp8_b:
+        case DataFormat::Bfp4_b:
+        case DataFormat::Bfp2_b:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/**
+ * \brief Returns true if `out_l1` is a valid output of the combined late-conversion column.
+ *
+ * Combined column: "From TF32 or BF16 or E8M6 or FP16 or E5M7 or E5M6 or FP8".
+ * This is exactly the FP32 column plus Tf32.
+ */
+__attribute__((noinline)) bool is_packer_combined_late_column_output(const DataFormat out_l1)
+{
+    return out_l1 == DataFormat::Tf32 || is_packer_fp32_late_column_output(out_l1);
+}
+
+/**
+ * \brief Returns true if conversion is supported by EARLY packer conversion stage.
+ *
+ * This checks the Wormhole early conversion matrix only (Dst register format -> intermediate
+ * format). For this API, `out_l1` is interpreted as the requested intermediate format code.
+ *
+ * Ref: Wormhole Packers/FormatConversion.md, "Early format conversion".
+ */
+__attribute__((noinline)) bool is_packer_to_L1_early_conversion_supported(const DataFormat in_reg, const DataFormat out_l1)
+{
+    switch (in_reg)
+    {
+        case DataFormat::Float32:
+            return out_l1 == DataFormat::Float32 ||   // FP32 (identity)
+                   out_l1 == DataFormat::Tf32 ||      // TF32
+                   out_l1 == DataFormat::Float16_b || // BF16
+                   out_l1 == DataFormat::Bfp8_b ||    // E8M6 (encoded as BFP8)
+                   out_l1 == DataFormat::Int32 ||     // INT32 (bitcast)
+                   out_l1 == DataFormat::Int8 ||      // INT8
+                   out_l1 == DataFormat::UInt8;       // UINT8
+
+        case DataFormat::Float16_b:
+            return out_l1 == DataFormat::Tf32 ||      // TF32
+                   out_l1 == DataFormat::Float16_b || // BF16
+                   out_l1 == DataFormat::Bfp8_b ||    // E8M6 (encoded as BFP8)
+                   out_l1 == DataFormat::Int8;        // INT8
+
+        case DataFormat::Float16:
+            return out_l1 == DataFormat::Float16 || // FP16
+                   out_l1 == DataFormat::Bfp8 ||    // E5M7/E5M6 (encoded as BFP8a)
+                   out_l1 == DataFormat::Lf8 ||     // FP8 (e5m2)
+                   out_l1 == DataFormat::Int8;      // INT8
+
+        case DataFormat::Int32:
+            return out_l1 == DataFormat::Float32 ||   // FP32 (bitcast)
+                   out_l1 == DataFormat::Tf32 ||      // TF32 (bitcast+round)
+                   out_l1 == DataFormat::Float16_b || // BF16 (top 16b bitcast)
+                   out_l1 == DataFormat::Int32 ||     // INT32 (identity)
+                   out_l1 == DataFormat::Int8 ||      // INT8
+                   out_l1 == DataFormat::UInt8;       // UINT8
+
+        case DataFormat::UInt16: // INT16 identity path
+            return out_l1 == DataFormat::UInt16;
+
+        default:
+            return false;
+    }
+}
+
+/**
+ * \brief Returns true if conversion is supported by LATE packer conversion stage.
+ *
+ * This checks the Wormhole late conversion matrix only (intermediate/LateFromFormat -> L1).
+ *
+ * Ref: Wormhole Packers/FormatConversion.md, "Late format conversion".
+ */
+__attribute__((noinline)) bool is_packer_to_L1_late_conversion_supported(const DataFormat in_reg, const DataFormat out_l1)
+{
+    switch (in_reg)
+    {
+        case DataFormat::Float32: // From FP32 column
+            return is_packer_fp32_late_column_output(out_l1);
+
+        // Combined column (TF32 / BF16 / E8M6 / FP16 / E5M7 / E5M6 / FP8).
+        // Bfp4/Bfp2 and Bfp4_b/Bfp2_b are kept for backward compatibility with existing code.
+        case DataFormat::Tf32:
+        case DataFormat::Float16_b:
+        case DataFormat::Bfp8_b:
+        case DataFormat::Bfp4_b:
+        case DataFormat::Bfp2_b:
+        case DataFormat::Float16:
+        case DataFormat::Bfp8:
+        case DataFormat::Bfp4:
+        case DataFormat::Bfp2:
+        case DataFormat::Lf8:
+            return is_packer_combined_late_column_output(out_l1);
+
+        case DataFormat::Int32: // From INT32 column
+            return out_l1 == DataFormat::Int32;
+
+        case DataFormat::UInt16: // From INT16 column
+            return out_l1 == DataFormat::UInt16;
+
+        case DataFormat::Int8: // From INT8/UINT8 column
+        case DataFormat::UInt8:
+            return out_l1 == DataFormat::Int8 || out_l1 == DataFormat::UInt8;
+
+        case DataFormat::UInt32:
+            return out_l1 == DataFormat::UInt32;
+
+        default:
+            return false;
+    }
+}
+
+/**
+ * \brief Returns true if either EARLY or LATE packer conversion stage supports the conversion.
+ */
+__attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFormat in_reg, const DataFormat out_l1)
+{
+    return is_packer_to_L1_early_conversion_supported(in_reg, out_l1) || is_packer_to_L1_late_conversion_supported(in_reg, out_l1);
+}
+
 // This function saves the exponential section size/required offsets to GPR for reconfiguring
 // of data format for packer. These registers are not explicitly used by the packer during
 // operation, thus we do not need to use a semaphore to wait for the packer to finish before
@@ -429,6 +568,9 @@ inline void reconfig_packer_data_format(
     const bool partial_face        = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(
+        is_packer_to_L1_conversion_supported(static_cast<DataFormat>(pack_src_format), static_cast<DataFormat>(pack_dst_format)),
+        "Unsupported packer to L1 conversion.");
     // Configure packers
     pack_config_u config;
     config.val[2] = 0; // Only need to modify word[2][15:0]
@@ -544,6 +686,9 @@ inline void configure_pack(
     const std::uint32_t relu_config = 0)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(
+        is_packer_to_L1_conversion_supported(static_cast<DataFormat>(pack_src_format), static_cast<DataFormat>(pack_dst_format)),
+        "Unsupported packer to L1 conversion.");
     // Get pointer to registers for current state ID
     volatile std::uint32_t* cfg = get_cfg_pointer();
 

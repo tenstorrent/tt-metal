@@ -28,6 +28,12 @@ from helpers.test_variant_parameters import (
 )
 
 
+def get_dest_accum_modes(formats):
+    if formats.input_format.is_32_bit() and formats.input_format.is_integer():
+        return [DestAccumulation.No]
+    return [DestAccumulation.Yes, DestAccumulation.No]
+
+
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats(
@@ -138,10 +144,7 @@ def test_perf_eltwise_binary_sfpu_float(
         MathOperation.SfpuElwLeftShift,
         MathOperation.SfpuElwLogicalRightShift,
     ],
-    dest_acc=[
-        DestAccumulation.Yes,
-        DestAccumulation.No,
-    ],
+    dest_acc=lambda formats: get_dest_accum_modes(formats),
     loop_factor=[
         16,
     ],
@@ -227,10 +230,7 @@ def test_perf_eltwise_binary_sfpu_int(
     mathop=[
         MathOperation.SfpuAddTopRow,
     ],
-    dest_acc=[
-        DestAccumulation.Yes,
-        DestAccumulation.No,
-    ],
+    dest_acc=lambda formats: get_dest_accum_modes(formats),
     loop_factor=[
         16,
     ],

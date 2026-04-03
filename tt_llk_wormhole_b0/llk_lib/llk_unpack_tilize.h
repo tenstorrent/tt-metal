@@ -56,6 +56,9 @@ inline void _llk_unpack_tilize_init_(
     // For integers, always unpack to dest. For Float32, only if unpack_dst_format is Float32 (lossless tilize mode)
     const bool unpack_to_dest = (unpack_src_format == to_underlying(DataFormat::UInt32)) || (unpack_src_format == to_underlying(DataFormat::Int32)) ||
                                 (unpack_dst_format == to_underlying(DataFormat::Float32));
+    LLK_ASSERT(
+        is_unpacker_format_conversion_supported_dest(static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), unpack_to_dest),
+        "Unsupported unpacker format conversion.");
 
     const std::uint32_t block_c_dim = ct_dim * (narrow_tile ? FACE_C_DIM : TILE_C_DIM);
 
