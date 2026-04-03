@@ -52,17 +52,16 @@ def test_parallel_embedding(mesh_device, isl_per_chip, vocab_size, emb_dim):
 
     sp_factor = mesh_device.shape[0]
     tp_factor = mesh_device.shape[1]
-    seq_per_chip = isl_per_chip
 
     signpost(f"embedding-{mesh_device.shape}-isl_per_chip{isl_per_chip}-v{vocab_size}-e{emb_dim}")
 
     logger.debug(
-        f"Config: {mesh_device.shape=}, {sp_factor=}, {tp_factor=}, " f"{seq_per_chip=}, {vocab_size=}, {emb_dim=}"
+        f"Config: {mesh_device.shape=}, {sp_factor=}, {tp_factor=}, " f"{isl_per_chip=}, {vocab_size=}, {emb_dim=}"
     )
 
     assert (
-        seq_per_chip % ttnn.TILE_SIZE == 0
-    ), f"isl_per_chip ({seq_per_chip}) must be a multiple of TILE_SIZE ({ttnn.TILE_SIZE})"
+        isl_per_chip % ttnn.TILE_SIZE == 0
+    ), f"isl_per_chip ({isl_per_chip}) must be a multiple of TILE_SIZE ({ttnn.TILE_SIZE})"
     assert emb_dim % tp_factor == 0, f"emb_dim ({emb_dim}) must be divisible by tp_factor ({tp_factor})"
 
     ttnn.visualize_mesh_device(mesh_device)
@@ -73,10 +72,10 @@ def test_parallel_embedding(mesh_device, isl_per_chip, vocab_size, emb_dim):
     torch.manual_seed(42)
     torch_weight = torch.randn(vocab_size, emb_dim, dtype=torch.float32)
 
-    # Tokens shaped as [sp_factor, 1, seq_per_chip] — one chunk per SP device
-    torch_tokens = torch.randint(0, vocab_size, (sp_factor, 1, seq_per_chip))
+    # Tokens shaped as [sp_factor, 1, isl_per_chip] — one chunk per SP device
+    torch_tokens = torch.randint(0, vocab_size, (sp_factor, 1, isl_per_chip))
 
-    # Reference output: [sp_factor, 1, seq_per_chip, emb_dim]
+    # Reference output: [sp_factor, 1, isl_per_chip, emb_dim]
     torch_output = F.embedding(torch_tokens, torch_weight)
     logger.debug(f"Torch reference output: {torch_output.shape}")
 
