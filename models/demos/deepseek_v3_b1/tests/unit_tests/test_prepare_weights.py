@@ -27,7 +27,6 @@ from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
 OverlappedTensor = ttnn.OverlappedTensor
 from models.demos.deepseek_v3_b1.prepare_weights import (
     _MTP_LAYER_IDX,
-    CURRENT_TRANSFORM_VERSION,
     AttentionWeights,
     DeepSeekV3DenseLayerWeights,
     DeepSeekV3EmbeddingLayerWeights,
@@ -37,11 +36,6 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     DenseRoutedExpertWeights,
     MoERoutedExpertWeights,
     SharedExpertWeights,
-    load_dense_decoder_layer,
-    load_embedding_weights,
-    load_lm_head_weights,
-    load_moe_decoder_layer,
-    load_mtp_weights,
     prepare_attention_weights,
     prepare_dense_layer_weights,
     prepare_embedding_weights,
@@ -50,13 +44,6 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     prepare_mtp_weights,
     prepare_routed_expert_weights,
     prepare_shared_expert_weights,
-    save_attention_weights,
-    save_decoder_layer,
-    save_embedding_weights,
-    save_lm_head_weights,
-    save_mtp_weights,
-    save_routed_expert_weights,
-    save_shared_expert_weights,
 )
 from models.demos.deepseek_v3_b1.tensor_cache import CacheConfig, CacheContext, TensorCache
 
@@ -141,7 +128,7 @@ def _test_cache_context(mesh_shape: tuple[int, int] = (4, 2)) -> CacheContext:
         schema_version=1,
         hf_model_id="test-model",
         hf_revision="test-rev",
-        transform_version=CURRENT_TRANSFORM_VERSION,
+        transform_version=1,
         mesh_shape=mesh_shape,
     )
 

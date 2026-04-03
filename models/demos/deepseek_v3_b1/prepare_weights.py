@@ -27,6 +27,8 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
+from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions as D
+from models.demos.deepseek_v3_b1.tensor_cache import CacheConfig, ShardMeshMapper, SourceTensorSelection, TensorTarget
 
 OverlappedTensor = ttnn.OverlappedTensor
 
@@ -633,11 +635,25 @@ def prepare_attention_weights(
         q_norm_ot = o_norms["q_norm"]
         ffn_norm_ot = o_norms["ffn_norm"]
         kv_norm_ot = o_norms["kv_norm"]
-        gate_bias_tt = create_gate_bias_tensor(
-            state_dict[_key(layer_idx, "mlp.gate.e_score_correction_bias")],
-            bdw._device,
-            move_to_device=move_to_device,
-        )
+        _gate_bias_key = _key(layer_idx, "mlp.gate.e_score_correction_bias")
+        if cache_config is not None:
+            target = _gate_bias_target(layer_idx)
+            fingerprint = cache_config.context.fingerprint(
+                source=SourceTensorSelection(names=(_gate_bias_key,)),
+                target=target,
+            )
+            gate_bias_tt = cache_config.cache.get_or_create(
+                fingerprint,
+                bdw._device,
+                preprocess=lambda t: {target.name: t[_gate_bias_key].reshape(16, 16).T.contiguous().to(torch.bfloat16)},
+                raw_tensors=lambda: {_gate_bias_key: state_dict[_gate_bias_key]},
+            )
+        else:
+            gate_bias_tt = create_gate_bias_tensor(
+                state_dict[_gate_bias_key],
+                bdw._device,
+                move_to_device=move_to_device,
+            )
         logger.debug("  convert o_proj_gate_mm_norms (MoE): {:.3f}s", time.perf_counter() - t0)
         return AttentionWeights(
             q_a_proj=q_a_proj,
