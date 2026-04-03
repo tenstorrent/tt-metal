@@ -285,6 +285,8 @@ def test_mla(
         rope_tensors=rope_tensors,
     )
     ttnn.synchronize_device(mesh_device)
+
+    logger.info("Second MLA run")
     ttnn.distributed_context_barrier()
 
     # Second forward to test program cache hit
