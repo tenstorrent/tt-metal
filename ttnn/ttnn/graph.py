@@ -13,7 +13,7 @@ import graphviz
 from ttnn._ttnn.graph import (
     RunMode,
     begin_graph_capture as _cpp_begin_graph_capture,
-    end_graph_capture,
+    end_graph_capture as _cpp_end_graph_capture,
     end_graph_capture_to_file as _cpp_end_graph_capture_to_file,
     REPORT_VERSION,
     extract_calltrace,
@@ -48,7 +48,8 @@ from ttnn.graph_report import (
 # to set correct input_tensors / output_tensors associations.
 
 _python_io_data: list = []
-_python_stack_traces_enabled: bool = True
+_python_io_recording_enabled: bool = False
+_python_stack_traces_enabled: bool = False
 
 # Glob patterns for frames to strip from stack traces (pathlib-style).
 # Matches ttnn internals (decorators/graph), pytest, pluggy, and the pytest entry script.
@@ -62,6 +63,32 @@ _STACK_TRACE_INTERNAL_PATTERNS = (
     "**/pluggy/**",
     "**/bin/pytest",
 )
+
+
+def enable_python_io_recording():
+    """Enable recording Python-level operation arguments and tensor IDs during graph capture.
+
+    When enabled, each operation records its kwargs, tensor summaries, and
+    (optionally) Python stack traces.  This is required for
+    ``end_graph_capture_to_file`` / ``graph_report`` but adds significant
+    overhead — disable it when graph capture is used only for memory tracking.
+
+    Automatically enabled by :func:`begin_graph_capture` and disabled by
+    :func:`end_graph_capture` / :func:`end_graph_capture_to_file`.
+    """
+    global _python_io_recording_enabled
+    _python_io_recording_enabled = True
+
+
+def disable_python_io_recording():
+    """Disable Python-level I/O recording during graph capture."""
+    global _python_io_recording_enabled
+    _python_io_recording_enabled = False
+
+
+def is_python_io_recording_enabled() -> bool:
+    """Return whether Python I/O recording is currently enabled."""
+    return _python_io_recording_enabled
 
 
 def enable_python_stack_traces():
@@ -126,10 +153,20 @@ def _collect_tensor_ids(value) -> list:
 
 
 def begin_graph_capture(run_mode=None):
-    """Wrapper that clears Python I/O state before starting C++ capture."""
-    global _python_io_data
+    """Wrapper that clears Python I/O state before starting C++ capture.
+
+    Automatically enables Python I/O recording so that
+    ``end_graph_capture_to_file`` can embed operation arguments,
+    tensor IDs, and (if enabled) stack traces in the JSON report.
+
+    When graph capture is started from C++ (e.g. ``MemoryUsageTracker``),
+    this wrapper is bypassed and Python I/O recording stays disabled,
+    avoiding the associated overhead.
+    """
+    global _python_io_data, _python_io_recording_enabled
     if not is_graph_capture_active():
         _python_io_data = []
+        _python_io_recording_enabled = True
         import ttnn
 
         if ttnn.CONFIG.enable_fast_runtime_mode:
@@ -145,11 +182,27 @@ def begin_graph_capture(run_mode=None):
     return _cpp_begin_graph_capture(run_mode)
 
 
+def end_graph_capture():
+    """End graph capture and return the captured graph.
+
+    Automatically disables Python I/O recording when the outermost
+    capture session ends.
+    """
+    global _python_io_recording_enabled
+    result = _cpp_end_graph_capture()
+    if not is_graph_capture_active():
+        _python_io_recording_enabled = False
+    return result
+
+
 def end_graph_capture_to_file(report_path):
     """Wrapper that appends Python I/O data to the JSON report."""
+    global _python_io_recording_enabled
     result_str = _cpp_end_graph_capture_to_file(report_path)
     if _python_io_data:
         _write_python_io_sidecar(report_path)
+    if not is_graph_capture_active():
+        _python_io_recording_enabled = False
     return json.loads(result_str)
 
 
@@ -268,6 +321,57 @@ def _write_python_io_sidecar(report_path):
     sidecar_path = report_path.with_suffix(".python_io.json")
     with open(sidecar_path, "w") as f:
         json.dump(_python_io_data, f)
+
+
+@contextlib.contextmanager
+def full_graph_capture(report_path: str, *, run_mode=None, slow_dispatch: bool = True):
+    """Context manager that captures a complete graph trace with all features enabled.
+
+    Enables Python I/O recording, Python stack traces, and detailed buffer
+    tracing.  Optionally switches to slow dispatch (``Operation`` decorator)
+    for per-operation captured sub-graphs.
+
+    On exit the trace is written to *report_path* and all settings are
+    restored to their previous values.
+
+    Example::
+
+        with ttnn.graph.full_graph_capture("my_report.json"):
+            # ... run your model ...
+
+    Args:
+        report_path: Destination JSON file for the graph report.
+        run_mode: ``RunMode.NORMAL`` (default) or ``RunMode.NO_DISPATCH``.
+        slow_dispatch: If ``True`` (default), temporarily disables
+            ``enable_fast_runtime_mode`` so ``Operation`` produces
+            per-operation captured sub-graphs.
+    """
+    import ttnn
+
+    prev_stack_traces = _python_stack_traces_enabled
+    prev_buffer_tracing = is_detailed_buffer_tracing_enabled()
+    prev_fast_runtime = ttnn.CONFIG.enable_fast_runtime_mode
+
+    enable_python_stack_traces()
+    enable_detailed_buffer_tracing()
+    if slow_dispatch:
+        ttnn.CONFIG.enable_fast_runtime_mode = False
+
+    try:
+        begin_graph_capture(run_mode if run_mode is not None else RunMode.NORMAL)
+        yield
+        end_graph_capture_to_file(report_path)
+    finally:
+        if is_graph_capture_active():
+            try:
+                _cpp_end_graph_capture()
+            except Exception:
+                pass
+        if not prev_buffer_tracing:
+            disable_detailed_buffer_tracing()
+        if not prev_stack_traces:
+            disable_python_stack_traces()
+        ttnn.CONFIG.enable_fast_runtime_mode = prev_fast_runtime
 
 
 class ExitStackWithPop(contextlib.ExitStack):
