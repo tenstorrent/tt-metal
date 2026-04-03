@@ -149,7 +149,14 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
     auto worker_core_range_set = operation_attributes.worker_core_range_set;
 
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
-    uint32_t effective_num_links = std::min(num_links, 4u);
+    // MAX_BARRIER_CORES: kernel writer_dispatch.cpp sizes its barrier address array to this limit.
+    constexpr uint32_t MAX_BARRIER_CORES = 4;
+    uint32_t effective_num_links = std::min(num_links, MAX_BARRIER_CORES);
+    TT_FATAL(
+        effective_num_links <= MAX_BARRIER_CORES,
+        "effective_num_links {} exceeds MAX_BARRIER_CORES {} (kernel barrier array limit)",
+        effective_num_links,
+        MAX_BARRIER_CORES);
     TT_FATAL(
         subdevice_cores.size() >= effective_num_links,
         "Not enough cores {} for {} links",
@@ -178,6 +185,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
         mesh_coordinate[1],
         sender_cores);
 
+    // Must match the read_batch_size constexpr in reader_dispatch.cpp kernel.
     constexpr uint32_t read_batch_size = 8;
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
@@ -220,7 +228,6 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
     // so the CB must not fill up before the writer can consume (which requires payload data).
     {
         uint32_t route_info_page_size = l1_alignment;
-        constexpr uint32_t read_batch_size = 8;  // must match kernel constant
         uint32_t route_info_buffering = read_batch_size * operation_attributes.num_experts_per_tok;
         tt::tt_metal::CircularBufferConfig route_info_cb_config =
             tt::tt_metal::CircularBufferConfig(
@@ -230,9 +237,8 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
     }
 
     // c_5: payload_for_writer (reader->writer, input pages for fabric sends)
-    // Same buffering rationale as route_info: must hold a full batch of remote tokens.
+    // Same buffering rationale as route_info (see c_4 comment for deadlock analysis).
     {
-        constexpr uint32_t read_batch_size = 8;
         uint32_t payload_buffering = read_batch_size * operation_attributes.num_experts_per_tok;
         detail::create_tensor_cb(
             program,
@@ -243,8 +249,8 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
             "payload_for_writer");
     }
     // c_6: metadata_for_writer (reader->writer, metadata pages for fabric sends)
+    // Same buffering rationale as route_info (see c_4 comment for deadlock analysis).
     {
-        constexpr uint32_t read_batch_size = 8;
         uint32_t metadata_buffering = read_batch_size * operation_attributes.num_experts_per_tok;
         detail::create_tensor_cb(
             program,

@@ -144,7 +144,14 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     auto max_dispatched_tokens_per_expert = dispatched_shape[-2];
 
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
-    uint32_t effective_num_links = std::min(num_links, 4u);
+    // MAX_BARRIER_CORES: kernel writer_combine.cpp sizes its barrier address array to this limit.
+    constexpr uint32_t MAX_BARRIER_CORES = 4;
+    uint32_t effective_num_links = std::min(num_links, MAX_BARRIER_CORES);
+    TT_FATAL(
+        effective_num_links <= MAX_BARRIER_CORES,
+        "effective_num_links {} exceeds MAX_BARRIER_CORES {} (kernel barrier array limit)",
+        effective_num_links,
+        MAX_BARRIER_CORES);
     TT_FATAL(
         subdevice_cores.size() >= effective_num_links,
         "Not enough cores {} for {} links",
@@ -169,6 +176,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     auto zero_init_semaphore_id = tt::tt_metal::CreateSemaphore(program, sender_core_grid, 0);
     auto zero_init_barrier_semaphore_id = tt::tt_metal::CreateSemaphore(program, sender_core_grid, 0);
 
+    // Must match the read_batch_size constexpr in reader_combine.cpp kernel.
     constexpr uint32_t read_batch_size = 8;
 
     // c_0: dispatched_buffer scratch (reader-only, batched DRAM reads)
@@ -197,9 +205,12 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         "expert_token_counts");
 
     // c_3: route_info (reader->writer, 4 x uint32_t per entry)
+    // Must hold at least read_batch_size entries to avoid deadlock:
+    // the reader pushes all route_info entries for a batch before starting the L1 payload copy,
+    // so the CB must not fill up before the writer can consume (which requires payload data).
     {
         uint32_t route_info_page_size = l1_alignment;
-        constexpr uint32_t route_info_buffering = 16;
+        uint32_t route_info_buffering = read_batch_size * operation_attributes.num_experts_per_tok;
         tt::tt_metal::CircularBufferConfig route_info_cb_config =
             tt::tt_metal::CircularBufferConfig(
                 route_info_buffering * route_info_page_size, {{tt::CBIndex::c_3, tt::DataFormat::UInt8}})
@@ -208,13 +219,17 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     }
 
     // c_4: output_for_writer (reader->writer, output pages for fabric sends)
-    detail::create_tensor_cb(
-        program,
-        sender_core_grid,
-        dispatched_buffer,
-        /*buffering_factor=*/16,
-        /*cb_id=*/tt::CBIndex::c_4,
-        "output_for_writer");
+    // Same buffering rationale as route_info (see c_3 comment for deadlock analysis).
+    {
+        uint32_t output_buffering = read_batch_size * operation_attributes.num_experts_per_tok;
+        detail::create_tensor_cb(
+            program,
+            sender_core_grid,
+            dispatched_buffer,
+            /*buffering_factor=*/output_buffering,
+            /*cb_id=*/tt::CBIndex::c_4,
+            "output_for_writer");
+    }
 
     // c_5: packet header CB for fabric sends (writer-only)
     if (num_links > 0) {

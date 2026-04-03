@@ -504,7 +504,7 @@ def test_ttnn_dispatch_combine(
             (8, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
             },
             1,
             ttnn.Topology.Linear,
@@ -641,3 +641,35 @@ def test_ttnn_dispatch_combine_overflow(
     tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts)
     ttnn.synchronize_device(mesh_device)
     logger.info("[overflow test] Combine completed (did not hang)")
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
+            },
+            1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+            id="linear-8-1link",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_ttnn_dispatch_combine_top4(mesh_device, num_links, topology):
+    """Regression test for num_experts_per_tok > 2 (previously caused hangs due to undersized CB buffering)."""
+    test_ttnn_dispatch_combine(
+        mesh_device=mesh_device,
+        seq_len_per_chip=1600,
+        emb_dim=7168,
+        num_routed_experts=64,
+        num_experts_per_tok=4,
+        capacity_factor=2,
+        num_links=num_links,
+        topology=topology,
+        use_predictable_data=True,
+    )
