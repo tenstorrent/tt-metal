@@ -365,6 +365,56 @@ def postprocess_global_golden_function_outputs(outputs, golden_outputs):
         TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[output.tensor_id] = golden_output
 
 
+def _drain_traceback_ids():
+    """Drain pending allocation traceback IDs captured by the C++ allocator.
+
+    Called after every nanobind op returns so the Python stack is captured at
+    the actual call site rather than at the next unrelated C builtin return
+    (which is where sys.setprofile's c_return would fire on CPython <3.12
+    due to nanobind's use of vectorcall).
+    """
+    from ttnn._ttnn.operations.trace import drain_pending_traceback_ids
+
+    pending = drain_pending_traceback_ids()
+    if not pending:
+        return
+    import traceback as _tb
+    from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
+
+    # Drop the last 2 frames (_drain_traceback_ids + FastOperation.__call__) so the
+    # traceback ends at the actual op call site in user/model code.
+    stack = "".join(_tb.format_stack()[:-2])
+    for buf_id in pending:
+        UnsafeAllocationTracker._tracebacks[buf_id] = stack
+
+
+if not os.environ.get("TT_METAL_TRACE_ALLOC_TRACEBACKS"):
+
+    def _drain_traceback_ids():  # noqa: F811
+        pass
+
+
+if os.environ.get("TT_METAL_TRACE_ALLOC_TRACKING") or os.environ.get("TT_METAL_TRACE_ALLOC_TRACEBACKS"):
+
+    def _push_allocation_context(name):
+        from ttnn._ttnn.operations.trace import push_allocation_context
+
+        push_allocation_context(name)
+
+    def _pop_allocation_context():
+        from ttnn._ttnn.operations.trace import pop_allocation_context
+
+        pop_allocation_context()
+
+else:
+
+    def _push_allocation_context(name):
+        pass
+
+    def _pop_allocation_context():
+        pass
+
+
 @dataclasses.dataclass
 class FastOperation:
     python_fully_qualified_name: str
@@ -469,17 +519,20 @@ class FastOperation:
             set_tensor_id(input_tensors)
 
         try:
+            _push_allocation_context(self.python_fully_qualified_name)
             if cq_id is None:
                 result = self.function(*function_args, **function_kwargs)
             else:
                 with command_queue(cq_id):
                     result = self.function(*function_args, **function_kwargs)
+            _drain_traceback_ids()
         except TypeError as e:
             enhanced_msg = self._enhance_type_error_message(str(e), function_args, function_kwargs)
             if enhanced_msg:
                 raise TypeError(enhanced_msg) from e
             raise
         finally:
+            _pop_allocation_context()
             if recording:
                 ttnn.graph.track_function_end()
 
