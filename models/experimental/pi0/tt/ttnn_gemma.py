@@ -120,12 +120,10 @@ def adarms_norm_ttnn(
     gate = ttnn.slice(modulation, [0, 0, hidden_dim * 2], [batch_size, 1, hidden_dim * 3])
     ttnn.deallocate(modulation)
 
-    # Apply: normed = normed * (1 + scale) + shift
-    # TTNN handles broadcasting (B, 1, hidden) with (B, seq, hidden) automatically
-    scale_plus_one = ttnn.add(scale, 1.0)
+    # Apply: normed * (1 + scale) + shift = scale * normed + normed + shift
+    # FUSED: mac(scale, normed, normed) = scale * normed + normed — saves 1 op vs add+mul
+    normed = ttnn.mac(scale, normed, normed)
     ttnn.deallocate(scale)
-    normed = ttnn.mul(normed, scale_plus_one)
-    ttnn.deallocate(scale_plus_one)
     normed = ttnn.add(normed, shift, memory_config=ttnn.L1_MEMORY_CONFIG)
     ttnn.deallocate(shift)
 
@@ -140,9 +138,8 @@ def gated_residual_ttnn(
     """Gated residual: x + y * gate (Pi0.5) or x + y (Pi0)."""
     if gate is None:
         return ttnn.add(x, y)
-    # TTNN multiply supports broadcasting (B, 1, hidden) * (B, seq, hidden)
-    gated = ttnn.mul(y, gate, memory_config=ttnn.L1_MEMORY_CONFIG)
-    return ttnn.add(x, gated, memory_config=ttnn.L1_MEMORY_CONFIG)
+    # FUSED: mac(gate, y, x) = gate * y + x — single op instead of mul + add
+    return ttnn.mac(gate, y, x)
 
 
 # ============================================================================
