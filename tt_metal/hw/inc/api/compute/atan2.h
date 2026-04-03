@@ -13,8 +13,19 @@ namespace ckernel {
 
 // clang-format off
 /**
- * Performs element-wise atan2 operation y = atan2(x0, x1) with x0 as the first operand and x1 as the second operand.
- * Output overwrites the destination tile at `odst` in DST.
+ * Performs an elementwise atan2 operation on two inputs: y = atan2(x0, x1).
+ * Output overwrites odst in DST.
+ *
+ * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
+ * on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                           | Type     | Valid Range                                           | Required |
+ * |----------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst0          | The index of the tile in DST register buffer to use as first operand  | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | idst1          | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
 ALWI void atan2_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
