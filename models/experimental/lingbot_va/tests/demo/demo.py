@@ -12,6 +12,7 @@ import argparse
 import gc
 import os
 import sys
+import time
 from copy import deepcopy
 from pathlib import Path
 
@@ -391,8 +392,8 @@ def _load_models_phase1(config, load_text_encoder=True, mesh_device=None):
     action_scheduler = FlowMatchSchedulerTtnn(
         mesh_device, shift=config.action_snr_shift, sigma_min=0.0, extra_one_step=True
     )
-    scheduler.set_timesteps(1000, training=True)
-    action_scheduler.set_timesteps(1000, training=True)
+    # scheduler.set_timesteps(1000, training=True)
+    # action_scheduler.set_timesteps(1000, training=True)
 
     return {
         "vae": vae,
@@ -1349,6 +1350,10 @@ def run_inference(
     Optional keyword overrides set ``config`` fields; when omitted, env
     ``LINGBOT_VA_*`` inference overrides may apply (see ``apply_robotwin_inference_overrides``).
     """
+    t0 = time.perf_counter()
+    start_ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    logger.info("run_inference: start %s", start_ts)
+
     checkpoint_path = Path(checkpoint_path).resolve()
     if not checkpoint_path.is_dir():
         raise FileNotFoundError(f"Checkpoint dir not found: {checkpoint_path}")
@@ -1420,6 +1425,11 @@ def run_inference(
 
     _reset_state(models, state, prompt)
     action, _ = _infer_impl(models, state, init_obs, frame_st_id=state["frame_st_id"])
+
+    elapsed_s = time.perf_counter() - t0
+    end_ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    logger.info("run_inference: end %s (elapsed %.3f s)", end_ts, elapsed_s)
+
     return {"action": action}
 
 
@@ -1434,6 +1444,10 @@ def run_generate(
     Run multi-chunk video generation (same behavior as VA_Server.generate).
     Loads init obs from images_dir, runs num_chunks of inference, decodes to video, saves demo.mp4.
     """
+    t0 = time.perf_counter()
+    start_ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    logger.info("run_generate: start %s", start_ts)
+
     checkpoint_path = Path(checkpoint_path).resolve()
     images_dir = Path(images_dir).resolve()
     if not checkpoint_path.is_dir():
@@ -1566,6 +1580,11 @@ def run_generate(
     if decoded_video is not None:
         export_to_video(decoded_video, os.path.join(config.save_root, "demo.mp4"), fps=10)
     _close_lingbot_mesh_stack(models)
+
+    elapsed_s = time.perf_counter() - t0
+    end_ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    logger.info("run_generate: end %s (elapsed %.3f s)", end_ts, elapsed_s)
+
     return str(Path(save_dir) / "demo.mp4")
 
 
