@@ -496,12 +496,12 @@ class ttMLA:
         # profiler = Profiler()
 
         # profiler.enable()
-        ttnn.synchronize_device(self.mesh_device)
+        # ttnn.synchronize_device(self.mesh_device)
         # ttnn.distributed_context_barrier()
 
         # start = time.time()
 
-        ttnn.distributed_context_barrier()
+        # ttnn.distributed_context_barrier()
 
         attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             tt_q,
