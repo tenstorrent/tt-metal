@@ -18,7 +18,7 @@ run_dual_galaxy_unit_tests() {
   local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile"
   local tcp_interface="cnx1"
   local mpi_args="--host g05glx01,g05glx02 $mpi_args_base"
-  local mpi_args_reversed="--host g05glx01,g05glx02 $mpi_args_base"
+  local mpi_args_reversed="--host g05glx02,g05glx01 $mpi_args_base"
 
   local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
   local mpirun_args="--host g05glx01,g05glx02 $mpirun_args_base"
