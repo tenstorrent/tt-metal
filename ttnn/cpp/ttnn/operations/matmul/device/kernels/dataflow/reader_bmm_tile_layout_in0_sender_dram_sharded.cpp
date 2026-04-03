@@ -35,6 +35,8 @@ void kernel_main() {
     uint32_t in0_mcast_sender_valid_semaphore = get_semaphore(get_compile_time_arg_val(13));
 
     constexpr uint32_t num_blocks_per_shard = get_compile_time_arg_val(14);
+    constexpr uint32_t in0_block_w = get_compile_time_arg_val(15);
+    constexpr uint32_t in0_block_h = in0_block_num_tiles / in0_block_w;
     constexpr uint32_t num_storage_cores = num_blocks / num_blocks_per_shard;
 
     // RUNTIME ARGS
@@ -98,17 +100,23 @@ void kernel_main() {
 
             // Now we have the block in the CB address, we can mcast to dests!
 
-            // Zero out padded regions for the very last tile
+            // Zero out padded regions for tiles in the last K-column/row
             if constexpr (in0_last_ktile_w > 0) {
                 if (is_last_ktile_padded && (i == num_blocks_per_shard - 1)) {
-                    auto in0_last_ktile_ptr = local_read_addr + in0_block_size_bytes - in0_single_tile_size_bytes;
-                    pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_ptr);
+                    for (uint32_t h = 0; h < in0_block_h; ++h) {
+                        auto in0_last_ktile_ptr =
+                            local_read_addr + (h * in0_block_w + in0_block_w - 1) * in0_single_tile_size_bytes;
+                        pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_ptr);
+                    }
                 }
             }
             if constexpr (in0_last_ktile_h > 0) {
                 if (is_last_ktile_padded && (i == num_blocks_per_shard - 1)) {
-                    auto in0_last_ktile_ptr = local_read_addr + in0_block_size_bytes - in0_single_tile_size_bytes;
-                    pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(in0_last_ktile_ptr);
+                    for (uint32_t w = 0; w < in0_block_w; ++w) {
+                        auto in0_last_ktile_ptr =
+                            local_read_addr + ((in0_block_h - 1) * in0_block_w + w) * in0_single_tile_size_bytes;
+                        pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(in0_last_ktile_ptr);
+                    }
                 }
             }
 
@@ -157,17 +165,23 @@ void kernel_main() {
                 sender_sem.wait(in0_mcast_num_dests - 1);
                 sender_sem.set(0);
 
-                // Zero out padded regions for the very last tile
+                // Zero out padded regions for tiles in the last K-column/row
                 if constexpr (in0_last_ktile_w > 0) {
                     if (is_last_ktile_padded && (block == num_blocks - 1)) {
-                        auto in0_last_ktile_ptr = local_read_addr + in0_block_size_bytes - in0_single_tile_size_bytes;
-                        pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_ptr);
+                        for (uint32_t h = 0; h < in0_block_h; ++h) {
+                            auto in0_last_ktile_ptr =
+                                local_read_addr + (h * in0_block_w + in0_block_w - 1) * in0_single_tile_size_bytes;
+                            pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_ptr);
+                        }
                     }
                 }
                 if constexpr (in0_last_ktile_h > 0) {
                     if (is_last_ktile_padded && (block == num_blocks - 1)) {
-                        auto in0_last_ktile_ptr = local_read_addr + in0_block_size_bytes - in0_single_tile_size_bytes;
-                        pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(in0_last_ktile_ptr);
+                        for (uint32_t w = 0; w < in0_block_w; ++w) {
+                            auto in0_last_ktile_ptr =
+                                local_read_addr + ((in0_block_h - 1) * in0_block_w + w) * in0_single_tile_size_bytes;
+                            pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(in0_last_ktile_ptr);
+                        }
                     }
                 }
 #ifndef SKIP_MCAST

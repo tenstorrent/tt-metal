@@ -172,7 +172,7 @@ def test_sdpa(device, num_tiles_k, num_tiles_v, chunk_size, num_chunks, scale):
     logger.info(f"Sum Max absolute difference: {sum_max_diff}")
     logger.info(f"Sum Mean absolute difference: {sum_mean_diff}")
 
-    passing, pcc_message = comp_pcc(torch_out_expected, out_torch, 0.99)
+    passing, pcc_message = comp_pcc(torch_out_expected, out_torch, 0.995)
     logger.info(f"{pcc_message}")
 
     assert passing, f"Output PCC failed: {pcc_message}"
@@ -181,8 +181,18 @@ def test_sdpa(device, num_tiles_k, num_tiles_v, chunk_size, num_chunks, scale):
     logger.info(f"{pcc_message}")
     assert passing, f"Max PCC failed: {pcc_message}"
 
-    passing, pcc_message = comp_pcc(torch_sum_expected, sum_torch, 0.99)
+    passing, pcc_message = comp_pcc(torch_sum_expected, sum_torch, 0.98)
     logger.info(f"{pcc_message}")
     assert passing, f"Sum PCC failed: {pcc_message}"
+
+    sum_rtol, sum_atol = 0.02, 6.0
+    sum_close = torch.allclose(
+        torch_sum_expected,
+        sum_torch,
+        rtol=sum_rtol,
+        atol=sum_atol,
+    )
+    logger.info(f"Sum allclose (rtol={sum_rtol}, atol={sum_atol}): {sum_close}")
+    assert sum_close, f"Sum allclose failed: max_abs_diff={torch.max(torch.abs(sum_torch - torch_sum_expected)).item()}"
 
     logger.info("✓ SDPA Q*K^T test passed!")

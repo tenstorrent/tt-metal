@@ -291,7 +291,8 @@ Buffer::Buffer(
     owns_data_(owns_data),
     page_size_(page_size),
     shard_spec_(sharding_args.shard_spec()),
-    buffer_distribution_spec_(sharding_args.buffer_distribution_spec()) {
+    buffer_distribution_spec_(sharding_args.buffer_distribution_spec()),
+    per_core_allocation_(experimental::per_core_allocation::is_per_core_allocation(sharding_args)) {
     TT_FATAL(this->device_ != nullptr, "Device needs to not be null.");
     if (this->sub_device_id_.has_value()) {
         validate_sub_device_id(this->sub_device_id_, this->device_, buffer_type, shard_spec_);
@@ -386,6 +387,8 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
     if (region.offset == 0 && region.size == size()) {
         return shared_from_this();
     }
+
+    TT_FATAL(!per_core_allocation_, "Buffer::view() with sub-regions is not supported for per-core allocated buffers");
 
     auto buffer = Buffer::create(
         device_,
@@ -564,6 +567,10 @@ DeviceAddr Buffer::aligned_size_per_bank() const {
         is_sharded(this->buffer_layout_) ? this->num_cores().value() : allocator_->get_num_banks(this->buffer_type());
     return tt::tt_metal::detail::calculate_bank_size_spread(
         this->aligned_size(), this->aligned_page_size(), num_banks, this->alignment());
+}
+
+void Buffer::set_per_core_addresses(std::unordered_map<CoreCoord, DeviceAddr> addrs) {
+    per_core_addresses_ = std::move(addrs);
 }
 
 ShardSpecBuffer Buffer::shard_spec() const {

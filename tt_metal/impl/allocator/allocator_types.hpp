@@ -9,6 +9,7 @@
 #include <vector>
 #include <unordered_map>
 
+#include <tt-metalium/experimental/per_core_allocation/allocator_mode.hpp>
 #include <tt-metalium/core_coord.hpp>
 
 namespace tt::tt_metal {
@@ -45,6 +46,7 @@ struct AllocatorConfig {
     CoreRangeSet compute_grid;
     uint32_t l1_alignment = 0;
     bool disable_interleaved = false;
+    AllocatorMode allocator_mode = AllocatorMode::LOCKSTEP;
 
     // Device pointer for SHM tracking (optional, can be null)
     const class Device* device = nullptr;
