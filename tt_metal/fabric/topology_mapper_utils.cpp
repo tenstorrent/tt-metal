@@ -761,6 +761,21 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
     }
 }
 
+// Helper function to build ASIC positions to ASIC IDs map
+std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
+    const ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph, const TopologyMappingConfig& config) {
+    std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> asic_positions_to_asic_ids;
+    if (!config.asic_positions.empty()) {
+        for (const auto& asic_id : physical_graph.get_nodes()) {
+            auto pos_it = config.asic_positions.find(asic_id);
+            if (pos_it != config.asic_positions.end()) {
+                asic_positions_to_asic_ids[pos_it->second].insert(asic_id);
+            }
+        }
+    }
+    return asic_positions_to_asic_ids;
+}
+
 // Helper function to build inter-mesh constraints
 // Maps logical meshes to physical meshes based on matching mesh host ranks
 // A logical mesh maps to a physical mesh if the ASICs in that physical mesh have matching ranks
@@ -777,6 +792,21 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
         add_inter_mesh_minimal_host_cover_from_hostname_map(
             config, physical_graph, mesh_logical_level_graph, inter_mesh_constraints, {});
         return inter_mesh_constraints;
+    }
+
+    std::map<MeshId, std::set<MeshId>> mesh_level_pinnings;
+    for (const auto& [pos, fabric_node] : config.pinnings) {
+        for (const auto& [physical_mesh_id, physical_mesh_graph] : physical_graph.mesh_adjacency_graphs_) {
+            auto asic_position_map = build_asic_positions_map(physical_mesh_graph, config);
+            if (asic_position_map.contains(pos)) {
+                mesh_level_pinnings[fabric_node.mesh_id].insert(physical_mesh_id);
+            }
+        }
+    }
+    for (const auto& [mesh_id, physical_meshes] : mesh_level_pinnings) {
+        if (!physical_meshes.empty()) {
+            inter_mesh_constraints.add_required_constraint(mesh_id, physical_meshes);
+        }
     }
 
     // Find the Physical graph mesh ID to asic id to mesh rank mapping based on the asics in the physical graph
@@ -837,21 +867,6 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
         return config_mode_it->second;
     }
     return ::tt::tt_fabric::ConnectionValidationMode::RELAXED;
-}
-
-// Helper function to build ASIC positions to ASIC IDs map
-std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
-    const ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph, const TopologyMappingConfig& config) {
-    std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> asic_positions_to_asic_ids;
-    if (!config.asic_positions.empty()) {
-        for (const auto& asic_id : physical_graph.get_nodes()) {
-            auto pos_it = config.asic_positions.find(asic_id);
-            if (pos_it != config.asic_positions.end()) {
-                asic_positions_to_asic_ids[pos_it->second].insert(asic_id);
-            }
-        }
-    }
-    return asic_positions_to_asic_ids;
 }
 
 // Helper function to add rank binding constraints. Only called when config.disable_rank_bindings is false.
@@ -1521,7 +1536,14 @@ TopologyMappingResult map_multi_mesh_to_physical(
         // Step 2: For each mesh mapping, do the sub mapping for fabric node id to asic id
         std::unordered_map<MeshId, MeshId> mesh_mappings(
             solver_result.target_to_global.begin(), solver_result.target_to_global.end());
+        log_info(tt::LogFabric, "Attempt {}: Mapping {} mesh pair(s)", retry_attempt, mesh_mappings.size());
         for (const auto& [logical_mesh_id, physical_mesh_id] : mesh_mappings) {
+            log_info(
+                tt::LogFabric,
+                "Attempt {}: Mapping mesh {} -> {}",
+                retry_attempt,
+                logical_mesh_id.get(),
+                physical_mesh_id.get());
             // Get the logical graph and the physical graph
             const auto& logical_graph = adjacency_map_logical.mesh_adjacency_graphs_.at(logical_mesh_id);
             const auto& physical_graph = adjacency_map_physical.mesh_adjacency_graphs_.at(physical_mesh_id);
