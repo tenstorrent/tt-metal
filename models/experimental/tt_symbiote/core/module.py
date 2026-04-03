@@ -74,8 +74,11 @@ class TTNNModule:
         """Set model configuration dictionary."""
         self._model_config = model_config if model_config is not None else {}
 
-    def __call__(self, *args, **kwds):
+    def call(self, *args, **kwds):
         return TENSOR_RUN_IMPLEMENTATION.module_run(self, *args, **kwds)
+
+    def __call__(self, *args, **kwds):
+        return self.call(*args, **kwds)
 
     def preprocess_weights(self):
         """Preprocess weights (called once before first use)."""

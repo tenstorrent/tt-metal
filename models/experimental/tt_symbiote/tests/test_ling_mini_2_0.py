@@ -27,7 +27,8 @@ from models.experimental.tt_symbiote.modules.attention import (
 )
 from models.experimental.tt_symbiote.modules.decoder_layer import TTNNBailingMoEDecoderLayerPadded
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
-from models.experimental.tt_symbiote.modules.embedding import TTNNBailingPaddedEmbedding
+from models.experimental.tt_symbiote.modules.embedding import TTNNBailingPaddedEmbedding, TTNNBailingRotaryEmbedding
+from models.experimental.tt_symbiote.models.bailing_moe_v2 import TTNNBailingMoeV2Model
 
 
 def create_paged_kv_cache(model_config, device, batch_size=1):
@@ -87,10 +88,14 @@ def test_ling_mini_2_0(mesh_device):
         model.model.layers[0].__class__: TTNNBailingMoEDecoderLayerPadded,
         model.model.norm.__class__: TTNNDistributedRMSNorm,
         nn.Embedding: TTNNBailingPaddedEmbedding,
+        model.model.rotary_emb.__class__: TTNNBailingRotaryEmbedding,
     }
     nn_to_ttnn2 = {
         nn.Linear: TTNNLinearIColShardedWRowSharded,
         nn.SiLU: TTNNSilu,
+    }
+    nn_to_ttnn_3 = {
+        model.model.__class__: TTNNBailingMoeV2Model,
     }
     messages = [
         {
@@ -109,12 +114,13 @@ def test_ling_mini_2_0(mesh_device):
         del inputs["token_type_ids"]
     modules1 = register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
     modules2 = register_module_replacement_dict(model, nn_to_ttnn2, model_config=None)
+    modules3 = register_module_replacement_dict(model, nn_to_ttnn_3, model_config=None)
     # After replacing all nn.Modules with TTNNModules, HF's model.device
     # (which calls next(self.parameters())) fails since no nn.Module params remain.
     # Patch it to return cpu — HF uses this for placing generated token tensors.
     type(model).device = property(lambda self: torch.device("cpu"))
     set_device(model, mesh_device)
-    all_modules = {**modules1, **modules2}
+    all_modules = {**modules1, **modules2, **modules3}
     print(f"Preprocessing {len(all_modules)} TTNN modules weights...")
     for k, v in tqdm(all_modules.items()):
         v.preprocess_weights()

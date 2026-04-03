@@ -39,6 +39,20 @@ def _initialize_module_on_device(module: "TTNNModule", device, device_init=Devic
         module.set_device_state(device_init.init_state(device))
 
 
+def timed_call(original_call, module_name, module_class):
+    @functools.wraps(original_call)
+    def new_call(*args, **kwargs):
+        begin = time.time()
+        DispatchManager.set_current_module_name(module_name)
+        result = original_call(*args, **kwargs)
+        DispatchManager.set_current_module_name(None)
+        end = time.time()
+        DispatchManager.record_timing("TorchModules", module_name, module_class, {}, end - begin)
+        return result
+
+    return new_call
+
+
 def set_device(obj, device, device_init=DeviceInit, **kwargs):
     """Recursively set device for all TTNN modules in a model."""
     from models.experimental.tt_symbiote.core.module import TTNNModule
@@ -55,28 +69,10 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs):
 
             # Register forward hook for this module
             if kwargs.get("register_forward_hook", True):
-
-                def timed_call(original_call, module_name, module_class):
-                    @functools.wraps(original_call)
-                    def new_call(*args, **kwargs):
-                        begin = time.time()
-                        DispatchManager.set_current_module_name(module_name)
-                        result = original_call(*args, **kwargs)
-                        DispatchManager.set_current_module_name(None)
-                        end = time.time()
-                        DispatchManager.record_timing("TorchModules", module_name, module_class, {}, end - begin)
-                        return result
-
-                    return new_call
-
                 if hasattr(current_obj, "forward"):
                     if not hasattr(current_obj.forward, "_is_timed"):
                         current_obj.forward = timed_call(current_obj.forward, name, current_obj.__class__.__name__)
                         current_obj.forward._is_timed = True
-                elif hasattr(current_obj, "__call__"):
-                    if not hasattr(current_obj.__call__, "_is_timed"):
-                        current_obj.__call__ = timed_call(current_obj.__call__, name, current_obj.__class__.__name__)
-                        current_obj.__call__._is_timed = True
 
             # nn.Module children: TTNNModule children get bypass=False (parent is nn.Module)
             for child_name, module in current_obj._modules.items():
@@ -110,6 +106,12 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs):
             # Set bypass based on parent type: TTNN children of TTNN modules bypass wrapping
             current_obj._bypass_tensor_wrapping = parent_is_ttnn
             _initialize_module_on_device(current_obj, device, device_init)
+            if hasattr(current_obj, "call"):
+                if not hasattr(current_obj.call, "_is_timed"):
+                    current_obj.call = timed_call(
+                        current_obj.call, current_obj.module_name, current_obj.__class__.__name__
+                    )
+                    current_obj.call._is_timed = True
             for attr_name in dir(current_obj):
                 if attr_name.startswith("_"):
                     continue

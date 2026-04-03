@@ -591,7 +591,6 @@ class NormalRun:
     def module_run(self, *args, **kwds):
         print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
         assert self.device is not None, "Device must be set for TTNN module execution."
-        begin_full = time.time()
         bypass = getattr(self, "_bypass_tensor_wrapping", False)
         if bypass:
             transform = fast_unwrap_to_device(self.device)
@@ -625,10 +624,6 @@ class NormalRun:
         end = time.time()
         DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
         DispatchManager.set_current_module_name(None)
-        end_full = time.time()
-        DispatchManager.record_timing(
-            "TorchModules", self.module_name, self.__class__.__name__, {}, end_full - begin_full
-        )
         return result
 
 

@@ -39,7 +39,8 @@ from models.experimental.tt_symbiote.modules.attention import (
 )
 from models.experimental.tt_symbiote.modules.decoder_layer import TTNNBailingMoEDecoderLayerPadded
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
-from models.experimental.tt_symbiote.modules.embedding import TTNNBailingPaddedEmbedding
+from models.experimental.tt_symbiote.modules.embedding import TTNNBailingPaddedEmbedding, TTNNBailingRotaryEmbedding
+from models.experimental.tt_symbiote.models.bailing_moe_v2 import TTNNBailingMoeV2Model
 
 MESH_DEVICE_MAP = {
     "N150": (1, 1),
@@ -111,18 +112,24 @@ def load_model(mesh_device, model_name="inclusionAI/Ling-mini-2.0"):
         model.model.layers[0].__class__: TTNNBailingMoEDecoderLayerPadded,
         model.model.norm.__class__: TTNNDistributedRMSNorm,
         nn.Embedding: TTNNBailingPaddedEmbedding,
+        model.model.rotary_emb.__class__: TTNNBailingRotaryEmbedding,
     }
     nn_to_ttnn2 = {
         nn.Linear: TTNNLinearIColShardedWRowSharded,
         nn.SiLU: TTNNSilu,
     }
 
+    nn_to_ttnn3 = {
+        model.model.__class__: TTNNBailingMoeV2Model,
+    }
+
     modules1 = register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
     modules2 = register_module_replacement_dict(model, nn_to_ttnn2, model_config=None)
+    modules3 = register_module_replacement_dict(model, nn_to_ttnn3, model_config=None)
     type(model).device = property(lambda self: torch.device("cpu"))
     set_device(model, mesh_device)
 
-    all_modules = {**modules1, **modules2}
+    all_modules = {**modules1, **modules2, **modules3}
     print(f"Preprocessing {len(all_modules)} TTNN module weights...")
     for k, v in tqdm(all_modules.items()):
         v.preprocess_weights()
