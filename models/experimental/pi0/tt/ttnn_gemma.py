@@ -328,14 +328,17 @@ class GemmaAttentionTTNN:
         # OPTIMIZATION 1: Single fused QKV linear (instead of 3 separate)
         # Output: [batch, 1, seq, Q_dim + K_dim + V_dim]
 
-        # QKV linear with HiFi2 for fast projection
+        # QKV linear with HiFi2, WIDTH_SHARDED for expert (small seq), interleaved for VLM (large seq)
+        qkv_mem = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if self.hidden_size <= 1024 else ttnn.L1_MEMORY_CONFIG
         xqkv = ttnn.linear(
             hidden_states,
             self.wqkv,
             dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=qkv_mem,
             compute_kernel_config=self.compute_kernel_config_hifi2,
         )
+        if self.hidden_size <= 1024:
+            xqkv = ttnn.to_memory_config(xqkv, ttnn.L1_MEMORY_CONFIG)
 
         # OPTIMIZATION 2: Native TTNN head splitting (no PyTorch transfers!)
         # This splits the fused QKV into separate Q, K, V with proper head layout
@@ -386,7 +389,7 @@ class GemmaAttentionTTNN:
             k_rope,
             v,
             attn_mask=attention_mask,
-            is_causal=False,  # Mask handles causality
+            is_causal=False,
             scale=self.scale,
         )
 
