@@ -905,9 +905,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
-                is_warmup = i == 1 and len(timesteps) == 2
+                warmup_tranformer_2 = i == 1 and len(timesteps) == 2
 
-                if (boundary_timestep is None or t >= boundary_timestep) and not is_warmup:
+                if (boundary_timestep is None or t >= boundary_timestep) and not warmup_tranformer_2:
                     self._prepare_transformer1()
                     # wan2.1 or high-noise stage in wan2.2
                     current_model = self.transformer

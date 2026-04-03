@@ -433,9 +433,6 @@ class WanTransformer3DModel(Module):
         return tt_prompt_1BLP
 
     def prepare_timestep_conditioning(self, timestep):
-        # assert timestep.ndim == 1, "Wan2.2-T2V/I2V requires a 1D timestep tensor"
-        # TODO: Cleanup and move out of prepare_timestep_conditioning.
-        # timestep = float32_tensor(timestep.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=self.mesh_device)
         tt_temb_11BD, tt_timestep_proj_1BTD = self.condition_embedder.forward_timestep(timestep, timestep_seq_len=None)
         tt_timestep_proj_1BTD = unflatten(ttnn.squeeze(tt_timestep_proj_1BTD, -2), -1, (6, -1))
         logger.info(f"TT temb shape: {tt_temb_11BD.shape}")
