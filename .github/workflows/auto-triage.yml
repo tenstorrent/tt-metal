@@ -55,3 +55,16 @@ jobs:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           # SLACK_WEBHOOK_URL is removed in favor of SLACK_BOT_TOKEN + channel logic in the action
           SLACK_CHANNEL_ID: ${{ inputs.slack_channel_id != '' && inputs.slack_channel_id || secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
+
+      - name: Export triage result for data pipeline
+        if: ${{ !cancelled() && hashFiles('output/slack_message.json') != '' }}
+        shell: bash
+        run: |
+          JOB_ID=$(jq -r '.failing_run_url' output/slack_message.json \
+                   | grep -oE '/job/[0-9]+' | grep -oE '[0-9]+')
+          jq -n --arg job_id "$JOB_ID" \
+             --arg run_id "$GITHUB_RUN_ID" \
+             --arg run_link "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+             '{github_job_id: ($job_id|tonumber),
+               auto_triage_run_id: ($run_id|tonumber),
+               auto_triage_run_link: $run_link}' > output/auto_triage_result.json
