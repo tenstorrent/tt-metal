@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Device 2.0 Data Movement API Migration Guide &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html" />
+  <!--[if lt IE 9]>
+    <script src="../../../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../../../" id="documentation_options" src="../../../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../../../_static/posthog.js?v=aa5946f9"></script>
+    <script src="../../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+    <link rel="next" title="noc_async_read" href="noc_async_read.html" />
+    <link rel="prev" title="Data Movement APIs" href="data_movement.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../../../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../../programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples/index.html">Programming Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../labs/index.html">Lab Exercises</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../advanced_topics/index.html">Advanced Topics</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../../index.html">APIs</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../../host_apis.html">Host APIs</a></li>
+<li class="toctree-l2 current"><a class="reference internal" href="../../kernel_apis.html">Kernel APIs</a><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="../../kernel_apis.html#common-apis">Common APIs</a></li>
+<li class="toctree-l3 current"><a class="reference internal" href="../../kernel_apis.html#data-movement">Data Movement</a><ul class="current">
+<li class="toctree-l4 current"><a class="reference internal" href="data_movement.html">Data Movement APIs</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../../kernel_apis.html#compute">Compute</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../../environment_variables/index.html">Environment Variables</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../index.html">APIs</a></li>
+          <li class="breadcrumb-item"><a href="../../kernel_apis.html">Kernel APIs</a></li>
+          <li class="breadcrumb-item"><a href="data_movement.html">Data Movement APIs</a></li>
+      <li class="breadcrumb-item active">Device 2.0 Data Movement API Migration Guide</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../../_sources/tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.md.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="device-2-0-data-movement-api-migration-guide">
+<h1>Device 2.0 Data Movement API Migration Guide<a class="headerlink" href="#device-2-0-data-movement-api-migration-guide" title="Permalink to this heading"></a>
+</h1>
+<p>This guide helps developers migrate from legacy data movement APIs to the new experimental Device 2.0 APIs located in <code class="docutils literal notranslate"><span class="pre">tt_metal/hw/inc/experimental/</span></code>.</p>
+<blockquote>
+<div>
+<p><strong>Note</strong>: These APIs are experimental and subject to change.</p>
+</div>
+</blockquote>
+<section id="table-of-contents">
+<h2>Table of Contents<a class="headerlink" href="#table-of-contents" title="Permalink to this heading"></a>
+</h2>
+<ol class="arabic simple">
+<li><p><a class="reference internal" href="#overview"><span class="std std-ref">Overview</span></a></p></li>
+<li><p><a class="reference internal" href="#header-files"><span class="std std-ref">Header Files</span></a></p></li>
+<li><p><a class="reference internal" href="#key-classes"><span class="std std-ref">Key Classes</span></a></p></li>
+<li>
+<p><a class="reference internal" href="#migration-patterns"><span class="std std-ref">Migration Patterns</span></a></p>
+<ul class="simple">
+<li><p><a class="reference internal" href="#noc-operations"><span class="std std-ref">NoC Operations</span></a></p></li>
+<li><p><a class="reference internal" href="#circular-buffer-operations"><span class="std std-ref">Circular Buffer Operations</span></a></p></li>
+<li><p><a class="reference internal" href="#semaphore-operations"><span class="std std-ref">Semaphore Operations</span></a></p></li>
+<li><p><a class="reference internal" href="#memory-access"><span class="std std-ref">Memory Access</span></a></p></li>
+</ul>
+</li>
+<li><p><a class="reference internal" href="#complete-migration-examples"><span class="std std-ref">Complete Migration Examples</span></a></p></li>
+<li><p><a class="reference internal" href="#troubleshooting"><span class="std std-ref">Troubleshooting</span></a></p></li>
+</ol>
+</section>
+<hr class="docutils">
+<section id="overview">
+<h2>Overview<a class="headerlink" href="#overview" title="Permalink to this heading"></a>
+</h2>
+<p>The Device 2.0 experimental APIs provide a more object-oriented, type-safe interface for data movement operations on Tenstorrent hardware. Key benefits include:</p>
+<ul class="simple">
+<li><p><strong>Type Safety</strong>: Template-based traits system prevents common errors at compile time</p></li>
+<li><p><strong>Cleaner Abstractions</strong>: Object-oriented wrappers around raw addresses and operations</p></li>
+<li><p><strong>Unified Interface</strong>: Consistent API patterns across different data sources/destinations</p></li>
+<li><p><strong>Better Encapsulation</strong>: State management within class instances</p></li>
+</ul>
+</section>
+<section id="header-files">
+<h2>Header Files<a class="headerlink" href="#header-files" title="Permalink to this heading"></a>
+</h2>
+<p>Include the following headers based on your needs:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/noc.h"</span><span class="c1">            // Core NoC operations</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/circular_buffer.h"</span><span class="c1"> // CircularBuffer wrapper</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/core_local_mem.h"</span><span class="c1">  // Safe L1 memory pointers</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/endpoints.h"</span><span class="c1">       // Unicast/Multicast/AllocatorBank endpoints</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/noc_semaphore.h"</span><span class="c1">   // Semaphore synchronization</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/tensor.h"</span><span class="c1">          // TensorAccessor traits</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/lock.h"</span><span class="c1">            // RAII lock utilities</span>
+</pre></div>
+</div>
+</section>
+<section id="key-classes">
+<h2>Key Classes<a class="headerlink" href="#key-classes" title="Permalink to this heading"></a>
+</h2>
+<section id="experimental-noc">
+<h3>
+<code class="docutils literal notranslate"><span class="pre">experimental::Noc</span></code><a class="headerlink" href="#experimental-noc" title="Permalink to this heading"></a>
+</h3>
+<p>The central class for NoC operations. Wraps a Noc index and provides methods for async reads, writes, multicasts, and barriers.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span><span class="w">           </span><span class="c1">// Uses default noc_index</span>
+<span class="n">experimental</span><span class="o">::</span><span class="n">Noc</span><span class="w"> </span><span class="nf">noc1</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span><span class="w">       </span><span class="c1">// Explicitly use NoC 1</span>
+</pre></div>
+</div>
+</section>
+<section id="experimental-circularbuffer">
+<h3>
+<code class="docutils literal notranslate"><span class="pre">experimental::CircularBuffer</span></code><a class="headerlink" href="#experimental-circularbuffer" title="Permalink to this heading"></a>
+</h3>
+<p>Provides circular buffer operations.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">CircularBuffer</span><span class="w"> </span><span class="nf">cb</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span>
+<span class="n">cb</span><span class="p">.</span><span class="n">reserve_back</span><span class="p">(</span><span class="n">num_pages</span><span class="p">);</span>
+<span class="n">cb</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">num_pages</span><span class="p">);</span>
+<span class="n">cb</span><span class="p">.</span><span class="n">wait_front</span><span class="p">(</span><span class="n">num_pages</span><span class="p">);</span>
+<span class="n">cb</span><span class="p">.</span><span class="n">pop_front</span><span class="p">(</span><span class="n">num_pages</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
+<section id="experimental-corelocalmem-t">
+<h3>
+<code class="docutils literal notranslate"><span class="pre">experimental::CoreLocalMem&lt;T&gt;</span></code><a class="headerlink" href="#experimental-corelocalmem-t" title="Permalink to this heading"></a>
+</h3>
+<p>Provides a safe zero overhead way to access a given type in L1 memory.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">mem</span><span class="p">(</span><span class="n">address</span><span class="p">);</span>
+<span class="n">mem</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">value</span><span class="p">;</span><span class="w">              </span><span class="c1">// Array-style access</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">val</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">*</span><span class="n">mem</span><span class="p">;</span><span class="w">             </span><span class="c1">// Dereference</span>
+<span class="n">mem</span><span class="o">++</span><span class="p">;</span><span class="w">                       </span><span class="c1">// Pointer arithmetic</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mem</span><span class="p">.</span><span class="n">get_address</span><span class="p">();</span>
+</pre></div>
+</div>
+</section>
+<section id="experimental-semaphore">
+<h3>
+<code class="docutils literal notranslate"><span class="pre">experimental::Semaphore</span></code><a class="headerlink" href="#experimental-semaphore" title="Permalink to this heading"></a>
+</h3>
+<p>Provides a semaphore for synchronization.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">Semaphore</span><span class="o">&lt;&gt;</span><span class="w"> </span><span class="n">sem</span><span class="p">(</span><span class="n">semaphore_id</span><span class="p">);</span>
+<span class="n">sem</span><span class="p">.</span><span class="n">up</span><span class="p">(</span><span class="n">value</span><span class="p">);</span><span class="w">               </span><span class="c1">// Local increment</span>
+<span class="n">sem</span><span class="p">.</span><span class="n">down</span><span class="p">(</span><span class="n">value</span><span class="p">);</span><span class="w">             </span><span class="c1">// Blocking decrement</span>
+<span class="n">sem</span><span class="p">.</span><span class="n">wait</span><span class="p">(</span><span class="n">value</span><span class="p">);</span><span class="w">             </span><span class="c1">// Wait for exact value</span>
+<span class="n">sem</span><span class="p">.</span><span class="n">wait_min</span><span class="p">(</span><span class="n">value</span><span class="p">);</span><span class="w">         </span><span class="c1">// Wait for minimum value</span>
+</pre></div>
+</div>
+</section>
+<section id="endpoints">
+<h3>Endpoints<a class="headerlink" href="#endpoints" title="Permalink to this heading"></a>
+</h3>
+<p>Endpoints are used as sources or destinations for the <code class="docutils literal notranslate"><span class="pre">Noc</span></code> interface. Depending on which endpoint is provided, additional arguments can be passed in to <code class="docutils literal notranslate"><span class="pre">src_args_t</span></code> or <code class="docutils literal notranslate"><span class="pre">dst_args_t</span></code> of each <code class="docutils literal notranslate"><span class="pre">Noc</span></code> action to specify additional metadata such as offset or size.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">experimental::UnicastEndpoint</span></code> - For unicast NoC addresses</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">experimental::MulticastEndpoint</span></code> - For multicast NoC addresses</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">experimental::AllocatorBank&lt;AllocatorBankType&gt;</span></code> - For DRAM/L1 bank addressing</p></li>
+</ul>
+</section>
+</section>
+<hr class="docutils">
+<section id="migration-patterns">
+<h2>Migration Patterns<a class="headerlink" href="#migration-patterns" title="Permalink to this heading"></a>
+</h2>
+<section id="noc-operations">
+<h3>NoC Operations<a class="headerlink" href="#noc-operations" title="Permalink to this heading"></a>
+</h3>
+<section id="async-read">
+<h4>Async Read<a class="headerlink" href="#async-read" title="Permalink to this heading"></a>
+</h4>
+<p><strong>Legacy API:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">src_noc_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_noc_addr</span><span class="p">(</span><span class="n">noc_x</span><span class="p">,</span><span class="w"> </span><span class="n">noc_y</span><span class="p">,</span><span class="w"> </span><span class="n">src_addr</span><span class="p">);</span>
+<span class="n">noc_async_read</span><span class="p">(</span><span class="n">src_noc_addr</span><span class="p">,</span><span class="w"> </span><span class="n">dst_l1_addr</span><span class="p">,</span><span class="w"> </span><span class="n">size_bytes</span><span class="p">);</span>
+<span class="n">noc_async_read_barrier</span><span class="p">();</span>
+</pre></div>
+</div>
+<p><strong>New Experimental API:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
+<span class="n">experimental</span><span class="o">::</span><span class="n">UnicastEndpoint</span><span class="w"> </span><span class="n">src</span><span class="p">;</span>
+<span class="n">experimental</span><span class="o">::</span><span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">dst</span><span class="p">(</span><span class="n">dst_l1_addr</span><span class="p">);</span>
+
+<span class="n">noc</span><span class="p">.</span><span class="n">async_read</span><span class="p">(</span>
+<span class="w">    </span><span class="n">src</span><span class="p">,</span><span class="w">                                    </span><span class="c1">// Source endpoint</span>
+<span class="w">    </span><span class="n">dst</span><span class="p">,</span><span class="w">                                    </span><span class="c1">// Destination</span>
+<span class="w">    </span><span class="n">size_bytes</span><span class="p">,</span><span class="w">                             </span><span class="c1">// Transfer size</span>
+<span class="w">    </span><span class="p">{.</span><span class="n">noc_x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">addr</span><span class="p">},</span><span class="w"> </span><span class="c1">// Source args</span>
+<span class="w">    </span><span class="p">{}</span><span class="w">                                      </span><span class="c1">// Destination args</span>
+<span class="p">);</span>
+<span class="n">noc</span><span class="p">.</span><span class="n">async_read_barrier</span><span class="p">();</span>
+</pre></div>
+</div>
+</section>
+<section id="async-write">
+<h4>Async Write<a class="headerlink" href="#async-write" title="Permalink to this heading"></a>
+</h4>
+<p><strong>Legacy API:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">dst_noc_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_noc_addr</span><span class="p">(</span><span class="n">noc_x</span><span class="p">,</span><span class="w"> </span><span class="n">noc_y</span><span class="p">,</span><span class="w"> </span><span class="n">dst_addr</span><span class="p">);</span>
+<span class="n">noc_async_write</span><span class="p">(</span><span class="n">src_l1_addr</span><span class="p">,</span><span class="w"> </span><span class="n">dst_noc_addr</span><span class="p">,</span><span class="w"> </span><span class="n">size_bytes</span><span class="p">);</span>
+<span class="n">noc_async_write_barrier</span><span class="p">();</span>
+</pre></div>
+</div>
+<p><strong>New Experimental API:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
+<span class="n">experimental</span><span class="o">::</span><span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">src</span><span class="p">(</span><span class="n">src_l1_addr</span><span class="p">);</span>
+<span class="n">experimental</span><span class="o">::</span><span class="n">UnicastEndpoint</span><span class="w"> </span><span class="n">dst</span><span class="p">;</span>
+
+<span class="n">noc</span><span class="p">.</span><span class="n">async_write</span><span class="p">(</span>
+<span class="w">    </span><span class="n">src</span><span class="p">,</span><span class="w">                                    </span><span class="c1">// Source</span>
+<span class="w">    </span><span class="n">dst</span><span class="p">,</span><span class="w">                                    </span><span class="c1">// Destination</span>
+<span class="w">    </span><span class="n">size_bytes</span><span class="p">,</span><span class="w">                             </span><span class="c1">// Transfer size</span>
+<span class="w">    </span><span class="p">{},</span><span class="w">                                     </span><span class="c1">// Source args</span>
+<span class="w">    </span><span class="p">{.</span><span class="n">noc_x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">addr</span><span class="p">}</span><span class="w">  </span><span class="c1">// Destination args</span>
+<span class="p">);</span>
+<span class="n">noc</span><span class="p">.</span><span class="n">async_write_barrier</span><span class="p">();</span>
+</pre></div>
+</div>
+</section>
+<section id="async-write-with-state-optimized-repeated-writes">
+<h4>Async Write with State (Optimized Repeated Writes)<a class="headerlink" href="#async-write-with-state-optimized-repeated-writes" title="Permalink to this heading"></a>
+</h4>
+<p><strong>Legacy API:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">dst_noc_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_noc_addr</span><span class="p">(</span><span class="n">noc_x</span><span class="p">,</span><span class="w"> </span><span class="n">noc_y</span><span class="p">,</span><span class="w"> </span><span class="n">base_addr</span><span class="p">);</span>
+<span class="n">noc_async_write_one_packet_set_state</span><span class="p">(</span><span class="n">dst_noc_addr</span><span class="p">,</span><span class="w"> </span><span class="n">size_bytes</span><span class="p">);</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(...)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">noc_async_write_one_packet_with_state</span><span class="p">(</span><span class="n">src_l1_addr</span><span class="p">,</span><span class="w"> </span><span class="n">dst_offset</span><span class="p">);</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>New Experimental API:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
+<span class="n">experimental</span><span class="o">::</span><span class="n">UnicastEndpoint</span><span class="w"> </span><span class="n">dst</span><span class="p">;</span>
+<span class="n">experimental</span><span class="o">::</span><span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">src</span><span class="p">(</span><span class="n">src_addr</span><span class="p">);</span>
+
+<span class="n">noc</span><span class="p">.</span><span class="n">set_async_write_state</span><span class="o">&lt;</span><span class="n">Noc</span><span class="o">::</span><span class="n">ResponseMode</span><span class="o">::</span><span class="n">NON_POSTED</span><span class="o">&gt;</span><span class="p">(</span>
+<span class="w">    </span><span class="n">dst</span><span class="p">,</span><span class="w"> </span><span class="n">size_bytes</span><span class="p">,</span><span class="w"> </span><span class="p">{.</span><span class="n">noc_x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">base_addr</span><span class="p">}</span>
+<span class="p">);</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(...)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">noc</span><span class="p">.</span><span class="n">async_write_with_state</span><span class="o">&lt;</span><span class="n">Noc</span><span class="o">::</span><span class="n">ResponseMode</span><span class="o">::</span><span class="n">NON_POSTED</span><span class="o">&gt;</span><span class="p">(</span>
+<span class="w">        </span><span class="n">src</span><span class="p">,</span><span class="w"> </span><span class="n">dst</span><span class="p">,</span><span class="w"> </span><span class="n">size_bytes</span><span class="p">,</span><span class="w"> </span><span class="p">{.</span><span class="n">offset_bytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">src_offset</span><span class="p">},</span><span class="w"> </span><span class="p">{.</span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dst_offset</span><span class="p">}</span>
+<span class="w">    </span><span class="p">);</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="multicast-write">
+<h4>Multicast Write<a class="headerlink" href="#multicast-write" title="Permalink to this heading"></a>
+</h4>
+<p><strong>Legacy API:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">mcast_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_noc_multicast_addr</span><span class="p">(</span><span class="n">x_start</span><span class="p">,</span><span class="w"> </span><span class="n">y_start</span><span class="p">,</span><span class="w"> </span><span class="n">x_end</span><span class="p">,</span><span class="w"> </span><span class="n">y_end</span><span class="p">,</span><span class="w"> </span><span class="n">l1_addr</span><span class="p">);</span>
+<span class="n">noc_async_write_multicast</span><span class="p">(</span><span class="n">src_l1_addr</span><span class="p">,</span><span class="w"> </span><span class="n">mcast_addr</span><span class="p">,</span><span class="w"> </span><span class="n">size_bytes</span><span class="p">,</span><span class="w"> </span><span class="n">num_dests</span><span class="p">);</span>
+</pre></div>
+</div>
+<p><strong>New Experimental API:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
+<span class="n">experimental</span><span class="o">::</span><span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">src</span><span class="p">(</span><span class="n">src_l1_addr</span><span class="p">);</span>
+<span class="n">experimental</span><span class="o">::</span><span class="n">CircularBuffer</span><span class="w"> </span><span class="nf">cb</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span><span class="w">  </span><span class="c1">// Or any destination with mcast traits</span>
+
+<span class="n">noc</span><span class="p">.</span><span class="n">async_write_multicast</span><span class="o">&lt;</span><span class="n">Noc</span><span class="o">::</span><span class="n">McastMode</span><span class="o">::</span><span class="n">EXCLUDE_SRC</span><span class="o">&gt;</span><span class="p">(</span>
+<span class="w">    </span><span class="n">src</span><span class="p">,</span>
+<span class="w">    </span><span class="n">cb</span><span class="p">,</span>
+<span class="w">    </span><span class="n">size_bytes</span><span class="p">,</span>
+<span class="w">    </span><span class="n">num_dests</span><span class="p">,</span>
+<span class="w">    </span><span class="p">{},</span><span class="w">  </span><span class="c1">// Source args</span>
+<span class="w">    </span><span class="p">{.</span><span class="n">noc_x_start</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">x_start</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc_y_start</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y_start</span><span class="p">,</span>
+<span class="w">     </span><span class="p">.</span><span class="n">noc_x_end</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">x_end</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc_y_end</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y_end</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">offset_bytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">}</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+</section>
+<section id="transaction-id-support">
+<h4>Transaction ID Support<a class="headerlink" href="#transaction-id-support" title="Permalink to this heading"></a>
+</h4>
+<p><strong>New Experimental API (Transaction IDs):</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">trid</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+
+<span class="c1">// Write with transaction ID</span>
+<span class="n">noc</span><span class="p">.</span><span class="n">async_write</span><span class="o">&lt;</span><span class="n">Noc</span><span class="o">::</span><span class="n">TxnIdMode</span><span class="o">::</span><span class="n">ENABLED</span><span class="o">&gt;</span><span class="p">(</span>
+<span class="w">    </span><span class="n">src</span><span class="p">,</span><span class="w"> </span><span class="n">dst</span><span class="p">,</span><span class="w"> </span><span class="n">size_bytes</span><span class="p">,</span><span class="w"> </span><span class="n">src_args</span><span class="p">,</span><span class="w"> </span><span class="n">dst_args</span><span class="p">,</span>
+<span class="w">    </span><span class="n">NOC_UNICAST_WRITE_VC</span><span class="p">,</span><span class="w"> </span><span class="n">trid</span>
+<span class="p">);</span>
+
+<span class="c1">// Barrier on specific transaction ID</span>
+<span class="n">noc</span><span class="p">.</span><span class="n">async_write_barrier</span><span class="o">&lt;</span><span class="n">Noc</span><span class="o">::</span><span class="n">BarrierMode</span><span class="o">::</span><span class="n">TXN_ID</span><span class="o">&gt;</span><span class="p">(</span><span class="n">trid</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
+</section>
+<hr class="docutils">
+<section id="circular-buffer-operations">
+<h3>Circular Buffer Operations<a class="headerlink" href="#circular-buffer-operations" title="Permalink to this heading"></a>
+</h3>
+<section id="basic-operations">
+<h4>Basic Operations<a class="headerlink" href="#basic-operations" title="Permalink to this heading"></a>
+</h4>
+<p><strong>Legacy API:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">cb_reserve_back</span><span class="p">(</span><span class="n">cb_id</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles</span><span class="p">);</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">write_ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_write_ptr</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span>
+<span class="c1">// ... write data ...</span>
+<span class="n">cb_push_back</span><span class="p">(</span><span class="n">cb_id</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles</span><span class="p">);</span>
+
+<span class="n">cb_wait_front</span><span class="p">(</span><span class="n">cb_id</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles</span><span class="p">);</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">read_ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_read_ptr</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span>
+<span class="c1">// ... read data ...</span>
+<span class="n">cb_pop_front</span><span class="p">(</span><span class="n">cb_id</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles</span><span class="p">);</span>
+</pre></div>
+</div>
+<p><strong>New Experimental API:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">CircularBuffer</span><span class="w"> </span><span class="nf">cb</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span>
+
+<span class="n">cb</span><span class="p">.</span><span class="n">reserve_back</span><span class="p">(</span><span class="n">num_tiles</span><span class="p">);</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">write_ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cb</span><span class="p">.</span><span class="n">get_write_ptr</span><span class="p">();</span>
+<span class="c1">// ... write data ...</span>
+<span class="n">cb</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">num_tiles</span><span class="p">);</span>
+
+<span class="n">cb</span><span class="p">.</span><span class="n">wait_front</span><span class="p">(</span><span class="n">num_tiles</span><span class="p">);</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">read_ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cb</span><span class="p">.</span><span class="n">get_read_ptr</span><span class="p">();</span>
+<span class="c1">// ... read data ...</span>
+<span class="n">cb</span><span class="p">.</span><span class="n">pop_front</span><span class="p">(</span><span class="n">num_tiles</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
+<section id="using-circularbuffer-with-noc">
+<h4>Using CircularBuffer with Noc<a class="headerlink" href="#using-circularbuffer-with-noc" title="Permalink to this heading"></a>
+</h4>
+<p><strong>New Experimental API:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
+<span class="n">experimental</span><span class="o">::</span><span class="n">CircularBuffer</span><span class="w"> </span><span class="nf">cb</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span>
+<span class="n">experimental</span><span class="o">::</span><span class="n">UnicastEndpoint</span><span class="w"> </span><span class="n">remote</span><span class="p">;</span>
+
+<span class="c1">// Read into circular buffer</span>
+<span class="n">cb</span><span class="p">.</span><span class="n">reserve_back</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+<span class="n">noc</span><span class="p">.</span><span class="n">async_read</span><span class="p">(</span>
+<span class="w">    </span><span class="n">remote</span><span class="p">,</span>
+<span class="w">    </span><span class="n">cb</span><span class="p">,</span><span class="w">  </span><span class="c1">// CircularBuffer as destination</span>
+<span class="w">    </span><span class="n">tile_size</span><span class="p">,</span>
+<span class="w">    </span><span class="p">{.</span><span class="n">noc_x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">addr</span><span class="p">},</span>
+<span class="w">    </span><span class="p">{.</span><span class="n">offset_bytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">}</span>
+<span class="p">);</span>
+<span class="n">noc</span><span class="p">.</span><span class="n">async_read_barrier</span><span class="p">();</span>
+<span class="n">cb</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
+<section id="selecting-read-write-pointer-for-noc-async-read-write-api">
+<h4>Selecting Read/Write Pointer for Noc Async Read/Write API<a class="headerlink" href="#selecting-read-write-pointer-for-noc-async-read-write-api" title="Permalink to this heading"></a>
+</h4>
+<p>Use <code class="docutils literal notranslate"><span class="pre">experimental::use&lt;&gt;()</span></code> to explicitly select which pointer to use:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">using</span><span class="w"> </span><span class="n">experimental</span><span class="o">::</span><span class="n">CircularBuffer</span><span class="p">;</span>
+<span class="k">using</span><span class="w"> </span><span class="n">experimental</span><span class="o">::</span><span class="n">use</span><span class="p">;</span>
+
+<span class="n">experimental</span><span class="o">::</span><span class="n">CircularBuffer</span><span class="w"> </span><span class="nf">cb</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span>
+
+<span class="c1">// Use read pointer explicitly</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">cb_read_view</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">use</span><span class="o">&lt;</span><span class="n">CircularBuffer</span><span class="o">::</span><span class="n">AddrSelector</span><span class="o">::</span><span class="n">READ_PTR</span><span class="o">&gt;</span><span class="p">(</span><span class="n">cb</span><span class="p">);</span>
+
+<span class="c1">// Use write pointer explicitly</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">cb_write_view</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">use</span><span class="o">&lt;</span><span class="n">CircularBuffer</span><span class="o">::</span><span class="n">AddrSelector</span><span class="o">::</span><span class="n">WRITE_PTR</span><span class="o">&gt;</span><span class="p">(</span><span class="n">cb</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>These <em>pointers</em> can be passed into the NoC async read and write APIs as sources or destinations.</p>
+</section>
+</section>
+<hr class="docutils">
+<section id="semaphore-operations">
+<h3>Semaphore Operations<a class="headerlink" href="#semaphore-operations" title="Permalink to this heading"></a>
+</h3>
+<section id="local-semaphore-operations">
+<h4>Local Semaphore Operations<a class="headerlink" href="#local-semaphore-operations" title="Permalink to this heading"></a>
+</h4>
+<p><strong>Legacy API:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">volatile</span><span class="w"> </span><span class="n">tt_l1_ptr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="o">*</span><span class="w"> </span><span class="n">sem_addr</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="k">reinterpret_cast</span><span class="o">&lt;</span><span class="k">volatile</span><span class="w"> </span><span class="n">tt_l1_ptr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="o">*&gt;</span><span class="p">(</span><span class="n">get_semaphore</span><span class="p">(</span><span class="n">sem_id</span><span class="p">));</span>
+<span class="n">noc_semaphore_set</span><span class="p">(</span><span class="n">sem_addr</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
+<span class="n">noc_semaphore_wait</span><span class="p">(</span><span class="n">sem_addr</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+</pre></div>
+</div>
+<p><strong>New Experimental API:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">Semaphore</span><span class="o">&lt;&gt;</span><span class="w"> </span><span class="n">sem</span><span class="p">(</span><span class="n">sem_id</span><span class="p">);</span>
+<span class="n">sem</span><span class="p">.</span><span class="n">set</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+<span class="n">sem</span><span class="p">.</span><span class="n">wait</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+<span class="c1">// Or use sem.wait_min(1) for &gt;= comparison</span>
+</pre></div>
+</div>
+</section>
+<section id="remote-semaphore-operations">
+<h4>Remote Semaphore Operations<a class="headerlink" href="#remote-semaphore-operations" title="Permalink to this heading"></a>
+</h4>
+<p><strong>Legacy API:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">remote_sem_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_noc_addr</span><span class="p">(</span><span class="n">noc_x</span><span class="p">,</span><span class="w"> </span><span class="n">noc_y</span><span class="p">,</span><span class="w"> </span><span class="n">get_semaphore</span><span class="p">(</span><span class="n">sem_id</span><span class="p">));</span>
+<span class="n">noc_semaphore_inc</span><span class="p">(</span><span class="n">remote_sem_addr</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+</pre></div>
+</div>
+<p><strong>New Experimental API:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
+<span class="n">experimental</span><span class="o">::</span><span class="n">Semaphore</span><span class="o">&lt;&gt;</span><span class="w"> </span><span class="n">sem</span><span class="p">(</span><span class="n">sem_id</span><span class="p">);</span>
+<span class="n">sem</span><span class="p">.</span><span class="n">up</span><span class="p">(</span><span class="n">noc</span><span class="p">,</span><span class="w"> </span><span class="n">noc_x</span><span class="p">,</span><span class="w"> </span><span class="n">noc_y</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span><span class="w">  </span><span class="c1">// Atomic remote increment</span>
+</pre></div>
+</div>
+</section>
+<section id="multicast-semaphore">
+<h4>Multicast Semaphore<a class="headerlink" href="#multicast-semaphore" title="Permalink to this heading"></a>
+</h4>
+<p><strong>Legacy API:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">mcast_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_noc_multicast_addr</span><span class="p">(</span><span class="n">x0</span><span class="p">,</span><span class="w"> </span><span class="n">y0</span><span class="p">,</span><span class="w"> </span><span class="n">x1</span><span class="p">,</span><span class="w"> </span><span class="n">y1</span><span class="p">,</span><span class="w"> </span><span class="n">get_semaphore</span><span class="p">(</span><span class="n">sem_id</span><span class="p">));</span>
+<span class="n">noc_semaphore_set_multicast</span><span class="p">(</span><span class="n">local_sem_addr</span><span class="p">,</span><span class="w"> </span><span class="n">mcast_addr</span><span class="p">,</span><span class="w"> </span><span class="n">num_dests</span><span class="p">);</span>
+</pre></div>
+</div>
+<p><strong>New Experimental API:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
+<span class="n">experimental</span><span class="o">::</span><span class="n">Semaphore</span><span class="o">&lt;&gt;</span><span class="w"> </span><span class="n">sem</span><span class="p">(</span><span class="n">sem_id</span><span class="p">);</span>
+<span class="n">sem</span><span class="p">.</span><span class="n">set_multicast</span><span class="o">&lt;</span><span class="n">Noc</span><span class="o">::</span><span class="n">McastMode</span><span class="o">::</span><span class="n">EXCLUDE_SRC</span><span class="o">&gt;</span><span class="p">(</span>
+<span class="w">    </span><span class="n">noc</span><span class="p">,</span><span class="w"> </span><span class="n">x0</span><span class="p">,</span><span class="w"> </span><span class="n">y0</span><span class="p">,</span><span class="w"> </span><span class="n">x1</span><span class="p">,</span><span class="w"> </span><span class="n">y1</span><span class="p">,</span><span class="w"> </span><span class="n">num_dests</span>
+<span class="p">);</span>
+
+<span class="c1">// Include source in multicast:</span>
+<span class="n">sem</span><span class="p">.</span><span class="n">set_multicast</span><span class="o">&lt;</span><span class="n">Noc</span><span class="o">::</span><span class="n">McastMode</span><span class="o">::</span><span class="n">INCLUDE_SRC</span><span class="o">&gt;</span><span class="p">(</span>
+<span class="w">    </span><span class="n">noc</span><span class="p">,</span><span class="w"> </span><span class="n">x0</span><span class="p">,</span><span class="w"> </span><span class="n">y0</span><span class="p">,</span><span class="w"> </span><span class="n">x1</span><span class="p">,</span><span class="w"> </span><span class="n">y1</span><span class="p">,</span><span class="w"> </span><span class="n">num_dests</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+</section>
+</section>
+<hr class="docutils">
+<section id="memory-access">
+<h3>Memory Access<a class="headerlink" href="#memory-access" title="Permalink to this heading"></a>
+</h3>
+<section id="safe-local-memory-access">
+<h4>Safe Local Memory Access<a class="headerlink" href="#safe-local-memory-access" title="Permalink to this heading"></a>
+</h4>
+<p><strong>Legacy API:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">volatile</span><span class="w"> </span><span class="kt">uint32_t</span><span class="o">*</span><span class="w"> </span><span class="n">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">reinterpret_cast</span><span class="o">&lt;</span><span class="k">volatile</span><span class="w"> </span><span class="kt">uint32_t</span><span class="o">*&gt;</span><span class="p">(</span><span class="n">address</span><span class="p">);</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">data</span><span class="p">[</span><span class="mi">0</span><span class="p">];</span>
+<span class="n">data</span><span class="o">++</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><strong>New Experimental API:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">mem</span><span class="p">(</span><span class="n">address</span><span class="p">);</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mem</span><span class="p">[</span><span class="mi">0</span><span class="p">];</span><span class="w">    </span><span class="c1">// Bounds-checked in debug mode</span>
+<span class="n">mem</span><span class="o">++</span><span class="p">;</span><span class="w">                       </span><span class="c1">// Type-safe pointer arithmetic</span>
+</pre></div>
+</div>
+</section>
+<section id="struct-access">
+<h4>Struct Access<a class="headerlink" href="#struct-access" title="Permalink to this heading"></a>
+</h4>
+<p><strong>New Experimental API:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">MyStruct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">field1</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">field2</span><span class="p">;</span>
+<span class="p">};</span>
+
+<span class="n">experimental</span><span class="o">::</span><span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="n">MyStruct</span><span class="o">&gt;</span><span class="w"> </span><span class="n">struct_mem</span><span class="p">(</span><span class="n">address</span><span class="p">);</span>
+<span class="n">struct_mem</span><span class="o">-&gt;</span><span class="n">field1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">42</span><span class="p">;</span>
+<span class="n">struct_mem</span><span class="o">-&gt;</span><span class="n">field2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">100</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+<section id="pointer-arithmetic">
+<h4>Pointer Arithmetic<a class="headerlink" href="#pointer-arithmetic" title="Permalink to this heading"></a>
+</h4>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">mem</span><span class="p">(</span><span class="n">base_addr</span><span class="p">);</span>
+
+<span class="c1">// Navigate through memory</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">mid</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mem</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">offset</span><span class="p">;</span><span class="w">           </span><span class="c1">// Offset by elements</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">diff</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mid</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">mem</span><span class="p">;</span><span class="w">             </span><span class="c1">// Difference in elements</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mid</span><span class="p">.</span><span class="n">get_address</span><span class="p">();</span><span class="w">     </span><span class="c1">// Get raw address</span>
+
+<span class="c1">// Iteration</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mem</span><span class="p">;</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">end</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">ptr</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="o">*</span><span class="n">ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">value</span><span class="p">;</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+<hr class="docutils">
+<section id="complete-migration-examples">
+<h2>Complete Migration Examples<a class="headerlink" href="#complete-migration-examples" title="Permalink to this heading"></a>
+</h2>
+<section id="example-1-tile-read-kernel">
+<h3>Example 1: Tile Read Kernel<a class="headerlink" href="#example-1-tile-read-kernel" title="Permalink to this heading"></a>
+</h3>
+<p><strong>Legacy Kernel:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/dataflow/dataflow_api.h"</span>
+
+<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">src_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">cb_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">tensor_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TensorAccessorArgs</span><span class="o">&lt;</span><span class="mi">0</span><span class="o">&gt;</span><span class="p">();</span>
+
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">tile_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_tile_size</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">accessor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TensorAccessor</span><span class="p">(</span><span class="n">tensor_args</span><span class="p">,</span><span class="w"> </span><span class="n">src_addr</span><span class="p">,</span><span class="w"> </span><span class="n">tile_size</span><span class="p">);</span>
+
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">tile_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">tile_id</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">num_tiles</span><span class="p">;</span><span class="w"> </span><span class="n">tile_id</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">cb_reserve_back</span><span class="p">(</span><span class="n">cb_id</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">l1_write_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_write_ptr</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span>
+<span class="w">        </span><span class="n">noc_async_read_tile</span><span class="p">(</span><span class="n">tile_id</span><span class="p">,</span><span class="w"> </span><span class="n">accessor</span><span class="p">,</span><span class="w"> </span><span class="n">l1_write_addr</span><span class="p">);</span>
+<span class="w">        </span><span class="n">noc_async_read_barrier</span><span class="p">();</span>
+<span class="w">        </span><span class="n">cb_push_back</span><span class="p">(</span><span class="n">cb_id</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>Migrated Kernel:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/dataflow/dataflow_api.h"</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/noc.h"</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/circular_buffer.h"</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/tensor.h"</span>
+
+<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">src_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">cb_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">tensor_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TensorAccessorArgs</span><span class="o">&lt;</span><span class="mi">0</span><span class="o">&gt;</span><span class="p">();</span>
+
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">tile_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_tile_size</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">accessor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TensorAccessor</span><span class="p">(</span><span class="n">tensor_args</span><span class="p">,</span><span class="w"> </span><span class="n">src_addr</span><span class="p">,</span><span class="w"> </span><span class="n">tile_size</span><span class="p">);</span>
+
+<span class="w">    </span><span class="n">experimental</span><span class="o">::</span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
+<span class="w">    </span><span class="n">experimental</span><span class="o">::</span><span class="n">CircularBuffer</span><span class="w"> </span><span class="n">cb</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span>
+
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">tile_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">tile_id</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">num_tiles</span><span class="p">;</span><span class="w"> </span><span class="n">tile_id</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">cb</span><span class="p">.</span><span class="n">reserve_back</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+<span class="w">        </span><span class="n">noc</span><span class="p">.</span><span class="n">async_read</span><span class="p">(</span>
+<span class="w">            </span><span class="n">accessor</span><span class="p">,</span>
+<span class="w">            </span><span class="n">cb</span><span class="p">,</span>
+<span class="w">            </span><span class="n">tile_size</span><span class="p">,</span>
+<span class="w">            </span><span class="p">{.</span><span class="n">page_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tile_id</span><span class="p">},</span>
+<span class="w">            </span><span class="p">{.</span><span class="n">offset_bytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">}</span>
+<span class="w">        </span><span class="p">);</span>
+<span class="w">        </span><span class="n">noc</span><span class="p">.</span><span class="n">async_read_barrier</span><span class="p">();</span>
+<span class="w">        </span><span class="n">cb</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="example-2-core-to-core-communication">
+<h3>Example 2: Core-to-Core Communication<a class="headerlink" href="#example-2-core-to-core-communication" title="Permalink to this heading"></a>
+</h3>
+<p><strong>Legacy Kernel:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">src_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">neighbor_x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">neighbor_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">2</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_bytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">3</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// Write to neighbor</span>
+<span class="w">    </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">dst_noc_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_noc_addr</span><span class="p">(</span><span class="n">neighbor_x</span><span class="p">,</span><span class="w"> </span><span class="n">neighbor_y</span><span class="p">,</span><span class="w"> </span><span class="n">src_addr</span><span class="p">);</span>
+<span class="w">    </span><span class="n">noc_async_write</span><span class="p">(</span><span class="n">src_addr</span><span class="p">,</span><span class="w"> </span><span class="n">dst_noc_addr</span><span class="p">,</span><span class="w"> </span><span class="n">num_bytes</span><span class="p">);</span>
+<span class="w">    </span><span class="n">noc_async_write_barrier</span><span class="p">();</span>
+
+<span class="w">    </span><span class="c1">// Read from neighbor</span>
+<span class="w">    </span><span class="n">noc_async_read</span><span class="p">(</span><span class="n">dst_noc_addr</span><span class="p">,</span><span class="w"> </span><span class="n">src_addr</span><span class="p">,</span><span class="w"> </span><span class="n">num_bytes</span><span class="p">);</span>
+<span class="w">    </span><span class="n">noc_async_read_barrier</span><span class="p">();</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>Migrated Kernel:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/noc.h"</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/core_local_mem.h"</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/endpoints.h"</span>
+
+<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">src_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">neighbor_x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">neighbor_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">2</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_bytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">3</span><span class="p">);</span>
+
+<span class="w">    </span><span class="n">experimental</span><span class="o">::</span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
+<span class="w">    </span><span class="n">experimental</span><span class="o">::</span><span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">mem</span><span class="p">(</span><span class="n">src_addr</span><span class="p">);</span>
+<span class="w">    </span><span class="n">experimental</span><span class="o">::</span><span class="n">UnicastEndpoint</span><span class="w"> </span><span class="n">remote</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// Write to neighbor</span>
+<span class="w">    </span><span class="n">noc</span><span class="p">.</span><span class="n">async_write</span><span class="p">(</span>
+<span class="w">        </span><span class="n">mem</span><span class="p">,</span>
+<span class="w">        </span><span class="n">remote</span><span class="p">,</span>
+<span class="w">        </span><span class="n">num_bytes</span><span class="p">,</span>
+<span class="w">        </span><span class="p">{},</span>
+<span class="w">        </span><span class="p">{.</span><span class="n">noc_x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">neighbor_x</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">neighbor_y</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">src_addr</span><span class="p">}</span>
+<span class="w">    </span><span class="p">);</span>
+<span class="w">    </span><span class="n">noc</span><span class="p">.</span><span class="n">async_write_barrier</span><span class="p">();</span>
+
+<span class="w">    </span><span class="c1">// Read from neighbor</span>
+<span class="w">    </span><span class="n">noc</span><span class="p">.</span><span class="n">async_read</span><span class="p">(</span>
+<span class="w">        </span><span class="n">remote</span><span class="p">,</span>
+<span class="w">        </span><span class="n">mem</span><span class="p">,</span>
+<span class="w">        </span><span class="n">num_bytes</span><span class="p">,</span>
+<span class="w">        </span><span class="p">{.</span><span class="n">noc_x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">neighbor_x</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">neighbor_y</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">src_addr</span><span class="p">},</span>
+<span class="w">        </span><span class="p">{}</span>
+<span class="w">    </span><span class="p">);</span>
+<span class="w">    </span><span class="n">noc</span><span class="p">.</span><span class="n">async_read_barrier</span><span class="p">();</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+</section>
+<hr class="docutils">
+<section id="troubleshooting">
+<h2>Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permalink to this heading"></a>
+</h2>
+<section id="common-issues">
+<h3>Common Issues<a class="headerlink" href="#common-issues" title="Permalink to this heading"></a>
+</h3>
+<ol class="arabic simple">
+<li>
+<p><strong>Static assertion failure: “NoC transactions are not supported for this type”</strong></p>
+<ul class="simple">
+<li><p>Ensure your type has a <code class="docutils literal notranslate"><span class="pre">noc_traits_t</span></code> specialization</p></li>
+<li><p>Include the appropriate header (e.g., <code class="docutils literal notranslate"><span class="pre">experimental/tensor.h</span></code> for <code class="docutils literal notranslate"><span class="pre">TensorAccessor</span></code>)</p></li>
+</ul>
+</li>
+<li>
+<p><strong>“CircularBuffer without mcast range can only be used as L1 source”</strong></p>
+<ul class="simple">
+<li><p>CircularBuffers require explicit mcast range for multicast destinations</p></li>
+<li><p>Use <code class="docutils literal notranslate"><span class="pre">dst_args_mcast_type</span></code> with proper coordinates</p></li>
+</ul>
+</li>
+<li>
+<p><strong>“CoreLocalMem can only be used as local L1 source/dest”</strong></p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">CoreLocalMem</span></code> represents a buffer in local memory. Therefore, providing it as a destination for a Noc async write or source for Noc async read is invalid.</p></li>
+<li><p>Use <code class="docutils literal notranslate"><span class="pre">UnicastEndpoint</span></code> for remote memory access</p></li>
+</ul>
+</li>
+</ol>
+</section>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="data_movement.html" class="btn btn-neutral float-left" title="Data Movement APIs" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="noc_async_read.html" class="btn btn-neutral float-right" title="noc_async_read" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

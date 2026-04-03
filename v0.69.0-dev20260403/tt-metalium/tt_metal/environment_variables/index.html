@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Environment Variables &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/environment_variables/index.html" />
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Tools" href="../../tools/index.html" />
+    <link rel="prev" title="Low Level Kernels" href="../apis/kernel_apis/sfpu/llk.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/index.html">Programming Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../labs/index.html">Lab Exercises</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced_topics/index.html">Advanced Topics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../apis/index.html">APIs</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Environment Variables</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#tt-metal-home">TT_METAL_HOME</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#tt-metal-runtime-root">TT_METAL_RUNTIME_ROOT</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Environment Variables</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/tt_metal/environment_variables/index.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="environment-variables">
+<span id="id1"></span><h1>Environment Variables<a class="headerlink" href="#environment-variables" title="Permalink to this heading"></a>
+</h1>
+<section id="tt-metal-home">
+<h2>TT_METAL_HOME<a class="headerlink" href="#tt-metal-home" title="Permalink to this heading"></a>
+</h2>
+<p><strong>Optional:</strong> Needed only for specific workflows.</p>
+<p><strong>Description:</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">TT_METAL_HOME</span></code> is an environment variable that points to the root directory of the tt-metal repository. It may be needed before running some tests, or scripts. It is not mandated by the metal runtime.</p>
+<p><strong>Usage:</strong></p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_HOME</span><span class="o">=</span>/path/to/your/tt-metal
+</pre></div>
+</div>
+<p><strong>When is it needed:</strong></p>
+<ul class="simple">
+<li><p><strong>Development:</strong> Used by test scripts and build tools to locate repository files</p></li>
+<li><p><strong>Documentation builds:</strong> Referenced when checking spelling and building docs</p></li>
+<li><p><strong>CMake builds:</strong> Used as a fallback when building tt-train standalone</p></li>
+</ul>
+</section>
+<section id="tt-metal-runtime-root">
+<h2>TT_METAL_RUNTIME_ROOT<a class="headerlink" href="#tt-metal-runtime-root" title="Permalink to this heading"></a>
+</h2>
+<p><strong>Required:</strong> Conditional (only for specific C++ application scenarios)</p>
+<p><strong>Description:</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">TT_METAL_RUNTIME_ROOT</span></code> serves as an override to tell <code class="docutils literal notranslate"><span class="pre">libtt_metal.so</span></code> where to look for artifacts - firmware blobs, etc.. that is needed during runtime.</p>
+<p><strong>When is it required:</strong></p>
+<p>This variable is <strong>only</strong> required when running a C++ application (not ttnn Python) <strong>AND</strong>:</p>
+<ul class="simple">
+<li><p>Not using the metalium prebuilt binary package</p></li>
+<li><p>Not running from a repository clone directory</p></li>
+</ul>
+<p><strong>Usage:</strong></p>
+<p>Set this variable to point to the directory containing runtime artifacts:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_RUNTIME_ROOT</span><span class="o">=</span>/path/to/runtime/artifacts
+</pre></div>
+</div>
+<p><strong>Background:</strong></p>
+<p>When running Python applications with ttnn, the runtime root is automatically determined by the package installation location. However, C++ applications that link against <code class="docutils literal notranslate"><span class="pre">libtt_metal.so</span></code> need to know where to find runtime files like kernel binaries and device firmware.</p>
+<p>The library uses the following fallback order to locate runtime artifacts:</p>
+<ol class="arabic simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">TT_METAL_RUNTIME_ROOT</span></code> environment variable (if set)</p></li>
+<li><p>Installation directory (for prebuilt packages)</p></li>
+<li><p>Repository root (for development builds)</p></li>
+</ol>
+<p><strong>Example scenarios:</strong></p>
+<ul>
+<li>
+<p><strong>Scenario 1 (No override needed):</strong> Running from repo clone</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>~/tt-metal
+./build/my_cpp_app<span class="w">  </span><span class="c1"># Uses repo root automatically</span>
+</pre></div>
+</div>
+</li>
+<li>
+<p><strong>Scenario 2 (Override required):</strong> Custom C++ application outside repo</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_RUNTIME_ROOT</span><span class="o">=</span>/opt/tt-metalium-runtime
+/usr/local/bin/my_cpp_app
+</pre></div>
+</div>
+</li>
+</ul>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../apis/kernel_apis/sfpu/llk.html" class="btn btn-neutral float-left" title="Low Level Kernels" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../../tools/index.html" class="btn btn-neutral float-right" title="Tools" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

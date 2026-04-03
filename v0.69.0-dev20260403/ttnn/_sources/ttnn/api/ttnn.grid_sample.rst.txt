@@ -1,0 +1,8 @@
+﻿ttnn.grid\_sample
+=================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.grid_sample:
+
+.. autooperation:: ttnn.grid_sample
