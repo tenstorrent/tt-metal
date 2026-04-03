@@ -505,6 +505,11 @@ class VectorExportSource(VectorSource):
                 )
 
         strict_ci_mesh_ownership = filter_policy["enforce_mesh_capability"] and bool(explicit_test_group_name)
+        if strict_ci_mesh_ownership and not allowed_mesh_shapes:
+            raise RuntimeError(
+                f"Mesh-grouped run for module '{module_name}' resolved TEST_GROUP_NAME='{test_group_name}', "
+                "but no owned mesh shapes were configured for that lane."
+            )
 
         hardware_rules = capability_profile.get("hardware_rules", ())
         if filter_policy["enforce_hardware_capability"] and not hardware_rules:
