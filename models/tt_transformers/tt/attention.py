@@ -262,7 +262,7 @@ class Attention(LightweightModule):
                 x = ttnn.to_memory_config(x, mem_cfg, dtype=x.dtype)
             return x
 
-        if False and f"{q_norm_str}.weight" in state_dict:  # PERF: skip Q/K norms to eliminate 384 ops/decode
+        if f"{q_norm_str}.weight" in state_dict:
             fn_q_norm = RMSNorm(
                 device=self.mesh_device,
                 dim=self.head_dim,
@@ -280,7 +280,7 @@ class Attention(LightweightModule):
         else:
             self.q_norm = lambda x, mode, norm_config: x
 
-        if False and f"{k_norm_str}.weight" in state_dict:  # PERF: skip Q/K norms
+        if f"{k_norm_str}.weight" in state_dict:
             fn_k_norm = RMSNorm(
                 device=self.mesh_device,
                 dim=self.head_dim,
