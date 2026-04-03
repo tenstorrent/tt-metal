@@ -32,8 +32,10 @@ d_model=192, decoder_d_model=128, forecast_length=96.
 |------|---------|------------|
 | Eager (batch=1) | ~8.5 ms | ~117 seq/s |
 | Traced (batch=1) | **~2.3 ms** | ~440 seq/s |
+| Traced (batch=2) | ~2.4 ms | ~840 seq/s |
 | Traced (batch=8) | ~3.1 ms | **~2620 seq/s** |
 | Traced (batch=32) | ~6.2 ms | ~5200 seq/s |
+| Traced (batch=64) | ~11.2 ms | **~5723 seq/s** (peak) |
 
 See [PERF.md](PERF.md) for the full throughput-vs-batch table and methodology.
 
@@ -107,8 +109,11 @@ pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_model_size -v
 # Stage 3 traced latency / throughput (batch=1)
 pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_throughput_and_latency_traced -v -s
 
-# Throughput vs batch size sweep (batch=1–32)
+# Throughput vs batch size sweep (batch=1,2,4,8,16,32,64)
 pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_throughput_batch -v -s
+
+# Double-buffered pipelined inference (2 command queues, batch=1)
+pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_throughput_pipelined -v -s
 
 # Multi-model serving (100 shared-weight instances)
 pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_multi_model_serving -v
@@ -167,6 +172,19 @@ forecaster = GraniteTTMStreamingForecaster(model, model_config, device)
 for new_obs in sensor_stream:          # new_obs: [n_new, num_channels]
     forecast = forecaster.step(new_obs)  # [forecast_len, num_channels]
 ```
+
+## Stage 4 Experiments
+
+Six optimisation experiments were run after Stage 3:
+
+| Experiment | Result |
+|---|---|
+| E1: Zero-shot ETTh1 accuracy | TTNN MSE 0.4324 vs published 0.444 (2.6% below, all 7 channels) |
+| E2: Pre-allocated host buffer | No gain — per-call allocation overhead negligible vs trace replay |
+| E3: LoFi math fidelity | No gain — model is dispatch-bound; HiFi2 retained |
+| E4: 2-CQ double-buffering | ~433 seq/s (xfail) — `synchronize_device` overhead exceeds H2D saving |
+| E5: batch=64 sweep | **~5723 seq/s peak** — saturation at batch=64; batch=128 drops |
+| E6: Streaming circular buffer | Eliminated `torch.roll` allocation; in-place indexed writes |
 
 ## Architecture Inspection
 
