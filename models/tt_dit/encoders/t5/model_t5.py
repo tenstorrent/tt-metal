@@ -286,7 +286,11 @@ class T5DenseGatedActDense(Module):
 
         if self.parallel_config.tensor_parallel.factor > 1:
             hidden_states = self.ccl_manager.all_gather(
-                hidden_states, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis, use_hyperparams=True
+                hidden_states,
+                dim=3,
+                mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                use_hyperparams=True,
+                use_persistent_buffer=True,
             )
         hidden_states = ttnn.squeeze(hidden_states, 0)
         return hidden_states
@@ -414,7 +418,9 @@ class T5Attention(Module):
         scores = ttnn.matmul(q, k)
 
         scores = scores + position_bias
-        attn_weights = ttnn.softmax(scores, dim=-1, compute_kernel_config=self.layer_norm.compute_kernel_config)
+        attn_weights = ttnn.softmax(
+            scores, dim=-1, numeric_stable=False, compute_kernel_config=self.layer_norm.compute_kernel_config
+        )
         attn_output = ttnn.matmul(attn_weights, v)
         attn_output = ttnn.transformer.concatenate_heads(attn_output)
 
@@ -422,14 +428,22 @@ class T5Attention(Module):
         orig_shape = list(attn_output.shape)
         if self.parallel_config.tensor_parallel.factor > 1:
             attn_output = self.ccl_manager.all_gather(
-                attn_output, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis, use_hyperparams=True
+                attn_output,
+                dim=3,
+                mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                use_hyperparams=True,
+                use_persistent_buffer=True,
             )
 
         dense_out = self.o_proj(attn_output)
 
         if self.parallel_config.tensor_parallel.factor > 1:
             dense_out = self.ccl_manager.all_gather(
-                dense_out, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis, use_hyperparams=True
+                dense_out,
+                dim=3,
+                mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                use_hyperparams=True,
+                use_persistent_buffer=True,
             )
 
         dense_out_shape = list(dense_out.shape)
