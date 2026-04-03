@@ -144,7 +144,7 @@ def train_grpo(run, yaml_config_path, checkpoint_interval, start_checkpoint_path
             )
 
             if num_steps % checkpoint_interval == 1:
-                run.save_checkpoint(ctx.tt_model, step=num_steps)
+                run.save_checkpoint(ctx.tt_model, step=num_steps, dp_composer=ctx.dp_composer)
 
             run.logger.info(f"{mini_epoch=} done!")
 

@@ -17,11 +17,11 @@ class RunContext:
     checkpoint_dir: str
     logger: logging.Logger
 
-    def save_checkpoint(self, model, step: int) -> str:
+    def save_checkpoint(self, model, step: int, dp_composer: object) -> str:
         os.makedirs(self.checkpoint_dir, exist_ok=True)
         tensors = {}
         for name, param in model.parameters().items():
-            tensors[name] = param.to_numpy(ttnn.DataType.FLOAT32)
+            tensors[name] = param.to_numpy(ttnn.DataType.FLOAT32, dp_composer)
 
         filepath = os.path.join(self.checkpoint_dir, f"grpo_step_{step}.safetensors")
         save_file(tensors, filepath)
