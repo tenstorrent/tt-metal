@@ -448,12 +448,14 @@ static void run_quasar_pack_untilize_test(IDevice* dev, uint32_t num_tiles_r, ui
     uint32_t dram_buffer_src_addr = src_dram_buffer->address();
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-    // DFB needs at least num_tiles_c entries so cb_wait_front(block_ct_dim) can be satisfied
-    uint32_t dfb_num_entries = std::max(2u, num_tiles_c);
+    // Input DFB needs enough entries to hold all tiles at once
+    uint32_t input_dfb_num_entries = std::max(2u, num_tiles);
+    // Output DFB needs all tiles so pack_untilize can write each row at a distinct L1 offset
+    uint32_t output_dfb_num_entries = std::max(2u, num_tiles);
 
     tt_metal::experimental::dfb::DataflowBufferConfig l1_input_dfb_config = {
         .entry_size = single_tile_size,
-        .num_entries = dfb_num_entries,
+        .num_entries = input_dfb_num_entries,
         .num_producers = 1,
         .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
@@ -462,7 +464,7 @@ static void run_quasar_pack_untilize_test(IDevice* dev, uint32_t num_tiles_r, ui
         .data_format = tt::DataFormat::Float16_b};
     tt_metal::experimental::dfb::DataflowBufferConfig l1_output_dfb_config = {
         .entry_size = single_tile_size,
-        .num_entries = dfb_num_entries,
+        .num_entries = output_dfb_num_entries,
         .num_producers = 1,
         .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
@@ -493,7 +495,7 @@ static void run_quasar_pack_untilize_test(IDevice* dev, uint32_t num_tiles_r, ui
         "tests/tt_metal/tt_metal/test_kernels/compute/pack_untilize.cpp",
         core,
         tt_metal::experimental::quasar::QuasarComputeConfig{
-            .num_threads_per_cluster = 1, .compile_args = {num_tiles_r, num_tiles_c, l1_input_dfb, l1_output_dfb}});
+            .num_threads_per_cluster = 1, .dst_full_sync_en = true, .compile_args = {num_tiles_r, num_tiles_c, l1_input_dfb, l1_output_dfb}});
 
     tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, l1_input_dfb, reader, compute);
     tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, l1_output_dfb, compute, writer);
@@ -513,12 +515,19 @@ static void run_quasar_pack_untilize_test(IDevice* dev, uint32_t num_tiles_r, ui
         .num_tiles_r_dim = static_cast<int>(num_tiles_r), .num_tiles_c_dim = static_cast<int>(num_tiles_c)};
     auto golden = ::unit_tests::compute::gold_standard_untilize(src_vec, golden_config);
 
+    bool pass = (golden.size() == result_vec.size()) && (golden == result_vec);
+    if (!pass) {
+        std::cout << "GOLDEN (num_tiles_r=" << num_tiles_r << ", num_tiles_c=" << num_tiles_c << "):" << std::endl;
+        print_vector(unpack_vector<bfloat16, uint32_t>(golden));
+        std::cout << "RESULTS:" << std::endl;
+        print_vector(unpack_vector<bfloat16, uint32_t>(result_vec));
+    }
     EXPECT_EQ(golden.size(), result_vec.size());
     EXPECT_EQ(golden, result_vec);
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize) {
-    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 1, 1);
+    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 2, 2);
 }
 
 /**************************************

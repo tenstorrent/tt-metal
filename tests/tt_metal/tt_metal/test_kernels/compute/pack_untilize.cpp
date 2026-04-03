@@ -6,6 +6,7 @@
 
 #include "api/compute/pack_untilize.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/debug/dprint.h"
 
 // Helper constexpr function to compute num_blocks_per_col
 constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) {
@@ -36,6 +37,8 @@ void kernel_main() {
     constexpr uint32_t block_ct_dim = per_core_block_tile_cnt / num_blocks_per_col;
     constexpr uint32_t full_ct_dim = per_core_block_tile_cnt;
 
+    constexpr uint32_t num_tiles = per_core_block_cnt * per_core_block_tile_cnt;
+    // DPRINT << "num_blocks_per_col " << num_blocks_per_col << ENDL;
     compute_kernel_hw_startup(cb_in0, cb_out0);
     pack_untilize_init<block_ct_dim, full_ct_dim>(cb_in0, cb_out0);
 
@@ -43,6 +46,7 @@ void kernel_main() {
         cb_reserve_back(cb_out0, full_ct_dim);
 
         for (uint32_t b = 0; b < num_blocks_per_col; ++b) {
+            // DPRINT << "Processing block: r= " << r << ", b=" << b << ENDL;
             cb_wait_front(cb_in0, block_ct_dim);
             pack_untilize_block<block_ct_dim, full_ct_dim>(cb_in0, 1, cb_out0, b);
             cb_pop_front(cb_in0, block_ct_dim);

@@ -176,12 +176,14 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
         MATH((llk_math_dest_section_done()));
         PACK((llk_packer_wait_for_math_done()));
         PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, block_c_index)));
+        // PACK(llk_pack_dest_dvalid_section_done())
 #else
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
         PACK((llk_packer_wait_for_math_done()));
         PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, FACE_R_DIM, 4, block_c_index)));
 #endif
         PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+        
     }
 }
 

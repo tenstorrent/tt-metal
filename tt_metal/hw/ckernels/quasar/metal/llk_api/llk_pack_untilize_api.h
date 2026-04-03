@@ -103,15 +103,9 @@ inline void llk_pack_untilize(std::uint32_t block_rt_dim, std::uint32_t output, 
     const std::uint32_t C_DIM_FACES = narrow_tile ? 1 : 2;
     const std::uint32_t R_DIM_FACES = (num_faces == 2 && !narrow_tile) ? 1 : 2;
 
-    // Each tile is packed in two 16x32 halves — top faces (0+1) then bottom faces (2+3)
-    // merging adjacent face-columns into a single output row. Hence we use R_DIM_FACES instead of num_faces for L1
-    // strides
+    const std::uint32_t base_l1 = g_dfb_interface[output_id].wr_entry_idx;
     const std::uint32_t y_stride = full_ct_dim * R_DIM_FACES * face_r_dim;
-    const std::uint32_t base_l1 = g_dfb_interface[output_id].wr_entry_idx * R_DIM_FACES * face_r_dim;
-
-    for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
-        const std::uint32_t dest_idx = (block_rt * block_ct_dim) * num_faces * face_r_dim;
-        const std::uint32_t l1_tile_idx = base_l1 + block_rt * y_stride + block_c_index * block_ct_dim * C_DIM_FACES;
-        _llk_pack_untilize_(dest_idx, l1_tile_idx);
-    }
+    // std::uint32_t y_stride_external = full_ct_dim * R_DIM_FACES * face_r_dim;
+    // _llk_pack_untilize_(0, block_c_index * y_stride_external);
+    _llk_pack_untilize_(0, base_l1 + 0 * y_stride + block_c_index * block_ct_dim);
 }
