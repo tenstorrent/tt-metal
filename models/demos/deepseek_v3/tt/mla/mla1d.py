@@ -47,6 +47,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+from models.experimental.ops.descriptors.fusion import Parallel
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
@@ -1872,7 +1873,7 @@ class MLA1D(AbstractModule):
         kv_norm_desc = descriptors.rms_norm(
             tt_kv_nope, program_config=RMSNorm._get_pc(tt_kv_nope.memory_config()), **cfg["kv_norm"]
         )
-        tt_q, tt_kv_nope = descriptors.Parallel(q_norm_desc, kv_norm_desc).run()
+        tt_q, tt_kv_nope = Parallel(q_norm_desc, kv_norm_desc).run()
         # Q: 1,1,32,1536, width sharded 8x2 [32,96]
 
         # KV RoPE
