@@ -150,7 +150,7 @@ def train_grpo(run, yaml_config_path, checkpoint_interval, start_checkpoint_path
         run.logger.info(f"batch={num_batches} done!")
 
     run.logger.info("training process done!")
-    run.save_checkpoint(ctx.tt_model, step=num_steps)
+    run.save_checkpoint(ctx.tt_model, step=num_steps, dp_composer=ctx.dp_composer)
 
 
 if __name__ == "__main__":
