@@ -461,15 +461,16 @@ class VectorExportSource(VectorSource):
             return []
 
         # Determine which traced sweep mode this module belongs to.
-        is_model_traced = "model_traced" in module_name
         is_lead_models = os.environ.get("LEAD_MODELS_RUN", "").strip() == "1"
         run_type = self._get_run_type(module_name, is_lead_models)
         filter_policy = get_vector_load_filter_policy(manifest["vector_grouping_mode"])
         filter_kind = filter_policy["kind"]
 
-        # Get current machine info when runtime capability may be needed.
+        # Fetch runtime machine info for traced sweep modes based on the resolved
+        # run type rather than a module-name substring. This keeps the behavior
+        # stable even if traced module naming changes later.
         current_machine_info = None
-        if is_model_traced:
+        if run_type in {"model_traced", "lead_models"}:
             current_machine_info = self._get_machine_info()
 
         test_group_name = self._resolve_runtime_test_group_name(run_type, current_machine_info)
