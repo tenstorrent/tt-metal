@@ -88,10 +88,7 @@ export PYTHONPATH="$(pwd)"
 - **`--tt-mesh-shape ROWS COLS`** *(optional):* Caps / configures how many devices are considered available when validating **`N`** for slice-parallel mode; the slice-parallel path still opens exactly **`N`** devices with the topology above (not the full **`8×4`** mesh unless **`N`** equals 32 and you choose a matching shape).
 - **Teardown:** Slice-parallel mode does **not** use `create_submesh()` off a larger parent mesh (avoids CQ sharing issues on close).
 - **Verification:** On TT init the script prints **`TT device verify:`** with `num_devices`, `mesh_shape`, `device_batch_size`, `tt_slice_parallel_mesh_shape`, and how the device was opened. **`summary.json`** includes **`config.tt_device_verify`** (and **`config.tt_slice_parallel_mesh_shape`**) with the same fields.
-- **Timing:** For each image, stdout shows **full** and **sliced** lines with coarse **`pre` / `device` / `post`** (seconds), plus an optional **detail** line when non-zero:
-  - **TT full / sliced:** e.g. **`read`**, **`sahi_slice`**, **`cpu_prep`** (host letterbox/tensor prep; **summed** over all slice forwards on the sliced path), **`tt_run`**, **`to_torch`**, **`tt_post`** (NMS + `scale_boxes` on host), **`sahi_shift`**, **`sahi_merge`**, **`slice_export`** (if saving slice PNGs). On TT, letterbox runs **once per preprocess call**; the sliced path calls it once per tile (or once per parallel batch of tiles). **`host_cpu_prep_mean_per_slice_sec`** in JSON helps compare per-tile cost vs a single full-image run.
-  - **Sliced path `read`:** TT and Ultralytics **tagged** slice flows preload with **`read_image_as_pil`** and pass a PIL image into **`slice_image`** so **`read`** and **`sahi_slice`** are separate; SAHI **`get_sliced_prediction`** timings keep SAHI’s internal **`slice`** bucket only.
-  - **`summary.json`:** `full_timing_sec` / `sliced_timing_sec` include granular keys such as **`host_read_image_sec`**, **`host_cpu_prep_letterbox_sec`**, **`host_cpu_prep_mean_per_slice_sec`** (TT sliced), **`device_ttnn_run_sec`**, **`host_ttnn_to_torch_sec`**, **`host_tt_torch_postprocess_sec`**, **`sahi_shift_to_full_sec`**, **`sahi_merge_sec`**, **`sahi_ultralytics_per_slice_host_sec`** (tagged Ultralytics path), plus aggregates under **`aggregate.mean_*_timing_sec`**.
+- **Timing:** Per-image stdout and **`summary.json`** timing fields are documented in **[Timing breakdown](#timing-breakdown-full-image-vs-sliced-tt-vs-ultralytics)** below (coarse **`pre` / `device` / `post`**, detail-line labels, JSON keys, and what is **not** bucketed).
 - **`--save-slice-images`:** After each slice’s inference, saves **`OUTPUT_DIR/<stem>_slices/slice_NNN_xX_yY.png`** with **detections drawn** (slice-local boxes, **before** cross-tile merge). No separate script.
 
 ### Multi-chip / Ethernet dispatch
@@ -248,8 +245,9 @@ python models/demos/yolo_eval/sahi_ultralytics_eval.py \
 
 - **Stdout (per image):**
   - Detection counts and wall times for full vs sliced.
-  - Two lines with coarse **`pre` / `device` / `post`** timing for **full (single)** and **sliced** (seconds; see `sahi_ultralytics_eval.py` for definitions).
-  - Extra **detail** lines with granular timers (**`read`**, **`cpu_prep`**, **`tt_run`**, **`to_torch`**, **`tt_post`**, **`sahi_slice`**, **`sahi_shift`**, **`sahi_merge`**, **`slice_export`**, etc.) when non-zero.
+  - Two lines with coarse **`pre` / `device` / `post`** timing for **full (single)** and **sliced** (seconds).
+  - Extra **detail** lines with granular timers when non-zero.
+  - See **[Timing breakdown](#timing-breakdown-full-image-vs-sliced-tt-vs-ultralytics)** for definitions, the print-label ↔ JSON table, and unbucketed work.
 - **`summary.json`** (under `--output-dir`):
   - **`config`:** run settings, **`tt_device_verify`** (TT only), **`tt_slice_parallel_mesh_shape`**, etc.
   - **`per_image`:** `full_timing_sec`, `sliced_timing_sec` (including granular timing keys), detection deltas.
@@ -260,6 +258,54 @@ python models/demos/yolo_eval/sahi_ultralytics_eval.py \
   - `<stem>_slices/*.png` — per-tile predictions if **`--save-slice-images`**.
 
 Default output directory if omitted: `models/demos/yolo_eval/sahi_outputs`.
+
+## Timing breakdown (full-image vs sliced, TT vs Ultralytics)
+
+This section describes what **`sahi_ultralytics_eval.py`** prints and what each **`full_timing_sec` / `sliced_timing_sec`** field means. All times are wall-clock seconds unless noted.
+
+### Per-image stdout
+
+1. **First line:** Detection counts and **end-to-end** wall time for full vs sliced (`full_time_sec` / `sliced_time_sec` in JSON). This span includes any work that is **not** assigned to the coarse buckets below (see **Gaps** at the end of this section).
+2. **Next two lines (coarse triple):** For **full (single)** and **sliced**, labels **`pre`**, **`device`**, **`post`**:
+   - **`pre`** = `host_slice_and_preprocess_sec` (derived). **Sliced:** `host_read_image_sec` + `host_sahi_slice_sec` + `host_preprocess_before_device_sec`. **Full single image:** `host_preprocess_before_device_sec` only (for TT full, that already includes **image load** + letterbox/tensor prep—there is no separate add of `host_read_image_sec` in this sum).
+   - **`device`** = `device_inference_sec`. **TT:** sum of `runner.run(...)` only (includes host→device / `ttnn` setup inside that call—not split further). **Ultralytics + SAHI sliced:** SAHI’s **`prediction`** duration (model **plus** per-slice host work inside SAHI’s loop—not “device-only”). **Ultralytics full:** SAHI **`prediction`** ≈ model forward.
+   - **`post`** = `host_postprocess_and_sahi_merge_sec`. **TT full:** `ttnn.to_torch` + `postprocess` (NMS, `scale_boxes`, etc.)—no SAHI merge. **TT sliced:** per-tile `to_torch` + `postprocess` (summed) + **shift to full image** + **SAHI merge** (NMM/NMS). **Ultralytics / SAHI:** SAHI **`postprocess`** (and merge where applicable).
+
+3. **Detail lines (optional):** A second line per row when any **granular** field is non-zero. Labels are **short**; the canonical names are the **JSON keys** in the table below.
+
+### Detail print label → JSON key → meaning (TT-focused)
+
+| Print label | JSON key | Meaning (TT) |
+|-------------|----------|----------------|
+| `read` | `host_read_image_sec` | PIL read (+ EXIF) for sliced TT; full TT path uses `load_image_bgr_sahi` and still records this field, while the coarse **`pre`** triple for **full** folds load into `host_preprocess_before_device_sec` (so do not double-count `read` + `pre` on full). |
+| `sahi_slice` | `host_sahi_slice_sec` | `slice_image(...)` wall time. |
+| `cpu_prep` | `host_cpu_prep_letterbox_sec` | **Sliced TT:** RGB→BGR + `preprocess` (letterbox, tensor) **summed over all slices**; detail may show `(Nt~mean/t)` using `host_cpu_prep_mean_per_slice_sec`. The key name suggests letterbox only, but the timed region is **wider** on the sliced path. |
+| `tt_run` | `device_ttnn_run_sec` | Same as summed `runner.run` for TT (includes anything inside that call, e.g. host tensor → device, not broken out). |
+| `to_torch` | `host_ttnn_to_torch_sec` | `ttnn.to_torch` on outputs. |
+| `tt_post` | `host_tt_torch_postprocess_sec` | `postprocess(...)` on host after torch tensors. |
+| `sahi_per_slice` | `sahi_ultralytics_per_slice_host_sec` | **Ultralytics + SAHI** path: sum of SAHI’s per-slice **`postprocess`** timers (not used the same way on pure TT). |
+| `sahi_shift` | `sahi_shift_to_full_sec` | SAHI **`get_shifted_object_prediction()`** over all slice predictions—boxes moved from **tile coordinates** to **full-image** coordinates before merge. This is SAHI’s API, matching `get_sliced_prediction` semantics. |
+| `sahi_merge` | `sahi_merge_sec` | SAHI merge postprocess (NMM/NMS / configured matcher). |
+| `slice_export` | `host_slice_image_export_sec` | Saving tagged per-slice PNGs when **`--save-slice-images`** (or equivalent) is enabled. |
+| `sahi_pred` | *(uses `device_inference_sec`)* | Shown when there is **no** `tt_run` but **sliced** Ultralytics/SAHI timing: SAHI **`prediction`** bucket (not pure GPU). |
+| `ultra_decode` | *(uses `host_postprocess_and_sahi_merge_sec`)* | **Full-image Ultralytics:** host decode / post bucket from SAHI **`postprocess`**. |
+
+**Sliced path `read` vs SAHI’s own timers:** TT and Ultralytics **tagged** slice flows preload with **`read_image_as_pil`** and pass PIL into **`slice_image`**, so **`read`** and **`sahi_slice`** are separate. Plain SAHI **`get_sliced_prediction`** durations keep SAHI’s internal **`slice`** bucket only.
+
+### `summary.json` timing fields
+
+- **`per_image`:** `full_timing_sec`, `sliced_timing_sec` — same keys as above, plus aggregates such as **`host_slice_and_preprocess_sec`**, **`total_wall_sec`**, and **`extra`** (e.g. **`tt_num_slices`** for sliced TT).
+- **`aggregate`:** **`mean_full_timing_sec`**, **`mean_sliced_timing_sec`** — means over the same key set.
+
+### Gaps
+
+Work that still contributes to **`total_wall_sec`** / the first-line wall times but is **not** a separate JSON field:
+
+- **`result_to_object_predictions`** after each forward (full TT: after `infer_*_timed`; sliced TT: inside the per-slice loop).
+- **`build_postprocess(...)`** (usually negligible).
+- Python overhead between timed regions (list growth, indexing).
+- **Inside `tt_run`:** no separate line for `ttnn.from_torch` / H2D vs device execute—everything stays in **`device_run_sec`** / **`device_ttnn_run_sec`**.
+- **Visuals not in timing dict:** **`maybe_export_visuals`**, **`save_slice_grid_overlay`** when those flags are on.
 
 ## Notes for tuning
 
