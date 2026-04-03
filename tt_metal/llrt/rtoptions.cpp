@@ -130,6 +130,7 @@ enum class EnvVarID {
     TT_METAL_GTEST_NUM_HW_CQS,                     // Number of HW command queues in tests
     TT_METAL_ARC_DEBUG_BUFFER_SIZE,                // ARC processor debug buffer size
     TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
+    TT_METAL_SIM_CYCLE_TIMEOUT,                    // Simulator cycle-count timeout for hang detection
     TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,  // Terminal command to execute on dispatch timeout.
     TT_METAL_NOC_DEBUG_DUMP,                       // Enable experimental NOC debug dump to detect missing barriers
     TT_METAL_DISPATCH_PROGRESS_UPDATE_MS,          // Dispatch kernel progress update period in milliseconds
@@ -944,6 +945,15 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->timeout_duration_for_operations = std::chrono::duration<float>(timeout_duration);
             break;
         }
+
+        // TT_METAL_SIM_CYCLE_TIMEOUT
+        // Simulator cycle-count timeout for hang detection.  On the simulator,
+        // wall-clock time is meaningless so this provides a cycle budget instead.
+        // When wait_until_cores_done exhausts this many simulated cycles without
+        // all cores completing, the dispatch timeout fires.
+        // Default: 0 (no timeout)
+        // Usage: export TT_METAL_SIM_CYCLE_TIMEOUT=100000000
+        case EnvVarID::TT_METAL_SIM_CYCLE_TIMEOUT: this->sim_cycle_timeout = std::stoull(value); break;
 
         // TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE
         // Terminal command to execute on dispatch timeout.
