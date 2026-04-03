@@ -433,17 +433,11 @@ def _tensor_1d_from_floats(
     layout=ttnn.ROW_MAJOR_LAYOUT,
     dtype=ttnn.float32,
 ) -> ttnn.Tensor:
-    """Build a 1-D TTNN vector from host floats using only ``ttnn.full`` / ``ttnn.concat``."""
+    """Build a 1-D TTNN vector from host floats with one host-to-device transfer."""
     if not values:
         raise ValueError("_tensor_1d_from_floats: values must be non-empty")
-    kw = dict(device=mesh_device, layout=layout, dtype=dtype)
-    if len(values) == 1:
-        return ttnn.full((1,), float(values[0]), **kw)
-    parts = [ttnn.full((1,), float(v), **kw) for v in values]
-    out = parts[0]
-    for p in parts[1:]:
-        out = ttnn.concat([out, p], dim=0)
-    return out
+    host = torch.tensor(values, dtype=torch.float32)
+    return ttnn.from_torch(host, device=mesh_device, layout=layout, dtype=dtype)
 
 
 class FlowMatchSchedulerTtnn:
@@ -451,7 +445,7 @@ class FlowMatchSchedulerTtnn:
 
     Schedule vectors ``sigmas`` and ``timesteps`` are stored as 1-D ``ttnn.Tensor`` on
     ``mesh_device``. :meth:`set_timesteps` builds them via host float math (matching the
-    reference) then materializes them with ``ttnn`` ops only.
+    reference) then materializes them on device.
 
     :meth:`step` uses ``ttnn`` arithmetic; public inputs/outputs are ``ttnn.Tensor`` only.
     """
@@ -529,8 +523,6 @@ class FlowMatchSchedulerTtnn:
             sigmas_list = [1.0 - (z / scale_factor) for z in one_minus_z]
         if self.reverse_sigmas:
             sigmas_list = [1.0 - s for s in sigmas_list]
-        timesteps_list = [s * self.num_train_timesteps for s in sigmas_list]
-
         self._deallocate_schedule()
         self.sigmas = _tensor_1d_from_floats(
             self.mesh_device,
@@ -538,12 +530,7 @@ class FlowMatchSchedulerTtnn:
             layout=self._schedule_layout,
             dtype=self._schedule_dtype,
         )
-        self.timesteps = _tensor_1d_from_floats(
-            self.mesh_device,
-            timesteps_list,
-            layout=self._schedule_layout,
-            dtype=self._schedule_dtype,
-        )
+        self.timesteps = ttnn.multiply(self.sigmas, float(self.num_train_timesteps))
         self.training = bool(training)
 
     def step(
