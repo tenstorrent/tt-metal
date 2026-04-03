@@ -185,7 +185,15 @@ def run_test_create_head_max_width_shard(device, n_local_heads, n_local_kv_heads
 
 @pytest.mark.parametrize(
     "n_local_heads, n_local_kv_heads, head_dim, batch",
-    ((8, 1, 128, 32), (8, 4, 96, 32), (16, 2, 64, 32), (8, 1, 128, 16), (8, 1, 128, 8), (32, 8, 128, 4)),
+    (
+        (8, 1, 128, 32),
+        (8, 4, 96, 32),
+        (16, 2, 64, 32),
+        (8, 1, 128, 16),
+        (8, 1, 128, 8),
+        (32, 8, 128, 4),
+        (64, 8, 96, 1),
+    ),
 )
 def test_create_head_max_width_shard(
     n_local_heads,

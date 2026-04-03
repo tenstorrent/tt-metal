@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include <tt-metalium/constants.hpp>
 
 void kernel_main() {
     uint32_t in_tile_offset_by_batch = get_arg_val<uint32_t>(0);
@@ -30,8 +31,15 @@ void kernel_main() {
     uint32_t q_write_addr = 0;
     uint32_t qkv_tile_id = 0;
 
+    constexpr uint32_t HALF_TILE_ELEMENTS = tt::constants::FACE_HEIGHT * tt::constants::TILE_WIDTH;
     for (uint32_t q = 0; q < num_q_heads; ++q) {
-        uint32_t wptr_offset = q < 16 ? q * SUBTILE_LINE_BYTES : (q - 16) * SUBTILE_LINE_BYTES + 512 * ELEMENT_SIZE;
+        uint32_t tile_row_index = q / tt::constants::TILE_HEIGHT;
+        uint32_t row_in_tile = q % tt::constants::TILE_HEIGHT;
+        uint32_t offset_in_tile =
+            row_in_tile < tt::constants::FACE_HEIGHT
+                ? row_in_tile * SUBTILE_LINE_BYTES
+                : (row_in_tile - tt::constants::FACE_HEIGHT) * SUBTILE_LINE_BYTES + HALF_TILE_ELEMENTS * ELEMENT_SIZE;
+        uint32_t wptr_offset = tile_row_index * head_size + offset_in_tile;
         uint32_t q_write_addr = get_write_ptr(cb_id_q_out) + wptr_offset;
 
         for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
@@ -60,7 +68,13 @@ void kernel_main() {
 
     // Read 2 phases per tile, where there are num_q_heads * q_num_tiles tiles
     for (uint32_t k = 0; k < num_kv_heads; ++k) {
-        uint32_t wptr_offset = k < 16 ? k * SUBTILE_LINE_BYTES : (k - 16) * SUBTILE_LINE_BYTES + 512 * ELEMENT_SIZE;
+        uint32_t tile_row_index = k / tt::constants::TILE_HEIGHT;
+        uint32_t row_in_tile = k % tt::constants::TILE_HEIGHT;
+        uint32_t offset_in_tile =
+            row_in_tile < tt::constants::FACE_HEIGHT
+                ? row_in_tile * SUBTILE_LINE_BYTES
+                : (row_in_tile - tt::constants::FACE_HEIGHT) * SUBTILE_LINE_BYTES + HALF_TILE_ELEMENTS * ELEMENT_SIZE;
+        uint32_t wptr_offset = tile_row_index * head_size + offset_in_tile;
         uint32_t k_write_addr = get_write_ptr(cb_id_k_out) + wptr_offset;
 
         for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
@@ -89,7 +103,13 @@ void kernel_main() {
 
     // Read 2 phases per tile, where there are num_q_heads * q_num_tiles tiles
     for (uint32_t v = 0; v < num_kv_heads; ++v) {
-        uint32_t wptr_offset = v < 16 ? v * SUBTILE_LINE_BYTES : (v - 16) * SUBTILE_LINE_BYTES + 512 * ELEMENT_SIZE;
+        uint32_t tile_row_index = v / tt::constants::TILE_HEIGHT;
+        uint32_t row_in_tile = v % tt::constants::TILE_HEIGHT;
+        uint32_t offset_in_tile =
+            row_in_tile < tt::constants::FACE_HEIGHT
+                ? row_in_tile * SUBTILE_LINE_BYTES
+                : (row_in_tile - tt::constants::FACE_HEIGHT) * SUBTILE_LINE_BYTES + HALF_TILE_ELEMENTS * ELEMENT_SIZE;
+        uint32_t wptr_offset = tile_row_index * head_size + offset_in_tile;
         uint32_t v_write_addr = get_write_ptr(cb_id_v_out) + wptr_offset;
 
         for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
