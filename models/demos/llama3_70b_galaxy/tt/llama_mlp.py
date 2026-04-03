@@ -50,6 +50,11 @@ class TtLlamaMLP(LightweightModule):
         self.tt_ccl = tt_ccl
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
         torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
+
+        # AGMM FF2 weight padding disabled - requires extensive memory config changes
+        # OLMo intermediate=3456 not compatible with AGMM kernel K%128=0 requirement
+        is_olmo = getattr(args, "is_olmo", False)
+
         if args.dummy_weights:
             cache_name = lambda _: None
         else:
@@ -160,11 +165,16 @@ class TtLlamaMLP(LightweightModule):
 
         if not self.model_config["USE_PREFETCHER"]:
             if is_olmo:
-                # OLMo decode: ring matmul outputs 3840-padded, slice to 3456 before reduce_scatter.
+                # OLMo decode: ring matmul outputs 3840-padded, slice before reduce_scatter.
                 # REDUCE_SCATTER_OUT_MEMCFG (L1) is incompatible with OLMo due to L1 constraints,
                 # so reduce_scatter outputs to DRAM. We avoid the redundant L1→DRAM push by slicing
                 # directly from DRAM after moving the padded ring output to DRAM.
-                unpadded_width = self.args.intermediate_dim_per_tp  # 3456
+                # When USE_AGMM_FF2=True, slice to 3584 (AGMM-compatible padding).
+                # When USE_AGMM_FF2=False, slice to 3456 (unpadded).
+                use_agmm = self.model_config.get("USE_AGMM_FF2", False)
+                unpadded_width = (
+                    self.args.intermediate_dim_per_tp_padded_for_agmm if use_agmm else self.args.intermediate_dim_per_tp
+                )
 
                 w1_out = ttnn.linear(
                     x,
@@ -335,6 +345,7 @@ class TtLlamaMLP(LightweightModule):
 
         if is_olmo and mode == "decode":
             # Original path: separate all_gather + linear (fallback when USE_AGMM_FF2=False)
+            use_l1_matmuls = self.model_config.get("USE_L1_DECODE_MATMULS", False)
             w2_in = self.tt_ccl.line_all_gather(
                 ff1ff3,
                 dim=3,
@@ -370,13 +381,26 @@ class TtLlamaMLP(LightweightModule):
         ttnn.deallocate(ff1ff3)
 
         if is_olmo and mode == "decode":
-            w2_out = ttnn.linear(
-                w2_in,
-                self.w2_interleaved,
-                compute_kernel_config=self.args.compute_kernel_config_hifi2,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            if use_l1_matmuls:
+                # L1-optimized path: use explicit DRAM-sharded program config
+                # This provides better kernel selection than default auto-config
+                w2_out = ttnn.linear(
+                    w2_in,
+                    self.w2_interleaved,
+                    compute_kernel_config=self.args.compute_kernel_config_hifi2,
+                    dtype=ttnn.bfloat8_b,
+                    program_config=self.model_config["FF2_DRAM_SHARDED_PROGCFG_OLMO"],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            else:
+                # Original path: no program config, uses default kernel
+                w2_out = ttnn.linear(
+                    w2_in,
+                    self.w2_interleaved,
+                    compute_kernel_config=self.args.compute_kernel_config_hifi2,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
             # w2_in IS the BINARY_MUL_BF16 persistent buffer — do NOT deallocate it.
             self._debug_check_mlp("w2_out", w2_out)
             w2_out_sharded = ttnn.to_memory_config(w2_out, self.model_config["FF2_OUT_RING_MEMCFG_OLMO"])

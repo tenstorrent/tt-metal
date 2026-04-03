@@ -63,12 +63,10 @@ class TTSampling(LightweightModule):
         Changing this state between decode steps invalidates captured traces, so
         SamplingGenerator maintains separate trace slots keyed by force_argmax.
         """
-        return (
-            self._allow_force_argmax_sampling
-            and is_default_value(k, 1)
-            and is_default_value(p, 1.0)
-            and is_default_value(temp, 1.0)
-        )
+        # When top_k=1, the result is always the argmax token regardless of top_p.
+        # top_p only affects which tokens are candidates, but with k=1 there's only one.
+        # Temperature also doesn't affect the result when there's only one candidate.
+        return self._allow_force_argmax_sampling and is_default_value(k, 1)
 
     def _select_topk_indices_dtype(self, per_device_vocab_size: int, multi_step_reduction: bool):
         # if vocab is larger than uint16 max, return uint32 for indices
@@ -176,6 +174,9 @@ class TTSampling(LightweightModule):
             temp = torch.ones(total_param_size)
 
         self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
+        logger.info(
+            f"TTSampling: allow_force_argmax={self._allow_force_argmax_sampling}, force_argmax={self._force_argmax_sampling}, k={k[:4] if hasattr(k, '__len__') else k}"
+        )
 
         # Create sampling parameter tensors on device
         # When _sampling_dp > 1, dims=(0, None) shards the [128] tensor across 4 rows → [32] per row
@@ -401,11 +402,12 @@ class TTSampling(LightweightModule):
             Sampled token indices tensor
         """
         if self._force_argmax_sampling:
-            logger.info("Forcing argmax sampling")
             # Gather the output across all devices and untilize the tensor (for argmax)
             num_devices = self.mesh_device.get_num_devices()
             if num_devices > 1:
-                cluster_axis = 1
+                # For 1D meshes use cluster_axis=None. For 2D meshes (like OLMo's 8x4),
+                # use sampling_all_gather_axis (default 0 for row-sharded vocab).
+                cluster_axis = None if 1 in self.cluster_shape else self.sampling_all_gather_axis
                 x = ttnn.experimental.all_gather_async(
                     x,
                     persistent_output_buffer=None,

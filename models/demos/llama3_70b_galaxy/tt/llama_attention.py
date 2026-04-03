@@ -1003,11 +1003,23 @@ class TtLlamaAttention(LightweightModule):
             wo_decode = (
                 self.wo_interleaved_unpadded if self.wo_interleaved_unpadded is not None else self.wo_interleaved
             )
+            # Use explicit program config when L1 matmuls enabled
+            use_l1_matmuls = self.model_config.get("USE_L1_DECODE_MATMULS", False)
+            if use_l1_matmuls and self.wo_interleaved_unpadded is not None:
+                # Unpadded weights: K=640, use optimized DRAM-sharded config
+                wo_progcfg = self.model_config.get("WO_DRAM_SHARDED_PROGCFG_UNPADDED_OLMO")
+            elif use_l1_matmuls:
+                # Padded weights: K=1024
+                wo_progcfg = self.model_config.get("WO_DRAM_SHARDED_PROGCFG_OLMO")
+            else:
+                wo_progcfg = None  # Use default kernel selection
+
             dense_out_ttnn = ttnn.matmul(  # [1, 1, 32, 1280]
                 attn_output_cat,
                 wo_decode,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=ttnn.bfloat8_b,
+                program_config=wo_progcfg,
             )
             ttnn.deallocate(attn_output_cat)
             self._debug_check_attn("wo_matmul_out", dense_out_ttnn)

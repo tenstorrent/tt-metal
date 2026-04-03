@@ -65,6 +65,8 @@ class TT_CCL:
         self.gather_semaphore_handles = [[], []]
         self.barrier_semaphore_handles = [[], []]
         self.reduce_semaphore_handles = [[], []]  # Now needed for decode too (OLMo uses reduce_scatter_minimal_async)
+        # Force-argmax all-gather semaphores (need 2 per all_gather_async call)
+        self.ag_async_semaphore_handles = [[], []]
         if mode == "prefill":
             self.from_semaphore_handles = [[], []]
             self.to_semaphore_handles = [[], []]
@@ -90,6 +92,11 @@ class TT_CCL:
                     [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3)]
                 )
 
+                # Force-argmax all_gather_async needs 2 semaphores per call
+                self.ag_async_semaphore_handles[i].append(
+                    [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(2)]
+                )
+
                 if mode == "prefill":
                     self.from_semaphore_handles[i].append(
                         ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
@@ -101,6 +108,7 @@ class TT_CCL:
         self.gather_idx = [0, 0]
         self.reduce_scatter_buffer_idx = [0, 0]
         self.barrier_semaphore_idx = [0, 0]
+        self.ag_async_semaphore_idx = [0, 0]
         self.persistent_buffers = {}
         self.all_gather_buffers = {}
         if mode == "decode":
@@ -118,8 +126,7 @@ class TT_CCL:
             # For some prefill seqlens we always allocate CCL buffers. Otherwise they will require barrier syncing
             # 256 and 512 added to support short prompts (128-256, 257-512 tokens) so they don't pad
             # all the way to 1024, which fills the KV cache with 847 EOS tokens and causes incoherence.
-            # OLMo: 8K removed - async CCL deadlocks even with pre-allocated buffers.
-            # 8K will run in eager mode with sync CCL like 16K+.
+            # OLMo: 8K/16K run in eager mode with sync CCL fix in line_all_gather (2026-04-03).
             self.support_seqlens = [4096, 2048, 1024, 512, 256, 128]
             if allocate_prefill_buffers:
                 self.persistent_buffers = (
@@ -143,6 +150,16 @@ class TT_CCL:
         current_idx = self.barrier_semaphore_idx[semaphore_index]
         self.barrier_semaphore_idx[semaphore_index] = (current_idx + 1) % self.num_cbs
         return self.barrier_semaphore_handles[semaphore_index][current_idx]
+
+    def get_and_cycle_ag_semaphore_handles(self, cluster_axis=None):
+        """Get all-gather semaphore handles for force-argmax sampling.
+
+        Returns a list of 2 semaphores needed by all_gather_async.
+        """
+        semaphore_index = cluster_axis if cluster_axis is not None else 0
+        current_idx = self.ag_async_semaphore_idx[semaphore_index]
+        self.ag_async_semaphore_idx[semaphore_index] = (current_idx + 1) % self.num_cbs
+        return self.ag_async_semaphore_handles[semaphore_index][current_idx]
 
     def get_all_gather_concat_inter_buffer(self):
         # Buffer dimensions depend on batch size:
@@ -1322,31 +1339,43 @@ class TT_CCL:
             topology = self.model_config["CCL_TOPOLOGY"]
             persistent_buffer = self.all_gather_buffers.get(buffer_key, None) if buffer_key is not None else None
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
-        barrier_semaphore = None
-        if persistent_buffer is None:
-            barrier_semaphore = self.get_and_cycle_barrier_semaphore_handle(cluster_axis)
-        semaphores = (
-            self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]][0]
-            if self.use_ring_ag_prefill
-            else [
-                self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
-                self.gather_semaphore_handles[cluster_axis][(self.gather_idx[cluster_axis] + 1) % self.num_cbs],
-            ]
-        )
-        ttnn_tensor_out = ttnn.experimental.all_gather_async(
-            input_tensor_mesh,
-            dim,
-            cluster_axis=cluster_axis,
-            mesh_device=self.mesh_device,
-            topology=topology,
-            multi_device_global_semaphore=semaphores,
-            persistent_output_tensor=persistent_buffer,
-            barrier_semaphore=barrier_semaphore,
-            num_links=num_links,
-            memory_config=memory_config,
-            subdevice_id=self.worker_sub_device_id,
-            use_optimal_ccl_for_llama=use_optimal_ccl_for_llama,
-        )
+        # OLMo prefill: sync all_gather (no subdevice). Avoids barrier_semaphore deadlocks
+        # that occur with async CCL at longer sequence lengths (8K+).
+        if self.is_olmo and self.mode == "prefill":
+            ttnn_tensor_out = ttnn.all_gather(
+                input_tensor_mesh,
+                dim,
+                cluster_axis=cluster_axis,
+                topology=topology,
+                num_links=1,  # Force num_links=1 for sync CCL (multi-link can deadlock)
+                memory_config=memory_config,
+            )
+        else:
+            barrier_semaphore = None
+            if persistent_buffer is None:
+                barrier_semaphore = self.get_and_cycle_barrier_semaphore_handle(cluster_axis)
+            semaphores = (
+                self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]][0]
+                if self.use_ring_ag_prefill
+                else [
+                    self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+                    self.gather_semaphore_handles[cluster_axis][(self.gather_idx[cluster_axis] + 1) % self.num_cbs],
+                ]
+            )
+            ttnn_tensor_out = ttnn.experimental.all_gather_async(
+                input_tensor_mesh,
+                dim,
+                cluster_axis=cluster_axis,
+                mesh_device=self.mesh_device,
+                topology=topology,
+                multi_device_global_semaphore=semaphores,
+                persistent_output_tensor=persistent_buffer,
+                barrier_semaphore=barrier_semaphore,
+                num_links=num_links,
+                memory_config=memory_config,
+                subdevice_id=self.worker_sub_device_id,
+                use_optimal_ccl_for_llama=use_optimal_ccl_for_llama,
+            )
         if self.mode == "prefill" and buffer_key is not None:
             # reshape input back
             if buffer_key != "LM_HEAD":

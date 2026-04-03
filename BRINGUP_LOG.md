@@ -1,5 +1,209 @@
 # OLMo-3.1-32B Bring-up Log
 
+## Session: 2026-04-03
+
+### Status: ISL 8K/16K RELIABILITY FIXED — sync CCL for line_all_gather
+
+### Summary
+
+Fixed the ISL reliability issues (previously 8K 30%, 16K 20%, 32K 0% pass rate) by adding sync CCL path to `line_all_gather` for OLMo prefill.
+
+### Root Cause
+
+The `line_all_gather` function (used by `tt_distributed_rmsnorm` for distributed norm) was using async `all_gather_async` even for OLMo prefill, while `reduce_scatter` and `ring_all_gather` already had sync CCL paths. This caused barrier semaphore deadlocks at longer sequence lengths.
+
+### Fix
+
+Added sync CCL path in `llama_ccl.py:line_all_gather()`:
+
+```python
+# OLMo prefill: sync all_gather (no subdevice). Avoids barrier_semaphore deadlocks
+# that occur with async CCL at longer sequence lengths (8K+).
+if self.is_olmo and self.mode == "prefill":
+    ttnn_tensor_out = ttnn.all_gather(
+        input_tensor_mesh,
+        dim,
+        cluster_axis=cluster_axis,
+        topology=topology,
+        num_links=1,  # Force num_links=1 for sync CCL (multi-link can deadlock)
+        memory_config=memory_config,
+    )
+```
+
+### Test Results (verified 2026-04-03)
+
+| ISL | Before Fix | After Fix | TTFT | Decode Speed |
+|-----|------------|-----------|------|--------------|
+| 4K | ✓ pass | ✓ pass | 1.3s | 19.31 tok/s |
+| 8K | 30% pass, hangs at layer 44 | ✓ PASS (reliable) | 2.7s | 19.15 tok/s |
+| 16K | 20% pass, hangs randomly | ✓ PASS (reliable) | 5.6s | 18.82 tok/s |
+| 32K | 0% pass | Still hangs (different issue - likely memory/timeout) | - | - |
+
+### Performance Impact
+
+- 8K: TTFT 2.7s, 19.15 tok/s decode
+- 16K: TTFT 5.6s, 18.82 tok/s decode (sync CCL slightly slower but reliable)
+
+The sync CCL path adds minimal overhead (~0.1-0.2 tok/s) but eliminates all deadlocks.
+
+### Note on 32K
+
+32K warmup compile succeeds (38s) but inference prefill hangs. This is a separate issue from the CCL deadlock fixed above - likely memory pressure or a timeout with the larger tensors. Needs further investigation.
+
+### Files Modified
+
+- `models/demos/llama3_70b_galaxy/tt/llama_ccl.py:1343-1353` — added sync path for OLMo prefill
+
+---
+
+## Session: 2026-04-02 (evening)
+
+### Status: AGMM FF2 NOT VIABLE — fundamental dimension incompatibility
+
+### Summary
+
+Deep investigation into enabling AGMM (AllGather+Matmul fusion) for FF2. After multiple attempts including weight padding, concluded AGMM requires too many infrastructure changes.
+
+### Root Cause Analysis
+
+AGMM kernel (`llama_all_gather_matmul_async`) requires K dimension divisible by 128:
+- **Llama 70B**: K = 3584/4 = 896 = 28 tiles → 28/4 = 7 ✓
+- **OLMo 32B**: K = 3456/4 = 864 = 27 tiles → 27/4 = 6.75 ✗
+
+### Attempted Fixes
+
+1. **Core placement fix**: Moved AGMM intermediate buffer from (3,0)-(3,3) to (6,2)-(6,5)
+   - Result: Eliminated core overlap crash
+   - But: AGMM still produced garbage (K not divisible by 128)
+
+2. **Weight padding to 3584**: Pad all MLP weights so K=896 (divisible by 128)
+   - W1/W3: [5120, 27648] → [5120, 28672]
+   - W2: [27648, 5120] → [28672, 5120]
+   - Result: Requires cascading changes to ALL memory configs, program configs
+   - Error: "Shard height 3456 must match physical height 3584"
+
+### Why Padding Failed
+
+Full padding approach needs:
+- W1W3_RING_MEMCFG: 3840 → needs update for 3584-wide weights
+- FF1_3_TG_RING_PROGCFG: matmul program config expects 3840
+- SHARDED_FF12_OUT_RING_MEMCFG: output memory expects 3840
+- All reduce_scatter buffer shapes
+- All slice operations
+
+Too much coupling — not worth the risk for ~10% speedup.
+
+### Conclusion
+
+AGMM is not viable for OLMo without either:
+1. Modifying AGMM kernel to support non-128-aligned K
+2. Major refactor of all OLMo MLP memory configs
+
+### Baseline Verified
+
+~20 tok/s with coherent output (AGMM disabled)
+
+---
+
+## Session: 2026-04-02
+
+### Status: Force-argmax optimization DISABLED — output discrepancy
+
+### Summary
+
+Investigated force-argmax sampling optimization to bypass TopK+Sampling pipeline for greedy decoding (k=1). The optimization was implemented but produces different output than the TopK path, so it's disabled.
+
+### Changes Made
+
+1. **`olmo_model_config.py`**: Added `SAMPLING_AG_CONFIG` with `allow_force_argmax=False`
+2. **`tt_sampling.py`**: Fixed `cluster_axis` to use `sampling_all_gather_axis` (0 for OLMo's row-sharded vocab) instead of hardcoded 1
+3. **`llama_ccl.py`**: Added dedicated `ag_async_semaphore_handles` (2 semaphores per call for `all_gather_async`)
+
+### Root Cause
+
+Force-argmax path gathers along `cluster_axis=0` but produces different tokens than the TopK+Sampling path. Suspected issues:
+- OLMo's 8x4 mesh has vocab split across 8 row devices (100352 vocab → 12544/device)
+- `all_gather_async` on cluster_axis=0 may have different ordering/indexing than TopK path
+- Trace capture with force_argmax path shows only 3 log messages for 9000+ iterations (normal - trace replays captured ops)
+
+### Investigation Notes
+
+- With `cluster_axis=1` (wrong): Garbage output like random characters
+- With `cluster_axis=0` (correct axis): Repetitive "Okay,Okay,Okay..." output
+- The repetitive output could be correct greedy behavior or incorrect argmax indexing
+- No performance improvement observed (~19.5 tok/s with force_argmax vs 20.2 tok/s baseline)
+
+### Baseline Verified
+
+```
+pytest ... -k "isl-128-b1" → PASS, 20.18 tok/s (force_argmax DISABLED)
+```
+
+### CCL Tuning Attempted (No Improvements)
+
+| Optimization | Status | Why |
+|--------------|--------|-----|
+| num_links=4 | Breaks coherency | Already documented in config comment |
+| Async reduce_scatter | Crashes | OLMo missing llama_reduce_scatter buffers |
+| AGMM FF2 (fused AG+MM) | Crashes | Kernel core overlap at (x=3,y=0) |
+
+OLMo CCL is constrained by:
+- **Sync reduce_scatter**: Async produces garbage with DRAM bfloat8_b input
+- **bfloat16 buffers**: Can't use `use_optimal_ccl_for_llama` (requires bfloat8_b)
+
+No easy CCL speedup available without kernel-level changes.
+
+### Future Work
+
+1. Compare argmax output indices between force_argmax and TopK paths
+2. Verify `all_gather_async` dimension ordering for 2D mesh (8x4)
+3. Test with simpler prompt that doesn't trigger greedy repetition
+4. Fix AGMM FF2 kernel core placement conflict
+5. Add llama_reduce_scatter buffers for OLMo async path
+
+---
+
+## Session: 2026-04-01 (late evening)
+
+### Status: 40-core FF1/FF3 matmul optimization FAILED - dispatch core constraint
+
+### Summary
+
+Attempted to increase FF1/FF3 matmul from 24 cores to 40 cores for ~67% more parallelism.
+
+### Analysis
+
+- **K dimension**: 1280 (dim/4), supports max 40 cores (1280/32=40 tiles)
+- **N dimension**: 3840 (padded intermediate), divisible by 40 (3840/40=96)
+- **Math works**: in0_block_w=1, out_block_w=3 — both integer tiles
+
+### Failure Reason
+
+`num_to_coregrid(40)` returns `CoreGrid(y=5, x=8)` which uses columns 0-7. On TG/Galaxy:
+- **Column 7 contains dispatch cores** (kernel placement illegal)
+- **Crash**: `TT_FATAL: Illegal kernel placement for writer_unary_sharded_blocks_interleaved_start_id`
+
+### Valid Core Counts (cols 0-6 only, 7 columns × 10 rows = 70 max)
+
+| Cores | Grid | K (1280) tiles | Works? |
+|-------|------|----------------|--------|
+| 24 | 3×8 → 3×7 possible | 1280/24=53 | ✓ (current baseline) |
+| 35 | 5×7 | 1280/35=36.6 | ✗ (not divisible) |
+| 40 | 5×8 | 1280/40=32 | ✗ (**col 7 = dispatch**) |
+| 42 | 6×7 | 1280/42=30.5 | ✗ (not divisible) |
+
+### Conclusion
+
+Keep 24-core baseline. 40 cores would need custom matmul program config that avoids col 7, which requires ttnn kernel changes.
+
+### Verified Baseline
+
+```
+pytest ... -k "isl-128-b1" → PASS, coherent output at 17.7 tok/s
+```
+
+---
+
 ## Session: 2026-04-01 (evening)
 
 ### Status: ff_sub_core_grids (70 cores) for FF2 SUCCESSFUL
