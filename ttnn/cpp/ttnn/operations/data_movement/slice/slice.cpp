@@ -54,10 +54,14 @@ ttnn::Tensor slice(
 
     auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config()
                                                             : memory_config_arg.value_or(input_tensor.memory_config());
+    // output_memory_config may be recomputed below for sharded tensors to match the
+    // sliced output dimensions. memory_config stays as the original (input-compatible)
+    // config and is used for input layout conversion (to_layout in the rm_only path).
+    auto output_memory_config = memory_config;
 
     auto ret_adjustment([&](const ttnn::Tensor& input_tensor) {
         if (input_tensor.storage_type() == StorageType::DEVICE) {
-            auto tensor = ttnn::to_memory_config(input_tensor, memory_config, std::nullopt);
+            auto tensor = ttnn::to_memory_config(input_tensor, output_memory_config, std::nullopt);
             tensor = ttnn::to_layout(tensor, input_layout);
             return tensor;
         }
@@ -111,6 +115,66 @@ ttnn::Tensor slice(
     // The tile path handles any end values (they get padded to tile boundaries
     // downstream), so only begin alignment matters.
     rm_only = (input_tensor.layout() != Layout::TILE) || (!no_step || one_dimensional || !handled_tile_alignment);
+
+    // When no explicit output memory config is provided and the input is sharded,
+    // recompute the shard spec to match the output dimensions. Without this, the output
+    // tensor inherits the input's shard spec which may be too large for the sliced shape.
+    // (Issue #38016)
+    if (!memory_config_arg.has_value() && !optional_output_tensor.has_value() && input_tensor.is_sharded() &&
+        input_rank >= 2) {
+        const auto& mem_layout = output_memory_config.memory_layout();
+        TT_FATAL(
+            mem_layout != tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
+            "ttnn::slice does not support implicit memory_config inheritance for BLOCK_SHARDED tensors. "
+            "Please provide an explicit output memory_config.");
+        if (mem_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
+            mem_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
+            const auto& shard_spec_val = output_memory_config.shard_spec().value();
+            uint32_t num_cores = shard_spec_val.num_cores();
+
+            // Compute output dimensions, tile-aligned if using TILE path
+            ttnn::SmallVector<uint32_t> output_dims(input_rank);
+            for (size_t i = 0; i < input_rank; i++) {
+                output_dims[i] = output_dim_i(i, modified_ends);
+            }
+            if (!rm_only) {
+                output_dims[input_rank - 2] =
+                    std::max(tt::round_up(output_dims[input_rank - 2], tile_shape[0]), tile_shape[0]);
+                output_dims[input_rank - 1] =
+                    std::max(tt::round_up(output_dims[input_rank - 1], tile_shape[1]), tile_shape[1]);
+            }
+
+            // Flatten to 2D: height = product of all dims except last, width = last dim
+            uint32_t output_height = 1;
+            for (size_t i = 0; i + 1 < input_rank; i++) {
+                output_height *= output_dims[i];
+            }
+            uint32_t output_width = output_dims[input_rank - 1];
+
+            std::array<uint32_t, 2> new_shard_shape = shard_spec_val.shape;
+            if (mem_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
+                uint32_t new_shard_h = tt::div_up(output_height, num_cores);
+                if (!rm_only) {
+                    new_shard_h = std::max(tt::round_up(new_shard_h, tile_shape[0]), tile_shape[0]);
+                }
+                new_shard_shape = {new_shard_h, output_width};
+            } else {  // WIDTH_SHARDED
+                uint32_t new_shard_w = tt::div_up(output_width, num_cores);
+                if (!rm_only) {
+                    new_shard_w = std::max(tt::round_up(new_shard_w, tile_shape[1]), tile_shape[1]);
+                }
+                new_shard_shape = {output_height, new_shard_w};
+            }
+
+            if (new_shard_shape != shard_spec_val.shape) {
+                auto new_shard_spec =
+                    tt::tt_metal::ShardSpec(shard_spec_val.grid, new_shard_shape, shard_spec_val.orientation);
+                output_memory_config = MemoryConfig(
+                    output_memory_config.memory_layout(), output_memory_config.buffer_type(), new_shard_spec);
+            }
+        }
+    }
+
     if (rm_only) {
         if (!no_step) {
             TT_FATAL(input.dtype() != DataType::BFLOAT8_B, "Strided slice is not supported for BFLOAT8 tensors");
@@ -161,7 +225,7 @@ ttnn::Tensor slice(
         ttnn::Shape(modified_begins),
         ttnn::Shape(padded_ends),
         ttnn::Shape(modified_step),
-        memory_config,
+        output_memory_config,
         /*use_tensor_args*/ false,
         std::nullopt,
         std::nullopt,
