@@ -42,9 +42,10 @@ def compute_grpo_loss(
     Tp: int,
     completions_batch_len: int,
     eps: float,
-    dp_mapper: object,
-    dp_composer: object,
+    ctx: InferenceCtx,
 ) -> Tuple[ttml.autograd.Tensor, list]:
+    assert B % ctx.total_devices == 0
+    B_local = B // ctx.total_devices
     ratio = Exp.apply(nlog_probs_old - nlog_probs_new)
     clipped_ratio = Clip.apply(ratio, 1.0 - eps, 1.0 + eps)
 
@@ -52,13 +53,13 @@ def compute_grpo_loss(
     surr2 = clipped_ratio * adv_tt
     surr = Min.apply(surr1, surr2)
 
-    mask_np = mask.to_numpy(composer=dp_composer)
+    mask_np = mask.to_numpy(composer=ctx.dp_composer)
     tokens_per_completion = np.maximum(mask_np.sum(axis=1, keepdims=True), 1.0)
     weight_np = (mask_np / tokens_per_completion).astype(np.float32)
-    weight_tt = ttml.autograd.Tensor.from_numpy(weight_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16, dp_mapper)
+    weight_tt = ttml.autograd.Tensor.from_numpy(weight_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16, ctx.dp_mapper)
 
     weighted_surr = surr * weight_tt
-    weighted_surr_4d = ttml.ops.reshape.reshape(weighted_surr, [1, 1, B, Tp])
+    weighted_surr_4d = ttml.ops.reshape.reshape(weighted_surr, [1, 1, B_local, Tp])
     loss = ttml.ops.unary.mean(weighted_surr_4d) * (-float(Tp) / completions_batch_len)
 
     return loss
@@ -79,20 +80,26 @@ def compute_nlog_probs(
         prompts:     List of B token-id lists (one per sequence).
         completions: List of B token-id lists (one per sequence).
     Returns:
-        nlog_probs: Tensor [B, Tp] — negative log-probability of each target token.
+        nlog_probs: Tensor [B_local, Tp] — negative log-probability of each target token.
                     Positions beyond T (the true sequence length) are tile padding and meaningless.
-        mask:       Tensor [B, Tp] — binary mask, 1.0 on completion-token positions only
+        mask:       Tensor [B_local, Tp] — binary mask, 1.0 on completion-token positions only
                     (0.0 on prompt tokens, left-pad, and tile-pad). Accounts for the
                     one-token input/target shift so mask[i,t]=1 where the model is
                     predicting a completion token.
         Tp:         int — T rounded up to the tile boundary (multiple of ctx.tile_size).
                     T = max(len(p)+len(c)) - 1 across the batch.
+
+    B_local = B // ctx.total_devices, represents a batch size on each device. After converting to numpy with composer,
+    the batch size in the numpy array will be B again.
     """
 
     assert len(completions) == len(prompts)
 
     B = len(completions)
     ctx._B = B  # create_causal_mask() reads this
+
+    assert B % ctx.total_devices == 0
+    B_local = B // ctx.total_devices
 
     lengths = [len(p) + len(c) for p, c in zip(prompts, completions)]
     T = max(lengths) - 1
@@ -137,7 +144,7 @@ def compute_nlog_probs(
     )
 
     nlog = ttml.ops.loss.cross_entropy_loss(logits, targets_tt, ttml.ops.ReduceType.NONE)
-    nlog = ttml.ops.reshape.reshape(nlog, [B, Tp])
+    nlog = ttml.ops.reshape.reshape(nlog, [B_local, Tp])
 
     loss_mask_pad = np.zeros((B, Tp), dtype=np.float32)
     loss_mask_pad[:, :T] = loss_mask_np
@@ -146,6 +153,6 @@ def compute_nlog_probs(
         loss_mask_pad, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16, ctx.dp_mapper
     )
 
-    assert nlog.shape() == [B, Tp]
-    assert loss_mask_tt.shape() == [B, Tp]
+    assert nlog.shape() == [B_local, Tp]
+    assert loss_mask_tt.shape() == [B_local, Tp]
     return nlog, loss_mask_tt, Tp
