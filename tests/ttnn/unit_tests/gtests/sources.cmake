@@ -63,6 +63,7 @@ set(UNIT_TESTS_TTNN_TENSOR_SOURCES
     tensor/test_create_tensor_multi_device.cpp
     tensor/test_create_tensor_with_layout.cpp
     tensor/test_device_storage_ownership.cpp
+    tensor/test_tensor_deallocation.cpp
     tensor/test_distributed_tensor.cpp
     tensor/test_tensor_topology.cpp
     tensor/test_mesh_tensor.cpp
