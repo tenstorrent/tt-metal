@@ -135,6 +135,9 @@ target_sources(
             cpp/ttnn/kernel_lib/reduce_helpers_compute.inl
             cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp
             cpp/ttnn/kernel_lib/reduce_helpers_dataflow.inl
+            cpp/ttnn/kernel_lib/sfpu_helpers.hpp
+            cpp/ttnn/kernel_lib/sfpu_helpers.inl
+            cpp/ttnn/kernel_lib/sfpu_helpers_bitwise.hpp
             cpp/ttnn/kernel_lib/tilize_helpers.hpp
             cpp/ttnn/kernel_lib/tilize_helpers.inl
             cpp/ttnn/kernel_lib/untilize_helpers.hpp
