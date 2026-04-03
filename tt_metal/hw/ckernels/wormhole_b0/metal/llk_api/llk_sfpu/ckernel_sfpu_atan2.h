@@ -83,9 +83,11 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
     }
     v_endif;
 
-    sfpi::vFloat pi = sfpi::addexp(half_pi, 1);
     // if sign of x is negative (including x=-0), then r = π - r
-    v_if(x < 0.0f) { r = pi - r; }
+    v_if(x < 0.0f) {
+        sfpi::vFloat pi = sfpi::addexp(half_pi, 1);
+        r = pi - r;
+    }
     v_endif;
 
     if constexpr (!is_fp32_dest_acc_en) {
