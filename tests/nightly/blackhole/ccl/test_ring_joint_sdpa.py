@@ -230,6 +230,26 @@ def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
         )
     )
 
+    # HACK: Non-causal MLA-like test to exercise v2 streaming with Sq=5/Sk=8, DHt=18, vDHt=4
+    configs.append(
+        ModelConfig(
+            name="mla_v2_hack",
+            nhq=mla_nhq,
+            nhk=1,
+            nhv=mla_nhq,
+            d_q=576,
+            d_k=576,
+            d_v=128,
+            is_causal=False,
+            is_balanced=False,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat8_b,
+            q_chunk_sizes=[160],  # Sq_chunk_t=5
+            k_chunk_sizes=[256],  # Sk_chunk_t=8
+            seq_len=2560,  # LCM(160, 256) * 2
+        )
+    )
+
     return {config.name: config for config in configs}
 
 
