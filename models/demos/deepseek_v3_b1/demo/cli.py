@@ -181,14 +181,17 @@ def run_demo(
             if not prompt_ids:
                 raise RuntimeError("Chat template produced an empty prompt")
             logger.debug(f"Encoded prompt: {prompt_ids}")
-
+            eos_id = tokenizer.eos_token_id
             logger.info("Running inference on prompt with {} tokens", len(prompt_ids))
-            generated_tokens = model_pipeline.run_inference(
-                prompt_token_ids=prompt_ids,
-                max_new_tokens=iterations,
-                eos_token_id=tokenizer.eos_token_id,
-                return_generated_tokens=True,
-            )
+
+        generated_tokens = model_pipeline.run_inference(
+            prompt_token_ids=prompt_ids,
+            max_new_tokens=iterations,
+            eos_token_id=eos_id,
+            return_generated_tokens=(my_mesh_id == 0),
+        )
+
+        if my_mesh_id == 0:
             assert generated_tokens is not None
             generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
             logger.info("Output ({} tokens): {}", len(generated_tokens), generated_text)
