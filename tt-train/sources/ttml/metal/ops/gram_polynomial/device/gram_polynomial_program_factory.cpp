@@ -4,6 +4,7 @@
 
 #include "gram_polynomial_program_factory.hpp"
 
+#include <bit>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
@@ -478,7 +479,17 @@ GramPolynomialProgramFactory::cached_program_t GramPolynomialProgramFactory::cre
         return ComputeConfig{
             .math_fidelity = attrs.math_fidelity,
             .fp32_dest_acc_en = true,
-            .compile_args = {K_half, K_block_tiles, Mpc, subblock_w, M_block, subblock_h, N_block, num_n_blocks},
+            .compile_args =
+                {K_half,
+                 K_block_tiles,
+                 Mpc,
+                 subblock_w,
+                 M_block,
+                 subblock_h,
+                 N_block,
+                 num_n_blocks,
+                 std::bit_cast<uint32_t>(attrs.b),
+                 std::bit_cast<uint32_t>(attrs.c)},
             .defines = defines};
     };
 

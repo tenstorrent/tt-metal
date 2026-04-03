@@ -11,6 +11,7 @@
 #include "api/compute/cb_api.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh.h"
@@ -71,9 +72,10 @@ void matmul_blocks(
 }
 
 // Pack c_2 → c_5 in row-major order for DM to send to reduction partner.
+// Scales each tile by c_scalar before packing.
 // REDUCE_SENDER_TRANSPOSE: transpose tile content + swap indices so receiver can add directly.
 // REDUCE_SENDER: identity copy with FP32 → BF16 format conversion.
-void pack_subblock_pernsb(uint32_t in_cb, uint32_t out_cb, uint32_t current_M, uint32_t current_N) {
+void pack_subblock_pernsb(uint32_t in_cb, uint32_t out_cb, uint32_t current_M, uint32_t current_N, uint32_t c_scalar) {
 #ifdef REDUCE_SENDER_TRANSPOSE
     transpose_wh_init(in_cb, out_cb);
     reconfig_data_format_srca(in_cb);
@@ -85,6 +87,7 @@ void pack_subblock_pernsb(uint32_t in_cb, uint32_t out_cb, uint32_t current_M, u
             uint32_t out_tile = n * current_M + m;
             acquire_dst();
             transpose_wh_tile(in_cb, in_tile, 0);
+            mul_unary_tile(0, c_scalar);
             pack_tile<true>(0, out_cb, out_tile);
             release_dst();
         }
@@ -97,6 +100,7 @@ void pack_subblock_pernsb(uint32_t in_cb, uint32_t out_cb, uint32_t current_M, u
     for (uint32_t t = 0; t < current_M * current_N; t++) {
         acquire_dst();
         copy_tile(in_cb, t, 0);
+        mul_unary_tile(0, c_scalar);
         pack_tile<true>(0, out_cb, t);
         release_dst();
     }
@@ -174,6 +178,8 @@ void kernel_main() {
     constexpr uint32_t subblock_h = get_compile_time_arg_val(5);
     constexpr uint32_t N_block = get_compile_time_arg_val(6);
     constexpr uint32_t num_n_blocks = get_compile_time_arg_val(7);
+    constexpr uint32_t b_bits = get_compile_time_arg_val(8);  // float b as uint32_t bits
+    constexpr uint32_t c_bits = get_compile_time_arg_val(9);  // float c as uint32_t bits
     constexpr uint32_t K_num_blocks = K_half / K_block_tiles;
     constexpr uint32_t tiles_per_in0_block = K_block_tiles * M_block;
     constexpr uint32_t tiles_per_in1_block = K_block_tiles * N_block;
@@ -236,7 +242,8 @@ void kernel_main() {
             // REDUCE_SENDER path: pack c_2 → c_5 for DM to send to partner
             cb_reserve_back(out_cb, intermed_tiles);
             cb_wait_front(intermed_cb, intermed_tiles);
-            pack_subblock_pernsb(intermed_cb, out_cb, current_M_block, current_N);
+            binop_with_scalar_tile_init();
+            pack_subblock_pernsb(intermed_cb, out_cb, current_M_block, current_N, c_bits);
             cb_pop_front(intermed_cb, intermed_tiles);
             cb_push_back(out_cb, intermed_tiles);
 #else

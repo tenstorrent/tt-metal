@@ -71,10 +71,11 @@ std::vector<float> extract_output_tile(
     return tile;
 }
 
-void check_tile(const std::vector<float>& ref, const std::vector<float>& dev, const char* label) {
+void check_tile(
+    const std::vector<float>& ref, const std::vector<float>& dev, const char* label, float atol_scale = 1.0f) {
     auto ref_xt = xt::adapt(ref, {32u, 32u});
     auto dev_xt = xt::adapt(dev, {32u, 32u});
-    EXPECT_TRUE(xt::allclose(ref_xt, dev_xt, kRtol, kAtol)) << label << " exceeded tolerance";
+    EXPECT_TRUE(xt::allclose(ref_xt, dev_xt, kRtol, kAtol * atol_scale)) << label << " exceeded tolerance";
 }
 
 }  // namespace
@@ -97,4 +98,28 @@ TEST_F(GramPolynomialTest, GSquared_2048x2048) {
     ref = compute_g_squared_tile(g_vec, M, 0, 0);
     dev = extract_output_tile(out_vec, W, 0, 0);
     check_tile(ref, dev, "G²[0,0] diagonal");
+}
+
+// Phase 2: cG² (b=0, c=2.5)
+TEST_F(GramPolynomialTest, ScaledGSquared_2048x2048) {
+    auto G = make_random_tensor(2048);
+    constexpr float c = 2.5f;
+    auto output = ttml::metal::gram_polynomial(G, 0.0f, c, ttml::metal::OutputMode::Full);
+    tt::tt_metal::distributed::Synchronize(&ttml::autograd::ctx().get_device(), std::nullopt);
+
+    auto g_vec = G.to_vector<float>();
+    auto out_vec = output.to_vector<float>();
+    uint32_t M = G.logical_shape()[-1];
+    uint32_t W = output.logical_shape()[-1];
+
+    // CPU reference: c * (G @ G)
+    auto ref = compute_g_squared_tile(g_vec, M, 2, 5);
+    for (auto& v : ref) v *= c;
+    auto dev = extract_output_tile(out_vec, W, 2, 5);
+    check_tile(ref, dev, "cG²[2,5] off-diagonal", c);
+
+    ref = compute_g_squared_tile(g_vec, M, 0, 0);
+    for (auto& v : ref) v *= c;
+    dev = extract_output_tile(out_vec, W, 0, 0);
+    check_tile(ref, dev, "cG²[0,0] diagonal", c);
 }
