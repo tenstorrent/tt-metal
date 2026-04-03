@@ -236,10 +236,12 @@ class VectorExportSource(VectorSource):
 
         available_modules = sorted(vector_path.stem for vector_path in manifest_vector_paths)
         preview = available_modules[:5]
-        raise FileNotFoundError(
-            f"No vector file for module '{module_name}' found in generation manifest {self.export_dir / GENERATION_MANIFEST_FILENAME}. "
+        logger.warning(
+            f"No vector file for module '{module_name}' found in generation manifest "
+            f"{self.export_dir / GENERATION_MANIFEST_FILENAME}. "
             f"Manifest grouping mode is '{grouping_mode}'. Available manifest entries include: {preview}"
         )
+        return []
 
     @staticmethod
     def _parse_mesh_shape_string(mesh_shape: str) -> tuple[int, int] | None:
