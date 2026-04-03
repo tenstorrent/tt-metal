@@ -91,8 +91,8 @@ NLPCreateQKVHeadsDecodeShardedProgramFactory::cached_program_t NLPCreateQKVHeads
             .set_globally_allocated_address(*output[1].buffer());
     auto cb_k_output = CreateCircularBuffer(program, k_cores, cb_k_output_config);
 
-    auto v_shard_spec = output[0].shard_spec().value();
-    auto v_cores = q_shard_spec.grid;
+    auto v_shard_spec = output[2].shard_spec().value();
+    auto v_cores = v_shard_spec.grid;
     auto v_num_tiles = v_shard_spec.shape[0] * v_shard_spec.shape[1] / TILE_HW;
 
     uint32_t v_output_cb_index = CBIndex::c_18;

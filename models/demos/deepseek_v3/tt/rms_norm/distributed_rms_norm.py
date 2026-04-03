@@ -21,7 +21,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI4_NOFP32_ACC,
-    USERS_PER_ROW,
     even_int_div,
     get_state_dicts,
     shard_and_save,
@@ -87,7 +86,12 @@ class DistributedRMSNorm(RMSNormBase):
         )  # type: ignore
 
     @classmethod
-    def decode_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelDecodeConfig:
+    def decode_model_config(
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device: ttnn.Device,
+        batch_size_per_row: int,
+    ) -> ModelDecodeConfig:
         """Generate decode configuration for this module.
 
         Args:
@@ -100,7 +104,7 @@ class DistributedRMSNorm(RMSNormBase):
         shard_core_grid = ttnn.CoreGrid(x=4, y=7)
         memory_config = ttnn.create_sharded_memory_config(
             shape=(
-                ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE),
+                ttnn.core.roundup(batch_size_per_row, ttnn.TILE_SIZE),
                 ttnn.core.roundup(
                     even_int_div(hf_config.hidden_size, shard_core_grid.num_cores * mesh_device.shape[1]),
                     ttnn.TILE_SIZE,
