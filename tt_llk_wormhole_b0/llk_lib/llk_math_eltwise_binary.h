@@ -79,7 +79,7 @@ inline auto eltwise_binary_func(std::uint8_t clr_src, std::uint8_t acc_to_dest, 
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType bcast_type, MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void eltwise_binary_configure_mop_standard(const std::uint32_t acc_to_dest, const ckernel::TensorShape &tensor_shape)
 {
-    validate_tensor_shape_tile_dependent_ops_(tensor_shape);
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     const std::uint32_t num_faces           = tensor_shape.total_num_faces();
     const std::uint32_t num_faces_c_dim     = tensor_shape.num_faces_c_dim;
     [[maybe_unused]] const bool narrow_tile = tensor_shape.num_faces_c_dim < tensor_shape.num_faces_r_dim;
@@ -155,7 +155,7 @@ inline void eltwise_binary_configure_mop_standard(const std::uint32_t acc_to_des
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType src_b_bcast_type, MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void _llk_math_eltwise_binary_standard_init_(const ckernel::TensorShape &tensor_shape, const std::uint32_t acc_to_dest)
 {
-    validate_tensor_shape_tile_dependent_ops_(tensor_shape);
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     LLK_ASSERT(math_fidelity == MathFidelity::LoFi || eltwise_binary_type == ELWMUL, "Math fidelity larger than LoFi only works with Eltwise multiply");
     LLK_ASSERT(
         (eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB) || (eltwise_binary_type == ELWMUL),
@@ -188,7 +188,7 @@ template <
     MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void _llk_math_eltwise_binary_standard_(const ckernel::TensorShape &tensor_shape, std::uint32_t dst_index)
 {
-    validate_tensor_shape_tile_dependent_ops_(tensor_shape);
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     const std::uint32_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
     LLK_ASSERT(math_fidelity == MathFidelity::LoFi || eltwise_binary_type == ELWMUL, "Math fidelity larger than LoFi only works with Eltwise multiply");
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
@@ -307,7 +307,7 @@ inline void eltwise_binary_reuse_dest_as_src()
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType bcast_type, MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void eltwise_binary_configure_mop_with_dest_reuse(const std::uint32_t acc_to_dest, const ckernel::TensorShape &tensor_shape)
 {
-    validate_tensor_shape_tile_dependent_ops_(tensor_shape);
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     constexpr bool high_fidelity    = is_high_fidelity(math_fidelity);
     constexpr std::uint8_t addr_mod = ADDR_MOD_0;
 
@@ -386,7 +386,7 @@ template <
 inline void _llk_math_eltwise_binary_with_dest_reuse_init_(const ckernel::TensorShape &tensor_shape, const std::uint32_t acc_to_dest)
 {
     static_assert(binary_reuse_dest != EltwiseBinaryReuseDestType::NONE, "Use _llk_math_eltwise_binary_standard_init_ for no dest reuse");
-    validate_tensor_shape_tile_dependent_ops_(tensor_shape);
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     LLK_ASSERT(math_fidelity == MathFidelity::LoFi || eltwise_binary_type == ELWMUL, "Math fidelity larger than LoFi only works with Eltwise multiply");
     LLK_ASSERT(
         (eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB) || (eltwise_binary_type == ELWMUL),
@@ -452,7 +452,7 @@ template <
 inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape &tensor_shape, std::uint32_t dst_index, const bool clear_fp32_dst_acc)
 {
     static_assert(binary_reuse_dest != EltwiseBinaryReuseDestType::NONE, "Use _llk_math_eltwise_binary_standard_ for no dest reuse");
-    validate_tensor_shape_tile_dependent_ops_(tensor_shape);
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     const std::uint32_t num_faces       = tensor_shape.total_num_faces();
     const std::uint32_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
     const std::uint32_t num_faces_c_dim = tensor_shape.num_faces_c_dim;

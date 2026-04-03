@@ -332,7 +332,7 @@ inline void _llk_math_reduce_addrmod_()
 template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_reduce_init_(const TensorShape& tensor_shape)
 {
-    validate_tensor_shape_tile_dependent_ops_(tensor_shape);
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     _llk_math_reduce_addrmod_<REDUCE_DIMENSION, MATH_FIDELITY_TYPE>();
 
     if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_COL)
