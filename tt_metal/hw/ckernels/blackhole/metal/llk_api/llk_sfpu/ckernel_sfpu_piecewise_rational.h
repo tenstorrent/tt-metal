@@ -247,7 +247,13 @@ ALWI void piecewise_rational_unroll_segment(
 // USE_PARITY template parameter allows per-call parity control without macros.
 // ============================================================================
 
-template <uint32_t NUM_DEGREE, uint32_t DEN_DEGREE, uint32_t NUM_SEGMENTS, uint32_t LUT_SIZE, bool USE_PARITY = false>
+template <
+    uint32_t NUM_DEGREE,
+    uint32_t DEN_DEGREE,
+    uint32_t NUM_SEGMENTS,
+    uint32_t LUT_SIZE,
+    bool USE_PARITY = false,
+    bool APPROX_RECIP = false>
 ALWI sfpi::vFloat piecewise_rational_eval(const std::array<float, LUT_SIZE>& lut, sfpi::vFloat x) {
     constexpr uint32_t NUM_COEFFS = NUM_DEGREE + 1;
     constexpr uint32_t COEFF_OFFSET = NUM_SEGMENTS + 1;
@@ -276,7 +282,7 @@ ALWI sfpi::vFloat piecewise_rational_eval(const std::array<float, LUT_SIZE>& lut
             lut, x, numer, denom, x2);
     }
 
-    return numer * sfpu_reciprocal<false>(denom);
+    return numer * sfpu_reciprocal<APPROX_RECIP>(denom);
 }
 
 // ============================================================================
