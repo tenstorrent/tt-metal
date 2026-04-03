@@ -453,8 +453,8 @@ public:
     // Users can configure larger sizes up to architecture-specific maximums
     // via FabricRouterConfig in SetFabricConfig()
     // payload only, no header
-    static constexpr size_t default_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 4;
-    static constexpr size_t default_mesh_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 4;
+    static constexpr size_t default_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 8;
+    static constexpr size_t default_mesh_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 8;
 
     // Architecture-specific maximum packet payload size limits
     //
@@ -475,8 +475,8 @@ public:
     static constexpr size_t max_packet_payload_size_bytes_blackhole =
         tt::tile_size(tt::DataFormat::Bfp8_b) * 14;  // 15232 bytes
 
-    static_assert(default_packet_payload_size_bytes == 4352, "Packet size must be 4352 bytes");
-    static_assert(default_mesh_packet_payload_size_bytes == 4352, "Mesh packet size must be 4352 bytes");
+    static_assert(default_packet_payload_size_bytes == 8704, "Packet size must be 8704 bytes");
+    static_assert(default_mesh_packet_payload_size_bytes == 8704, "Mesh packet size must be 8704 bytes");
 
     // Get architecture-specific maximum packet payload size
     static size_t get_max_packet_payload_size_for_arch(tt::ARCH arch);
