@@ -19,11 +19,86 @@ with hard-coded ``do_sample=True`` on each decode step. That keeps **speech-code
 stochastic while the outer talker loop is greedy, which often sounds like wrong or random words
 in TTS even when thinker **text** is correct. We set ``talker._symbiote_code_predictor_do_sample``
 from ``talker_do_sample`` for the duration of ``Qwen3OmniMoeForConditionalGeneration.generate``.
+
+**Code predictor on TTNN:** ``Qwen3OmniMoeTalkerCodePredictorAttention`` lives under
+``talker.code_predictor``, a separate ``PreTrainedModel``. A single
+``register_module_replacement_dict(model.talker, ...)`` pass can fail to replace or
+device-init that subtree depending on module traversal order. We call
+``ensure_qwen3_omni_code_predictor_attention_ttnn`` from the composite ``generate`` wrapper
+and immediately before ``code_predictor.generate`` in the patched talker prepare path so
+predictor self-attention runs through TTNN when the rest of the model uses a mesh device.
 """
 
 import functools
 
 import torch
+
+
+def _infer_mesh_device_from_symbiote_model(root: torch.nn.Module):
+    """First TTNNModule under ``root`` with a non-None ``device`` (mesh), or None."""
+    from models.experimental.tt_symbiote.core.module import TTNNModule
+
+    for _name, mod in root.named_modules():
+        if isinstance(mod, TTNNModule) and getattr(mod, "device", None) is not None:
+            return mod.device
+    return None
+
+
+def _code_predictor_subtree_has_torch_attention(code_predictor) -> bool:
+    from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
+        Qwen3OmniMoeTalkerCodePredictorAttention,
+    )
+
+    for _n, mod in code_predictor.named_modules():
+        if isinstance(mod, Qwen3OmniMoeTalkerCodePredictorAttention):
+            return True
+    return False
+
+
+def ensure_qwen3_omni_code_predictor_attention_ttnn(model_or_talker, mesh_device=None) -> None:
+    """Register ``TTNNQwen3Attention`` for code-predictor layers and set mesh device on that subtree.
+
+    Pass the composite ``Qwen3OmniMoeForConditionalGeneration`` or the talker submodule.
+    If ``mesh_device`` is omitted, it is inferred from existing TTNN modules (talker or full model).
+
+    Idempotent: safe to call from ``generate`` and from ``prepare_inputs_for_generation``.
+    """
+    talker = getattr(model_or_talker, "talker", None)
+    if talker is None:
+        talker = model_or_talker
+    code_predictor = getattr(talker, "code_predictor", None)
+    if code_predictor is None:
+        return
+    if getattr(code_predictor, "_tt_symbiote_attn_ttnn_ensured", False):
+        return
+
+    device = mesh_device
+    if device is None:
+        device = _infer_mesh_device_from_symbiote_model(model_or_talker)
+    if device is None and talker is not model_or_talker:
+        device = _infer_mesh_device_from_symbiote_model(talker)
+    if device is None:
+        return
+
+    if not _code_predictor_subtree_has_torch_attention(code_predictor):
+        code_predictor._tt_symbiote_attn_ttnn_ensured = True
+        return
+
+    from models.experimental.tt_symbiote.modules.attention import TTNNQwen3Attention
+    from models.experimental.tt_symbiote.utils.device_management import set_device
+    from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
+    from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
+        Qwen3OmniMoeTalkerCodePredictorAttention,
+    )
+
+    register_module_replacement_dict(
+        code_predictor,
+        {Qwen3OmniMoeTalkerCodePredictorAttention: TTNNQwen3Attention},
+        model_config=None,
+    )
+    # Subtree only: talker/code_predictor forward is already wrapped by a full-model set_device pass.
+    set_device(code_predictor, device, register_forward_hook=False)
+    code_predictor._tt_symbiote_attn_ttnn_ensured = True
 
 
 def _patch_talkers_code_predictor_class_device_dtype() -> None:
@@ -105,6 +180,7 @@ def apply_qwen3_omni_talker_prepare_inputs_fix() -> None:
                 if cp_do_sample:
                     _cp_kw["top_k"] = 50
                     _cp_kw["top_p"] = 0.8
+                ensure_qwen3_omni_code_predictor_attention_ttnn(self)
                 predictor_result = self.code_predictor.generate(**_cp_kw)
                 residual_codes = torch.cat((input_ids, predictor_result.sequences.to(input_ids.device)), dim=-1)
 
@@ -147,6 +223,7 @@ def apply_qwen3_omni_talker_prepare_inputs_fix() -> None:
         if talker is not None and ret_audio:
             talker._symbiote_code_predictor_do_sample = bool(talker_do_sample)
             try:
+                ensure_qwen3_omni_code_predictor_attention_ttnn(self)
                 return _orig_generate(self, *args, **kwargs)
             finally:
                 if hasattr(talker, "_symbiote_code_predictor_do_sample"):

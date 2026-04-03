@@ -4,6 +4,7 @@
 
 """Linear layer implementations for TTNN."""
 
+import os
 import torch
 from torch import nn
 
@@ -376,7 +377,10 @@ class TTNNConv1d(TTNNModule):
             w = w.unsqueeze(2).contiguous()
         self.tt_weight = ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         if conv.bias is not None:
-            self.tt_bias = ttnn.from_torch(conv.bias.data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+            # Host conv bias must be 4D ``[1, 1, 1, out_channels]`` (see ``validate_host_conv_bias`` /
+            # ``prepare_conv_bias_internal`` in ``prepare_conv2d_weights.cpp``); 1D bias hits ``logical_shape()[3]``.
+            b = conv.bias.data.reshape(1, 1, 1, -1).contiguous()
+            self.tt_bias = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         else:
             self.tt_bias = None
         super().preprocess_weights_impl()
@@ -394,30 +398,64 @@ class TTNNConv1d(TTNNModule):
             ttnn.deallocate(self.tt_bias)
         super().deallocate_weights_impl()
 
-    def _ensure_conv_configs(self):
-        if self._conv1d_conv_config is None:
-            self._conv1d_conv_config = ttnn.Conv1dConfig(
-                weights_dtype=ttnn.bfloat16,
-                shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                deallocate_activation=True,
-            )
-            self._conv1d_compute_config = ttnn.init_device_compute_kernel_config(
-                self.device.arch(),
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-            )
+    def set_output_tensors_config_impl(self, output_tensors):
+        """Avoid default mesh ``logical_shape_fn`` on ``[B, C, L]`` conv outputs.
 
-    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-        self._ensure_conv_configs()
-        batch_size = int(input_tensor.shape[0])
-        input_length = int(input_tensor.shape[2])
-        w = self.tt_weight
-        if len(w.shape) == 3:
-            w = ttnn.reshape(w, [int(w.shape[0]), int(w.shape[1]), 1, int(w.shape[2])])
-            self.tt_weight = w
-        x = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.permute(x, (0, 2, 1))
+        Default sharding heuristics multiply the **last** dim by mesh width. For NCL activations
+        that last dim is **sequence length** (e.g. code2wav upsample), producing ``L×8`` bogus
+        logical shapes and breaking residual ``input + hidden_states``.
+        """
+        if (
+            self.device_state is None
+            or self.device_state.mesh_device is None
+            or self.device_state.mesh_device.get_num_devices() <= 1
+        ):
+            return super().set_output_tensors_config_impl(output_tensors)
+
+        mesh_device = self.device_state.mesh_device
+
+        def _replicated_config(e):
+            from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+            if isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None:
+                e.set_distributed_tensor_config(
+                    DistributedTensorConfig(
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                        mesh_composer=replicated_tensor_mesh_composer(mesh_device),
+                    )
+                )
+            return e
+
+        return tree_map(_replicated_config, output_tensors)
+
+    @staticmethod
+    def _conv1d_chunk_output_steps() -> int:
+        """Outputs per ``ttnn.conv1d`` chunk (smaller → lower L1 CB pressure).
+
+        Env ``TT_SYMBIOTE_TTNN_CONV1D_CHUNK_OUT`` (default ``128``).
+        """
+        return max(1, int(os.environ.get("TT_SYMBIOTE_TTNN_CONV1D_CHUNK_OUT", "128")))
+
+    @staticmethod
+    def _conv1d_chunk_if_input_len() -> int:
+        """Use chunked device conv when ``L`` exceeds this and ``padding == 0``.
+
+        Env ``TT_SYMBIOTE_TTNN_CONV1D_CHUNK_IF_LEN`` (default ``384``). ``0`` = always chunk when
+        ``padding == 0``.
+        """
+        raw = os.environ.get("TT_SYMBIOTE_TTNN_CONV1D_CHUNK_IF_LEN", "384").strip().lower()
+        if raw in ("0", "off", "false", "none", ""):
+            return 0
+        return max(0, int(raw))
+
+    def _conv1d_nlc_to_ncl(self, tt_out: ttnn.Tensor, batch_size: int, out_len: int) -> ttnn.Tensor:
+        tt_out = ttnn.reshape(tt_out, [batch_size, out_len, self.out_channels])
+        return ttnn.permute(tt_out, (0, 2, 1))
+
+    def _conv1d_once_nlc(self, x_nlc: ttnn.Tensor, batch_size: int, seg_len: int) -> ttnn.Tensor:
+        """Single ``ttnn.conv1d`` on ``x_nlc`` ``[B,L,C]``; returns ``[B,C,L_out]``."""
         ret = ttnn.conv1d(
-            input_tensor=x,
+            input_tensor=x_nlc,
             weight_tensor=self.tt_weight,
             in_channels=self.in_channels,
             out_channels=self.out_channels,
@@ -428,7 +466,7 @@ class TTNNConv1d(TTNNModule):
             padding=self.padding,
             dilation=self.dilation,
             batch_size=batch_size,
-            input_length=input_length,
+            input_length=seg_len,
             conv_config=self._conv1d_conv_config,
             compute_config=self._conv1d_compute_config,
             groups=self.groups,
@@ -438,8 +476,114 @@ class TTNNConv1d(TTNNModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         tt_out, out_len, (self.tt_weight, self.tt_bias) = ret
-        tt_out = ttnn.reshape(tt_out, [batch_size, out_len, self.out_channels])
-        return ttnn.permute(tt_out, (0, 2, 1))
+        self.tt_weight = self._ensure_conv1d_weight_rank4(self.tt_weight)
+        self.tt_bias = self._ensure_conv1d_bias_rank4(self.tt_bias)
+        return self._conv1d_nlc_to_ncl(tt_out, batch_size, out_len)
+
+    def _forward_conv1d_chunked_nlc(self, x_nlc: ttnn.Tensor, batch_size: int, input_length: int) -> ttnn.Tensor:
+        """Sequence-chunked conv (``padding == 0`` only); matches one full conv."""
+        K, S, D = self.kernel_size, self.stride, self.dilation
+        P = int(self.padding)
+        if P != 0:
+            raise RuntimeError("TTNNConv1d: internal chunked forward requires padding == 0")
+        L_out_total = (input_length + 2 * P - D * (K - 1) - 1) // S + 1
+        if L_out_total <= 0:
+            raise RuntimeError(f"TTNNConv1d: invalid conv geometry L_in={input_length} K={K} S={S} D={D} P={P}")
+        chunk_out = self._conv1d_chunk_output_steps()
+        pieces: list[ttnn.Tensor] = []
+        o_start = 0
+        while o_start < L_out_total:
+            n_target = min(chunk_out, L_out_total - o_start)
+            last_o = o_start + n_target - 1
+            in_lo = o_start * S
+            in_hi_excl = min(input_length, last_o * S + (K - 1) * D + 1)
+            l_sub = in_hi_excl - in_lo
+            min_l = (K - 1) * D + 1
+            if l_sub < min_l:
+                raise RuntimeError(
+                    f"TTNNConv1d: chunk too short l_sub={l_sub} need >= {min_l} "
+                    f"(o_start={o_start} L={input_length})"
+                )
+            x_sub = ttnn.slice(
+                x_nlc,
+                [0, in_lo, 0],
+                [batch_size, in_hi_excl, self.in_channels],
+                [1, 1, 1],
+            )
+            piece = self._conv1d_once_nlc(x_sub, batch_size, l_sub)
+            pieces.append(piece)
+            n_out = int(piece.shape[2])
+            if n_out <= 0:
+                raise RuntimeError("TTNNConv1d: empty chunk output")
+            o_start += n_out
+
+        if len(pieces) == 1:
+            return pieces[0]
+        return ttnn.concat(pieces, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    def _ensure_conv_configs(self):
+        if self._conv1d_conv_config is None:
+            # Prefer width sharding along sequence (conv1d→conv2d ``W``) to cap per-core L1 CBs;
+            # move conv config tables to DRAM; split reader reduces reader CB pressure.
+            self._conv1d_conv_config = ttnn.Conv1dConfig(
+                weights_dtype=ttnn.bfloat16,
+                shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                deallocate_activation=True,
+                reallocate_halo_output=True,
+                config_tensors_in_dram=True,
+                force_split_reader=True,
+            )
+            self._conv1d_compute_config = ttnn.init_device_compute_kernel_config(
+                self.device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+            )
+
+    def _ensure_conv1d_weight_rank4(self, w: ttnn.Tensor) -> ttnn.Tensor:
+        """``conv1d`` → ``conv2d`` expects 4D weights ``[O, I/groups, 1, K]``.
+
+        Prepared weights from ``return_weights_and_bias=True`` may come back rank-1 (flattened)
+        or rank-3; DRAM slicing uses ``weight.logical_shape()[3]``, which aborts otherwise.
+        """
+        if w is None:
+            return w
+        rank = int(w.shape.rank)
+        oc = self.out_channels
+        icg = self.in_channels // self.groups
+        ks = self.kernel_size
+        if rank == 4:
+            return w
+        if rank == 3:
+            return ttnn.reshape(w, [int(w.shape[0]), int(w.shape[1]), 1, int(w.shape[2])])
+        if rank == 1:
+            return ttnn.reshape(w, [oc, icg, 1, ks])
+        raise RuntimeError(f"TTNNConv1d: unsupported weight rank {rank}, shape={list(w.shape)}")
+
+    def _ensure_conv1d_bias_rank4(self, b: ttnn.Tensor | None) -> ttnn.Tensor | None:
+        """Conv2d bias prep expects rank-4 ``[1, 1, 1, out_channels]`` on host (and ``[3]`` for channel count)."""
+        if b is None:
+            return None
+        rank = int(b.shape.rank)
+        oc = self.out_channels
+        if rank == 4:
+            return b
+        if rank == 1:
+            return ttnn.reshape(b, [1, 1, 1, oc])
+        raise RuntimeError(f"TTNNConv1d: unsupported bias rank {rank}, shape={list(b.shape)}")
+
+    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        self._ensure_conv_configs()
+        batch_size = int(input_tensor.shape[0])
+        input_length = int(input_tensor.shape[2])
+        self.tt_weight = self._ensure_conv1d_weight_rank4(self.tt_weight)
+        self.tt_bias = self._ensure_conv1d_bias_rank4(self.tt_bias)
+        x = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.permute(x, (0, 2, 1))
+        P = int(self.padding)
+        thr = self._conv1d_chunk_if_input_len()
+        use_chunks = P == 0 and (thr == 0 or input_length > thr)
+        if use_chunks:
+            return self._forward_conv1d_chunked_nlc(x, batch_size, input_length)
+        return self._conv1d_once_nlc(x, batch_size, input_length)
 
 
 class TTNNConv2dBNNHWC(TTNNConv2dNHWC):
