@@ -26,6 +26,7 @@ from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import (
     get_max_page_size_and_num_pages,
     get_noc_max_page_size,
 )
+from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,
     PerCoreRuntimeArgsDescriptor,
@@ -2629,6 +2630,17 @@ class AttentionBlock:
         sdpa_kv_cache_running_offset_post_sdpa = 0
         sdpa_out_interm_running_offset_post_sdpa = 0
 
+        sdpa_fwd_buffer_bytes = compute_forwarder_scratch_size(
+            batch_size=SDPA_L_HEIGHT,
+            l_width=sdpa_l_per_worker,
+            num_cores=NUM_SDPA_WORKERS,
+        )
+
+        # This is used to overlap the sdpa forwarder scratch buffer with the kv cache buffer
+        # TODO: We can better overlap this if necessary
+        forwarder_buffer_base = ref_sdpa_kv_cache_buffer.buffer_address() + sdpa_kv_cache_running_offset_post_sdpa
+        sdpa_kv_cache_running_offset_post_sdpa += sdpa_fwd_buffer_bytes
+
         # CB 0: Matmul4 input (from sharded tensor, kv_b2 grid)
         matmul4_in0_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
         matmul4_in0_cb_format = ttnn.CBFormatDescriptor(
@@ -3313,7 +3325,6 @@ class AttentionBlock:
         # ========================================================================
         # Pre-compute device-invariant SDPA addresses
         # ========================================================================
-        forwarder_buffer_base = ref_sdpa_forwarder_scratch.buffer_address()
         ncrisc_buffer_offset = sdpa_fwd_slots_per_round * sdpa_fwd_slot_size * 2  # After BRISC R1+R2
         r1_recv_buffer_addr = ref_sdpa_intermediate_recv.buffer_address()
         r2_recv_buffer_addr = r1_recv_buffer_addr + (sdpa_l_tiles_per_worker + 1) * sdpa_l_tile_size
