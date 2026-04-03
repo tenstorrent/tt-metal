@@ -4,6 +4,7 @@
 
 #include <memory>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/allocation_context.hpp>
 #include "allocator_types.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <enchantum/enchantum.hpp>
@@ -11,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <mutex>
+#include <cstdlib>
 
 #include <tt_stl/assert.hpp>
 #include "buffer_types.hpp"
@@ -95,17 +97,31 @@ void AllocatorImpl::init_one_bank_per_l1() {
     }
 }
 
+static thread_local std::vector<size_t> pending_traceback_ids;
+static thread_local std::vector<std::string> allocation_context_stack;
+static const std::string empty_context;
+
+void push_allocation_context(std::string ctx) { allocation_context_stack.push_back(std::move(ctx)); }
+
+void pop_allocation_context() {
+    TT_ASSERT(!allocation_context_stack.empty(), "pop_allocation_context called with empty stack");
+    allocation_context_stack.pop_back();
+}
+
+const std::string& current_allocation_context() {
+    return allocation_context_stack.empty() ? empty_context : allocation_context_stack.back();
+}
+
 void AllocatorImpl::verify_safe_allocation() const {
-    // Inform the user that its unsafe to allocate buffers when a trace is live on device.
-    // If the user does this, they are meant to ensure that buffers allocated when a trace is active,
-    // have a lifetime that ends before the trace is executed.
-    // Print the warning once per device, to ensure that user output is not clobbered.
+    if (!allocations_unsafe_) {
+        return;
+    }
     thread_local static bool warning_generated = false;
-    if (allocations_unsafe_ and not warning_generated) {
+    if (!tracking_enabled_ && !warning_generated) {
         log_warning(
             tt::LogMetal,
-            "Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be "
-            "corrupted once a trace is executed.");
+            "Allocating device buffers while a trace is active. "
+            "Enable the unsafe allocation tracker for safety checks.");
         warning_generated = true;
     }
 }
@@ -189,6 +205,24 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         }
     }
     allocated_buffers_.insert(buffer);
+    if (allocations_unsafe_ && tracking_enabled_) {
+        // Only the top of the context stack is checked for suppression.  This is intentional:
+        // corruptible_allocation_scope only suppresses its own direct allocations, NOT program-cache
+        // misses from ops dispatched inside it (those push their own context on top).
+        const auto& ctx = current_allocation_context();
+        bool skip = false;
+        if (ctx == "corruptible_allocation_scope") {
+            skip = true;
+        } else if (skip_program_cache_ && ctx.starts_with("program_cache:")) {
+            skip = true;
+        }
+        if (!skip) {
+            unsafe_tracked_ids_[buffer->unique_id()] = ctx;
+            if (traceback_capture_enabled_) {
+                pending_traceback_ids.push_back(buffer->unique_id());
+            }
+        }
+    }
     return address;
 }
 
@@ -219,6 +253,9 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
         }
     }
     allocated_buffers_.erase(buffer);
+    if (tracking_enabled_) {
+        unsafe_tracked_ids_.erase(buffer->unique_id());
+    }
 }
 
 void AllocatorImpl::deallocate_buffers() {
@@ -441,11 +478,46 @@ void AllocatorImpl::reset_allocator_size(const BufferType& buffer_type) {
 void AllocatorImpl::mark_allocations_unsafe() {
     std::lock_guard<std::mutex> lock(mutex_);
     allocations_unsafe_ = true;
+
+    static const bool env_tracking = std::getenv("TT_METAL_TRACE_ALLOC_TRACKING") != nullptr ||
+                                     std::getenv("TT_METAL_TRACE_ALLOC_TRACEBACKS") != nullptr;
+    static const bool env_tracebacks = std::getenv("TT_METAL_TRACE_ALLOC_TRACEBACKS") != nullptr;
+    static const bool env_skip_pcache = std::getenv("TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE") != nullptr;
+    if (env_tracking) {
+        tracking_enabled_ = true;
+    }
+    if (env_tracebacks) {
+        traceback_capture_enabled_ = true;
+    }
+    if (env_skip_pcache) {
+        skip_program_cache_ = true;
+    }
 }
 
 void AllocatorImpl::mark_allocations_safe() {
     std::lock_guard<std::mutex> lock(mutex_);
     allocations_unsafe_ = false;
+}
+
+bool AllocatorImpl::allocations_unsafe() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return allocations_unsafe_;
+}
+
+std::unordered_map<size_t, std::string> AllocatorImpl::get_unsafe_tracked_ids() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return unsafe_tracked_ids_;
+}
+
+void AllocatorImpl::clear_unsafe_tracked_ids() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    unsafe_tracked_ids_.clear();
+}
+
+std::vector<size_t> AllocatorImpl::drain_pending_traceback_ids() {
+    std::vector<size_t> result;
+    result.swap(pending_traceback_ids);
+    return result;
 }
 
 void AllocatorImpl::begin_dram_high_water_mark_tracking() {

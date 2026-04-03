@@ -21,6 +21,7 @@
 #include "ttnn/graph/graph_serialization.hpp"  // serialize_tracked_arg<T> definitions, used via track_function_start
 #include "ttnn/distributed/api.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/allocation_context.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
 #include <type_traits>
 #include "ttnn/mesh_device_operation_adapter.hpp"
@@ -216,6 +217,17 @@ void enqueue_mesh_workload(
         return;
     }
 
+    // Set allocation context so that any program-cache buffer allocations inside EnqueueMeshWorkload
+    // are tagged with the op name + compile args for the trace allocation tracker.
+    std::string alloc_ctx;
+    {
+        auto op_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
+        alloc_ctx = "program_cache: " + std::string(op_name);
+        for (const auto& [name, value] : ttsl::reflection::get_attributes(operation_attributes)) {
+            alloc_ctx += " " + std::string(name) + "=" + value.to_string();
+        }
+    }
+    tt::tt_metal::AllocationContextGuard ctx_guard(std::move(alloc_ctx));
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
     TracyOpMeshWorkload(
