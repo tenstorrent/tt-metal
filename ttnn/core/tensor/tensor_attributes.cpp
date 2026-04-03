@@ -26,9 +26,7 @@ const TensorSpec& TensorAttributes::get_tensor_spec() const {
             [](const HostStorage& host_storage) -> const TensorSpec& {
                 return host_storage.host_tensor().tensor_spec();
             },
-            [](const DeviceStorage& device_storage) -> const TensorSpec& {
-                return device_storage.get_mesh_tensor().tensor_spec();
-            },
+            [](const DeviceStorage& device_storage) -> const TensorSpec& { return device_storage.get_tensor_spec(); },
         },
         storage_);
 }
