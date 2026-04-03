@@ -77,11 +77,18 @@ TransposeWHShardedProgramFactory::cached_program_t TransposeWHShardedProgramFact
         total_cores,
         WriterDataMovementConfig(writer_compile_time_args));
 
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (src0_cb_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    }
     auto compute_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh_sharded.cpp",
         total_cores,
-        ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_compile_time_args});
+        ComputeConfig{
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
+            .compile_args = compute_compile_time_args});
 
     auto padded_shape = input_tensor.padded_shape();
     auto shard_shape = shard_spec.shape;

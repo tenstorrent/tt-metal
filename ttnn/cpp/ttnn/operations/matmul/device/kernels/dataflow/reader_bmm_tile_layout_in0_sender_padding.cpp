@@ -311,6 +311,29 @@ void kernel_main() {
                             in0_tensor_current_inner_dim_block_start_addr += shard_read_width;
                             noc.async_read_barrier();
                         }
+
+                        {
+                            constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
+                            uint32_t in0_pad_base_addr = cb_in0.get_write_ptr();
+                            if constexpr (in0_last_ktile_w > 0) {
+                                if ((block == num_blocks_inner_dim - 1)) {
+                                    for (uint32_t h = 0; h < in0_block_h; ++h) {
+                                        auto ptr = in0_pad_base_addr +
+                                                   (h * in0_block_w + in0_block_w - 1) * in0_single_tile_size_bytes;
+                                        pad_last_ktile<in0_data_format, in0_last_ktile_w>(ptr);
+                                    }
+                                }
+                            }
+                            if constexpr (in0_last_ktile_h > 0) {
+                                if ((block == num_blocks_inner_dim - 1)) {
+                                    for (uint32_t w = 0; w < in0_block_w; ++w) {
+                                        auto ptr = in0_pad_base_addr +
+                                                   ((in0_block_h - 1) * in0_block_w + w) * in0_single_tile_size_bytes;
+                                        pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(ptr);
+                                    }
+                                }
+                            }
+                        }
 #endif  // IN0_SHARDED
 
 #ifndef SKIP_MCAST

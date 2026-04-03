@@ -255,14 +255,11 @@ struct FlashMLADecode {
 
             auto [k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(
                 cur_pos, args.cur_batch, args.core_num_in_reduce, args.num_cores_per_head, args.k_chunk_size);
-            (void)k_num_chunks;
 
             volatile tt_l1_ptr uint32_t* kv_cache_cur_pos_ready_semaphore_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.kv_cache_cur_pos_ready_semaphore_addr);
 
             if (k_chunk_start == k_chunk_end) {
-                noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value);
-                noc_semaphore_set(kv_cache_cur_pos_ready_semaphore_ptr, 0);
                 return;
             }
 
@@ -327,6 +324,7 @@ struct FlashMLADecode {
                         uint32_t pages_completed = 0;
                         if (wait_for_kv_cache_ready && (k_chunk + args.num_cores_per_head) >= k_chunk_end) {
                             noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value);
+                            noc_semaphore_set(kv_cache_cur_pos_ready_semaphore_ptr, 0);
                         }
 
                         noc_semaphore_wait(ncrisc_brisc_sync_curr_ptr, 0);
@@ -372,9 +370,6 @@ struct FlashMLADecode {
                     cb_push_back(args.cb_k_in, k_chunk_tiles);
                 }
             }
-            noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value);
-            noc_semaphore_set(kv_cache_cur_pos_ready_semaphore_ptr, 0);
-
 // ====================================================================
 // NCRISC (Writer)
 // ====================================================================

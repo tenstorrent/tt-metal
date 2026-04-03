@@ -23,6 +23,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -1650,6 +1651,7 @@ void sdpa_inner_loop(
     const LightweightMaskContext& lw_mask = {},
     const bool is_causal = false,
     const bool is_balanced = false,
+    const bool use_zigzag_balancing = false,
     const bool is_last_ring_iter = true) {
     uint32_t KV_chunks_processed_in_iter = 0;
     const uint32_t q_per_core = iter_q_end - iter_q_start;
@@ -1681,19 +1683,17 @@ void sdpa_inner_loop(
                 q_high_idx = Skt;
             }
         } else if (sdpa_type == RING) {
-            const uint32_t q_chunk = q_iter % q_num_chunks;
+            uint32_t q_chunk = remap_q_index(q_iter, q_num_chunks, use_zigzag_balancing) % q_num_chunks;
 
             if (is_causal) {
                 q_low_idx = q_chunk * Sq_chunk_t;
                 q_high_idx = q_low_idx + Sq_chunk_t;
                 q_high_idx = (q_high_idx + Sk_chunk_t - 1) / Sk_chunk_t;
             }
-            if (is_balanced) {
-                if (q_chunk < q_num_chunks / 2) {
-                    continue;
-                }
+            if (is_balanced && (q_chunk < q_num_chunks / 2)) {
+                continue;
             }
-        }
+        }  // If ring attention
 
         // Set up ping pong buffers
         uint32_t alias_prev_sum = cb_sum_A;
@@ -2363,7 +2363,8 @@ void sdpa_ring(
     const LightweightMaskContext& lw_mask,
     const bool is_causal,
     const bool is_balanced,
-    const bool is_last_ring_iter) {
+    const bool is_last_ring_iter,
+    const bool use_zigzag_balancing = false) {
     sdpa_inner_loop<
         RING,
         cb_qk_im,
@@ -2439,6 +2440,7 @@ void sdpa_ring(
         lw_mask,
         is_causal,
         is_balanced,
+        use_zigzag_balancing,
         is_last_ring_iter);
 }
 
