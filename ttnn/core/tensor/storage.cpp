@@ -84,9 +84,9 @@ DeviceStorage::DeviceStorage(MeshTensor mesh_tensor_, std::vector<distributed::M
 DeviceStorage::DeviceStorage(const DeviceStorage& other, std::vector<distributed::MeshCoordinate> coords) :
     DeviceStorage(other.mesh_tensor_, std::move(coords), other.root_mesh_tensor_) {}
 
-DeviceStorage::DeviceStorage(const DeviceStorage& owning_storage, MeshTensor surface_mesh_tensor) :
+DeviceStorage::DeviceStorage(const DeviceStorage& owning_storage, MeshTensor reinterpreted_mesh_tensor) :
     DeviceStorage(
-        std::make_shared<MeshTensor>(std::move(surface_mesh_tensor)),
+        std::make_shared<MeshTensor>(std::move(reinterpreted_mesh_tensor)),
         owning_storage.coords_,
         owning_storage.get_root_mesh_tensor()) {}
 
