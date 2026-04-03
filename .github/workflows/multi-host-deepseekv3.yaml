@@ -177,7 +177,6 @@ jobs:
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
             --pid=host
-            --hostname=mpirun-host
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
@@ -201,7 +200,6 @@ jobs:
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
             --pid=host
-            --hostname=mpirun-host
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
@@ -226,7 +224,6 @@ jobs:
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
             --pid=host
-            --hostname=mpirun-host
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
@@ -250,7 +247,6 @@ jobs:
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
             --pid=host
-            --hostname=mpirun-host
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
@@ -275,7 +271,6 @@ jobs:
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
             --pid=host
-            --hostname=mpirun-host
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
@@ -309,7 +304,6 @@ jobs:
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
             --pid=host
-            --hostname=mpirun-host
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
@@ -344,7 +338,6 @@ jobs:
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
             --pid=host
-            --hostname=mpirun-host
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
@@ -378,7 +371,6 @@ jobs:
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
             --pid=host
-            --hostname=mpirun-host
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
@@ -412,7 +404,6 @@ jobs:
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
             --pid=host
-            --hostname=mpirun-host
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
@@ -446,7 +437,6 @@ jobs:
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
             --pid=host
-            --hostname=mpirun-host
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
@@ -481,7 +471,6 @@ jobs:
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
             --pid=host
-            --hostname=mpirun-host
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
@@ -515,7 +504,6 @@ jobs:
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
             --pid=host
-            --hostname=mpirun-host
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
