@@ -217,7 +217,7 @@ void kernel_main() {
             0,                           // ignore
             static_cast<uint32_t>(1)});  // increment 1
 
-    // HACK make this proper, with comments
+    // TODO make this proper, with comments
     uint64_t even_core_sem_noc_addr = direction ? safe_get_noc_addr(this_core_x, this_core_y, out_ready_sem, 0)
                                                 : safe_get_noc_addr(opposite_core_x, opposite_core_y, out_ready_sem, 0);
     uint64_t odd_core_sem_noc_addr = !direction ? safe_get_noc_addr(this_core_x, this_core_y, out_ready_sem, 0)

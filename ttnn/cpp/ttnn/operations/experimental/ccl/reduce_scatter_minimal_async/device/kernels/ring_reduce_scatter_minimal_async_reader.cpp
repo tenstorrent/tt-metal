@@ -22,7 +22,7 @@ constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
 constexpr uint32_t ring_size = get_compile_time_arg_val(1);
 constexpr uint32_t cb_input_id = get_compile_time_arg_val(2);
 constexpr uint32_t cb_interm_id = get_compile_time_arg_val(3);
-constexpr uint32_t cb_interm2_id = get_compile_time_arg_val(4);
+constexpr uint32_t cb_interm2_id = get_compile_time_arg_val(4);  // TODO call interm2 better, better cb names
 constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(5);
 constexpr uint32_t tile_granularity = get_compile_time_arg_val(6);
 constexpr uint32_t page_size = get_compile_time_arg_val(7);
@@ -50,7 +50,7 @@ void kernel_main() {
     address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     size_t out2_ready_sem =
-        get_arg_val<uint32_t>(arg_idx++);  // HACK rename out2 and sem2 to opposite_out and opposite_sem
+        get_arg_val<uint32_t>(arg_idx++);  // TODO rename out2 and sem2 to opposite_out and opposite_sem
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
     const int32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);

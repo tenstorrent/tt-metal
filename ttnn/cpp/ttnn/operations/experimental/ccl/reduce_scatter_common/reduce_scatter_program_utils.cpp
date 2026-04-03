@@ -56,6 +56,7 @@ uint32_t reduce_scatter_default_workers(
     constexpr double LINEAR_LOW_DATA_THRESHOLD = 500000.0;
     constexpr double SINGLE_PACKET_THRESHOLD = 4.0 * 1024;
     if (topology == ttnn::ccl::Topology::Ring) {
+        // TODO add 5MB threshold
         if (data_moved_per_link_bytes > RING_HIGH_DATA_THRESHOLD) {
             candidate_worker_counts = {8, 4, 2, 1};
         } else if (data_moved_per_link_bytes <= SINGLE_PACKET_THRESHOLD) {
