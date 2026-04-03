@@ -676,7 +676,7 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ttnn nightly eltwise tests group ${{ matrix.group }}
         timeout-minutes: ${{ inputs.timeout }}
-        run: pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group ${{ matrix.group }} --splitting-algorithm least_duration -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+        run: pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group ${{ matrix.group }} -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
