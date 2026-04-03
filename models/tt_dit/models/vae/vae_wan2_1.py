@@ -924,8 +924,29 @@ class WanResample(Module):
             if feat_cache is not None:
                 idx = feat_idx[0]
                 if feat_cache[idx] is None:
-                    feat_cache[idx] = "Rep"
                     feat_idx[0] += 1
+                    if T > 1:
+                        # Frame 0 passes through; frames 1+ get time_conv + temporal doubling
+                        x_first = x_BTHWC[:, :1, :, :, :]
+                        x_rest = x_BTHWC[:, 1:, :, :, :]
+                        x_time_rest = self.time_conv(x_rest, logical_h)
+                        T_rest = x_time_rest.shape[1]
+                        x_BTHW2C = ttnn.reshape(x_time_rest, (B, T_rest, H, W, 2, C))
+                        x_BT2HWC = ttnn.permute(x_BTHW2C, (0, 1, 4, 2, 3, 5))
+                        x_rest_doubled = ttnn.reshape(x_BT2HWC, (B, T_rest * 2, H, W, C))
+                        x_BTHWC = ttnn.concat([x_first, x_rest_doubled], dim=1)
+                        # Cache last CACHE_T frames from x_rest for the next chunk.
+                        # Zero-pad the front if fewer than CACHE_T frames available.
+                        cache_start = max(x_rest.shape[1] - CACHE_T, 0)
+                        cache_x = x_rest[:, cache_start:, :, :, :]
+                        if cache_x.shape[1] < CACHE_T:
+                            pad_t = CACHE_T - cache_x.shape[1]
+                            cache_x_BNC = ttnn.reshape(cache_x, (B, cache_x.shape[1], H * W, C))
+                            cache_x_BNC = ttnn.pad(cache_x_BNC, [(0, 0), (pad_t, 0), (0, 0), (0, 0)], value=0.0)
+                            cache_x = ttnn.reshape(cache_x_BNC, (B, CACHE_T, H, W, C))
+                        feat_cache[idx] = cache_x
+                    else:
+                        feat_cache[idx] = "Rep"
                 else:
                     t_start = x_BTHWC.shape[1] - CACHE_T
                     cache_x_BTHWC = x_BTHWC[:, t_start:, :, :, :]
