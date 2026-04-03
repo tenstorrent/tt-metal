@@ -231,7 +231,7 @@ def test_unary_composite_multigammaln_ttnn(input_shapes, device):
     ),
 )
 @pytest.mark.parametrize("k", [1, 5])
-def test_unary_composite_polygamma_ttnn(input_shapes, k, device):
+def test_unary_polygamma_ttnn(input_shapes, k, device):
     torch.manual_seed(213919)
     torch_input = torch.rand(input_shapes, dtype=torch.bfloat16) * 9.0 + 1.0
     golden_function = ttnn.get_golden_function(ttnn.polygamma)
