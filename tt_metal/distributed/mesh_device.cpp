@@ -262,6 +262,16 @@ void MeshDeviceImpl::mark_allocations_unsafe() { this->allocator_impl()->mark_al
 
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshDeviceImpl::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
+bool MeshDeviceImpl::allocations_unsafe() const { return this->allocator_impl()->allocations_unsafe(); }
+
+std::unordered_map<size_t, std::string> MeshDeviceImpl::get_unsafe_tracked_ids() const {
+    return this->allocator_impl()->get_unsafe_tracked_ids();
+}
+// NOLINTNEXTLINE(readability-make-member-function-const)
+void MeshDeviceImpl::clear_unsafe_tracked_ids() { this->allocator_impl()->clear_unsafe_tracked_ids(); }
+std::vector<size_t> MeshDeviceImpl::drain_pending_traceback_ids() {
+    return AllocatorImpl::drain_pending_traceback_ids();
+}
 
 MeshDeviceImpl::MeshDeviceImpl(
     std::shared_ptr<ScopedDevices> mesh_handle,
@@ -1187,6 +1197,7 @@ void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
     // Only enable allocations once all captured traces are released
     if (this->trace_buffers_size_ == 0) {
         this->mark_allocations_safe();
+        this->clear_unsafe_tracked_ids();
     }
 }
 
@@ -1600,6 +1611,14 @@ void MeshDevice::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, b
     pimpl_->replay_mesh_trace(cq_id, trace_id, blocking);
 }
 void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id) { pimpl_->release_mesh_trace(trace_id); }
+void MeshDevice::mark_allocations_safe() { pimpl_->mark_allocations_safe(); }
+void MeshDevice::mark_allocations_unsafe() { pimpl_->mark_allocations_unsafe(); }
+bool MeshDevice::allocations_unsafe() const { return pimpl_->allocations_unsafe(); }
+std::unordered_map<size_t, std::string> MeshDevice::get_unsafe_tracked_ids() const {
+    return pimpl_->get_unsafe_tracked_ids();
+}
+void MeshDevice::clear_unsafe_tracked_ids() { pimpl_->clear_unsafe_tracked_ids(); }
+std::vector<size_t> MeshDevice::drain_pending_traceback_ids() { return MeshDeviceImpl::drain_pending_traceback_ids(); }
 std::shared_ptr<MeshTraceBuffer> MeshDevice::get_mesh_trace(const MeshTraceId& trace_id) {
     return pimpl_->get_mesh_trace(trace_id);
 }

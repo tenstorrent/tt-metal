@@ -155,6 +155,15 @@ public:
     void end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
     void replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
     void release_mesh_trace(const MeshTraceId& trace_id);
+    void mark_allocations_safe();
+    void mark_allocations_unsafe();
+    bool allocations_unsafe() const;
+
+    // Unsafe allocation tracking
+    std::unordered_map<size_t, std::string> get_unsafe_tracked_ids() const;
+    void clear_unsafe_tracked_ids();
+    static std::vector<size_t> drain_pending_traceback_ids();
+
     std::shared_ptr<MeshTraceBuffer> get_mesh_trace(const MeshTraceId& trace_id);
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;
