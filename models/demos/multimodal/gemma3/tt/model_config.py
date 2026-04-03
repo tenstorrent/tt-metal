@@ -9,6 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.multimodal.gemma3.tt.load_checkpoints import convert_vision_hf_to_meta, convert_vision_meta_to_hf
 from models.tt_transformers.tt.common import calculate_prefill_warmup_seq_lens, cap_seq_lens_to_max_prefill_chunk_size
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_meta_to_hf, standardize_hf_keys
@@ -152,6 +153,11 @@ class ModelArgs(TTModelArgs):
         # TODO: Add more model-specific filtering here
         # This filtering is based on the current PR's (https://github.com/tenstorrent/tt-metal/pull/33143) sequence lengths that are used for warmup
         return to_warmup_seq_lens
+
+    def supports_decode_trace(self) -> bool:
+        # Decode trace capture stalls after the compile (no-trace) run on Blackhole (e.g. P150)
+        # inside _capture_decode_trace_text (between "Done Compiling Model" and "Done Capturing Decode Trace").
+        return not is_blackhole()
 
     def get_trace_prefill_supported_seq_lens(self):
         default_supported_seq_lens = {

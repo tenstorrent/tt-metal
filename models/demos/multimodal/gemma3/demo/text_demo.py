@@ -865,6 +865,13 @@ def test_demo_text(
         paged_attention=paged_attention,
     )
 
+    if enable_trace and not model_args[0].supports_decode_trace():
+        logger.warning(
+            "Gemma3 text_demo: requested decode tracing is unsupported on this arch/device "
+            "(trace capture can hang after compile). Running decode without trace."
+        )
+        enable_trace = False
+
     if token_accuracy:
         token_acc = TokenAccuracy(model_name=model_args[0].model_name)
 

@@ -620,6 +620,7 @@ class Generator(WarmupForwardMixin):
                     batch_size=padded_batch if use_batched_prefill else 1,
                     **local_kwargs,
                 )
+                logger.info("prefill_forward_text: prefill_forward_single_user_text returned")
             if use_batched_prefill:
                 hidden_dim = logits.shape[-1]
                 logits = ttnn.reshape(logits, [padded_batch, 1, prefill_seq_len, hidden_dim])
@@ -739,7 +740,9 @@ class Generator(WarmupForwardMixin):
                     }
                 )
             else:
+                logger.info("prefill_forward_text: untilize start")
                 logits = ttnn.untilize(logits, use_multicore=True)
+                logger.info("prefill_forward_text: cpu(blocking=False) start")
                 prefill_results.append(
                     {
                         "idx": idx,
@@ -749,6 +752,7 @@ class Generator(WarmupForwardMixin):
                         "sampling": sampling_enabled,
                     }
                 )
+                logger.info("prefill_forward_text: cpu(blocking=False) issued")
 
         if len(prefill_results) > 0:
             for elem_idx, res in enumerate(prefill_results):
@@ -757,7 +761,9 @@ class Generator(WarmupForwardMixin):
                 model_id = res["model_id"]
                 num_cached_tokens = int(start_pos[idx]) if start_pos is not None else 0
                 last_token_idx_relative = last_token_idx - num_cached_tokens
+                logger.info("prefill_forward_text: synchronize_device start")
                 ttnn.synchronize_device(self.model[model_id].mesh_device)
+                logger.info("prefill_forward_text: synchronize_device done")
 
                 if "hidden_states" in res:
                     output_tensor[idx] = self.model[model_id].process_output_prefill_hidden_states(
@@ -904,6 +910,7 @@ class Generator(WarmupForwardMixin):
                 else:
                     del tt_logits
         else:
+            logger.info("prefill_forward_single_user_text: prepare_inputs_prefill start")
             inputs = self.model[model_id].prepare_inputs_prefill(
                 tokens,
                 page_table=page_table,
@@ -912,6 +919,7 @@ class Generator(WarmupForwardMixin):
                 **kwargs,
             )
             prefill_input, rot_mats_global_prefill, rot_mats_local_prefill, page_table_tt, _ = inputs
+            logger.info("prefill_forward_single_user_text: ttnn_prefill_forward start")
 
             tt_logits = self.model[model_id].ttnn_prefill_forward(
                 prefill_input,
@@ -923,6 +931,7 @@ class Generator(WarmupForwardMixin):
                 kv_cache=kv_cache,
                 batch_size=batch_size,
             )
+            logger.info("prefill_forward_single_user_text: ttnn_prefill_forward done")
             return tt_logits
 
     # Note: This function is called by vLLM
@@ -1046,6 +1055,7 @@ class Generator(WarmupForwardMixin):
         tt_current_pos = []
         tt_rot_mat_idxs = []
         tt_page_table = []
+        logger.info("_decode_forward_no_trace_text: prepare_inputs_decode start")
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
             model_i = self.model[i]
@@ -1060,6 +1070,7 @@ class Generator(WarmupForwardMixin):
             tt_rot_mat_idxs.append(tt_rot_mat_idxs_i)
             tt_page_table.append(tt_page_table_i)
 
+        logger.info("_decode_forward_no_trace_text: ttnn_decode_forward start")
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
             tt_logits_i, tt_log_probs_i = self.model[i].ttnn_decode_forward(
@@ -1072,6 +1083,7 @@ class Generator(WarmupForwardMixin):
             )
             tt_output.append((tt_logits_i, tt_log_probs_i))
 
+        logger.info("_decode_forward_no_trace_text: ttnn_decode_forward done")
         return tt_output
 
     def _capture_decode_trace_text(
@@ -1514,6 +1526,7 @@ class Generator(WarmupForwardMixin):
         Input tt_out is list of tuples of (tt_out_tok, tt_log_probs)
         tt_log_probs can be: ttnn.Tensor (old path), LogProbsResult (new path), or None.
         """
+        logger.info("read_decode_output: start cpu readback")
 
         def _read_logprobs(lp, blocking: bool = True):
             if lp is None:
@@ -1522,9 +1535,13 @@ class Generator(WarmupForwardMixin):
 
         if not async_read:
             if isinstance(tt_out[0], tuple):
-                return [(out[0].cpu(), _read_logprobs(out[1])) for out in tt_out]
+                result = [(out[0].cpu(), _read_logprobs(out[1])) for out in tt_out]
+                logger.info("read_decode_output: done")
+                return result
             elif isinstance(tt_out[0], ttnn.Tensor):
-                return [out.cpu() for out in tt_out]
+                result = [out.cpu() for out in tt_out]
+                logger.info("read_decode_output: done")
+                return result
 
         host_outputs = []
         read_events = []
