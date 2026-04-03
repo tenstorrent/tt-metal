@@ -773,3 +773,226 @@ OPENAI_API_KEY="dummy" python run.py --model Molmo2-8B --workflow evals \
 OPENAI_API_KEY="dummy" python run.py --model Molmo2-8B --workflow evals \
   --tt-device t3k --limit-samples-mode ci-nightly
 ```
+
+---
+
+### 2026-03-29 — Batch size dimension fix in decode attention
+
+**Status:** Completed. Fixed batch dimension confusion in `nlp_concat_heads_decode` output.
+
+**Problem:**
+When running batch=1 decode with decode trace, the second attention layer received input with batch=32 instead of batch=1:
+```
+Layer 0 input: x.shape=[1, 1, 1, 4096] (correct)
+Layer 1 input: x.shape=[1, 1, 32, 4096] (wrong - batch became 32)
+```
+
+**Root Cause:**
+1. RoPE pads the head dimension from actual heads (4 for Q, 1 for K/V per device) to 32 for efficient computation
+2. `nlp_concat_heads_decode` interprets the padded head dimension (32) as part of the output batch dimension
+3. Output from concat_heads becomes `[1, 1, 32, H*d]` instead of `[1, 1, 1, H*d]`
+4. This incorrect shape propagates through the output projection and all-reduce
+
+**Fix Applied (text_attention.py):**
+
+1. **Changed batch_size derivation:**
+   ```python
+   # Before (wrong for paged attention):
+   batch_size = kv_cache[0].shape[0]  # Returns num_blocks for paged cache
+
+   # After (correct for all cases):
+   batch_size = x.shape[2]  # Input shape is [1, 1, batch_size, hidden_dim]
+   ```
+
+2. **Added batch dimension fix after concat_heads:**
+   ```python
+   attn_output = ttnn.experimental.nlp_concat_heads_decode(attn_output, num_heads=...)
+
+   # Fix batch dimension when padded shape was used
+   if attn_output.shape[2] != batch_size:
+       attn_output = ttnn.to_memory_config(attn_output, ttnn.DRAM_MEMORY_CONFIG)
+       attn_output = attn_output[:, :, :batch_size, :]
+   ```
+
+**Test Results:**
+| Config | Status | Throughput |
+|--------|--------|------------|
+| batch=1, no paged attention | PASS | 35.48 tok/s |
+| batch=1, paged attention | Not tested |
+| batch=32, paged attention | Warmup PASS, inference fails (shape mismatch with single prompt) |
+
+**Note:** Batch=32 inference with single prompt fails because trace tensors are allocated for batch=32 but inference runs with batch=1. This is expected - proper batch=32 testing requires 32 concurrent prompts.
+
+---
+
+### 2026-03-29 — Batch=32 support implemented in demo.py
+
+**Status:** Completed. Batch=32 decode working with traces.
+
+**Changes Applied (demo/demo.py):**
+
+1. **`_argmax_on_device()`:** Updated to handle batch dimension
+   ```python
+   # Before: [1, 1, 1, vocab] -> [1, 1]
+   # After: [1, 1, batch_size, vocab] -> [1, batch_size]
+   logits = logits[:, :, :self.batch_size, :]
+   tt_token = ttnn.reshape(tt_token, [1, self.batch_size])
+   ```
+
+2. **`_read_token_from_device()`:** Returns first token from batch for EOS check
+   ```python
+   # For batch > 1, all items have same prompt, return first for EOS
+   if tokens_torch.numel() > 1:
+       return tokens_torch[0].item()
+   ```
+
+3. **`run_inference()`:** Replicate first token to batch_size
+   ```python
+   # Replicate to batch_size for batch processing
+   token_batch = torch.tensor([[next_token] * self.batch_size], dtype=torch.long)
+   ```
+
+**Test Results:**
+| Config | Status | Throughput | Total Throughput |
+|--------|--------|------------|------------------|
+| batch=1, decode trace | PASS | 35.52 tok/s | 35.52 tok/s |
+| batch=32, decode trace | PASS | 31.43 tok/s | ~1006 tok/s |
+
+**Throughput Analysis:**
+- Per-batch throughput drops slightly (35.52 → 31.43 tok/s) due to larger memory operations
+- Total throughput increases 28x (35.52 → 1006 tok/s) with batch=32
+- Efficiency: 1006/(32*35.52) = 88.5%
+
+**Known Issue:**
+EOS token not generated within 100 tokens - model produces repetitive output ("and tan, and tan,"). This is a greedy decoding issue (no temperature/top_p/repetition_penalty), not a batch issue. Both batch=1 and batch=32 exhibit same behavior.
+
+**Command:**
+```bash
+python models/demos/molmo2/demo/demo.py --use-decode-trace --batch-size 32
+```
+
+---
+
+### 2026-03-29 — True Parallel Batch Processing
+
+**Status:** Completed. True multi-user batched inference working.
+
+**Problem:**
+Previous batch processing was "pseudo-batching" - it replicated the same token to all batch slots:
+```python
+token_batch = torch.tensor([[next_token] * self.batch_size], dtype=torch.long)
+```
+
+**Solution:**
+Added `user_id` parameter through the prefill call chain to enable proper KV cache isolation per user.
+
+**Files Modified:**
+| File | Change |
+|------|--------|
+| `demo/demo.py` | Added `run_batched_inference()`, `user_id` param to `run_prefill()` |
+| `tt/text_model.py` | Added `user_id` param to `forward()`, `forward_with_embedding()` |
+| `tt/text_block.py` | Added `user_id` param to `forward()` |
+| `tt/text_attention.py` | Changed `batch_idx=0` to `batch_idx=user_id` in `fill_cache` calls |
+
+**Key Fix:**
+The KV cache `fill_cache()` calls were hardcoded to `batch_idx=0`, causing all users' prefill data to overwrite the same cache slot. Now `user_id` is threaded through so each user fills their own cache slot.
+
+**Test Results:**
+| Config | Throughput | Per-User |
+|--------|------------|----------|
+| 4 prompts, decode trace | 140.40 tok/s | 35.10 tok/s/user |
+
+**Sample Output (4 different prompts about same dog image):**
+```
+User 0: "This image shows a small, fluffy, brown and white dog..."
+User 1: "The dog appears to be a mixed breed..."
+User 2: "The image shows a small dog standing on a skateboard..."
+User 3: "Paws on wheels, a skateboard, he rides the breeze..." (haiku)
+```
+
+**Command:**
+```bash
+python models/demos/molmo2/demo/demo.py \
+    --input-file models/demos/molmo2/demo/sample_prompts/multi_prompts.json \
+    --batch-size 4 \
+    --use-decode-trace
+```
+
+---
+
+**Batch=32 Test Results:**
+| Config | Total Throughput | Per-User |
+|--------|------------------|----------|
+| 4 prompts, decode trace | 140.40 tok/s | 35.10 tok/s/user |
+| 32 prompts, decode trace | 514.44 tok/s | 16.08 tok/s/user |
+
+All 32 users received coherent, unique outputs matching their specific prompts.
+
+---
+
+### 2026-04-02 — O(n) Fusion Fix & Chunked Prefill Infrastructure
+
+**Status:** Partial. O(n) fusion complete. Chunked prefill infrastructure in place but producing degraded output.
+
+**Problem 1: O(n²) Memory in prepare_inputs_for_multimodal**
+The selector matrix approach used a dense [seq_len, seq_len] boolean matrix:
+```python
+# OLD: O(n²) memory - OOM at 256 frames (5GB selector matrix)
+selector = torch.zeros((seq_len, seq_len), dtype=torch.bool)
+for i, pos in enumerate(image_positions):
+    selector[pos, num_text_tokens + i] = True
+text_embeddings[0, 0, image_positions, :] = visual_embeddings[0, 0, :, :]
+```
+
+**Solution:** O(n) index-based scatter instead of dense selector:
+```python
+# NEW: O(n) - no selector matrix
+text_emb_cpu[0, 0, image_positions, :] += visual_cpu[0, 0, :, :]
+```
+
+**Files Modified:**
+| File | Change |
+|------|--------|
+| `tt/molmo2_model.py` | Replaced selector matrix with index-based scatter in `prepare_inputs_for_multimodal` |
+
+**Verification:** 256 frames (75k tokens) now works without OOM.
+
+---
+
+**Problem 2: Prefill OOM for Long Sequences**
+For 66+ frames (14k+ tokens), standard SDPA creates a 128GB attention matrix causing OOM.
+
+**Solution:** Chunked prefill using `ttnn.transformer.chunked_scaled_dot_product_attention`:
+- Process long sequences in chunks of 8192 tokens
+- Each chunk writes to KV cache using `paged_fill_cache`
+- Chunked SDPA reads from full KV cache to attend to previous tokens
+
+**Files Modified:**
+| File | Change |
+|------|--------|
+| `demo/demo.py` | Added `_run_chunked_prefill()` method, `max_prefill_chunk_size=8192` |
+| `tt/text_attention.py` | Added `chunk_page_table` and `chunk_start_idx` params, chunked SDPA path with `SDPAProgramConfig` |
+| `tt/text_model.py` | Pass-through `chunk_page_table` and `chunk_start_idx` |
+| `tt/text_block.py` | Pass-through `chunk_page_table` and `chunk_start_idx` |
+
+**Current State:**
+- Chunked prefill processes 2 chunks correctly (chunk_start_idx=0 and 8192)
+- SDPAProgramConfig added (q_chunk=128, k_chunk=512)
+- BUT: Output is degraded ("A 0 " instead of meaningful text)
+- Baseline (8 frames, no chunking) produces correct output
+
+**Next Steps:**
+1. Debug chunked SDPA attention pattern - verify KV cache read is correct
+2. Compare k_cache/v_cache shapes with Llama implementation
+3. Verify paged_fill_cache writes to correct positions
+
+**Command (chunked prefill):**
+```bash
+python models/demos/molmo2/demo/demo.py \
+    --prompt "<|video|> Describe this video in detail." \
+    --video video.mp4 \
+    --max-seq-len 32768 \
+    --paged-attention
+```
+
+---

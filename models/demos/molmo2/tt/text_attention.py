@@ -23,6 +23,7 @@ import math
 from typing import Dict, List, Optional, Tuple
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -271,9 +272,15 @@ class TextAttention(LightweightModule):
         kv_cache: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
         page_table: Optional[ttnn.Tensor] = None,
         user_id: int = 0,
+        chunk_page_table: Optional[ttnn.Tensor] = None,
+        chunk_start_idx: Optional[int] = None,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         Forward pass through GQA attention (prefill mode) with tensor parallelism.
+
+        Supports chunked prefill for long sequences (>64k tokens):
+            - When chunk_start_idx is provided, uses chunked_scaled_dot_product_attention
+            - This reads previous KV from cache and computes attention without full matrix
 
         Args:
             x: Input tensor of shape [1, 1, seq_len, hidden_dim]
@@ -284,6 +291,8 @@ class TextAttention(LightweightModule):
             page_table: Optional page table for paged attention (vLLM)
                 Shape: [batch, max_num_blocks_per_req] mapping positions to block IDs
             user_id: Batch index for multi-user batching (which user's KV cache slot to fill)
+            chunk_page_table: Page table for current chunk (used for paged_fill_cache in chunked prefill)
+            chunk_start_idx: Starting position of current chunk (enables chunked_scaled_dot_product_attention)
 
         Returns:
             Tuple of (output, updated_kv_cache)
@@ -363,8 +372,10 @@ class TextAttention(LightweightModule):
             k_cache, v_cache = kv_cache
             if page_table is not None:
                 # Paged attention: write to pages specified by page_table
-                ttnn.experimental.paged_fill_cache(k_cache, k, page_table, batch_idx=user_id)
-                ttnn.experimental.paged_fill_cache(v_cache, v, page_table, batch_idx=user_id)
+                # For chunked prefill, use chunk_page_table if provided
+                fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
+                ttnn.experimental.paged_fill_cache(k_cache, k, fill_page_table, batch_idx=user_id)
+                ttnn.experimental.paged_fill_cache(v_cache, v, fill_page_table, batch_idx=user_id)
             else:
                 # Fallback for non-paged mode (demo) - use user_id for multi-user batching
                 ttnn.fill_cache(k_cache, k, batch_idx=user_id)
@@ -380,23 +391,55 @@ class TextAttention(LightweightModule):
 
         # Convert to bfloat8_b for SDPA
         q = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
-        k = ttnn.typecast(k, dtype=ttnn.bfloat8_b)
-        v = ttnn.typecast(v, dtype=ttnn.bfloat8_b)
 
         # Scaled dot-product attention
-        attn_output = ttnn.transformer.scaled_dot_product_attention(
-            q,
-            k,
-            v,
-            is_causal=True if attn_mask is None else False,
-            scale=self.scale,
-            attn_mask=attn_mask,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-        )
+        logger.debug(f"SDPA decision: chunk_start_idx={chunk_start_idx}, kv_cache={'not None' if kv_cache else 'None'}")
+        if chunk_start_idx is not None and kv_cache is not None:
+            # Chunked prefill: use chunked SDPA which reads from KV cache
+            # This avoids materializing the full attention matrix for long sequences
+            k_cache, v_cache = kv_cache
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
 
-        ttnn.deallocate(q)
-        ttnn.deallocate(k)
-        ttnn.deallocate(v)
+            # Configure chunked SDPA program
+            q_chunk_size = 128 if seq_len % 128 == 0 else 32
+            k_chunk_size = 512 if seq_len % 512 == 0 else 128 if seq_len % 128 == 0 else 32
+            pc_sdpa = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=[8, 4],  # Molmo2 uses 4 heads per device
+                q_chunk_size=q_chunk_size,
+                k_chunk_size=k_chunk_size,
+                exp_approx_mode=False,
+            )
+            logger.debug(f"Chunked SDPA config: q_chunk={q_chunk_size}, k_chunk={k_chunk_size}, seq_len={seq_len}")
+
+            attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
+                input_tensor_q=q,
+                input_tensor_k=k_cache,
+                input_tensor_v=v_cache,
+                page_table_tensor=page_table,
+                chunk_start_idx=chunk_start_idx,
+                program_config=pc_sdpa,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+            )
+            ttnn.deallocate(q)
+        else:
+            # Regular prefill: compute attention with current chunk's KV
+            k = ttnn.typecast(k, dtype=ttnn.bfloat8_b)
+            v = ttnn.typecast(v, dtype=ttnn.bfloat8_b)
+
+            attn_output = ttnn.transformer.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                is_causal=True if attn_mask is None else False,
+                scale=self.scale,
+                attn_mask=attn_mask,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+            )
+
+            ttnn.deallocate(q)
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
 
         # Reshape back: [1, num_heads_per_device, seq_len, head_dim] -> [1, 1, seq_len, hidden_dim_per_device]
         attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
