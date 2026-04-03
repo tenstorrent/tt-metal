@@ -137,6 +137,9 @@ def test_yolo_v11_c3k2(
     )
     ttnn_output = ttnn_module(x=ttnn_input, device=device)
     ttnn_output = ttnn.to_torch(ttnn_output)
-    ttnn_output = ttnn_output[:, :, : torch_output.shape[2] * torch_output.shape[3], :]
+    expected_flat = torch_output.shape[2] * torch_output.shape[3]
+    # Host-side trim only if conv2 left extra flattened spatial padding (not device Slice op).
+    if ttnn_output.shape[2] > expected_flat:
+        ttnn_output = ttnn_output[:, :, :expected_flat, :]
     ttnn_output = ttnn_output.permute(0, 3, 1, 2).reshape(torch_output.shape)
     assert_with_pcc(torch_output, ttnn_output, 0.99)
