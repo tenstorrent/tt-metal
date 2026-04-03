@@ -170,7 +170,7 @@ def test_throughput_and_latency_traced(device, n_warmup, n_timing):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("batch_size", [1, 2, 4, 8, 16, 32])
+@pytest.mark.parametrize("batch_size", [1, 2, 4, 8, 16, 32, 64])
 @pytest.mark.parametrize("n_warmup,n_timing", [(3, 30)])
 def test_throughput_batch(device, batch_size, n_warmup, n_timing):
     """Sweep batch sizes to find the throughput saturation point.

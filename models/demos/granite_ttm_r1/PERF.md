@@ -13,7 +13,7 @@
 | Model size on disk | < 5 MB | 3.07 MB ✅ | float32 weights |
 | PCC vs PyTorch | ≥ 0.99 | ≥ 0.99 ✅ | 9/9 tests pass (batch=1,4,8) on Wormhole N300s |
 | MSE vs PyTorch | within 5% | within 5% ✅ | validated by PCC tests |
-| Zero-shot vs published | within 5% | pending | requires ETTh1 dataset (see scripts/prepare_assets.py) |
+| Zero-shot vs published | within 5% | **2.6% below ✅** | TTNN MSE 0.4324 vs published 0.444 (7ch, 57 test windows) |
 
 ## Throughput vs batch size (traced, Wormhole N300s)
 
@@ -25,6 +25,8 @@
 | 8 | ~3.1 ms | ~2620 seq/s | ✅ exceeds 2000 seq/s stretch target |
 | 16 | ~4.1 ms | ~3930 seq/s | ✅ |
 | 32 | ~6.2 ms | ~5200 seq/s | ✅ (compute-bound regime begins) |
+| 64 | ~11.2 ms | **~5723 seq/s** | ✅ peak throughput (Stage 4 E5) |
+| 128 | ~25.7 ms | ~4972 seq/s | throughput drops — memory pressure |
 
 ## Stage 3 feature status
 
@@ -83,6 +85,17 @@ python -m pytest models/demos/granite_ttm_r1/tests/pcc/ -v
 python -m pytest models/demos/granite_ttm_r1/tests/accuracy/ -v -s
 ```
 
+## Stage 4 experiment results
+
+| Experiment | Result | Finding |
+|---|---|---|
+| E1: Zero-shot ETTh1 accuracy | ✅ **PASSED** | TTNN MSE 0.4324 vs published 0.444 (2.6% below target); PCC vs PyTorch 0.9999 |
+| E2: Pre-allocated host buffer | No gain | Input tensor is 1 KB; per-call allocation overhead is negligible vs trace replay |
+| E3: LoFi math fidelity | No gain | Model is dispatch-bound; faster kernels hidden by trace replay cost; HiFi2 retained |
+| E4: Double-buffering (async) | Not attempted | TTNN execute_trace blocking=True required; async path not available; see Known limitations |
+| E5: batch=64 sweep | ✅ **5723 seq/s peak** | Saturation at batch=64; batch=128 drops to ~4972 seq/s (memory pressure) |
+| E6: Streaming circular buffer | ✅ Implemented | Eliminates torch.roll allocation; ~0.01 ms saving per step |
+
 ## Known limitations and trade-offs
 
 | Trade-off | Decision |
@@ -92,3 +105,6 @@ python -m pytest models/demos/granite_ttm_r1/tests/accuracy/ -v -s
 | Trace must be recompiled per batch size | One `compile()` call per batch size; cached on model instance |
 | Shared weights across model instances | Read-only weight tensors; no correctness risk; saves ~1.53 MB per additional instance |
 | 500 seq/s target at batch=1 | Latency target (< 5 ms) is met at 2.3 ms; 500 seq/s requires batch=2 (~840 seq/s achieved) |
+| Peak throughput | batch=64 gives ~5723 seq/s (Stage 4 E5); batch=128 regresses due to memory pressure |
+| LoFi math fidelity | Tested (Stage 4 E3): no gain because model is dispatch-bound; toggle via TTNN_LOFI=1 |
+| Zero-shot accuracy | Stage 4 E1: TTNN MSE 0.4324 vs published 0.444 on ETTh1 test split (all 7 channels, normalized) |
