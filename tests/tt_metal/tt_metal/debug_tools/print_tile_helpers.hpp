@@ -91,12 +91,13 @@ inline std::vector<uint32_t> GenerateInputTileWithOffset(tt::DataFormat data_for
     return u32_vec;
 }
 
-inline std::string GenerateExpectedData(tt::DataFormat data_format, std::vector<uint32_t>& input_tile) {
+inline std::string GenerateExpectedData(
+    tt::DataFormat data_format, std::vector<uint32_t>& input_tile, bool device_print = false) {
     std::string data;
     if (data_format == tt::DataFormat::Float32) {
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
-                "\n{:.6} {:.6} {:.6} {:.6}",
+                fmt::runtime(device_print ? "\n{} {} {} {}" : "\n{:.6} {:.6} {:.6} {:.6}"),
                 *reinterpret_cast<float*>(&input_tile[(col * 32) + 0]),
                 *reinterpret_cast<float*>(&input_tile[(col * 32) + 8]),
                 *reinterpret_cast<float*>(&input_tile[(col * 32) + 16]),
@@ -106,7 +107,7 @@ inline std::string GenerateExpectedData(tt::DataFormat data_format, std::vector<
         std::vector<bfloat16> fp16b_vec = unpack_uint32_vec_into_bfloat16_vec(input_tile);
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
-                "\n{:.6} {:.6} {:.6} {:.6}",
+                fmt::runtime(device_print ? "\n{} {} {} {}" : "\n{:.6} {:.6} {:.6} {:.6}"),
                 static_cast<float>(fp16b_vec[(col * 32) + 0]),
                 static_cast<float>(fp16b_vec[(col * 32) + 8]),
                 static_cast<float>(fp16b_vec[(col * 32) + 16]),
@@ -116,7 +117,7 @@ inline std::string GenerateExpectedData(tt::DataFormat data_format, std::vector<
         std::vector<float> float_vec = unpack_bfp8_tiles_into_float_vec(input_tile, true, false);
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
-                "\n{:.6} {:.6} {:.6} {:.6}",
+                fmt::runtime(device_print ? "\n{} {} {} {}" : "\n{:.6} {:.6} {:.6} {:.6}"),
                 *reinterpret_cast<float*>(&float_vec[(col * 32) + 0]),
                 *reinterpret_cast<float*>(&float_vec[(col * 32) + 8]),
                 *reinterpret_cast<float*>(&float_vec[(col * 32) + 16]),
@@ -126,7 +127,7 @@ inline std::string GenerateExpectedData(tt::DataFormat data_format, std::vector<
         std::vector<float> float_vec = unpack_bfp4_tiles_into_float_vec(input_tile, true, false);
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
-                "\n{:.6} {:.6} {:.6} {:.6}",
+                fmt::runtime(device_print ? "\n{} {} {} {}" : "\n{:.6} {:.6} {:.6} {:.6}"),
                 *reinterpret_cast<float*>(&float_vec[(col * 32) + 0]),
                 *reinterpret_cast<float*>(&float_vec[(col * 32) + 8]),
                 *reinterpret_cast<float*>(&float_vec[(col * 32) + 16]),
