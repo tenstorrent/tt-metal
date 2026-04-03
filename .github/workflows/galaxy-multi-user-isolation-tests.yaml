@@ -108,7 +108,12 @@ jobs:
             container_prefix: bh_tray
             mesh_descriptor: p150_x8_mesh_graph_descriptor.textproto
             test_path: tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_all_gather_nightly.py
-            test_args: "-k 'non-trace and not ring and not broken'"
+            # The bh_1d_mesh_device fixture is function-scoped and opens/closes all 8 devices per test.
+            # Repeated open/close cycles can randomly cause firmware re-initialization failures
+            # ("Device N init: failed to initialize FW") due to a BH-specific firmware layer issue,
+            # not a tt-metal issue. Since this CI only needs one representative test to verify
+            # inter-container isolation, we narrow down to a single test combination to avoid the problem.
+            test_args: "-k 'non-trace and not ring and not broken and linear_2D and bfloat_8 and 2_links and not DRAM'"
     runs-on:
       - topology-6u
       - arch-${{ matrix.arch }}
