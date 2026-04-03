@@ -242,7 +242,8 @@ def _open_tt_yolo_device(ttnn, args):
 
 def _open_tt_slice_parallel_device(ttnn, args, n_par: int):
     """
-    Open exactly n_par chips as a 1×n row mesh (or open_device when n_par==1).
+    Open exactly n_par chips: MeshShape(1, n_par) by default, or MeshShape(ROWS, COLS) if
+    args.tt_slice_parallel_mesh_shape is set (ROWS*COLS must equal n_par). Uses open_device when n_par==1.
 
     Do not use create_submesh() off a larger parent mesh: closing the child can fail with
     "MeshDevice cq ID ... is in use by parent mesh ..." because parent and submesh share CQs.
@@ -265,7 +266,17 @@ def _open_tt_slice_parallel_device(ttnn, args, n_par: int):
     if n_par == 1:
         return ttnn.open_device(device_id=args.tt_device_id, **kwargs), False
 
-    mesh_shape = ttnn.MeshShape(1, n_par)
+    mesh_rows, mesh_cols = 1, n_par
+    mshape_arg = getattr(args, "tt_slice_parallel_mesh_shape", None)
+    if mshape_arg is not None:
+        mesh_rows, mesh_cols = int(mshape_arg[0]), int(mshape_arg[1])
+        if mesh_rows * mesh_cols != n_par:
+            raise ValueError(
+                f"--tt-slice-parallel-mesh-shape {mesh_rows} {mesh_cols} implies {mesh_rows * mesh_cols} devices, "
+                f"but --tt-slice-parallel-devices is {n_par} (need ROWS*COLS == N)."
+            )
+
+    mesh_shape = ttnn.MeshShape(mesh_rows, mesh_cols)
     return ttnn.open_mesh_device(mesh_shape=mesh_shape, **kwargs), True
 
 
@@ -336,9 +347,19 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         metavar="N",
-        help="TT mesh width for SAHI sliced mode: use a 1×N submesh so each of N simultaneous 640×640 inputs is sharded "
-        "to one wormhole chip (data parallel on batch dim). Requires a parent mesh with ≥N devices (e.g. T3K 1×8 with "
-        "N=4). Omit for legacy behavior (full parent mesh, same slice replicated on all devices per forward).",
+        help="TT SAHI sliced mode: open a mesh of N devices and run one distinct 640×640 slice per chip per forward "
+        "(batch dim sharded). Default topology is MeshShape(1, N). Use --tt-slice-parallel-mesh-shape ROWS COLS when "
+        "ROWS*COLS=N (e.g. 8 3 for Galaxy). --tt-mesh-shape (if set) only caps N via total device count. "
+        "Omit this flag for full-mesh legacy behavior (same slice replicated on all devices).",
+    )
+    parser.add_argument(
+        "--tt-slice-parallel-mesh-shape",
+        type=int,
+        nargs=2,
+        metavar=("ROWS", "COLS"),
+        default=None,
+        help="Optional mesh topology for --tt-slice-parallel-devices: open MeshShape(ROWS, COLS) instead of MeshShape(1, N). "
+        "Required: ROWS*COLS must equal N. Only used with --tt-slice-parallel-devices.",
     )
     parser.add_argument(
         "--confidence-threshold",
@@ -487,6 +508,8 @@ class TTYoloBackend:
         n_par = getattr(args, "tt_slice_parallel_devices", None)
         if n_par is not None:
             n_par = int(n_par)
+            if getattr(args, "tt_slice_parallel_mesh_shape", None) is not None and n_par <= 1:
+                raise ValueError("--tt-slice-parallel-mesh-shape requires --tt-slice-parallel-devices > 1")
             max_devices = _system_or_configured_mesh_device_count(ttnn, args)
             if n_par > 1 and max_devices <= 1:
                 raise ValueError(
@@ -529,8 +552,12 @@ class TTYoloBackend:
         except Exception:
             pass
         n_par_cfg = getattr(args, "tt_slice_parallel_devices", None)
+        sp_mesh = getattr(args, "tt_slice_parallel_mesh_shape", None)
         if n_par_cfg is not None and int(n_par_cfg) > 1 and not getattr(args, "tt_force_single_device", False):
-            opened_desc = f"open_mesh_device MeshShape(1, {int(n_par_cfg)})"
+            if sp_mesh is not None:
+                opened_desc = f"open_mesh_device MeshShape({int(sp_mesh[0])}, {int(sp_mesh[1])})"
+            else:
+                opened_desc = f"open_mesh_device MeshShape(1, {int(n_par_cfg)})"
         elif self._is_mesh_device:
             opened_desc = "open_mesh_device (full or explicit --tt-mesh-shape)"
         else:
@@ -540,6 +567,7 @@ class TTYoloBackend:
             "is_mesh_device": self._is_mesh_device,
             "device_batch_size": batch_size,
             "tt_slice_parallel_devices": n_par_cfg,
+            "tt_slice_parallel_mesh_shape": list(sp_mesh) if sp_mesh is not None else None,
             "mesh_shape": mesh_shape_list,
             "opened_as": opened_desc,
         }
@@ -1105,6 +1133,9 @@ def resize_images_for_processing(
 
 def main():
     args = parse_args()
+    if args.tt_slice_parallel_mesh_shape is not None and args.tt_slice_parallel_devices is None:
+        raise ValueError("--tt-slice-parallel-mesh-shape requires --tt-slice-parallel-devices N")
+
     input_path = Path(args.input)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1240,6 +1271,9 @@ def main():
             "backend": args.backend,
             "tt_model": args.tt_model if args.backend == "tt" else None,
             "tt_slice_parallel_devices": args.tt_slice_parallel_devices if args.backend == "tt" else None,
+            "tt_slice_parallel_mesh_shape": list(args.tt_slice_parallel_mesh_shape)
+            if args.backend == "tt" and args.tt_slice_parallel_mesh_shape
+            else None,
             "tt_mesh_shape": list(args.tt_mesh_shape) if args.backend == "tt" and args.tt_mesh_shape else None,
             "tt_device_verify": tt_backend.device_verify_info if args.backend == "tt" and tt_backend else None,
             "confidence_threshold": args.confidence_threshold,

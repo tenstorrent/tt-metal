@@ -83,10 +83,15 @@ export PYTHONPATH="$(pwd)"
 
 - **Full-image path:** Image is loaded with **PIL + EXIF** (`read_image_as_pil`), converted to BGR for the TT runner. Inference uses a **640×640 letterbox** (`preprocess`); boxes are scaled back to the original resolution via `scale_boxes` in `common_demo_utils.postprocess`.
 - **Sliced path:** SAHI `slice_image` builds tiles. Each tile is inferred; predictions are **shifted to full-image coordinates** before SAHI merge (NMS / NMM / GREEDYNMM / LSNMS), matching `sahi.predict.get_sliced_prediction` semantics.
-- **`--tt-slice-parallel-devices N`:** Opens **`MeshShape(1, N)`** — **N** chips in one row. Each forward can run **up to N distinct** 640×640 crops (**one slice per chip**). The last chunk is padded with black if fewer than N tiles remain (padded slots are not merged). **`N` must be ≤ the number of devices** reported by the system (or configured with `--tt-mesh-shape`). Omit this flag for **sequential** per-slice inference; without it, a single slice may be **replicated** across the opened mesh per forward.
+- **`--tt-slice-parallel-devices N`:** Opens a mesh of **N** chips for slice batching (default topology **`MeshShape(1, N)`** — one row). Each forward runs **up to N distinct** 640×640 crops (**one real slice per chip**). The last chunk is padded with black if fewer than N tiles remain (padded slots are not merged). **`N` must be ≤** the device count implied by **`--tt-mesh-shape`** when set, or the system mesh descriptor. Omit this flag for **sequential** per-slice inference; without it, a single slice may be **replicated** across the opened mesh per forward.
+- **`--tt-slice-parallel-mesh-shape ROWS COLS`** *(optional):* Use **`MeshShape(ROWS, COLS)`** instead of **`(1, N)`**, as long as **`ROWS * COLS == N`** (e.g. **`8 3`** with **`--tt-slice-parallel-devices 24`** on Galaxy-style layouts). Requires **`--tt-slice-parallel-devices`**. If omitted, behavior is unchanged: **`MeshShape(1, N)`**.
+- **`--tt-mesh-shape ROWS COLS`** *(optional):* Caps / configures how many devices are considered available when validating **`N`** for slice-parallel mode; the slice-parallel path still opens exactly **`N`** devices with the topology above (not the full **`8×4`** mesh unless **`N`** equals 32 and you choose a matching shape).
 - **Teardown:** Slice-parallel mode does **not** use `create_submesh()` off a larger parent mesh (avoids CQ sharing issues on close).
-- **Verification:** On TT init the script prints **`TT device verify:`** with `num_devices`, `mesh_shape`, `device_batch_size`, and how the device was opened. **`summary.json`** includes **`config.tt_device_verify`** with the same fields.
-- **Timing:** For each image, stdout shows **full** and **sliced** lines with **`pre` / `device` / `post`** (seconds). Per-image and aggregate breakdowns are in **`summary.json`** (`full_timing_sec`, `sliced_timing_sec`, `aggregate.mean_*_timing_sec`).
+- **Verification:** On TT init the script prints **`TT device verify:`** with `num_devices`, `mesh_shape`, `device_batch_size`, `tt_slice_parallel_mesh_shape`, and how the device was opened. **`summary.json`** includes **`config.tt_device_verify`** (and **`config.tt_slice_parallel_mesh_shape`**) with the same fields.
+- **Timing:** For each image, stdout shows **full** and **sliced** lines with coarse **`pre` / `device` / `post`** (seconds), plus an optional **detail** line when non-zero:
+  - **TT full / sliced:** e.g. **`read`**, **`sahi_slice`**, **`cpu_prep`** (host letterbox/tensor prep; **summed** over all slice forwards on the sliced path), **`tt_run`**, **`to_torch`**, **`tt_post`** (NMS + `scale_boxes` on host), **`sahi_shift`**, **`sahi_merge`**, **`slice_export`** (if saving slice PNGs). On TT, letterbox runs **once per preprocess call**; the sliced path calls it once per tile (or once per parallel batch of tiles). **`host_cpu_prep_mean_per_slice_sec`** in JSON helps compare per-tile cost vs a single full-image run.
+  - **Sliced path `read`:** TT and Ultralytics **tagged** slice flows preload with **`read_image_as_pil`** and pass a PIL image into **`slice_image`** so **`read`** and **`sahi_slice`** are separate; SAHI **`get_sliced_prediction`** timings keep SAHI’s internal **`slice`** bucket only.
+  - **`summary.json`:** `full_timing_sec` / `sliced_timing_sec` include granular keys such as **`host_read_image_sec`**, **`host_cpu_prep_letterbox_sec`**, **`host_cpu_prep_mean_per_slice_sec`** (TT sliced), **`device_ttnn_run_sec`**, **`host_ttnn_to_torch_sec`**, **`host_tt_torch_postprocess_sec`**, **`sahi_shift_to_full_sec`**, **`sahi_merge_sec`**, **`sahi_ultralytics_per_slice_host_sec`** (tagged Ultralytics path), plus aggregates under **`aggregate.mean_*_timing_sec`**.
 - **`--save-slice-images`:** After each slice’s inference, saves **`OUTPUT_DIR/<stem>_slices/slice_NNN_xX_yY.png`** with **detections drawn** (slice-local boxes, **before** cross-tile merge). No separate script.
 
 ### Multi-chip / Ethernet dispatch
@@ -103,7 +108,7 @@ or pass **`--tt-eth-dispatch`** (the script sets the env var before `ttnn` loads
 
 ### Example: TT reference command (YOLOv8s, 1280×1280, 640 tiles, NMM, parallel mesh)
 
-Below is a **copy-paste** command using paths under this repo. Adjust **`--tt-slice-parallel-devices`** to match your hardware (e.g. **`4`** for a 2×2 grid on 1280×1280 with 640×640 tiles and zero overlap). **`32`** is only valid if the machine exposes **at least 32** mesh devices; otherwise the script raises an error.
+Below is a **copy-paste** command using paths under this repo. Adjust **`--tt-slice-parallel-devices`** to match your hardware (e.g. **`4`** for a 2×2 grid on 1280×1280 with 640×640 tiles and zero overlap). **`32`** is only valid if the machine exposes **at least 32** mesh devices; otherwise the script raises an error. For **`--tt-slice-parallel-mesh-shape`**, **`ROWS*COLS`** must equal **`N`**.
 
 ```bash
 python models/demos/yolo_eval/sahi_ultralytics_eval.py \
@@ -149,6 +154,34 @@ python models/demos/yolo_eval/sahi_ultralytics_eval.py \
 ```
 
 Optional: add **`--save-slice-images`** to export per-tile PNGs with boxes (same folder pattern as above).
+
+### Example: 3840×2160 UHD, 6×4 = 24 tiles, slice-parallel 24, mesh 8×3
+
+Resize input to **3840×2160**, tile with **640×640** and **no overlap** → **⌈3840/640⌉ × ⌈2160/640⌉ = 6×4 = 24** slices. Use **`--tt-slice-parallel-devices 24`** so one forward processes up to 24 distinct tiles. **`--tt-slice-parallel-mesh-shape 8 3`** opens **`MeshShape(8,3)`** instead of **`(1,24)`**; **`--tt-mesh-shape 8 4`** ensures the configured device budget is at least **32** so **`24 ≤ max_devices`**. Adjust paths to your checkout.
+
+```bash
+python models/demos/yolo_eval/sahi_ultralytics_eval.py \
+  --backend tt \
+  --tt-model yolov8s \
+  --tt-eth-dispatch \
+  --tt-slice-parallel-devices 24 \
+  --tt-slice-parallel-mesh-shape 8 3 \
+  --tt-mesh-shape 8 4 \
+  --pre-resize-to 3840 2160 \
+  --slice-height 640 \
+  --slice-width 640 \
+  --overlap-height-ratio 0 \
+  --overlap-width-ratio 0 \
+  --postprocess-type NMM \
+  --postprocess-match-metric IOU \
+  --postprocess-match-threshold 0.2 \
+  --confidence-threshold 0.55 \
+  --save-visuals \
+  --save-slice-grid-overlay \
+  --save-slice-images \
+  --input models/demos/yolo_eval/sample_images/crowded_freeway_3840x2160.jpg \
+  --output-dir models/demos/yolo_eval/sample_images_output
+```
 
 ---
 
@@ -215,12 +248,12 @@ python models/demos/yolo_eval/sahi_ultralytics_eval.py \
 
 - **Stdout (per image):**
   - Detection counts and wall times for full vs sliced.
-  - Two lines with **`pre` / `device` / `post`** timing for **full (single)** and **sliced** (seconds; see `sahi_ultralytics_eval.py` for definitions).
-  - If **`--save-slice-images`**, an extra line reports **`slice_export`** I/O time.
+  - Two lines with coarse **`pre` / `device` / `post`** timing for **full (single)** and **sliced** (seconds; see `sahi_ultralytics_eval.py` for definitions).
+  - Extra **detail** lines with granular timers (**`read`**, **`cpu_prep`**, **`tt_run`**, **`to_torch`**, **`tt_post`**, **`sahi_slice`**, **`sahi_shift`**, **`sahi_merge`**, **`slice_export`**, etc.) when non-zero.
 - **`summary.json`** (under `--output-dir`):
-  - **`config`:** run settings, **`tt_device_verify`** (TT only), etc.
-  - **`per_image`:** `full_timing_sec`, `sliced_timing_sec`, detection deltas.
-  - **`aggregate`:** means including **`mean_full_timing_sec`**, **`mean_sliced_timing_sec`**.
+  - **`config`:** run settings, **`tt_device_verify`** (TT only), **`tt_slice_parallel_mesh_shape`**, etc.
+  - **`per_image`:** `full_timing_sec`, `sliced_timing_sec` (including granular timing keys), detection deltas.
+  - **`aggregate`:** means including **`mean_full_timing_sec`**, **`mean_sliced_timing_sec`** over the same timing key set.
 - **Visuals (optional):**
   - `<stem>_full.*`, `<stem>_sliced.*`
   - `<stem>_slice_grid.png` — tile boundaries on the input.
