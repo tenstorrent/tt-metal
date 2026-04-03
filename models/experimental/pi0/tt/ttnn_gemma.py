@@ -71,7 +71,7 @@ def adarms_norm_ttnn(
     cond: ttnn.Tensor,
     eps: float = 1e-6,
     device: ttnn.Device = None,
-    ones_weight: Optional[ttnn.Tensor] = None,
+    ones_weight: Optional[ttnn.Tensor] = None,  # deprecated, kept for API compat
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
     """
     Adaptive RMSNorm (Pi0.5) using TTNN operations.
@@ -95,15 +95,6 @@ def adarms_norm_ttnn(
     seq_len = x.shape[1]
     hidden_dim = x.shape[2]
 
-    # RMS normalize (no learnable weight — scale/shift come from conditioning)
-    if ones_weight is None:
-        ones_weight = ttnn.ones((1, hidden_dim), device=device, dtype=ttnn.bfloat16)
-        ones_weight = ttnn.to_layout(ones_weight, ttnn.TILE_LAYOUT)
-        normed = ttnn.rms_norm(x, weight=ones_weight, epsilon=eps, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(ones_weight)
-    else:
-        normed = ttnn.rms_norm(x, weight=ones_weight, epsilon=eps, memory_config=ttnn.L1_MEMORY_CONFIG)
-
     # Project conditioning: cond (B, cond_dim) -> modulation (B, hidden_dim * 3)
     cond_2d = ttnn.reshape(cond, (batch_size, 1, -1)) if len(cond.shape) == 2 else cond
     modulation = ttnn.linear(
@@ -112,7 +103,6 @@ def adarms_norm_ttnn(
         bias=dense_bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    # modulation shape: (B, 1, hidden_dim * 3)
 
     # Split into scale, shift, gate — each (B, 1, hidden_dim)
     scale = ttnn.slice(modulation, [0, 0, 0], [batch_size, 1, hidden_dim])
@@ -120,11 +110,12 @@ def adarms_norm_ttnn(
     gate = ttnn.slice(modulation, [0, 0, hidden_dim * 2], [batch_size, 1, hidden_dim * 3])
     ttnn.deallocate(modulation)
 
-    # Apply: normed * (1 + scale) + shift = scale * normed + normed + shift
-    # FUSED: mac(scale, normed, normed) = scale * normed + normed — saves 1 op vs add+mul
-    normed = ttnn.mac(scale, normed, normed)
+    # FUSED: rms_norm with dynamic weight=(1+scale) and bias=shift
+    # This replaces 3 separate ops (rms_norm + mac + add) with 2 ops (add + rms_norm)
+    weight_dynamic = ttnn.add(scale, 1.0)
     ttnn.deallocate(scale)
-    normed = ttnn.add(normed, shift, memory_config=ttnn.L1_MEMORY_CONFIG)
+    normed = ttnn.rms_norm(x, weight=weight_dynamic, bias=shift, epsilon=eps, memory_config=ttnn.L1_MEMORY_CONFIG)
+    ttnn.deallocate(weight_dynamic)
     ttnn.deallocate(shift)
 
     return normed, gate
