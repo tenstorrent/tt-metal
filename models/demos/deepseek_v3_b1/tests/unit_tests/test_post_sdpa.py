@@ -17,7 +17,7 @@ Post-SDPA phases:
 - Gather1: Collect to [1, 8192] on gather core (12, 9)
 - Mcast: Broadcast [1, 8192] to 130 cores (13x10 rectangular grid)
 - Matmul2: [1, 8192] x [8192, 64] -> [1, 64] per core on 112 active cores
-- Gather2: Collect to [1, 7168] on gather core (12, 9)
+- Gather2: Collect to [1, 7168] on sender core (11, 9)
 - TP All-Reduce: Exchange [1, 7168] between devices, reduce (local + remote + residual)
 
 The mcast grid (13x10=130 cores) includes 18 inactive cores that receive mcast data
@@ -26,8 +26,7 @@ but skip matmul2 via is_matmul2_core=false.
 Core Layout:
 - SDPA Workers: FlashMLADecode.output_cores(0, SDPA_INPUT_NUM_CORES)
 - SDPA Forwarders: (6,9), (7,9) = 2 cores
-- TP All-Reduce Receiver = Gather core (12, 9): already has local data after Gather2
-- TP All-Reduce Sender = Adjacent core (11, 9): reads from gather core, sends via fabric
+- TP All-Reduce: sender core (11, 9) + receiver core (12, 9)
 
 Full operation: [1, 512] @ [512, 8192] @ [8192, 7168] -> [1, 7168] per device,
 then all-reduce across devices with optional residual add.
@@ -47,13 +46,7 @@ from models.demos.deepseek_v3_b1.blitz_decode_weights import (
 from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import PostSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import SdpaReduceToAll, compute_forwarder_scratch_size
-
-
-def create_fabric_router_config(max_payload_size):
-    """Helper to create FabricRouterConfig with custom max payload size."""
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
 
 
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(1, 1), (4, 2)], ids=["single_device", "multi_device"])
@@ -110,6 +103,7 @@ def test_post_sdpa(
 
     # Create submesh - fabric requires opening full system mesh first
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    ccl_num_links = 2
 
     # Set up sub-device
     compute_grid_size = submesh.compute_with_storage_grid_size()
@@ -152,6 +146,9 @@ def test_post_sdpa(
 
     gather_core = ttnn.CoreCoord(12, 9)
     gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
+
+    sender_core = ttnn.CoreCoord(11, 9)
+    sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(sender_core, sender_core)])
 
     # ========================================================================
     # Create PyTorch tensors (per-device)
@@ -298,12 +295,12 @@ def test_post_sdpa(
     logger.info(f"Created gather1 output tensor: {gather1_output_shard_shape} on gather core")
 
     # ========================================================================
-    # Create gather2 output tensor (intermediate [1, 7168] on gather core, per device)
-    # This tensor backs CB7 and holds gather2 output for CCL to read
+    # Create gather2 output tensor (intermediate [1, 7168] on sender core, per device)
+    # This tensor backs the CCL local data CB on sender core (11, 9)
     # ========================================================================
     gather2_output_shard_shape = (M, output_size)  # [1, 7168]
     gather2_output_shard_spec = ttnn.ShardSpec(
-        gather_core_grid,
+        sender_core_grid,
         gather2_output_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
@@ -322,7 +319,7 @@ def test_post_sdpa(
         memory_config=gather2_output_mem_config,
         mesh_mapper=mesh_mapper,
     )
-    logger.info(f"Created gather2 output tensor: {gather2_output_shard_shape} on gather core per device")
+    logger.info(f"Created gather2 output tensor: {gather2_output_shard_shape} on sender core per device")
 
     # ========================================================================
     # Create CCL tensors and semaphores (only when CCL is enabled)
@@ -330,7 +327,10 @@ def test_post_sdpa(
     ttnn_ccl_intermediate = None
     ttnn_output = None
     ttnn_residual = None
-    semaphores = None
+
+    # Global semaphores (always created, like AttentionBlock)
+    semaphores = PostSDPA.create_semaphores(submesh, num_links=ccl_num_links)
+    logger.info(f"Created {len(semaphores)} global semaphores for PostSDPA")
 
     if ccl_enabled:
         # CCL intermediate tensor (1x32 tiles to match gather2 output format)
@@ -397,14 +397,6 @@ def test_post_sdpa(
             )
             logger.info(f"Created residual tensor: {output_shard_shape} on gather core per device")
 
-        # Global semaphores for CCL
-        num_cores = compute_grid_size.x * compute_grid_size.y
-        available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
-        semaphore1 = ttnn.create_global_semaphore(submesh, available_cores, 0)
-        semaphore2 = ttnn.create_global_semaphore(submesh, available_cores, 0)
-        semaphores = [semaphore1, semaphore2]
-        logger.info("Created global semaphores for CCL synchronization")
-
     # ========================================================================
     # SDPA KV Cache tensor for CB overlap
     # Matches flash_mla's double-buffered KV CB sizing: shard = (256, 576) per core,
@@ -464,6 +456,7 @@ def test_post_sdpa(
         residual_tensor_mesh=ttnn_residual,
         fp32_dest_acc_en=False,
         ccl_enabled=ccl_enabled,
+        ccl_num_links=ccl_num_links,
         sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
     )
     ttnn.synchronize_device(submesh)
@@ -603,6 +596,9 @@ def test_post_sdpa_with_sdpa_phase(
 
     gather_core = ttnn.CoreCoord(12, 9)
     gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
+
+    sender_core = ttnn.CoreCoord(11, 9)
+    sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(sender_core, sender_core)])
 
     sdpa_output_cores = FlashMLADecode.ProgramConfig.grid.output_cores(0, NUM_SDPA_WORKERS)
     sdpa_worker_grid = ttnn.CoreRangeSet(
@@ -821,7 +817,7 @@ def test_post_sdpa_with_sdpa_phase(
 
     gather2_output_shard_shape = (M, output_size)
     gather2_output_shard_spec = ttnn.ShardSpec(
-        gather_core_grid, gather2_output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR
+        sender_core_grid, gather2_output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR
     )
     gather2_output_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gather2_output_shard_spec
@@ -887,11 +883,8 @@ def test_post_sdpa_with_sdpa_phase(
         )
 
     # Global semaphores for CCL
-    num_cores = compute_grid_size.x * compute_grid_size.y
-    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
-    semaphore1 = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    semaphore2 = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    semaphores = [semaphore1, semaphore2]
+    ccl_num_links = 2
+    semaphores = PostSDPA.create_semaphores(submesh, num_links=ccl_num_links)
 
     # ========================================================================
     # Create SDPA tensors
@@ -1005,11 +998,6 @@ def test_post_sdpa_with_sdpa_phase(
         f"Created SDPA forwarder scratch buffer: {sdpa_fwd_buffer_bytes} bytes total, {sdpa_fwd_per_forwarder} elements per forwarder"
     )
 
-    # SDPA global semaphores - must be created on the SDPA worker grid (like original SDPA op)
-    sdpa_semaphore1 = ttnn.create_global_semaphore(submesh, sdpa_worker_grid, 0)
-    sdpa_semaphore2 = ttnn.create_global_semaphore(submesh, sdpa_worker_grid, 0)
-    sdpa_semaphores = [sdpa_semaphore1, sdpa_semaphore2]
-
     # ========================================================================
     # Create position_id tensor mesh for SDPA position validity
     # HEIGHT_SHARDED int32 [1,1] per SDPA worker core, replicated across mesh
@@ -1044,13 +1032,13 @@ def test_post_sdpa_with_sdpa_phase(
         residual_tensor_mesh=ttnn_residual,
         fp32_dest_acc_en=False,
         ccl_enabled=True,
+        ccl_num_links=ccl_num_links,
         # SDPA parameters
         sdpa_input_l_mesh=ttnn_sdpa_input_l,
         sdpa_input_ms_mesh=ttnn_sdpa_input_ms,
         sdpa_output_l_mesh=ttnn_sdpa_output_l,
         sdpa_intermediate_recv_mesh=ttnn_sdpa_intermediate_recv,
         sdpa_forwarder_scratch_mesh=ttnn_sdpa_forwarder_scratch,
-        sdpa_semaphores=sdpa_semaphores,
         sdpa_scale_fp32=1.0,
         sdpa_cluster_axis=0,  # SDPA reduces on axis 0 (rows), TP reduces on axis 1 (cols)
         sdpa_position_id_tensor_mesh=position_id_tensor_mesh,
