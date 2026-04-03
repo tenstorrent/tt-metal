@@ -879,7 +879,6 @@ jobs:
       (needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Nightly)' || needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Comprehensive)' || needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Model Traced)' || needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Lead Models)')
     runs-on: ubuntu-22.04
     outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
       n150-matrix: ${{ steps.set-matrix.outputs.n150-matrix }}
       n300-matrix: ${{ steps.set-matrix.outputs.n300-matrix }}
       p150b-matrix: ${{ steps.set-matrix.outputs.p150b-matrix }}
