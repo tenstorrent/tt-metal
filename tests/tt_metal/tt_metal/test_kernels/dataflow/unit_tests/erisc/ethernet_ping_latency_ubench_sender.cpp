@@ -88,6 +88,7 @@ FORCE_INLINE void run_loop_iteration(
 }
 
 void kernel_main() {
+    set_l1_data_cache<false>();
     uint32_t arg_idx = 0;
     const uint32_t handshake_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_messages = get_arg_val<uint32_t>(arg_idx++);
@@ -117,10 +118,6 @@ void kernel_main() {
     // This ensures registers are initialized before the remote side can access them
     init_ptr_val<SENDER_CREDIT_STREAM_ID>(0);
 
-    // Avoids hang in issue https://github.com/tenstorrent/tt-metal/issues/9963
-    for (uint32_t i = 0; i < 2000000000; i++) {
-        asm volatile("nop");
-    }
     eth_setup_handshake(handshake_addr, true);
 
     // Track expected credits for stream register checking
