@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -12,6 +12,8 @@ from PIL import Image
 from torchvision import transforms
 from models.experimental.retinanet.tt.tt_backbone import TTBackbone
 from models.experimental.retinanet.tt.custom_preprocessor import create_custom_mesh_preprocessor
+from ttnn.model_preprocessing import infer_ttnn_module_args
+from models.experimental.retinanet.tests.pcc.test_resnet50_fpn import infer_ttnn_module_args as infer_module_args
 
 
 class BackboneTestInfra:
@@ -32,8 +34,7 @@ class BackboneTestInfra:
         self.inputs_mesh_mapper, self.weights_mesh_mapper, self.output_mesh_composer = self.get_mesh_mappers(device)
 
         # Load RetinaNet model to extract backbone
-        retinanet = retinanet_resnet50_fpn_v2(weights=RetinaNet_ResNet50_FPN_V2_Weights.DEFAULT)
-        retinanet.eval()
+        retinanet = retinanet_resnet50_fpn_v2(weights=RetinaNet_ResNet50_FPN_V2_Weights.DEFAULT).eval()
 
         # Store only backbone
         self.torch_backbone = retinanet.backbone
@@ -52,6 +53,55 @@ class BackboneTestInfra:
 
         # Get backbone features
         backbone_features = self.torch_backbone(self.torch_input_tensor)
+
+        ################# MODEL ARGS ##################
+        conv_args = {}
+        backbone = retinanet.backbone.body
+        self.fpn_model = retinanet.backbone.fpn
+        self.torch_fpn_input_tensor = backbone(self.torch_input_tensor)
+
+        conv_args = infer_ttnn_module_args(
+            model=self.torch_backbone,
+            run_model=lambda model: self.torch_backbone(self.torch_input_tensor),
+            device=device,
+        )
+        fpn_args = infer_module_args(
+            model=self.fpn_model, run_model=lambda model: self.fpn_model(self.torch_fpn_input_tensor), device=device
+        )
+
+        model_args = {}
+        model_args["stem"] = {}
+        model_args["stem"]["conv1"] = conv_args["body"]["conv1"]
+        model_args["stem"]["maxpool"] = conv_args["body"]["maxpool"]
+
+        model_args["fpn"] = {}
+        model_args["fpn"]["inner_blocks"] = {}
+        model_args["fpn"]["inner_blocks"][0] = fpn_args["fpn"]["fpn"]["inner_blocks"][0]["fpn"]["inner_blocks"][0][0]
+        model_args["fpn"]["inner_blocks"][1] = fpn_args["fpn"]["fpn"]["inner_blocks"][1]["fpn"]["inner_blocks"][1][0]
+        model_args["fpn"]["inner_blocks"][2] = fpn_args["fpn"]["fpn"]["inner_blocks"][2]["fpn"]["inner_blocks"][2][0]
+
+        model_args["fpn"]["layer_blocks"] = {}
+        model_args["fpn"]["layer_blocks"][0] = fpn_args["fpn"]["fpn"]["layer_blocks"][0]["fpn"]["layer_blocks"][0][0]
+        model_args["fpn"]["layer_blocks"][1] = fpn_args["fpn"]["fpn"]["layer_blocks"][1]["fpn"]["layer_blocks"][1][0]
+        model_args["fpn"]["layer_blocks"][2] = fpn_args["fpn"]["fpn"]["layer_blocks"][2]["fpn"]["layer_blocks"][2][0]
+
+        model_args["fpn"]["extra_blocks"] = {}
+        model_args["fpn"]["extra_blocks"]["p6"] = fpn_args["fpn"]["fpn"]["extra_blocks"]["fpn"]["extra_blocks"]["p6"]
+        model_args["fpn"]["extra_blocks"]["p7"] = fpn_args["fpn"]["fpn"]["extra_blocks"]["fpn"]["extra_blocks"]["p7"]
+
+        model_args["layer1"] = {}
+        model_args["layer1"] = conv_args["body"]["layer1"]
+
+        model_args["layer2"] = {}
+        model_args["layer2"] = conv_args["body"]["layer2"]
+
+        model_args["layer3"] = {}
+        model_args["layer3"] = conv_args["body"]["layer3"]
+
+        model_args["layer4"] = {}
+        model_args["layer4"] = conv_args["body"]["layer4"]
+
+        ################# MODEL ARGS ##################
 
         # Store only backbone outputs (FPN levels: "0", "1", "2", "p6", "p7")
         self.torch_output_tensor = backbone_features
@@ -78,7 +128,9 @@ class BackboneTestInfra:
         tt_host_tensor = to_ttnn_host(self.torch_input_tensor)
 
         # TTNN backbone model
-        self.ttnn_model = TTBackbone(parameters=self.backbone_parameters, model_config=model_config)
+        self.ttnn_model = TTBackbone(
+            parameters=self.backbone_parameters, model_config=model_config, device=device, model_args=model_args
+        )
 
         # Move input to device
         self.input_tensor = ttnn.to_device(tt_host_tensor, device)

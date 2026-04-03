@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -14,6 +14,7 @@ from tests.ttnn.utils_for_testing import check_with_pcc
 
 from models.experimental.retinanet.tt.tt_stem import resnet50Stem, neck_optimisations
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
+from ttnn.model_preprocessing import infer_ttnn_module_args
 
 
 def conv_bn_to_params(conv, bn, mesh_mapper):
@@ -34,6 +35,7 @@ def create_custom_mesh_preprocessor(mesh_mapper=None):
     def custom_mesh_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
         conv = model.conv1
         bn = model.bn1
+        relu = model.relu
         pool = model.maxpool
 
         stem_params = conv_bn_to_params(conv, bn, mesh_mapper)
@@ -91,6 +93,13 @@ class Resnet50StemTestInfra:
         self.torch_input_tensor = preprocess(img).unsqueeze(0)
         self.torch_output_tensor = torch_model(self.torch_input_tensor)
 
+        ################# MODEL ARGS ##################
+        model_args = {}
+        model_args = infer_ttnn_module_args(
+            model=torch_model, run_model=lambda model: torch_model(self.torch_input_tensor), device=device
+        )
+        ################# MODEL ARGS ##################
+
         # Convert input to TTNN format
         tt_host_tensor = ttnn.from_torch(
             self.torch_input_tensor.permute(0, 2, 3, 1),
@@ -102,8 +111,9 @@ class Resnet50StemTestInfra:
         # Build TTNN model
         self.ttnn_model = resnet50Stem(
             parameters=parameters,
-            stride=stride,
+            device=device,
             model_config=model_config,
+            model_args=model_args,
             layer_optimisations=neck_optimisations,
         )
 

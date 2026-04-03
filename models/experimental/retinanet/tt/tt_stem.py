@@ -1,10 +1,15 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 
 import ttnn
 from dataclasses import dataclass
-from models.experimental.retinanet.tt.utils import TTConv2D
+from models.experimental.retinanet.tt.utils import MaxPoolConfiguration
+from models.tt_cnn.tt.builder import TtConv2d, TtMaxPool2d
+import ttnn
+from models.tt_cnn.tt.builder import (
+    Conv2dConfiguration,
+)
 
 
 @dataclass
@@ -14,13 +19,10 @@ class NeckOptimizer:
 
 neck_optimisations = NeckOptimizer(
     conv1={
-        "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         "reallocate_halo_output": True,
         "enable_act_double_buffer": True,
         "enable_weights_double_buffer": True,
-        "memory_config": ttnn.L1_MEMORY_CONFIG,
-        "slice_config": ttnn.Conv2dL1FullSliceConfig,
-        "dtype": ttnn.bfloat16,
+        "activation": ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
     }
 )
 
@@ -29,19 +31,24 @@ class resnet50Stem:
     def __init__(
         self,
         parameters,
-        stride,
+        device,
         model_config,
+        model_args,
         layer_optimisations=neck_optimisations,
     ) -> None:
-        self.conv1 = TTConv2D(
-            kernel_size=7,
-            stride=2,
-            padding=3,
-            parameters=parameters.conv1,
-            kernel_fidelity=model_config,
-            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+        self.conv_config_1 = Conv2dConfiguration.from_model_args(
+            model_args["conv1"],
+            weights=parameters.conv1["weight"],
+            bias=parameters.conv1["bias"],
             **layer_optimisations.conv1,
+            math_fidelity=model_config["MATH_FIDELITY"],
+            weights_dtype=model_config["WEIGHTS_DTYPE"],
+            activation_dtype=model_config["ACTIVATIONS_DTYPE"],
         )
+        self.conv1 = TtConv2d(self.conv_config_1, device)
+
+        self.maxpool_config = MaxPoolConfiguration.from_model_args(model_args["maxpool"])
+        self.maxpool = TtMaxPool2d(self.maxpool_config, device)
 
     def __call__(
         self,
@@ -49,22 +56,8 @@ class resnet50Stem:
         device,
     ):
         # conv1 is stride 2 conv 3x3
-        out, shape = self.conv1(device, x, x.shape)
-
-        out = ttnn.max_pool2d(
-            input_tensor=out,
-            batch_size=shape[-4],
-            input_h=shape[-3],
-            input_w=shape[-2],
-            channels=shape[-1],
-            kernel_size=[3, 3],
-            stride=[2, 2],
-            padding=[1, 1],
-            dilation=[1, 1],
-            reallocate_halo_output=True,
-            applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ceil_mode=False,
-        )
-        out = ttnn.reshape(out, (shape[-4], shape[-3] // 2, shape[-2] // 2, shape[-1]))
+        out, shape = self.conv1(x, return_output_dim=True)
+        out = self.maxpool(out)
+        out = ttnn.reshape(out, (1, shape[-2] // 2, shape[-1] // 2, 64))
 
         return out
