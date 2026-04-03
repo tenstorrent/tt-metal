@@ -270,16 +270,16 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         if self.dynamic_load:
             # setup models that cannot be loaded together with the corresponding model.
             # The module loading utility will take care of the necessary unloading.
-            self.tt_umt5_encoder.set_unload_set(self.transformer_2)
+            self.tt_umt5_encoder.register_coresident_exclusions(self.transformer_2)
             if ttnn.device.is_blackhole():
-                self.transformer.set_unload_set(self.transformer_2)
-                self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder)
+                self.transformer.register_coresident_exclusions(self.transformer_2)
+                self.transformer_2.register_coresident_exclusions(self.transformer, self.tt_umt5_encoder)
             else:
                 # WH T3K has tighter DRAM — include VAE in the unload chain so
                 # transformers and VAE never coexist in DRAM across pipeline runs.
-                self.transformer.set_unload_set(self.transformer_2, self.tt_vae)
-                self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder, self.tt_vae)
-                self.tt_vae.set_unload_set(self.transformer, self.transformer_2)
+                self.transformer.register_coresident_exclusions(self.transformer_2, self.tt_vae)
+                self.transformer_2.register_coresident_exclusions(self.transformer, self.tt_umt5_encoder, self.tt_vae)
+                self.tt_vae.register_coresident_exclusions(self.transformer, self.transformer_2)
 
         # Cache warmup: Load in reverse order of use to ensure the earliest required models stay loaded before call.
         self._prepare_transformer2()
@@ -301,7 +301,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             1, self.vae.config.z_dim, 1, 1, 1
         )
 
-        # TODO: Reset buffers for change in resolution. Alos reinitialize trace
+        # TODO: Reset buffers for change in resolution. Also reinitialize trace
         self.prompt_t1_buffer = None
         self.prompt_t2_buffer = None
         self.negative_prompt_t1_buffer = None

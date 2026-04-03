@@ -36,7 +36,7 @@ class Module(ABC):
         self._children = {}
         self._parameters = {}
         self._is_loaded = False
-        self.unload_set = None  # set of modules that cannot be loaded together with this module. They need to be unloaded before loading this module.
+        self.coresident_exclusions = None  # modules that cannot be resident in memory at the same time as this module. They should be deallocated before this module is loaded.
 
     def named_children(self) -> Iterator[tuple[str, Module]]:
         yield from self._children.items()
@@ -215,13 +215,20 @@ class Module(ABC):
     def is_loaded(self) -> bool:
         return self._is_loaded
 
-    def set_unload_set(self, *args: Module) -> None:
+    def register_coresident_exclusions(self, *args: Module) -> None:
         """
-        Set the modules that cannot be loaded together with this module. They need to be unloaded before loading this module.
+        Register modules that cannot be resident in memory at the same time as this module.
+        They should be deallocated before this module is loaded. See `evict_coresident_exclusions` .
         Args:
-            *args: Arbitrary number of Modules that cannot be loaded together with this module.
+            *args: Modules that cannot be co-resident in memory with this module.
         """
-        self.unload_set = set(args)
+        self.coresident_exclusions = set(args)
+
+    def evict_coresident_exclusions(self) -> None:
+        """Evict the modules that cannot be resident in memory at the same time as this module."""
+        if self.coresident_exclusions is not None:
+            for module in self.coresident_exclusions:
+                module.deallocate_weights()
 
     @abstractmethod
     def forward(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401

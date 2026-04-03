@@ -79,9 +79,8 @@ def load_model(
     if tt_model.is_loaded():
         return
 
-    # unload any modules that need to be unloaded before loading this module
-    for module in tt_model.unload_set or []:
-        module.deallocate_weights()
+    # evict any modules that cannot be resident in memory at the same time as this module
+    tt_model.evict_coresident_exclusions()
 
     cache_dir = model_cache_dir(
         model_name=model_name,
