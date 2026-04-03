@@ -28,6 +28,8 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/allocator_state.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/maybe_remote.hpp>
@@ -85,6 +87,10 @@ public:
 // NOLINTBEGIN(misc-redundant-expression)
 void py_module_types(nb::module_& mod) {
     using namespace tt::tt_metal::distributed::multihost;
+
+    // AllocatorState — opaque type for save/restore allocator state
+    nb::class_<tt::tt_metal::AllocatorState>(mod, "AllocatorState",
+        "Opaque allocator state for save/restore between inference calls.");
 
     // Bind strong types for Rank and Size
     nb::class_<Rank>(mod, "Rank", "Rank of a process in the distributed context")
@@ -341,6 +347,25 @@ void py_module(nb::module_& mod) {
             &MeshDevice::set_program_cache_misses_allowed,
             R"doc(
                Set whether program cache misses are allowed across all devices in the mesh.
+           )doc")
+        .def(
+            "extract_allocator_state",
+            [](MeshDevice& self) {
+                return self.allocator()->extract_state();
+            },
+            R"doc(
+               Extract the current allocator state for later restoration.
+               Used to save/restore memory layout between inference calls.
+           )doc")
+        .def(
+            "override_allocator_state",
+            [](MeshDevice& self, const AllocatorState& state) {
+                self.allocator()->override_state(state);
+            },
+            nb::arg("state"),
+            R"doc(
+               Override the allocator state with a previously extracted state.
+               Restores memory layout to eliminate settling overhead.
            )doc")
         .def_prop_ro(
             "shape",
