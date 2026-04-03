@@ -205,7 +205,6 @@ Tensor maximum(
 }
 
 Tensor atan2(const Tensor& input_b, const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
-    log_info(tt::LogOp, "Input arguments are ordered as atan2(y, x)");
     return ttnn::detail::invoke_binary_ng(
         input_b,
         input_a,
