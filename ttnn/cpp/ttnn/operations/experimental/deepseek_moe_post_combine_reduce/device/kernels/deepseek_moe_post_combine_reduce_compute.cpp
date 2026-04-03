@@ -74,10 +74,12 @@ void kernel_main() {
 
         // Copy accumulator result to row-major buffer
         cb_wait_front(cb_accumulator, emb_dim_tiles);
-        // DPRINT_UNPACK({ DPRINT << "data cb_accumulator for token " << i << ENDL(); });
-        // for (uint32_t j = 0; j < 7; ++j) {
-        //     DPRINT_UNPACK({ DPRINT << "tile " << j << " data: " << TileSlice(cb_accumulator, j, sr, true, false) <<
-        //     ENDL(); });
+        // if (i == 0 || i == 1  || i == 2) {
+        //     DPRINT_UNPACK({ DPRINT << "data cb_accumulator for token " << i << ENDL(); });
+        //     for (uint32_t j = 0; j < 7; ++j) {
+        //         DPRINT_UNPACK({ DPRINT << "tile " << j << " data: " << TileSlice(cb_accumulator, j, sr, true, false)
+        //         << ENDL(); });
+        //     }
         // }
 
         tile_regs_acquire();
@@ -92,10 +94,21 @@ void kernel_main() {
 
         // Pack to row-major CB17 at position for this token in batch
         for (uint32_t j = 0; j < emb_dim_tiles; j++) {
+            // if (i == 0 || i == 1  || i == 2) {
+            //     DPRINT_UNPACK({ DPRINT << "packing data from cb_accumulator to cb_rowmajor from tile " << j << " to
+            //     tile " << (i * emb_dim_tiles + j) << ENDL(); });
+            // }
             pack_tile(j, cb_rowmajor, i * emb_dim_tiles + j);
         }
 
         tile_regs_release();
+        // if (i == 0 || i == 1  || i == 2) {
+        //     DPRINT_UNPACK({ DPRINT << "data cb_rowmajor for token " << i << ENDL(); });
+        //     for (uint32_t j = 0; j < 7; ++j) {
+        //         DPRINT_UNPACK({ DPRINT << "tile " << j << " data: " << TileSlice(cb_rowmajor, j, sr, true, false) <<
+        //         ENDL(); });
+        //     }
+        // }
 
         cb_pop_front(cb_accumulator, emb_dim_tiles);
         cb_pop_front(cb_combine_input, total_expert_tiles);
