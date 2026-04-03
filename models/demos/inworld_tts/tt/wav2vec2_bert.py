@@ -303,7 +303,7 @@ class TtW2vConvModule(LightweightModule):
         )
 
         # Host roundtrip for GLU + depthwise conv + depthwise LN + SiLU
-        h_torch = ttnn.to_torch(h)  # [1, 1, T, 2048]
+        h_torch = ttnn.to_torch(h).float()  # [1, 1, T, 2048] -> float32 for conv
         h_torch = h_torch.squeeze(0)  # [1, T, 2048]
 
         # GLU: split along last dim, sigmoid gate

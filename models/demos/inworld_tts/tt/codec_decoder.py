@@ -83,8 +83,23 @@ class TtCodecDecoder(LightweightModule):
         )
 
         # ISTFTHead weights (CPU)
-        self.istft_out_weight = state_dict[head_prefix + "out.weight"]
-        self.istft_out_bias = state_dict[head_prefix + "out.bias"]
+        # ISTFTHead Linear(1024, 1282) on TTNN
+        istft_w = state_dict[head_prefix + "out.weight"]
+        istft_b = state_dict[head_prefix + "out.bias"]
+        self.istft_linear_weight = ttnn.from_torch(
+            istft_w.T.unsqueeze(0).unsqueeze(0),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self.istft_linear_bias = ttnn.from_torch(
+            istft_b.unsqueeze(0).unsqueeze(0).unsqueeze(0),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
         self.compute_kernel_config = get_compute_kernel_config_hifi4()
 
@@ -105,11 +120,11 @@ class TtCodecDecoder(LightweightModule):
         codes = indices.transpose(1, 2)  # [B, T, 1]
         return self.quantizer.get_output_from_indices(codes)
 
-    def istft_head(self, x_torch):
-        """ISTFTHead: linear -> split mag/phase -> exp -> complex -> ISTFT (CPU).
+    def istft_head(self, x_input):
+        """ISTFTHead: linear (TTNN) -> split mag/phase -> exp -> complex -> ISTFT (CPU).
 
         Args:
-            x_torch: [B, T, 1024] torch tensor
+            x_input: [B, T, 1024] torch tensor OR [1, 1, T, 1024] ttnn tensor
         Returns:
             [B, 1, num_samples] torch tensor
         """
@@ -117,9 +132,28 @@ class TtCodecDecoder(LightweightModule):
         hop_length = ISTFT_HOP_LENGTH
         win_length = n_fft
 
-        # Linear projection (ensure float32 for FFT math)
-        x_torch = x_torch.float()
-        x_pred = F.linear(x_torch, self.istft_out_weight.float(), self.istft_out_bias.float())  # [B, T, 1282]
+        # Linear projection on TTNN
+        if isinstance(x_input, ttnn.Tensor):
+            x_tt = x_input
+        else:
+            x_tt = ttnn.from_torch(
+                x_input.unsqueeze(0) if x_input.dim() == 3 else x_input,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
+        x_pred_tt = ttnn.linear(
+            x_tt,
+            self.istft_linear_weight,
+            bias=self.istft_linear_bias,
+            core_grid=self.core_grid,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        # Back to CPU for FFT (float32)
+        x_pred = ttnn.to_torch(x_pred_tt).float()
+        if x_pred.dim() == 4:
+            x_pred = x_pred.squeeze(0)  # [B, T, 1282]
         x_pred = x_pred.transpose(1, 2)  # [B, 1282, T]
 
         # Split magnitude and phase
@@ -192,14 +226,10 @@ class TtCodecDecoder(LightweightModule):
         )  # [1, 1, T, 1024]
 
         # Step 3: VocosBackbone (TTNN)
-        hidden = self.backbone(projected)  # [1, 1, T, 1024]
+        hidden = self.backbone(projected)  # [1, 1, T, 1024] ttnn tensor
 
-        # Step 4: ISTFTHead (CPU)
-        hidden_torch = ttnn.to_torch(hidden)  # [1, 1, T, 1024]
-        if hidden_torch.dim() == 4:
-            hidden_torch = hidden_torch.squeeze(0)  # [1, T, 1024]
-
-        audio = self.istft_head(hidden_torch)  # [1, 1, num_samples]
+        # Step 4: ISTFTHead -- Linear on TTNN, FFT on CPU
+        audio = self.istft_head(hidden)  # [1, 1, num_samples]
 
         return audio
 

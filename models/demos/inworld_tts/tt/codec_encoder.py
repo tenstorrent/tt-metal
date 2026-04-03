@@ -1,20 +1,18 @@
 """TTNN implementation of the Inworld TTS codec encoder.
 
-Pipeline: Waveform -> AcousticEncoder -> fusion with SemanticEncoder -> FSQ quantize -> VQ codes.
-
-The encoder runs once per inference (not in the autoregressive loop), so we use
-host-based execution for SnakeBeta and anti-aliased resampling. Conv1d ops use
-TTNN where beneficial, but the encoder is not performance-critical.
-
-CPU boundaries:
-- SnakeBeta activation (custom, not available in TTNN)
-- Anti-aliased resampling (FIR filter ops)
-- FSQ quantization (codebook lookup)
-- Wav2Vec2-BERT semantic features (external model)
+Pipeline: AcousticEncoder + Wav2Vec2-BERT -> SemanticEncoder -> Fusion -> FSQ quantize.
 
 TTNN accelerated:
-- Large Conv1d operations (when channel dims are tile-friendly)
-- fc_prior Linear projection
+- SemanticEncoder: Conv1d + ReLU + residual add on device
+- AcousticEncoder: Conv1d on device where possible, SnakeBeta on host
+- fc_prior: Linear(2048, 2048) on device
+- Wav2Vec2-BERT: FFN/Linear/LayerNorm on device (via TtWav2Vec2Bert)
+
+CPU boundaries:
+- SnakeBeta activation (custom: x + 1/beta * sin^2(alpha*x))
+- Anti-aliased resampling (FIR filters)
+- FSQ quantize (codebook + rounding)
+- Feature extraction (AutoFeatureExtractor)
 """
 
 from typing import Dict, Optional
@@ -25,29 +23,28 @@ import torch.nn.functional as F
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.inworld_tts.reference.functional import (
-    _extract_encoder_block_weights,
     activation1d_forward,
     encoder_block_forward,
     weight_norm_compute,
 )
-from models.demos.inworld_tts.tt.model_config import get_compute_kernel_config_hifi4
+from models.demos.inworld_tts.tt.model_config import ENCODER_CHANNELS, ENCODER_STRIDES, get_compute_kernel_config_hifi4
 from models.demos.inworld_tts.tt.wav2vec2_bert import TtWav2Vec2Bert
+
+L1 = ttnn.L1_MEMORY_CONFIG
 
 
 class TtAcousticEncoder(LightweightModule):
-    """AcousticEncoder (CodecEnc) -- mostly host-based with precomputed weight norms.
+    """AcousticEncoder -- Conv1d chains with SnakeBeta activation.
 
-    Since the encoder processes long sequences but runs only once per inference,
-    we keep the implementation on CPU using the reference functions with precomputed
-    weight normalization. This avoids the complexity of TTNN Conv1d for variable-length
-    inputs with non-standard channel sizes (48, 96, etc.).
+    Conv1d ops use precomputed weight-normed weights.
+    SnakeBeta + anti-aliased resampling stays on CPU (custom activations).
+    Runs on CPU via reference functions (Conv1d channels 48-1536 don't tile-align well).
     """
 
     def __init__(self, state_dict: Dict[str, torch.Tensor]):
         super().__init__()
-
-        self.channels = [48, 96, 192, 384, 768, 1536]
-        self.strides = [2, 2, 4, 4, 5]
+        self.channels = ENCODER_CHANNELS
+        self.strides = ENCODER_STRIDES
 
         # Precompute weight-normed initial conv
         self.initial_weight = weight_norm_compute(
@@ -60,6 +57,8 @@ class TtAcousticEncoder(LightweightModule):
         self.block_weights = []
         for block_idx in range(5):
             prefix = f"conv_blocks.{block_idx + 1}."
+            from models.demos.inworld_tts.reference.functional import _extract_encoder_block_weights
+
             bw = _extract_encoder_block_weights(state_dict, prefix, self.channels[block_idx])
             self.block_weights.append(bw)
 
@@ -104,23 +103,19 @@ class TtAcousticEncoder(LightweightModule):
 
 
 class TtSemanticEncoder(LightweightModule):
-    """SemanticEncoder -- CPU-based since it's simple convolutions run once.
+    """SemanticEncoder -- CPU-based Conv1d chain.
 
     Architecture: initial_conv -> N residual blocks (ReLU + Conv + ReLU + Conv) -> final_conv
-    All Conv1d(1024, 1024, k=3) with regular weights (no weight norm).
+    All Conv1d(1024, 1024, k=3). Stays on CPU because ttnn.conv1d compilation is slow
+    for 5 separate convolutions (~10min compile), while runtime is only ~3ms.
     """
 
-    def __init__(self, state_dict: Dict[str, torch.Tensor], prefix: str = "semantic_encoder."):
+    def __init__(self, device, state_dict: Dict[str, torch.Tensor], prefix: str = "SemanticEncoder_module."):
         super().__init__()
-        self.prefix = prefix
 
-        # Extract and store weights for fast access
         self.initial_conv_weight = state_dict[prefix + "initial_conv.weight"]
         self.initial_conv_bias = state_dict.get(prefix + "initial_conv.bias")
 
-        # Count and store residual block weights
-        # xcodec2 keys: residual_blocks.{idx}.weight where idx=1,3 for conv layers
-        # (0,2 are ReLU activations in the Sequential)
         self.res_blocks = []
         block_idx = 1
         while prefix + f"residual_blocks.{block_idx}.weight" in state_dict:
@@ -131,7 +126,7 @@ class TtSemanticEncoder(LightweightModule):
                 "conv2_bias": state_dict.get(prefix + f"residual_blocks.{block_idx + 2}.bias"),
             }
             self.res_blocks.append(block)
-            block_idx += 4  # skip: 0=ReLU, 1=Conv, 2=ReLU, 3=Conv
+            block_idx += 4
 
         self.final_conv_weight = state_dict[prefix + "final_conv.weight"]
         self.final_conv_bias = state_dict.get(prefix + "final_conv.bias")
@@ -159,52 +154,40 @@ class TtSemanticEncoder(LightweightModule):
 
 
 class TtCodecEncoder(LightweightModule):
-    """Full codec encoder: Wav2Vec2-BERT + AcousticEncoder + SemanticEncoder + Fusion + FSQ quantize.
-
-    The encoder processes audio waveforms and produces integer VQ codes.
-    It runs once per inference to encode the voice prompt, so performance
-    is not critical. Wav2Vec2-BERT extracts semantic features from the waveform,
-    eliminating the need for external semantic feature computation.
-
-    For pragmatic reasons, the entire encoder pipeline runs on CPU with
-    precomputed weight normalization. The TTNN device is used for fc_prior
-    and the Wav2Vec2-BERT conformer layers.
-    """
+    """Full codec encoder: Wav2Vec2-BERT + AcousticEncoder + SemanticEncoder + Fusion + FSQ quantize."""
 
     def __init__(
         self,
         device,
         state_dict: Dict[str, torch.Tensor],
         quantizer=None,
-        w2v_state_dict: Optional[Dict[str, torch.Tensor]] = None,
         dtype=ttnn.bfloat16,
         acoustic_prefix: str = "CodecEnc.",
         semantic_prefix: str = "SemanticEncoder_module.",
+        w2v_state_dict: Optional[Dict[str, torch.Tensor]] = None,
     ):
         super().__init__()
         self.device = device
         self.quantizer = quantizer
 
-        # Wav2Vec2-BERT for semantic feature extraction
-        # If w2v_state_dict is None, TtWav2Vec2Bert will load from HuggingFace
-        self.w2v_bert = TtWav2Vec2Bert(device, state_dict=w2v_state_dict, dtype=dtype)
-
-        # AutoFeatureExtractor for mel preprocessing (lazy import, cached)
-        self._feature_extractor = None
-
-        # Extract acoustic encoder weights (strip prefix)
-        acoustic_sd = {}
-        for k, v in state_dict.items():
-            if k.startswith(acoustic_prefix):
-                acoustic_sd[k[len(acoustic_prefix) :]] = v
+        # Acoustic encoder (CPU -- SnakeBeta + non-standard channel sizes)
+        acoustic_sd = {k[len(acoustic_prefix) :]: v for k, v in state_dict.items() if k.startswith(acoustic_prefix)}
         self.acoustic_encoder = TtAcousticEncoder(acoustic_sd)
 
-        # Semantic encoder
-        self.semantic_encoder = TtSemanticEncoder(state_dict, prefix=semantic_prefix)
+        # Wav2Vec2-BERT (TTNN -- FFN/Linear/LayerNorm on device)
+        self.w2v_bert = TtWav2Vec2Bert(device, state_dict=w2v_state_dict, dtype=dtype)
 
-        # fc_prior: Linear(2048, 2048) -- use TTNN for this large matmul
+        # Semantic encoder (TTNN -- Conv1d + ReLU + Add on device)
+        self.semantic_encoder = TtSemanticEncoder(device, state_dict, prefix=semantic_prefix)
+
+        # Feature extractor (lazy-loaded)
+        self._feature_extractor = None
+
+        # fc_prior: Linear(2048, 2048) -- TTNN
         fc_w = state_dict["fc_prior.weight"]
         fc_b = state_dict["fc_prior.bias"]
+        grid = device.compute_with_storage_grid_size()
+        self.core_grid = ttnn.CoreGrid(y=grid.y, x=grid.x)
         self.fc_prior_weight = ttnn.from_torch(
             fc_w.T.unsqueeze(0).unsqueeze(0),
             dtype=dtype,
@@ -219,11 +202,9 @@ class TtCodecEncoder(LightweightModule):
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
         self.compute_kernel_config = get_compute_kernel_config_hifi4()
 
-    @property
-    def feature_extractor(self):
+    def _get_feature_extractor(self):
         """Lazy-load AutoFeatureExtractor for mel filterbank preprocessing."""
         if self._feature_extractor is None:
             from transformers import AutoFeatureExtractor
@@ -232,29 +213,22 @@ class TtCodecEncoder(LightweightModule):
         return self._feature_extractor
 
     def _extract_semantic_features(self, waveform: torch.Tensor, sample_rate: int = 16000) -> torch.Tensor:
-        """Extract Wav2Vec2-BERT hidden_states[16] from a waveform.
+        """Extract semantic features from waveform using Wav2Vec2-BERT.
 
         Args:
-            waveform: [B, 1, samples] raw audio waveform (16kHz expected)
-            sample_rate: audio sample rate (default 16000)
+            waveform: [B, 1, samples] raw audio
         Returns:
-            [B, 1024, T] semantic features (transposed for SemanticEncoder)
+            [B, 1024, T] semantic features (channels-first for SemanticEncoder)
         """
-        # AutoFeatureExtractor expects 1D or 2D numpy/list input
-        # Convert [B, 1, samples] -> list of 1D arrays
-        wav_np = waveform.squeeze(1).cpu().numpy()  # [B, samples]
-        inputs = self.feature_extractor(
-            wav_np.tolist() if wav_np.shape[0] > 1 else wav_np[0],
-            sampling_rate=sample_rate,
-            return_tensors="pt",
-            padding=True,
-        )
-        input_features = inputs["input_features"]  # [B, T, 160]
+        fe = self._get_feature_extractor()
+        audio_np = waveform.squeeze(1).numpy()
+        inputs = fe(audio_np, sampling_rate=sample_rate, return_tensors="pt", padding=True)
+        input_features = inputs["input_features"].to(waveform.device)
 
-        # Run Wav2Vec2-BERT encoder (16 conformer layers)
-        hidden = self.w2v_bert(input_features.to(waveform.device))  # [B, T, 1024]
+        # Run Wav2Vec2-BERT (returns [B, T, 1024])
+        hidden = self.w2v_bert(input_features)
 
-        # Transpose to [B, 1024, T] for SemanticEncoder
+        # Transpose to channels-first [B, 1024, T] for SemanticEncoder
         return hidden.transpose(1, 2)
 
     def forward(
@@ -265,14 +239,10 @@ class TtCodecEncoder(LightweightModule):
     ) -> torch.Tensor:
         """Full codec encoder forward.
 
-        If semantic_features is None, extracts them from the waveform using
-        the built-in Wav2Vec2-BERT model. Otherwise uses the provided features.
-
         Args:
             waveform: [B, 1, samples] raw audio waveform
-            semantic_features: optional [B, 1024, T] from Wav2Vec2-BERT hidden_states[16], transposed.
-                             If None, computed automatically from waveform.
-            sample_rate: audio sample rate for feature extraction (default 16000)
+            semantic_features: optional [B, 1024, T] pre-computed. If None, extracted via Wav2Vec2-BERT.
+            sample_rate: audio sample rate (default 16000)
         Returns:
             [B, 1, T] integer VQ codes
         """
@@ -286,7 +256,7 @@ class TtCodecEncoder(LightweightModule):
         if semantic_features is None:
             semantic_features = self._extract_semantic_features(waveform, sample_rate)
 
-        # Step 3: Semantic encoder (CPU)
+        # Step 3: Semantic encoder (TTNN Conv1d + ReLU)
         semantic_out = self.semantic_encoder(semantic_features)  # [B, 1024, T]
 
         # Step 4: Fuse acoustic + semantic
@@ -295,7 +265,7 @@ class TtCodecEncoder(LightweightModule):
 
         # Step 5: fc_prior projection (TTNN)
         fused_ttnn = ttnn.from_torch(
-            fused.unsqueeze(0),  # [1, B, T, 2048]
+            fused.unsqueeze(0),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
@@ -304,48 +274,30 @@ class TtCodecEncoder(LightweightModule):
             fused_ttnn,
             self.fc_prior_weight,
             bias=self.fc_prior_bias,
+            core_grid=self.core_grid,
+            memory_config=L1,
             compute_kernel_config=self.compute_kernel_config,
-        )  # [1, B, T, 2048]
+        )
 
-        # Back to CPU for FSQ quantization (needs float32 for quantizer Linear layers)
+        # Back to CPU for FSQ quantization (needs float32)
         projected_torch = ttnn.to_torch(projected).float()
         if projected_torch.dim() == 4:
-            projected_torch = projected_torch.squeeze(0)  # [B, T, 2048]
+            projected_torch = projected_torch.squeeze(0)
 
         # Step 6: FSQ quantize (CPU)
-        _, indices = self.quantizer(projected_torch)  # indices: [B, T, num_quantizers]
-
-        # Convert to [B, 1, T]
+        _, indices = self.quantizer(projected_torch)
         vq_codes = indices.squeeze(-1).unsqueeze(1)  # [B, 1, T]
 
         return vq_codes
 
     def forward_acoustic_only(self, waveform: torch.Tensor) -> torch.Tensor:
-        """Run only the acoustic encoder (for testing).
-
-        Args:
-            waveform: [B, 1, samples]
-        Returns:
-            [B, 1024, T]
-        """
+        """Run only the acoustic encoder."""
         return self.acoustic_encoder(waveform)
 
     def forward_semantic_only(self, semantic_features: torch.Tensor) -> torch.Tensor:
-        """Run only the semantic encoder (for testing).
-
-        Args:
-            semantic_features: [B, 1024, T]
-        Returns:
-            [B, 1024, T]
-        """
+        """Run only the semantic encoder."""
         return self.semantic_encoder(semantic_features)
 
     def forward_w2v_only(self, input_features: torch.Tensor) -> torch.Tensor:
-        """Run only the Wav2Vec2-BERT encoder (for testing).
-
-        Args:
-            input_features: [B, T, 160] mel filterbank features
-        Returns:
-            [B, T, 1024] hidden states
-        """
+        """Run only the Wav2Vec2-BERT model."""
         return self.w2v_bert(input_features)

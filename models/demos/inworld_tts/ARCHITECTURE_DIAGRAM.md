@@ -116,12 +116,14 @@
   |  |  | (3) Convolution Module:                           | |
   |  |  |   LayerNorm [TTNN L1]                             | |
   |  |  |   PointwiseConv1d(1024,2048,k=1) [TTNN linear]   | |
+  |  |  |   -> to_torch (float32) for conv ops              | |
   |  |  |   GLU [host: split + sigmoid + mul]               | |
   |  |  |   DepthwiseConv1d(1024,k=31,g=1024) [host]       | |
   |  |  |     causal left-pad=30                            | |
-  |  |  |   LayerNorm [TTNN L1]                             | |
-  |  |  |   SiLU [TTNN L1]                                  | |
-  |  |  |   PointwiseConv1d(1024,1024,k=1) [TTNN linear]   | |
+  |  |  |   DepthwiseLN [host]                              | |
+  |  |  |   SiLU [host]                                     | |
+  |  |  |   -> from_torch back to device                    | |
+  |  |  |   PointwiseConv2d(1024,1024,k=1) [TTNN linear]   | |
   |  |  |   x = h + residual [TTNN L1]                      | |
   |  |  |                                                   | |
   |  |  | (4) FFN2 -- Macaron half-step:                    | |
@@ -335,18 +337,20 @@
   |  Output: [B, T, 1024]                                 |
   +======================================================+
   |
-  |  =================== ISTFT HEAD (CPU) =======================
+  |  =================== ISTFT HEAD (TTNN + CPU) ==================
   v
   +------------------------------------------------------+
   | ISTFT HEAD                                            |
-  |  Linear(1024, 1282) [CPU, float32]                    |
+  |  Linear(1024, 1282) [TTNN, L1, full grid]             |
+  |  |                                                    |
+  |  -> to_torch (float32) for FFT math                   |
   |  |                                                    |
   |  Split -> magnitude [641] + phase [641]               |
   |  |                                                    |
-  |  magnitude = exp(clamp(mag, max=1e2))                 |
-  |  S = mag * (cos(phase) + j*sin(phase))                |
+  |  magnitude = exp(clamp(mag, max=1e2))     [CPU]       |
+  |  S = mag * (cos(phase) + j*sin(phase))    [CPU]       |
   |  |                                                    |
-  |  ISTFT: irfft + window + overlap-add                  |
+  |  ISTFT: irfft + window + overlap-add      [CPU]       |
   |    n_fft=1280, hop_length=320, win_length=1280        |
   |  |                                                    |
   |  Output: [B, 1, num_samples]                          |
@@ -379,16 +383,18 @@
   |    TransformerBlock MLP fc2 ....... L1, full core grid       |
   |    TransformerBlock Residual Add .. L1                       |
   |    Final LayerNorm ................ L1                       |
+  |    ISTFTHead Linear(1024,1282) .... L1, full core grid       |
   |                                                             |
   |  ENCODER:                                                   |
   |    Wav2Vec2-BERT FFN1/FFN2 Linear . L1, full core grid       |
   |    Wav2Vec2-BERT FFN SiLU ......... L1                       |
   |    Wav2Vec2-BERT Q/K/V/O Linear ... L1, full core grid       |
   |    Wav2Vec2-BERT LayerNorm (x5) ... L1                       |
-  |    Wav2Vec2-BERT PointwiseConv .... L1 (as ttnn.linear)      |
+  |    Wav2Vec2-BERT PointwiseConv1 ... L1 (as ttnn.linear)      |
+  |    Wav2Vec2-BERT PointwiseConv2 ... L1 (as ttnn.linear)      |
   |    Wav2Vec2-BERT Macaron x0.5 ..... L1                       |
   |    Wav2Vec2-BERT Residual Add ..... L1                       |
-  |    fc_prior Linear ................ L1, full core grid       |
+  |    fc_prior Linear(2048,2048) ..... L1, full core grid       |
   |                                                             |
   |  LLM (target: 2x Galaxy, 64 BH chips):                     |
   |    32 decoder layers .............. SRAM, TP=2 per layer     |
@@ -404,15 +410,16 @@
   |    ResnetBlock GroupNorm .......... host roundtrip           |
   |    Attention RoPE ................. host roundtrip (5D)      |
   |    Attention QKV reshape .......... host roundtrip           |
-  |    ISTFTHead Linear ............... float32 for FFT          |
-  |    ISTFTHead ISTFT (FFT) ......... torch.fft                |
+  |    ISTFTHead ISTFT (FFT) ......... torch.fft (float32)      |
   |                                                             |
   |  ENCODER:                                                   |
   |    AcousticEncoder ................ Conv1d + SnakeBeta       |
   |    Wav2Vec2-BERT FeatureProj ...... 160->1024, not tile-aligned |
   |    Wav2Vec2-BERT Attn + PosBias ... SDPA no additive bias support |
-  |    Wav2Vec2-BERT DepthwiseConv .... groups=1024, k=31       |
   |    Wav2Vec2-BERT GLU .............. split + sigmoid + mul   |
+  |    Wav2Vec2-BERT DepthwiseConv .... groups=1024, k=31       |
+  |    Wav2Vec2-BERT DepthwiseLN ...... LayerNorm(1024)         |
+  |    Wav2Vec2-BERT ConvModule SiLU .. after depthwise LN      |
   |    SemanticEncoder ................ Conv1d residual          |
   |    FSQ quantize ................... codebook + rounding      |
   |                                                             |
