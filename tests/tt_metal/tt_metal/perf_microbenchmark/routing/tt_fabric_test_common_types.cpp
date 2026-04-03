@@ -18,7 +18,9 @@ std::string format_device_label(const FabricNodeId& node_id) {
     const auto& psd = control_plane.get_physical_system_descriptor();
     auto tray_id = psd.get_tray_id(asic_id);
     auto asic_location = psd.get_asic_location(asic_id);
-    return fmt::format("{} [T{}/N{}]", node_id, *tray_id, *asic_location);
+    auto hostname = psd.get_host_name_for_asic(asic_id);
+    auto rank = psd.get_rank_for_hostname(hostname);
+    return fmt::format("{} [{}(R{})/T{}/N{}]", node_id, hostname, rank, *tray_id, *asic_location);
 }
 
 // Helper functions for fetching pattern parameters

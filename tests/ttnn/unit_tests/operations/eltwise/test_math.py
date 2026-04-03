@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 from models.common.utility_functions import torch_random
 
 from loguru import logger
@@ -284,7 +284,7 @@ def test_multigammaln(device, h, w):
     run_math_unary_test_range(device, h, w, ttnn.multigammaln, pcc=0.999)
 
 
-def run_math_test_polygamma(device, h, w, scalar, ttnn_function, pcc=0.9999):
+def run_math_test_polygamma(device, h, w, scalar, ttnn_function, ulp=1):
     torch.manual_seed(0)
 
     low = 1
@@ -298,14 +298,14 @@ def run_math_test_polygamma(device, h, w, scalar, ttnn_function, pcc=0.9999):
     output_tensor = ttnn_function(input_tensor, scalar)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp)
 
 
 @pytest.mark.parametrize("scalar", [1, 2, 5, 10])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_polygamma(device, h, w, scalar):
-    run_math_test_polygamma(device, h, w, scalar, ttnn.polygamma, pcc=0.999)
+    run_math_test_polygamma(device, h, w, scalar, ttnn.polygamma, ulp=1)
 
 
 @pytest.mark.parametrize("h", [64])

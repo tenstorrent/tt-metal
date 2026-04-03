@@ -147,22 +147,23 @@ def run_mesh_partition_test(
 
     def run_op(n_iters, store_all_results=True):
         tt_output_list = []
-        for i in range(n_iters):
-            buffer_index = 0 if trace_mode else i
-            tt_out_tensor = ttnn.mesh_partition(
-                tt_input_tensors_list[buffer_index],
-                dim,
-                cluster_axis=cluster_axis,
-                memory_config=output_memory_config,
-            )
-            if not trace_mode:
-                ttnn.synchronize_device(mesh_device)
+        with mesh_device.cache_entries_counter.measure():
+            for i in range(n_iters):
+                buffer_index = 0 if trace_mode else i
+                tt_out_tensor = ttnn.mesh_partition(
+                    tt_input_tensors_list[buffer_index],
+                    dim,
+                    cluster_axis=cluster_axis,
+                    memory_config=output_memory_config,
+                )
+                if not trace_mode:
+                    ttnn.synchronize_device(mesh_device)
+                if store_all_results:
+                    tt_output_list.append(tt_out_tensor)
             if store_all_results:
-                tt_output_list.append(tt_out_tensor)
-        if store_all_results:
-            return tt_output_list
-        else:
-            return [tt_out_tensor]
+                return tt_output_list
+            else:
+                return [tt_out_tensor]
 
     if trace_mode:
         # compile run:
@@ -229,10 +230,10 @@ def run_mesh_partition_test(
             failed_indices = torch.where(tt_torch_tensor != output_tensor_goldens_list[tensor_index])
             break
 
-    logger.info(f"Device has {mesh_device.num_program_cache_entries()} program cache entries")
+    logger.info(f"Device has {mesh_device.cache_entries_counter.total} program cache entries")
     assert (
-        mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
-    ), f"Device {mesh_device.id} has {mesh_device.num_program_cache_entries()} program cache entries"
+        mesh_device.cache_entries_counter.total == 1 or mesh_device.cache_entries_counter.total == num_iters
+    ), f"Device {mesh_device.id} has {mesh_device.cache_entries_counter.total} program cache entries"
 
     if not passed:
         logger.info(f"Failed indices: {failed_indices}")

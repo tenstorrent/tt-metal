@@ -307,7 +307,7 @@ def _build_distributed_norm_inputs(
         mesh_device,
         force_recalculate_weight_config,
     )
-    model_config = get_model_config(DistributedRMSNorm, mode, hf_config, mesh_device)
+    model_config = get_model_config(DistributedRMSNorm, mode, hf_config, mesh_device, batch_size_per_row=USERS_PER_ROW)
     model_state = DistributedRMSNorm.create_state(hf_config, mesh_device, ccl)
     run_config = create_run_config(model_config, weight_config, model_state)
 

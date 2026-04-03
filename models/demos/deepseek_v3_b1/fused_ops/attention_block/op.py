@@ -26,6 +26,7 @@ from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import (
     get_max_page_size_and_num_pages,
     get_noc_max_page_size,
 )
+from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,
     PerCoreRuntimeArgsDescriptor,
@@ -906,6 +907,7 @@ class AttentionBlock:
 
         kv_cache_output_cb = cb_id_context.get_cb_id(k_df, TD_32x32)  # Output CB for KV Cache Branch
         kv_cache_intermed_cb = cb_id_context.get_cb_id(untilize_df, TD_32x32)  # Intermed CB for KV Cache Branch
+        kv_cache_intermed_sync_cb = cb_id_context.get_cb_id(untilize_df, TD_32x32)  # Sync CB overlapping intermed CB
         kv_cache_input_cb = cb_id_context.get_cb_id(k_df, TD_32x32)  # Input CB for KV Cache Branch
 
         # MLA parameters
@@ -1411,11 +1413,10 @@ class AttentionBlock:
             ("dkv_gather_sender_grid_end_x", dkv_gather_sender_grid_end_x),
             ("dkv_gather_sender_grid_end_y", dkv_gather_sender_grid_end_y),
             ("dkv_gather_row_major", 1),  # 1 = row-major linearization
-            ("dkv_gather_dst_cb", kv_rmsnorm_input_cb),  # Destination CB: write directly to kv_rmsnorm_input_cb
         ]
 
-        # Gather receiver compile-time args (named args for BRISC on kv rmsnorm core)
-        # ReceiverCTArgs: noc0_num_senders, noc1_num_senders, noc0_receiver_semaphore_id, noc1_receiver_semaphore_id
+        # Gather receiver compile-time args (now on NCRISC via ReceiverOnNCRISC mode)
+        # ReceiverCTArgs: noc0_num_senders, noc1_num_senders, noc0_receiver_semaphore_addr, noc1_receiver_semaphore_addr
         # Plus destination CB info for reserve/push
         # Writes directly to kv_rmsnorm_input_cb
         dkv_gather_receiver_named_compile_time_args = [
@@ -1455,17 +1456,15 @@ class AttentionBlock:
         ]
 
         # KVCacheUpdate compile-time args split across NCRISC (patch + writeback) and BRISC (DRAM read)
+        # k_chunk_size and num_cores_per_head are shared with MLA args (set in mla_ncrisc section)
+        # mla_sender_noc_x/y args are appended after MLA core group is built (depends on num_s_blocks)
         kv_cache_ncrisc_named_compile_time_args = [
             ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
             ("krope_output_cb", krope_output_cb),
             ("kv_cache_intermed_cb", kv_cache_intermed_cb),
+            ("kv_cache_intermed_sync_cb", kv_cache_intermed_sync_cb),
             ("kv_cache_output_cb", kv_cache_output_cb),
             ("kv_cache_grid_start_y", list(krope_grid.ranges())[0].start.y),
-            ("full_grid_mcast_start_x", mcast_dest_noc_start_core.x),
-            ("full_grid_mcast_start_y", mcast_dest_noc_start_core.y),
-            ("full_grid_mcast_end_x", mcast_dest_noc_end_core.x),
-            ("full_grid_mcast_end_y", mcast_dest_noc_end_core.y),
-            ("full_grid_mcast_num_dests", mcast_num_cores - 1),
             ("kv_cache_cur_pos_ready_semaphore_addr", mla_kv_cache_cur_pos_ready_semaphore_addr),
         ]
         kv_cache_brisc_named_compile_time_args = [
@@ -1477,6 +1476,7 @@ class AttentionBlock:
             ("kv_cache_output_cb", kv_cache_output_cb),
             ("kv_cache_input_cb", kv_cache_input_cb),
             ("kv_cache_intermed_cb", kv_cache_intermed_cb),
+            ("kv_cache_intermed_sync_cb", kv_cache_intermed_sync_cb),
         ]
 
         # Flash MLA named compile-time args
@@ -1591,6 +1591,20 @@ class AttentionBlock:
 
         # Create core group with the same layout
         mla_core_group = [ttnn.CoreCoord(x, y) for x, y in mla_all_cores]
+
+        # Physical NOC coordinates of mcast sender cores (first batch, one per S block).
+        # Used by kv_cache_update to unicast the cache-ready signal to the specific
+        # MLA reader core that handles the last KV chunk.
+        mla_sender_noc_xs = []
+        mla_sender_noc_ys = []
+        for s_idx in range(num_s_blocks):
+            phys = device.worker_core_from_logical_core(mla_core_group[s_idx])
+            mla_sender_noc_xs.append(phys.x)
+            mla_sender_noc_ys.append(phys.y)
+
+        kv_cache_ncrisc_named_compile_time_args += [
+            (f"mla_sender_noc_x_{i}", mla_sender_noc_xs[i]) for i in range(num_s_blocks)
+        ] + [(f"mla_sender_noc_y_{i}", mla_sender_noc_ys[i]) for i in range(num_s_blocks)]
 
         # Multicast: each S block's first core (Q1) reads KV and multicasts to others in that S block
         # Since all S blocks have 8 cores, num_mcast_dests is the same for all (7 = 8-1)
@@ -2303,7 +2317,7 @@ class AttentionBlock:
         create_q_heads_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             create_q_heads_out_cb,
             ref_attention_block_output_tensor,  # Overlap with attn output since it's only on the mcast core
-            address_offset=0,
+            address_offset=attn_block_output_running_offset,
             total_size=create_q_heads_out_total_size,
             core_ranges=full_device_grid,
         )
@@ -2315,6 +2329,7 @@ class AttentionBlock:
                 tile=create_q_heads_out_tile_descriptor,
             )
         ]
+        attn_block_output_running_offset += create_q_heads_out_cb_descriptor.total_size
 
         # CB 24: DKV Matmul output — shares CB ID with matmul_output_cb (disjoint grids)
         # matmul_output_cb covers matmul_weights_core_grid (rows 0-7)
@@ -2462,15 +2477,23 @@ class AttentionBlock:
             page_size=TILE_32x32.get_tile_size(untilize_df),
             tile=ttnn.TileDescriptor(TILE_32x32),
         )
-        # One extra tile for syncing, can optimize to remove
+        kv_cache_intermed_sync_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=kv_cache_intermed_sync_cb,
+            data_format=untilize_df,
+            page_size=TILE_32x32.get_tile_size(untilize_df),
+            tile=ttnn.TileDescriptor(TILE_32x32),
+        )
         kv_cache_intermed_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             kv_cache_intermed_cb,
             ref_sdpa_forwarder_scratch,
             address_offset=sdpa_forwarder_scratch_running_offset,
-            total_size=(kv_cache_num_tiles + 1) * TILE_32x32.get_tile_size(untilize_df),
+            total_size=kv_cache_num_tiles * TILE_32x32.get_tile_size(untilize_df),
             core_ranges=full_device_grid,
         )
-        kv_cache_intermed_cb_descriptor.format_descriptors = [kv_cache_intermed_cb_format]
+        kv_cache_intermed_cb_descriptor.format_descriptors = [
+            kv_cache_intermed_cb_format,
+            kv_cache_intermed_sync_cb_format,
+        ]
         sdpa_forwarder_scratch_running_offset += kv_cache_intermed_cb_descriptor.total_size
         # Flash MLA cb descriptors
         mla_cb_descriptors = []
@@ -2606,6 +2629,17 @@ class AttentionBlock:
         # ========================================================================
         sdpa_kv_cache_running_offset_post_sdpa = 0
         sdpa_out_interm_running_offset_post_sdpa = 0
+
+        sdpa_fwd_buffer_bytes = compute_forwarder_scratch_size(
+            batch_size=SDPA_L_HEIGHT,
+            l_width=sdpa_l_per_worker,
+            num_cores=NUM_SDPA_WORKERS,
+        )
+
+        # This is used to overlap the sdpa forwarder scratch buffer with the kv cache buffer
+        # TODO: We can better overlap this if necessary
+        forwarder_buffer_base = ref_sdpa_kv_cache_buffer.buffer_address() + sdpa_kv_cache_running_offset_post_sdpa
+        sdpa_kv_cache_running_offset_post_sdpa += sdpa_fwd_buffer_bytes
 
         # CB 0: Matmul4 input (from sharded tensor, kv_b2 grid)
         matmul4_in0_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
@@ -3068,6 +3102,7 @@ class AttentionBlock:
             + dkv_matmul_ncrisc_named_compile_time_args
             + kv_rmsnorm_ncrisc_named_compile_time_args
             + dkv_gather_sender_named_compile_time_args
+            + dkv_gather_receiver_named_compile_time_args
             + krope_ncrisc_named_compile_time_args
             + kv_cache_ncrisc_named_compile_time_args
             + mla_ncrisc_named_compile_time_args
@@ -3082,7 +3117,6 @@ class AttentionBlock:
             + mcast2_brisc_named_compile_time_args
             + matmul3_brisc_named_compile_time_args
             + qrope_brisc_named_compile_time_args
-            + dkv_gather_receiver_named_compile_time_args
             + kv_rmsnorm_brisc_named_compile_time_args
             + kv_cache_brisc_named_compile_time_args
             + mla_brisc_named_compile_time_args
@@ -3291,7 +3325,6 @@ class AttentionBlock:
         # ========================================================================
         # Pre-compute device-invariant SDPA addresses
         # ========================================================================
-        forwarder_buffer_base = ref_sdpa_forwarder_scratch.buffer_address()
         ncrisc_buffer_offset = sdpa_fwd_slots_per_round * sdpa_fwd_slot_size * 2  # After BRISC R1+R2
         r1_recv_buffer_addr = ref_sdpa_intermediate_recv.buffer_address()
         r2_recv_buffer_addr = r1_recv_buffer_addr + (sdpa_l_tiles_per_worker + 1) * sdpa_l_tile_size
@@ -3415,17 +3448,18 @@ class AttentionBlock:
                     kv_cache_input_cb,  # idx 4
                     kv_cache_output_cb,  # idx 5
                     kv_cache_intermed_cb,  # idx 6
-                    position_ids_tensor_addr,  # idx 7
-                    matmul_weights_addr,  # idx 8
-                    matmul2_weights_addr,  # idx 9
-                    dkv_matmul_weights_addr,  # idx 10
-                    matmul3_weights_addr,  # idx 11
-                    matmul4_weights_addr,  # idx 12
-                    matmul5_weights_addr,  # idx 13
-                    qrope_trans_mat_addr,  # idx 14
-                    gamma_addr,  # idx 15
-                    rmsnorm2_gamma_addr,  # idx 16
-                    kv_rmsnorm_gamma_addr,  # idx 17
+                    kv_cache_intermed_sync_cb,  # idx 7
+                    position_ids_tensor_addr,  # idx 8
+                    matmul_weights_addr,  # idx 9
+                    matmul2_weights_addr,  # idx 10
+                    dkv_matmul_weights_addr,  # idx 11
+                    matmul3_weights_addr,  # idx 12
+                    matmul4_weights_addr,  # idx 13
+                    matmul5_weights_addr,  # idx 14
+                    qrope_trans_mat_addr,  # idx 15
+                    gamma_addr,  # idx 16
+                    rmsnorm2_gamma_addr,  # idx 17
+                    kv_rmsnorm_gamma_addr,  # idx 18
                 ]
 
                 qrope_ncrisc_addr_args = [

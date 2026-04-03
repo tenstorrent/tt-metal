@@ -91,6 +91,8 @@ tt_metal/impl/event @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
 tt_metal/impl/flatbuffer/ @cfjchu @kmabeeTT @nsmithtt @tenstorrent/codeowner-bypass
 tt_metal/impl/kernels/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @sagarwalTT @tenstorrent/codeowner-bypass
 tt_metal/impl/lightmetal/ @kmabeeTT @gsarabandoTT @tenstorrent/codeowner-bypass
+tt_metal/impl/metal2_host_api/ @akerteszTT @riverwuTT @tenstorrent/codeowner-bypass
+tt_metal/impl/per_core_allocation/ @yugaoTT @cfjchu @tenstorrent/codeowner-bypass
 tt_metal/impl/profiler/ @mo-tenstorrent @abhullar-tt @tenstorrent/codeowner-bypass
 tt_metal/impl/program/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @sidnadTT @tenstorrent/codeowner-bypass
 tt_metal/impl/sub_device/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass

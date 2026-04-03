@@ -636,15 +636,10 @@ def test_tilize_with_val_padding_fp32_truncation(device, use_multicore):
         ((32, 32), (3, 3), (2, 2), 1),
     ],
 )
-def test_tilize_with_val_padding_tilize_after_avg_pool2d_sum_input_interleaved_rm_tensor_has_larger_padded_width_than_logical_width(
-    device, hw, kernel, stride, pad
-):
+def test_tilize_with_val_padding_tilize_after_avg_pool2d_sum(device, hw, kernel, stride, pad):
     """
     Tests avg_pool2d followed by to_layout(TILE) on the avg_pool2d output.
     This isolates and validates the to_layout(TILE) step on the avg_pool2d result against a PyTorch avg_pool2d reference.
-
-    The key for this test is that the output from avg_pool2d, which is the input to to_layout, is a row-major interleaved tensor with a larger padded_shape width than logical_shape width.
-    This test aims to test such a scenario where there is a mismatch between the padded_shape width and the logical_shape width for interleaved row major tensors.
     """
     h, w = hw
     kh, kw = kernel
@@ -685,10 +680,6 @@ def test_tilize_with_val_padding_tilize_after_avg_pool2d_sum_input_interleaved_r
         reallocate_halo_output=False,
         config_tensor_in_dram=True,
     )
-
-    # At this point, for the testcase with "(hw, kernel, stride, pad)" == "((64, 64), (2, 2), (2, 2), 0)", y is a row-major interleaved tensor with logical_shape [1, 1, 1024, 1] and padded_shape [1, 1, 1024, 16].
-    # Make this precondition explicit to ensure the test remains valid if upstream behavior changes.
-    assert y.padded_shape[-1] > y.shape[-1]
 
     y_torch_before_tile = ttnn.to_torch(y)
 

@@ -69,8 +69,8 @@ class TtDispatchModule(LightweightModule):
 
         Args:
             mesh_device: The mesh device to place the tensor on
-            expert_offsets: Base offset for each expert from each chip
-                Shape: (dispatch_group_size, num_routed_experts) - from get_gate_outputs()
+            expert_offsets: Base offset for each expert from each chip (sparse per group)
+                Shape: (num_dispatch_groups, dispatch_group_size, num_routed_experts) - from get_gate_outputs()
 
         Returns:
             TTNN tensor sharded across mesh devices
@@ -79,7 +79,7 @@ class TtDispatchModule(LightweightModule):
         mesh_mapper = ttnn.ShardTensor2dMesh(
             mesh_device,
             mesh_shape=mesh_device.shape,
-            dims=(0, None),
+            dims=(1, 0),
         )
         result = ttnn.from_torch(
             expert_offsets,
