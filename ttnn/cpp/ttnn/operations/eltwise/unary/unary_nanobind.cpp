@@ -2400,6 +2400,48 @@ void py_module(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("output_tensor") = nb::none());
+
+    auto rrelu_doc = R"doc(
+        Performs RReLU (Randomized Leaky ReLU) function on :attr:`input_tensor`.
+
+        RReLU(x) = x if x >= 0; a*x if x < 0, where a is sampled from Uniform(lower, upper)
+        in training mode, or a = (lower + upper) / 2 in eval mode.
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword args:
+            lower (float, optional): Lower bound of uniform distribution. Defaults to `0.125`.
+            upper (float, optional): Upper bound of uniform distribution. Defaults to `0.333333`.
+            seed (int, optional): PRNG seed for training mode. 0 means eval mode (deterministic midpoint slope). Defaults to `0`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32
+                 - TILE
+        )doc";
+
+    ttnn::bind_function<"rrelu">(
+        mod,
+        rrelu_doc,
+        &ttnn::rrelu,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("lower") = 0.125f,
+        nb::arg("upper") = 0.333333f,
+        nb::arg("seed") = 0u,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
 }  // namespace ttnn::operations::unary

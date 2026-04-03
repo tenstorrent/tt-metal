@@ -4,6 +4,7 @@
 
 #include "unary.hpp"
 
+#include <bit>
 #include "common/unary_op_types.hpp"
 #include "device/unary_device_operation.hpp"
 #include "ttnn/operation.hpp"
@@ -369,6 +370,22 @@ Tensor selu(
     const std::optional<Tensor>& optional_output_tensor) {
     return ttnn::detail::unary_impl(
         input_tensor, {UnaryWithParam{UnaryOpType::SELU, {scale, alpha}}}, memory_config, optional_output_tensor);
+}
+
+Tensor rrelu(
+    const Tensor& input_tensor,
+    float lower,
+    float upper,
+    uint32_t seed,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    // Pack seed as float for transport through the UnaryWithParam system
+    float seed_as_float = std::bit_cast<float>(seed);
+    return ttnn::detail::unary_impl(
+        input_tensor,
+        {UnaryWithParam{UnaryOpType::RRELU, {lower, upper, seed_as_float}}},
+        memory_config,
+        optional_output_tensor);
 }
 
 Tensor swish(

@@ -267,6 +267,14 @@ Tensor selu(
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
+Tensor rrelu(
+    const Tensor& input_tensor,
+    float lower = 0.125f,
+    float upper = 0.333333f,
+    uint32_t seed = 0,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
 Tensor bitcast(
     const Tensor& input_tensor,
     const tt::tt_metal::DataType& output_dtype,
