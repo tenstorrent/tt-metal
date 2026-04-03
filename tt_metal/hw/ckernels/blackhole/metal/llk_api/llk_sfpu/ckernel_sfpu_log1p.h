@@ -1,5 +1,4 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-// SPDX-FileCopyrightText: © 2015-2023 Norbert Juffa
 // SPDX-FileCopyrightText: © 2026 Jason Davies <jason@jasondavies.com>
 //
 // SPDX-License-Identifier: Apache-2.0
