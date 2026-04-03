@@ -1,8 +1,8 @@
 # Workspace Detection
 
-Detect the current workspace context before executing any command. This runs
-first in the tt-run pipeline and produces workspace context consumed by all
-subsequent steps.
+Detect the current workspace context and verify the environment is ready before
+executing any command. If anything is missing, tell the developer what to do —
+don't try to fix it silently.
 
 ## Detection Steps
 
@@ -15,23 +15,14 @@ clone, venv, and build. See `knowledge/recipes/workspace.md` for the layout.
 
 ```bash
 echo $TT_METAL_HOME
-# → /localdev/$USER/workspaces/<name>/tt-metal
 ```
 
-If set, we're in an activated workspace. Derive workspace root:
-
-```bash
-WORKSPACE_DIR=$(dirname $TT_METAL_HOME)
-```
-
-**If TT_METAL_HOME is not set**, detect from cwd — walk up looking for a
-directory containing `build_metal.sh` and `.git/`.
+If set, we're in an activated workspace. If not, detect from cwd — walk up
+looking for a directory containing `build_metal.sh` and `.git/`.
 
 If neither works, ask the user where tt-metal is.
 
 ### 2. Detect repo
-
-From the current working directory:
 
 ```bash
 git remote get-url origin
@@ -45,52 +36,80 @@ Extract the repo name:
 ### 3. Check for recipe
 
 Look for `knowledge/recipes/<repo>/index.md` in the tt-agent directory.
-If found, recipes are available. If not, proceed with explicit user commands
-or tt-learn for context.
 
-### 4. Check python environment
+## Environment Readiness Check
+
+After detection, verify the environment before proceeding. For each issue found,
+tell the developer what's missing and how to fix it. Reference the relevant
+recipe. **Stop and report — don't attempt to fix setup issues.**
+
+### Python environment
 
 ```bash
 echo $VIRTUAL_ENV
-# → $TT_METAL_HOME/python_env (if activated)
 ```
 
-If no venv is active but one exists at `$TT_METAL_HOME/python_env/`, note it
-needs activation. If none exists, a first-time build is needed.
+| State | Action |
+|---|---|
+| Venv active at `$TT_METAL_HOME/python_env` | Ready |
+| Venv exists but not active | Tell developer: `source $TT_METAL_HOME/python_env/bin/activate` |
+| No venv exists | Tell developer: run first-time build (see `recipes/tt-metal/build.md`) |
 
-### 5. Detect platform
+### Build state
 
-**Check for tt-device-mcp availability:**
-- If `tt_device_queue_status` MCP tool is available → device execution possible
-- If not → local execution only (build, host-side testing)
+| State | Action |
+|---|---|
+| `$TT_METAL_HOME/build/` exists | Ready (incremental build may be needed) |
+| No build dir | Tell developer: first-time build needed (see `recipes/tt-metal/build.md`) |
+| Kernel-only changes | Ready — no rebuild needed (JIT compiled at runtime) |
 
-### 6. Detect architecture
+### Device access (tt-device-mcp)
 
-If on a machine with TT devices:
+Check if `tt_device_queue_status` MCP tool is available.
 
-```bash
-tt_device_exec -- "echo $ARCH_NAME"
-```
+| State | Action |
+|---|---|
+| MCP tools available | Ready for device execution |
+| MCP tools not available | Tell developer: install and configure tt-device-mcp, then restart Claude Code (see `recipes/developer-setup.md`) |
 
-If not detectable (e.g., local Mac), note as unknown.
+### Tokens and secrets (check only when needed)
+
+Only check these when the task actually requires them (e.g., downloading a
+model from HuggingFace, accessing a private repo):
+
+| State | Action |
+|---|---|
+| `HF_TOKEN` not set, model download needed | Tell developer: set HF_TOKEN (see `recipes/developer-setup.md`) |
+| `GH_TOKEN` not set, private repo needed | Tell developer: set GH_TOKEN (see `recipes/developer-setup.md`) |
 
 ## Output
 
+Produce a workspace context summary plus any issues found:
+
 ```
-Workspace: my-feature ($LOCAL_DEV/workspaces/my-feature)
+Workspace: my-feature
 Repo: tt-metal
 Branch: ppetrovic/my-feature
-Venv: active ($TT_METAL_HOME/python_env)
-Recipe: knowledge/recipes/tt-metal/ (available)
+Venv: active
+Build: ready
 Platform: remote (tt-device-mcp available)
 Architecture: wormhole_b0
+Issues: none
 ```
 
-## Build State Detection
+Or with issues:
 
-Before running tests, check if a build exists and is current:
+```
+Workspace: my-feature
+Repo: tt-metal
+Venv: NOT ACTIVE — run: source $TT_METAL_HOME/python_env/bin/activate
+Build: ready
+Platform: LOCAL ONLY — tt-device-mcp not available
+  → Install: pip install git+https://github.com/tenstorrent/tt-device-mcp.git
+  → Then: tt-device-mcp daemon start && tt-device-mcp claude-add-mcp
+  → Then restart Claude Code
+Issues: 2 (see above)
+```
 
-- **No build dir** (`$TT_METAL_HOME/build/` missing) → first-time build needed
-- **Build exists** → incremental build usually sufficient
-- **Kernel-only changes** → no rebuild needed (JIT compiled at runtime)
-- **After git pull** → rebuild + `git submodule update --init --recursive`
+If there are blocking issues (no venv, no build), stop and report before
+attempting to run anything.
