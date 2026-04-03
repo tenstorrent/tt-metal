@@ -72,9 +72,9 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
         num_units_per_shard_height = shard_spec.shape[0] / TILE_HEIGHT;
         num_units_per_shard_width = shard_spec.shape[1] / TILE_WIDTH;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
-        num_units_per_row = input.padded_shape()[-1] / TILE_WIDTH;
+        num_units_per_row = tt::div_up(input.logical_shape()[-1], TILE_WIDTH);
         num_units_offset = num_units_per_row;
-        uint32_t num_units_height = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT / num_slices;
+        uint32_t num_units_height = tt::div_up((input.logical_volume() / input.logical_shape()[-1]), TILE_HEIGHT);
         num_units_per_shard_height_last =
             num_units_per_shard_height -
             (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
@@ -88,9 +88,9 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
         num_units_per_shard_height = shard_spec.shape[0];
         num_units_per_shard_width = 1;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
-        num_units_per_row = input.padded_shape()[-1] * input.element_size();
+        num_units_per_row = input.logical_shape()[-1] * input.element_size();
         num_units_offset = 1;
-        uint32_t num_units_height = input.physical_volume() / input.padded_shape()[-1];
+        uint32_t num_units_height = input.logical_volume() / input.logical_shape()[-1];
         num_units_per_shard_height_last =
             num_units_per_shard_height -
             (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
