@@ -20,7 +20,7 @@ import analyze_memory
 import analyze_steps
 
 
-def get_env(name: str, required=False) -> str:
+def get_env(name: str, required=False) -> str | None:
     """Get an environment variable. Exit with error if missing and required is True."""
     value = os.environ.get(name)
     if required and not value:

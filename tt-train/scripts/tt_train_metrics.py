@@ -5,9 +5,10 @@
 TT-Train metrics schema and serialization utilities.
 
 """
-from pydantic import BaseModel, Field
-from typing import Optional
 import json
+from typing import Optional
+
+from pydantic import BaseModel, Field
 
 
 class TtTrainMetricsData(BaseModel):
