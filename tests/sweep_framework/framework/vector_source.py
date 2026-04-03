@@ -293,7 +293,8 @@ class VectorExportSource(VectorSource):
                 if isinstance(parsed, list) and len(parsed) == 2:
                     return (parsed[0], parsed[1])
             except (SyntaxError, ValueError):
-                pass
+                # Treat unparseable mesh strings as missing mesh information.
+                logger.debug("Failed to parse mesh_device_shape from traced_machine_info entry: %r", mesh)
 
         placements = entry.get("tensor_placements")
         if isinstance(placements, list) and placements:
@@ -306,7 +307,11 @@ class VectorExportSource(VectorSource):
                     if isinstance(parsed, list) and len(parsed) == 2:
                         return (parsed[0], parsed[1])
                 except (SyntaxError, ValueError):
-                    pass
+                    # Treat unparseable placement mesh strings as missing mesh information.
+                    logger.debug(
+                        "Failed to parse mesh_device_shape from tensor_placements entry: %r",
+                        placement_mesh,
+                    )
         return None
 
     @staticmethod
