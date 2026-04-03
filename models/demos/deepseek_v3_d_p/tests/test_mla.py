@@ -284,12 +284,16 @@ def test_mla(
         hidden_states=tt_hidden_states,
         rope_tensors=rope_tensors,
     )
+    ttnn.synchronize_device(mesh_device)
+    ttnn.distributed_context_barrier()
 
     # Second forward to test program cache hit
     tt_output = mla_tt.forward(
         hidden_states=tt_hidden_states,
         rope_tensors=rope_tensors,
     )
+    ttnn.synchronize_device(mesh_device)
+    ttnn.distributed_context_barrier()
 
     if skip_host_comparison == False:
         tt_output_cpu = ttnn.to_torch(
