@@ -129,7 +129,7 @@
 #endif
 
 #if SFPU_OP_LOGSIGMOID_INCLUDE
-#include "api/compute/logsigmoid.h"
+#include "api/compute/eltwise_unary/logsigmoid.h"
 #endif
 
 #if SFPU_OP_SELU_INCLUDE

@@ -100,7 +100,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/gcd.h
     inc/api/compute/layernorm.h
     inc/api/compute/lcm.h
-    inc/api/compute/logsigmoid.h
+    inc/api/compute/eltwise_unary/logsigmoid.h
     inc/api/compute/mask.h
     inc/api/compute/matmul.h
     inc/api/compute/mul_int_sfpu.h

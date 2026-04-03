@@ -589,11 +589,12 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::HARDSWISH:
         case UnaryOpType::LGAMMA:
         case UnaryOpType::TANHSHRINK:
-        case UnaryOpType::LOGSIGMOID:
         case UnaryOpType::BITCAST:
             // Bitcast uses identity kernel (copy_tile + pack_tile) - no LLK needed
             // Parameters are input_dtype and output_dtype, but we don't need them for the kernel
         case UnaryOpType::IDENTITY: return {};
+        case UnaryOpType::LOGSIGMOID:
+            return {"logsigmoid_tile_init();", fmt::format("logsigmoid_tile({});", idst)};
         default: TT_THROW("Undefined non-parametrized op type {}", op_type);
     }
 }
@@ -662,7 +663,6 @@ std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<Data
         case UnaryOpType::LOGIT: return "logit_kernel.cpp";
         case UnaryOpType::HARDSHRINK: return "hardshrink_kernel.cpp";
         case UnaryOpType::HARDSWISH: return "hardswish_kernel.cpp";
-        case UnaryOpType::LOGSIGMOID: return "logsigmoid_kernel.cpp";
         default: return "eltwise_sfpu.cpp";
     }
 }
