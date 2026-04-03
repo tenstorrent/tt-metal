@@ -21,6 +21,7 @@ void kernel_main() {
     uint32_t num_words = get_common_arg_val<uint32_t>(1);
 
     DPRINT << "START mode=" << test_mode << " words=" << num_words << ENDL();
+    DEVICE_PRINT("START mode={} words={}\n", test_mode, num_words);
 
     // Write values to cacheable addresses
     volatile uint32_t* ptr = (volatile uint32_t*)(uintptr_t)base_addr;
@@ -29,6 +30,7 @@ void kernel_main() {
     }
 
     DPRINT << "WRITES DONE" << ENDL();
+    DEVICE_PRINT("WRITES DONE\n");
 
     // Flush/invalidate based on test mode
     switch (test_mode) {
@@ -85,4 +87,5 @@ void kernel_main() {
     }
 
     DPRINT << "DONE" << ENDL();
+    DEVICE_PRINT("DONE\n");
 }

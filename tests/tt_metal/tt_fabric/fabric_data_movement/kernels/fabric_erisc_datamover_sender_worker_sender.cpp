@@ -43,6 +43,14 @@ void kernel_main() {
            //    << "\n\tnum_buffers_per_channel=" << num_buffers_per_channel
            << "\n\tdest_is_dram=" << (dest_is_dram ? "T" : "F") << "\n\tmcast_mode=" << (mcast_mode ? "T" : "F")
            << "\n\twrite_scatter_mode=" << (write_scatter_mode ? "T" : "F") << "\n";
+    DEVICE_PRINT(
+        "sws: args "
+        "\n\tnum_pages_to_send={}\n\tpage_size={}\n\tdest_is_dram={}\n\tmcast_mode={}\n\twrite_scatter_mode={}\n",
+        total_pages_to_send,
+        page_size,
+        dest_is_dram,
+        mcast_mode,
+        write_scatter_mode);
 
     size_t arg_idx = 0;
     size_t dest_addr = get_arg_val<uint32_t>(arg_idx++);

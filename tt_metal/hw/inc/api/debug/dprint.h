@@ -487,6 +487,5 @@ DebugPrinter operator<<(DebugPrinter dp, T* val) {
 #include "dprint_tile.h"
 #endif
 
-#if defined(USE_DEVICE_PRINT)
+// Support for DEVICE_PRINT.
 #include "device_print.h"
-#endif

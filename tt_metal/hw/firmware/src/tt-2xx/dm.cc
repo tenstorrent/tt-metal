@@ -127,6 +127,7 @@ inline __attribute__((always_inline)) void signal_subordinate_completion() {
 inline void run_triscs(uint32_t enables) {
     // Wait for init_sync_registers to complete. Should always be done by the time we get here.
     DPRINT << "DM-FW: waiting for TRISCs to complete" << ENDL();
+    DEVICE_PRINT("DM-FW: waiting for TRISCs to complete\n");
     while (subordinate_sync->allNeo0 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo2 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
@@ -134,6 +135,7 @@ inline void run_triscs(uint32_t enables) {
         invalidate_l1_cache();
     }
     DPRINT << "DM-FW: running TRISCs " << enables << ENDL();
+    DEVICE_PRINT("DM-FW: running TRISCs {}\n", enables);
     if (enables &
         (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::E0_MATH0))) {
         subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_GO;
@@ -195,6 +197,7 @@ extern "C" uint32_t _start1() {
     do_thread_crt1(__ldm_tdata_init);
     WAYPOINT("I");
     DPRINT << "DM0-FW: initialized" << ENDL();
+    DEVICE_PRINT("DM0-FW: initialized\n");
 
     // handle noc_tobank ???
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
@@ -212,6 +215,7 @@ extern "C" uint32_t _start1() {
 
         deassert_trisc();
         DPRINT << "DM0-FW: deasserted TRISC" << ENDL();
+        DEVICE_PRINT("DM0-FW: deasserted TRISC\n");
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
@@ -227,6 +231,7 @@ extern "C" uint32_t _start1() {
             // before mcasting the launch message (as a hang workaround), which
             // ensures that the unicast data will also have been received.
             DPRINT << "DM0-FW: waiting for GO message" << ENDL();
+            DEVICE_PRINT("DM0-FW: waiting for GO message\n");
             while (((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
                    !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload &
                      DISPATCH_ENABLE_FLAG_PRELOAD)) {

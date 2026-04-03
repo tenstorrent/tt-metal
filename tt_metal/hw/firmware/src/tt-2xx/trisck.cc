@@ -50,6 +50,7 @@ uint32_t _start() {
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
     wait_for_go_message();
     DPRINT << "DEBUG_NULL_KERNELS got go message" << ENDL();
+    DEVICE_PRINT("DEBUG_NULL_KERNELS got go message\n");
     DeviceZoneScopedMainChildN("TRISC-KERNEL");
 #ifdef KERNEL_RUN_TIME
     ckernel::wait(KERNEL_RUN_TIME);

@@ -18,20 +18,25 @@ void kernel_main() {
     uint32_t producer_mask = get_arg_val<uint32_t>(0);
 
     // Compute which logical producer slot this TRISC occupies within the mask.
-    uint32_t trisc_id     = static_cast<uint32_t>(ckernel::csr_read<ckernel::CSR::TRISC_ID>());
+    uint32_t trisc_id = static_cast<uint32_t>(ckernel::csr_read<ckernel::CSR::TRISC_ID>());
     uint32_t producer_idx = static_cast<uint32_t>(__builtin_popcount(producer_mask & ((1u << trisc_id) - 1u)));
 
     experimental::DataflowBuffer dfb(0);
 
     // DPRINT << "t6 producer trisc_id: " << trisc_id << " producer_idx: " << producer_idx
     //        << " num_entries_per_producer: " << num_entries_per_producer << ENDL();
+    // DEVICE_PRINT("t6 producer trisc_id: {} producer_idx: {} num_entries_per_producer: {}\n",
+    //              trisc_id, producer_idx, num_entries_per_producer);
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
         DPRINT << "producer tile id " << tile_id << ENDL();
+        DEVICE_PRINT("producer tile id {}\n", tile_id);
         dfb.reserve_back(1);
         dfb.push_back(1);
     }
     DPRINT << "PFW" << ENDL();
+    DEVICE_PRINT("PFW\n");
     dfb.finish();
     DPRINT << "PFD" << ENDL();
+    DEVICE_PRINT("PFD\n");
 }

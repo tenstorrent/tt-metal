@@ -56,6 +56,7 @@ void kernel_main() {
 #endif
                 // DPRINT << 'W' << 'C' << itileC << ' ' << 'a' << dst_addr << ENDL();
                 // DPRINT << itileC << ' ' << uint32_t(dst_noc_addr) << ENDL();
+                // DEVICE_PRINT("WC{0} a{1}\n{0} {2}\n", itileC, dst_addr, uint32_t(dst_noc_addr));
                 itileC++;
             }
         }

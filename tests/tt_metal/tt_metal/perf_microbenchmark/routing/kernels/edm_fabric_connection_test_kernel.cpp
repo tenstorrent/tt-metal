@@ -69,6 +69,7 @@ void kernel_main() {
 
     if (is_starting_worker) {
         DPRINT << "Is starting worker\n";
+        DEVICE_PRINT("Is starting worker\n");
         *connection_token_ptr += 1;
     }
 

@@ -18,6 +18,12 @@ void kernel_main() {
 
     DPRINT << "swr: args " << "\n\tsrc_addr=" << src_addr << "\n\tsrc_is_dram=" << (src_args.is_dram ? "T" : "F")
            << "\n\tnum_pages_to_read_total=" << num_pages_to_read_total << "\n\tpage_size=" << page_size << "\n";
+    DEVICE_PRINT(
+        "swr: args \n\tsrc_addr={}\n\tsrc_is_dram={}\n\tnum_pages_to_read_total={}\n\tpage_size={}\n",
+        src_addr,
+        (src_args.is_dram ? "T" : "F"),
+        num_pages_to_read_total,
+        page_size);
 
     for (uint32_t num_pages_read = 0; num_pages_read < num_pages_to_read_total;
          num_pages_read += pages_per_edm_buffer) {
@@ -35,4 +41,5 @@ void kernel_main() {
         cb_push_back(cb_id_in0, pages_to_read);
     }
     DPRINT << "SR DONE\n";
+    DEVICE_PRINT("SR DONE\n");
 }

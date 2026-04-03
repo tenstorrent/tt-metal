@@ -34,6 +34,7 @@ void kernel_main() {
         if (rt_arg != expected) {
             DPRINT << "Actual runtime argument value: " << rt_arg << " Expected runtime argument value: " << expected
                    << ENDL();
+            DEVICE_PRINT("Actual runtime argument value: {} Expected runtime argument value: {}\n", rt_arg, expected);
             ASSERT(0);
             while (true);  // Hang kernel if values aren't correct
         }
@@ -46,6 +47,7 @@ void kernel_main() {
         if (expected_sem_val != actual_sem_val) {
             DPRINT << "Actual semaphore value: " << actual_sem_val << " Expected semaphore value: " << expected_sem_val
                    << ENDL();
+            DEVICE_PRINT("Actual semaphore value: {} Expected semaphore value: {}\n", actual_sem_val, expected_sem_val);
             ASSERT(0);
             while (true);  // Hang kernel if values aren't correct
         }
@@ -58,6 +60,11 @@ void kernel_main() {
         if (expected_cb_page_size != actual_cb_page_size) {
             DPRINT << cb_idx << " Actual circular buffer page size: " << actual_cb_page_size
                    << " Expected circular buffer page size: " << expected_cb_page_size << ENDL();
+            DEVICE_PRINT(
+                "{} Actual circular buffer page size: {} Expected circular buffer page size: {}\n",
+                cb_idx,
+                actual_cb_page_size,
+                expected_cb_page_size);
             ASSERT(0);
             while (true);  // Hang kernel if values aren't correct
         }
@@ -70,6 +77,10 @@ void kernel_main() {
         if (common_rt_arg != expected) {
             DPRINT << "Actual common runtime argument value: " << common_rt_arg
                    << " Expected common runtime argument value: " << expected << ENDL();
+            DEVICE_PRINT(
+                "Actual common runtime argument value: {} Expected common runtime argument value: {}\n",
+                common_rt_arg,
+                expected);
             ASSERT(0);
             FWASSERT(s, p)
             while (true);  // Hang kernel if values aren't correct

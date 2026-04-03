@@ -23,16 +23,26 @@ void kernel_main() {
 
 #ifdef DEBUG
     DPRINT << "dst_addr: " << dst_addr << ENDL();
+    DEVICE_PRINT("dst_addr: {}\n", dst_addr);
     DPRINT << "output_stick_size: " << output_stick_size << ENDL();
+    DEVICE_PRINT("output_stick_size: {}\n", output_stick_size);
     DPRINT << "input_stick_size: " << input_stick_size << ENDL();
+    DEVICE_PRINT("input_stick_size: {}\n", input_stick_size);
     DPRINT << "stick_size_offset: " << stick_size_offset << ENDL();
+    DEVICE_PRINT("stick_size_offset: {}\n", stick_size_offset);
     DPRINT << "num_dims: " << num_dims << ENDL();
+    DEVICE_PRINT("num_dims: {}\n", num_dims);
     DPRINT << "start_id: " << start_id << ENDL();
+    DEVICE_PRINT("start_id: {}\n", start_id);
     DPRINT << "num_sticks_per_core: " << num_sticks_per_core << ENDL();
+    DEVICE_PRINT("num_sticks_per_core: {}\n", num_sticks_per_core);
     DPRINT << "num_sticks_per_core_read: " << num_sticks_per_core_read << ENDL();
+    DEVICE_PRINT("num_sticks_per_core_read: {}\n", num_sticks_per_core_read);
     DPRINT << "num_read_per_barrier: " << num_read_per_barrier << ENDL();
+    DEVICE_PRINT("num_read_per_barrier: {}\n", num_read_per_barrier);
 #ifdef UNPAD_INPUT_WIDTH
     DPRINT << "padding_width_ntiles: " << padding_width_ntiles << ENDL();
+    DEVICE_PRINT("padding_width_ntiles: {}\n", padding_width_ntiles);
 #endif
 
 #endif
@@ -69,6 +79,15 @@ void kernel_main() {
             DPRINT << "SRC L1 : " << src_buffer_l1_addr - base_src_l1_addr << " Dst Stick ID " << dst_stick_id
                    << " sticks_read: " << sticks_read << " Coord " << id_per_dim[0] << ", " << id_per_dim[1] << ", "
                    << id_per_dim[2] << ", " << id_per_dim[3] << ENDL();
+            DEVICE_PRINT(
+                "SRC L1 : {} Dst Stick ID {} sticks_read: {} Coord {}, {}, {}, {}\n",
+                src_buffer_l1_addr - base_src_l1_addr,
+                dst_stick_id,
+                sticks_read,
+                id_per_dim[0],
+                id_per_dim[1],
+                id_per_dim[2],
+                id_per_dim[3]);
 #endif
             src_buffer_l1_addr += stick_size_offset;
             dst_stick_id++;

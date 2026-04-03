@@ -148,6 +148,7 @@ void kernel_main() {
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
     DPRINT << "Starting d2d exchange kernel" << ENDL();
+    DEVICE_PRINT("Starting d2d exchange kernel\n");
 
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
         downstream_enc.d2d.downstream_noc_x,

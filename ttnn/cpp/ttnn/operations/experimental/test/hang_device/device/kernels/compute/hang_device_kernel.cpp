@@ -7,5 +7,6 @@
 
 void kernel_main() {
     DPRINT_MATH(DPRINT << "Hanging the device, use this only for testing!!!" << ENDL());
+    DEVICE_PRINT_MATH("Hanging the device, use this only for testing!!!\n");
     while (true);
 }

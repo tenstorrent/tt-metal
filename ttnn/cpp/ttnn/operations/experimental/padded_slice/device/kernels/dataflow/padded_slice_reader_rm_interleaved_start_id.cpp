@@ -48,15 +48,47 @@ void kernel_main() {
            << ", num_sticks_per_core: " << num_sticks_per_core
            << ", num_sticks_per_core_read: " << num_sticks_per_core_read
            << ", num_read_per_barrier: " << num_read_per_barrier << ENDL();
+    DEVICE_PRINT(
+        "src_addr: {}, padded_stick_size: {}, unpadded_stick_size: {}, stick_size_offset: {}, num_dims: {}, start_id: "
+        "{}, num_sticks_per_core: {}, num_sticks_per_core_read: {}, num_read_per_barrier: {}\n",
+        src_addr,
+        padded_stick_size,
+        unpadded_stick_size,
+        stick_size_offset,
+        num_dims,
+        start_id,
+        num_sticks_per_core,
+        num_sticks_per_core_read,
+        num_read_per_barrier);
 
     DPRINT << "non_aligned: " << is_non_aligned << "cb = " << cb_id_non_aligned << ", read_size: " << read_size
            << ", src_stick_id: " << src_stick_id << ", sticks_read: " << sticks_read << ENDL();
+    DEVICE_PRINT(
+        "non_aligned: {}, cb = {}, read_size: {}, src_stick_id: {}, sticks_read: {}\n",
+        is_non_aligned,
+        cb_id_non_aligned,
+        read_size,
+        src_stick_id,
+        sticks_read);
 
     DPRINT << "num_unpadded_sticks: " << num_unpadded_sticks[0] << " " << num_unpadded_sticks[1] << " "
            << num_unpadded_sticks[2] << " " << num_unpadded_sticks[3] << " " << ENDL();
+    DEVICE_PRINT(
+        "num_unpadded_sticks: {} {} {} {}\n",
+        num_unpadded_sticks[0],
+        num_unpadded_sticks[1],
+        num_unpadded_sticks[2],
+        num_unpadded_sticks[3]);
     DPRINT << "num_padded_sticks: " << num_padded_sticks[0] << " " << num_padded_sticks[1] << " "
            << num_padded_sticks[2] << " " << num_padded_sticks[3] << " " << ENDL();
+    DEVICE_PRINT(
+        "num_padded_sticks: {} {} {} {}\n",
+        num_padded_sticks[0],
+        num_padded_sticks[1],
+        num_padded_sticks[2],
+        num_padded_sticks[3]);
     DPRINT << "Out CB Page size: " << get_local_cb_interface(cb_id_in0).fifo_page_size << ENDL();
+    DEVICE_PRINT("Out CB Page size: {}\n", get_local_cb_interface(cb_id_in0).fifo_page_size);
 #endif
     if constexpr (is_non_aligned) {
         enum SlotState : uint8_t { IDLE = 0, SRC_PENDING = 1, SCRATCH_READY = 2, SCRATCH_PENDING = 3 };
