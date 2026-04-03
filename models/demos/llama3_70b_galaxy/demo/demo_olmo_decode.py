@@ -98,6 +98,7 @@ def run_olmo_demo(
     stress_test,
     start_pos,
     enable_prefetcher_performance_mode=True,
+    is_cur_pos_sharded=True,
 ):
     max_supported_seq_len = 128 * 1024  # OLMo supports up to 128k context
 
@@ -430,20 +431,32 @@ def run_olmo_demo(
     logger.info("=" * 60)
 
     # Decode starts from the end of each user's prompt (always 32 entries, -1 for inactive users)
-    current_pos = torch.full((32,), -1, dtype=torch.long)
-    for b in range(batch_size):
-        current_pos[b] = prompt_lengths[b]
+    decoding_pos = [prompt_lengths[b] if b < batch_size else -1 for b in range(32)]
+    current_pos = torch.tensor(decoding_pos, dtype=torch.long)
 
+    # OPTIMIZATION: sharding the current position tensor on each core (matches Llama demo)
+    if is_cur_pos_sharded and batch_size > 1:
+        # Each core will have a copy of the current position tensor in L1
+        current_pos_sram = torch.tensor([[decoding_pos[b] for b in range(32)]] * model_args.sub_core_grids.num_cores())
+        cur_pos_shard_spec = ttnn.ShardSpec(
+            model_args.sub_core_grids, (1, 32 // mesh_device.shape[1]), ttnn.ShardOrientation.ROW_MAJOR
+        )
+        cur_pos_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, cur_pos_shard_spec
+        )
     current_pos_tensor = ttnn.from_torch(
-        current_pos,
-        device=mesh_device,
+        current_pos_sram if (is_cur_pos_sharded and batch_size > 1) else current_pos,
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 0),
+            dims=(None, 1) if (is_cur_pos_sharded and batch_size > 1) else (None, 0),
             mesh_shape=model_args.cluster_shape,
         ),
     )
+    if is_cur_pos_sharded and batch_size > 1:
+        current_pos_tensor = current_pos_tensor.to(mesh_device, cur_pos_memory_config)
+    else:
+        current_pos_tensor = current_pos_tensor.to(mesh_device)
 
     rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rm_rot_mats(current_pos, return_rot_idxs=True)
 
@@ -493,7 +506,13 @@ def run_olmo_demo(
         logger.info(f"Decode compile iteration {i} done")
 
     if not stress_test:
-        ttnn.plus_one(current_pos_tensor, sub_core_grids=model_args.sub_core_grids, skip_negative_entries=True)
+        ttnn.plus_one(
+            current_pos_tensor,
+            sub_core_grids=model_args.sub_core_grids
+            if is_cur_pos_sharded
+            else ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+            skip_negative_entries=True,
+        )
         ttnn.plus_one(
             rot_mat_idxs,
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
@@ -521,7 +540,13 @@ def run_olmo_demo(
     _ = tt_sampling(tt_out[0], tt_out_tok=tt_out_tok)
 
     if not stress_test:
-        ttnn.plus_one(current_pos_tensor, sub_core_grids=model_args.sub_core_grids, skip_negative_entries=True)
+        ttnn.plus_one(
+            current_pos_tensor,
+            sub_core_grids=model_args.sub_core_grids
+            if is_cur_pos_sharded
+            else ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+            skip_negative_entries=True,
+        )
         ttnn.plus_one(
             rot_mat_idxs,
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
@@ -532,11 +557,11 @@ def run_olmo_demo(
 
     # Reset decode state for actual generation
     current_pos_reset = ttnn.from_torch(
-        current_pos,
+        current_pos_sram if (is_cur_pos_sharded and batch_size > 1) else current_pos,
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 0),
+            dims=(None, 1) if (is_cur_pos_sharded and batch_size > 1) else (None, 0),
             mesh_shape=model_args.cluster_shape,
         ),
     )
