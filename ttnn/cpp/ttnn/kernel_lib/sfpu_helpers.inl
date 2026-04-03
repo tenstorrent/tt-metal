@@ -52,12 +52,7 @@
 #include "api/compute/eltwise_unary/typecast.h"
 #include "api/compute/eltwise_unary/identity.h"
 #include "api/compute/eltwise_unary/dropout.h"
-#include "api/compute/eltwise_unary/bitwise_and.h"
-#include "api/compute/eltwise_unary/bitwise_or.h"
-#include "api/compute/eltwise_unary/bitwise_xor.h"
-#include "api/compute/eltwise_unary/bitwise_not.h"
-#include "api/compute/eltwise_unary/left_shift.h"
-#include "api/compute/eltwise_unary/right_shift.h"
+// NOTE: bitwise/shift headers excluded — see sfpu_helpers.hpp for rationale.
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/rsub.h"
 #include "api/compute/eltwise_unary/rdiv.h"
@@ -374,18 +369,7 @@ ALWI void Typecast<in_dtype, out_dtype, Slot>::call(uint32_t d0) const { typecas
 
 template <Dst Slot> ALWI void Identity<Slot>::init() const { identity_tile_init(); }
 template <Dst Slot> ALWI void Identity<Slot>::call(uint32_t d0) const { identity_tile(d0); }
-template <Dst Slot> ALWI void BitwiseNot<Slot>::init() const { bitwise_not_tile_init(); }
-template <Dst Slot> ALWI void BitwiseNot<Slot>::call(uint32_t d0) const { bitwise_not_tile(d0); }
-template <Dst Slot> ALWI void BitwiseAnd<Slot>::init() const { bitwise_and_tile_init(); }
-template <Dst Slot> ALWI void BitwiseAnd<Slot>::call(uint32_t d0) const { bitwise_and_tile(d0, param0); }
-template <Dst Slot> ALWI void BitwiseOr<Slot>::init() const { bitwise_or_tile_init(); }
-template <Dst Slot> ALWI void BitwiseOr<Slot>::call(uint32_t d0) const { bitwise_or_tile(d0, param0); }
-template <Dst Slot> ALWI void BitwiseXor<Slot>::init() const { bitwise_xor_tile_init(); }
-template <Dst Slot> ALWI void BitwiseXor<Slot>::call(uint32_t d0) const { bitwise_xor_tile(d0, param0); }
-template <Dst Slot> ALWI void LeftShift<Slot>::init() const { left_shift_tile_init(); }
-template <Dst Slot> ALWI void LeftShift<Slot>::call(uint32_t d0) const { left_shift_tile(d0, param0); }
-template <Dst Slot> ALWI void RightShift<Slot>::init() const { right_shift_tile_init(); }
-template <Dst Slot> ALWI void RightShift<Slot>::call(uint32_t d0) const { right_shift_tile(d0, param0); }
+// NOTE: Bitwise/shift op implementations excluded — see sfpu_helpers.hpp for rationale.
 
 // =============================================================================
 // Op Method Definitions — Scalar Arithmetic (10 ops)

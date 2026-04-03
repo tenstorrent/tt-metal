@@ -40,12 +40,10 @@
 #include "api/compute/eltwise_unary/typecast.h"
 #include "api/compute/eltwise_unary/identity.h"
 #include "api/compute/eltwise_unary/dropout.h"
-#include "api/compute/eltwise_unary/bitwise_and.h"
-#include "api/compute/eltwise_unary/bitwise_or.h"
-#include "api/compute/eltwise_unary/bitwise_xor.h"
-#include "api/compute/eltwise_unary/bitwise_not.h"
-#include "api/compute/eltwise_unary/left_shift.h"
-#include "api/compute/eltwise_unary/right_shift.h"
+// NOTE: bitwise_and/or/xor/not and left_shift/right_shift headers are intentionally
+// excluded — their underlying ckernel headers use `using namespace sfpi` and define
+// operators (e.g. operator&) that create ambiguous overloads when combined with
+// reduce.h or other LLK headers.  Include them directly in kernels that need them.
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/rsub.h"
 #include "api/compute/eltwise_unary/rdiv.h"
@@ -928,46 +926,9 @@ struct Identity : UnaryOp<Identity<Slot>, Slot> {
     ALWI void call(uint32_t d0) const;
 };
 
-template <Dst Slot = Dst::D0>
-struct BitwiseNot : UnaryOp<BitwiseNot<Slot>, Slot> {
-    ALWI void init() const;
-    ALWI void call(uint32_t d0) const;
-};
-
-template <Dst Slot = Dst::D0>
-struct BitwiseAnd : UnaryOp<BitwiseAnd<Slot>, Slot> {
-    uint32_t param0;
-    ALWI void init() const;
-    ALWI void call(uint32_t d0) const;
-};
-
-template <Dst Slot = Dst::D0>
-struct BitwiseOr : UnaryOp<BitwiseOr<Slot>, Slot> {
-    uint32_t param0;
-    ALWI void init() const;
-    ALWI void call(uint32_t d0) const;
-};
-
-template <Dst Slot = Dst::D0>
-struct BitwiseXor : UnaryOp<BitwiseXor<Slot>, Slot> {
-    uint32_t param0;
-    ALWI void init() const;
-    ALWI void call(uint32_t d0) const;
-};
-
-template <Dst Slot = Dst::D0>
-struct LeftShift : UnaryOp<LeftShift<Slot>, Slot> {
-    uint32_t param0;
-    ALWI void init() const;
-    ALWI void call(uint32_t d0) const;
-};
-
-template <Dst Slot = Dst::D0>
-struct RightShift : UnaryOp<RightShift<Slot>, Slot> {
-    uint32_t param0;
-    ALWI void init() const;
-    ALWI void call(uint32_t d0) const;
-};
+// NOTE: BitwiseNot, BitwiseAnd, BitwiseOr, BitwiseXor, LeftShift, RightShift
+// are excluded — their ckernel headers pollute the global namespace with operators
+// that conflict with reduce.h.  See note at top of includes.
 
 // --- Scalar Arithmetic ---
 
