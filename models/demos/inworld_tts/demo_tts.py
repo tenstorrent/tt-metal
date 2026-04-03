@@ -39,14 +39,27 @@ for p in sorted(
         sys.path.append(p)
 
 # ---- Constants ----
-MERGED_MODEL_DIR = os.path.join(os.path.dirname(__file__), "training", "merged_model")
+MERGED_MODEL_DIR = "/home/ttuser/models/models--meta-llama--Llama-3.2-1B-Instruct/snapshots/9213176726f574b556790deb65791e0c5aa438b6"
 CODEC_CKPT = os.path.join(
     os.path.dirname(__file__),
-    "training/vectorized_data_full/.cache/models--HKUSTAudio--xcodec2/"
+    "/home/ttuser/models/models--HKUSTAudio--xcodec2/"
     "snapshots/06071873ab345f44488d235dae3cb10b5901fd90/ckpt/epoch=4-step=1400000.ckpt",
 )
 SAMPLE_RATE = 16000
 TOKEN_RATE = 50  # speech tokens per second
+
+# Tokenizer constants (from Inworld TTS)
+SPEECH_START_TOKEN = "<|speech_start|>"
+SPEECH_END_TOKEN = "<|speech_end|>"
+TEXT_PROMPT_START_TOKEN = "<|text_prompt_start|>"
+TEXT_PROMPT_END_TOKEN = "<|text_prompt_end|>"
+VOICE_DESCRIPTION_START_TOKEN = "<|voice_description_start|>"
+VOICE_DESCRIPTION_END_TOKEN = "<|voice_description_end|>"
+SOUND_EFFECT_START_TOKEN = "<|sound_effect_start|>"
+SOUND_EFFECT_END_TOKEN = "<|sound_effect_end|>"
+SPEECH_TOKEN_PATTERN = "<|s_{0}|>"
+_EXPECTED_VOCAB_SIZE = 193856
+CODEBOOK_SIZE = 65536  # 4^8 for FSQ levels=[4,4,4,4,4,4,4,4]
 
 
 # ---------------------------------------------------------------------------
@@ -129,15 +142,82 @@ def encode_audio_prompt(audio_path, codec_sd, quantizer, device):
 # ---------------------------------------------------------------------------
 # LLM
 # ---------------------------------------------------------------------------
+def build_tokenizer(model_dir, max_seq_len=8192, codebook_size=CODEBOOK_SIZE):
+    """Build tokenizer with speech tokens added.
+    
+    Based on Inworld TTS tokenization.py:
+    https://github.com/inworld-ai/tts/blob/a8556e420a2e6e0b18f506f369aae9efa65d2c78/tts/core/tokenization.py#L11
+    
+    Args:
+        model_dir: HuggingFace model directory
+        max_seq_len: Maximum sequence length
+        codebook_size: Number of speech tokens to add (default: 65536 for 4^8 FSQ)
+    
+    Returns:
+        tokenizer: Tokenizer with speech tokens, vocab_size = 193856
+    """
+    from transformers import AutoTokenizer
+
+    print(f"Building tokenizer from {model_dir}...")
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_dir,
+        model_max_length=max_seq_len,
+        padding_side="right",
+    )
+    tokenizer.pad_token = tokenizer.eos_token
+    original_vocab_size = len(tokenizer)
+    print(f"  Original vocab size: {original_vocab_size}")
+
+    # Check if already expanded
+    if original_vocab_size == _EXPECTED_VOCAB_SIZE:
+        print("  Tokenizer already has the correct size.")
+        return tokenizer
+
+    # Add special tokens
+    new_tokens = [
+        SPEECH_START_TOKEN,
+        SPEECH_END_TOKEN,
+        TEXT_PROMPT_START_TOKEN,
+        TEXT_PROMPT_END_TOKEN,
+        VOICE_DESCRIPTION_START_TOKEN,
+        VOICE_DESCRIPTION_END_TOKEN,
+        SOUND_EFFECT_START_TOKEN,
+        SOUND_EFFECT_END_TOKEN,
+    ]
+
+    # Add speech tokens <|s_0|> through <|s_N|>
+    new_tokens.extend([SPEECH_TOKEN_PATTERN.format(i) for i in range(codebook_size)])
+
+    num_added_tokens = tokenizer.add_tokens(sorted(new_tokens))
+    new_vocab_size = len(tokenizer)
+
+    # Pad with extra tokens if needed to reach expected size
+    if new_vocab_size < _EXPECTED_VOCAB_SIZE:
+        num_extra_tokens = _EXPECTED_VOCAB_SIZE - new_vocab_size
+        extra_tokens = [f"<extra_token_{i}>" for i in range(num_extra_tokens)]
+        tokenizer.add_tokens(extra_tokens)
+        new_vocab_size = len(tokenizer)
+        print(f"  Added {num_extra_tokens} padding tokens to reach {new_vocab_size}.")
+
+    if new_vocab_size != _EXPECTED_VOCAB_SIZE:
+        raise ValueError(
+            f"Expected tokenizer size to be {_EXPECTED_VOCAB_SIZE}, "
+            f"but got {new_vocab_size}!"
+        )
+
+    print(f"  Added {num_added_tokens} speech tokens. Final vocab size: {new_vocab_size}")
+    return tokenizer
+
+
 def load_llm(model_dir, device="cpu"):
     """Load the merged LLaMA SpeechLM model and tokenizer."""
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoModelForCausalLM
 
     print(f"Loading LLM from {model_dir}...")
-    tokenizer = AutoTokenizer.from_pretrained(model_dir)
+    tokenizer = build_tokenizer(model_dir)
     model = AutoModelForCausalLM.from_pretrained(model_dir, torch_dtype=torch.bfloat16, device_map=device)
     model.eval()
-    print(f"  Vocab size: {model.config.vocab_size}, Layers: {model.config.num_hidden_layers}")
+    print(f"  Model vocab size: {model.config.vocab_size}, Layers: {model.config.num_hidden_layers}")
     return model, tokenizer
 
 
@@ -151,12 +231,12 @@ def build_prompt(text, tokenizer, prompt_speech_ids=None):
     """
     messages = [{"role": "user", "content": text}]
     prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    prompt += "<|speech_start|>"
+    prompt += SPEECH_START_TOKEN
 
     # Add prompt speech tokens for voice cloning
     if prompt_speech_ids:
         for sid in prompt_speech_ids:
-            prompt += f"<|s_{sid}|>"
+            prompt += SPEECH_TOKEN_PATTERN.format(sid)
 
     return prompt
 
@@ -177,7 +257,7 @@ def generate_speech_tokens(model, tokenizer, text, prompt_speech_ids=None, max_t
     inputs = tokenizer(prompt, return_tensors="pt", add_special_tokens=False)
     input_ids = inputs["input_ids"].to(model.device)
 
-    speech_end_id = tokenizer.convert_tokens_to_ids("<|speech_end|>")
+    speech_end_id = tokenizer.convert_tokens_to_ids(SPEECH_END_TOKEN)
     eot_id = tokenizer.convert_tokens_to_ids("<|eot_id|>")
     stop_ids = [speech_end_id, eot_id]
 
@@ -194,7 +274,7 @@ def generate_speech_tokens(model, tokenizer, text, prompt_speech_ids=None, max_t
             top_p=1.0,
             top_k=50,
             repetition_penalty=1.1,
-            frequency_penalty=0.3,
+            # frequency_penalty=0.3,
             eos_token_id=stop_ids,
             pad_token_id=eot_id,
         )
