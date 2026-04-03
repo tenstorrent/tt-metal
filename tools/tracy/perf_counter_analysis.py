@@ -40,6 +40,15 @@ BH_RTL_DEAD_COUNTERS = frozenset({
     "WAITING_FOR_SFPU_IDLE_2",
 })
 
+# WH RTL-confirmed dead counters: signals tied to constant 0 in Wormhole RTL.
+# - PACK_BANK6/7_GRANT: bank 6-7 grant tied to 2'b00 (same as BH)
+# - FIDELITY_PHASE_STALLS: fidelity_phases_ongoing = 1'b0 on WH (no multi-phase fidelity)
+WH_RTL_DEAD_COUNTERS = frozenset({
+    "PACK_BANK6_GRANT",
+    "PACK_BANK7_GRANT",
+    "FIDELITY_PHASE_STALLS",
+})
+
 # Counter type enum from perf_counters.hpp — auto-generated, must match C++ enum order
 COUNTER_TYPE_NAMES = {
     0: "UNDEF",
@@ -347,7 +356,12 @@ def extract_perf_counters(events: List[Any], arch: str = "") -> Optional[pd.Data
     EVENT_CORE_COORDS_IDX = 4
     PERF_COUNTER_ID = 9090
 
-    hide_dead = arch.lower() == "blackhole" if arch else False
+    arch_lower = arch.lower() if arch else ""
+    dead_counters = frozenset()
+    if arch_lower == "blackhole":
+        dead_counters = BH_RTL_DEAD_COUNTERS
+    elif arch_lower in ("wormhole", "wormhole_b0"):
+        dead_counters = WH_RTL_DEAD_COUNTERS
 
     try:
         # Process events: extract metadata, add timestamp and coords
@@ -365,8 +379,8 @@ def extract_perf_counters(events: List[Any], arch: str = "") -> Optional[pd.Data
                 else:
                     counter_type_name = COUNTER_TYPE_NAMES.get(counter_type_raw, f"UNKNOWN_{counter_type_raw}")
 
-                # Skip BH RTL-confirmed dead counters (signals tied to 0 in silicon)
-                if hide_dead and counter_type_name in BH_RTL_DEAD_COUNTERS:
+                # Skip RTL-confirmed dead counters (signals tied to 0 in silicon)
+                if dead_counters and counter_type_name in dead_counters:
                     continue
 
                 perf_counter_events.append(
@@ -512,11 +526,6 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "MATH Instrn Avail Rate T1",
         "UNPACK Instrn Avail Rate T0",
         "PACK Instrn Avail Rate T2",
-        # NEW: Stall breakdown
-        "THCON Idle Stall Pct T0",
-        "MOVE Idle Stall Pct T0",
-        "MMIO Idle Stall Pct T1",
-        "SFPU Idle Stall Pct T1",
         # NEW: Write port blocking
         "SrcB Write Port Blocked Rate",
         "SrcA Write Actual Efficiency",
@@ -547,9 +556,7 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
 
     # Non-percentage metrics (raw rates, not %)
     base_metrics_no_pct = [
-        "Thread 0 IPC",
-        "Thread 1 IPC",
-        "Thread 2 IPC",
+        # Thread IPC removed: no RTL counter for instruction counts
         "Unpack Instrn Issue Rate T0",
         "Math Instrn Issue Rate T1",
         "Pack Instrn Issue Rate T2",

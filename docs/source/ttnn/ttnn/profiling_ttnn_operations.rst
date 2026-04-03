@@ -189,7 +189,6 @@ The following metrics are automatically computed from raw counters. Each metric 
 *Thread Analysis*
 
 - **Thread 0/1/2 Stall Rate (%)**: Fraction of cycles each thread was stalled. Thread 0 = unpack, Thread 1 = math, Thread 2 = pack. High values indicate the thread is waiting for a resource.
-- **Thread 0/1/2 IPC**: Instructions per cycle for each thread. Higher means more instructions issued per clock.
 
 *Pipeline Wait Metrics*
 
@@ -218,11 +217,6 @@ The following metrics are automatically computed from raw counters. Each metric 
 - **CFG/SYNC/THCON/MOVE Instrn Avail Rate T0 (%)**: Fraction of cycles each instruction type was available in thread 0's instruction buffer. Shows which instruction types occupy the most scheduling time.
 - **MATH Instrn Avail Rate T1 (%)**: Math instruction availability on the math thread.
 - **UNPACK/PACK Instrn Avail Rate T0/T2 (%)**: Unpack and pack instruction availability on their primary threads.
-
-*Stall Breakdown*
-
-- **THCON/MOVE Idle Stall Pct T0 (%)**: What percentage of thread 0's total stalls are caused by THCON or MOVE waits. Helps identify the dominant stall reason.
-- **MMIO/SFPU Idle Stall Pct T1 (%)**: What percentage of thread 1's stalls are MMIO or SFPU waits.
 
 *Write Port Analysis*
 

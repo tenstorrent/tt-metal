@@ -171,7 +171,7 @@ enum PerfCounterType : uint16_t {
     SRCB_WRITE_THREAD0,           // srcB writes from thread 0 (grant 264)
     SRCA_WRITE_THREAD1,           // srcA writes from thread 1 (grant 265)
     SRCB_WRITE_THREAD1,           // srcB writes from thread 1 (grant 266)
-    MATH_INSTRN_NOT_BLOCKED_SRC,  // Math not blocked by src_data_ready (grant 256, same req as 0)
+    MATH_INSTRN_NOT_BLOCKED_SRC,  // BH: Math not blocked by src_data_ready (grant 256)
     // TDMA_PACK additional req counters (WH only, BH has these tied to 0)
     PACKER_DEST_READ_1,  // Dest accumulator register 1 read request (req 12)
     PACKER_DEST_READ_2,  // Dest accumulator register 2 read request (req 13)
@@ -380,7 +380,13 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters =
      {PerfCounterType::SRCB_WRITE_THREAD1, 266}}};
 constexpr size_t NUM_UNPACK_COUNTERS = 22;
 #else
-// WH: all 22 counters active
+// WH: all 22 counters active.
+// Grant bank mapping differs from BH at banks 0 and 4-6:
+//   WH grant[0] (sel 256) = 4 HF cycles  (BH: math not blocked by src — dead)
+//   WH grant[4] (sel 260) = srcB not blocked by port
+//   WH grant[5] (sel 261) = srcA not blocked by overwrite
+//   WH grant[6] (sel 262) = srcA not blocked by port
+// Also: FIDELITY_PHASE_STALLS is always 0 (fidelity_phases_ongoing = 1'b0 on WH).
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
      {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
@@ -393,13 +399,13 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters =
      {PerfCounterType::UNPACK1_BUSY_THREAD0, 8},
      {PerfCounterType::UNPACK0_BUSY_THREAD1, 9},
      {PerfCounterType::UNPACK1_BUSY_THREAD1, 10},
-     {PerfCounterType::MATH_INSTRN_NOT_BLOCKED_SRC, 256},
+     {PerfCounterType::MATH_INSTRN_NOT_BLOCKED_SRC, 256},  // WH: actually 4-HF-cycle counter (hf_cycles==2'b11)
      {PerfCounterType::INSTRN_2_HF_CYCLES, 257},
      {PerfCounterType::INSTRN_1_HF_CYCLE, 258},
      {PerfCounterType::SRCB_WRITE_ACTUAL, 259},
-     {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_OVR, 260},
-     {PerfCounterType::SRCA_WRITE_ACTUAL, 261},
-     {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_PORT, 262},
+     {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_PORT, 260},
+     {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_OVR, 261},
+     {PerfCounterType::SRCA_WRITE_ACTUAL, 262},
      {PerfCounterType::SRCA_WRITE_THREAD0, 263},
      {PerfCounterType::SRCB_WRITE_THREAD0, 264},
      {PerfCounterType::SRCA_WRITE_THREAD1, 265},
@@ -655,7 +661,20 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_4_counters = {
 constexpr size_t NUM_L1_4_COUNTERS = 16;
 
 // INSTRN counters (61 counters)
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 85> instrn_counters = {
+// INSTRN_THREAD counter_sel mapping (verified against tt_instruction_thread.sv RTL).
+//
+// The flat perf_cnt_instrn_thread array is built from a Verilog concatenation (MSB first).
+// Sel 0-23: instruction availability (8 types × 3 threads, from tt_perf_cnt NUM_BANKS=8).
+// Sel 24-26: total stall cycles per thread (tt_perf_cnt NUM_BANKS=1, grant=0).
+//
+// Shared stall conditions and per-thread stall reasons differ between BH and WH:
+// - BH: shared conditions use 1 slot each (sel 27-30), per-thread start at sel 31
+// - WH: shared conditions are BROADCAST to 3 slots each (sel 27-38), per-thread start at sel 39
+#if defined(ARCH_BLACKHOLE)
+// BH INSTRN_THREAD: 82 counters
+// Sel 27-30: shared stall conditions (1 slot each, thread 0 only)
+// Sel 31-57: per-thread stall reasons (9 types × 3 threads)
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 82> instrn_counters = {
     {{PerfCounterType::CFG_INSTRN_AVAILABLE_0, 0},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_1, 1},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_2, 2},
@@ -680,43 +699,43 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 85> instrn_counters =
      {PerfCounterType::PACK_INSTRN_AVAILABLE_0, 21},
      {PerfCounterType::PACK_INSTRN_AVAILABLE_1, 22},
      {PerfCounterType::PACK_INSTRN_AVAILABLE_2, 23},
-     {PerfCounterType::THREAD_INSTRUCTIONS_0, 24},
-     {PerfCounterType::THREAD_INSTRUCTIONS_1, 25},
-     {PerfCounterType::THREAD_INSTRUCTIONS_2, 26},
-     {PerfCounterType::THREAD_STALLS_0, 27},
-     {PerfCounterType::THREAD_STALLS_1, 28},
-     {PerfCounterType::THREAD_STALLS_2, 29},
-     {PerfCounterType::WAITING_FOR_SRCA_VALID, 30},
-     {PerfCounterType::WAITING_FOR_SRCB_VALID, 31},
-     {PerfCounterType::WAITING_FOR_SRCA_CLEAR, 32},
-     {PerfCounterType::WAITING_FOR_SRCB_CLEAR, 33},
-     {PerfCounterType::WAITING_FOR_THCON_IDLE_0, 34},
-     {PerfCounterType::WAITING_FOR_THCON_IDLE_1, 35},
-     {PerfCounterType::WAITING_FOR_THCON_IDLE_2, 36},
-     {PerfCounterType::WAITING_FOR_MATH_IDLE_0, 37},
-     {PerfCounterType::WAITING_FOR_MATH_IDLE_1, 38},
-     {PerfCounterType::WAITING_FOR_MATH_IDLE_2, 39},
-     {PerfCounterType::WAITING_FOR_UNPACK_IDLE_0, 40},
-     {PerfCounterType::WAITING_FOR_UNPACK_IDLE_1, 41},
-     {PerfCounterType::WAITING_FOR_UNPACK_IDLE_2, 42},
-     {PerfCounterType::WAITING_FOR_PACK_IDLE_0, 43},
-     {PerfCounterType::WAITING_FOR_PACK_IDLE_1, 44},
-     {PerfCounterType::WAITING_FOR_PACK_IDLE_2, 45},
-     {PerfCounterType::WAITING_FOR_NONZERO_SEM_0, 46},
-     {PerfCounterType::WAITING_FOR_NONZERO_SEM_1, 47},
-     {PerfCounterType::WAITING_FOR_NONZERO_SEM_2, 48},
-     {PerfCounterType::WAITING_FOR_NONFULL_SEM_0, 49},
-     {PerfCounterType::WAITING_FOR_NONFULL_SEM_1, 50},
-     {PerfCounterType::WAITING_FOR_NONFULL_SEM_2, 51},
-     {PerfCounterType::WAITING_FOR_MOVE_IDLE_0, 52},
-     {PerfCounterType::WAITING_FOR_MOVE_IDLE_1, 53},
-     {PerfCounterType::WAITING_FOR_MOVE_IDLE_2, 54},
-     {PerfCounterType::WAITING_FOR_MMIO_IDLE_0, 55},
-     {PerfCounterType::WAITING_FOR_MMIO_IDLE_1, 56},
-     {PerfCounterType::WAITING_FOR_MMIO_IDLE_2, 57},
-     {PerfCounterType::WAITING_FOR_SFPU_IDLE_0, 58},
-     {PerfCounterType::WAITING_FOR_SFPU_IDLE_1, 59},
-     {PerfCounterType::WAITING_FOR_SFPU_IDLE_2, 60},
+     // Sel 24-26: total stall cycles per thread
+     {PerfCounterType::THREAD_STALLS_0, 24},
+     {PerfCounterType::THREAD_STALLS_1, 25},
+     {PerfCounterType::THREAD_STALLS_2, 26},
+     // Sel 27-30: shared stall conditions (1 slot each on BH)
+     {PerfCounterType::WAITING_FOR_SRCA_CLEAR, 27},
+     {PerfCounterType::WAITING_FOR_SRCB_CLEAR, 28},
+     {PerfCounterType::WAITING_FOR_SRCA_VALID, 29},
+     {PerfCounterType::WAITING_FOR_SRCB_VALID, 30},
+     // Sel 31-57: per-thread stall reasons (9 types × 3 threads)
+     {PerfCounterType::WAITING_FOR_THCON_IDLE_0, 31},
+     {PerfCounterType::WAITING_FOR_THCON_IDLE_1, 32},
+     {PerfCounterType::WAITING_FOR_THCON_IDLE_2, 33},
+     {PerfCounterType::WAITING_FOR_UNPACK_IDLE_0, 34},
+     {PerfCounterType::WAITING_FOR_UNPACK_IDLE_1, 35},
+     {PerfCounterType::WAITING_FOR_UNPACK_IDLE_2, 36},
+     {PerfCounterType::WAITING_FOR_PACK_IDLE_0, 37},
+     {PerfCounterType::WAITING_FOR_PACK_IDLE_1, 38},
+     {PerfCounterType::WAITING_FOR_PACK_IDLE_2, 39},
+     {PerfCounterType::WAITING_FOR_MATH_IDLE_0, 40},
+     {PerfCounterType::WAITING_FOR_MATH_IDLE_1, 41},
+     {PerfCounterType::WAITING_FOR_MATH_IDLE_2, 42},
+     {PerfCounterType::WAITING_FOR_NONZERO_SEM_0, 43},
+     {PerfCounterType::WAITING_FOR_NONZERO_SEM_1, 44},
+     {PerfCounterType::WAITING_FOR_NONZERO_SEM_2, 45},
+     {PerfCounterType::WAITING_FOR_NONFULL_SEM_0, 46},
+     {PerfCounterType::WAITING_FOR_NONFULL_SEM_1, 47},
+     {PerfCounterType::WAITING_FOR_NONFULL_SEM_2, 48},
+     {PerfCounterType::WAITING_FOR_MOVE_IDLE_0, 49},
+     {PerfCounterType::WAITING_FOR_MOVE_IDLE_1, 50},
+     {PerfCounterType::WAITING_FOR_MOVE_IDLE_2, 51},
+     {PerfCounterType::WAITING_FOR_MMIO_IDLE_0, 52},
+     {PerfCounterType::WAITING_FOR_MMIO_IDLE_1, 53},
+     {PerfCounterType::WAITING_FOR_MMIO_IDLE_2, 54},
+     {PerfCounterType::WAITING_FOR_SFPU_IDLE_0, 55},
+     {PerfCounterType::WAITING_FOR_SFPU_IDLE_1, 56},
+     {PerfCounterType::WAITING_FOR_SFPU_IDLE_2, 57},
      // Grant counters: actual instruction issue counts (counter_sel + 256)
      {PerfCounterType::CFG_INSTRN_ISSUED_0, 256},
      {PerfCounterType::CFG_INSTRN_ISSUED_1, 257},
@@ -742,7 +761,100 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 85> instrn_counters =
      {PerfCounterType::PACK_INSTRN_ISSUED_0, 277},
      {PerfCounterType::PACK_INSTRN_ISSUED_1, 278},
      {PerfCounterType::PACK_INSTRN_ISSUED_2, 279}}};
-constexpr size_t NUM_INSTRN_COUNTERS = 85;
+constexpr size_t NUM_INSTRN_COUNTERS = 82;
+#else
+// WH INSTRN_THREAD: 90 counters
+// Sel 27-38: shared stall conditions BROADCAST from thread 0 to all 3 slots (read slot 0 only)
+// Sel 39-65: per-thread stall reasons (9 types × 3 threads)
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 90> instrn_counters = {
+    {{PerfCounterType::CFG_INSTRN_AVAILABLE_0, 0},
+     {PerfCounterType::CFG_INSTRN_AVAILABLE_1, 1},
+     {PerfCounterType::CFG_INSTRN_AVAILABLE_2, 2},
+     {PerfCounterType::SYNC_INSTRN_AVAILABLE_0, 3},
+     {PerfCounterType::SYNC_INSTRN_AVAILABLE_1, 4},
+     {PerfCounterType::SYNC_INSTRN_AVAILABLE_2, 5},
+     {PerfCounterType::THCON_INSTRN_AVAILABLE_0, 6},
+     {PerfCounterType::THCON_INSTRN_AVAILABLE_1, 7},
+     {PerfCounterType::THCON_INSTRN_AVAILABLE_2, 8},
+     {PerfCounterType::XSEARCH_INSTRN_AVAILABLE_0, 9},
+     {PerfCounterType::XSEARCH_INSTRN_AVAILABLE_1, 10},
+     {PerfCounterType::XSEARCH_INSTRN_AVAILABLE_2, 11},
+     {PerfCounterType::MOVE_INSTRN_AVAILABLE_0, 12},
+     {PerfCounterType::MOVE_INSTRN_AVAILABLE_1, 13},
+     {PerfCounterType::MOVE_INSTRN_AVAILABLE_2, 14},
+     {PerfCounterType::FPU_INSTRN_AVAILABLE_0, 15},
+     {PerfCounterType::FPU_INSTRN_AVAILABLE_1, 16},
+     {PerfCounterType::FPU_INSTRN_AVAILABLE_2, 17},
+     {PerfCounterType::UNPACK_INSTRN_AVAILABLE_0, 18},
+     {PerfCounterType::UNPACK_INSTRN_AVAILABLE_1, 19},
+     {PerfCounterType::UNPACK_INSTRN_AVAILABLE_2, 20},
+     {PerfCounterType::PACK_INSTRN_AVAILABLE_0, 21},
+     {PerfCounterType::PACK_INSTRN_AVAILABLE_1, 22},
+     {PerfCounterType::PACK_INSTRN_AVAILABLE_2, 23},
+     // Sel 24-26: total stall cycles per thread
+     {PerfCounterType::THREAD_STALLS_0, 24},
+     {PerfCounterType::THREAD_STALLS_1, 25},
+     {PerfCounterType::THREAD_STALLS_2, 26},
+     // Sel 27-38: shared stall conditions (broadcast from thread 0; read slot 0 only)
+     {PerfCounterType::WAITING_FOR_SRCA_CLEAR, 27},   // srca_cleared (broadcast)
+     {PerfCounterType::WAITING_FOR_SRCB_CLEAR, 30},   // srcb_cleared (broadcast)
+     {PerfCounterType::WAITING_FOR_SRCA_VALID, 33},   // srca_valid (broadcast)
+     {PerfCounterType::WAITING_FOR_SRCB_VALID, 36},   // srcb_valid (broadcast)
+     // Sel 39-65: per-thread stall reasons (9 types × 3 threads)
+     {PerfCounterType::WAITING_FOR_THCON_IDLE_0, 39},
+     {PerfCounterType::WAITING_FOR_THCON_IDLE_1, 40},
+     {PerfCounterType::WAITING_FOR_THCON_IDLE_2, 41},
+     {PerfCounterType::WAITING_FOR_UNPACK_IDLE_0, 42},
+     {PerfCounterType::WAITING_FOR_UNPACK_IDLE_1, 43},
+     {PerfCounterType::WAITING_FOR_UNPACK_IDLE_2, 44},
+     {PerfCounterType::WAITING_FOR_PACK_IDLE_0, 45},
+     {PerfCounterType::WAITING_FOR_PACK_IDLE_1, 46},
+     {PerfCounterType::WAITING_FOR_PACK_IDLE_2, 47},
+     {PerfCounterType::WAITING_FOR_MATH_IDLE_0, 48},
+     {PerfCounterType::WAITING_FOR_MATH_IDLE_1, 49},
+     {PerfCounterType::WAITING_FOR_MATH_IDLE_2, 50},
+     {PerfCounterType::WAITING_FOR_NONZERO_SEM_0, 51},
+     {PerfCounterType::WAITING_FOR_NONZERO_SEM_1, 52},
+     {PerfCounterType::WAITING_FOR_NONZERO_SEM_2, 53},
+     {PerfCounterType::WAITING_FOR_NONFULL_SEM_0, 54},
+     {PerfCounterType::WAITING_FOR_NONFULL_SEM_1, 55},
+     {PerfCounterType::WAITING_FOR_NONFULL_SEM_2, 56},
+     {PerfCounterType::WAITING_FOR_MOVE_IDLE_0, 57},
+     {PerfCounterType::WAITING_FOR_MOVE_IDLE_1, 58},
+     {PerfCounterType::WAITING_FOR_MOVE_IDLE_2, 59},
+     {PerfCounterType::WAITING_FOR_MMIO_IDLE_0, 60},
+     {PerfCounterType::WAITING_FOR_MMIO_IDLE_1, 61},
+     {PerfCounterType::WAITING_FOR_MMIO_IDLE_2, 62},
+     {PerfCounterType::WAITING_FOR_SFPU_IDLE_0, 63},
+     {PerfCounterType::WAITING_FOR_SFPU_IDLE_1, 64},
+     {PerfCounterType::WAITING_FOR_SFPU_IDLE_2, 65},
+     // Grant counters: actual instruction issue counts (counter_sel + 256)
+     {PerfCounterType::CFG_INSTRN_ISSUED_0, 256},
+     {PerfCounterType::CFG_INSTRN_ISSUED_1, 257},
+     {PerfCounterType::CFG_INSTRN_ISSUED_2, 258},
+     {PerfCounterType::SYNC_INSTRN_ISSUED_0, 259},
+     {PerfCounterType::SYNC_INSTRN_ISSUED_1, 260},
+     {PerfCounterType::SYNC_INSTRN_ISSUED_2, 261},
+     {PerfCounterType::THCON_INSTRN_ISSUED_0, 262},
+     {PerfCounterType::THCON_INSTRN_ISSUED_1, 263},
+     {PerfCounterType::THCON_INSTRN_ISSUED_2, 264},
+     {PerfCounterType::XSEARCH_INSTRN_ISSUED_0, 265},
+     {PerfCounterType::XSEARCH_INSTRN_ISSUED_1, 266},
+     {PerfCounterType::XSEARCH_INSTRN_ISSUED_2, 267},
+     {PerfCounterType::MOVE_INSTRN_ISSUED_0, 268},
+     {PerfCounterType::MOVE_INSTRN_ISSUED_1, 269},
+     {PerfCounterType::MOVE_INSTRN_ISSUED_2, 270},
+     {PerfCounterType::FPU_INSTRN_ISSUED_0, 271},
+     {PerfCounterType::FPU_INSTRN_ISSUED_1, 272},
+     {PerfCounterType::FPU_INSTRN_ISSUED_2, 273},
+     {PerfCounterType::UNPACK_INSTRN_ISSUED_0, 274},
+     {PerfCounterType::UNPACK_INSTRN_ISSUED_1, 275},
+     {PerfCounterType::UNPACK_INSTRN_ISSUED_2, 276},
+     {PerfCounterType::PACK_INSTRN_ISSUED_0, 277},
+     {PerfCounterType::PACK_INSTRN_ISSUED_1, 278},
+     {PerfCounterType::PACK_INSTRN_ISSUED_2, 279}}};
+constexpr size_t NUM_INSTRN_COUNTERS = 90;
+#endif
 
 // bit masks for the different counter groups
 #define PROFILE_PERF_COUNTERS_FPU (1 << 0)

@@ -43,11 +43,17 @@ The `TT_METAL_PROFILE_PERF_COUNTERS` value selects which counter banks to enable
 
 | | Wormhole | Blackhole |
 |---|---|---|
-| Tensix raw counters | 172 | 140 (15 RTL-dead filtered) |
+| Tensix raw counters | 155 (3 RTL-dead filtered) | 207 (15 RTL-dead filtered) |
 | ERISC raw counters | 16 | 64 |
-| Derived metrics | 86 | 74 |
+| Derived metrics | 59 | 59 |
 
-Blackhole has fewer active TDMA counters due to `PACK_COUNT=1` (single packer engine) and `o_math_instrnbuf_rden` being inactive. 15 RTL-confirmed dead counters are automatically filtered from BH output in `perf_counter_analysis.py`. Three metrics (Packer Efficiency, Math Pipeline Utilization, Math-to-Pack Handoff) use BH-specific fallback formulas since their WH denominators (`PACKER_BUSY`, `MATH_INSTRN_STARTED`) are always 0 on BH. Blackhole has more L1 mux positions (5 vs 2 for Tensix, 4 vs 1 for Ethernet).
+**Wormhole** has `PACK_COUNT=4` (4 packer engines), active `o_math_instrnbuf_rden`, and all TDMA counters live. 3 RTL-confirmed dead counters are automatically filtered: `PACK_BANK6_GRANT`, `PACK_BANK7_GRANT` (tied to `2'b00`), and `FIDELITY_PHASE_STALLS` (`fidelity_phases_ongoing = 1'b0` — no multi-phase fidelity on WH). The TDMA_UNPACK grant bank 0 (counter_sel 256) measures 4-HF-cycle instructions on WH (vs math-not-blocked-by-src on BH). Grant banks 4-6 (counter_sels 260-262) map to srcB/srcA write-port and overwrite signals in a different order than BH. The L1 mux is 1-bit (2 positions: ports 0-7 and 8-15).
+
+**Blackhole** has fewer active TDMA counters due to `PACK_COUNT=1` (single packer engine) and `o_math_instrnbuf_rden` being inactive. 15 RTL-confirmed dead counters are automatically filtered from BH output in `perf_counter_analysis.py`. Three metrics (Packer Efficiency, Math Pipeline Utilization, Math-to-Pack Handoff) use BH-specific fallback formulas since their WH denominators (`PACKER_BUSY`, `MATH_INSTRN_STARTED`) are always 0 on BH. Blackhole has more L1 mux positions (5 vs 2 for Tensix, 4 vs 1 for Ethernet).
+
+**INSTRN_THREAD bank** — The `perf_cnt_instrn_thread` flat array (built from a Verilog concatenation in `tt_instruction_thread.sv`) has architecture-specific counter_sel mappings for sel 27+. On WH, the shared stall conditions (srcA/B valid/cleared) are broadcast to 3 slots (sels 27-38), while on BH they occupy 1 slot each (sels 27-30). Per-thread stall reasons (thcon, unpack, pack, math, sem_zero, sem_max, move, trisc_reg_access, sfpu) start at sel 39 on WH and sel 31 on BH. The `instrn_counters` array is split by `#if defined(ARCH_BLACKHOLE)` to handle this difference.
+
+**Note**: No RTL counter exists for per-thread instruction issue counts. Sel 24-26 measures total stall cycles per thread (`THREAD_STALLS`). The `Thread IPC` metric was removed.
 
 ---
 
@@ -213,23 +219,9 @@ Thread mapping: Thread 0 = unpack, Thread 1 = math, Thread 2 = pack.
 
 ---
 
-**8. Thread 0/1/2 IPC**
+**8. Thread 0/1/2 IPC** *(Removed)*
 
-Instructions per cycle for each thread.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | INSTRN |
-
-```
-Thread N IPC = THREAD_INSTRUCTIONS_N / ref_cnt
-```
-
-- **High value (>0.5)**: Thread is issuing instructions efficiently.
-- **Low value (<0.1)**: Thread is mostly stalled or idle.
-
-**Use case:** Quantifies instruction throughput per thread. Compare across threads to find the slowest one.
+No RTL counter exists for per-thread instruction counts. The INSTRN_THREAD flat array sel 24-26 measures total stall cycles (mapped to `THREAD_STALLS`), not instruction issue counts. The IPC metric has been removed.
 
 ---
 
@@ -351,7 +343,7 @@ Cycles spent on HiFi fidelity phases in the math pipeline.
 
 | | |
 |---|---|
-| **Architectures** | Wormhole, Blackhole |
+| **Architectures** | Blackhole only |
 | **Counter group** | UNPACK |
 
 ```
@@ -361,13 +353,15 @@ Fidelity Phase Overhead = FIDELITY_PHASE_STALLS / ref_cnt * 100
 - **High value (>20%)**: Significant time spent on fidelity phases. Expected for HiFi4 matmul (30%).
 - **Low value (<5%)**: Minimal fidelity overhead. Expected for LoFi or non-math ops.
 
+**Not available on Wormhole**: `fidelity_phases_ongoing` is hardwired to `1'b0` in WH RTL, so `FIDELITY_PHASE_STALLS` is always 0. On WH, use `HiFi4 Instrn Rate` to analyze fidelity costs instead.
+
 **Use case:** Quantifies the cost of high-fidelity math. If too high, consider LoFi mode for better throughput.
 
 ---
 
-**15. SrcA Write Port Blocked Rate**
+**15. SrcA Write Overwrite Blocked Rate**
 
-Fraction of srcA DMA write attempts blocked by overwrite protection.
+Fraction of srcA DMA write attempts blocked by overwrite protection (data not yet consumed by math).
 
 | | |
 |---|---|
@@ -375,9 +369,11 @@ Fraction of srcA DMA write attempts blocked by overwrite protection.
 | **Counter group** | UNPACK |
 
 ```
-SrcA Write Port Blocked = (SRCA_WRITE_AVAILABLE - SRCA_WRITE_NOT_BLOCKED_OVR) /
-                          SRCA_WRITE_AVAILABLE * 100
+SrcA Write Blocked = (SRCA_WRITE_AVAILABLE - SRCA_WRITE_NOT_BLOCKED_OVR) /
+                     SRCA_WRITE_AVAILABLE * 100
 ```
+
+On WH, `SRCA_WRITE_NOT_BLOCKED_OVR` (counter_sel 261) directly measures srcA DMA writes not blocked by overwrite. On BH, counter_sel 260 is used (verified empirically).
 
 - **High value (>30%)**: SrcA writes are frequently blocked. Data overwrite protection is active.
 - **Low value (~0%)**: SrcA writes proceed without blocking.
@@ -400,10 +396,12 @@ SrcB Write Port Blocked = (SRCB_WRITE_AVAILABLE - SRCB_WRITE_NOT_BLOCKED_PORT) /
                           SRCB_WRITE_AVAILABLE * 100
 ```
 
-- **High value (>50%)**: SrcB write port is heavily contended. Common across many ops (50-99%).
+On WH, `SRCB_WRITE_NOT_BLOCKED_PORT` (counter_sel 260) directly measures srcB DMA writes not blocked by the write port. On BH, counter_sel 262 is used (verified empirically).
+
+- **High value (>50%)**: SrcB write port is heavily contended.
 - **Low value (<20%)**: SrcB writes proceed with minimal blocking.
 
-**Use case:** Detects srcB write port contention. High values are common on BH and may not indicate a problem unless combined with high unpack stall rates.
+**Use case:** Detects srcB write port contention.
 
 ---
 
@@ -445,7 +443,7 @@ Math Dest Write Port Stall = (MATH_INSTRN_AVAILABLE - MATH_NOT_STALLED_DEST_WR_P
 - **High value (>10%)**: Math is stalled waiting for write port to destination register.
 - **Low value (~0%)**: No write port stalls.
 
-**Not available on Blackhole**: `MATH_NOT_STALLED_DEST_WR_PORT` is always 0 on BH (empirically verified), which would produce a bogus 100% stall rate. The metric is automatically hidden on BH.
+**Not available on Blackhole**: `MATH_NOT_STALLED_DEST_WR_PORT` is always 0 on BH (empirically verified), which would produce a bogus 100% stall rate. The metric is automatically hidden on BH. On WH, this counter is live and the metric works correctly.
 
 **Use case:** Detects destination register write contention from the math side.
 
@@ -498,47 +496,7 @@ Where TYPE is CFG, SYNC, THCON, MOVE (on T0), MATH (on T1), UNPACK (on T0), PACK
 
 ### Stall Breakdown
 
-**21. THCON/MOVE Idle Stall Pct T0**
-
-What percentage of thread 0's total stalls are caused by THCON or MOVE waits.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | INSTRN |
-
-```
-MOVE Idle Stall Pct T0 = WAITING_FOR_MOVE_IDLE_0 / THREAD_STALLS_0 * 100
-THCON Idle Stall Pct T0 = WAITING_FOR_THCON_IDLE_0 / THREAD_STALLS_0 * 100
-```
-
-- **MOVE Idle high (>50%)**: Most of Thread 0's stalls are XMOV waits. Expected for data movement ops like tilize (94%), silu (95%).
-- **THCON Idle high (>20%)**: Thread control operations are the bottleneck.
-- **Both low**: Stalls are caused by other reasons (semaphores, unpack idle, etc.).
-
-**Use case:** Narrows down the dominant stall reason for thread 0. If thread 0 has high stall rate, this tells you why.
-
----
-
-**22. MMIO/SFPU Idle Stall Pct T1**
-
-What percentage of thread 1's total stalls are caused by MMIO or SFPU waits.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | INSTRN |
-
-```
-MMIO Idle Stall Pct T1 = WAITING_FOR_MMIO_IDLE_1 / THREAD_STALLS_1 * 100
-SFPU Idle Stall Pct T1 = WAITING_FOR_SFPU_IDLE_1 / THREAD_STALLS_1 * 100
-```
-
-- **SFPU Idle high (>30%)**: Math thread is waiting for SFPU pipeline to drain.
-- **MMIO Idle high (>10%)**: Math thread is waiting for config register access.
-- **N/A**: Thread 1 never stalled (denominator = 0). This is common and means the math thread runs without stalls.
-
-**Use case:** When the math thread does stall, identifies whether it's SFPU pipeline depth or config access.
+> **Removed metrics:** The stall breakdown percentage metrics (`THCON/MOVE Idle Stall Pct T0`, `MMIO/SFPU Idle Stall Pct T1`) were removed. They divided `WAITING_FOR_X` by `THREAD_STALLS`, but `WAITING_FOR_X` counts cycles a hardware unit was busy — not cycles the thread was stalled by that unit. When thread stalls are low (e.g. concat, tilize), `WAITING_FOR_X >> THREAD_STALLS`, producing meaningless >100% values. Use the absolute idle wait metrics (`MMIO/SFPU/THCON/MOVE Idle Wait`) instead, which correctly measure % of total time each hardware unit was busy.
 
 ---
 

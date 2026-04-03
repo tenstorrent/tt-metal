@@ -183,18 +183,7 @@ PERF_COUNTER_CSV_HEADERS = [
     "Thread 2 Stall Rate Max (%)",
     "Thread 2 Stall Rate Avg (%)",
     # INSTRN_THREAD: Thread IPC (instructions per cycle, not %)
-    "Thread 0 IPC Min",
-    "Thread 0 IPC Median",
-    "Thread 0 IPC Max",
-    "Thread 0 IPC Avg",
-    "Thread 1 IPC Min",
-    "Thread 1 IPC Median",
-    "Thread 1 IPC Max",
-    "Thread 1 IPC Avg",
-    "Thread 2 IPC Min",
-    "Thread 2 IPC Median",
-    "Thread 2 IPC Max",
-    "Thread 2 IPC Avg",
+    # Thread IPC removed: no RTL counter for instruction counts (sel 24-26 = total stalls)
     # INSTRN_THREAD: Pipeline wait metrics
     "SrcA Valid Wait Min (%)",
     "SrcA Valid Wait Median (%)",
@@ -383,22 +372,6 @@ PERF_COUNTER_CSV_HEADERS = [
     "PACK Instrn Avail Rate T2 Max (%)",
     "PACK Instrn Avail Rate T2 Avg (%)",
     # === NEW: Stall breakdown (% of total stalls per thread) ===
-    "THCON Idle Stall Pct T0 Min (%)",
-    "THCON Idle Stall Pct T0 Median (%)",
-    "THCON Idle Stall Pct T0 Max (%)",
-    "THCON Idle Stall Pct T0 Avg (%)",
-    "MOVE Idle Stall Pct T0 Min (%)",
-    "MOVE Idle Stall Pct T0 Median (%)",
-    "MOVE Idle Stall Pct T0 Max (%)",
-    "MOVE Idle Stall Pct T0 Avg (%)",
-    "MMIO Idle Stall Pct T1 Min (%)",
-    "MMIO Idle Stall Pct T1 Median (%)",
-    "MMIO Idle Stall Pct T1 Max (%)",
-    "MMIO Idle Stall Pct T1 Avg (%)",
-    "SFPU Idle Stall Pct T1 Min (%)",
-    "SFPU Idle Stall Pct T1 Median (%)",
-    "SFPU Idle Stall Pct T1 Max (%)",
-    "SFPU Idle Stall Pct T1 Avg (%)",
     # === NEW: Write port blocking ===
     "SrcB Write Port Blocked Rate Min (%)",
     "SrcB Write Port Blocked Rate Median (%)",
@@ -1379,12 +1352,9 @@ def _enrich_ops_from_device_logs(
                 if has_counter(name):
                     thread_stall_metrics[t] = compute_util_metric(name)
 
-            # Thread IPC (instructions / ref_cnt, no percentage scaling)
+            # Thread IPC: no RTL counter for instruction counts (sel 24-26 = total stalls,
+            # not instructions). IPC metric removed.
             thread_ipc_metrics = {}
-            for t in range(3):
-                name = f"THREAD_INSTRUCTIONS_{t}"
-                if has_counter(name):
-                    thread_ipc_metrics[t] = compute_util_metric(name, scale=1)
 
             # Pipeline wait metrics
             pipeline_wait_metrics = {}
@@ -1483,8 +1453,11 @@ def _enrich_ops_from_device_logs(
                 }
 
             # Math source data readiness
+            # On WH, MATH_INSTRN_NOT_BLOCKED_SRC (counter_sel 256) measures 4-HF-cycle instructions,
+            # not math-blocked-by-src. Only compute this metric on BH where it's the correct signal.
             math_src_ready = {}
-            if has_counter("MATH_INSTRN_NOT_BLOCKED_SRC") and has_counter("MATH_INSTRN_AVAILABLE"):
+            is_wh = device_arch.lower() in ("wormhole", "wormhole_b0")
+            if not is_wh and has_counter("MATH_INSTRN_NOT_BLOCKED_SRC") and has_counter("MATH_INSTRN_AVAILABLE"):
                 num = get_counter_series("MATH_INSTRN_NOT_BLOCKED_SRC")
                 den = get_counter_series("MATH_INSTRN_AVAILABLE")
                 ratio = (num / den * 100).replace([float("inf"), -float("inf")], nan)
@@ -1663,19 +1636,14 @@ def _enrich_ops_from_device_logs(
             if has_counter("PACK_INSTRN_AVAILABLE_2"):
                 pack_instrn_issue_eff = compute_util_metric("PACK_INSTRN_AVAILABLE_2")
 
-            # === NEW: Stall breakdown (% of total stalls per thread) ===
+            # Stall breakdown pct metrics removed: WAITING_FOR_X counts cycles the hardware
+            # unit was busy, NOT cycles the thread was stalled by that unit. When thread stalls
+            # are low (e.g. concat), WAITING_FOR_X >> THREAD_STALLS producing >100% values.
+            # Use the absolute idle wait metrics (WAITING_FOR_X / ref_cnt) instead.
             thcon_stall_pct = {}
             move_stall_pct = {}
             mmio_stall_pct = {}
             sfpu_stall_pct = {}
-            if has_counter("WAITING_FOR_THCON_IDLE_0") and has_counter("THREAD_STALLS_0"):
-                thcon_stall_pct = compute_ratio_metric("WAITING_FOR_THCON_IDLE_0", "THREAD_STALLS_0")
-            if has_counter("WAITING_FOR_MOVE_IDLE_0") and has_counter("THREAD_STALLS_0"):
-                move_stall_pct = compute_ratio_metric("WAITING_FOR_MOVE_IDLE_0", "THREAD_STALLS_0")
-            if has_counter("WAITING_FOR_MMIO_IDLE_1") and has_counter("THREAD_STALLS_1"):
-                mmio_stall_pct = compute_ratio_metric("WAITING_FOR_MMIO_IDLE_1", "THREAD_STALLS_1")
-            if has_counter("WAITING_FOR_SFPU_IDLE_1") and has_counter("THREAD_STALLS_1"):
-                sfpu_stall_pct = compute_ratio_metric("WAITING_FOR_SFPU_IDLE_1", "THREAD_STALLS_1")
 
             # === NEW: Write port blocking ===
             srcb_blocked = {}
@@ -1695,7 +1663,19 @@ def _enrich_ops_from_device_logs(
                 total = get_counter_series("MATH_INSTRN_STARTED")
                 hf2 = get_counter_series("INSTRN_2_HF_CYCLES")
                 hf1 = get_counter_series("INSTRN_1_HF_CYCLE")
-                hf4 = total - hf2 - hf1
+                # On WH, MATH_INSTRN_NOT_BLOCKED_SRC (counter_sel 256) is actually the 4-HF-cycle
+                # counter (o_math_instrnbuf_rden & hf_cycles==2'b11). Use it directly when available.
+                # On BH, counter_sel 256 is dead (o_math_instrnbuf_rden inactive), so derive by subtraction.
+                if has_counter("MATH_INSTRN_NOT_BLOCKED_SRC"):
+                    hf4_direct = get_counter_series("MATH_INSTRN_NOT_BLOCKED_SRC")
+                    # If the counter has data and total > 0, use it directly (WH).
+                    # If it's all zeros (BH dead), fall back to derivation.
+                    if hf4_direct is not None and hf4_direct.sum() > 0:
+                        hf4 = hf4_direct
+                    else:
+                        hf4 = total - hf2 - hf1
+                else:
+                    hf4 = total - hf2 - hf1
                 ratio = (hf4 / total * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
                 grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
                 hifi4_rate = {
@@ -1994,10 +1974,6 @@ def _enrich_ops_from_device_logs(
                 assign_metric("PACK Instrn Avail Rate T2", pack_instrn_issue_eff)
 
                 # Stall breakdown
-                assign_metric("THCON Idle Stall Pct T0", thcon_stall_pct)
-                assign_metric("MOVE Idle Stall Pct T0", move_stall_pct)
-                assign_metric("MMIO Idle Stall Pct T1", mmio_stall_pct)
-                assign_metric("SFPU Idle Stall Pct T1", sfpu_stall_pct)
 
                 # Write port blocking
                 assign_metric("SrcB Write Port Blocked Rate", srcb_blocked)
@@ -2317,15 +2293,9 @@ def get_device_data_generate_report(
                     # New metrics: Thread stall rates and IPC
                     for t in range(3):
                         stall_col = f"value_THREAD_STALLS_{t}"
-                        ipc_col = f"value_THREAD_INSTRUCTIONS_{t}"
                         ref_col = f"ref_cnt_THREAD_STALLS_{t}"
                         eff_pivot[f"Thread {t} Stall Rate"] = eff_pivot.apply(
                             lambda x, s=stall_col, r=ref_col: safe_div(x.get(s, 0), x.get(r, 0)), axis=1
-                        )
-                        ref_ipc = f"ref_cnt_THREAD_INSTRUCTIONS_{t}"
-                        eff_pivot[f"Thread {t} IPC"] = eff_pivot.apply(
-                            lambda x, v=ipc_col, r=ref_ipc: (x.get(v, 0) / x.get(r, 1)) if x.get(r, 0) > 0 else nan,
-                            axis=1,
                         )
 
                     # Pipeline wait metrics
@@ -2539,15 +2509,9 @@ def get_device_data_generate_report(
                     eff_pivot["PACK Instrn Avail Rate T2"] = eff_pivot.apply(
                         safe_util("value_PACK_INSTRN_AVAILABLE_2", "ref_cnt_PACK_INSTRN_AVAILABLE_2"), axis=1)
 
-                    # Stall breakdown (% of total stalls per thread)
-                    eff_pivot["THCON Idle Stall Pct T0"] = eff_pivot.apply(
-                        safe_ratio("value_WAITING_FOR_THCON_IDLE_0", "value_THREAD_STALLS_0"), axis=1)
-                    eff_pivot["MOVE Idle Stall Pct T0"] = eff_pivot.apply(
-                        safe_ratio("value_WAITING_FOR_MOVE_IDLE_0", "value_THREAD_STALLS_0"), axis=1)
-                    eff_pivot["MMIO Idle Stall Pct T1"] = eff_pivot.apply(
-                        safe_ratio("value_WAITING_FOR_MMIO_IDLE_1", "value_THREAD_STALLS_1"), axis=1)
-                    eff_pivot["SFPU Idle Stall Pct T1"] = eff_pivot.apply(
-                        safe_ratio("value_WAITING_FOR_SFPU_IDLE_1", "value_THREAD_STALLS_1"), axis=1)
+                    # Stall breakdown pct metrics removed: WAITING_FOR_X counts cycles the
+                    # hardware unit was busy, not cycles the thread was stalled by that unit.
+                    # Use the absolute idle wait metrics (WAITING_FOR_X / ref_cnt) instead.
 
                     # Write port blocking
                     eff_pivot["SrcA Write Port Blocked Rate"] = eff_pivot.apply(
@@ -2591,9 +2555,15 @@ def get_device_data_generate_report(
                     # Fidelity analysis
                     def hifi4_rate_fn(x):
                         total = x.get("value_MATH_INSTRN_STARTED", 0)
+                        if total <= 0:
+                            return nan
+                        # On WH, MATH_INSTRN_NOT_BLOCKED_SRC (counter_sel 256) is the 4-HF-cycle counter
+                        hf4_direct = x.get("value_MATH_INSTRN_NOT_BLOCKED_SRC", 0)
+                        if hf4_direct > 0:
+                            return max(0.0, hf4_direct / total * 100)
                         hf2 = x.get("value_INSTRN_2_HF_CYCLES", 0)
                         hf1 = x.get("value_INSTRN_1_HF_CYCLE", 0)
-                        return max(0.0, (total - hf2 - hf1) / total * 100) if total > 0 else nan
+                        return max(0.0, (total - hf2 - hf1) / total * 100)
                     eff_pivot["HiFi4 Instrn Rate"] = eff_pivot.apply(hifi4_rate_fn, axis=1)
                     eff_pivot["Fidelity Phase Overhead"] = eff_pivot.apply(
                         safe_util("value_FIDELITY_PHASE_STALLS", "ref_cnt_FIDELITY_PHASE_STALLS"), axis=1)
@@ -2771,10 +2741,6 @@ def get_device_data_generate_report(
                         "MATH Instrn Avail Rate T1",
                         "UNPACK Instrn Avail Rate T0",
                         "PACK Instrn Avail Rate T2",
-                        "THCON Idle Stall Pct T0",
-                        "MOVE Idle Stall Pct T0",
-                        "MMIO Idle Stall Pct T1",
-                        "SFPU Idle Stall Pct T1",
                         "SrcB Write Port Blocked Rate",
                         "SrcA Write Actual Efficiency",
                         "SrcB Write Actual Efficiency",
@@ -2800,9 +2766,6 @@ def get_device_data_generate_report(
                     ]
                     # Non-percentage metrics (raw rates)
                     _ipc_metric_names = [
-                        "Thread 0 IPC",
-                        "Thread 1 IPC",
-                        "Thread 2 IPC",
                         "Unpack Instrn Issue Rate T0",
                         "Math Instrn Issue Rate T1",
                         "Pack Instrn Issue Rate T2",
