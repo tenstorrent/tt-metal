@@ -1,5 +1,8 @@
 # vLLM Environment Variables
 
+Variables needed when building and running vLLM with TT backend. For global
+developer setup (HF_TOKEN, cache paths), see `recipes/developer-setup.md`.
+
 ## Critical (must set before install)
 
 | Variable | Purpose | Value |
@@ -11,17 +14,8 @@
 | Variable | Purpose | Example |
 |---|---|---|
 | `VLLM_RPC_TIMEOUT` | RPC timeout in ms (increase for large models) | `300000`–`900000` |
-| `TT_METAL_HOME` | tt-metal repo root | `/path/to/tt-metal` |
-| `PYTHONPATH` | Must include tt-metal and vllm | `/work:/work/vllm` |
-| `LD_LIBRARY_PATH` | tt-metal shared libs | `/work/build/lib` |
-
-## Model caching
-
-| Variable | Purpose | Example |
-|---|---|---|
-| `HF_HUB_CACHE` | HuggingFace model cache | `/mnt/MLPerf/huggingface/hub` |
-| `HF_HUB_OFFLINE` | Prevent downloads (CI) | `1` |
-| `TT_CACHE_HOME` | Compiled TT artifact cache | `/mnt/MLPerf/huggingface/tt_cache` |
+| `TT_METAL_HOME` | tt-metal repo root (set by workspace activation) | `/path/to/tt-metal` |
+| `PYTHONPATH` | Must include tt-metal and vllm | `$TT_METAL_HOME:$WORKSPACE/vllm` |
 
 ## Device / topology
 
