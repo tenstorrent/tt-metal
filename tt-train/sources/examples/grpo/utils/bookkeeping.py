@@ -33,8 +33,8 @@ def setup_training_run(output_dir: str | None) -> RunContext:
     args = _parse_args()
     repo_root = get_tt_metal_runtime_root()
 
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     if output_dir is None:
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         output_dir = os.path.join(repo_root, "generated/tt-train/grpo_training_runs", f"{args.run_name}_{timestamp}")
 
     checkpoint_dir = os.path.join(output_dir, "checkpoints")
@@ -165,8 +165,8 @@ def setup_accuracy_run(output_dir: str | None) -> RunContext:
     args = _parse_args(default_run_name="grpo_model_accuracy")
     repo_root = get_tt_metal_runtime_root()
 
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     if output_dir is None:
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         output_dir = os.path.join(
             repo_root, "generated/tt-train/grpo_model_accuracy_runs", f"{args.run_name}_{timestamp}"
         )
