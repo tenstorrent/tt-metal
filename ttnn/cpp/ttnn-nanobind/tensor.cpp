@@ -165,6 +165,10 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
 }
 
 void tensor_mem_config_module(nb::module_& m_tensor) {
+    nb::enum_<DumpTensorMode>(m_tensor, "DumpTensorMode")
+        .value("DISTRIBUTED_GATHER", DumpTensorMode::DISTRIBUTED_GATHER)
+        .value("LOCAL", DumpTensorMode::LOCAL);
+
     auto py_core_coord = static_cast<nb::class_<CoreCoord>>(m_tensor.attr("CoreCoord"));
     py_core_coord.def(nb::init<std::size_t, std::size_t>())
         .def(
@@ -452,6 +456,13 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             })
         .def("is_sharded", &MemoryConfig::is_sharded, "Whether tensor data is sharded across multiple cores in L1")
         .def(
+            "experimental_set_per_core_allocation",
+            [](MemoryConfig& self, bool enable) {
+                experimental::per_core_allocation::set_per_core_allocation(self, enable);
+            },
+            nb::arg("enable"),
+            "Enable or disable experimental per-core L1 allocation on this MemoryConfig.")
+        .def(
             "with_shard_spec",
             &MemoryConfig::with_shard_spec,
             "Returns a new MemoryConfig with the shard spec set to the given value")
@@ -599,6 +610,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             &dump_tensor_flatbuffer,
             nb::arg("filename"),
             nb::arg("tensor"),
+            nb::arg("mode") = DumpTensorMode::DISTRIBUTED_GATHER,
             R"doc(
                 Dump tensor to file using FlatBuffer format with inline file storage.
             )doc")

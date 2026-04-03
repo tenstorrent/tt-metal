@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "move_program_factory.hpp"
-#include "ttnn/operations/data_movement/copy/device/copy_program_factory.hpp"
+#include "ttnn/operations/data_movement/copy/device/copy_same_memory_config_program_factory.hpp"
 #include "ttnn/operations/data_movement/copy/device/copy_device_operation_types.hpp"
 #include "ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 
@@ -22,7 +22,7 @@ MoveProgramFactory::cached_program_t MoveProgramFactory::create(
         operation_attributes.output_mem_config, output.dtype(), operation_attributes.backwards};
     const copy_args_t copy_args{input, std::make_optional(output)};
 
-    return ttnn::prim::CopyProgramFactory::create(copy_attrs, copy_args, tensor_return_value);
+    return ttnn::prim::CopySameMemoryConfigProgramFactory::create(copy_attrs, copy_args, tensor_return_value);
 }
 
 void MoveProgramFactory::override_runtime_arguments(
@@ -39,7 +39,7 @@ void MoveProgramFactory::override_runtime_arguments(
         operation_attributes.output_mem_config, output.dtype(), operation_attributes.backwards};
     const copy_args_t copy_args{input, std::make_optional(output)};
 
-    ttnn::prim::CopyProgramFactory::override_runtime_arguments(
+    ttnn::prim::CopySameMemoryConfigProgramFactory::override_runtime_arguments(
         cached_program, copy_attrs, copy_args, tensor_return_value);
 }
 
