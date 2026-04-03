@@ -24,18 +24,15 @@ void kernel_main() {
 
     binary_op_init_common(cb_combine_input, cb_weights, cb_output);
 
-    // Hardware startup required for tilize operation
-    compute_kernel_hw_startup(cb_rowmajor, cb_output);
-
     // Each core processes exactly 32 tokens for hardware tilization
-    constexpr uint32_t BATCH_SIZE = 32;
-    static_assert(BATCH_SIZE == 32, "Hardware tilize requires exactly 32 tokens per core");
+    constexpr uint32_t TOKENS_PER_CORE = 32;
+    static_assert(TOKENS_PER_CORE == 32, "Hardware tilize requires exactly 32 tokens per core");
 
     // Reserve row-major buffer for all 32 tokens
-    cb_reserve_back(cb_rowmajor, BATCH_SIZE);
+    cb_reserve_back(cb_rowmajor, TOKENS_PER_CORE);
 
     // Process each token
-    for (uint32_t i = 0; i < BATCH_SIZE; ++i) {
+    for (uint32_t i = 0; i < TOKENS_PER_CORE; ++i) {
         uint32_t total_expert_tiles = num_experts * emb_dim_tiles;
         cb_wait_front(cb_combine_input, total_expert_tiles);
         cb_wait_front(cb_weights, num_experts);
@@ -99,23 +96,24 @@ void kernel_main() {
         cb_pop_front(cb_weights, num_experts);
     }
 
-    cb_push_back(cb_rowmajor, BATCH_SIZE);
+    // cb_push_back(cb_rowmajor, TOKENS_PER_CORE);
 
+    DPRINT_UNPACK({ DPRINT << "UNPACK STARTING TILIZE!!!" << ENDL(); });
+    DPRINT_MATH({ DPRINT << "MATH STARTING TILIZE!!!" << ENDL(); });
+    DPRINT_PACK({ DPRINT << "PACK STARTING TILIZE!!!" << ENDL(); });
     // Hardware tilize: convert 32 rows to 224 tiles
-    // CB17 has asymmetric pages (row-sized: 7168 elements each)
-    // Output CB16 has tile-sized pages
-    cb_reserve_back(cb_output, 224);
-
+    // cb_rowmajor has asymmetric pages (row-sized: 7168 elements each)
+    // tilize<> internally handles cb_reserve_back/push_back/pop_front
     using namespace compute_kernel_lib::tilize_config;
     compute_kernel_lib::tilize<
         224,          // block_width_tiles (7168 ÷ 32 = 224)
         cb_rowmajor,  // input CB (row-major, asymmetric pages)
         cb_output,    // output CB (tiled)
         InitUninitMode::InitAndUninit,
-        WaitMode::WaitBlock,
+        WaitMode::NoWait,
         ReconfigureRegisterDatatypeMode::NoReconfigure,
-        Fp32Mode::Fast>(1, 32);  // 1 tile-row, 32 input pages
-
-    cb_push_back(cb_output, 224);
-    cb_pop_front(cb_rowmajor, BATCH_SIZE);
+        Fp32Mode::Fast>(1, TOKENS_PER_CORE);  // 1 tile-row, 32 input pages
+    DPRINT_UNPACK({ DPRINT << "UNPACK FINISHED TILIZE!!!" << ENDL(); });
+    DPRINT_MATH({ DPRINT << "MATH FINISHED TILIZE!!!" << ENDL(); });
+    DPRINT_PACK({ DPRINT << "PACK FINISHED TILIZE!!!" << ENDL(); });
 }
