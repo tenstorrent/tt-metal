@@ -906,7 +906,7 @@ int main(int argc, char **argv) {
         fmt::print("Rank {}: Finalizing MPI context\n", distributed_ctx->rank());
     }
 
-    ttml::autograd::ctx().get_profiler().read_results(device, "before close device", 0, /* dump_results */ true);
+    ttml::autograd::ctx().get_profiler().read_results(device, "before close device", /* dump_results */ true, 0);
     ttml::autograd::ctx().close_device();
     ttml::autograd::ctx().close_profiler();
     return 0;

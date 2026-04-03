@@ -83,6 +83,9 @@ def profiler_marker(x, name, dump_results=False):
     if grad_mode != cpp.autograd.GradMode.ENABLED:
         return x
 
+    if not x.get_requires_grad():
+        return x
+
     output = cpp.autograd.create_tensor(x.get_value(), requires_grad=True)
 
     input_tensor = x
