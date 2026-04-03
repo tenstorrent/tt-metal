@@ -175,7 +175,7 @@ def test_pipeline_performance(
     """Performance test for Wan pipeline with detailed timing analysis."""
 
     benchmark_profiler = BenchmarkProfiler()
-    traced = mesh_device.shape == (4, 32)  # trace only for quadx32
+    traced = mesh_shape == (4, 32)  # trace only for quadx32
 
     # Skip 4U.
     if galaxy_type == "4U":
