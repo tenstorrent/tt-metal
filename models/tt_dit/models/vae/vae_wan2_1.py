@@ -1349,7 +1349,13 @@ class WanDecoder(Module):
         self._conv_idx = [0]
         self._feat_cache = [None] * self.cached_conv_count
 
-    def forward(self, z_BTHWC: ttnn.Tensor, logical_h: int, use_cache: bool = True) -> tuple[ttnn.Tensor, int]:
+    def forward(self, z_BTHWC: ttnn.Tensor, logical_h: int, t_chunk_size: int | None = 1) -> tuple[ttnn.Tensor, int]:
+        """
+        t_chunk_size controls how the T dimension is processed:
+            None  – full-T single pass, no caching (fastest, most memory)
+            1     – one frame at a time with caching (slowest, least memory)
+            N > 1 – N frames at a time with caching between chunks
+        """
         B, T, H, W, C = z_BTHWC.shape
 
         self.clear_cache()
@@ -1357,25 +1363,26 @@ class WanDecoder(Module):
         x_tile_BTHWC = self.post_quant_conv(z_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
-        if use_cache:
+        if t_chunk_size is None:
+            # No-cache full-T single-pass mode
+            out_BTHWC, new_logical_h = self.decoder(x_BTHWC, logical_h, feat_cache=None, feat_idx=None)
+            output_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
+        else:
             output_BCTHW = None
-            for i in range(T):
-                # Process one frame at a time
+            for t_start in range(0, T, t_chunk_size):
                 self._conv_idx = [0]
                 out_BTHWC, new_logical_h = self.decoder(
-                    x_BTHWC[:, i : i + 1, :, :, :], logical_h, feat_cache=self._feat_cache, feat_idx=self._conv_idx
+                    x_BTHWC[:, t_start : t_start + t_chunk_size, :, :, :],
+                    logical_h,
+                    feat_cache=self._feat_cache,
+                    feat_idx=self._conv_idx,
                 )
-                # Channels first
                 out_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
                 if output_BCTHW is None:
                     output_BCTHW = out_BCTHW
                 else:
                     output_BCTHW = ttnn.concat([output_BCTHW, out_BCTHW], dim=2)
             self.clear_cache()
-        else:
-            # No-cache full-T single-pass mode
-            out_BTHWC, new_logical_h = self.decoder(x_BTHWC, logical_h, feat_cache=None, feat_idx=None)
-            output_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
 
         output_tile_BCTHW = ttnn.to_layout(output_BCTHW, ttnn.TILE_LAYOUT)
         output_BCTHW = ttnn.clamp(output_tile_BCTHW, min=-1.0, max=1.0)
