@@ -35,7 +35,7 @@ from models.demos.granite_ttm_r1.tt.ttnn_granite_ttm_model import TtnnGraniteTTM
 PCC_THRESHOLD = 0.99
 
 
-@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("batch_size", [1, 4, 8])
 def test_pcc_full_model(device, batch_size):
     hf_config = load_granite_ttm_config(DEFAULT_MODEL_NAME)
     num_channels = infer_num_channels(hf_config)

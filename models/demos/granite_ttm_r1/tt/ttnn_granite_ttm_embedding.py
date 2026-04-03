@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from models.demos.granite_ttm_r1.tt.common import TorchModuleFallback
+from models.demos.granite_ttm_r1.tt.common import TorchModuleFallback, get_linear_compute_config
 
 
 class TtnnGraniteTTMEmbedding:
@@ -36,4 +36,5 @@ class TtnnGraniteTTMEmbedding:
             bias=self._params.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
+            compute_kernel_config=get_linear_compute_config(),
         )

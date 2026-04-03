@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from models.demos.granite_ttm_r1.tt.common import TorchModuleFallback
+from models.demos.granite_ttm_r1.tt.common import TorchModuleFallback, get_linear_compute_config
 
 
 class TtnnGraniteTTMChannelMixer:
@@ -48,6 +48,7 @@ class TtnnGraniteTTMChannelMixer:
         )
 
         # MLP: fc1 -> GELU (fused) -> fc2
+        ckc = get_linear_compute_config()
         hidden_states = ttnn.linear(
             hidden_states,
             self._params.mlp.fc1.weight,
@@ -55,6 +56,7 @@ class TtnnGraniteTTMChannelMixer:
             activation="gelu",
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
+            compute_kernel_config=ckc,
         )
         hidden_states = ttnn.linear(
             hidden_states,
@@ -62,6 +64,7 @@ class TtnnGraniteTTMChannelMixer:
             bias=self._params.mlp.fc2.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
+            compute_kernel_config=ckc,
         )
 
         # Gated attention: linear -> softmax(dim=-1) -> element-wise multiply
@@ -71,6 +74,7 @@ class TtnnGraniteTTMChannelMixer:
             bias=self._params.gating_block.attn_layer.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
+            compute_kernel_config=ckc,
         )
         attn = ttnn.softmax(attn, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
         hidden_states = ttnn.mul(hidden_states, attn, memory_config=ttnn.L1_MEMORY_CONFIG)

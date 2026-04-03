@@ -67,6 +67,27 @@ def custom_preprocessor(torch_model, name):
     return parameters
 
 
+_LINEAR_COMPUTE_CONFIG = None
+
+
+def get_linear_compute_config():
+    """Return a WormholeComputeKernelConfig tuned for TTM-R1 linear layers.
+
+    HiFi2 math fidelity keeps bfloat16 accumulation accurate enough for
+    PCC ≥ 0.99 while enabling packer L1 accumulation for lower memory traffic.
+    math_approx_mode=True allows faster transcendentals (GELU, softmax).
+    """
+    global _LINEAR_COMPUTE_CONFIG
+    if _LINEAR_COMPUTE_CONFIG is None:
+        _LINEAR_COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+    return _LINEAR_COMPUTE_CONFIG
+
+
 def resolve_module(root_module: torch.nn.Module, candidates: list[str]) -> torch.nn.Module | None:
     named_modules = dict(root_module.named_modules())
     for candidate in candidates:

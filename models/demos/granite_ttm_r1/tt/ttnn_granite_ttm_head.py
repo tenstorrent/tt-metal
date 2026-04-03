@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from models.demos.granite_ttm_r1.tt.common import TorchModuleFallback
+from models.demos.granite_ttm_r1.tt.common import TorchModuleFallback, get_linear_compute_config
 
 
 class TtnnGraniteTTMHead:
@@ -49,6 +49,7 @@ class TtnnGraniteTTMHead:
             bias=self._params.base_forecast_block.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
+            compute_kernel_config=get_linear_compute_config(),
         )
 
         # Permute: [B, C, forecast_len] -> [B, forecast_len, C]
