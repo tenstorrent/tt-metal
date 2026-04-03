@@ -39,6 +39,50 @@ def _get_element_size_bytes(dtype):
     raise ValueError(f"Unsupported dtype for sdpa_reduce_to_all: {dtype}")
 
 
+def compute_forwarder_scratch_size(
+    batch_size: int,
+    l_width: int,
+    num_cores: int,
+    tile_height: int = 8,
+    tile_width: int = 32,
+    bytes_per_element: int = 2,
+    num_links: int = 2,
+):
+    """
+    Compute the total forwarder scratch buffer size in bytes for SDPA reduce-to-all.
+
+    This matches the calculation in sdpa_reduce_to_all/op.py for proper L1 allocation.
+    """
+    input_page_size_bytes = tile_height * tile_width * bytes_per_element
+    input_l_num_pages = (batch_size // tile_height) * (l_width // tile_width)
+
+    PNH = 8
+    DH = input_l_num_pages * tile_width
+    DHt = DH // tile_width
+    PNHt = PNH // tile_height
+    out_tiles = PNHt * DHt
+
+    max_tiles_per_chunk = 8
+    min_num_l_chunks = (out_tiles + max_tiles_per_chunk - 1) // max_tiles_per_chunk
+    num_l_chunks = max(min_num_l_chunks, 4)
+    if out_tiles % num_l_chunks != 0:
+        raise ValueError("out_tiles must be divisible by num_l_chunks")
+
+    tiles_per_l_chunk = out_tiles // num_l_chunks
+    l_chunk_size_bytes = tiles_per_l_chunk * input_page_size_bytes
+
+    header_size = ttnn.get_tt_fabric_packet_header_size_bytes()
+    l1_alignment = 16
+    slot_size = _round_up(header_size + l_chunk_size_bytes, l1_alignment)
+
+    num_workers_per_link = num_cores // num_links
+    workers_per_type = num_workers_per_link // 2
+    slots_per_worker = 1 + num_l_chunks
+    slots_per_round = workers_per_type * slots_per_worker
+
+    return 2 * slots_per_round * slot_size * 2
+
+
 class SdpaReduceToAll:
     @staticmethod
     def golden(
