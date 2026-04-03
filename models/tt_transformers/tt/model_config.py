@@ -595,6 +595,10 @@ class ModelArgs:
         self.use_qk_fused = not self.is_multimodal
         if self.prefetcher is not None:
             self.use_qk_fused = False
+        # Fused QK places Q and K on separate core grids (2x batch cores).
+        # For batch>32 on BH (120 cores), 2*64=128 > 120, so disable fusion.
+        if self.max_batch_size > 32:
+            self.use_qk_fused = False
 
         if device is not None:  # Avoid issue with test_torch.py not having a device
             # ============================================================================
@@ -1449,14 +1453,14 @@ class ModelArgs:
                 sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
                     start_core, num_sdpa_cores, prefetcher.all_worker_cores_range_set, row_wise=True
                 ),
-                exp_approx_mode=False,
+                exp_approx_mode=True,
                 q_chunk_size=0,
                 k_chunk_size=0,
             )
         else:
             return ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
-                exp_approx_mode=False,
+                exp_approx_mode=True,
                 q_chunk_size=0,
                 k_chunk_size=0,
             )
@@ -1643,7 +1647,7 @@ class ModelArgs:
                 if is_blackhole():
                     return ttnn.create_sharded_memory_config(
                         shape=(ttnn.TILE_SIZE, self.head_dim),
-                        core_grid=ttnn.CoreGrid(y=4, x=8),
+                        core_grid=num_to_coregrid(self.max_batch_size),
                         strategy=ttnn.ShardStrategy.HEIGHT,
                         orientation=ttnn.ShardOrientation.ROW_MAJOR,
                         use_height_and_width_as_shard_shape=True,
@@ -2108,12 +2112,9 @@ class ModelArgs:
             668 * core_grid.num_cores
         )  # 668 columns per core is close to the L1 limit in LM head matmul.
         if is_blackhole():
-            if self.num_devices == 4:
-                max_columns_per_device = LLAMA_VOCAB_SIZE // self.num_devices // NUM_LM_HEAD_COLUMNS
-            elif self.num_devices == 8:
-                max_columns_per_device = LLAMA_VOCAB_SIZE // self.num_devices // (NUM_LM_HEAD_COLUMNS * 2)
-            else:
-                max_columns_per_device = LLAMA_VOCAB_SIZE // NUM_LM_HEAD_COLUMNS
+            # Use per-core limit directly: 668 columns per core fits in L1
+            # Previous BH override was overly conservative (19 splits for Qwen3-32B)
+            max_columns_per_device = 668 * core_grid.num_cores
         if prefetcher is not None:
             return math.ceil(max_columns_per_device / (self.tile_size * prefetcher.ring_size)) * (
                 self.tile_size * prefetcher.ring_size
@@ -3155,14 +3156,6 @@ class ModelArgs:
         _per_core_M = math.ceil(m / self.tile_size)
         _in0_block_w = self.find_largest_divisor(k // (self.tile_size * num_cores))
         _per_core_N = math.ceil(n / (self.tile_size * num_cores))
-        if _per_core_M > 1:
-            # Use Batched DRAM-sharded config for batch > 32 (M > 1 tile)
-            return ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
-                in0_block_w=_in0_block_w,
-                per_core_M=_per_core_M,
-                per_core_N=_per_core_N,
-                fused_activation=fused_activation,
-            )
         return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=_in0_block_w,
             per_core_M=_per_core_M,
