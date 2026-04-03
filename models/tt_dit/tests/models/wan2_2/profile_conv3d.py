@@ -3,30 +3,36 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Tracy-compatible conv3d profiling for Wan 2.2 VAE decoder bottleneck layers.
+Conv3d device profiling for Wan 2.2 VAE decoder bottleneck layers.
 
 Runs the top time-consuming conv3d shapes on a 1x1 mesh with 12x10 grid,
 using the optimized blocking table from conv3d-blocking-sweep-v3.
 
-Usage:
-    # 1. Start Tracy capture (in a separate terminal):
-    ./build/tools/profiler/bin/capture-release -o conv3d_profile.tracy
+Timing modes
+------------
+Default (wall-clock, batched):
+    Dispatches all timed iterations in one batch, syncs once at the end.
+    Amortises the single-sync PCIe roundtrip across N runs.
+    Reported time ≈ pure device execution time (matches Tracy device kernel duration).
 
-    # 2. Run this script:
-    source python_env/bin/activate && export PYTHONPATH=$(pwd)
     python models/tt_dit/tests/models/wan2_2/profile_conv3d.py
 
-    # 3. Copy .tracy file to your Mac and open in Tracy GUI.
+Device profiler (exact device cycles):
+    TT_METAL_DEVICE_PROFILER=1 python models/tt_dit/tests/models/wan2_2/profile_conv3d.py
+    Reads generated/profiler/.logs/profile_log_device.csv after each layer
+    and reports the per-dispatch device cycle time directly.
 
-    # To profile a specific layer only:
+Tracy capture (host + device trace):
+    ./build/tools/profiler/bin/capture-release -o conv3d_profile.tracy
+    python models/tt_dit/tests/models/wan2_2/profile_conv3d.py
+
+Specific layer:
     python models/tt_dit/tests/models/wan2_2/profile_conv3d.py --layer up2_res
-
-    # To run without Tracy (wall-clock timing only):
-    python models/tt_dit/tests/models/wan2_2/profile_conv3d.py --no-tracy
 """
 
 import argparse
 import math
+import os
 import time
 from collections import namedtuple
 
@@ -118,7 +124,7 @@ def make_tensors(mesh_device, T, H, W, C_in, C_out, kernel_size, C_in_block):
     return tt_input, tt_weight, tt_bias
 
 
-def run_conv3d(mesh_device, tt_input, tt_weight, tt_bias, conv_config, C_out, kernel_size, ckc):
+def run_conv3d(mesh_device, tt_input, tt_weight, tt_bias, conv_config, C_out, kernel_size, ckc, sync=True):
     out = ttnn.experimental.conv3d(
         input_tensor=tt_input,
         weight_tensor=tt_weight,
@@ -132,15 +138,44 @@ def run_conv3d(mesh_device, tt_input, tt_weight, tt_bias, conv_config, C_out, ke
         dtype=ttnn.bfloat16,
         compute_kernel_config=ckc,
     )
-    ttnn.synchronize_device(mesh_device)
+    if sync:
+        ttnn.synchronize_device(mesh_device)
     return out
+
+
+def _read_device_kernel_us(freq_mhz=1350):
+    """Parse profile_log_device.csv and return list of per-dispatch device durations (us)."""
+    csv_path = "generated/profiler/.logs/profile_log_device.csv"
+    if not os.path.exists(csv_path):
+        return []
+    starts, ends = {}, {}
+    with open(csv_path) as f:
+        next(f)  # arch line
+        next(f)  # header
+        for line in f:
+            p = line.strip().split(",")
+            if len(p) < 12:
+                continue
+            zone, ztype = p[10].strip(), p[11].strip()
+            if "KERNEL" not in zone:
+                continue
+            try:
+                cycles = int(p[5].strip())
+                run_id = int(p[7].strip())
+            except ValueError:
+                continue
+            starts[run_id] = min(starts.get(run_id, cycles), cycles)
+            ends[run_id] = max(ends.get(run_id, cycles), cycles)
+    return sorted(
+        [(rid, (ends[rid] - starts[rid]) / freq_mhz) for rid in starts if rid in ends],
+        key=lambda x: x[0],
+    )
 
 
 def profile_layer(mesh_device, grid_size, ckc, name, layer_info, warmup=WARMUP, timed=TIMED):
     desc, T, H, W, C_in, kernel_size, C_out, repeat = layer_info
     padded_C_in = aligned_channels(C_in)
 
-    # Compute output spatial dims (input has external padding already applied)
     kT, kH, kW = kernel_size
     H_out = H - (kH - 1)
     W_out = W - (kW - 1)
@@ -169,27 +204,46 @@ def profile_layer(mesh_device, grid_size, ckc, name, layer_info, warmup=WARMUP, 
     torch.manual_seed(42)
     tt_input, tt_weight, tt_bias = make_tensors(mesh_device, T, H, W, C_in, C_out, kernel_size, conv_config.C_in_block)
 
-    # Warmup
-    for i in range(warmup):
-        out = run_conv3d(mesh_device, tt_input, tt_weight, tt_bias, conv_config, C_out, kernel_size, ckc)
+    # Warmup (sync after each to ensure clean state)
+    for _ in range(warmup):
+        out = run_conv3d(mesh_device, tt_input, tt_weight, tt_bias, conv_config, C_out, kernel_size, ckc, sync=True)
         ttnn.deallocate(out)
 
-    # Timed runs
-    times = []
-    for i in range(timed):
-        t0 = time.perf_counter()
-        out = run_conv3d(mesh_device, tt_input, tt_weight, tt_bias, conv_config, C_out, kernel_size, ckc)
-        elapsed = (time.perf_counter() - t0) * 1e6
-        times.append(elapsed)
+    use_device_profiler = bool(os.environ.get("TT_METAL_DEVICE_PROFILER"))
+    dispatches_before = len(_read_device_kernel_us()) if use_device_profiler else 0
+
+    # Timed: dispatch all N runs in one batch, single sync at end.
+    # This amortises the sync PCIe roundtrip and matches Tracy device kernel duration.
+    t0 = time.perf_counter()
+    outs = []
+    for _ in range(timed):
+        outs.append(
+            run_conv3d(mesh_device, tt_input, tt_weight, tt_bias, conv_config, C_out, kernel_size, ckc, sync=False)
+        )
+    ttnn.synchronize_device(mesh_device)
+    batch_us = (time.perf_counter() - t0) * 1e6
+    for out in outs:
         ttnn.deallocate(out)
 
     ttnn.deallocate(tt_input)
     ttnn.deallocate(tt_weight)
     ttnn.deallocate(tt_bias)
 
-    avg = sum(times) / len(times)
+    avg = batch_us / timed
+
+    # Device profiler: read exact on-device dispatch times if available
+    if use_device_profiler:
+        dispatches_after = _read_device_kernel_us()
+        new_dispatches = dispatches_after[dispatches_before:]
+        # Last `timed` dispatches are the timed runs
+        timed_dispatches = [d for _, d in new_dispatches[-timed:]]
+        if timed_dispatches:
+            avg_device = sum(timed_dispatches) / len(timed_dispatches)
+            print(f"  Per-call (device profiler): {avg_device:.0f} us")
+            avg = avg_device
+
     total_in_decoder = avg * repeat
-    print(f"  Per-call: {avg:.0f} us (runs: {', '.join(f'{t:.0f}' for t in times)})")
+    print(f"  Per-call (batched wall): {batch_us/timed:.0f} us  (batch={batch_us:.0f} us / {timed} runs)")
     print(f"  Decoder total ({repeat}x): {total_in_decoder:.0f} us")
     return avg, total_in_decoder
 
@@ -197,7 +251,7 @@ def profile_layer(mesh_device, grid_size, ckc, name, layer_info, warmup=WARMUP, 
 def main():
     parser = argparse.ArgumentParser(description="Profile conv3d bottleneck layers with Tracy")
     parser.add_argument("--layer", type=str, default=None, help="Profile specific layer only (e.g. up2_res)")
-    parser.add_argument("--no-tracy", action="store_true", help="Skip Tracy, wall-clock timing only")
+    parser.add_argument("--no-tracy", action="store_true", help="(No-op, kept for compatibility)")
     parser.add_argument("--timed", type=int, default=TIMED, help="Number of timed iterations")
     parser.add_argument("--warmup", type=int, default=WARMUP, help="Number of warmup iterations")
     args = parser.parse_args()
@@ -225,8 +279,9 @@ def main():
         results[name] = (avg, total, info[7])  # avg, total, repeat
 
     # Summary
+    mode = "device profiler" if os.environ.get("TT_METAL_DEVICE_PROFILER") else "batched wall-clock"
     print(f"\n{'='*80}")
-    print(f"  SUMMARY — bh_4x32 720p uncached (1x1 mesh, 12x10 grid)")
+    print(f"  SUMMARY — bh_4x32 720p uncached (1x1 mesh, 12x10 grid)  [{mode}]")
     print(f"{'='*80}")
     print(f"  {'Layer':<15} {'Per-call (us)':>14} {'Repeats':>8} {'Total (us)':>12} {'% of total':>10}")
     print(f"  {'-'*15} {'-'*14} {'-'*8} {'-'*12} {'-'*10}")

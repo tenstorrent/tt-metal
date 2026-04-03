@@ -44,7 +44,7 @@ class CCLManager:
         self.sr_ping_pong_idx = [0, 0]
         self.barrier_idx = [0, 0]
 
-    def _init_subdevice(self, num_fabric_cores: int = 4):
+    def _init_subdevice(self):
         compute_grid_size = self.mesh_device.compute_with_storage_grid_size()
         self.ccl_cores = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
@@ -54,8 +54,13 @@ class CCLManager:
         self.ccl_sub_device_id = ttnn.SubDeviceId(0)
 
         # Sub-devices for halo-parallel mode:
-        # Sub-device 0: fabric cores (row 0, cols 0..num_fabric_cores-1) — for NeighborPad fabric-only
-        # Sub-device 1: all remaining cores — for conv3d
+        # Sub-device 0: fabric cores (row 0, first N cols) — for NeighborPad fabric-only on CQ1
+        # Sub-device 1: all remaining cores — for conv3d on CQ0
+        #
+        # NP uses num_links*2 cores per halo direction. For 2D (H+W) NP the total is
+        # num_links*2 (H) + num_links*2 (W) = num_links*4. We allocate that many cores
+        # in row 0 so the halo sub-device covers all NP cores regardless of direction count.
+        num_fabric_cores = self.num_links * 4
         self.fabric_cores = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_fabric_cores - 1, 0))}
         )

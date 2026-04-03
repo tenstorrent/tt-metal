@@ -35,11 +35,11 @@ from models.tt_dit.utils.tensor import typed_tensor_2dshard
 
 # --- Config ---
 B, C, T = 1, 16, 21  # 81 video frames → (81-1)//4+1 = 21 latent frames (encoder does 4× temporal downsample)
-H, W = 46, 20  # Latent dims: 368/8=46, 160/8=20
-TARGET_HEIGHT, TARGET_WIDTH = 368, 160  # Full output resolution for compute_decoder_stage_dims
+H, W = 60, 104  # 480p
+TARGET_HEIGHT, TARGET_WIDTH = 480, 832
 MESH_SHAPE = (2, 4)
 H_AXIS, W_AXIS = 0, 1
-NUM_LINKS = 1
+NUM_LINKS = 2  # matches BH 2x4 pipeline config
 USE_CACHE = False  # uncached
 
 # Ablation from env
