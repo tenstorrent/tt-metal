@@ -982,7 +982,23 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         for (std::size_t idx = start; idx < segments.size(); ++idx) {
             const auto& seg = segments.at(idx);
             const uint32_t core_idx = seg.core_idx;
-            const auto& hw = core_work.at(core_idx).head_work.at(seg.head_work_index);
+            const auto& work = core_work.at(core_idx);
+
+            // With zigzag balancing, multi-head cores have mismatched iteration patterns
+            // across heads, breaking chain synchronization. Exclude them from chains.
+            if (enable_zigzag_balancing && work.head_work.size() > 1) {
+                // Multi-head core breaks the chain - mark previous core as sink and stop
+                if (idx > start) {
+                    const uint32_t prev_core_idx = segments.at(idx - 1).core_idx;
+                    auto& prev_chain = core_chain_info.at(prev_core_idx);
+                    prev_chain.is_sink = true;
+                    prev_chain.next_physical = {};
+                    prev_chain.next_core_q_chunks = 0;
+                }
+                break;
+            }
+
+            const auto& hw = work.head_work.at(seg.head_work_index);
             auto& chain = core_chain_info.at(core_idx);
 
             chain.participates = true;
