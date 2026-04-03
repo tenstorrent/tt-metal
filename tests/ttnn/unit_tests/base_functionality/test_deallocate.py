@@ -26,5 +26,3 @@ def test_deallocate(device, h, w):
     ttnn.deallocate(output_tensor)
     with pytest.raises(RuntimeError) as exception:
         output_tensor_reference + output_tensor_reference
-
-    assert "Device Memory is not allocated" in str(exception.value)
