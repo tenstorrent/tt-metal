@@ -188,14 +188,24 @@ void kernel_main() {
 
                             if constexpr (in0_last_ktile_w > 0) {
                                 if ((block == num_blocks_inner_dim - 1)) {
-                                    auto in0_last_ktile_w_ptr = l1_write_extract_shard_in0 - in0_single_tile_size_bytes;
-                                    pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_w_ptr);
+                                    for (uint32_t h = 0; h < out_block_h; ++h) {
+                                        auto in0_last_ktile_w_ptr =
+                                            in0_tensor_read_addr +
+                                            (h * in0_block_w + in0_block_w - 1) * in0_single_tile_size_bytes;
+                                        pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_w_ptr);
+                                    }
                                 }
                             }
                             if constexpr (in0_last_ktile_h > 0) {
                                 if ((block == num_blocks_inner_dim - 1)) {
-                                    auto in0_last_ktile_h_ptr = l1_write_extract_shard_in0 - in0_single_tile_size_bytes;
-                                    pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(in0_last_ktile_h_ptr);
+                                    for (uint32_t w = 0; w < in0_block_w; ++w) {
+                                        auto in0_last_ktile_h_ptr =
+                                            in0_tensor_read_addr +
+                                            (out_block_h - 1) * in0_block_w * in0_single_tile_size_bytes +
+                                            w * in0_single_tile_size_bytes;
+                                        pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(
+                                            in0_last_ktile_h_ptr);
+                                    }
                                 }
                             }
                         } else {
@@ -204,16 +214,23 @@ void kernel_main() {
 
                             if constexpr (in0_last_ktile_w > 0) {
                                 if ((block == num_blocks_inner_dim - 1)) {
-                                    auto in0_last_ktile_w_ptr =
-                                        in0_tensor_read_addr + in0_block_size_bytes - in0_single_tile_size_bytes;
-                                    pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_w_ptr);
+                                    for (uint32_t h = 0; h < in0_block_h; ++h) {
+                                        auto in0_last_ktile_w_ptr =
+                                            in0_tensor_read_addr +
+                                            (h * in0_block_w + in0_block_w - 1) * in0_single_tile_size_bytes;
+                                        pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_w_ptr);
+                                    }
                                 }
                             }
                             if constexpr (in0_last_ktile_h > 0) {
                                 if ((block == num_blocks_inner_dim - 1)) {
-                                    auto in0_last_ktile_h_ptr =
-                                        in0_tensor_read_addr + in0_block_size_bytes - in0_single_tile_size_bytes;
-                                    pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(in0_last_ktile_h_ptr);
+                                    for (uint32_t w = 0; w < in0_block_w; ++w) {
+                                        auto in0_last_ktile_h_ptr =
+                                            in0_tensor_read_addr +
+                                            ((in0_block_h - 1) * in0_block_w + w) * in0_single_tile_size_bytes;
+                                        pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(
+                                            in0_last_ktile_h_ptr);
+                                    }
                                 }
                             }
                         }
