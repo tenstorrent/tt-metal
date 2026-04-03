@@ -274,25 +274,19 @@ class GemmaAttentionTTNN:
         self.cos_meta = cos_meta
         self.sin_meta = sin_meta
 
-        # WormholeComputeKernelConfig works for expert shapes (1024 hidden)
-        # but fails for SigLIP shapes (608 dim) due to Blackhole kernel bug.
-        # Only enable for expert-sized tensors.
-        if config.width <= 1024:
-            self.compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
-            )
-            self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-                math_approx_mode=False,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=True,
-            )
-        else:
-            self.compute_kernel_config_hifi4 = None
-            self.compute_kernel_config_hifi2 = None
+        # WormholeComputeKernelConfig for Blackhole — all shapes work after cache clear
+        self.compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
 
     def forward(
         self,
