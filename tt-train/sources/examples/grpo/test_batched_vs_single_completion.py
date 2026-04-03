@@ -30,11 +30,7 @@ def to_chat_prompt(tokenizer, user_text: str) -> str:
 
 @pytest.mark.slow
 def test_capitals_one_by_one_equals_single_batch():
-    ctx = setup_inference(
-        yaml_config_path=YAML_CONFIG,
-        hf_model_id=HF_MODEL_ID,
-        load_pretrained=True,
-    )
+    ctx = setup_inference(yaml_config_path=YAML_CONFIG, hf_model_id=HF_MODEL_ID, checkpoint_path=None)
 
     assert ctx.group_size == 1, "This test expects group_size=1 for 1:1 comparison."
     assert ctx.temperature == 0.0, "This test expects greedy decoding (temperature=0)."

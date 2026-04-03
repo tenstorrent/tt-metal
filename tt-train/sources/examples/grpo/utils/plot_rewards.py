@@ -31,7 +31,7 @@ def plot_rewards(log_path):
     std_smooth = np.convolve(stds, np.ones(window) / window, mode="valid")
     steps_smooth = steps[window - 1 :]
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+    _, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
 
     ax1.scatter(steps, means, alpha=0.15, s=8, color="steelblue")
     ax1.plot(steps_smooth, mean_smooth, color="steelblue", linewidth=2, label=f"rolling avg (w={window})")
