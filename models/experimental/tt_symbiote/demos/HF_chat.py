@@ -7,6 +7,7 @@
 import argparse
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 # Fix import path: ensure project root comes before script directory in sys.path
@@ -23,9 +24,18 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers.generation.logits_process import (
+    LogitsProcessorList,
+    NoRepeatNGramLogitsProcessor,
+    RepetitionPenaltyLogitsProcessor,
+    TemperatureLogitsWarper,
+    TopKLogitsWarper,
+    TopPLogitsWarper,
+)
 
 import ttnn
 from models.experimental.tt_symbiote.core.run_config import DispatchManager, TracedRun
@@ -127,6 +137,40 @@ def preprocess_generation_inputs(inputs, model_config, paged_cache, max_new_toke
     return {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in out.items()}
 
 
+@dataclass
+class DecodeParams:
+    """Settings for logits post-processing during autoregressive decoding (HF processor / warper semantics)."""
+
+    temperature: float = 0.0
+    top_p: float = 0.95
+    top_k: int = 50
+    repetition_penalty: float = 1.0
+    no_repeat_ngram_size: int = 0
+
+
+def build_logits_postprocess_processors(params: DecodeParams) -> LogitsProcessorList:
+    """Processors applied to raw next-step logits (repetition penalty, banned n-grams)."""
+    procs = LogitsProcessorList()
+    if params.repetition_penalty != 1.0:
+        procs.append(RepetitionPenaltyLogitsProcessor(penalty=params.repetition_penalty))
+    if params.no_repeat_ngram_size > 0:
+        procs.append(NoRepeatNGramLogitsProcessor(params.no_repeat_ngram_size))
+    return procs
+
+
+def build_logits_postprocess_warpers(params: DecodeParams) -> LogitsProcessorList:
+    """Sampling warpers (temperature, top-k, top-p). Only used when ``params.temperature > 0``."""
+    if params.temperature <= 0:
+        return LogitsProcessorList()
+    warp = LogitsProcessorList()
+    warp.append(TemperatureLogitsWarper(params.temperature))
+    if params.top_k > 0:
+        warp.append(TopKLogitsWarper(top_k=params.top_k))
+    if params.top_p < 1.0:
+        warp.append(TopPLogitsWarper(top_p=params.top_p))
+    return warp
+
+
 def logits_postprocess_generation_kwargs(
     *,
     temperature: float,
@@ -136,9 +180,9 @@ def logits_postprocess_generation_kwargs(
     no_repeat_ngram_size: int,
 ):
     """
-    Build `model.generate` kwargs for logits post-processing (HF applies processors / warpers).
+    Build `model.generate` kwargs so Hugging Face applies the same logits post-processing internally.
 
-    Default temperature=0 keeps greedy decoding; temperature>0 enables sampling with top-p/top-k.
+    Used by warmup; interactive chat uses :func:`decode_with_logit_postprocess` so processing is explicit on ``logits``.
     """
     kwargs = {}
     if repetition_penalty is not None and repetition_penalty != 1.0:
@@ -153,6 +197,76 @@ def logits_postprocess_generation_kwargs(
     else:
         kwargs["do_sample"] = False
     return kwargs
+
+
+def _token_is_eos(token_id: int, eos_token_id) -> bool:
+    if eos_token_id is None:
+        return False
+    if isinstance(eos_token_id, (list, tuple)):
+        return token_id in eos_token_id
+    return token_id == eos_token_id
+
+
+def decode_with_logit_postprocess(
+    model,
+    input_ids: torch.LongTensor,
+    attention_mask: torch.LongTensor,
+    past_key_values,
+    max_new_tokens: int,
+    decode_params: DecodeParams,
+):
+    """
+    Autoregressive decoding with explicit logits post-processing.
+
+    Each step: ``outputs = model(**model_inputs)``, ``logits = outputs.logits[:, -1, :]``, then applies HF
+    ``LogitsProcessor`` / warper lists before ``argmax`` or ``multinomial``. Cache bookkeeping uses
+    ``GenerationMixin`` helpers only (not ``model.generate``).
+    """
+    logits_processor = build_logits_postprocess_processors(decode_params)
+    logits_warper = build_logits_postprocess_warpers(decode_params)
+    do_sample = decode_params.temperature > 0
+
+    model_kwargs: dict = {
+        "attention_mask": attention_mask,
+        "past_key_values": past_key_values,
+        "use_cache": True,
+    }
+    cur_len = input_ids.shape[-1]
+    model_kwargs = model._get_initial_cache_position(cur_len, input_ids.device, model_kwargs)
+
+    eos_token_id = model.config.eos_token_id
+    is_prefill = True
+
+    for _ in range(max_new_tokens):
+        model_inputs = model.prepare_inputs_for_generation(input_ids, **model_kwargs)
+        if is_prefill:
+            outputs = model(**model_inputs, return_dict=True)
+            is_prefill = False
+        else:
+            outputs = model(**model_inputs, return_dict=True)
+
+        next_token_logits = outputs.logits[:, -1, :].to(copy=True, dtype=torch.float32, device=input_ids.device)
+        next_token_scores = logits_processor(input_ids, next_token_logits)
+        if do_sample:
+            next_token_scores = logits_warper(input_ids, next_token_scores)
+            probs = F.softmax(next_token_scores, dim=-1)
+            next_tokens = torch.multinomial(probs, num_samples=1).squeeze(1)
+        else:
+            next_tokens = torch.argmax(next_token_scores, dim=-1)
+
+        model_kwargs = model._update_model_kwargs_for_generation(
+            outputs,
+            model_kwargs,
+            is_encoder_decoder=getattr(model.config, "is_encoder_decoder", False),
+        )
+        del outputs
+
+        input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
+
+        if _token_is_eos(int(next_tokens.item()), eos_token_id):
+            break
+
+    return input_ids
 
 
 def load_model(mesh_device, model_name="inclusionAI/Ling-mini-2.0"):
@@ -195,9 +309,10 @@ def load_model(mesh_device, model_name="inclusionAI/Ling-mini-2.0"):
     return model, tokenizer, paged_cache
 
 
-def warmup(model, tokenizer, mesh_device, paged_cache):
+def warmup(model, tokenizer, mesh_device, paged_cache, logits_gen_kwargs=None):
+    """Uses ``model.generate`` so the HF generation path is exercised; logits processing kwargs match CLI defaults."""
+    logits_gen_kwargs = dict(logits_gen_kwargs or {})
     print("Warming up with zero inputs at seq_len = 256 ...")
-    vocab_size = model.config.vocab_size
     for seq_len in [256, 1024]:
         input_ids = torch.zeros((1, seq_len), dtype=torch.long, device=model.device)
         attention_mask = torch.ones((1, seq_len), dtype=torch.long, device=model.device)
@@ -207,6 +322,7 @@ def warmup(model, tokenizer, mesh_device, paged_cache):
             max_new_tokens=2,
             use_cache=True,
             past_key_values=paged_cache,
+            **logits_gen_kwargs,
         )
         paged_cache.reset()
         print(f"  seq_len={seq_len} done")
@@ -220,9 +336,9 @@ def chat_loop(
     paged_cache,
     mesh_device,
     max_new_tokens=256,
-    logits_gen_kwargs=None,
+    decode_params=None,
 ):
-    logits_gen_kwargs = logits_gen_kwargs or {}
+    decode_params = decode_params or DecodeParams()
     messages = []
     print("\n--- Ling-mini-2.0 Chatbot ---")
     print("Type 'quit' or 'exit' to stop, '/clear' to reset history.\n")
@@ -271,15 +387,17 @@ def chat_loop(
         # prompt lengths require new prefill captures each turn).
         paged_cache.reset()
 
-        outputs = model.generate(
-            **inputs,
+        prompt_len = inputs["input_ids"].shape[-1]
+        outputs = decode_with_logit_postprocess(
+            model,
+            inputs["input_ids"],
+            inputs["attention_mask"],
+            paged_cache,
             max_new_tokens=max_new_tokens,
-            use_cache=True,
-            past_key_values=paged_cache,
-            **logits_gen_kwargs,
+            decode_params=decode_params,
         )
 
-        response = tokenizer.decode(outputs[0][inputs["input_ids"].shape[-1] :], skip_special_tokens=True)
+        response = tokenizer.decode(outputs[0][prompt_len:], skip_special_tokens=True)
         print(f"\nAssistant: {response}\n")
 
         messages.append({"role": "assistant", "content": response})
@@ -312,6 +430,13 @@ def main():
         help="If >0, blocks repeating n-grams of this size",
     )
     args = parser.parse_args()
+    decode_params = DecodeParams(
+        temperature=args.temperature,
+        top_p=args.top_p,
+        top_k=args.top_k,
+        repetition_penalty=args.repetition_penalty,
+        no_repeat_ngram_size=args.no_repeat_ngram_size,
+    )
     logits_gen_kwargs = logits_postprocess_generation_kwargs(
         temperature=args.temperature,
         top_p=args.top_p,
@@ -323,8 +448,8 @@ def main():
     mesh_device = setup_mesh_device()
     try:
         model, tokenizer, paged_cache = load_model(mesh_device, args.model)
-        warmup(model, tokenizer, mesh_device, paged_cache)
-        chat_loop(model, tokenizer, paged_cache, mesh_device, args.max_new_tokens, logits_gen_kwargs)
+        warmup(model, tokenizer, mesh_device, paged_cache, logits_gen_kwargs)
+        chat_loop(model, tokenizer, paged_cache, mesh_device, args.max_new_tokens, decode_params)
     finally:
         cleanup(mesh_device)
 
