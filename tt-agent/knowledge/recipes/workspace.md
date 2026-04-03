@@ -5,18 +5,20 @@ branch, build artifacts, and python venv. Multiple workspaces enable parallel wo
 
 Some developers also clone vLLM, tt-inference-server, or other repos alongside
 tt-metal — that's fine but not required. The workspace concept doesn't impose
-which repos are present.
+which repos are present or where workspaces live on disk.
 
 ## Layout
 
+Workspaces can live anywhere. On remote TT machines, local storage is often at
+`/localdev/$USER/` (commonly exported as `$LOCAL_DEV`). Example layout:
+
 ```
-$LOCAL_DEV/workspaces/
+<anywhere>/workspaces/
   main/
     tt-metal/                    # The only required repo
       python_env/                # Created by create_venv.sh
       build/                     # cmake build artifacts
-    vllm/                        # Optional — if working on vLLM
-    tt-inference-server/         # Optional — if working on inference
+    vllm/                        # Optional
   my-feature/
     tt-metal/                    # branch: $USER/my-feature
     ...                          # Whatever else this task needs
@@ -25,7 +27,7 @@ $LOCAL_DEV/workspaces/
 ## Create a workspace
 
 ```bash
-WORKSPACE=$LOCAL_DEV/workspaces/<name>
+WORKSPACE=<path>/workspaces/<name>
 mkdir -p $WORKSPACE && cd $WORKSPACE
 git clone git@github.com:tenstorrent/tt-metal.git
 cd tt-metal
