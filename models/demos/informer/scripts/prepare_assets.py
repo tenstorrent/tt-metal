@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """Prepare Informer real-data assets for full validation runs.
