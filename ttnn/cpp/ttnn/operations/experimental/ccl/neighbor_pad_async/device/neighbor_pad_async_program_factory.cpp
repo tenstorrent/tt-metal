@@ -14,6 +14,7 @@
 #include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -37,10 +38,20 @@ NeighborPadAsyncMeshWorkloadFactory::cached_mesh_workload_t NeighborPadAsyncMesh
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    // Synchronize all devices before dispatching neighbor_pad programs.
-    // This ensures all previous fabric-initiated writes (from prior ops) have completed.
+    // Synchronize before dispatching neighbor_pad programs.
+    // In fabric_only mode with sub_device_id: sync only the fabric CQ (CQ1) to avoid
+    // blocking the conv3d CQ (CQ0) and allow true concurrent execution.
     auto* mesh_device = tensor_args.input_tensor.device();
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+    {
+        ttnn::SmallVector<tt::tt_metal::SubDeviceId> sync_sds;
+        std::optional<uint8_t> sync_cq = std::nullopt;
+        if (operation_attributes.sub_device_id.has_value()) {
+            sync_sds.push_back(*operation_attributes.sub_device_id);
+            // Only sync this CQ — don't block other CQs running concurrently
+            sync_cq = GetCurrentCommandQueueIdForThread();
+        }
+        tt::tt_metal::distributed::Synchronize(mesh_device, sync_cq, sync_sds);
+    }
 
     // Create programs for each coordinate in tensor_coords
     for (const auto& mesh_coord_range : tensor_coords.ranges()) {
@@ -80,6 +91,9 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
         hw[1] = output_addr;
         hw[2] = h_sem_addr;
         hw[3] = barrier_sem_addr;
+        if (operation_attributes.progress_semaphore.has_value()) {
+            hw[4] = operation_attributes.progress_semaphore->address();
+        }
 
         if (shared_vars.has_local_copy) {
             auto& lr = GetCommonRuntimeArgs(program, shared_vars.local_reader_kernel_id);
@@ -171,7 +185,11 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         num_sticks_per_halo_dim *= input_tensor_shape[d];
     }
     uint32_t input_halo_dim_size = input_tensor_shape[operation_attributes.dim];
-    uint32_t output_halo_dim_size = output_tensor_shape[operation_attributes.dim];
+    // In fabric_only mode the output is a compact 1D halo buffer — output_halo_dim_size
+    // is the number of halo rows (padding_left + padding_right), not the full padded dim.
+    uint32_t output_halo_dim_size = operation_attributes.fabric_only
+                                        ? (operation_attributes.padding_left + operation_attributes.padding_right)
+                                        : output_tensor_shape[operation_attributes.dim];
     uint32_t outer_dim_size = 1;
     for (size_t d = 0; d < operation_attributes.dim; d++) {
         outer_dim_size *= input_tensor_shape[d];
@@ -444,19 +462,29 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     h_writer_kernel_config.compile_args.push_back(is_2d ? 1 : 0);                   // handle_incoming_writes
     h_writer_kernel_config.compile_args.push_back(0);                               // is_w_fabric_writer (false for H)
     h_writer_kernel_config.compile_args.push_back(operation_attributes.ring_size);  // ring_size
+    // NP_PROGRESS_SEM define gates the progress_t_batch_size compile-time arg read in the kernel.
+    // Other users of minimal_default_writer.cpp (all_gather, slice_reshard) don't have this arg.
+    if (operation_attributes.progress_t_batch_size > 0) {
+        h_writer_kernel_config.defines["NP_PROGRESS_SEM"] = "1";
+        h_writer_kernel_config.compile_args.push_back(operation_attributes.progress_t_batch_size);  // ct_after_dst + 5
+    }
     auto h_writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
         "minimal_default_writer.cpp",
         worker_core_ranges,
         h_writer_kernel_config);
-    SetCommonRuntimeArgs(
-        program,
-        h_writer_kernel_id,
-        {input_buffer->address(),
-         output_buffer->address(),
-         operation_attributes.h_neighbor_semaphore.address(),
-         operation_attributes.barrier_semaphore.address()});
+    {
+        std::vector<uint32_t> h_writer_crta = {
+            input_buffer->address(),
+            output_buffer->address(),
+            operation_attributes.h_neighbor_semaphore.address(),
+            operation_attributes.barrier_semaphore.address(),
+            operation_attributes.progress_semaphore.has_value() ? operation_attributes.progress_semaphore->address()
+                                                                : 0u,
+        };
+        SetCommonRuntimeArgs(program, h_writer_kernel_id, h_writer_crta);
+    }
 
     // Set per-core runtime args for H fabric cores
     uint32_t link_offset_start_id = 0;
@@ -563,6 +591,20 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 }
                 writer_rt_args.push_back(false);
             }
+            // In fabric_only mode: override writer rt_args to index into the compact halo buffer.
+            // Compact layout: [outer_dim_size × padding_left × W | outer_dim_size × padding_right × W]
+            // direction=0 (top/left halo): outer_dim_offset_start_id=0, output_halo_dim_size=padding_left
+            // direction=1 (bottom/right halo): outer_dim_offset_start_id=top_halo_size,
+            // output_halo_dim_size=padding_right
+            if (operation_attributes.fabric_only) {
+                uint32_t top_halo_sticks = outer_dim_size * operation_attributes.padding_left * num_sticks_per_halo_dim;
+                uint32_t padding_this_dir =
+                    direction ? operation_attributes.padding_right : operation_attributes.padding_left;
+                writer_rt_args[0] = direction ? top_halo_sticks : 0;  // outer_dim_offset_start_id
+                writer_rt_args[3] = padding_this_dir;                 // output_halo_dim_size (compact)
+                writer_rt_args[6] = 0;                                // padding_left (no W-offset in compact)
+                writer_rt_args[40] = 0;  // num_phase2_signal_targets = 0 (no local_copy to signal)
+            }
             SetRuntimeArgs(program, h_writer_kernel_id, {core}, writer_rt_args);
         }
         if (operation_attributes.dim > 0) {
@@ -576,11 +618,12 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     }
 
     // Local copy workers on cores not used by fabric: AllCores - FabricCores
+    // In fabric_only mode, local_copy is skipped entirely — conv3d reads interior from original tensor.
     std::vector<CoreCoord> local_copy_core_coords;
     KernelHandle local_reader_kernel_id = 0;
     KernelHandle local_writer_kernel_id = 0;
     bool has_local_copy = false;
-    {
+    if (!operation_attributes.fabric_only) {
         CoreRangeSet all_cores(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}));
         CoreRangeSet fabric_cores = worker_core_ranges;
         if (is_2d) {
@@ -671,7 +714,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 unit_offset += units_for_core;
             }
         }
-    }
+    }  // end !fabric_only local_copy block
 
     // Phase 2: W fabric kernel creation (for 2D padding)
     KernelHandle w_reader_kernel_id = 0;
@@ -747,6 +790,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         w_writer_kernel_config.compile_args.push_back(0);  // handle_incoming_writes (data goes direct to DRAM)
         w_writer_kernel_config.compile_args.push_back(1);  // is_w_fabric_writer (W writer: true)
         w_writer_kernel_config.compile_args.push_back(w_ring_size);  // ring_size
+        // W writer never increments progress sem; no NP_PROGRESS_SEM define, no extra compile arg
         w_writer_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
