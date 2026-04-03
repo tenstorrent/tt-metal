@@ -1,0 +1,186 @@
+name: "(Runtime) Tests"
+
+on:
+  workflow_dispatch:
+    inputs:
+      # Architecture selection
+      wormhole:
+        description: "Run on Wormhole"
+        required: false
+        type: boolean
+        default: true
+      blackhole:
+        description: "Run on Blackhole"
+        required: false
+        type: boolean
+        default: true
+      # Test level selection
+      run-unit-tests:
+        description: "Run FD unit tests (single-chip)"
+        required: false
+        type: boolean
+        default: true
+      run-sd-unit-tests:
+        description: "Run Slow Dispatch unit tests (single-chip)"
+        required: false
+        type: boolean
+        default: true
+      run-perf-tests:
+        description: "Run dispatch performance tests"
+        required: false
+        type: boolean
+        default: true
+      run-bh-multicard-tests:
+        description: "Run BH multi-card runtime tests"
+        required: false
+        type: boolean
+        default: true
+      run-galaxy-tests:
+        description: "Run Galaxy runtime tests (WH + BH)"
+        required: false
+        type: boolean
+        default: true
+      run-fd-python-tests:
+        description: "Run FD Python API unit tests (eager/sweep)"
+        required: false
+        type: boolean
+        default: true
+      # Build options
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
+  schedule:
+    - cron: "0 6 * * *"
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: ${{ inputs.build-type || 'Release' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+
+  resolve-skus:
+    runs-on: ubuntu-latest
+    outputs:
+      unit-skus: ${{ steps.resolve.outputs.unit-skus }}
+      perf-skus: ${{ steps.resolve.outputs.perf-skus }}
+      bh-multicard-skus: ${{ steps.resolve.outputs.bh-multicard-skus }}
+      galaxy-skus: ${{ steps.resolve.outputs.galaxy-skus }}
+    steps:
+      - id: resolve
+        run: |
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            echo "unit-skus=wh_n150_civ2,bh_p150b_civ2,bh_p150b_civ2_viommu" >> "$GITHUB_OUTPUT"
+            echo "perf-skus=wh_n300_civ2,bh_p150_perf" >> "$GITHUB_OUTPUT"
+            echo "bh-multicard-skus=bh_quietbox,bh_loudbox" >> "$GITHUB_OUTPUT"
+            echo "galaxy-skus=wh_galaxy,bh_galaxy" >> "$GITHUB_OUTPUT"
+          else
+            unit_skus=""
+            perf_skus=""
+            bh_mc_skus=""
+            galaxy_skus=""
+            if [[ "${{ inputs.wormhole }}" == "true" ]]; then
+              unit_skus="wh_n150_civ2"
+              perf_skus="wh_n300_civ2"
+              galaxy_skus="wh_galaxy"
+            fi
+            if [[ "${{ inputs.blackhole }}" == "true" ]]; then
+              [ -n "$unit_skus" ] && unit_skus="${unit_skus},"
+              unit_skus="${unit_skus}bh_p150b_civ2,bh_p150b_civ2_viommu"
+              [ -n "$perf_skus" ] && perf_skus="${perf_skus},"
+              perf_skus="${perf_skus}bh_p150_perf"
+              bh_mc_skus="bh_quietbox,bh_loudbox"
+              [ -n "$galaxy_skus" ] && galaxy_skus="${galaxy_skus},"
+              galaxy_skus="${galaxy_skus}bh_galaxy"
+            fi
+            echo "unit-skus=$unit_skus" >> "$GITHUB_OUTPUT"
+            echo "perf-skus=$perf_skus" >> "$GITHUB_OUTPUT"
+            echo "bh-multicard-skus=$bh_mc_skus" >> "$GITHUB_OUTPUT"
+            echo "galaxy-skus=$galaxy_skus" >> "$GITHUB_OUTPUT"
+          fi
+
+  runtime-unit-tests:
+    needs: [build-artifact, resolve-skus]
+    if: ${{ github.event_name == 'schedule' || inputs.run-unit-tests }}
+    uses: ./.github/workflows/runtime-unit-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enabled-skus: ${{ needs.resolve-skus.outputs.unit-skus }}
+
+  runtime-sd-unit-tests:
+    needs: [build-artifact, resolve-skus]
+    if: ${{ github.event_name == 'schedule' || inputs.run-sd-unit-tests }}
+    uses: ./.github/workflows/runtime-sd-unit-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enabled-skus: ${{ needs.resolve-skus.outputs.unit-skus }}
+
+  runtime-perf-tests:
+    needs: [build-artifact, resolve-skus]
+    if: ${{ github.event_name == 'schedule' || inputs.run-perf-tests }}
+    uses: ./.github/workflows/runtime-perf-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enabled-skus: ${{ needs.resolve-skus.outputs.perf-skus }}
+
+  runtime-bh-multicard-tests:
+    needs: [build-artifact, resolve-skus]
+    if: ${{ (github.event_name == 'schedule' || inputs.run-bh-multicard-tests) && needs.resolve-skus.outputs.bh-multicard-skus != '' }}
+    uses: ./.github/workflows/runtime-bh-multicard-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enabled-skus: ${{ needs.resolve-skus.outputs.bh-multicard-skus }}
+
+  runtime-galaxy-tests:
+    needs: [build-artifact, resolve-skus]
+    if: ${{ (github.event_name == 'schedule' || inputs.run-galaxy-tests) && needs.resolve-skus.outputs.galaxy-skus != '' }}
+    uses: ./.github/workflows/runtime-galaxy-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enabled-skus: ${{ needs.resolve-skus.outputs.galaxy-skus }}
+
+  runtime-fd-python-tests:
+    needs: [build-artifact, resolve-skus]
+    if: ${{ github.event_name == 'schedule' || inputs.run-fd-python-tests }}
+    uses: ./.github/workflows/runtime-fd-python-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.resolve-skus.outputs.unit-skus }}

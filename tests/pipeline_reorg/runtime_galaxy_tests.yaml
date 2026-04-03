@@ -1,0 +1,93 @@
+# This file defines the test matrix for the Runtime Galaxy unit tests.
+# These tests require Galaxy (6U topology) machines for WH and BH.
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+# --- Cluster Validation ---
+- name: galaxy_cluster_validation
+  cmd: |
+    if [ "$ARCH_NAME" = "blackhole" ]; then
+      ./build/tools/scaleout/run_cluster_validation \
+        --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus.textproto \
+        --hard-fail --send-traffic --num-iterations 1
+    else
+      ./build/tools/scaleout/run_cluster_validation \
+        --cabling-descriptor-path tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto \
+        --hard-fail --send-traffic
+    fi
+  skus:
+    wh_galaxy:
+      timeout: 10
+    bh_galaxy:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- System Health (per device) ---
+- name: galaxy_system_health
+  cmd: |
+    if [ "$ARCH_NAME" = "blackhole" ]; then
+      ./build/test/tt_metal/tt_fabric/test_system_health
+    else
+      for i in {0..31}; do
+        TT_VISIBLE_DEVICES="$i" ./build/test/tt_metal/tt_fabric/test_system_health \
+          --gtest_filter=Cluster.ReportSystemHealth
+      done
+    fi
+  skus:
+    wh_galaxy:
+      timeout: 10
+  owner_id: U099A7FMKL2
+  team: runtime
+
+# --- Dispatch (Galaxy single-card + multi-CQ fixtures) ---
+- name: galaxy_dispatch
+  cmd: |
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch \
+      --gtest_filter="UnitMeshCQSingleCardFixture.*"
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch \
+      --gtest_filter="UnitMeshCQSingleCardProgramFixture.*"
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch \
+      --gtest_filter="UnitMeshCQSingleCardBufferFixture.ShardedBufferLarge*ReadWrites"
+    TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch \
+      --gtest_filter="UnitMeshMultiCQMultiDevice*Fixture.*"
+  skus:
+    wh_galaxy:
+      timeout: 15
+  owner_id: U099A7FMKL2
+  team: runtime
+
+# --- Device Tests (Galaxy/TG fixtures, SD + FD) ---
+- name: galaxy_device
+  cmd: |
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device \
+      --gtest_filter="GalaxyFixture.*:TGFixture.*"
+    ./build/test/tt_metal/unit_tests_device \
+      --gtest_filter="GalaxyFixture.*:TGFixture.*"
+  skus:
+    wh_galaxy:
+      timeout: 10
+  owner_id: U099A7FMKL2
+  team: runtime
+
+# --- Distributed (DispatchContext SD) ---
+- name: galaxy_distributed
+  cmd: |
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/distributed/distributed_unit_tests \
+      --gtest_filter="*DispatchContext*"
+    TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch \
+      --gtest_filter="UnitMeshCQSingleCard*Fixture.*"
+  skus:
+    wh_galaxy:
+      timeout: 10
+  owner_id: U099A7FMKL2
+  team: runtime

@@ -44,8 +44,9 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
-  schedule:
-    - cron: "0 */4 * * *"
+  # schedule trigger disabled — dispatch perf tests moved to runtime pipeline_reorg (runtime_perf_tests.yaml)
+  # schedule:
+  #   - cron: "0 */4 * * *"
 
 jobs:
   build-artifact:
@@ -58,11 +59,4 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-wheel: true
       enable-lto: ${{ inputs.enable-lto || false }}
-  fd-nightly:
-    needs: build-artifact
-    uses: ./.github/workflows/fast-dispatch-frequent-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # fd-nightly job removed — dispatch perf tests moved to runtime pipeline_reorg (runtime_perf_tests.yaml)

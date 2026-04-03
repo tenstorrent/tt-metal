@@ -12,10 +12,10 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 # --- Dispatch Tests (Fast Dispatch) ---
-- name: runtime_dispatch
+- name: runtime_fast_dispatch_on_eth
   cmd: |
     [ "$ARCH_NAME" = "wormhole_b0" ] && export TT_METAL_GTEST_ETH_DISPATCH=1
-    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=-*NIGHTLY_*
+    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='-*NIGHTLY_*'
   skus:
     wh_n150_civ2:
       timeout: 10
@@ -24,8 +24,8 @@
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
-- name: runtime_dispatch_multi_cq
-  cmd: TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshMultiCQ*Fixture.*
+- name: runtime_fast_dispatch_multi_cq
+  cmd: TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshMultiCQ*Fixture.*'
   skus:
     wh_n150_civ2:
       timeout: 5
@@ -34,20 +34,23 @@
   owner_id: U099A7FMKL2
   team: runtime
 
-# --- Core API Tests ---
+# --- Core API Tests (includes kernel path validation) ---
 - name: runtime_api
-  cmd: ./build/test/tt_metal/unit_tests_api
+  cmd: |
+    ./build/test/tt_metal/unit_tests_api
+    rm -rf /tmp/kernels && mkdir -p /tmp/kernels
+    TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter='CompileProgramWithKernelPathEnvVarFixture.*'
   skus:
     wh_n150_civ2:
-      timeout: 12
+      timeout: 15
     bh_p150b_civ2:
-      timeout: 12
+      timeout: 15
   owner_id: U099A7FMKL2
   team: runtime
 
 # --- Data Movement Tests ---
 - name: runtime_data_movement
-  cmd: ./build/test/tt_metal/unit_tests_data_movement --gtest_filter=-*NIGHTLY_*
+  cmd: ./build/test/tt_metal/unit_tests_data_movement --gtest_filter='-*NIGHTLY_*'
   skus:
     wh_n150_civ2:
       timeout: 8
@@ -100,9 +103,9 @@
 - name: runtime_debug_tools
   cmd: |
     ./tests/scripts/run_tools_tests.sh
-    ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*
-    ./build/test/tt_metal/unit_tests_inspector --gtest_filter=*
-    TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES=1 ./build/test/tt_metal/unit_tests_noc_debugging --gtest_filter=*
+    ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='*'
+    ./build/test/tt_metal/unit_tests_inspector --gtest_filter='*'
+    TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES=1 ./build/test/tt_metal/unit_tests_noc_debugging --gtest_filter='*'
   skus:
     wh_n150_civ2:
       timeout: 12
@@ -124,7 +127,7 @@
 
 # --- Legacy Tests ---
 - name: runtime_legacy
-  cmd: ./build/test/tt_metal/unit_tests_legacy --gtest_shuffle --gtest_filter=-*NIGHTLY_*
+  cmd: ./build/test/tt_metal/unit_tests_legacy --gtest_shuffle --gtest_filter='-*NIGHTLY_*'
   skus:
     wh_n150_civ2:
       timeout: 5
@@ -135,7 +138,7 @@
 
 # --- Distributed / Multi-Device Tests ---
 - name: runtime_distributed
-  cmd: ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter=*
+  cmd: ./build/test/tt_metal/distributed/distributed_unit_tests
   skus:
     wh_n150_civ2:
       timeout: 8
@@ -144,15 +147,28 @@
   owner_id: U099A7FMKL2
   team: runtime
 
-# --- Kernel Path Validation ---
-- name: runtime_kernel_path
+# --- IOMMU PinnedMemory Tests (SD + FD) ---
+- name: runtime_iommu_pinned_memory
   cmd: |
-    rm -rf /tmp/kernels && mkdir -p /tmp/kernels
-    TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device --gtest_filter='*PinnedMemory*'
+    ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter='*PinnedMemory*'
   skus:
     wh_n150_civ2:
-      timeout: 3
+      timeout: 5
+    bh_p150b_civ2_viommu:
+      timeout: 5
+  owner_id: U099A7FMKL2
+  team: runtime
+
+# --- FD2 Dispatch Tests (prefetcher + dispatcher) ---
+- name: runtime_fd2
+  cmd: |
+    ./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher
+    ./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher
+  skus:
+    wh_n150_civ2:
+      timeout: 5
     bh_p150b_civ2:
-      timeout: 3
+      timeout: 5
   owner_id: U099A7FMKL2
   team: runtime

@@ -1,0 +1,61 @@
+# This file defines the test matrix for the Runtime performance (dispatch) tests.
+# These are Google Benchmark-based microbenchmarks measuring dispatch latency and
+# buffer R/W bandwidth, with golden comparison for regression detection.
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+# --- Dispatch Program Latency Benchmark ---
+- name: runtime_perf_pgm_dispatch
+  cmd: |
+    mkdir -p generated/test_reports
+    ./build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch \
+      --benchmark_out_format=json --benchmark_out=pgm_bench.json --benchmark_repetitions=2
+    if [ "$ARCH_NAME" = "blackhole" ]; then
+      ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.py \
+        -g tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/pgm_dispatch_blackhole_golden.json \
+        pgm_bench.json
+    else
+      ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.py \
+        pgm_bench.json
+    fi
+  skus:
+    wh_n300_civ2:
+      timeout: 30
+    bh_p150_perf:
+      timeout: 30
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Dispatch Buffer R/W Bandwidth Benchmark ---
+- name: runtime_perf_rw_buffer
+  cmd: |
+    mkdir -p generated/test_reports
+    if [ "$ARCH_NAME" = "blackhole" ]; then
+      ./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer \
+        --benchmark_out_format=json --benchmark_out=buffer_bench.json --benchmark_repetitions=11
+      ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_benchmark_rw_buffer.py \
+        --golden tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer_blackhole_golden.json \
+        buffer_bench.json --ignore-times
+    else
+      ./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer \
+        --benchmark_out_format=json --benchmark_out=buffer_bench.json --benchmark_repetitions=5
+      ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_benchmark_rw_buffer.py \
+        buffer_bench.json --ignore-times \
+        --golden tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer_n300_iommu_golden.json
+    fi
+  skus:
+    wh_n300_civ2:
+      timeout: 25
+    bh_p150_perf:
+      timeout: 10
+  owner_id: U099A7FMKL2
+  team: runtime
