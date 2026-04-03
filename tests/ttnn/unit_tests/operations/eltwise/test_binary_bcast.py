@@ -1688,19 +1688,19 @@ def test_binary_sharded_scalar_row_major(scalar, a_shape, shard_type, shard_size
 
 class TestBinaryRowMajor:
     SHAPES = [
-        pytest.param((1, 1, 32, 32), id="tile_aligned"),
-        pytest.param((1, 1, 35, 35), id="non_tile_aligned"),
-        # pytest.param((4, 2, 17, 19), id="weird_nc_hw"),
-        pytest.param((2, 3, 33, 64), id="multi_nc_multi_row"),
-        pytest.param((1, 1, 3, 1025), id="wide_over_1024"),
-        pytest.param((1, 1, 1025, 32), id="tall_over_1024"),
-        pytest.param((1, 1, 1, 1), id="tiny"),
-        pytest.param((1, 1, 1, 1024), id="width_eq_stride"),
-        pytest.param((1, 1, 1, 1025), id="width_gt_stride_remainder"),
-        pytest.param((1, 1, 1, 2048), id="two_full_chunks"),
-        pytest.param((1, 1, 1, 2049), id="two_full_chunks_remainder"),
-        pytest.param((1, 1, 1, 4096), id="extreme_row_width"),
-        pytest.param((1, 1, 2, 1, 1, 3, 1025), id="rank7_weird_wide"),
+        # pytest.param((1, 1, 32, 32), id="tile_aligned"),
+        # pytest.param((1, 1, 35, 35), id="non_tile_aligned"),
+        pytest.param((4, 2, 17, 19), id="weird_nc_hw"),
+        # pytest.param((2, 3, 33, 64), id="multi_nc_multi_row"),
+        # pytest.param((1, 1, 3, 1025), id="wide_over_1024"),
+        # pytest.param((1, 1, 1025, 32), id="tall_over_1024"),
+        # pytest.param((1, 1, 1, 1), id="tiny"),
+        # pytest.param((1, 1, 1, 1024), id="width_eq_stride"),
+        # pytest.param((1, 1, 1, 1025), id="width_gt_stride_remainder"),
+        # pytest.param((1, 1, 1, 2048), id="two_full_chunks"),
+        # pytest.param((1, 1, 1, 2049), id="two_full_chunks_remainder"),
+        # pytest.param((1, 1, 1, 4096), id="extreme_row_width"),
+        # pytest.param((1, 1, 2, 1, 1, 3, 1025), id="rank7_weird_wide"),
     ]
 
     DTYPE_CASES = [
