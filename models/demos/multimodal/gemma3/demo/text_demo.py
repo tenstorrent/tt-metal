@@ -15,6 +15,7 @@ from loguru import logger
 
 import ttnn
 from models.common.sampling import SamplingParams
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill, sample_host
@@ -288,6 +289,19 @@ def prepare_generator_args(
     return model_args, model, page_table, tt_kv_cache, tokenizer
 
 
+def _gemma3_text_demo_device_params():
+    # Blackhole (e.g. P150) matches multimodal vision_demo: extra CQ + L1 small; trace size may be overridden by
+    # get_supported_trace_region_size (trace_region_config.py) from HF_MODEL when applicable.
+    if is_blackhole():
+        return {
+            "fabric_config": True,
+            "trace_region_size": 70000000,
+            "num_command_queues": 2,
+            "l1_small_size": 24576,
+        }
+    return {"fabric_config": True, "trace_region_size": 30000000, "num_command_queues": 1}
+
+
 # List of supported Parameters for demo.py
 #
 # input_prompts (string): input json file with prompts to process. See models/tt_transformers/demo/*.json for list of input files
@@ -302,7 +316,7 @@ def prepare_generator_args(
 # stop_at_eos (bool): Whether to stop decoding when the model generates an EoS token
 #
 # optimization (ModelOptimizations): Optimization level to use for the model (performance or accuracy)
-# MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
+# MESH_DEVICE (str): Logical mesh to open (e.g. N150, N300, T3K, TG, P150, P300, P150x4, P150x8). Example: `export MESH_DEVICE=P150` runs a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, data_parallel, token_accuracy, stress_test, enable_trace",
     [
@@ -682,7 +696,9 @@ def prepare_generator_args(
     ids=["performance", "accuracy"],
 )
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": True, "trace_region_size": 30000000, "num_command_queues": 1}], indirect=True
+    "device_params",
+    [_gemma3_text_demo_device_params()],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -727,8 +743,8 @@ def test_demo_text(
     Simple demo with limited dependence on reference code.
     """
     test_id = request.node.callspec.id
-    if is_ci_env and (("accuracy" in test_id) or not ci_only):
-        pytest.skip("CI only runs the CI-only tests")
+    # if is_ci_env and (("accuracy" in test_id) or not ci_only):
+    #     pytest.skip("CI only runs the CI-only tests")
 
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
@@ -785,9 +801,9 @@ def test_demo_text(
     if stress_test and token_accuracy:
         pytest.skip("Stress test cannot be run with token accuracy mode")
 
-    # Non-paged decode compiles a different SDPA path that currently exhausts L1 on Wormhole
-    # (circular-buffer clash in program.cpp). Paged decode is the supported demo path.
-    if not paged_attention:
+    # Non-paged decode compiles a different SDPA path that exhausts L1 on Wormhole (circular-buffer clash).
+    # Blackhole uses a different grid/L1 budget; keep paged decode as default there too, but allow non-paged.
+    if not paged_attention and is_wormhole_b0():
         pytest.skip(
             "Gemma3 text_demo: non-paged KV decode is not supported on Wormhole (L1 limits in "
             "scaled_dot_product_attention_decode). Use default paged_attention=True; do not pass "
