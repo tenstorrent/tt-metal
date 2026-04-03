@@ -66,6 +66,8 @@ set(SOURCES
     ops/layernorm_bw_fused_op_test.cpp
     ops/layernorm_fw_fused_op_test.cpp
     ops/swiglu_op_test.cpp
+    ops/binary_ops_fw_test.cpp
+    ops/binary_ops_bw_test.cpp
     utils/memory_utils_test.cpp
 )
 
@@ -87,6 +89,17 @@ set_target_properties(
 )
 target_compile_options(ttml_tests PRIVATE -fPIC)
 target_precompile_headers(ttml_tests REUSE_FROM ttml_pch)
+
+# Suppress false-positive -Wnonnull from xtensor internals on GCC < 13.
+# At -O3, GCC over-inlines xbroadcast::has_linear_assign and wrongly flags std::equal as null.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS "13")
+    set_source_files_properties(
+        ops/binary_ops_bw_test.cpp
+        PROPERTIES
+            COMPILE_OPTIONS
+                "-Wno-nonnull"
+    )
+endif()
 
 add_definitions(-DTEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
 

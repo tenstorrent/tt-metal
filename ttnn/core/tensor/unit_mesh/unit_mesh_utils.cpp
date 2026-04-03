@@ -81,8 +81,17 @@ Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
     auto mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
         reference_buffer.global_config(), reference_buffer.device_local_config(), parent_mesh.get(), reference_address);
 
-    tt::tt_metal::DeviceStorage device_storage(mesh_buffer);
-    TT_FATAL(device_storage.get_coords().size() == 1, "mesh_buffer is not on a unit submesh");
+    // Explicitly enumerate all coordinates of the parent mesh so the DeviceStorage
+    // spans every device.  The single-arg DeviceStorage(mesh_buffer) constructor
+    // delegates to get_all_mesh_coordinates(), which returns only one coordinate when
+    // the parent mesh is a top-level mesh — causing a bogus "not on a unit submesh"
+    // assertion.  This was introduced by the DeviceStorage refactor (#39872).
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> coords;
+    coords.reserve(parent_mesh->shape().mesh_size());
+    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(parent_mesh->shape())) {
+        coords.push_back(coord);
+    }
+    tt::tt_metal::DeviceStorage device_storage(std::move(mesh_buffer), std::move(coords));
 
     return Tensor(
         std::move(device_storage),
