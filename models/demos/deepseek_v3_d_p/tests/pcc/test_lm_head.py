@@ -26,7 +26,7 @@ TORCH_TO_TTNN_DTYPE = {
 }
 
 
-def random_weights(config, emb_dim: int, vocab_size: int):
+def random_weights(config, emb_dim: int, vocab_size: int, dtype: torch.dtype):
     """
     Generate random weights for LM head testing.
 
@@ -34,15 +34,16 @@ def random_weights(config, emb_dim: int, vocab_size: int):
         config: HuggingFace config
         emb_dim: Embedding dimension
         vocab_size: Vocabulary size
+        dtype: Desired torch dtype for weights
 
     Returns:
-        Tuple of (config, weights_dict) in bfloat16
+        Tuple of (config, weights_dict) in the specified dtype
     """
     torch.manual_seed(42)
     std = config.initializer_range
 
     weights = {
-        "lm_head.weight": (torch.randn(vocab_size, emb_dim) * std).to(torch.bfloat16),
+        "lm_head.weight": (torch.randn(vocab_size, emb_dim) * std).to(dtype),
     }
 
     logger.info(f"Generated random LM head weight: {weights['lm_head.weight'].shape}")
@@ -67,6 +68,14 @@ def random_weights(config, emb_dim: int, vocab_size: int):
             1,
             ttnn.Topology.Ring,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
+            id="ring-4",
+        ),
+        pytest.param(
+            (2, 2),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+            1,
+            ttnn.Topology.Ring,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="ring"),
             id="ring-4",
         ),
     ],
@@ -111,7 +120,7 @@ def test_lm_head(
     # Run the reference model in case the PCC check is enabled
     weights = None
     if run_pcc_check:
-        config, weights = random_weights(config_only, emb_dim, vocab_size)
+        config, weights = random_weights(config_only, emb_dim, vocab_size, torch_weights_dtype)
 
         # Create PyTorch reference model (Linear without bias), matching dtypes
         logger.debug("Creating torch.nn.Linear reference")
