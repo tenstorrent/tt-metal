@@ -928,6 +928,57 @@ void bind_softplus(nb::module_& mod) {
         nb::arg("output_tensor") = nb::none());
 }
 
+void bind_rrelu(nb::module_& mod) {
+    auto doc = fmt::format(
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
+
+        .. math::
+            \mathrm{{output\_tensor}}_i = \begin{{cases}} x_i & \text{{if }} x_i \geq 0 \\ a \cdot x_i & \text{{if }} x_i < 0 \end{{cases}}
+
+        In training mode, ``a`` is randomly sampled from Uniform(lower, upper) per element.
+        In eval mode, ``a = (lower + upper) / 2``.
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword Args:
+            lower (float, optional): Lower bound of the uniform distribution. Defaults to `0.125`.
+            upper (float, optional): Upper bound of the uniform distribution. Defaults to `0.3333`.
+            training (bool, optional): If True, use random slope (training mode). If False, use fixed slope (eval mode). Defaults to `False`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - FLOAT32, BFLOAT16, BFLOAT8_B
+                 - TILE
+        )doc",
+        "rrelu",
+        "ttnn.rrelu");
+
+    ttnn::bind_function<"rrelu">(
+        mod,
+        doc.c_str(),
+        &ttnn::rrelu,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("lower") = 0.125f,
+        nb::arg("upper") = 1.0f / 3.0f,
+        nb::arg("training") = false,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
+}
+
 void bind_xielu(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
@@ -2224,6 +2275,7 @@ void py_module(nb::module_& mod) {
 
     // Other unaries (unary chain operations)
     bind_softplus(mod);
+    bind_rrelu(mod);
     bind_xielu(mod);
     bind_tanh_like<"tanh", &ttnn::tanh>(mod);
     bind_tanh_like<"tanhshrink", &ttnn::tanhshrink>(mod);

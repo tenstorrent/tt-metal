@@ -403,6 +403,15 @@ def _golden_function_selu(input_tensor_a, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.selu, golden_function=_golden_function_selu)
 
 
+def _golden_function_rrelu(input_tensor_a, *args, lower=0.125, upper=1.0 / 3.0, training=False, **kwargs):
+    import torch
+
+    return torch.nn.functional.rrelu(input_tensor_a, lower=lower, upper=upper, training=training)
+
+
+ttnn.attach_golden_function(ttnn.rrelu, golden_function=_golden_function_rrelu)
+
+
 def _golden_function_tanhshrink(input_tensor_a, *args, **kwargs):
     import torch
 
