@@ -139,9 +139,10 @@ void bind_slice_descriptor(nb::module_& mod) {
     nb::class_<ttnn::prim::SliceInputs>(mod, "SliceInputs")
         .def(
             "__init__",
-            [](ttnn::prim::SliceInputs* t) {
-                new (t) ttnn::prim::SliceInputs{ttnn::Tensor(), std::nullopt, std::nullopt, std::nullopt};
-            })
+            [](ttnn::prim::SliceInputs* t, const ttnn::Tensor& input) {
+                new (t) ttnn::prim::SliceInputs{input, std::nullopt, std::nullopt, std::nullopt};
+            },
+            nb::arg("input"))
         .def_rw("input", &ttnn::prim::SliceInputs::input)
         .def_rw("preallocated_output", &ttnn::prim::SliceInputs::preallocated_output);
 
