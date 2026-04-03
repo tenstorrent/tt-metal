@@ -25,8 +25,8 @@ from models.demos.deepseek_v3_b1.blitz_decode_weights import (
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
+from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
 from models.demos.deepseek_v3_b1.utils import generate_mm_weights
 
@@ -821,6 +821,8 @@ def test_attention_block(
     sdpa_fwd_total_elements = sdpa_fwd_buffer_bytes // 2
     # WIDTH_SHARDED across 2 forwarder cores, each gets half
     num_forwarders = 2
+    # THIS BUFFER SIZE IS NOT CORRECT BECAUSE WE'RE INCORRECTLY DIVIDING BY 2
+    # TODO: Plan to remove this scratch buffer entirely once we reduce cb memory usage currently being overlapped with this buffer.
     sdpa_fwd_per_forwarder = sdpa_fwd_total_elements // num_forwarders
     sdpa_forwarder_shard_shape = (1, sdpa_fwd_per_forwarder)
     sdpa_forwarder_shard_spec = ttnn.ShardSpec(
