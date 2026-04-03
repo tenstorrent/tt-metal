@@ -2,12 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cctype>
-#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -755,16 +753,12 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
     auto assert_status = mbox_data_.watcher().assert_status();
     if (assert_status.tripped() == dev_msgs::DebugAssertOK ||
         assert_status.tripped() == dev_msgs::DebugAssertWriteInProgress) {
-        if (assert_status.line_num() != DEBUG_SANITIZE_SENTINEL_OK_16 ||
-            assert_status.file_id() != DEBUG_SANITIZE_SENTINEL_OK_16 ||
-            assert_status.which() != DEBUG_SANITIZE_SENTINEL_OK_8) {
+        if (assert_status.msg_ptr() != 0 || assert_status.which() != DEBUG_SANITIZE_SENTINEL_OK_8) {
             TT_THROW(
-                "Watcher unexpected assert state on core {}, reported OK but got processor {}, line {}, file_id "
-                "0x{:04x}.",
+                "Watcher unexpected assert state on core {}, reported OK but got processor {}, msg_ptr 0x{:08x}.",
                 virtual_coord_.str(),
                 assert_status.which(),
-                assert_status.line_num(),
-                assert_status.file_id());
+                assert_status.msg_ptr());
         }
         return;  // no assert tripped, nothing to do
     }
@@ -798,8 +792,7 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
         "{}: {} ", core_str_, get_riscv_name(reader_.env.get_hal(), programmable_core_type_, assert_status.which()));
     std::string assert_msg = get_debug_assert_message(
         static_cast<dev_msgs::debug_assert_type_t>(assert_status.tripped()),
-        assert_status.line_num(),
-        assert_status.file_id(),
+        assert_status.msg_ptr(),
         assert_status.hw_fault_info(),
         elf_paths);
     if (assert_msg.empty()) {
@@ -816,75 +809,6 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
     DumpWaypoints(true);
     DumpRingBuffer(true);
     LogRunningKernels();
-
-    // Run dump_watcher_asserts.py for function name / callstack resolution.
-    // Requires only pyelftools — no triage framework, no ttexalens needed.
-    {
-        std::string script_path;
-        const char* metal_home = std::getenv("TT_METAL_HOME");
-        if (metal_home) {
-            script_path = std::string(metal_home) + "/tt_metal/tools/watcher_dump/dump_watcher_asserts.py";
-        }
-
-        // Pick a Python interpreter that has pyelftools.  The script will auto-install
-        // it via pip if not found, but prefer an interpreter that already has it.
-        std::string python_bin = "python3";
-        for (const char* candidate : {"/opt/venv/bin/python3", "python3"}) {
-            std::string probe = fmt::format("{} -c 'import elftools' 2>/dev/null && echo ok", candidate);
-            if (std::system(probe.c_str()) == 0) {
-                python_bin = candidate;
-                break;
-            }
-        }
-
-        // Build --kernel-elf / --firmware-elf args.  Put the faulting processor's ELF first
-        // so the Python script searches the correct binary for function name resolution.
-        std::string kernel_elf_args;
-        {
-            std::string proc_name =
-                get_riscv_name(reader_.env.get_hal(), programmable_core_type_, assert_status.which());
-            std::transform(proc_name.begin(), proc_name.end(), proc_name.begin(), ::tolower);
-
-            // Find the ELF whose parent directory matches the faulting processor name.
-            auto faulting = std::find_if(elf_paths.begin(), elf_paths.end(), [&](const std::string& p) {
-                return std::filesystem::path(p).parent_path().filename() == proc_name;
-            });
-
-            if (faulting != elf_paths.end()) {
-                kernel_elf_args += " --kernel-elf " + *faulting;
-                for (const auto& p : elf_paths) {
-                    if (&p != &*faulting) {
-                        kernel_elf_args += " --firmware-elf " + p;
-                    }
-                }
-            } else {
-                for (size_t i = 0; i < elf_paths.size(); ++i) {
-                    kernel_elf_args += (i == 0 ? " --kernel-elf " : " --firmware-elf ") + elf_paths[i];
-                }
-            }
-        }
-
-        if (!script_path.empty() && std::filesystem::exists(script_path) && !kernel_elf_args.empty()) {
-            std::string cmd = fmt::format(
-                "{} {} --file-id 0x{:04x} --line-num {}{}",
-                python_bin,
-                script_path,
-                assert_status.file_id(),
-                assert_status.line_num(),
-                kernel_elf_args);
-            log_info(tt::LogMetal, "Assert resolver: {}", cmd);
-            std::system(cmd.c_str());
-        } else if (!script_path.empty() && std::filesystem::exists(script_path)) {
-            log_info(
-                tt::LogMetal,
-                "For callstack details run: {} {} --file-id 0x{:04x} --line-num {}"
-                " --kernel-elf <path/to/kernel.elf>",
-                python_bin,
-                script_path,
-                assert_status.file_id(),
-                assert_status.line_num());
-        }
-    }
 
     MetalContext::instance().watcher_server()->set_exception_message(error_msg);
     TT_THROW("Watcher detected tripped assert and stopped device.");

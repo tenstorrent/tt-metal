@@ -12,7 +12,6 @@
 #include <fstream>
 #include <set>
 #include <string>
-#include <unordered_set>
 #include <vector>
 #include <fmt/core.h>
 #include <fmt/ranges.h>
@@ -103,98 +102,26 @@ inline std::string_view get_core_type_name(CoreType ct) {
     }
 }
 
-// Host-side FNV-1a hash — mirrors device-side constexpr debug_file_hash in dev_msgs.h.
-inline uint16_t host_debug_file_hash(const char* str) {
-    uint32_t hash = 2166136261u;
-    while (*str) {
-        hash ^= static_cast<uint32_t>(*str++);
-        hash *= 16777619u;
-    }
-    return static_cast<uint16_t>((hash >> 16) ^ (hash & 0xFFFF));
-}
+// Resolve a debug_assert_info_t struct by its device VMA (msg_ptr) from the .debug_assert_msgs
+// section in a kernel ELF.  Struct layout (packed, bit 31 clear):
+//   [uint32_t filename_ptr][uint16_t line_num][uint32_t message_ptr]
+// Packed (bit 31 set): bits[15:0] = line_num only, no filename.
+// Returns {line_num, filename, message} — filename/message empty when not resolvable.
+struct AssertInfo {
+    uint16_t line_num = 0;
+    std::string file;  // filename from struct-pointer asserts; empty for packed (line-only) asserts
+    std::string msg;
+};
 
-// Read all source file paths from a .o.dephash file.
-// These are always written during kernel compilation (no debug info required).
-// Format per line: "<absolute-path>"\t<uint64-content-hash>
-inline std::unordered_set<std::string> collect_dephash_filenames(const std::filesystem::path& dephash_path) {
-    std::unordered_set<std::string> result;
-    std::ifstream f(dephash_path);
-    if (!f.is_open()) {
-        return result;
+inline AssertInfo resolve_assert_info(uint32_t msg_ptr, const std::vector<std::string>& elf_paths) {
+    if (msg_ptr == 0) {
+        return {};
     }
-    std::filesystem::path dep;
-    while (f >> dep) {
-        uint64_t content_hash;
-        f >> content_hash;  // skip the file content hash
-        if (f.bad()) {
-            break;
-        }
-        result.insert(dep.string());
+    // Packed encoding (bit 31 set): bits[15:0] = line_num only, no filename.
+    if (msg_ptr & 0x80000000u) {
+        return {static_cast<uint16_t>(msg_ptr & 0xFFFFu), "", ""};
     }
-    return result;
-}
-
-// Try to match file_id against a path and all its stripped-prefix suffixes.
-// Returns the shortest matching path form (the one __FILE__ expanded to), or empty string.
-inline std::string match_hash_in_path(uint16_t file_id, const std::string& path) {
-    std::string best;
-    auto check = [&](const char* s) {
-        if (host_debug_file_hash(s) == file_id) {
-            if (best.empty()) {
-                best = s;  // keep first match; loop goes full→stripped so this is the longest match
-            }
-        }
-    };
-    // Try full path, then strip one leading directory component at a time.
-    // This recovers the relative path form __FILE__ expanded to at compile time.
-    check(path.c_str());
-    size_t start = 0;
-    while ((start = path.find('/', start)) != std::string::npos) {
-        ++start;
-        if (start < path.size()) {
-            check(path.c_str() + start);
-        }
-    }
-    return best;
-}
-
-// Resolve a file_id hash back to a source filename using the .o.dephash files that sit
-// alongside each kernel ELF.  These are always written during compilation (no debug info
-// required) and record the absolute paths of every header compiled into the kernel.
-inline std::string resolve_file_from_hash(uint16_t file_id, const std::vector<std::string>& elf_paths = {}) {
-    std::unordered_set<std::string> candidates;
-    for (const auto& elf_path : elf_paths) {
-        auto elf_dir = std::filesystem::path(elf_path).parent_path();
-        try {
-            for (const auto& entry : std::filesystem::directory_iterator(elf_dir)) {
-                const auto& p = entry.path();
-                // Only *.o.dephash — *.elf.dephash contains only linker scripts.
-                if (p.extension() == ".dephash" && std::filesystem::path(p.stem()).extension() == ".o") {
-                    auto filenames = collect_dephash_filenames(p);
-                    candidates.insert(filenames.begin(), filenames.end());
-                }
-            }
-        } catch (const std::filesystem::filesystem_error&) {
-        }
-    }
-
-    for (const auto& path : candidates) {
-        auto m = match_hash_in_path(file_id, path);
-        if (!m.empty()) {
-            return m;
-        }
-    }
-
-    return fmt::format("unknown file (hash=0x{:04x})", file_id);
-}
-
-// Read the assert message for (file_id, line_num) from the .debug_assert_msgs section
-// in the kernel ELF.  Section entries are variable-length and packed:
-//   [uint16_t file_id][uint16_t line_num][char msg... '\0']
-// The string is stored inline — no pointer resolution, no device L1 cost.
-// Returns empty string if the section is absent or no matching entry is found.
-inline std::string resolve_assert_message(
-    uint16_t file_id, uint16_t line_num, const std::vector<std::string>& elf_paths) {
+    // Otherwise: VMA pointer to a debug_assert_info_t struct in .debug_assert_msgs.
     for (const auto& elf_path : elf_paths) {
         std::ifstream f(elf_path, std::ios::binary);
         if (!f) {
@@ -248,52 +175,69 @@ inline std::string resolve_assert_message(
             continue;
         }
 
-        std::vector<char> section(msgs_shdr->sh_size);
+        // Check that msg_ptr falls within this section's VMA range.
+        if (msg_ptr < msgs_shdr->sh_addr || msg_ptr >= msgs_shdr->sh_addr + msgs_shdr->sh_size) {
+            continue;
+        }
+
+        uint32_t offset = msg_ptr - msgs_shdr->sh_addr;
+        // Struct layout (packed): [uint32_t filename_ptr][uint16_t line_num][char msg...\0]
+        if (offset + 6 > msgs_shdr->sh_size) {
+            continue;
+        }
+
+        std::vector<char> section_data(msgs_shdr->sh_size);
         f.seekg(msgs_shdr->sh_offset);
-        f.read(section.data(), msgs_shdr->sh_size);
+        f.read(section_data.data(), msgs_shdr->sh_size);
         if (f.fail()) {
             continue;
         }
 
-        // Scan variable-length entries: [fid:2][lnum:2][msg...\0]
-        const char* p = section.data();
-        const char* end = p + section.size();
-        while (p + 4 < end) {
-            uint16_t fid, lnum;
-            std::memcpy(&fid, p, 2);
-            std::memcpy(&lnum, p + 2, 2);
-            p += 4;
-            const char* msg_start = p;
-            while (p < end && *p != '\0') {
-                ++p;
+        uint32_t filename_ptr = 0;
+        uint16_t line_num = 0;
+        std::memcpy(&filename_ptr, section_data.data() + offset, 4);
+        std::memcpy(&line_num, section_data.data() + offset + 4, 2);
+
+        // Inline message starts at offset+6, null-terminated.
+        const char* msg_start = section_data.data() + offset + 6;
+        const char* msg_end =
+            static_cast<const char*>(std::memchr(msg_start, '\0', section_data.size() - (offset + 6)));
+        std::string msg = (msg_end && msg_end > msg_start) ? std::string(msg_start, msg_end) : "";
+
+        // Read filename string via its VMA pointer (also in this section).
+        auto read_str_at_ptr = [&](uint32_t ptr) -> std::string {
+            if (ptr == 0 || ptr < msgs_shdr->sh_addr || ptr >= msgs_shdr->sh_addr + msgs_shdr->sh_size) {
+                return {};
             }
-            if (fid == file_id && lnum == line_num && p > msg_start) {
-                return std::string(msg_start, p);
-            }
-            if (p < end) {
-                ++p;  // skip null terminator
-            }
-        }
+            uint32_t str_off = ptr - msgs_shdr->sh_addr;
+            const char* start = section_data.data() + str_off;
+            const char* end = static_cast<const char*>(std::memchr(start, '\0', section_data.size() - str_off));
+            return end ? std::string(start, end) : std::string(start);
+        };
+
+        std::string filename = read_str_at_ptr(filename_ptr);
+
+        return {line_num, std::move(filename), std::move(msg)};
     }
     return {};
 }
 
 // Returns the assert message portion for a given assert type.
 // Returns empty string for unknown types (callers must handle this).
+// msg_ptr: device VMA of debug_assert_info_t in .debug_assert_msgs (or mepc for DebugAssertHwFault).
 inline std::string get_debug_assert_message(
     dev_msgs::debug_assert_type_t type,
-    uint16_t line_num = 0,
-    uint16_t file_id = 0,
+    uint32_t msg_ptr = 0,
     uint64_t hw_fault_info = 0,
     const std::vector<std::string>& elf_paths = {}) {
     switch (type) {
         case dev_msgs::DebugAssertTripped: {
-            std::string file_str = (file_id != 0) ? resolve_file_from_hash(file_id, elf_paths) : "unknown file";
-            std::string msg = resolve_assert_message(file_id, line_num, elf_paths);
-            if (!msg.empty()) {
-                return fmt::format("tripped an assert in {} on line {}: \"{}\".", file_str, line_num, msg);
+            auto info = resolve_assert_info(msg_ptr, elf_paths);
+            std::string file_str = info.file.empty() ? "unknown file" : info.file;
+            if (!info.msg.empty()) {
+                return fmt::format("tripped an assert in {} on line {}: \"{}\".", file_str, info.line_num, info.msg);
             }
-            return fmt::format("tripped an assert in {} on line {}.", file_str, line_num);
+            return fmt::format("tripped an assert in {} on line {}.", file_str, info.line_num);
         }
         case dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped:
             return "detected an inter-kernel data race due to kernel completing with pending NOC "
@@ -310,10 +254,10 @@ inline std::string get_debug_assert_message(
         case dev_msgs::DebugAssertRtaOutOfBounds: return "accessed unique runtime arg index out of bounds.";
         case dev_msgs::DebugAssertCrtaOutOfBounds: return "accessed common runtime arg index out of bounds.";
         case dev_msgs::DebugAssertHwFault:
-            // line_num holds mepc (faulting instruction address) for hardware faults
+            // msg_ptr holds mepc (faulting instruction address) for hardware faults
             return fmt::format(
                 "hardware fault occurred at PC 0x{:x}. Cause: 0x{:x}, faulting address or instruction: 0x{:08x}",
-                line_num,
+                msg_ptr,
                 hw_fault_info & 0xffffffff,
                 (hw_fault_info >> 32) & 0xffffffff);
         default: return "";

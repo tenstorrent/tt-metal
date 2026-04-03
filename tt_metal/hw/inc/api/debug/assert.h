@@ -15,7 +15,10 @@
 
 // For Quasar, multiple DMs share assert_status; CAS is used for thread safety; address is
 // remapped from uncached to cached L1 (LR/SC requires cache coherence), then flushed to host.
-inline void assert_and_hang(uint32_t line_num, uint16_t file_id, debug_assert_type_t assert_type = DebugAssertTripped) {
+//
+// msg_ptr is the device VMA of a debug_assert_info_t struct in .debug_assert_msgs (rodata).
+// For DebugAssertHwFault the field is repurposed to carry mepc (faulting instruction address).
+inline void assert_and_hang(uint32_t msg_ptr, debug_assert_type_t assert_type = DebugAssertTripped) {
     debug_assert_msg_t tt_l1_ptr* v = GET_MAILBOX_ADDRESS_DEV(watcher.assert_status);
 #if defined(ARCH_QUASAR)
     // TODO: Remove this check once mailbox is accessed via cached memory (see dm.cc UNCACHED_MEM_MAILBOX_BASE)
@@ -30,8 +33,7 @@ inline void assert_and_hang(uint32_t line_num, uint16_t file_id, debug_assert_ty
     if (v->tripped == DebugAssertOK)
 #endif
     {
-        v->line_num = line_num;
-        v->file_id = file_id;
+        v->msg_ptr = msg_ptr;
         v->which = internal_::get_hw_thread_idx();
         if (assert_type == DebugAssertHwFault) {  // only valid on Quasar
             uint64_t mcause;
@@ -40,7 +42,7 @@ inline void assert_and_hang(uint32_t line_num, uint16_t file_id, debug_assert_ty
             asm volatile("csrr %0, mepc" : "=r"(mepc));
             asm volatile("csrr %0, mcause" : "=r"(mcause));
             asm volatile("csrr %0, mtval" : "=r"(mtval));
-            v->line_num = mepc;  // mepc is the faulting instruction address
+            v->msg_ptr = (uint32_t)mepc;  // repurpose msg_ptr as mepc for HwFault
             v->hw_fault_info = mtval << 32 | (mcause & 0xffffffff);
         }
         v->tripped = assert_type;
@@ -70,44 +72,45 @@ inline void assert_and_hang(uint32_t line_num, uint16_t file_id, debug_assert_ty
     }
 }
 
-// Backward-compatible overload — existing callers that only pass assert_type get file_id=0.
-inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type = DebugAssertTripped) {
-    assert_and_hang(line_num, 0, assert_type);
-}
-// Overload so the discarded else-branch of _ASSERT_EXTRA type-checks in template bodies
-// (GCC -Wtemplate-body checks both branches even when if constexpr discards one).
-inline void assert_and_hang(uint32_t line_num, uint16_t file_id, const char*) { assert_and_hang(line_num, file_id); }
-
-// ASSERT(condition)                — hang with DebugAssertTripped
-// ASSERT(condition, "message")     — hang; message stored in file-only ELF section (zero L1 cost)
-// ASSERT(condition, type)          — hang with a specific debug_assert_type_t
+// msg_ptr encoding:
+//   bit 31 = 0  — VMA pointer to a struct in .debug_assert_msgs (message asserts):
+//                 [uint32_t filename_ptr][uint16_t line_num][char msg...\0]
+//                 filename_ptr is the VMA of a null-terminated filename string also in
+//                 .debug_assert_msgs; msg is the inline null-terminated message string.
+//   bit 31 = 1  — packed line number: bits[15:0]=line_num (no filename)
+//                 Used for plain/type asserts — no static local, safe in constexpr functions.
 //
-// ASSERT message section entry layout (packed, variable-length):
-//   [uint16_t file_id][uint16_t line_num][char msg[sizeof(literal)]]
+// The .debug_assert_msgs section VMA is 0x6600000 (bit 31 = 0), so no collision is possible.
+
+// Overload so the discarded else-branch of _ASSERT_EXTRA type-checks when extra is a string literal.
+inline void assert_and_hang(uint32_t msg_ptr, const char*) { assert_and_hang(msg_ptr); }
+
+// ASSERT(condition)            — packed line number in msg_ptr (no static local; constexpr-safe)
+// ASSERT(condition, "message") — struct pointer in msg_ptr (filename+message in .debug_assert_msgs)
+// ASSERT(condition, type)      — packed line number in msg_ptr + specific debug_assert_type_t
 
 // Implementation detail — do not call directly.
-// Single extra arg: string literal → embed in ELF section and hang;
-//                   enum type      → hang with that specific assert type.
-#define _ASSERT_EXTRA(condition, extra)                                              \
-    do {                                                                             \
-        if (not(condition)) {                                                        \
-            if constexpr (__is_same(__typeof__(extra), const char[sizeof(extra)])) { \
-                static const struct __attribute__((packed)) {                        \
-                    uint16_t file_id;                                                \
-                    uint16_t line_num;                                               \
-                    char msg_data[sizeof(extra)];                                    \
-                } _e __attribute__((used, section(".debug_assert_msgs"))) = {        \
-                    debug_file_hash(__FILE__), (uint16_t)__LINE__, extra};           \
-                assert_and_hang(__LINE__, debug_file_hash(__FILE__));                \
-            } else {                                                                 \
-                assert_and_hang(__LINE__, debug_file_hash(__FILE__), extra);         \
-            }                                                                        \
-        }                                                                            \
+#define _ASSERT_EXTRA(condition, extra)                                                                  \
+    do {                                                                                                 \
+        if (not(condition)) {                                                                            \
+            if constexpr (__is_same(__typeof__(extra), const char[sizeof(extra)])) {                     \
+                static const char _fn[] __attribute__((used, section(".debug_assert_msgs"))) = __FILE__; \
+                static const struct __attribute__((packed)) {                                            \
+                    uint32_t filename_ptr;                                                               \
+                    uint16_t line_num;                                                                   \
+                    char msg_data[sizeof(extra)];                                                        \
+                } _info __attribute__((used, section(".debug_assert_msgs"))) = {                         \
+                    (uint32_t)((uintptr_t)_fn), (uint16_t)__LINE__, extra};                              \
+                assert_and_hang((uint32_t)((uintptr_t)(&_info)));                                        \
+            } else {                                                                                     \
+                assert_and_hang((uint32_t)(0x80000000u | (uint16_t)__LINE__), extra);                    \
+            }                                                                                            \
+        }                                                                                                \
     } while (0)
-#define _ASSERT_PLAIN(condition)                                  \
-    do {                                                          \
-        if (not(condition))                                       \
-            assert_and_hang(__LINE__, debug_file_hash(__FILE__)); \
+#define _ASSERT_PLAIN(condition)                                           \
+    do {                                                                   \
+        if (not(condition))                                                \
+            assert_and_hang((uint32_t)(0x80000000u | (uint16_t)__LINE__)); \
     } while (0)
 #define _ASSERT_PICK(_c, _extra, _name, ...) _name
 

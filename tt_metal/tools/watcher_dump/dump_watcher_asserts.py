@@ -9,19 +9,20 @@ Resolve a watcher ASSERT() failure to a callstack using ELF DWARF.
 Called automatically by the C++ watcher when a kernel trips an ASSERT():
 
     python3 dump_watcher_asserts.py \\
-        --file-id   0x002B \\
-        --line-num  142    \\
-        --kernel-elf /path/to/built/.../trisc1/trisc1.elf \\
-        --kernel-offset 0xFFC00000
+        --msg-ptr   0x06600010 \\
+        --kernel-elf /path/to/built/.../trisc1/trisc1.elf
 
-The C++ watcher already reads file_id + line_num from the device mailbox and
-knows the kernel ELF path from the build environment.  This script does the
-DWARF lookup to resolve file_id back to a source path and find the function
-at that file:line.
+The C++ watcher reads msg_ptr from the device mailbox.  When bit 31 is clear,
+msg_ptr is the VMA of a debug_assert_info_t struct in .debug_assert_msgs:
+  [uint32_t filename_ptr][uint16_t line_num][char msg...\0]
+The filename string is also in .debug_assert_msgs — no hash needed.
+When bit 31 is set, msg_ptr encodes only a line number (plain/type asserts in
+constexpr functions where static locals are not allowed).
 """
 
 import argparse
 import os
+import struct
 import subprocess
 import sys
 
@@ -32,14 +33,60 @@ except ImportError:
     from elftools.elf.elffile import ELFFile
 
 
-# ── FNV-1a hash (mirrors device-side constexpr debug_file_hash) ──────────────
+# ── Read debug_assert_info_t from ELF by VMA ─────────────────────────────────
 
 
-def _debug_file_hash(s: str) -> int:
-    h = 2166136261
-    for c in s:
-        h = ((h ^ ord(c)) * 16777619) & 0xFFFFFFFF
-    return ((h >> 16) ^ (h & 0xFFFF)) & 0xFFFF
+def read_assert_info_from_ptr(msg_ptr: int, elf_paths: list) -> dict | None:
+    """
+    Read assert location info from msg_ptr.
+    Bit 31 = 1: packed line number only — bits[15:0]=line_num, no filename/message.
+    Bit 31 = 0: VMA pointer to a debug_assert_info_t in .debug_assert_msgs.
+    Returns {'line_num': int, 'msg': str, 'filename': str|None} or None if not found.
+    """
+    if msg_ptr == 0:
+        return None
+    if msg_ptr & 0x80000000:
+        return {"line_num": msg_ptr & 0xFFFF, "msg": "", "filename": None}
+
+    for elf_path, _offset in elf_paths:
+        if not elf_path or not os.path.exists(elf_path):
+            continue
+        try:
+            with open(elf_path, "rb") as f:
+                elf = ELFFile(f)
+                section = elf.get_section_by_name(".debug_assert_msgs")
+                if section is None:
+                    continue
+                sh_addr = section["sh_addr"]
+                sh_size = section["sh_size"]
+                if msg_ptr < sh_addr or msg_ptr >= sh_addr + sh_size:
+                    continue
+                offset = msg_ptr - sh_addr
+                data = section.data()
+                # Struct layout (packed): [uint32_t filename_ptr][uint16_t line_num][char msg...\0]
+                if offset + 6 > len(data):
+                    continue
+                filename_ptr, line_num = struct.unpack_from("<IH", data, offset)
+
+                def read_str_at(ptr):
+                    if ptr == 0 or ptr < sh_addr or ptr >= sh_addr + sh_size:
+                        return ""
+                    off = ptr - sh_addr
+                    end = data.index(b"\x00", off)
+                    return data[off:end].decode("utf-8", errors="replace")
+
+                msg_bytes = data[offset + 6 :]
+                msg_end = msg_bytes.find(b"\x00")
+                msg = msg_bytes[:msg_end].decode("utf-8", errors="replace") if msg_end > 0 else ""
+
+                return {
+                    "line_num": line_num,
+                    "msg": msg,
+                    "filename": read_str_at(filename_ptr),
+                }
+        except Exception:
+            continue
+    return None
 
 
 # ── DWARF helpers (pyelftools only) ──────────────────────────────────────────
@@ -74,37 +121,6 @@ def _build_file_line_ranges(elf_file: ELFFile) -> dict:
         if prev is not None:
             result[(prev[0], prev[0] + 4)] = (prev[1], prev[2], prev[3])
     return result
-
-
-def resolve_file_from_hash(file_id: int, ranges: dict) -> str | None:
-    """
-    Scan the DWARF file paths and return the one matching file_id.
-
-    The hash was computed from __FILE__ at compile time.  The DWARF stores
-    absolute paths; __FILE__ is typically a relative path from the repo root.
-    We recover it by trying progressively shorter prefixes (at directory
-    boundaries) of each DWARF path until the hash matches — no hardcoded
-    path needed.
-    """
-    seen: set[str] = set()
-    for (_start, _end), (dwarf_fname, _line, _col) in ranges.items():
-        if dwarf_fname in seen:
-            continue
-        seen.add(dwarf_fname)
-
-        # Try the full path as stored in DWARF.
-        if _debug_file_hash(dwarf_fname) == file_id:
-            return dwarf_fname
-
-        # Try stripping one directory component at a time from the left.
-        # This recovers the relative path __FILE__ expanded to at compile time.
-        parts = dwarf_fname.split("/")
-        for i in range(1, len(parts)):
-            candidate = "/".join(parts[i:])
-            if candidate and _debug_file_hash(candidate) == file_id:
-                return candidate
-
-    return None
 
 
 def find_assert_address(ranges: dict, filename: str, line_num: int) -> int | None:
@@ -160,14 +176,26 @@ def find_function_at_address(elf_file: ELFFile, address: int) -> str | None:
 # ── Core resolution ───────────────────────────────────────────────────────────
 
 
-def resolve_assert(file_id: int, line_num: int, elf_paths: list[tuple[str, int | None]]) -> dict:
+def resolve_assert(msg_ptr: int, elf_paths: list) -> dict:
     """
-    Resolve file_id + line_num to a source file and function using DWARF.
+    Resolve msg_ptr to a source file and function using the .debug_assert_msgs
+    section (for filename + line_num + message) and DWARF (for function name).
     elf_paths: list of (elf_file_path, load_offset_or_None).
     """
-    resolved_file: str | None = None
+    # Step 1: read filename + line_num + message from the ELF section.
+    info = read_assert_info_from_ptr(msg_ptr, elf_paths)
+    if info is None:
+        return {
+            "file": f"unknown file (msg_ptr=0x{msg_ptr:08x})",
+            "line": 0,
+            "message": "",
+            "function": None,
+        }
+
+    line_num = info["line_num"]
+    message = info["msg"]
+    resolved_file: str | None = info.get("filename") or None
     func_name: str | None = None
-    assert_line: int = line_num
 
     for elf_path, _offset in elf_paths:
         if not elf_path or not os.path.exists(elf_path):
@@ -176,10 +204,6 @@ def resolve_assert(file_id: int, line_num: int, elf_paths: list[tuple[str, int |
             with open(elf_path, "rb") as f:
                 elf = ELFFile(f)
                 ranges = _build_file_line_ranges(elf)
-
-                if resolved_file is None:
-                    resolved_file = resolve_file_from_hash(file_id, ranges)
-
                 if resolved_file and func_name is None:
                     addr = find_assert_address(ranges, resolved_file, line_num)
                     if addr is not None:
@@ -188,8 +212,9 @@ def resolve_assert(file_id: int, line_num: int, elf_paths: list[tuple[str, int |
             continue
 
     return {
-        "file": resolved_file or f"unknown file (hash=0x{file_id:04X})",
-        "line": assert_line,
+        "file": resolved_file or "unknown file",
+        "line": line_num,
+        "message": message,
         "function": func_name,
     }
 
@@ -199,8 +224,7 @@ def resolve_assert(file_id: int, line_num: int, elf_paths: list[tuple[str, int |
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--file-id", required=True, type=lambda x: int(x, 0), help="file_id hash from mailbox")
-    parser.add_argument("--line-num", required=True, type=int, help="line_num from mailbox")
+    parser.add_argument("--msg-ptr", required=True, type=lambda x: int(x, 0), help="msg_ptr VMA from mailbox (hex)")
     parser.add_argument("--kernel-elf", required=False, default=None, help="kernel ELF file path")
     parser.add_argument(
         "--kernel-offset", required=False, type=lambda x: int(x, 0), default=None, help="kernel load offset (hex)"
@@ -217,10 +241,12 @@ def main():
     if not elf_paths:
         parser.error("at least one of --kernel-elf or --firmware-elf is required")
 
-    result = resolve_assert(args.file_id, args.line_num, elf_paths)
+    result = resolve_assert(args.msg_ptr, elf_paths)
 
     print(f"File     : {result['file']}")
     print(f"Line     : {result['line']}")
+    if result["message"]:
+        print(f"Message  : {result['message']}")
     print(f"Function : {result['function'] or '(rebuild with TT_METAL_RISCV_DEBUG_INFO=1 for function name)'}")
 
 

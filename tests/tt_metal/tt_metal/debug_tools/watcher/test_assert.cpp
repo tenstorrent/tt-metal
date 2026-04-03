@@ -194,8 +194,7 @@ static void RunTest(
     log_critical(LogTest, "hw_fault_info: 0x{:x}, hw_assert_cause: 0x{:x}", hw_fault_info, hw_assert_cause);
     const std::string msg = get_debug_assert_message(
         assert_type,
-        0,  // line_num: use 0 since we match with regex for DebugAssertTripped
-        0,  // file_id: unknown at test time
+        0,  // msg_ptr: 0 — no ELF available at test time, resolves to "unknown file on line 0"
         // hard code cause/line info for HW faults, as we know them exactly
         hw_fault_info << 32 | hw_assert_cause);
     ASSERT_FALSE(msg.empty()) << "Unhandled assert type " << static_cast<int>(assert_type);

@@ -259,8 +259,8 @@ enum debug_sanitize_noc_return_code_enum {
 };
 
 struct debug_assert_msg_t {
-    volatile uint16_t line_num;  // __LINE__ at call site
-    volatile uint16_t file_id;   // debug_file_hash(__FILE__)
+    volatile uint32_t msg_ptr;  // VMA of debug_assert_info_t in .debug_assert_msgs rodata
+                                // (repurposed as mepc for DebugAssertHwFault)
     volatile uint8_t tripped;
     volatile uint8_t which;
     volatile uint64_t hw_fault_info;  // Quasar only: mtval << 32 | mcause (DebugAssertHwFault)
@@ -345,16 +345,6 @@ struct dprint_buf_msg_t {
     static_assert(sizeof(data) == sizeof(shared_data));
 };
 
-// FNV-1a hash for assert file identification — must match device-side constexpr debug_file_hash.
-// Must be in #ifndef CODEGEN because codegen cannot handle constexpr functions.
-constexpr uint16_t debug_file_hash(const char* str) {
-    uint32_t hash = 2166136261u;
-    while (*str) {
-        hash ^= static_cast<uint32_t>(*str++);
-        hash *= 16777619u;
-    }
-    return static_cast<uint16_t>((hash >> 16) ^ (hash & 0xFFFF));
-}
 #endif
 
 // NOC alignment max from BH
