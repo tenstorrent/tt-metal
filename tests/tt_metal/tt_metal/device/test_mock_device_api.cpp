@@ -72,6 +72,11 @@ TEST_F(MockDeviceAPIFixture, BlackholeConfigurationsAreValid) {
     EXPECT_EQ(*experimental::get_mock_cluster_desc(), "blackhole_P300_both_mmio.yaml");
 }
 
+TEST_F(MockDeviceAPIFixture, QuasarConfigurationsAreValid) {
+    experimental::configure_mock_mode(tt::ARCH::QUASAR, 1);
+    EXPECT_EQ(*experimental::get_mock_cluster_desc(), "quasar_Q1.yaml");
+}
+
 TEST_F(MockDeviceAPIFixture, UnsupportedConfigurationThrows) {
     bool threw_during_configure = false;
     try {
