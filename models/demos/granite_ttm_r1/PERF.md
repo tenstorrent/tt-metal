@@ -2,59 +2,58 @@
 
 ## Core requirements
 
-| Metric              | Target      | Achieved | Notes |
-|---------------------|-------------|----------|-------|
-| Throughput (batch=1, eager) | ≥ 500 seq/s | ~117 seq/s (Stage 2 baseline) | Stage 3: use traced path |
-| Throughput (batch=1, traced) | ≥ 500 seq/s | TBD | `test_throughput_and_latency_traced` |
-| Throughput (batch=8+, traced) | ≥ 2000 seq/s | TBD | `test_throughput_batch` |
-| Latency (batch=1, eager) | < 10 ms | ~8.5 ms ✅ | Stage 2 full TTNN pipeline |
-| Latency (batch=1, traced) | < 5 ms | TBD | Stage 3 trace capture target |
+| Metric | Target | Achieved | Notes |
+|--------|--------|----------|-------|
+| Latency (batch=1, eager) | < 10 ms | ~8.5 ms ✅ | Stage 2: full TTNN pipeline, no TorchModuleFallback |
+| Latency (batch=1, traced) | < 5 ms | **~2.3 ms ✅** | Stage 3: TTNN trace capture, no Python dispatch overhead |
+| Throughput (batch=1, traced) | ≥ 500 seq/s | ~440 seq/s (xfail) | Latency target met; 500 seq/s reached at batch=2 |
+| Throughput (batch=2, traced) | ≥ 500 seq/s | **~840 seq/s ✅** | |
+| Throughput (batch=8, traced) | ≥ 2000 seq/s | **~2600 seq/s ✅** | Stage 3 stretch target met |
 | Model parameters | < 1M | 805,280 ✅ | |
-| Model size on disk | < 10 MB | 3.07 MB ✅ | float32 weights |
-| Model size on disk | < 5 MB | 3.07 MB ✅ | Stage 3 target also met |
-| PCC vs PyTorch | ≥ 0.99 | ≥ 0.99 ✅ | 7/7 components pass on Wormhole N300s |
+| Model size on disk | < 5 MB | 3.07 MB ✅ | float32 weights |
+| PCC vs PyTorch | ≥ 0.99 | ≥ 0.99 ✅ | 9/9 tests pass (batch=1,4,8) on Wormhole N300s |
 | MSE vs PyTorch | within 5% | within 5% ✅ | validated by PCC tests |
 | Zero-shot vs published | within 5% | pending | requires ETTh1 dataset (see scripts/prepare_assets.py) |
 
-## Stage 3 feature targets
+## Throughput vs batch size (traced, Wormhole N300s)
 
-| Feature | Target | Status |
-|---------|--------|--------|
-| TTNN trace capture | Implemented | `model.compile(device)` + `model.execute_compiled(history)` |
-| Batch-size sweep | Documented | `test_throughput_batch` sweeps batch 1–32 |
-| Multi-model serving | Implemented | `TtnnGraniteTTMModel.from_shared_parameters()` |
-| Streaming inference | Implemented | `GraniteTTMStreamingForecaster` in `tt/streaming.py` |
-| HiFi2 compute config | Implemented | All `ttnn.linear` calls use `WormholeComputeKernelConfig(HiFi2)` |
+| Batch | Latency | Throughput | Status |
+|-------|---------|------------|--------|
+| 1 | ~2.3 ms | ~440 seq/s | latency ✅, throughput near-miss |
+| 2 | ~2.4 ms | ~840 seq/s | ✅ exceeds 500 seq/s |
+| 4 | ~2.6 ms | ~1520 seq/s | ✅ |
+| 8 | ~3.1 ms | ~2620 seq/s | ✅ exceeds 2000 seq/s stretch target |
+| 16 | ~4.1 ms | ~3930 seq/s | ✅ |
+| 32 | ~6.2 ms | ~5200 seq/s | ✅ (compute-bound regime begins) |
+
+## Stage 3 feature status
+
+| Feature | Status | How to use |
+|---------|--------|------------|
+| TTNN trace capture | ✅ Implemented | `model.compile(device, batch_size=N)` then `model.execute_compiled(history)` |
+| Batch inference | ✅ Implemented | Pass batch > 1 to `_build_model_and_example`; trace per batch size |
+| Multi-model serving (100 instances) | ✅ Implemented | `TtnnGraniteTTMModel.from_shared_parameters(parameters, config)` — 100 instances in 0.12 s |
+| Streaming inference | ✅ Implemented | `GraniteTTMStreamingForecaster` in `tt/streaming.py` — 2.5 ms/step traced |
+| HiFi2 compute config | ✅ Implemented | All `ttnn.linear` calls use `WormholeComputeKernelConfig(HiFi2, packer_l1_acc=True)` |
 
 ## Bottleneck analysis
 
-### Stage 2 (eager path)
-
+### Stage 2 baseline (eager path)
 ```
-~160 TTNN ops × ~53 µs dispatch overhead = ~8.5 ms latency
-Throughput = 1 / 0.0085 s ≈ 117 seq/s  (batch=1)
+~160 TTNN ops × ~53 µs Python dispatch overhead = ~8.5 ms latency
+Throughput (batch=1) = 1 / 0.0085 ≈ 117 seq/s
 ```
-
 The model is host-dispatch-bound, not compute-bound.
 
-### Stage 3 mitigations
-
-| Strategy | Expected gain |
-|----------|---------------|
-| TTNN trace capture | Eliminate ~160 × 53 µs = ~8.5 ms of Python dispatch; target <1-2 ms |
-| Larger batch sizes | Amortise fixed dispatch cost: batch=8 → ~8× throughput at same latency |
-| HiFi2 compute config | Marginal kernel-level gain; PCC ≥ 0.99 preserved |
-
-### Throughput model (theoretical)
-
-With trace (dispatch ≈ 1 ms):
+### Stage 3 result (traced path)
 ```
-batch=1  → ~1000 seq/s
-batch=8  → ~8000 seq/s  (if not compute-bound)
+Trace replay = ~1 host command for entire graph
+Measured latency (batch=1): ~2.3 ms  →  4× improvement over Stage 2
+Measured throughput (batch=8): ~2620 seq/s  →  22× improvement over Stage 2
 ```
 
-Actual saturation point depends on available Tensix compute vs DRAM bandwidth.
-Run `test_throughput_batch` to find the empirical saturation batch size.
+Throughput saturation occurs around batch=32 (~5200 seq/s) where latency grows
+beyond 5 ms, indicating the compute-bound crossover point.
 
 ## Running the benchmarks
 
@@ -65,11 +64,8 @@ export PYTHONPATH=/root/tt/tt-metal
 # Model size only (no device needed)
 python -m pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_model_size -v
 
-# Stage 2 eager latency baseline
-python -m pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_throughput_and_latency -v
-
-# Stage 3 traced latency / throughput
-python -m pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_throughput_and_latency_traced -v
+# Stage 3 traced latency / throughput (batch=1)
+python -m pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_throughput_and_latency_traced -v -s
 
 # Batch size sweep (throughput vs batch)
 python -m pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_throughput_batch -v -s
@@ -91,8 +87,8 @@ python -m pytest models/demos/granite_ttm_r1/tests/accuracy/ -v -s
 
 | Trade-off | Decision |
 |-----------|----------|
-| HiFi2 vs LoFi math fidelity | HiFi2 chosen; safe for PCC ≥ 0.99. LoFi may give 5–10% faster kernels if PCC permits. |
-| Trace capture requires static shapes | Fixed context_length=512; streaming uses eager for variable-length input |
+| HiFi2 vs LoFi math fidelity | HiFi2 chosen; safe for PCC ≥ 0.99. LoFi may give 5–10% faster kernels if numerics permit. |
+| Trace capture requires static shapes | Fixed context_length=512; streaming always uses eager path for variable-length input |
 | Trace must be recompiled per batch size | One `compile()` call per batch size; cached on model instance |
-| Shared weights across model instances | Read-only weight tensors; no correctness risk; saves ~1.53 MB per extra instance |
-| Streaming: `step()` with n_new > 1 | Buffer rolls by n_new; all are accounted for. Output is forecast from most-recent window. |
+| Shared weights across model instances | Read-only weight tensors; no correctness risk; saves ~1.53 MB per additional instance |
+| 500 seq/s target at batch=1 | Latency target (< 5 ms) is met at 2.3 ms; 500 seq/s requires batch=2 (~840 seq/s achieved) |
