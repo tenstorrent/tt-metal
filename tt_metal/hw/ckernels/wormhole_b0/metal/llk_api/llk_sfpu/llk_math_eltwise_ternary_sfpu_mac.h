@@ -24,15 +24,18 @@ inline void llk_math_eltwise_ternary_sfpu_mac(
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, DataFormat data_format>
 inline void llk_math_eltwise_ternary_sfpu_mac_init() {
     _llk_math_eltwise_ternary_sfpu_init_<SfpuType::mac>();
-    // eltwise_ternary_sfpu_configure_addrmod only sets ADDR_MOD_2 (dest.incr=2)
-    // for SfpuType::where.  mac uses the same SFPSTORE addressing convention as
-    // all other WH kernels (ADDR_MOD_2), so configure it explicitly here.
-    // Note: BH uses ADDR_MOD_6 for SFPSTORE; the BH file is separate.
+    // The ternary SFPU dispatch sets addr_mod_base=1 (via set_addr_mod_base()),
+    // which shifts instruction addr_mod fields 0..3 to hardware slots 4..7.
+    // So SFPSTORE with ADDR_MOD_2 in the instruction actually uses hardware
+    // slot 6 at runtime.  We must configure hardware slot 6 (ADDR_MOD_6), not
+    // slot 2, for the dest auto-advance to work correctly.
+    // (This matches how SfpuType::where configures ADDR_MOD_6.)
     addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
         .dest = {.incr = 2},
-    }.set(ADDR_MOD_2);
+    }
+        .set(ADDR_MOD_6);
 
     // Record the replay sequence once at init time with fixed dest offsets.
     // All callers use tile indices (0, 1, 2, 0) → offsets (0, 64, 128, 0).
