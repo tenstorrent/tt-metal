@@ -29,12 +29,28 @@ def test_perf_unpack_transpose(
     unpack_transpose_within_face,
     workers_tensix_coordinates,
 ):
+    # Int32 format restrictions
+    if formats.input_format == DataFormat.Int32:
+        # Unpacker: Int32 can ONLY unpack to Int32 (identity) in Dst register per ISA specification
+        if formats.output_format != DataFormat.Int32:
+            pytest.skip(
+                f"Int32 -> {formats.output_format.name} conversion not supported (unpacker limitation)"
+            )
+        # Transpose: Int32 does not support any transposition operations
+        if (
+            unpack_transpose_faces == Transpose.Yes
+            or unpack_transpose_within_face == Transpose.Yes
+        ):
+            pytest.skip("Transpose not supported for Int32")
 
-    if (
-        formats.input == DataFormat.Int32
-        and unpack_transpose_within_face == Transpose.Yes
-    ):
-        pytest.skip("Unpack within face not supported for Int32")
+    # Packer: Bfp8_b and Float16 cannot convert to Int32 in this test matrix.
+    if formats.output_format == DataFormat.Int32 and formats.input_format in [
+        DataFormat.Bfp8_b,
+        DataFormat.Float16,
+    ]:
+        pytest.skip(
+            f"{formats.input_format.name} -> Int32 conversion not supported (packer limitation)"
+        )
 
     if (
         unpack_transpose_faces == Transpose.No

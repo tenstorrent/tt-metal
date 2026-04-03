@@ -30,6 +30,58 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_WITHIN_FACE,
 )
 
+_OPS_WITHOUT_DEST_ACC = {
+    MathOperation.Abs,
+    MathOperation.Acosh,
+    MathOperation.Asinh,
+    MathOperation.Celu,
+    MathOperation.Cos,
+    MathOperation.Elu,
+    MathOperation.Exp2,
+    MathOperation.Exp,
+    MathOperation.Fill,
+    MathOperation.Gelu,
+    MathOperation.Hardsigmoid,
+    MathOperation.Log,
+    MathOperation.Neg,
+    MathOperation.Silu,
+    MathOperation.Sin,
+    MathOperation.Square,
+    MathOperation.Threshold,
+    MathOperation.ReluMax,
+    MathOperation.ReluMin,
+}
+
+_OPS_WITH_FAST_MODE = {
+    MathOperation.Exp,
+    MathOperation.Rsqrt,
+    MathOperation.Sqrt,
+}
+
+_OPS_WITH_STABLE_SORT = {
+    MathOperation.TopKLocalSort,
+    MathOperation.TopKMerge,
+    MathOperation.TopKRebuild,
+}
+
+
+def _get_dest_acc_modes(mathop):
+    if mathop in _OPS_WITHOUT_DEST_ACC:
+        return [DestAccumulation.No]
+    return [DestAccumulation.Yes, DestAccumulation.No]
+
+
+def _get_fast_modes(mathop):
+    if mathop in _OPS_WITH_FAST_MODE:
+        return [FastMode.Yes, FastMode.No]
+    return [FastMode.No]
+
+
+def _get_stable_sort_modes(mathop):
+    if mathop in _OPS_WITH_STABLE_SORT:
+        return [StableSort.Yes, StableSort.No]
+    return [StableSort.No]
+
 
 @pytest.mark.perf
 @parametrize(
@@ -56,24 +108,15 @@ from helpers.test_variant_parameters import (
         MathOperation.TopKMerge,
         MathOperation.TopKRebuild,
     ],
-    dest_acc=[
-        DestAccumulation.Yes,
-        DestAccumulation.No,
-    ],
+    dest_acc=lambda mathop: _get_dest_acc_modes(mathop),
     loop_factor=[
         16,
     ],  # Number of iterations to run the test in order to minimize profiler overhead in measurement
     iterations=[
         32,
     ],  # Number of SFPU iterations
-    fast_mode=[
-        FastMode.Yes,
-        FastMode.No,
-    ],
-    stable_sort=[
-        StableSort.Yes,
-        StableSort.No,
-    ],
+    fast_mode=lambda mathop: _get_fast_modes(mathop),
+    stable_sort=lambda mathop: _get_stable_sort_modes(mathop),
     input_dimensions=[
         [128, 64],  # tile_cnt: 8
     ],  # Specifying different input sizes to cover different tile counts
@@ -91,58 +134,6 @@ def test_perf_eltwise_unary_sfpu(
     input_dimensions,
     workers_tensix_coordinates,
 ):
-    # Skip tests where template parameters are not used by the operation
-    # Operations that don't use is_fp32_dest_acc_en parameter
-    ops_without_dest_acc = {
-        MathOperation.Abs,
-        MathOperation.Acosh,
-        MathOperation.Asinh,
-        MathOperation.Celu,
-        MathOperation.Cos,
-        MathOperation.Elu,
-        MathOperation.Exp2,
-        MathOperation.Exp,
-        MathOperation.Fill,
-        MathOperation.Gelu,
-        MathOperation.Hardsigmoid,
-        MathOperation.Log,
-        MathOperation.Neg,
-        MathOperation.Silu,
-        MathOperation.Sin,
-        MathOperation.Square,
-        MathOperation.Threshold,
-        MathOperation.ReluMax,
-        MathOperation.ReluMin,
-    }
-
-    # Operations that use FAST_MODE
-    ops_with_fast_mode = {
-        MathOperation.Exp,
-        MathOperation.Rsqrt,
-        MathOperation.Sqrt,
-    }
-
-    # Operations that use STABLE_SORT
-    ops_with_stable_sort = {
-        MathOperation.TopKLocalSort,
-        MathOperation.TopKMerge,
-        MathOperation.TopKRebuild,
-    }
-
-    # Skip if dest_acc varies but operation doesn't use it
-    if mathop in ops_without_dest_acc and dest_acc == DestAccumulation.Yes:
-        pytest.skip(f"{mathop} does not use dest_acc parameter - skipping Yes variant")
-
-    # Skip if fast_mode varies but operation doesn't use it
-    if mathop not in ops_with_fast_mode and fast_mode == FastMode.Yes:
-        pytest.skip(f"{mathop} does not use fast_mode parameter - skipping Yes variant")
-
-    # Skip if stable_sort varies but operation doesn't use it
-    if mathop not in ops_with_stable_sort and stable_sort == StableSort.Yes:
-        pytest.skip(
-            f"{mathop} does not use stable_sort parameter - skipping Yes variant"
-        )
-
     # Calculate tile count from input dimensions
     tile_count_A, tile_count_B, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
