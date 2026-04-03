@@ -1516,9 +1516,10 @@ def test_wan_decoder(
 @pytest.mark.parametrize(
     ("B, C, H, W"),
     [
+        (1, 16, 60, 104),  # 480p
         (1, 16, 90, 160),  # 720p
     ],
-    ids=["720p"],
+    ids=["480p", "720p"],
 )
 @pytest.mark.parametrize("T", [21, 32], ids=["21f", "32f"])
 @pytest.mark.parametrize(
@@ -1623,9 +1624,7 @@ def test_wan_decoder_chunked_consistency(
         tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, t_chunk_size=t_chunk_size)
         return ttnn.to_torch(
             tt_output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(
-                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims
-            ),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
         )
 
     # Run baseline: full-T, no cache
@@ -1640,8 +1639,7 @@ def test_wan_decoder_chunked_consistency(
         logger.info(f"  chunked output shape: {chunked.shape}")
 
         assert baseline.shape == chunked.shape, (
-            f"Shape mismatch for t_chunk_size={t_chunk_size}: "
-            f"baseline {baseline.shape} vs chunked {chunked.shape}"
+            f"Shape mismatch for t_chunk_size={t_chunk_size}: " f"baseline {baseline.shape} vs chunked {chunked.shape}"
         )
         if not torch.equal(baseline, chunked):
             diff = (baseline - chunked).abs()
