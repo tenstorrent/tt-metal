@@ -18,7 +18,12 @@ set(ULFM_PREFIX /opt/openmpi-v5.0.7-ulfm)
 # Check if distributed is enabled and ULFM MPI exists, otherwise use system MPI, or fall back to single host
 if(ENABLE_DISTRIBUTED AND EXISTS ${ULFM_PREFIX}/lib/libmpi.so.40)
     message(STATUS "Using ULFM MPI from ${ULFM_PREFIX}")
-    list(APPEND DISTRIBUTED_SRC multihost/mpi_distributed_context.cpp)
+    list(
+        APPEND
+        DISTRIBUTED_SRC
+        multihost/mpi_distributed_context.cpp
+        multihost/mpi_failure_diagnostics.cpp
+    )
     set(ULFM_LIB ${ULFM_PREFIX}/lib/libmpi.so.40)
     set(USE_MPI TRUE)
 
@@ -46,7 +51,12 @@ elseif(ENABLE_DISTRIBUTED)
         message(STATUS "ULFM MPI not found, using system MPI")
         add_library(OpenMPI::MPI ALIAS MPI::MPI_C)
         set(USE_MPI TRUE)
-        list(APPEND DISTRIBUTED_SRC multihost/mpi_distributed_context.cpp)
+        list(
+            APPEND
+            DISTRIBUTED_SRC
+            multihost/mpi_distributed_context.cpp
+            multihost/mpi_failure_diagnostics.cpp
+        )
     else()
         message(
             FATAL_ERROR

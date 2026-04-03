@@ -3,14 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Purpose: Run fault tolerance tests for tt_metal
-# GHA ULFM annotations: ulfm_github_workflow_helpers.sh (sourced below).
+# GHA ULFM annotations: ulfm_github_workflow_wrappers.sh (sourced below).
 
 set -euo pipefail
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=ulfm_github_workflow_helpers.sh
-source "$SCRIPT_DIR/ulfm_github_workflow_helpers.sh"
+# shellcheck source=../../scripts/multihost/ulfm_github_workflow_wrappers.sh
+source "$SCRIPT_DIR/../../scripts/multihost/ulfm_github_workflow_wrappers.sh"
 
 # Allow test overrides for shell-level regression coverage.
 MPIRUN="${MPIRUN:-$SCRIPT_DIR/mpirun_wrapper.sh}"

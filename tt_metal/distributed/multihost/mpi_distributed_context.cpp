@@ -1,8 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "mpi_distributed_context.hpp"
+
+#include "mpi_ulfm_config.hpp"
+#include "mpi_failure_diagnostics.hpp"
 #include <mpi.h>
 #include <mpi-ext.h>
 
@@ -27,20 +30,7 @@
 #include <fmt/format.h>
 #include <tt_stl/assert.hpp>
 
-// Use MPIX_ERR_PROC_FAILED as a proxy to detect whether OpenMPI was built with
-// ULFM extensions.
-#if (defined(OPEN_MPI) && OPEN_MPI && defined(MPIX_ERR_PROC_FAILED))
-#define OMPI_HAS_ULFM 1
-#else
-#define OMPI_HAS_ULFM 0
-#endif
-
 namespace tt::tt_metal::distributed::multihost {
-
-// Exit code used by all ULFM fast-fail paths.  Matches EX_SOFTWARE (70) from
-// <sysexits.h> and is recognised by ttrun.py to emit a targeted diagnostic
-// rather than a generic "non-zero exit" message.
-static constexpr int kUlfmExitCode = 70;
 
 /* ----------------------------- helpers ---------------------------------- */
 
@@ -182,7 +172,7 @@ static std::string identify_failed_ranks(MPI_Comm comm) {
 
 // Handle a detected rank failure according to the active FailurePolicy.
 //
-// FAST_FAIL mode: revoke communicator, print diagnostic, call _exit(kUlfmExitCode).
+// FAST_FAIL mode: revoke communicator, print diagnostic, call _exit(k_mpi_ulfm_fast_fail_exit_code).
 //   _exit() is used instead of exit()/throw to avoid MPI_Finalize() deadlock:
 //   once a communicator is revoked, MPI_Finalize() blocks indefinitely because
 //   it tries to synchronise with ranks that no longer exist.  _exit() bypasses
@@ -242,27 +232,6 @@ static std::vector<Rank> parse_failed_ranks_string(std::string_view s) {
     return result;
 }
 
-[[nodiscard]] std::string format_world_rank_name(int world_rank) { return fmt::format("world-rank-{}", world_rank); }
-
-[[nodiscard]] std::string_view failure_policy_name(FailurePolicy policy) noexcept {
-    return (policy == FailurePolicy::FAST_FAIL) ? "fast_fail" : "fault_tolerant";
-}
-
-inline constexpr std::string_view kUnknownRankName = "unknown-world-rank";
-inline constexpr std::string_view kUnknownHostname = "unknown-hostname";
-static constexpr char kRunnerNameEnvVar[] = "RUNNER_NAME";
-
-[[nodiscard]] std::string_view hostname_for_rank(std::span<const std::string> rank_hostnames, int rank) noexcept {
-    if (rank < 0) {
-        return kUnknownHostname;
-    }
-    const auto rank_index = static_cast<std::size_t>(rank);
-    if (rank_index >= rank_hostnames.size() || rank_hostnames[rank_index].empty()) {
-        return kUnknownHostname;
-    }
-    return rank_hostnames[rank_index];
-}
-
 template <std::size_t N, typename... Args>
 [[nodiscard]] std::string_view format_to_buffer(
     char (&buffer)[N], fmt::format_string<Args...> format_string, Args&&... args) noexcept {
@@ -275,156 +244,6 @@ template <std::size_t N, typename... Args>
     } catch (...) {
         buffer[0] = '\0';
         return {};
-    }
-}
-
-[[nodiscard]] bool hostname_is_generic_for_rank_diagnostics(std::string_view hostname) noexcept {
-    return hostname.empty() || hostname == kUnknownHostname || hostname == "localhost" ||
-           hostname == "localhost.localdomain" || hostname == "mpirun-host";
-}
-
-[[nodiscard]] bool can_query_mpi_process_identity() noexcept {
-    int initialized = 0;
-    if (MPI_Initialized(&initialized) != MPI_SUCCESS || initialized == 0) {
-        return false;
-    }
-
-    int finalized = 0;
-    return MPI_Finalized(&finalized) == MPI_SUCCESS && finalized == 0;
-}
-
-[[nodiscard]] std::string_view select_best_effort_local_rank_hostname(
-    std::string_view mpi_processor_name, std::string_view runner_name) noexcept {
-    if (!hostname_is_generic_for_rank_diagnostics(mpi_processor_name)) {
-        return mpi_processor_name;
-    }
-
-    if (!runner_name.empty()) {
-        return runner_name;
-    }
-
-    if (!mpi_processor_name.empty()) {
-        return mpi_processor_name;
-    }
-
-    return kUnknownHostname;
-}
-
-[[nodiscard]] std::string_view best_effort_local_rank_hostname_view(
-    std::array<char, MPI_MAX_PROCESSOR_NAME>& processor_name_buffer) noexcept {
-    std::string_view mpi_processor_name;
-    if (can_query_mpi_process_identity()) {
-        int processor_name_length = 0;
-        if (MPI_Get_processor_name(processor_name_buffer.data(), &processor_name_length) == MPI_SUCCESS &&
-            processor_name_length > 0) {
-            const auto capped_length = std::clamp(processor_name_length, 0, MPI_MAX_PROCESSOR_NAME - 1);
-            processor_name_buffer[static_cast<std::size_t>(capped_length)] = '\0';
-            mpi_processor_name =
-                std::string_view{processor_name_buffer.data(), static_cast<std::size_t>(capped_length)};
-        }
-    }
-
-    std::string_view runner_name;
-    if (const char* value = std::getenv(kRunnerNameEnvVar); value != nullptr && *value != '\0') {
-        runner_name = value;
-    }
-
-    return select_best_effort_local_rank_hostname(mpi_processor_name, runner_name);
-}
-
-[[nodiscard]] std::string best_effort_local_rank_hostname() {
-    std::array<char, MPI_MAX_PROCESSOR_NAME> processor_name_buffer{};
-    return std::string{best_effort_local_rank_hostname_view(processor_name_buffer)};
-}
-
-[[nodiscard]] int best_effort_local_world_rank() noexcept {
-    if (!can_query_mpi_process_identity()) {
-        return -1;
-    }
-
-    int rank = -1;
-    if (MPI_Comm_rank(MPI_COMM_WORLD, &rank) != MPI_SUCCESS) {
-        return -1;
-    }
-
-    return rank;
-}
-
-[[nodiscard]] std::vector<std::string> best_effort_gather_rank_hostnames(MPI_Comm comm, int local_rank, int size) {
-    if (size <= 0) {
-        return {};
-    }
-
-    static constexpr int kRankHostnameBufferSize = 256;
-    std::vector<std::string> rank_hostnames(static_cast<std::size_t>(size), std::string{kUnknownHostname});
-    std::array<char, kRankHostnameBufferSize> local_hostname{};
-    const std::string local_hostname_value = best_effort_local_rank_hostname();
-    const auto copied_length = std::min(local_hostname_value.size(), local_hostname.size() - 1);
-    std::copy_n(local_hostname_value.data(), copied_length, local_hostname.data());
-    local_hostname[copied_length] = '\0';
-    if (local_rank >= 0 && local_rank < size) {
-        rank_hostnames[static_cast<std::size_t>(local_rank)] = local_hostname.data();
-    }
-
-    std::vector<char> gathered_hostnames(static_cast<std::size_t>(size) * kRankHostnameBufferSize, '\0');
-    if (MPI_Allgather(
-            local_hostname.data(),
-            kRankHostnameBufferSize,
-            MPI_CHAR,
-            gathered_hostnames.data(),
-            kRankHostnameBufferSize,
-            MPI_CHAR,
-            comm) != MPI_SUCCESS) {
-        return rank_hostnames;
-    }
-
-    for (int rank = 0; rank < size; ++rank) {
-        const auto begin = gathered_hostnames.begin() +
-                           static_cast<std::ptrdiff_t>(static_cast<std::size_t>(rank) * kRankHostnameBufferSize);
-        const auto end = begin + kRankHostnameBufferSize;
-        const auto nul = std::find(begin, end, '\0');
-        if (begin != nul) {
-            rank_hostnames[static_cast<std::size_t>(rank)] = std::string(begin, nul);
-        }
-    }
-
-    return rank_hostnames;
-}
-
-// Logs stable key=value fields to stderr for CI and multihost smoke tests (same
-// field names as the former GitHub annotation payload).
-static void emit_rank_failure_diagnostics(
-    const std::vector<Rank>& failed_ranks,
-    std::string_view failed_ranks_text,
-    std::span<const std::string> rank_hostnames,
-    int detecting_rank,
-    std::string_view operation,
-    int error_code,
-    FailurePolicy policy) {
-    const std::string detecting_rank_name = format_world_rank_name(detecting_rank);
-    const std::string_view detecting_hostname = hostname_for_rank(rank_hostnames, detecting_rank);
-
-    auto emit_line = [&](std::string_view failed_rank_name, std::string_view failed_hostname) {
-        fmt::print(
-            stderr,
-            "  ULFM detected a rank failure; failed_rank_name={}; failed_hostname={}; failed_ranks={}; "
-            "detecting_rank_name={}; detecting_hostname={}; operation={}; error_code={}; policy={}\n",
-            failed_rank_name,
-            failed_hostname,
-            failed_ranks_text,
-            detecting_rank_name,
-            detecting_hostname,
-            operation,
-            error_code,
-            failure_policy_name(policy));
-    };
-
-    if (failed_ranks.empty()) {
-        emit_line(kUnknownRankName, kUnknownHostname);
-    } else {
-        for (const auto failed_rank : failed_ranks) {
-            emit_line(format_world_rank_name(*failed_rank), hostname_for_rank(rank_hostnames, *failed_rank));
-        }
     }
 }
 
@@ -504,9 +323,9 @@ static void handle_rank_failure(
         throw MPIRankFailureException(Rank{cached_rank}, error_code, failed);
     }
 
-    // FAST_FAIL: exit code kUlfmExitCode (EX_SOFTWARE) flags ULFM-initiated shutdown so
+    // FAST_FAIL: exit code k_mpi_ulfm_fast_fail_exit_code (EX_SOFTWARE) flags ULFM-initiated shutdown so
     // ttrun.py can emit a targeted diagnostic.
-    _exit(kUlfmExitCode);
+    _exit(k_mpi_ulfm_fast_fail_exit_code);
 }
 
 #endif  // OMPI_HAS_ULFM
@@ -607,6 +426,9 @@ std::shared_ptr<MPIContext::CommunicatorState> MPIContext::snapshot_state() cons
 
 // MPI_CHECK     -- generic, for static methods and non-MPIContext contexts
 // MPI_CHECK_STATE -- ULFM-aware, for MPIContext member functions
+#undef MPI_CHECK
+#undef MPI_CHECK_STATE
+#undef MPI_CHECK_REQUEST
 #define MPI_CHECK(call) mpi_check((call), #call)
 #define MPI_CHECK_STATE(state, call)                     \
     mpi_check_ctx(                                       \
@@ -731,13 +553,13 @@ bool MPIRequest::active() const { return !done_; }
 //
 //  1. std::set_terminate — fires for any uncaught C++ exception or explicit
 //     std::terminate() call.  Revokes MPI_COMM_WORLD so blocked ranks receive
-//     ERR_REVOKED, then calls _exit(kUlfmExitCode) to bypass all atexit handlers.
+//     ERR_REVOKED, then calls _exit(k_mpi_ulfm_fast_fail_exit_code) to bypass all atexit handlers.
 //
 //  2. MPI_Finalize watchdog — the atexit handler that calls MPI_Finalize is
 //     collective: if one rank crashed or was killed without calling it, every
 //     other rank hangs there forever.  We arm a SIGALRM before calling
 //     MPI_Finalize; if it doesn't return within MPI_FINALIZE_TIMEOUT_SECS the
-//     alarm fires, we log, and _exit(kUlfmExitCode).
+//     alarm fires, we log, and _exit(k_mpi_ulfm_fast_fail_exit_code).
 //
 // Together these cover the cases ULFM can't: a rank that is alive-but-stuck
 // (e.g. blocked in Python teardown while holding an MPI_Finalize call).
@@ -751,20 +573,25 @@ static constexpr unsigned MPI_FINALIZE_TIMEOUT_SECS = 30;
 // SIGALRM handler: MPI_Finalize watchdog fired — another rank is dead/stuck.
 // async-signal-safe: only write() and _exit() are called.
 static void mpi_finalize_alarm_handler(int /*sig*/) noexcept {
+    static const char ulfm_struct[] =
+        "  ULFM detected a rank failure; failed_rank_name=unknown-world-rank; failed_hostname=unknown-hostname; "
+        "failed_ranks=unknown; detecting_rank_name=unknown-world-rank; detecting_hostname=unknown-hostname; "
+        "operation=MPI_Finalize_watchdog; error_code=70; policy=fast_fail; reason=finalize_timeout\n";
     static const char msg[] =
         "[ULFM] MPI_Finalize watchdog: another rank appears dead or stuck. "
-        "Exiting kUlfmExitCode (70) to unblock the job.\n";
-    [[maybe_unused]] auto w = write(STDERR_FILENO, msg, sizeof(msg) - 1);
+        "Exiting with code 70 (EX_SOFTWARE) to unblock the job.\n";
+    [[maybe_unused]] auto w1 = write(STDERR_FILENO, ulfm_struct, sizeof(ulfm_struct) - 1);
+    [[maybe_unused]] auto w2 = write(STDERR_FILENO, msg, sizeof(msg) - 1);
     // Note: MPIX_Comm_revoke is NOT async-signal-safe; skip it here.
     // _exit skips all atexit handlers (including the MPI_Finalize atexit),
     // avoiding a second hang.
-    _exit(kUlfmExitCode);
+    _exit(k_mpi_ulfm_fast_fail_exit_code);
 }
 
 // std::terminate handler: catches uncaught C++ exceptions and explicit
 // std::terminate() calls (e.g. exceptions thrown in thread-pool workers).
 // Revokes MPI_COMM_WORLD so surviving ranks detect the failure via ULFM,
-// then calls _exit(kUlfmExitCode) to bypass MPI_Finalize.
+// then calls _exit(k_mpi_ulfm_fast_fail_exit_code) to bypass MPI_Finalize.
 //
 // Async-signal-safety note: This is NOT a POSIX signal handler. Per C++
 // [except.terminate], std::terminate runs in the thread that invoked it, after
@@ -781,12 +608,14 @@ static void mpi_terminate_handler() noexcept {
     const int local_rank = best_effort_local_world_rank();
     std::array<char, MPI_MAX_PROCESSOR_NAME> processor_name_buffer{};
     const std::string_view local_hostname = best_effort_local_rank_hostname_view(processor_name_buffer);
+    char terminate_reason[512];
+    capture_terminate_reason(terminate_reason, sizeof terminate_reason);
 #if OMPI_HAS_ULFM
     // Revoke so that any rank blocked in a collective receives ERR_REVOKED
     // and our MPI_CHECK_CTX macro triggers the FailurePolicy dispatch.
     // This is best-effort: MPI_COMM_WORLD may already be revoked or
     // MPI may not be initialized yet.  We swallow any exception (or error
-    // return) so that _exit(kUlfmExitCode) below is always reached — an
+    // return) so that _exit(k_mpi_ulfm_fast_fail_exit_code) below is always reached — an
     // already-revoked communicator or torn-down MPI runtime must not
     // prevent the process from terminating.
     try {
@@ -796,9 +625,13 @@ static void mpi_terminate_handler() noexcept {
     }
 #endif
 
+    // Structured line for GHA / grep (same keys as emit_rank_failure_diagnostics).
+    emit_local_mpi_process_fatal_diagnostic(local_rank, local_hostname, "std::terminate", terminate_reason);
+
     char rank_name_buffer[32] = {};
-    const std::string_view rank_name =
-        (local_rank >= 0) ? format_to_buffer(rank_name_buffer, "world-rank-{}", local_rank) : kUnknownRankName;
+    const std::string_view rank_name = (local_rank >= 0)
+                                           ? format_to_buffer(rank_name_buffer, "world-rank-{}", local_rank)
+                                           : k_mpi_unknown_world_rank_name;
 
     char msg_buffer[1024] = {};
     const std::string_view msg = format_to_buffer(
@@ -808,7 +641,7 @@ static void mpi_terminate_handler() noexcept {
         "  Rank   : {}\n"
         "  Host   : {}\n"
         "  Cause  : uncaught exception or explicit std::terminate()\n"
-        "  Action : revoked MPI_COMM_WORLD (if ULFM available), exiting kUlfmExitCode (70)\n"
+        "  Action : revoked MPI_COMM_WORLD (if ULFM available), exiting with code 70\n"
         "================================================================\n",
         rank_name,
         local_hostname);
@@ -819,12 +652,12 @@ static void mpi_terminate_handler() noexcept {
             "================================================================\n"
             "FATAL: std::terminate called in MPI context\n"
             "  Cause  : uncaught exception or explicit std::terminate()\n"
-            "  Action : revoked MPI_COMM_WORLD (if ULFM available), exiting kUlfmExitCode (70)\n"
+            "  Action : revoked MPI_COMM_WORLD (if ULFM available), exiting with code 70\n"
             "================================================================\n";
         [[maybe_unused]] const auto ignored =
             write(STDERR_FILENO, kFallbackTerminateMessage.data(), kFallbackTerminateMessage.size());
     }
-    _exit(kUlfmExitCode);
+    _exit(k_mpi_ulfm_fast_fail_exit_code);
 }
 
 inline void init_env(int& argc, char**& argv) {
@@ -838,7 +671,7 @@ inline void init_env(int& argc, char**& argv) {
 
         // Install the terminate handler so that any uncaught exception
         // (including those thrown in thread-pool workers via std::async)
-        // revokes the world communicator and calls _exit(kUlfmExitCode) rather than
+        // revokes the world communicator and calls _exit(k_mpi_ulfm_fast_fail_exit_code) rather than
         // letting the process hang in teardown.
         std::set_terminate(mpi_terminate_handler);
 
@@ -1437,3 +1270,7 @@ MPIContext::~MPIContext() {
     state_.reset();
 }
 }  // namespace tt::tt_metal::distributed::multihost
+
+#undef MPI_CHECK
+#undef MPI_CHECK_STATE
+#undef MPI_CHECK_REQUEST
