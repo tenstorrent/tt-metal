@@ -282,8 +282,10 @@ def clear_build_cache() -> None:
 def _default_results(items) -> List:
     """Collect default result descriptors from a container's items.
 
-    - ``Parallel``: one output per branch (each branch's leaf).
-    - ``Sequential``: the last item's outputs.
+    Used for :class:`Sequential` only (see :func:`_default_results_parallel_branches` for
+    :class:`Parallel`).
+
+    - ``Sequential``: the last item's outputs (or expanded ``Parallel`` / nested chain).
     - Nested: recurses, so ``Sequential(stem, Parallel(a, b))`` → ``[a, b]``.
     """
     if not items:
@@ -304,6 +306,27 @@ def _default_results(items) -> List:
     return []
 
 
+def _default_results_parallel_branches(items) -> List:
+    """Collect one leaf :class:`OpDescriptor` per top-level branch of a :class:`Parallel`.
+
+    ``Parallel(op_a, op_b)`` with two op descriptors → ``[op_a, op_b]`` (not only ``op_b``).
+
+    A branch may be a :class:`Sequential` chain; then we use :func:`_default_results` for
+    that branch's step list (typically the last op in the chain).
+    """
+    out: List = []
+    for item in items:
+        if is_op_descriptor(item):
+            out.append(item)
+        elif isinstance(item, Parallel):
+            out.extend(_default_results_parallel_branches(item._items))
+        elif isinstance(item, Sequential):
+            out.extend(_default_results(item._items))
+        else:
+            raise TypeError(f"Unsupported Parallel branch type: {type(item)!r}")
+    return out
+
+
 def _container_run(container: Any, surface_prefix: str, results, device=None, kernel_dir: Optional[str] = None):
     """Shared implementation for :meth:`Sequential.run` / :meth:`Parallel.run`."""
     cache_device = device
@@ -319,7 +342,10 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
         container._run_signature = sig
     container._run_fused.launch()
     if results is None:
-        results = _default_results(container._items)
+        if surface_prefix == "P":
+            results = _default_results_parallel_branches(container._items)
+        else:
+            results = _default_results(container._items)
     return [desc.output_tensors[0] for desc in results]
 
 
