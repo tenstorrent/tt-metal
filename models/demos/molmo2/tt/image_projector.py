@@ -15,6 +15,10 @@ Dimensions:
     - output_dim: 4096 (text model hidden size)
 
 All linear layers have bias=False.
+
+Supports TP=8 tensor parallelism:
+    - w1, w3 (gate, up): column-parallel (12288/8 = 1536 per device)
+    - w2 (down): row-parallel with all_reduce
 """
 
 import torch
@@ -32,6 +36,10 @@ class ImageProjector(LightweightModule):
         - w3: Linear(input_dim, intermediate_dim, bias=False) - up projection
         - w2: Linear(intermediate_dim, output_dim, bias=False) - down projection
         - Output: w2(silu(w1(x)) * w3(x))
+
+    Supports TP=8:
+        - w1, w3: column-parallel (1536 per device)
+        - w2: row-parallel with all_reduce
     """
 
     def __init__(
@@ -66,52 +74,67 @@ class ImageProjector(LightweightModule):
         self.output_dim = output_dim
         self.dtype = dtype
 
+        # TP=8 configuration
+        self.is_mesh_device = mesh_device.__class__.__name__ == "MeshDevice"
+        self.num_devices = mesh_device.get_num_devices() if self.is_mesh_device else 1
+
         # Cache file naming
         if weight_cache_path is None:
             cache_name = lambda _: None
         else:
             cache_name = lambda name: weight_cache_path / f"{state_dict_prefix}.{name}"
 
-        is_mesh_device = mesh_device.__class__.__name__ == "MeshDevice"
-        mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh_device else None
+        # Mesh mappers for TP
+        if self.is_mesh_device:
+            # Column-parallel for w1, w3 (shard output dimension = intermediate_dim)
+            col_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3)
+            # Row-parallel for w2 (shard input dimension = intermediate_dim)
+            row_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+        else:
+            col_mesh_mapper = None
+            row_mesh_mapper = None
 
-        # Load w1 (gate): input_dim -> intermediate_dim (no bias)
+        # Load w1 (gate): input_dim -> intermediate_dim (column-parallel, no bias)
         w1_weight = torch.transpose(state_dict[f"{state_dict_prefix}.w1.weight"], -2, -1)
 
+        # w1 shape: [1, 1, input_dim, intermediate_dim]
+        # ShardTensorToMesh(dim=3) shards intermediate_dim across devices
         self.w1_weight = ttnn.as_tensor(
             w1_weight.unsqueeze(0).unsqueeze(0),
             dtype=dtype,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=col_mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("w1.weight"),
+            cache_file_name=cache_name("w1.weight.tp8") if self.is_mesh_device else cache_name("w1.weight"),
         )
 
-        # Load w3 (up): input_dim -> intermediate_dim (no bias)
+        # Load w3 (up): input_dim -> intermediate_dim (column-parallel, no bias)
         w3_weight = torch.transpose(state_dict[f"{state_dict_prefix}.w3.weight"], -2, -1)
 
         self.w3_weight = ttnn.as_tensor(
             w3_weight.unsqueeze(0).unsqueeze(0),
             dtype=dtype,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=col_mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("w3.weight"),
+            cache_file_name=cache_name("w3.weight.tp8") if self.is_mesh_device else cache_name("w3.weight"),
         )
 
-        # Load w2 (down): intermediate_dim -> output_dim (no bias)
+        # Load w2 (down): intermediate_dim -> output_dim (row-parallel, no bias)
         w2_weight = torch.transpose(state_dict[f"{state_dict_prefix}.w2.weight"], -2, -1)
 
+        # w2 shape: [1, 1, intermediate_dim, output_dim]
+        # ShardTensorToMesh(dim=2) shards intermediate_dim (input) across devices
         self.w2_weight = ttnn.as_tensor(
             w2_weight.unsqueeze(0).unsqueeze(0),
             dtype=dtype,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=row_mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("w2.weight"),
+            cache_file_name=cache_name("w2.weight.tp8") if self.is_mesh_device else cache_name("w2.weight"),
         )
 
         # Compute kernel configs
@@ -126,6 +149,11 @@ class ImageProjector(LightweightModule):
         """
         Forward pass through SwiGLU projector.
 
+        With TP=8:
+            - w1, w3 are column-parallel (each device has intermediate_dim/8)
+            - w2 is row-parallel (each device computes partial sum)
+            - all_reduce combines partial sums after w2
+
         Args:
             x: Input tensor of shape [1, 1, num_tokens, input_dim]
 
@@ -138,7 +166,7 @@ class ImageProjector(LightweightModule):
         if seq_len > 1024 and seq_len % 1024 == 0:
             x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
 
-        # w1 (gate projection) with SiLU activation
+        # w1 (gate projection) with SiLU activation - column-parallel
         gate = ttnn.linear(
             x,
             self.w1_weight,
@@ -147,7 +175,7 @@ class ImageProjector(LightweightModule):
         )
         gate = ttnn.silu(gate)
 
-        # w3 (up projection)
+        # w3 (up projection) - column-parallel
         up = ttnn.linear(
             x,
             self.w3_weight,
@@ -156,11 +184,12 @@ class ImageProjector(LightweightModule):
         )
 
         # Element-wise multiply: silu(w1(x)) * w3(x)
+        # Both gate and up are local intermediate dims, so multiply is local
         hidden = ttnn.mul(gate, up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
 
-        # w2 (down projection)
+        # w2 (down projection) - row-parallel
         output = ttnn.linear(
             hidden,
             self.w2_weight,
@@ -168,6 +197,15 @@ class ImageProjector(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(hidden)
+
+        # TP=8: All-reduce to combine partial results from all devices
+        if self.is_mesh_device and self.num_devices > 1:
+            output = ttnn.all_reduce(
+                output,
+                cluster_axis=1,
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         # Reshape back if needed
         if seq_len > 1024 and seq_len % 1024 == 0:

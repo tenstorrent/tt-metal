@@ -54,6 +54,7 @@ class VisionTransformer(LightweightModule):
         weight_cache_path=None,
         state_dict_prefix: str = "model.vision_backbone.image_vit",
         dtype=ttnn.bfloat16,  # Changed from bfloat8_b for better precision
+        use_tensor_parallel: bool = False,  # ViT uses data parallelism by default
     ):
         """
         Initialize VisionTransformer.
@@ -156,6 +157,7 @@ class VisionTransformer(LightweightModule):
                 weight_cache_path=weight_cache_path,
                 state_dict_prefix=f"{state_dict_prefix}.transformer.resblocks.{layer_num}",
                 dtype=dtype,
+                use_tensor_parallel=use_tensor_parallel,
             )
             self.blocks.append(block)
 
