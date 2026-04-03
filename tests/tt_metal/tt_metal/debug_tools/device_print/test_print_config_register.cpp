@@ -494,12 +494,7 @@ TEST_F(DevicePrintFixture, ConfigRegPackEdgeOffsetTestPrint) {
     std::vector<std::string> field_names_pack_edge_offset = field_names_pack_edge_offset_all;
     std::vector<uint32_t> field_values_pack_edge_offset = field_values_pack_edge_offset_all;
 
-    int num_of_registers;
-    if (this->arch_ == ARCH::BLACKHOLE) {
-        num_of_registers = 1;
-    } else {
-        num_of_registers = 4;
-    }
+    int num_of_registers = (this->arch_ == ARCH::BLACKHOLE) ? 1 : 4;
 
     // Setup test configuration
     ConfigRegPrintTestConfig test_config = {
