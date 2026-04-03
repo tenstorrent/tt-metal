@@ -124,7 +124,8 @@ ALWI void reduce(
     ReduceInputBlockShape input_block_shape,
     ReduceInputMemoryLayout input_memory_layout,
     AccumulateT accumulate,
-    PostReduceOp post_reduce_op) {
+    PostReduceOp post_reduce_op,
+    ReducePartialScaler partial_scaler) {
     // =============================================================================
     // Static Assertions (compile-time validation)
     // =============================================================================
@@ -157,6 +158,12 @@ ALWI void reduce(
         ASSERT(accumulate.config.cb_accumulator < NUM_CIRCULAR_BUFFERS);
     }
 
+    // REDUCE_SCALAR performs two reductions (H and W) with the same scaler tile.
+    // A single partial scaler tile cannot encode both partial-H and partial-W patterns.
+    if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
+        ASSERT(partial_scaler.last_tile_scaler_idx == 0);
+    }
+
     // Compile-time flag: true when Accumulate type is passed, false otherwise
     constexpr bool enable_accumulation = is_accumulate_v<AccumulateT>;
     // Extract block shape components
@@ -177,7 +184,7 @@ ALWI void reduce(
 
     // Initialization
     reduce_init<reduce_type, reduce_dim, enforce_fp32_accumulation>(input_cb, scaler_cb, output_cb);
-    cb_wait_front(scaler_cb, 1);  // Wait for scaler tile
+    cb_wait_front(scaler_cb, partial_scaler.last_tile_scaler_idx + 1);  // Wait for scaler tile(s)
 
     constexpr uint32_t onetile = 1;
 
@@ -299,18 +306,21 @@ ALWI void reduce(
 
                 const uint32_t dst_idx = get_dst_index(accumulate);
                 for (uint32_t wt = 0; wt < Wt; ++wt) {
+                    // Select partial scaler for the last W tile (padded columns zeroed)
+                    const uint32_t scaler_idx = (wt == Wt - 1) ? partial_scaler.last_tile_scaler_idx : 0;
                     if constexpr (waits_per_tile(input_policy)) {
                         // One-at-a-time: wait/pop per tile
                         cb_wait_front(input_cb, onetile);
-                        reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(input_cb, scaler_cb, 0, 0, dst_idx);
+                        reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
+                            input_cb, scaler_cb, 0, scaler_idx, dst_idx);
                         cb_pop_front(input_cb, onetile);
                     } else if constexpr (waits_bulk(input_policy)) {
                         // BulkWaitBulkPop: use indexed access
                         reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
-                            input_cb, scaler_cb, wt, 0, dst_idx);
+                            input_cb, scaler_cb, wt, scaler_idx, dst_idx);
                     } else {  // PreloadedPolicy or PersistentPolicy: indexed access
                         reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
-                            input_cb, scaler_cb, wt + index_offset, 0, dst_idx);
+                            input_cb, scaler_cb, wt + index_offset, scaler_idx, dst_idx);
                     }
                 }
 
@@ -393,6 +403,8 @@ ALWI void reduce(
                     input_cb, scaler_cb, accumulate);
 
                 for (uint32_t ht = 0; ht < Ht; ++ht) {
+                    // Select partial scaler for the last H tile (padded rows zeroed)
+                    const uint32_t scaler_idx = (ht == Ht - 1) ? partial_scaler.last_tile_scaler_idx : 0;
                     // Base dst_index: from accumulation config or 0 for multi-column output
                     uint32_t dst_idx = get_dst_index(accumulate);
                     for (uint32_t i = wt; i < chunk_end; ++i) {
@@ -400,17 +412,17 @@ ALWI void reduce(
                             // One-at-a-time: wait/pop per tile
                             cb_wait_front(input_cb, onetile);
                             reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
-                                input_cb, scaler_cb, 0, 0, dst_idx);
+                                input_cb, scaler_cb, 0, scaler_idx, dst_idx);
                             cb_pop_front(input_cb, onetile);
                         } else if constexpr (waits_bulk(input_policy)) {
                             // BulkWaitBulkPop: use indexed access
                             uint32_t tile_idx = ht * current_chunk + (i - wt);
                             reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
-                                input_cb, scaler_cb, tile_idx, 0, dst_idx);
+                                input_cb, scaler_cb, tile_idx, scaler_idx, dst_idx);
                         } else {  // PreloadedPolicy or PersistentPolicy: indexed access
                             uint32_t tile_idx = batch_offset + ht * stride + i;
                             reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
-                                input_cb, scaler_cb, tile_idx, 0, dst_idx);
+                                input_cb, scaler_cb, tile_idx, scaler_idx, dst_idx);
                         }
                         ++dst_idx;
                     }
