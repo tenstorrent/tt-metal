@@ -11,7 +11,6 @@ This tests the decoupled workflow:
 """
 
 import json
-import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -29,10 +28,6 @@ import graph_report
 # Now import ttnn for device tests
 import ttnn
 from models.common.utility_functions import is_wormhole_b0
-
-
-def is_simulator():
-    return os.environ.get("TT_METAL_SIMULATOR") is not None
 
 
 @pytest.fixture
@@ -2167,15 +2162,19 @@ class TestLinearModelE2E:
     def test_linear_model_structural_properties(self, device, tmp_path):
         report_path = tmp_path / "linear_report.json"
 
-        with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
-            "enable_logging", True
-        ), ttnn.manage_config("enable_graph_report", True):
-            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-            a = ttnn.ones([1024, 1024], layout=ttnn.TILE_LAYOUT, device=device)
-            b = ttnn.ones([1024, 1024], layout=ttnn.TILE_LAYOUT, device=device)
-            c = ttnn.ones([1, 1024], layout=ttnn.TILE_LAYOUT, device=device)
-            ttnn.linear(a, b, bias=c)
-            ttnn.graph.end_graph_capture_to_file(report_path)
+        ttnn.graph.enable_python_stack_traces()
+        try:
+            with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
+                "enable_logging", True
+            ), ttnn.manage_config("enable_graph_report", True):
+                ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+                a = ttnn.ones([1024, 1024], layout=ttnn.TILE_LAYOUT, device=device)
+                b = ttnn.ones([1024, 1024], layout=ttnn.TILE_LAYOUT, device=device)
+                c = ttnn.ones([1, 1024], layout=ttnn.TILE_LAYOUT, device=device)
+                ttnn.linear(a, b, bias=c)
+                ttnn.graph.end_graph_capture_to_file(report_path)
+        finally:
+            ttnn.graph.disable_python_stack_traces()
 
         assert report_path.exists(), "Report JSON should be created"
 
@@ -2252,7 +2251,6 @@ def imagenet_label_dict():
 
 
 @pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
-@pytest.mark.skipif(is_simulator(), reason="ResNet-50 uses ops unsupported by ttsim")
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
@@ -2269,10 +2267,14 @@ def test_resnet50_e2e_graph_capture(
 
     report_path = tmp_path / "resnet50_report.json"
 
-    with ttnn.manage_config("enable_fast_runtime_mode", False):
-        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-        run_resnet_inference(batch_size, input_loc, imagenet_label_dict, mesh_device, model_location_generator)
-        ttnn.graph.end_graph_capture_to_file(report_path)
+    ttnn.graph.enable_python_stack_traces()
+    try:
+        with ttnn.manage_config("enable_fast_runtime_mode", False):
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            run_resnet_inference(batch_size, input_loc, imagenet_label_dict, mesh_device, model_location_generator)
+            ttnn.graph.end_graph_capture_to_file(report_path)
+    finally:
+        ttnn.graph.disable_python_stack_traces()
 
     assert report_path.exists(), "Report JSON should be created"
 
@@ -3095,7 +3097,6 @@ class TestCapturedGraphFallbackExtraction:
         conn.close()
 
 
-@pytest.mark.skipif(is_simulator(), reason="Fast dispatch with ttnn.add crashes ttsim worker on teardown")
 class TestFastOperationGraphTracking:
     """Tests that FastOperation emits track_function_start/end during graph capture."""
 

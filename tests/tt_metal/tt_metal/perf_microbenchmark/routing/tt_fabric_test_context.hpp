@@ -133,6 +133,8 @@ public:
 
     void wait_for_programs() { fixture_->wait_for_programs(); }
 
+    void set_show_workers(bool show_workers) { show_workers_ = show_workers; }
+
     void enable_progress_monitoring(const ProgressMonitorConfig& config);
 
     void wait_for_programs_with_progress();
@@ -263,6 +265,8 @@ private:
     std::unique_ptr<LatencyResultsManager> latency_test_manager_;
     std::vector<TelemetryEntry> telemetry_entries_;  // Per-test raw data
     bool code_profiling_enabled_ = false;
+
+    bool show_workers_ = false;
 
     // Progress monitoring
     ProgressMonitorConfig progress_config_;

@@ -221,8 +221,30 @@ def _build_fused_descriptor(
     # Compute CB address rebinding info using remapped slot indices.
     rebind_info = _compute_rebind_info(phases, pool.phase_remaps)
 
-    # Build merged CB descriptors from pool (uses stored source_cb/source_fmt references)
-    merged_cbs = pool.build_merged_cb_descriptors(phases)
+    # Compute rebind source map BEFORE build_merged_cb_descriptors, which
+    # mutates fmt_desc.buffer_index to slot indices.  Here the original
+    # buffer_index values are still intact.
+    rebind_source_map = []
+    for phase_idx in sorted(rebind_info.keys()):
+        inv_remap = {v: k for k, v in pool.phase_remaps[phase_idx].items()}
+        for slot_idx, _addr, size in rebind_info[phase_idx]:
+            buffer_index = inv_remap[slot_idx]
+            # Find CBDescriptor position for this buffer_index
+            cbs_pos = None
+            for pos, cb_desc in enumerate(phases[phase_idx].op_descriptor.descriptor.cbs):
+                for fmt_desc in cb_desc.format_descriptors:
+                    if fmt_desc.buffer_index == buffer_index:
+                        cbs_pos = pos
+                        break
+                if cbs_pos is not None:
+                    break
+            if cbs_pos is not None:
+                rebind_source_map.append((phases[phase_idx].op_descriptor, cbs_pos, size))
+
+    # Build merged CB descriptors from pool (uses stored source_cb/source_fmt references).
+    # NOTE: this mutates fmt_desc.buffer_index — rebind_source_map must be
+    # computed above, before this call.
+    merged_cbs, cb_source_map, global_cb_source_map = pool.build_merged_cb_descriptors(phases)
 
     # Set CB core_ranges to the target when building for a specific core group.
     # Skip GlobalCB-backed descriptors — their core_ranges must stay within
@@ -486,8 +508,10 @@ def _build_fused_descriptor(
                 seen_tensor_ids.add(tid)
 
     output_tensor = None
+    output_source_map = []
     if phases[-1].op_descriptor.output_tensors:
         output_tensor = phases[-1].op_descriptor.output_tensors[0]
+        output_source_map.append((phases[-1].op_descriptor, 0))
 
     # Create the merged ProgramDescriptor
     merged_descriptor = ttnn.ProgramDescriptor()
@@ -517,6 +541,10 @@ def _build_fused_descriptor(
         semaphores=sem_refs,
         kernel_labels=tuple(kernel_labels),
         kernel_phase_map=tuple(kernel_phase_map),
+        cb_source_map=cb_source_map,
+        rebind_source_map=rebind_source_map,
+        global_cb_source_map=global_cb_source_map,
+        output_source_map=output_source_map,
     )
 
 

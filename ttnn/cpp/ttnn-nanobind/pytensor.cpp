@@ -53,6 +53,7 @@
 
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 
 #include <tracy/Tracy.hpp>
 
@@ -1323,6 +1324,25 @@ void pytensor_module(nb::module_& mod) {
 
         )doc")
         .def(
+            "experimental_per_core_buffer_address",
+            [](const Tensor& self, const CoreCoord& core) -> uint32_t {
+                TT_FATAL(
+                    is_device_tensor(self),
+                    "{} doesn't support experimental_per_core_buffer_address",
+                    self.storage_type());
+                TT_FATAL(self.is_allocated(), "Tensor is not allocated.");
+                return experimental::per_core_allocation::get_per_core_address(self.mesh_buffer(), core);
+            },
+            nb::arg("core"),
+            R"doc(
+            Get the per-core L1 address for a specific core (experimental per-core allocation).
+
+            .. code-block:: python
+
+                address = tt_tensor.experimental_per_core_buffer_address(ttnn.CoreCoord(0, 0))
+
+        )doc")
+        .def(
             "get_layout", [](const Tensor& self) { return self.layout(); }, R"doc(
             Get memory layout of TT Tensor.
 
@@ -1472,6 +1492,31 @@ void pytensor_module(nb::module_& mod) {
             "tensor_id",
             [](const Tensor& self) { return self.tensor_id; },
             [](Tensor& self, std::size_t tensor_id) { self.tensor_id = tensor_id; });
+
+    mod.def(
+        "get_optimal_worker_cores_for_sharded_tensor",
+        &tt::tt_metal::get_optimal_worker_cores_for_sharded_tensor,
+        nb::arg("tensor"),
+        nb::arg("noc") = tt::tt_metal::NOC::RISCV_0_default,
+        R"doc(
+            Returns the optimal worker cores on which to launch programs and kernels for a sharded tensor.
+            These are the worker cores that will allow the program to maximize its use of shard data locality and reduce NoC traffic.
+
+            For L1-sharded tensors, returns the cores that hold shards in shard-orientation order.
+            For DRAM-sharded tensors, returns the optimal Tensix worker core for each DRAM bank
+            (in shard-orientation order) that holds shards.
+
+            Args:
+                tensor: A sharded device tensor (legacy 2D or ND sharded).
+                noc: Which NOC to use for optimal DRAM to worker core mapping (relevant only for DRAM-sharded tensors, default NOC_0).
+
+            Returns:
+                List of worker CoreCoords in shard-orientation order.
+
+            Example:
+                >>> cores = ttnn.get_optimal_worker_cores_for_sharded_tensor(sharded_tensor)
+                >>> # cores will have a list of CoreCoords in shard-orientation order. These are the optimal worker cores on which programs/kernels can be launched for the sharded tensor.
+        )doc");
 }
 
 }  // namespace ttnn::tensor

@@ -12,6 +12,7 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
 from tests.ttnn.utils_for_testing import assert_equal, assert_allclose
+from models.common.utility_functions import skip_for_slow_dispatch
 
 shapes = [[[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]]]
 
@@ -319,6 +320,7 @@ def test_from_torch_conversion_deep_seek_mc_large_number_of_pages_per_row(
     ],
     indirect=True,
 )
+@skip_for_slow_dispatch()
 def test_deepseek_v3_mla_tilize_trace_mode(
     device,
     batch_size,
