@@ -253,14 +253,8 @@ class Attention(LightweightModule):
         )
 
         def norm_reshard(x, norm, mode, norm_config):
-            """Hack until RMSNorm supports height-sharded output config"""
-            if mode == Mode.DECODE:
-                mem_cfg = x.memory_config()
-                x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG, dtype=x.dtype)
-            x = norm(x, mode, norm_config=norm_config)
-            if mode == Mode.DECODE:
-                x = ttnn.to_memory_config(x, mem_cfg, dtype=x.dtype)
-            return x
+            """Direct call - RMSNorm now supports height-sharded input"""
+            return norm(x, mode, norm_config=norm_config)
 
         if f"{q_norm_str}.weight" in state_dict:
             fn_q_norm = RMSNorm(
