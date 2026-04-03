@@ -23,12 +23,11 @@ from tests.ttnn.utils_for_testing import comp_pcc
 
 
 @pytest.mark.parametrize(
-    "seq_len, vocab_size, emb_dim",
+    "isl_per_chip, vocab_size, emb_dim",
     [
-        (128, 1024, 256),
-        (512, DeepSeekV3Config.VOCAB_SIZE, DeepSeekV3Config.EMB_SIZE),
+        (3200, DeepSeekV3Config.VOCAB_SIZE, DeepSeekV3Config.EMB_SIZE),
     ],
-    ids=["small", "deepseek"],
+    ids=["deepseek_prefill_100K"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
@@ -48,12 +47,13 @@ from tests.ttnn.utils_for_testing import comp_pcc
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_parallel_embedding(mesh_device, seq_len, vocab_size, emb_dim):
+def test_parallel_embedding(mesh_device, isl_per_chip, vocab_size, emb_dim):
     """Test TtParallelEmbedding against torch reference."""
 
     sp_factor = mesh_device.shape[0]
     tp_factor = mesh_device.shape[1]
-    seq_per_chip = seq_len // sp_factor
+    seq_per_chip = isl_per_chip
+    seq_len = isl_per_chip * sp_factor
 
     signpost(f"embedding-{mesh_device.shape}-seq{seq_len}-v{vocab_size}-e{emb_dim}")
 
@@ -61,10 +61,9 @@ def test_parallel_embedding(mesh_device, seq_len, vocab_size, emb_dim):
         f"Config: {mesh_device.shape=}, {sp_factor=}, {tp_factor=}, " f"{seq_per_chip=}, {vocab_size=}, {emb_dim=}"
     )
 
-    assert seq_len % sp_factor == 0, f"seq_len ({seq_len}) must be divisible by sp_factor ({sp_factor})"
     assert (
         seq_per_chip % ttnn.TILE_SIZE == 0
-    ), f"seq_per_chip ({seq_per_chip}) must be a multiple of TILE_SIZE ({ttnn.TILE_SIZE})"
+    ), f"isl_per_chip ({seq_per_chip}) must be a multiple of TILE_SIZE ({ttnn.TILE_SIZE})"
     assert emb_dim % tp_factor == 0, f"emb_dim ({emb_dim}) must be divisible by tp_factor ({tp_factor})"
 
     ttnn.visualize_mesh_device(mesh_device)
