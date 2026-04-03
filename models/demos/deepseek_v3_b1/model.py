@@ -203,34 +203,18 @@ class DeepSeekV3:
         if len(prompt_tokens) == 0:
             raise ValueError("Expected at least one prompt token")
 
-        num_writes_before_readback = min(self._pipeline_depth, len(prompt_tokens))
-        total_reads = len(prompt_tokens)
-
-        write_idx = 0
-        read_count = 0
-
-        # Phase 1: saturate the pipeline (no reads yet)
-        while write_idx < num_writes_before_readback:
-            self._write_fn(prompt_tokens[write_idx])
-            write_idx += 1
-
-        # Phase 2: overlap — drain outputs and issue remaining writes in steady state
-        while write_idx < len(prompt_tokens):
+        last_output: ttnn.Tensor | None = None
+        for token in prompt_tokens:
+            print("Input User ID: ", token[0, InputField.USER_ID].item())
+            print("Input Position ID: ", token[0, InputField.POSITION_ID].item())
+            self._write_fn(token)
             self._read_fn(self._output_buffer)
-            read_count += 1
-            self._write_fn(prompt_tokens[write_idx])
-            write_idx += 1
-
-        # Phase 3: drain remaining outputs; save the last output
-        last_results: list[DecodeResult] = []
-        while read_count < total_reads:
-            self._read_fn(self._output_buffer)
-            read_count += 1
-            if read_count > total_reads - 1:
-                last_results.append(parse_output_page(self._output_buffer))
-
-        self._position += len(prompt_tokens)
-        return last_results
+            print("Output User ID: ", self._output_buffer[0, InputField.USER_ID].item())
+            print("Output Position ID: ", self._output_buffer[0, InputField.POSITION_ID].item())
+            last_output = self._output_buffer
+            self._position += 1
+        assert last_output is not None, "Last output tensor is None"
+        return last_output
 
     def decode_step(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """
