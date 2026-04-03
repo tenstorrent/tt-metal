@@ -123,3 +123,44 @@ TEST_F(GramPolynomialTest, ScaledGSquared_2048x2048) {
     dev = extract_output_tile(out_vec, W, 0, 0);
     check_tile(ref, dev, "cG²[0,0] diagonal", c);
 }
+
+// Phase 3: bG + cG² (Muon coefficients)
+TEST_F(GramPolynomialTest, BgPlusCgSquared_2048x2048) {
+    auto G = make_random_tensor(2048);
+    constexpr float b = -4.775f;
+    constexpr float c = 2.0315f;
+    auto output = ttml::metal::gram_polynomial(G, b, c, ttml::metal::OutputMode::Full);
+    tt::tt_metal::distributed::Synchronize(&ttml::autograd::ctx().get_device(), std::nullopt);
+
+    auto g_vec = G.to_vector<float>();
+    auto out_vec = output.to_vector<float>();
+    uint32_t M = G.logical_shape()[-1];
+    uint32_t W = output.logical_shape()[-1];
+
+    // CPU reference: bG + c*(G@G), tile [2,5]
+    auto g_tile = extract_output_tile(g_vec, M, 2, 5);
+    auto g2_tile = compute_g_squared_tile(g_vec, M, 2, 5);
+    std::vector<float> ref(32 * 32);
+    for (size_t i = 0; i < ref.size(); i++) ref[i] = b * g_tile[i] + c * g2_tile[i];
+    auto dev = extract_output_tile(out_vec, W, 2, 5);
+    // Debug: check if bG is applied by comparing against cG² only
+    auto cg2_ref = compute_g_squared_tile(g_vec, M, 2, 5);
+    for (auto& v : cg2_ref) v *= c;
+    float diff_vs_cg2 = 0, diff_vs_full = 0;
+    for (size_t i = 0; i < ref.size(); i++) {
+        diff_vs_cg2 = std::max(diff_vs_cg2, std::abs(dev[i] - cg2_ref[i]));
+        diff_vs_full = std::max(diff_vs_full, std::abs(dev[i] - ref[i]));
+    }
+    std::cout << "  dev vs cG²_only max_abs=" << diff_vs_cg2 << " (should be large if bG applied)\n";
+    std::cout << "  dev vs bG+cG² max_abs=" << diff_vs_full << " (should be small)\n";
+    std::cout << "  ref[0]=" << ref[0] << " dev[0]=" << dev[0] << " cg2[0]=" << cg2_ref[0] << "\n";
+    float max_scale = std::max(std::abs(b), std::abs(c));
+    check_tile(ref, dev, "bG+cG²[2,5] off-diagonal", max_scale);
+
+    // Diagonal tile [0,0]
+    g_tile = extract_output_tile(g_vec, M, 0, 0);
+    g2_tile = compute_g_squared_tile(g_vec, M, 0, 0);
+    for (size_t i = 0; i < ref.size(); i++) ref[i] = b * g_tile[i] + c * g2_tile[i];
+    dev = extract_output_tile(out_vec, W, 0, 0);
+    check_tile(ref, dev, "bG+cG²[0,0] diagonal", max_scale);
+}

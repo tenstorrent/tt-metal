@@ -229,12 +229,53 @@ void kernel_main() {
                     current_M_block,
                     current_N);
 
-                cb_pop_front(in0_cb, tiles_per_in0_block);
-                cb_pop_front(in1_cb, tiles_per_in1_block);
-
                 if (kb == 0) {
                     PACK((llk_pack_reconfig_l1_acc(1)));
                 }
+
+                // bG fusion: check if any output columns fall in this K-block's range.
+                // Lower/diagonal cores (REDUCE_SENDER*) see even K-cols, upper (REDUCE_ACCUMULATOR) see odd.
+                // K-block kb covers K-columns: kb*K_block_tiles*2 + parity_offset .. + (K_block_tiles-1)*2
+                if (b_bits != 0) {
+#ifdef REDUCE_ACCUMULATOR
+                    constexpr uint32_t parity_offset = 1;  // odd K-columns
+#else
+                    constexpr uint32_t parity_offset = 0;  // even K-columns
+#endif
+                    uint32_t k_col_start = kb * K_block_tiles * 2 + parity_offset;
+                    // Check each output column for a match
+                    for (uint32_t local_n = 0; local_n < current_N; local_n++) {
+                        uint32_t n_global = N_start + local_n;
+                        // Only process columns with matching parity
+                        if ((n_global & 1) != parity_offset)
+                            continue;
+                        // Which k_within in this block?
+                        if (n_global < k_col_start || n_global >= k_col_start + K_block_tiles * 2)
+                            continue;
+                        uint32_t k_within = (n_global - k_col_start) / 2;
+
+                        // Add b * G[m, n_global] for each row in the block
+                        copy_tile_to_dst_init_short(in0_cb);
+                        binop_with_scalar_tile_init();
+                        for (uint32_t local_m = 0; local_m < current_M_block; local_m++) {
+                            uint32_t c0_tile = k_within * M_block + local_m;
+                            uint32_t c2_tile = local_m * current_N + local_n;
+                            acquire_dst();
+                            copy_tile(in0_cb, c0_tile, 0);
+                            mul_unary_tile(0, b_bits);
+                            pack_tile<true>(0, intermed_cb, c2_tile);
+                            release_dst();
+                        }
+                        // Re-init matmul for next K-block
+                        mm_init(in0_cb, in1_cb, intermed_cb);
+                        mm_block_init_short(in0_cb, in1_cb, true, subblock_w, subblock_h, 1);
+                        reconfig_data_format(in1_cb, in0_cb);
+                        pack_reconfig_data_format(intermed_cb);
+                    }
+                }
+
+                cb_pop_front(in0_cb, tiles_per_in0_block);
+                cb_pop_front(in1_cb, tiles_per_in1_block);
             }
 
             cb_push_back(intermed_cb, intermed_tiles);
