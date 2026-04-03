@@ -187,9 +187,9 @@ void kernel_main() {
         for (uint32_t c_in_block = c_in_block_start; c_in_block < c_in_block_end; c_in_block++) {
             // Process only assigned C_out blocks
             for (uint32_t c_out_block = c_out_block_start; c_out_block < c_out_block_end; c_out_block++) {
-                // Wait for new weights and bias
-                cb_wait_front(cb_weight_tiled, weight_tiles);
-
+                // Bias must be ready before the first spatial block's reduction.
+                // Weight wait is deferred to right before matmul so the first
+                // tilize overlaps with BRISC's DRAM weight read.
                 if constexpr (use_bias) {
                     if (is_reducer) {
                         cb_wait_front(cb_bias_tiled, matmul_N_t);
@@ -200,47 +200,61 @@ void kernel_main() {
                 for (uint32_t t_block = t_out_start; t_block < t_out_end; t_block += T_block_size) {
                     for (uint32_t h_block = h_out_start; h_block < h_out_end; h_block += H_block_size) {
                         for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
-                            // When using fp32 partials, switch packer to bf16 for tilize, then back to fp32 for
-                            // matmul. Also reconfigure unpacker srcA from Float32 (left by previous untilize) to
-                            // bf16 so the tilize correctly reads bf16 vol2col data.
-                            if constexpr (use_fp32_partials) {
-                                pack_reconfig_data_format(cb_vol2col_tiled);
-                                reconfig_data_format_srca(cb_vol2col_rm);
+                            // Fused tilize+matmul: process one M tile-row at a time.
+                            // Tilize TILE_HEIGHT RM patches -> K_t tiles, matmul immediately,
+                            // pop K_t tiles and reuse CB for next tile-row.
+                            // Saves (M_t-1)*K_t tiles of L1 in cb_vol2col_tiled.
+                            {
+                                constexpr uint32_t row_tiles = matmul_K_t;
+                                uint32_t patches_left = num_patches;
+                                for (uint32_t m = 0; m < matmul_M_t; m++) {
+                                    const uint32_t patches_this_row = (patches_left >= tt::constants::TILE_HEIGHT)
+                                                                          ? tt::constants::TILE_HEIGHT
+                                                                          : patches_left;
+
+                                    // Tilize one tile-row
+                                    if constexpr (use_fp32_partials) {
+                                        pack_reconfig_data_format(cb_vol2col_tiled);
+                                        reconfig_data_format_srca(cb_vol2col_rm);
+                                    }
+                                    compute_kernel_lib::tilize<
+                                        matmul_K_t,
+                                        cb_vol2col_rm,
+                                        cb_vol2col_tiled,
+                                        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                                        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+                                        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::
+                                            NoReconfigure>(1, patches_this_row);
+
+                                    if constexpr (use_fp32_partials) {
+                                        pack_reconfig_data_format(cb_matmul_interm_tiled);
+                                    }
+
+                                    // Wait for weights — deferred from upfront to here so
+                                    // the tilize above overlaps with BRISC's weight DRAM read.
+                                    // First call stalls; subsequent calls are instant.
+                                    cb_wait_front(cb_weight_tiled, weight_tiles);
+
+                                    // Matmul one tile-row: 1 x K_t @ K_t x N_t -> 1 x N_t
+                                    cb_wait_front(cb_vol2col_tiled, row_tiles);
+                                    matmul_blocks(
+                                        cb_vol2col_tiled,
+                                        cb_weight_tiled,
+                                        cb_matmul_interm_tiled,
+                                        1,  // M = 1 tile-row
+                                        matmul_N_t,
+                                        matmul_K_t,
+                                        in0_num_subblocks,  // 1
+                                        in1_num_subblocks,
+                                        in0_block_w,
+                                        subblock_h,  // 1
+                                        subblock_w,
+                                        false /* transpose */);
+                                    cb_pop_front(cb_vol2col_tiled, row_tiles);
+
+                                    patches_left -= patches_this_row;
+                                }
                             }
-
-                            // Tilize row-major patches
-                            compute_kernel_lib::tilize<
-                                matmul_K_t,
-                                cb_vol2col_rm,
-                                cb_vol2col_tiled,
-                                compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-                                compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-                                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
-                                matmul_M_t, num_patches);
-
-                            if constexpr (use_fp32_partials) {
-                                // Reconfigure packer for fp32 output after tilize left it in bf16.
-                                // mm_block_init_short_with_both_dt is not needed: matmul_blocks()
-                                // calls mm_block_init_short() + reconfig_data_format() internally.
-                                pack_reconfig_data_format(cb_matmul_interm_tiled);
-                            }
-
-                            // Apply matmul blocks
-                            cb_wait_front(cb_vol2col_tiled, patch_tiles);
-                            matmul_blocks(
-                                cb_vol2col_tiled,
-                                cb_weight_tiled,
-                                cb_matmul_interm_tiled,
-                                matmul_M_t,
-                                matmul_N_t,
-                                matmul_K_t,
-                                in0_num_subblocks,
-                                in1_num_subblocks,
-                                in0_block_w,
-                                subblock_h,
-                                subblock_w,
-                                false /* transpose */);
-                            cb_pop_front(cb_vol2col_tiled, patch_tiles);
 
                             // Stall on matmul/bias to finish
                             cb_wait_front(cb_matmul_interm_tiled, output_tiles);
@@ -260,63 +274,65 @@ void kernel_main() {
                                 // Clear our partial results and continue
                                 cb_pop_front(cb_matmul_interm_tiled, output_tiles);
                             } else {
-                                // We are a reducer core. Note that num_workers can be 0, in which case there is no
-                                // reduction.
-                                if constexpr (use_fp32_partials) {
-                                    cb_wait_front(cb_zero_tiled, 1);
-                                    reconfig_data_format_srca(cb_matmul_interm_tiled);
-                                    // pack_reconfig not needed — packer already fp32 from pre-matmul reconfig
-                                }
-                                for (uint32_t i = 0; i < num_workers; i++) {
-                                    cb_wait_front(cb_reduction_tiled, output_tiles);
-
+                                // We are a reducer core.
+                                {
                                     if constexpr (use_fp32_partials) {
-                                        for (uint32_t t = 0; t < output_tiles; t++) {
-                                            tile_regs_acquire();
-                                            // Re-init before each op: copy_tile and add_tiles
-                                            // share the MATH unit config, so each needs its own
-                                            // init per tile iteration.
-                                            copy_tile_init(cb_matmul_interm_tiled);
-                                            copy_tile(cb_matmul_interm_tiled, 0, 0);
-                                            add_tiles_init(cb_reduction_tiled, cb_zero_tiled, true);
-                                            add_tiles(cb_reduction_tiled, cb_zero_tiled, 0, 0, 0);
-                                            tile_regs_commit();
+                                        cb_wait_front(cb_zero_tiled, 1);
+                                        reconfig_data_format_srca(cb_matmul_interm_tiled);
+                                        // pack_reconfig not needed — packer already fp32 from pre-matmul reconfig
+                                    }
+                                    for (uint32_t i = 0; i < num_workers; i++) {
+                                        cb_wait_front(cb_reduction_tiled, output_tiles);
 
-                                            cb_pop_front(cb_matmul_interm_tiled, 1);
-                                            cb_pop_front(cb_reduction_tiled, 1);
-                                            cb_reserve_back(cb_matmul_interm_tiled, 1);
-                                            tile_regs_wait();
-                                            pack_tile(0, cb_matmul_interm_tiled);
-                                            cb_push_back(cb_matmul_interm_tiled, 1);
-                                            tile_regs_release();
+                                        if constexpr (use_fp32_partials) {
+                                            for (uint32_t t = 0; t < output_tiles; t++) {
+                                                tile_regs_acquire();
+                                                // Re-init before each op: copy_tile and add_tiles
+                                                // share the MATH unit config, so each needs its own
+                                                // init per tile iteration.
+                                                copy_tile_init(cb_matmul_interm_tiled);
+                                                copy_tile(cb_matmul_interm_tiled, 0, 0);
+                                                add_tiles_init(cb_reduction_tiled, cb_zero_tiled, true);
+                                                add_tiles(cb_reduction_tiled, cb_zero_tiled, 0, 0, 0);
+                                                tile_regs_commit();
+
+                                                cb_pop_front(cb_matmul_interm_tiled, 1);
+                                                cb_pop_front(cb_reduction_tiled, 1);
+                                                cb_reserve_back(cb_matmul_interm_tiled, 1);
+                                                tile_regs_wait();
+                                                pack_tile(0, cb_matmul_interm_tiled);
+                                                cb_push_back(cb_matmul_interm_tiled, 1);
+                                                tile_regs_release();
+                                            }
+                                        } else {
+                                            add_block_inplace<output_tiles>(cb_matmul_interm_tiled, cb_reduction_tiled);
                                         }
-                                    } else {
-                                        add_block_inplace<output_tiles>(cb_matmul_interm_tiled, cb_reduction_tiled);
                                     }
                                 }
-
                                 // Apply bias only if we are a reducer, and do it after reduction
-                                if constexpr (use_bias) {
-                                    if constexpr (use_fp32_partials) {
-                                        reconfig_data_format(cb_matmul_interm_tiled, cb_bias_tiled);
+                                {
+                                    if constexpr (use_bias) {
+                                        if constexpr (use_fp32_partials) {
+                                            reconfig_data_format(cb_matmul_interm_tiled, cb_bias_tiled);
+                                        }
+                                        add_bias_inplace<matmul_M_t, matmul_N_t>(cb_matmul_interm_tiled, cb_bias_tiled);
                                     }
-                                    add_bias_inplace<matmul_M_t, matmul_N_t>(cb_matmul_interm_tiled, cb_bias_tiled);
                                 }
-
-                                // Untilize result — reconfigure unpacker when fp32 partials need
-                                // format conversion back to bf16
-                                constexpr auto untilize_reconfig_mode =
-                                    use_fp32_partials ? compute_kernel_lib::untilize_config::
-                                                            ReconfigureRegisterDatatypeMode::UnpackReconfigure
-                                                      : compute_kernel_lib::untilize_config::
-                                                            ReconfigureRegisterDatatypeMode::NoReconfigure;
-                                compute_kernel_lib::untilize<
-                                    matmul_N_t,
-                                    cb_matmul_interm_tiled,
-                                    cb_matmul_result_rm,
-                                    compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-                                    compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
-                                    untilize_reconfig_mode>(matmul_M_t);
+                                // Untilize result
+                                {
+                                    constexpr auto untilize_reconfig_mode =
+                                        use_fp32_partials ? compute_kernel_lib::untilize_config::
+                                                                ReconfigureRegisterDatatypeMode::UnpackReconfigure
+                                                          : compute_kernel_lib::untilize_config::
+                                                                ReconfigureRegisterDatatypeMode::NoReconfigure;
+                                    compute_kernel_lib::untilize<
+                                        matmul_N_t,
+                                        cb_matmul_interm_tiled,
+                                        cb_matmul_result_rm,
+                                        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+                                        compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
+                                        untilize_reconfig_mode>(matmul_M_t);
+                                }
                             }
                         }
                     }
