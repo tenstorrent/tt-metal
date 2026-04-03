@@ -1,6 +1,8 @@
 # BGE-M3 User Guide
 
-## Create a TT model
+## Low-level model creation
+
+Use `create_tt_model()` when you want the raw TT encoder model.
 
 ```python
 import ttnn
@@ -18,56 +20,144 @@ model_args, tt_model, state_dict = create_tt_model(
 )
 ```
 
-## Encode prompts and run the TT model
+You can then tokenize with `model_args.encode_prompts(...)` and pass `input_ids`, `attention_mask`, and `token_type_ids` to `tt_model`.
+
+## Embedding API
+
+For dense, sparse, and ColBERT-style embeddings, use `BgeM3ForEmbedding`.
 
 ```python
 import torch
+import torch.nn.functional as F
 import ttnn
 
-sentences = ["Artificial intelligence is transforming search."]
-
-encoded = model_args.encode_prompts(sentences)
-
-input_ids = ttnn.from_torch(
-    encoded["input_ids"].to(torch.int32),
-    device=device,
-    dtype=ttnn.uint32,
-)
-attention_mask = ttnn.from_torch(
-    encoded["attention_mask"].to(torch.int32),
-    device=device,
-    dtype=ttnn.uint32,
-)
-token_type_ids = ttnn.from_torch(
-    encoded.get("token_type_ids", torch.zeros_like(encoded["input_ids"])).to(torch.int32),
-    device=device,
-    dtype=ttnn.uint32,
+from models.demos.wormhole.bge_m3.demo.generator_vllm import BgeM3ForEmbedding
+from models.demos.wormhole.bge_m3.demo.m3_scores import (
+    compute_colbert_score_torch,
+    compute_dense_score_torch,
+    compute_sparse_score_torch,
 )
 
-tt_output = tt_model(
-    input_ids=input_ids,
-    attention_mask=attention_mask,
-    token_type_ids=token_type_ids,
+device = ttnn.open_device(device_id=0)
+
+sentences_1 = ["What is BGE M3?", "Definition of BM25"]
+sentences_2 = [
+    "BGE M3 is an embedding model supporting dense retrieval, lexical matching and multi-vector interaction.",
+    "BM25 is a bag-of-words retrieval function that ranks documents based on matching query terms.",
+]
+
+model = BgeM3ForEmbedding(
+    device=device,
+    max_batch_size=2,
+    max_seq_len=512,
+    tt_data_parallel=1,
+    dtype=ttnn.bfloat8_b,
+    model_name="BAAI/bge-m3",
+    sentence_pooling_method="cls",
+    return_dense=True,
+    return_sparse=True,
+    return_colbert=True,
+)
+model._initialize_model()
+model_args = model.model_args
+```
+
+Notes:
+
+- The current generator path is single-device.
+- `sentence_pooling_method` controls how `dense_vecs` are produced from the last hidden state.
+- The default is `"mean"`, which averages token embeddings across the non-padded tokens in the prompt.
+- `"cls"` pools from the first token and matches the reference setup used in `tests/pcc/test_generator_vllm.py`.
+- `"last_token"` pools from the last valid token in each prompt.
+- The returned tensors are padded to `max_batch_size`, so slice back to your real batch size.
+
+## Dense pooling modes
+
+`BgeM3ForEmbedding` currently supports these `sentence_pooling_method` values:
+
+- `"mean"`: (default) averages token embeddings using the attention mask.
+- `"cls"`: returns the embedding from the first token position.
+- `"last_token"`: returns the embedding from the last non-padding token.
+
+Example with the default behavior:
+
+```python
+model = BgeM3ForEmbedding(
+    device=device,
+    max_batch_size=2,
+    max_seq_len=512,
+    model_name="BAAI/bge-m3",
+    return_dense=True,
 )
 ```
 
-## Current status
+## Run inference (Example)
 
-`tests/pcc/test_model.py` passes for most sequence lengths, but `test_model` still fails at:
+```python
+def encode(sentences,model_args,model):
+    encoded = model_args.encode_prompts(sentences)
+    outputs = model.forward(
+        input_ids=encoded["input_ids"],
+        attention_mask=encoded["attention_mask"],
+        token_type_ids=encoded.get("token_type_ids", torch.zeros_like(encoded["input_ids"])),
+    )
 
-- `seq_len=2048` with PCC `0.9396697736415722`
-- `seq_len=4096` with PCC `0.9197336036560791`
+    seq_len = encoded["input_ids"].shape[1]
+    batch_size = len(sentences)
 
-This still needs more work.
+    return {
+        "input_ids": encoded["input_ids"],
+        "attention_mask": encoded["attention_mask"],
+        "dense_vecs": outputs["dense_vecs"][:batch_size].to(torch.float32),
+        "dense_vecs_norm": F.normalize(outputs["dense_vecs"][:batch_size].to(torch.float32), dim=-1),
+        "sparse_vecs": outputs["sparse_vecs"][:batch_size].to(torch.float32),
+        "colbert_vecs": outputs["colbert_vecs"][:batch_size, : seq_len - 1].to(torch.float32),
+        "colbert_vecs_norm": F.normalize(outputs["colbert_vecs"][:batch_size, : seq_len - 1].to(torch.float32), dim=-1),
+    }
 
-## Next tasks
+embeddings_1 = encode(sentences_1)
+embeddings_2 = encode(sentences_2)
+```
 
-- Reference this FlagEmbedding section for scoring logic: [BGE-M3 scoring reference](https://github.com/FlagOpen/FlagEmbedding/blob/dbc600560b2dadcc1514989092f7b849673bb67d/FlagEmbedding/inference/embedder/encoder_only/m3.py#L482)
-- Implement sparse score support
-- Implement ColBERT score support
-- Optimize program configuration and memory configuration
+## Dense retrieval
 
+`dense_vecs` are sentence embeddings. Normalize them before computing similarity.
 
-### TTT-v2 style reference
+```python
+similarity = compute_dense_score_torch(
+    embeddings_1["dense_vecs_norm"],
+    embeddings_2["dense_vecs_norm"],
+)
+print(similarity)
+```
 
-For tt-transformer v2 implementation please reference : models/common/modules
+## Sparse retrieval
+
+`sparse_vecs` are lexical-weight vectors over the vocabulary. Use them for sparse matching.
+
+```python
+sparse_scores = compute_sparse_score_torch(
+    embeddings_1["sparse_vecs"],
+    embeddings_2["sparse_vecs"],
+)
+print(sparse_scores)
+```
+
+## ColBERT / multi-vector retrieval
+
+`colbert_vecs` are token-level multi-vector embeddings. Normalize them before scoring.
+
+```python
+colbert_scores = compute_colbert_score_torch(
+    embeddings_1["colbert_vecs_norm"],
+    embeddings_2["colbert_vecs_norm"],
+    q_mask=embeddings_1["attention_mask"],
+)
+print(colbert_scores)
+```
+
+The ColBERT path skips the first token internally, which is why the examples slice token vectors to `: seq_len - 1`.
+
+## Reference examples
+
+- `models/demos/wormhole/bge_m3/tests/pcc/test_generator_vllm.py`
