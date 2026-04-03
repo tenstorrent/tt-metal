@@ -29,7 +29,6 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        attention_softmax/attention_softmax.cpp
         concatenate_heads/concatenate_heads.cpp
         sdpa/device/ring_fusion.cpp
         sdpa/device/joint_sdpa_device_operation.cpp
