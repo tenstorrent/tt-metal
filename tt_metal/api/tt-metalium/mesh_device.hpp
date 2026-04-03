@@ -158,6 +158,12 @@ public:
     void mark_allocations_safe();
     void mark_allocations_unsafe();
     bool allocations_unsafe() const;
+
+    // Unsafe allocation tracking
+    std::unordered_map<size_t, std::string> get_unsafe_tracked_ids() const;
+    void clear_unsafe_tracked_ids();
+    static std::vector<size_t> drain_pending_traceback_ids();
+
     std::shared_ptr<MeshTraceBuffer> get_mesh_trace(const MeshTraceId& trace_id);
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;
@@ -197,6 +203,10 @@ public:
     void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
     bool is_mmio_capable() const override;
+    // Returns true if this MeshDevice contains only remote devices (no local devices on this host).
+    // Remote-only MeshDevices cannot perform operations requiring local device access like
+    // allocator(), create_sub_device_manager(), etc. Use this to check before calling such methods.
+    bool is_remote_only() const;
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
 
     // A MeshDevice is a collection of devices arranged in a 2D grid.

@@ -6,6 +6,7 @@
 
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/allocation_context.hpp>
 
 #include <tracy/Tracy.hpp>
 #include "ttnn/common/queue_id.hpp"
@@ -47,5 +48,14 @@ bool allocations_unsafe(MeshDevice* device) {
     ZoneScoped;
     return device->allocations_unsafe();
 }
+
+std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(MeshDevice* device) {
+    return device->get_unsafe_tracked_ids();
+}
+void clear_unsafe_tracked_ids(MeshDevice* device) { device->clear_unsafe_tracked_ids(); }
+std::vector<size_t> drain_pending_traceback_ids() { return MeshDevice::drain_pending_traceback_ids(); }
+
+void push_allocation_context(const std::string& ctx) { tt::tt_metal::push_allocation_context(ctx); }
+void pop_allocation_context() { tt::tt_metal::pop_allocation_context(); }
 
 }  // namespace ttnn::operations::trace

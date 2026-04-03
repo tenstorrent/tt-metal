@@ -48,13 +48,13 @@
 #include "ttnn/graph/graph_serialization.hpp"
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
 #include <ttnn/tensor/to_string.hpp>
 
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 
 #include <tracy/Tracy.hpp>
 
@@ -642,7 +642,7 @@ void pytensor_module(nb::module_& mod) {
                const distributed::TensorToMesh* mesh_mapper,
                bool preserve_nan_values,
                bool col_tilize,
-               bool fast_approx) {
+               bool enable_bfloat_opt) {
                 auto py_tensor_dtype = dlpack_tensor.dtype();
 
                 // handle bool types by changing them to uint8
@@ -676,7 +676,7 @@ void pytensor_module(nb::module_& mod) {
                     pad_value,
                     preserve_nan_values,
                     col_tilize,
-                    fast_approx));
+                    enable_bfloat_opt));
             },
             nb::arg("tensor").noconvert(false),
             nb::arg("data_type") = nb::none(),
@@ -690,7 +690,7 @@ void pytensor_module(nb::module_& mod) {
             nb::arg("preserve_nan_values") = false,  // TODO: Remove preserve_nan_values argument after
                                                      // https://github.com/tenstorrent/tt-metal/issues/31406
             nb::arg("col_tilize") = false,
-            nb::arg("fast_approx") = false,
+            nb::arg("enable_bfloat_opt") = false,
             nb::keep_alive<1, 4>(),  // test: matches other k_a
             nb::rv_policy::move,
             R"doc(
@@ -1311,9 +1311,8 @@ void pytensor_module(nb::module_& mod) {
             "buffer_address",
             [](const Tensor& self) -> uint32_t {
                 TT_FATAL(is_device_tensor(self), "{} doesn't support buffer_address method", self.storage_type());
-                const auto& storage = self.device_storage();
-                TT_FATAL(storage.mesh_buffer != nullptr, "Tensor is not allocated.");
-                return storage.mesh_buffer->address();
+                TT_FATAL(self.is_allocated(), "Tensor is not allocated.");
+                return self.mesh_buffer().address();
             },
             R"doc(
             Get the address of the underlying buffer.
@@ -1326,17 +1325,31 @@ void pytensor_module(nb::module_& mod) {
 
         )doc")
         .def(
+            "experimental_per_core_buffer_address",
+            [](const Tensor& self, const CoreCoord& core) -> uint32_t {
+                TT_FATAL(
+                    is_device_tensor(self),
+                    "{} doesn't support experimental_per_core_buffer_address",
+                    self.storage_type());
+                TT_FATAL(self.is_allocated(), "Tensor is not allocated.");
+                return experimental::per_core_allocation::get_per_core_address(self.mesh_buffer(), core);
+            },
+            nb::arg("core"),
+            R"doc(
+            Get the per-core L1 address for a specific core (experimental per-core allocation).
+
+            .. code-block:: python
+
+                address = tt_tensor.experimental_per_core_buffer_address(ttnn.CoreCoord(0, 0))
+
+        )doc")
+        .def(
             "buffer_unique_id",
             [](const Tensor& self) -> std::optional<size_t> {
-                if (!is_device_tensor(self)) {
+                if (!is_device_tensor(self) || !self.is_allocated()) {
                     return std::nullopt;
                 }
-                const auto& storage = self.device_storage();
-                const auto& root = storage.get_root_mesh_buffer();
-                if (!root) {
-                    return std::nullopt;
-                }
-                auto* backing = root->get_backing_buffer();
+                auto* backing = self.mesh_buffer().get_backing_buffer();
                 if (!backing) {
                     return std::nullopt;
                 }
@@ -1497,6 +1510,31 @@ void pytensor_module(nb::module_& mod) {
             "tensor_id",
             [](const Tensor& self) { return self.tensor_id; },
             [](Tensor& self, std::size_t tensor_id) { self.tensor_id = tensor_id; });
+
+    mod.def(
+        "get_optimal_worker_cores_for_sharded_tensor",
+        &tt::tt_metal::get_optimal_worker_cores_for_sharded_tensor,
+        nb::arg("tensor"),
+        nb::arg("noc") = tt::tt_metal::NOC::RISCV_0_default,
+        R"doc(
+            Returns the optimal worker cores on which to launch programs and kernels for a sharded tensor.
+            These are the worker cores that will allow the program to maximize its use of shard data locality and reduce NoC traffic.
+
+            For L1-sharded tensors, returns the cores that hold shards in shard-orientation order.
+            For DRAM-sharded tensors, returns the optimal Tensix worker core for each DRAM bank
+            (in shard-orientation order) that holds shards.
+
+            Args:
+                tensor: A sharded device tensor (legacy 2D or ND sharded).
+                noc: Which NOC to use for optimal DRAM to worker core mapping (relevant only for DRAM-sharded tensors, default NOC_0).
+
+            Returns:
+                List of worker CoreCoords in shard-orientation order.
+
+            Example:
+                >>> cores = ttnn.get_optimal_worker_cores_for_sharded_tensor(sharded_tensor)
+                >>> # cores will have a list of CoreCoords in shard-orientation order. These are the optimal worker cores on which programs/kernels can be launched for the sharded tensor.
+        )doc");
 }
 
 }  // namespace ttnn::tensor

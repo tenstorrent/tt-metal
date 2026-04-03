@@ -4,6 +4,7 @@
 
 #include <memory>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/allocation_context.hpp>
 #include "allocator_types.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <enchantum/enchantum.hpp>
@@ -96,26 +97,31 @@ void AllocatorImpl::init_one_bank_per_l1() {
     }
 }
 
+static thread_local std::vector<size_t> pending_traceback_ids;
+static thread_local std::vector<std::string> allocation_context_stack;
+static const std::string empty_context;
+
+void push_allocation_context(std::string ctx) { allocation_context_stack.push_back(std::move(ctx)); }
+
+void pop_allocation_context() {
+    TT_ASSERT(!allocation_context_stack.empty(), "pop_allocation_context called with empty stack");
+    allocation_context_stack.pop_back();
+}
+
+const std::string& current_allocation_context() {
+    return allocation_context_stack.empty() ? empty_context : allocation_context_stack.back();
+}
+
 void AllocatorImpl::verify_safe_allocation() const {
-    // Inform the user that its unsafe to allocate buffers when a trace is live on device.
-    // If the user does this, they are meant to ensure that buffers allocated when a trace is active,
-    // have a lifetime that ends before the trace is executed.
-    // Print the warning once per device, to ensure that user output is not clobbered.
-    thread_local static bool warning_generated = false;
-    if (allocations_unsafe_) {
-        const char* throw_on_unsafe_alloc = std::getenv("TT_METAL_THROW_ON_UNSAFE_TRACE_ALLOCATION");
-        if (throw_on_unsafe_alloc != nullptr && throw_on_unsafe_alloc[0] == '1') {
-            TT_THROW(
-                "Unsafe device buffer allocation attempted while a trace is active. "
-                "This may corrupt buffers on trace replay. "
-                "Unset TT_METAL_THROW_ON_UNSAFE_TRACE_ALLOCATION to downgrade this to a warning.");
-        }
+    if (!allocations_unsafe_) {
+        return;
     }
-    if (allocations_unsafe_ and not warning_generated) {
+    thread_local static bool warning_generated = false;
+    if (!tracking_enabled_ && !warning_generated) {
         log_warning(
             tt::LogMetal,
-            "Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be "
-            "corrupted once a trace is executed.");
+            "Allocating device buffers while a trace is active. "
+            "Enable the unsafe allocation tracker for safety checks.");
         warning_generated = true;
     }
 }
@@ -132,6 +138,32 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
     if (config_->disable_interleaved) {
         TT_FATAL(num_cores.has_value(), "Interleaved allocation is disabled, see validate_num_banks");
     }
+
+    // Per-core allocation path: each core gets an independent address
+    if (buffer->per_core_allocation_) {
+        TT_FATAL(
+            config_->allocator_mode == AllocatorMode::HYBRID,
+            "Per-core allocation requires AllocatorMode::HYBRID when opening the device");
+        TT_FATAL(buffer_type == BufferType::L1, "per_core_allocation is only supported for L1 buffers");
+        using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+        TT_FATAL(buffer->has_shard_spec(), "per_core_allocation requires a shard_spec with core grid");
+        const auto& grid = buffer->shard_spec().tensor_shard_spec.grid;
+        bool row_major = buffer->shard_spec().tensor_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+        auto cores = corerange_to_cores(grid, std::nullopt, row_major);
+        TT_FATAL(!cores.empty(), "per_core_allocation: shard grid resolved to zero cores");
+        DeviceAddr alloc_size = buffer->aligned_size_per_bank();
+
+        std::unordered_map<CoreCoord, DeviceAddr> addrs;
+        for (const auto& core : cores) {
+            auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0);
+            addrs[core] = l1_manager_->allocate_buffer(
+                alloc_size, page_size, bottom_up, config_->compute_grid, /*num_shards=*/1, AllocatorID{bank_id + 1});
+        }
+        buffer->set_per_core_addresses(std::move(addrs));
+        allocated_buffers_.insert(buffer);
+        return buffer->per_core_addresses_.at(cores[0]);
+    }
+
     switch (buffer_type) {
         case BufferType::DRAM:
             address = dram_manager_->allocate_buffer(size, page_size, bottom_up, config_->compute_grid, num_cores);
@@ -153,6 +185,24 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         }
     }
     allocated_buffers_.insert(buffer);
+    if (allocations_unsafe_ && tracking_enabled_) {
+        // Only the top of the context stack is checked for suppression.  This is intentional:
+        // corruptible_allocation_scope only suppresses its own direct allocations, NOT program-cache
+        // misses from ops dispatched inside it (those push their own context on top).
+        const auto& ctx = current_allocation_context();
+        bool skip = false;
+        if (ctx == "corruptible_allocation_scope") {
+            skip = true;
+        } else if (skip_program_cache_ && ctx.starts_with("program_cache:")) {
+            skip = true;
+        }
+        if (!skip) {
+            unsafe_tracked_ids_[buffer->unique_id()] = ctx;
+            if (traceback_capture_enabled_) {
+                pending_traceback_ids.push_back(buffer->unique_id());
+            }
+        }
+    }
     return address;
 }
 
@@ -160,6 +210,19 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto address = buffer->address();
     auto buffer_type = buffer->buffer_type();
+
+    // Per-core deallocation path
+    if (buffer->per_core_allocation_) {
+        TT_FATAL(buffer_type == BufferType::L1, "per_core_allocation is only supported for L1 buffers");
+        using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+        for (const auto& [core, addr] : buffer->per_core_addresses_) {
+            auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0);
+            l1_manager_->deallocate_buffer(addr, AllocatorID{bank_id + 1});
+        }
+        allocated_buffers_.erase(buffer);
+        return;
+    }
+
     switch (buffer_type) {
         case BufferType::DRAM: dram_manager_->deallocate_buffer(address); break;
         case BufferType::L1: l1_manager_->deallocate_buffer(address); break;
@@ -170,6 +233,9 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
         }
     }
     allocated_buffers_.erase(buffer);
+    if (tracking_enabled_) {
+        unsafe_tracked_ids_.erase(buffer->unique_id());
+    }
 }
 
 void AllocatorImpl::deallocate_buffers() {
@@ -363,6 +429,20 @@ void AllocatorImpl::reset_allocator_size(const BufferType& buffer_type) {
 void AllocatorImpl::mark_allocations_unsafe() {
     std::lock_guard<std::mutex> lock(mutex_);
     allocations_unsafe_ = true;
+
+    static const bool env_tracking = std::getenv("TT_METAL_TRACE_ALLOC_TRACKING") != nullptr ||
+                                     std::getenv("TT_METAL_TRACE_ALLOC_TRACEBACKS") != nullptr;
+    static const bool env_tracebacks = std::getenv("TT_METAL_TRACE_ALLOC_TRACEBACKS") != nullptr;
+    static const bool env_skip_pcache = std::getenv("TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE") != nullptr;
+    if (env_tracking) {
+        tracking_enabled_ = true;
+    }
+    if (env_tracebacks) {
+        traceback_capture_enabled_ = true;
+    }
+    if (env_skip_pcache) {
+        skip_program_cache_ = true;
+    }
 }
 
 void AllocatorImpl::mark_allocations_safe() {
@@ -373,6 +453,22 @@ void AllocatorImpl::mark_allocations_safe() {
 bool AllocatorImpl::allocations_unsafe() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return allocations_unsafe_;
+}
+
+std::unordered_map<size_t, std::string> AllocatorImpl::get_unsafe_tracked_ids() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return unsafe_tracked_ids_;
+}
+
+void AllocatorImpl::clear_unsafe_tracked_ids() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    unsafe_tracked_ids_.clear();
+}
+
+std::vector<size_t> AllocatorImpl::drain_pending_traceback_ids() {
+    std::vector<size_t> result;
+    result.swap(pending_traceback_ids);
+    return result;
 }
 
 void AllocatorImpl::begin_dram_high_water_mark_tracking() {
@@ -433,6 +529,9 @@ AllocatorImpl::~AllocatorImpl() {
 
 AllocatorState AllocatorImpl::extract_state() const {
     std::lock_guard<std::mutex> lock(mutex_);
+    for (auto* buf : allocated_buffers_) {
+        TT_FATAL(!buf->per_core_allocation_, "extract_state does not yet support per-core L1 allocations");
+    }
 
     std::unordered_map<BufferType, AllocatorState::BufferTypeState> states_per_buffer_type;
 
@@ -463,6 +562,9 @@ AllocatorState AllocatorImpl::extract_state() const {
 
 void AllocatorImpl::override_state(const AllocatorState& state) {
     std::lock_guard<std::mutex> lock(mutex_);
+    for (auto* buf : allocated_buffers_) {
+        TT_FATAL(!buf->per_core_allocation_, "override_state does not yet support per-core L1 allocations");
+    }
 
     // Clear all buffer types
     dram_manager_->deallocate_all();
