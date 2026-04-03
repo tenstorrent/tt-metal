@@ -35,13 +35,7 @@ git checkout -b $USER/<name>    # or stay on main
 git submodule update --init --recursive
 ```
 
-## First-time build
-
-```bash
-cd $WORKSPACE/tt-metal
-bash build_metal.sh -e          # -e flag for first-time environment setup
-bash create_venv.sh             # creates python_env/ with all deps
-```
+Then follow `recipes/tt-metal/build.md` for first-time build and venv setup.
 
 ## Activate a workspace
 
@@ -50,22 +44,3 @@ export TT_METAL_HOME=$WORKSPACE/tt-metal
 export PYTHONPATH=$TT_METAL_HOME
 source $TT_METAL_HOME/python_env/bin/activate
 ```
-
-## Incremental rebuild
-
-```bash
-cd $TT_METAL_HOME && bash build_metal.sh
-```
-
-## Pull and sync
-
-```bash
-cd $TT_METAL_HOME
-git pull && git submodule update --init --recursive
-bash build_metal.sh
-```
-
-## Kernel iteration (no rebuild needed)
-
-Kernels (`tt_metal/kernels/`) are compiled JIT at runtime. If you're only
-editing kernel code, skip the rebuild — just re-run the test.
