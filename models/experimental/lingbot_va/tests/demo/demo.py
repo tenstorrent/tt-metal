@@ -42,8 +42,6 @@ from reference.utils import (
     VA_CONFIGS,
     FlowMatchScheduler,
     apply_robotwin_inference_overrides,
-    data_seq_to_patch,
-    get_mesh_id,
     init_logger,
     load_tokenizer,
     load_vae,
@@ -56,6 +54,7 @@ from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor, Vae
 from models.tt_dit.parallel.manager import CCLManager
 
 from models.experimental.lingbot_va.tt.transformer_wan import NUM_HEADS as LINGBOT_NUM_HEADS
+from models.experimental.lingbot_va.tt.utils import data_seq_to_patch_ttnn, get_mesh_id_ttnn
 from tt.utils import (
     _safe_deallocate_tensor,
     load_text_encoder as load_text_encoder_tt,
@@ -634,27 +633,6 @@ def _repeat_input_for_cfg_ttnn(models, state, input_dict):
     return input_dict
 
 
-def _get_mesh_id_ttnn(
-    mesh_device,
-    f: int,
-    h: int,
-    w: int,
-    t: int,
-    f_w: int = 1,
-    f_shift: int = 0,
-    *,
-    action: bool = False,
-) -> ttnn.Tensor:
-    """Same grid as :func:`get_mesh_id`, uploaded to the mesh as TTNN (host bridge via ``from_torch``)."""
-    grid = get_mesh_id(f, h, w, t, f_w, f_shift, action=action).float().contiguous()
-    return ttnn.from_torch(
-        grid,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.float32,
-        device=mesh_device,
-    )
-
-
 def _timesteps_1d_ttnn(mesh_device, num_frames: int, t_val: float, *, zero_first: bool = False) -> ttnn.Tensor:
     """1-D timestep vector of length ``num_frames`` (matches torch ``ones([F]) * t``); optionally zero first slot."""
     if num_frames < 1:
@@ -724,8 +702,8 @@ def _prepare_latent_input_ttnn(
     TTNN-native analogue of :func:`_prepare_latent_input`: all activations are ``ttnn.Tensor`` on ``mesh_device``.
 
     Expects ``state['prompt_embeds']`` to be a ``ttnn.Tensor``. Does not call :func:`torch.ones` / ``.to`` on
-    activations; timestep lines use :func:`ttnn.full` / :func:`ttnn.concat`. Grid ids use :func:`_get_mesh_id_ttnn`
-    (reference :func:`get_mesh_id` then device upload).
+    activations; timestep lines use :func:`ttnn.full` / :func:`ttnn.concat`. Grid ids use
+    :func:`models.experimental.lingbot_va.tt.utils.get_mesh_id_ttnn`.
 
     Callers use :func:`_ttnn_tensor_to_torch` on the adapter output when feeding torch schedulers or einops.
     """
@@ -743,7 +721,7 @@ def _prepare_latent_input_ttnn(
         w = int(noisy.shape[-1]) // patch_size[2]
         num_frames = int(noisy.shape[2])
         ts = _timesteps_1d_ttnn(mesh_device, num_frames, latent_t, zero_first=(latent_cond is not None))
-        grid_id = _get_mesh_id_ttnn(mesh_device, f, h, w, 0, 1, frame_st_id, action=False)
+        grid_id = get_mesh_id_ttnn(mesh_device, f, h, w, 0, 1, frame_st_id, action=False)
         if latent_cond is not None:
             if num_frames > 1:
                 tail = noisy[:, :, 1:, :, :]
@@ -761,7 +739,7 @@ def _prepare_latent_input_ttnn(
         noisy_a = action_model_input
         num_frames_a = int(noisy_a.shape[2])
         ts_a = _timesteps_1d_ttnn(mesh_device, num_frames_a, action_t, zero_first=(action_cond is not None))
-        grid_id_a = _get_mesh_id_ttnn(
+        grid_id_a = get_mesh_id_ttnn(
             mesh_device,
             int(noisy_a.shape[-3]),
             int(noisy_a.shape[-2]),
@@ -1144,14 +1122,28 @@ def _infer_impl(models, state, obs, frame_st_id=0):
             latents_torch = ttnn.to_torch(latents_tt).to(dtype)
             if not last_step or video_step != -1:
                 if not models.get("transformer_is_tt", False):
-                    video_noise_pred = data_seq_to_patch(
-                        config.patch_size,
-                        video_noise_pred,
-                        frame_chunk_size,
-                        latent_height,
-                        latent_width,
-                        batch_size=2 if use_cfg else 1,
+                    _patch_in_dtype = ttnn.bfloat16 if video_noise_pred.dtype == torch.bfloat16 else ttnn.float32
+                    _vnp_tt = ttnn.from_torch(
+                        video_noise_pred.contiguous(),
+                        device=mesh_device,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        dtype=_patch_in_dtype,
                     )
+                    _patched_tt = None
+                    try:
+                        _patched_tt = data_seq_to_patch_ttnn(
+                            config.patch_size,
+                            _vnp_tt,
+                            frame_chunk_size,
+                            latent_height,
+                            latent_width,
+                            batch_size=2 if use_cfg else 1,
+                        )
+                        video_noise_pred = ttnn.to_torch(_patched_tt).to(dtype)
+                    finally:
+                        ttnn.deallocate(_vnp_tt)
+                        if _patched_tt is not None:
+                            ttnn.deallocate(_patched_tt)
                 if config.guidance_scale > 1:
                     video_noise_pred = video_noise_pred[1:] + config.guidance_scale * (
                         video_noise_pred[:1] - video_noise_pred[1:]

@@ -12,6 +12,7 @@ from the reference (PyTorch) checkpoints.
 from __future__ import annotations
 
 import gc
+import math
 import os
 
 import torch
@@ -324,6 +325,286 @@ def _patchify_ttnn(x: ttnn.Tensor, patch_size: int | None) -> ttnn.Tensor:
     x = ttnn.reshape(x, (batch_size, channels, frames, height // ps, ps, width // ps, ps))
     x = ttnn.permute(x, (0, 1, 6, 4, 2, 3, 5))
     return ttnn.reshape(x, (batch_size, channels * ps * ps, frames, height // ps, width // ps))
+
+
+def data_seq_to_patch_ttnn(
+    patch_size: tuple[int, int, int],
+    data_seq: ttnn.Tensor,
+    latent_num_frames: int,
+    latent_height: int,
+    latent_width: int,
+    batch_size: int = 1,
+) -> ttnn.Tensor:
+    """Unpatchify sequence layout to (B, C, T, H, W) using only ttnn ops.
+
+    Matches ``reference.utils.data_seq_to_patch`` (reshape, permute, then flatten of dim
+    pairs (6,7), (4,5), (2,3)), implemented as reshape + permute + reshape.
+    """
+    p_t, p_h, p_w = patch_size
+    post_patch_num_frames = latent_num_frames // p_t
+    post_patch_height = latent_height // p_h
+    post_patch_width = latent_width // p_w
+    numel = 1
+    for d in data_seq.shape:
+        numel *= int(d)
+    grid = batch_size * post_patch_num_frames * post_patch_height * post_patch_width * p_t * p_h * p_w
+    if numel % grid != 0:
+        raise ValueError(f"data_seq size {numel} is not divisible by patch grid product {grid}")
+    channels = numel // grid
+    data_patch = ttnn.reshape(
+        data_seq,
+        (
+            batch_size,
+            post_patch_num_frames,
+            post_patch_height,
+            post_patch_width,
+            p_t,
+            p_h,
+            p_w,
+            channels,
+        ),
+    )
+    data_patch = ttnn.permute(data_patch, (0, 7, 1, 4, 2, 5, 3, 6))
+    return ttnn.reshape(
+        data_patch,
+        (batch_size, channels, latent_num_frames, latent_height, latent_width),
+    )
+
+
+def get_mesh_id_ttnn(
+    mesh_device: "ttnn.MeshDevice",
+    f: int,
+    h: int,
+    w: int,
+    t: float | int,
+    f_w: int = 1,
+    f_shift: int = 0,
+    *,
+    action: bool = False,
+) -> ttnn.Tensor:
+    """3D RoPE grid ids on device (matches ``reference.utils.get_mesh_id``).
+
+    Returns ``(4, f * h * w)`` float32, row-major: three flattened spatial coordinate
+    planes (frame / height / width) plus a row filled with ``t``.
+
+    ``action=True`` applies the same frame offset and ``hh``/``ww`` = -1 as the
+    reference implementation; ``ff_offset`` uses ``(1..h) / (h + 1)`` (equivalent
+    to ``ones(h).cumsum(0) / (h + 1)``).
+    """
+    kw = dict(device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.float32)
+    f_idx = ttnn.multiply(ttnn.arange(f_shift, f_shift + f, 1, **kw), float(f_w))
+    h_idx = ttnn.arange(0, h, 1, **kw)
+    w_idx = ttnn.arange(0, w, 1, **kw)
+    ff = ttnn.reshape(f_idx, (f, 1, 1))
+    ff = ttnn.repeat(ff, (1, h, w))
+    hh = ttnn.reshape(h_idx, (1, h, 1))
+    hh = ttnn.repeat(hh, (f, 1, w))
+    ww = ttnn.reshape(w_idx, (1, 1, w))
+    ww = ttnn.repeat(ww, (f, h, 1))
+    if action:
+        one_to_h = ttnn.arange(1, h + 1, 1, **kw)
+        ff_offset = ttnn.reshape(ttnn.multiply(one_to_h, 1.0 / float(h + 1)), (1, h, 1))
+        ff = ttnn.add(ff, ff_offset)
+        neg = ttnn.full((f, h, w), -1.0, **kw)
+        hh = neg
+        ww = ttnn.full((f, h, w), -1.0, **kw)
+    ff_u = ttnn.unsqueeze(ff, 0)
+    hh_u = ttnn.unsqueeze(hh, 0)
+    ww_u = ttnn.unsqueeze(ww, 0)
+    grid_3 = ttnn.concat([ff_u, hh_u, ww_u], dim=0)
+    grid_id = ttnn.reshape(grid_3, (3, f * h * w))
+    t_row = ttnn.full((1, f * h * w), float(t), **kw)
+    return ttnn.concat([grid_id, t_row], dim=0)
+
+
+def _linspace_floats(a: float, b: float, n: int) -> list[float]:
+    """Endpoints-inclusive linspace matching ``torch.linspace(a, b, n)``."""
+    if n <= 0:
+        return []
+    if n == 1:
+        return [float(a)]
+    return [a + (b - a) * i / (n - 1) for i in range(n)]
+
+
+def _tensor_1d_from_floats(
+    mesh_device: "ttnn.MeshDevice",
+    values: list[float],
+    *,
+    layout=ttnn.ROW_MAJOR_LAYOUT,
+    dtype=ttnn.float32,
+) -> ttnn.Tensor:
+    """Build a 1-D TTNN vector from host floats using only ``ttnn.full`` / ``ttnn.concat``."""
+    if not values:
+        raise ValueError("_tensor_1d_from_floats: values must be non-empty")
+    kw = dict(device=mesh_device, layout=layout, dtype=dtype)
+    if len(values) == 1:
+        return ttnn.full((1,), float(values[0]), **kw)
+    parts = [ttnn.full((1,), float(v), **kw) for v in values]
+    out = parts[0]
+    for p in parts[1:]:
+        out = ttnn.concat([out, p], dim=0)
+    return out
+
+
+def _ttnn_scalar_to_float(x: ttnn.Tensor) -> float:
+    """Read a single element from a TTNN tensor as Python ``float`` (host read)."""
+    t = ttnn.to_torch(x).reshape(-1)
+    return float(t[0].item())
+
+
+class FlowMatchSchedulerTtnn:
+    """Flow-match scheduler on device (same logic as ``reference.utils.FlowMatchScheduler``).
+
+    Schedule vectors ``sigmas`` and ``timesteps`` are stored as 1-D ``ttnn.Tensor`` on
+    ``mesh_device``. :meth:`set_timesteps` builds them via host float math (matching the
+    reference) then materializes them with ``ttnn`` ops only.
+
+    :meth:`step` uses ``ttnn`` arithmetic; public inputs/outputs are ``ttnn.Tensor`` only.
+    """
+
+    def __init__(
+        self,
+        mesh_device: "ttnn.MeshDevice",
+        num_inference_steps: int = 100,
+        num_train_timesteps: int = 1000,
+        shift: float = 3.0,
+        sigma_max: float = 1.0,
+        sigma_min: float = 0.003 / 1.002,
+        inverse_timesteps: bool = False,
+        extra_one_step: bool = False,
+        reverse_sigmas: bool = False,
+        exponential_shift: bool = False,
+        exponential_shift_mu: float | None = None,
+        shift_terminal: float | None = None,
+        *,
+        schedule_dtype=ttnn.float32,
+        schedule_layout=ttnn.ROW_MAJOR_LAYOUT,
+    ) -> None:
+        self.mesh_device = mesh_device
+        self.num_train_timesteps = num_train_timesteps
+        self.shift = shift
+        self.sigma_max = sigma_max
+        self.sigma_min = sigma_min
+        self.inverse_timesteps = inverse_timesteps
+        self.extra_one_step = extra_one_step
+        self.reverse_sigmas = reverse_sigmas
+        self.exponential_shift = exponential_shift
+        self.exponential_shift_mu = exponential_shift_mu
+        self.shift_terminal = shift_terminal
+        self._schedule_dtype = schedule_dtype
+        self._schedule_layout = schedule_layout
+        self.sigmas: ttnn.Tensor | None = None
+        self.timesteps: ttnn.Tensor | None = None
+        self.training = False
+        self.set_timesteps(num_inference_steps)
+
+    def _deallocate_schedule(self) -> None:
+        _safe_deallocate_tensor(self.sigmas, "FlowMatchSchedulerTtnn.sigmas")
+        _safe_deallocate_tensor(self.timesteps, "FlowMatchSchedulerTtnn.timesteps")
+        self.sigmas = None
+        self.timesteps = None
+
+    def set_timesteps(
+        self,
+        num_inference_steps: int = 100,
+        denoising_strength: float = 1.0,
+        training: bool = False,
+        shift: float | None = None,
+        dynamic_shift_len: int | None = None,
+    ) -> None:
+        if shift is not None:
+            self.shift = shift
+        sigma_start = self.sigma_min + (self.sigma_max - self.sigma_min) * denoising_strength
+        if self.extra_one_step:
+            sigmas_list = _linspace_floats(sigma_start, self.sigma_min, num_inference_steps + 1)[:-1]
+        else:
+            sigmas_list = _linspace_floats(sigma_start, self.sigma_min, num_inference_steps)
+        if self.inverse_timesteps:
+            sigmas_list = list(reversed(sigmas_list))
+        if self.exponential_shift:
+            mu = self.calculate_shift(dynamic_shift_len) if dynamic_shift_len is not None else self.exponential_shift_mu
+            if mu is None:
+                raise ValueError("exponential_shift requires dynamic_shift_len or exponential_shift_mu")
+            em = math.exp(mu)
+            sigmas_list = [em / (em + (1.0 / s - 1.0)) for s in sigmas_list]
+        else:
+            sigmas_list = [self.shift * s / (1.0 + (self.shift - 1.0) * s) for s in sigmas_list]
+        if self.shift_terminal is not None:
+            one_minus_z = [1.0 - s for s in sigmas_list]
+            scale_factor = one_minus_z[-1] / (1.0 - self.shift_terminal)
+            sigmas_list = [1.0 - (z / scale_factor) for z in one_minus_z]
+        if self.reverse_sigmas:
+            sigmas_list = [1.0 - s for s in sigmas_list]
+        timesteps_list = [s * self.num_train_timesteps for s in sigmas_list]
+
+        self._deallocate_schedule()
+        self.sigmas = _tensor_1d_from_floats(
+            self.mesh_device,
+            sigmas_list,
+            layout=self._schedule_layout,
+            dtype=self._schedule_dtype,
+        )
+        self.timesteps = _tensor_1d_from_floats(
+            self.mesh_device,
+            timesteps_list,
+            layout=self._schedule_layout,
+            dtype=self._schedule_dtype,
+        )
+        self.training = bool(training)
+
+    def step(
+        self,
+        model_output: ttnn.Tensor,
+        timestep: ttnn.Tensor,
+        sample: ttnn.Tensor,
+        to_final: bool = False,
+        **kwargs,
+    ) -> ttnn.Tensor:
+        if self.sigmas is None or self.timesteps is None:
+            raise RuntimeError("Call set_timesteps before step")
+        n = int(self.timesteps.shape[0])
+        t_val = _ttnn_scalar_to_float(timestep)
+        t_broadcast = ttnn.full(
+            (n,),
+            t_val,
+            device=self.mesh_device,
+            layout=self._schedule_layout,
+            dtype=self._schedule_dtype,
+        )
+        diff = ttnn.abs(ttnn.subtract(self.timesteps, t_broadcast))
+        neg_diff = ttnn.multiply(diff, -1.0)
+        idx_tt = ttnn.argmax(neg_diff, dim=-1)
+        timestep_id = int(_ttnn_scalar_to_float(idx_tt))
+
+        sig = ttnn.slice(self.sigmas, [timestep_id], [timestep_id + 1])
+        if to_final or timestep_id + 1 >= n:
+            s_next = 1.0 if (self.inverse_timesteps or self.reverse_sigmas) else 0.0
+            sig_next = ttnn.full(
+                (1,),
+                float(s_next),
+                device=self.mesh_device,
+                layout=self._schedule_layout,
+                dtype=self._schedule_dtype,
+            )
+        else:
+            sig_next = ttnn.slice(self.sigmas, [timestep_id + 1], [timestep_id + 2])
+
+        delta = ttnn.subtract(sig_next, sig)
+        if delta.dtype != model_output.dtype:
+            delta = ttnn.typecast(delta, model_output.dtype)
+        return ttnn.add(sample, ttnn.multiply(model_output, delta))
+
+    def calculate_shift(
+        self,
+        image_seq_len: float | int,
+        base_seq_len: int = 256,
+        max_seq_len: int = 8192,
+        base_shift: float = 0.5,
+        max_shift: float = 0.9,
+    ) -> float:
+        m = (max_shift - base_shift) / (max_seq_len - base_seq_len)
+        b = base_shift - m * base_seq_len
+        return float(image_seq_len) * m + b
 
 
 def _conv_pad_in_channels_ttnn(tensor_BTHWC: ttnn.Tensor) -> ttnn.Tensor:

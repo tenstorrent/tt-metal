@@ -18,6 +18,7 @@ import ttnn
 from reference.utils import VA_CONFIGS, apply_robotwin_inference_overrides
 
 from models.experimental.lingbot_va.tests.demo import demo as lingbot_demo
+from models.experimental.lingbot_va.tt.utils import get_mesh_id_ttnn
 
 
 class TtLingbotVA:
@@ -148,8 +149,8 @@ class TtLingbotVA:
         pF, pH, pW = tt_transformer.patch_size
         patch_F, patch_H, patch_W = F // pF, H // pH, W // pW
 
-        # Match ``demo._get_mesh_id_ttnn`` + batch dim, and mesh 1-D timestep (not torch on ``.device``).
-        grid_id = lingbot_demo._get_mesh_id_ttnn(mesh_device, patch_F, patch_H, patch_W, 0, 1, 0, action=False)
+        # Match ``get_mesh_id_ttnn`` + batch dim, and mesh 1-D timestep (not torch on ``.device``).
+        grid_id = get_mesh_id_ttnn(mesh_device, patch_F, patch_H, patch_W, 0, 1, 0, action=False)
         grid_id = ttnn.unsqueeze(grid_id, 0)
         # ``WanTransformer.prepare_timestep_conditioning`` typecasts this 1-D tensor before reshape/TILE.
         # ROW_MAJOR length-1 vectors can hit ttnn typecast padding rules (last dim multiple of 32); build as TILE.
