@@ -261,18 +261,17 @@ class WanVAEEncoder(Module):
         if feat_idx is None:
             feat_idx = [0]
 
-        if feat_cache is not None:
-            idx = feat_idx[0]
-            t_start = x_BTHWC.shape[1] - CACHE_T
-            cache_x_BTHWC = x_BTHWC[:, t_start:, :, :, :]
-            if cache_x_BTHWC.shape[1] < 2 and feat_cache[idx] is not None:
-                # Current activation is too short, so append the cached activation as well
-                cache_x_BTHWC = ttnn.concat([feat_cache[idx][:, -1:, :, :, :], cache_x_BTHWC], dim=1)
-            x_BTHWC = self.conv_in(x_BTHWC, logical_h, feat_cache[idx])
-            feat_cache[idx] = cache_x_BTHWC
-            feat_idx[0] += 1
-        else:
-            x_BTHWC = self.conv_in(x_BTHWC, logical_h)
+        # feat_cache is always a length-num_causal_conv_slots list after the default above, so the
+        # conv_in path always uses the streaming feat_cache slot (same as conv_out below).
+        idx = feat_idx[0]
+        t_start = x_BTHWC.shape[1] - CACHE_T
+        cache_x_BTHWC = x_BTHWC[:, t_start:, :, :, :]
+        if cache_x_BTHWC.shape[1] < 2 and feat_cache[idx] is not None:
+            # Current activation is too short, so append the cached activation as well
+            cache_x_BTHWC = ttnn.concat([feat_cache[idx][:, -1:, :, :, :], cache_x_BTHWC], dim=1)
+        x_BTHWC = self.conv_in(x_BTHWC, logical_h, feat_cache[idx])
+        feat_cache[idx] = cache_x_BTHWC
+        feat_idx[0] += 1
 
         # Match tt_dit WanEncoder3d: conv3d outputs ROW_MAJOR; residual / attention expect TILE.
         # WanResample expects ROW_MAJOR input, then we convert back to TILE for the next block.
@@ -301,16 +300,13 @@ class WanVAEEncoder(Module):
         x_silu_tile_BTHWC = ttnn.silu(x_silu_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
-        if feat_cache is not None:
-            idx = feat_idx[0]
-            t_start = x_BTHWC.shape[1] - CACHE_T
-            cache_x_BTHWC = x_BTHWC[:, t_start:, :, :, :]
-            if cache_x_BTHWC.shape[1] < 2 and feat_cache[idx] is not None:
-                # Current activation is too short, so append the cached activation as well
-                cache_x_BTHWC = ttnn.concat([feat_cache[idx][:, -1:, :, :, :], cache_x_BTHWC], dim=1)
-            x_BTHWC = self.conv_out(x_BTHWC, logical_h, feat_cache[idx])
-            feat_cache[idx] = cache_x_BTHWC
-            feat_idx[0] += 1
-        else:
-            x_BTHWC = self.conv_out(x_BTHWC, logical_h)
+        idx = feat_idx[0]
+        t_start = x_BTHWC.shape[1] - CACHE_T
+        cache_x_BTHWC = x_BTHWC[:, t_start:, :, :, :]
+        if cache_x_BTHWC.shape[1] < 2 and feat_cache[idx] is not None:
+            # Current activation is too short, so append the cached activation as well
+            cache_x_BTHWC = ttnn.concat([feat_cache[idx][:, -1:, :, :, :], cache_x_BTHWC], dim=1)
+        x_BTHWC = self.conv_out(x_BTHWC, logical_h, feat_cache[idx])
+        feat_cache[idx] = cache_x_BTHWC
+        feat_idx[0] += 1
         return x_BTHWC, logical_h

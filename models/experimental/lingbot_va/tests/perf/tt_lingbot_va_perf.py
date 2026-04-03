@@ -26,6 +26,7 @@ class TtLingbotVA:
     def __init__(self, models: dict, state: dict, message: dict, init_obs: dict) -> None:
         self.models = models
         self.state = state
+        # Kept for parity with run_inference payload; forward path reads state/init_obs only.
         self.message = message
         self._init_obs = init_obs
         self.single_run_inputs: dict | None = None
@@ -67,7 +68,6 @@ class TtLingbotVA:
         config.local_rank = 0
         config.rank = 0
         config.world_size = 1
-        config.save_root = str(save_dir)
         config.num_chunks_to_infer = 1
         apply_robotwin_inference_overrides(
             config,
@@ -77,6 +77,7 @@ class TtLingbotVA:
         )
         if save_dir is None:
             save_dir = lingbot_demo._SCRIPT_DIR
+        # Single assignment avoids str(None) when save_dir was omitted.
         config.save_root = str(save_dir)
 
         models = lingbot_demo._load_models_phase1(config, load_text_encoder=False, mesh_device=mesh_device)
@@ -141,7 +142,9 @@ class TtLingbotVA:
         if len(prompt.shape) == 2:
             prompt = ttnn.unsqueeze(prompt, 0)
 
-        B, _c, F, H, W = (int(spatial.shape[i]) for i in range(5))
+        # ttnn.Shape supports int indexing only, not slicing (spatial.shape[:5] raises TypeError).
+        sh = spatial.shape
+        B, _c, F, H, W = (int(sh[i]) for i in range(5))
         pF, pH, pW = tt_transformer.patch_size
         patch_F, patch_H, patch_W = F // pF, H // pH, W // pW
 
@@ -185,6 +188,8 @@ class TtLingbotVA:
 
     def forward_reset_and_infer(self) -> ttnn.Tensor:
         """Run one preprocessed WanTransformer forward with ``single_run=True``."""
+        # TODO: unused branch? verify before removal — ``prepare()`` always sets ``single_run_inputs``;
+        # this lazy path exists for hypothetical manual ``TtLingbotVA(models, …)`` construction.
         if self.single_run_inputs is None:
             self.single_run_inputs = self._prepare_single_run_inputs()
 
@@ -204,5 +209,6 @@ class TtLingbotVA:
 
     def __call__(self, l1_input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Pipeline entrypoint: runs one Lingbot chunk."""
+        # Signature required by ``tt_cnn`` pipeline; forward uses ``single_run_inputs``, not this tensor.
         _ = l1_input_tensor
         return self.forward_reset_and_infer()

@@ -94,9 +94,10 @@ class WanRotaryPosEmbed(nn.Module):
 
     def forward(self, grid_ids):
         with torch.no_grad():
-            f_freqs = grid_ids[:, 0, :].unsqueeze(-1) * self.f_freqs_base.to(grid_ids.device)
-            h_freqs = grid_ids[:, 1, :].unsqueeze(-1) * self.h_freqs_base.to(grid_ids.device)
-            w_freqs = grid_ids[:, 2, :].unsqueeze(-1) * self.w_freqs_base.to(grid_ids.device)
+            device = grid_ids.device
+            f_freqs = grid_ids[:, 0, :].unsqueeze(-1) * self.f_freqs_base.to(device)
+            h_freqs = grid_ids[:, 1, :].unsqueeze(-1) * self.h_freqs_base.to(device)
+            w_freqs = grid_ids[:, 2, :].unsqueeze(-1) * self.w_freqs_base.to(device)
             freqs = torch.cat([f_freqs, h_freqs, w_freqs], dim=-1).float()
             freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
 
@@ -118,7 +119,9 @@ class WanAttention(torch.nn.Module):
         if attn_mode == "torch":
             self.attn_op = custom_sdpa
         else:
-            raise ValueError(f"Unsupported attention mode: {attn_mode}, only support torch and flashattn")
+            raise ValueError(
+                f"Unsupported attention mode: {attn_mode!r}; this reference build only implements torch SDPA."
+            )
 
         self.inner_dim = dim_head * heads
         self.heads = heads
@@ -242,12 +245,10 @@ class WanAttention(torch.nn.Module):
         slots = None
         if kv_cache is not None and kv_cache["k"] is not None:
             slots = self.update_cache(cache_name, key, value, is_pred=(update_cache == 1))
-            key_pool = self.attn_caches[cache_name]["k"]
-            value_pool = self.attn_caches[cache_name]["v"]
-            mask = self.attn_caches[cache_name]["mask"]
-            valid = mask.nonzero(as_tuple=False).squeeze(-1)
-            key = key_pool[:, valid]
-            value = value_pool[:, valid]
+            cn = self.attn_caches[cache_name]
+            valid = cn["mask"].nonzero(as_tuple=False).squeeze(-1)
+            key = cn["k"][:, valid]
+            value = cn["v"][:, valid]
 
         hidden_states = self.attn_op(query, key, value)
 
@@ -273,7 +274,6 @@ class WanTransformerBlock(nn.Module):
         attn_mode: str = "flashattn",
     ):
         super().__init__()
-        self.attn_mode = attn_mode
 
         # 1. Self-attention
         self.norm1 = FP32LayerNorm(dim, eps, elementwise_affine=False)
@@ -488,6 +488,8 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin):
         dump_iter=None,
     ):
         _ = dump_iter
+        # TODO: unused branch? verify before removal — ``forward_train`` is not defined here;
+        # ``train_mode=True`` would fail at runtime; kept to match historical forward signature.
         if train_mode:
             return self.forward_train(input_dict)
         input_type = "action" if action_mode else "latent"

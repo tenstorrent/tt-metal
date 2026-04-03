@@ -76,6 +76,7 @@ def _load_torch_reference() -> TorchWanTransformer3DModel:
     try:
         return TorchWanTransformer3DModel.from_pretrained(path, low_cpu_mem_usage=True, **kw)
     except TypeError:
+        # Compat: ``from_pretrained`` may not accept ``low_cpu_mem_usage`` on older stacks.
         return TorchWanTransformer3DModel.from_pretrained(path, **kw)
 
 
@@ -369,16 +370,19 @@ def test_wan_transformer_model_video_and_action(
     )
     use_cache = cache_dir is not None and cache_dir.is_dir()
 
-    if use_cache:
-        del torch_model
-        _release_host_tensors()
-        tt_model = _make_wan_transformer(
+    def _instantiate_tt_model() -> WanTransformer3DModel:
+        return _make_wan_transformer(
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
             num_layers=NUM_LAYERS,
         )
+
+    if use_cache:
+        del torch_model
+        _release_host_tensors()
+        tt_model = _instantiate_tt_model()
         t0 = time.time()
         tt_model.load(cache_dir)
         logger.info("Loaded TT model from cache in {} s", time.time() - t0)
@@ -389,13 +393,7 @@ def test_wan_transformer_model_video_and_action(
         _release_host_tensors()
         t0 = time.time()
         state_dict = _load_state_dict_from_diffusers_safetensors(LINGBOT_VA_CHECKPOINT)
-        tt_model = _make_wan_transformer(
-            mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
-            parallel_config=parallel_config,
-            is_fsdp=is_fsdp,
-            num_layers=NUM_LAYERS,
-        )
+        tt_model = _instantiate_tt_model()
         tt_model.load_torch_state_dict(state_dict)
         del state_dict
         _release_host_tensors()

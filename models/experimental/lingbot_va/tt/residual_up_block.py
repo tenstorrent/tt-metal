@@ -32,10 +32,6 @@ class WanResidualUpBlock(Module):
     ) -> None:
         super().__init__()
 
-        self.in_dim = in_dim
-        self.out_dim = out_dim
-        self.up_flag = up_flag
-
         self.avg_shortcut = (
             TtDupUp3D(
                 in_dim,
