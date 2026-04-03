@@ -506,8 +506,10 @@ void GraphProcessor::track_function_end_impl() {
     }
     last_finished_op_id = counter;
 
-    // Snapshot live buffer state after each top-level operation completes
-    if (stacking_level == 1 && !captured_mesh_devices.empty()) {
+    // Snapshot live buffer state after each top-level operation completes.
+    // Only collected when detailed buffer tracing is enabled (report/visualization path)
+    // to avoid the overhead of iterating all allocated buffers on every operation.
+    if (stacking_level == 1 && capture_detailed_buffer_tracing_ && !captured_mesh_devices.empty()) {
         per_op_buffers_[function_start_id] = ttnn::reports::get_buffers(captured_mesh_devices);
     }
 }
