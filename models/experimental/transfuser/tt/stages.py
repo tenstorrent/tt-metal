@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -133,12 +134,13 @@ optimization_dict: Dict[str, Dict[str, Dict[str, Any]]] = {
 class Ttstages:
     def __init__(
         self,
+        device,
         parameters: Dict[str, Any],
+        model_args,
         stride: int,
         model_config: Dict[str, Any],
         stage_name: str,
         torch_model=None,
-        use_fallback: bool = False,
     ) -> None:
         """
         Builds a sequence of TTRegNetBottleneck blocks for a given stage (layer1..layer4).
@@ -167,7 +169,9 @@ class Ttstages:
         )
 
         self.layer = self._make_layer(
+            device=device,
             parameters=parameters,
+            model_args=model_args,
             planes=planes,
             blocks=blocks,
             stride=stride,
@@ -175,12 +179,13 @@ class Ttstages:
             model_config=model_config,
             stage_name=stage_name,
             torch_model=torch_model,
-            use_fallback=use_fallback,
         )
 
     @staticmethod
     def _make_layer(
+        device,
         parameters: Dict[str, Any],
+        model_args,
         planes: int,
         blocks: int,
         stride: int,
@@ -188,7 +193,6 @@ class Ttstages:
         model_config: Dict[str, Any] = None,
         stage_name: str = None,
         torch_model=None,
-        use_fallback: bool = False,
     ) -> List[TTRegNetBottleneck]:
         """
         Build TTRegNetBottleneck blocks for a stage.
@@ -235,14 +239,15 @@ class Ttstages:
         first_block_downsample = stride != 1
         layers.append(
             TTRegNetBottleneck(
+                device=device,
                 parameters=stage_params["b1"],
+                model_args=model_args["b1"],
                 model_config=model_config,
                 layer_config=layer_cfg,
                 stride=stride,
                 downsample=first_block_downsample,
                 groups=groups,
                 torch_model=torch_model,
-                use_fallback=use_fallback,
                 block_name="b1",
                 stage_name=stage_name,
             )
@@ -255,14 +260,15 @@ class Ttstages:
                 raise KeyError(f"Missing block '{bname}' in {stage_name}. Available: {available_block_names}")
             layers.append(
                 TTRegNetBottleneck(
+                    device=device,
                     parameters=stage_params[bname],
+                    model_args=model_args[bname],
                     model_config=model_config,
                     layer_config=layer_cfg,
                     stride=1,
                     downsample=False,
                     groups=groups,
                     torch_model=torch_model,
-                    use_fallback=use_fallback,
                     block_name=bname,
                     stage_name=stage_name,
                 )
@@ -270,8 +276,7 @@ class Ttstages:
 
         return layers
 
-    def __call__(self, x, device, input_shape=None):
-        shape = input_shape if input_shape is not None else x.shape
+    def __call__(self, x, device):
         for block in self.layer:
-            x, shape = block(x, device, shape)
-        return x, shape
+            x = block(x, device)
+        return x

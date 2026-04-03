@@ -28,14 +28,6 @@ The backbone consists of:
 3. **FPN (Feature Pyramid Network)**: Top-down pathway for multi-scale feature extraction
 4. **Feature Fusion**: Global average pooling and addition of image and LiDAR features
 
-### Bottleneck Blocks
-
-The RegNet bottleneck blocks include Squeeze-and-Excitation (SE) modules with `se_fc1` and `se_fc2` convolutions. These can run in either TTNN or PyTorch mode:
-
-- **TTNN mode** (default): `se_fc1` and `se_fc2` run on Tenstorrent hardware
-- **PyTorch fallback mode**: Set `use_fallback=True` to run SE modules in PyTorch on CPU
-
-The `use_fallback` flag in the bottleneck block constructor allows switching between implementations for debugging or performance optimization.
 
 ### LidarCenterNet
 
@@ -79,7 +71,6 @@ transfuser/
 │   ├── test_self_attention.py          # Self-attention tests
 │   ├── test_bottleneck.py              # Bottleneck tests
 │   ├── test_stages.py                  # Stage tests
-│   ├── test_head.py                    # Detection head tests
 │   └── test_topdown.py                 # FPN tests
 └── demo/                # Demo scripts
     └── lidar_center_net_demo.py
@@ -143,27 +134,24 @@ See `reference/config.py` for all available options.
 
 ### Downloading Checkpoints
 
-Download the pre-trained TransFuser model checkpoint from AWS S3:
+Download the pre-trained TransFuser model checkpoint from the official repository if not automatically downloaded:
 
 ```bash
-# Download the 2022 model checkpoints (recommended)
-wget https://s3.eu-central-1.amazonaws.com/avg-projects/transfuser/models_2022.zip -P model_ckpt
-cd model_ckpt && unzip models_2022.zip && cd ..
+# Download checkpoint (example: model_seed1_39.pth)
+# Option 1: Direct download from TransFuser repository
+wget https://github.com/autonomousvision/transfuser/releases/download/v1.0/model_seed1_39.pth
 
-# This creates the following structure:
-# model_ckpt/models_2022/transfuser/model_seed1_39.pth
+# Option 2: Clone the repository and use checkpoints from there
+git clone https://github.com/autonomousvision/transfuser.git
+# Checkpoints are typically in the transfuser/models_2022/transfuser/ directory
 ```
 
 **Checkpoint location:**
-- The tests expect the checkpoint at: `model_ckpt/models_2022/transfuser/model_seed1_39.pth`
-- Ensure this path exists before running tests
+- Place the checkpoint file (e.g., `model_seed1_39.pth`) in the correct directory.
 
-**Alternative: Download 2021 models**
-```bash
-# Original 2021 models (different architecture)
-wget https://s3.eu-central-1.amazonaws.com/avg-projects/transfuser/models.zip -P model_ckpt
-cd model_ckpt && unzip models.zip && cd ..
-```
+**Alternative checkpoint paths:**
+- Some checkpoints may be in `model_ckpt/models_2022/transfuser/` directory structure
+- Adjust the checkpoint path in your code accordingly
 
 ### Downloading Data
 
@@ -179,6 +167,18 @@ For running the demo and tests, you need CARLA simulation data. Download scenari
 # Example: Download scenario data from TransFuser releases
 # Check the TransFuser repository for data download links
 ```
+Steps to download dataset if not automatically downloaded.
+```bash
+mkdir -p models/experimental/transfuser/reference/data
+cd models/experimental/transfuser/reference/data
+wget -nc https://s3.eu-central-1.amazonaws.com/avg-projects/transfuser/data/LICENSE.txt
+wget -nc https://s3.eu-central-1.amazonaws.com/avg-projects/transfuser/data/2022_data/s3.zip
+unzip -q s3.zip
+rm -f s3.zip
+## verify the scenario folder exists after unzip
+ls -d Scenario3_Town01_curved_route0_11_23_20_02_59* 2>/dev/null || find . -maxdepth 2 -type d -name "Scenario3_Town01_curved_route0_11_23_20_02_59*"
+```
+
 
 **Data structure:**
 ```
@@ -191,7 +191,6 @@ Scenario3_Town01_curved_route0_11_23_20_02_59/
 ```
 
 **For testing:**
-- Tests use pre-loaded inputs: `transfuser_inputs_final.pt` (for backbone tests)
 - Demo requires actual scenario folders with images and lidar data
 
 **Note:** If you have CARLA simulation data from running the original TransFuser, you can use that directly. The `process_input()` function in `reference/lidar_center_net.py` handles loading and preprocessing the data.
@@ -212,7 +211,6 @@ pytest models/experimental/transfuser/tests/test_gpt.py
 pytest models/experimental/transfuser/tests/test_self_attention.py
 pytest models/experimental/transfuser/tests/test_bottleneck.py
 pytest models/experimental/transfuser/tests/test_stages.py
-pytest models/experimental/transfuser/tests/test_head.py
 pytest models/experimental/transfuser/tests/test_topdown.py
 ```
 
@@ -224,7 +222,6 @@ pytest models/experimental/transfuser/tests/test_topdown.py
 - **test_self_attention.py**: Tests self-attention mechanism (both optimized and non-optimized)
 - **test_bottleneck.py**: Tests bottleneck blocks
 - **test_stages.py**: Tests ResNet/RegNet stages
-- **test_head.py**: Tests LidarCenterNet detection head
 - **test_topdown.py**: Tests FPN top-down pathway
 
 All tests use PCC (Pearson Correlation Coefficient) validation to compare TTNN outputs with PyTorch reference outputs.
@@ -233,44 +230,48 @@ All tests use PCC (Pearson Correlation Coefficient) validation to compare TTNN o
 
 The TransFuserBackbone TTNN implementation achieves the following PCC scores compared to the PyTorch reference:
 
-| Output | PCC Score |
-|--------|-----------|
-| p2 (FPN feature) | 0.9892 |
-| p3 (FPN feature) | 0.9884 |
-| p4 (FPN feature) | 0.9894 |
-| p5 (FPN feature) | 0.9918 |
-| Image Grid | 0.9894 |
-| Fused Features | 0.9895 |
+| Backbone Output | PCC Score |
+|-----------------|-----------|
+| p2 (FPN)        | 0.9995 |
+| p3 (FPN)        | 0.9996 |
+| p4 (FPN)        | 0.9994 |
+| p5 (FPN)        | 0.9992 |
+| Image Grid      | 0.9993 |
+| Fused Features  | 0.9950 |
 
-*Test configuration: `image_architecture=regnety_032`, `lidar_architecture=regnety_032`, `n_layer=4`, `use_fallback=True`, `use_optimized_self_attn=True`*
+## PCC Validation Summary (TTNN vs PyTorch)
+
+| Component                | PCC Score |
+|--------------------------|-----------|
+| Fused Features           | 0.9947 |
+| Predicted Waypoints      | 0.9999 |
+| Feature Map              | 0.9997 |
+| Detection Head (Overall) | 0.9973 |
+| Bounding Boxes (Boxes)   | 0.9079 |
+
+
+### Detection Head – Per-Head PCC Breakdown
+
+| Head Component | PCC Score |
+|---------------|-----------|
+| Heatmap       | 0.9973 |
+| WH (Width/Height) | 0.9992 |
+| Offset        | 0.9979 |
+| Yaw Class     | 0.9997 |
+| Yaw Residual  | 0.9932 |
+| Velocity      | 0.9993 |
+| Brake         | 0.9998 |
+
+*Test configuration: `image_architecture=regnety_032`, `lidar_architecture=regnety_032`, `n_layer=4`,  `use_optimized_self_attn=True`*
 
 ## Demo
 
 Run the LidarCenterNet demo to compare TTNN and PyTorch implementations:
 
 ```bash
-python models/experimental/transfuser/demo/lidar_center_net_demo.py \
-    --data-root <path_to_scenario_folder> \
-    --frame <frame_id> \
-    --weights <path_to_model.pth> \
-    --device-id 0
+python models/experimental/transfuser/demo/lidar_center_net_demo.py
 ```
 
-**Required arguments:**
-- `--data-root`: Path to folder containing scenario data (images/lidar)
-- `--frame`: Frame ID inside data_root (e.g., "0120")
-- `--weights`: Path to Transfuser weight file (.pth)
-- `--device-id`: TTNN device ID (default: 0)
-
-
-**Example:**
-```bash
-python models/experimental/transfuser/demo/lidar_center_net_demo.py \
-    --data-root Scenario3_Town01_curved_route0_11_23_20_02_59/ \
-    --frame 0120 \
-    --weights model_seed1_39.pth \
-    --device-id 0
-```
 
 The demo will:
 1. Load inputs from the specified data root and frame

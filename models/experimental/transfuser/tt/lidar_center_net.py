@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
@@ -34,7 +35,7 @@ class LidarCenterNet(nn.Module):
         lidar_architecture="resnet18",
         use_velocity=True,
         torch_model=None,
-        use_fallback=False,
+        model_args=None,
     ):
         super().__init__()
         self.device = device
@@ -66,14 +67,15 @@ class LidarCenterNet(nn.Module):
             "math_approx_mode": False,
         }
         assert backbone == "transFuser", "Only Transfuser supported for LidarCenterNet."
+
         self._model = TtTransfuserBackbone(
             device,
             parameters=parameters,
+            model_args=model_args,
             stride=2,
             model_config=model_config,
             config=self.config,
             torch_model=torch_model,
-            use_fallback=use_fallback,
         )
 
         channel = config.channel
@@ -84,7 +86,6 @@ class LidarCenterNet(nn.Module):
             nn.Conv2d(channel, 3, kernel_size=(1, 1), stride=1, padding=0, bias=True),
         ).to(torch.device("cpu"))
 
-        # prediction heads
         # Initialize TTNN model
 
         self.head = TTLidarCenterNetHead(
