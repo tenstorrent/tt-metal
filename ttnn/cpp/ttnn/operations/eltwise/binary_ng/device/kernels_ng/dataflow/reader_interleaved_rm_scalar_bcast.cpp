@@ -159,7 +159,7 @@ void kernel_main() {
                             const uint32_t src_low_bits = static_cast<uint32_t>(addr_a & (alignment_a - 1));
                             const uint32_t scratch_l1_addr = l1_write_addr_src + src_low_bits;
 
-                            noc_async_read(addr_a, scratch_l1_addr, element_size_aligned_a);
+                            noc_async_read(addr_a, scratch_l1_addr, element_size);
                             noc_async_read_barrier();
 
                             copy_one_element<element_size>(l1_write_addr_src, scratch_l1_addr);
@@ -190,7 +190,7 @@ void kernel_main() {
                             const uint32_t src_low_bits = static_cast<uint32_t>(addr_b & (alignment_b - 1));
                             const uint32_t scratch_l1_addr = l1_write_addr_src_b + src_low_bits;
 
-                            noc_async_read(addr_b, scratch_l1_addr, element_size_aligned_b);
+                            noc_async_read(addr_b, scratch_l1_addr, element_size);
                             noc_async_read_barrier();
 
                             copy_one_element<element_size>(l1_write_addr_src_b, scratch_l1_addr);

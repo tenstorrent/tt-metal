@@ -164,7 +164,7 @@ void kernel_main() {
                                 const uint32_t row_l1_addr =
                                     l1_write_addr_src + static_cast<uint32_t>(k) * current_chunk_bytes;
 
-                                noc_async_read(addr_a, scratch_l1_addr, element_size_aligned_a);
+                                noc_async_read(addr_a, scratch_l1_addr, element_size);
                                 noc_async_read_barrier();
 
                                 copy_one_element<element_size>(row_l1_addr, scratch_l1_addr);
@@ -186,7 +186,7 @@ void kernel_main() {
                                 const uint32_t row_l1_addr =
                                     l1_write_addr_src_b + static_cast<uint32_t>(k) * current_chunk_bytes;
 
-                                noc_async_read(addr_b, scratch_l1_addr, element_size_aligned_b);
+                                noc_async_read(addr_b, scratch_l1_addr, element_size);
                                 noc_async_read_barrier();
 
                                 copy_one_element<element_size>(row_l1_addr, scratch_l1_addr);
