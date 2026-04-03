@@ -446,12 +446,6 @@ def _tensor_1d_from_floats(
     return out
 
 
-def _ttnn_scalar_to_float(x: ttnn.Tensor) -> float:
-    """Read a single element from a TTNN tensor as Python ``float`` (host read)."""
-    t = ttnn.to_torch(x).reshape(-1)
-    return float(t[0].item())
-
-
 class FlowMatchSchedulerTtnn:
     """Flow-match scheduler on device (same logic as ``reference.utils.FlowMatchScheduler``).
 
@@ -563,7 +557,7 @@ class FlowMatchSchedulerTtnn:
         if self.sigmas is None or self.timesteps is None:
             raise RuntimeError("Call set_timesteps before step")
         n = int(self.timesteps.shape[0])
-        t_val = _ttnn_scalar_to_float(timestep)
+        t_val = float(timestep.item())
         t_broadcast = ttnn.full(
             (n,),
             t_val,
@@ -574,7 +568,7 @@ class FlowMatchSchedulerTtnn:
         diff = ttnn.abs(ttnn.subtract(self.timesteps, t_broadcast))
         neg_diff = ttnn.multiply(diff, -1.0)
         idx_tt = ttnn.argmax(neg_diff, dim=-1)
-        timestep_id = int(_ttnn_scalar_to_float(idx_tt))
+        timestep_id = int(idx_tt.item())
 
         sig = ttnn.slice(self.sigmas, [timestep_id], [timestep_id + 1])
         if to_final or timestep_id + 1 >= n:
@@ -590,9 +584,10 @@ class FlowMatchSchedulerTtnn:
             sig_next = ttnn.slice(self.sigmas, [timestep_id + 1], [timestep_id + 2])
 
         delta = ttnn.subtract(sig_next, sig)
-        if delta.dtype != model_output.dtype:
-            delta = ttnn.typecast(delta, model_output.dtype)
-        return ttnn.add(sample, ttnn.multiply(model_output, delta))
+        # Avoid typecasting a row-major [1] tensor on Wormhole (requires padded last dim % 32).
+        # Apply delta as a host scalar, which is equivalent to broadcasting a length-1 tensor.
+        delta_scalar = float(delta.item())
+        return ttnn.add(sample, ttnn.multiply(model_output, delta_scalar))
 
     def calculate_shift(
         self,
