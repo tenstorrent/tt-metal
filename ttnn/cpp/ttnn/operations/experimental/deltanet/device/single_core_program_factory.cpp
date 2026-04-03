@@ -87,11 +87,29 @@ DeltaNetRecurrenceOperation::SingleCore::cached_program_t DeltaNetRecurrenceOper
             .set_page_size(tt::CBIndex::c_24, tile_size);
     CreateCircularBuffer(program, core_range, cb_scratch_config);
 
-    // cb_scratch2 (c_25): Q tile cache for matmul (compute-only, k_tiles capacity)
+    // cb_scratch2 (c_25): Q+K tile cache (compute-only, 2*k_tiles: Q at [0..k-1], K at [k..2k-1])
     CircularBufferConfig cb_scratch2_config =
-        CircularBufferConfig(k_tiles * tile_size, {{tt::CBIndex::c_25, cb_data_format}})
+        CircularBufferConfig(2 * k_tiles * tile_size, {{tt::CBIndex::c_25, cb_data_format}})
             .set_page_size(tt::CBIndex::c_25, tile_size);
     CreateCircularBuffer(program, core_range, cb_scratch2_config);
+
+    // cb_kv_mem (c_26): K @ state result (v_tiles) for delta rule Step 2
+    CircularBufferConfig cb_kv_mem_config =
+        CircularBufferConfig(v_tiles * tile_size, {{tt::CBIndex::c_26, cb_data_format}})
+            .set_page_size(tt::CBIndex::c_26, tile_size);
+    CreateCircularBuffer(program, core_range, cb_kv_mem_config);
+
+    // cb_delta (c_27): (V - kv_mem) * beta result (v_tiles) for Step 3
+    CircularBufferConfig cb_delta_config =
+        CircularBufferConfig(v_tiles * tile_size, {{tt::CBIndex::c_27, cb_data_format}})
+            .set_page_size(tt::CBIndex::c_27, tile_size);
+    CreateCircularBuffer(program, core_range, cb_delta_config);
+
+    // cb_outer (c_28): updated state buffer for Step 4 (state_tiles_per_head)
+    CircularBufferConfig cb_outer_config =
+        CircularBufferConfig(state_tiles_per_head * tile_size, {{tt::CBIndex::c_28, cb_data_format}})
+            .set_page_size(tt::CBIndex::c_28, tile_size);
+    CreateCircularBuffer(program, core_range, cb_outer_config);
 
     // ---- Reader Kernel ----
     // Compile-time: heads_per_core (not total num_heads), k_tiles, v_tiles, TensorAccessorArgs
