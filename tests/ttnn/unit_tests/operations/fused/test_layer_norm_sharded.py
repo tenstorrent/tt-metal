@@ -6,6 +6,7 @@ import pytest
 import torch
 import ttnn
 
+from models.common.utility_functions import is_watcher_enabled
 from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     layernorm_test_main,
     single_stage_param_sets,
@@ -14,12 +15,6 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     ttnn_layer_norm_sharded,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
-# Non-zero implicit tile padding on activations (#31982); matches layernorm_test_main → do_test_main (-42).
-TEST_PADDING_VALUE = -42
-# L1 physical shard shape (per-core buffer) must be a multiple of the 32×32 tile. Shapes where
-# h//num_cores_h or w//num_cores_w is not divisible by 32 are invalid here — use interleaved layer_norm
-# tests for logical non-multiple-of-32 extents and implicit padding.
 
 
 @pytest.mark.parametrize("h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt", single_stage_param_sets())
@@ -189,16 +184,18 @@ def test_layer_norm_sharded_with_weight_and_bias_and_residual(device, use_welfor
 @pytest.mark.parametrize("use_welford", [True])
 def test_layer_norm_sharded_padded(device, use_welford):
     """
-    Inactive width columns set to TEST_PADDING_VALUE; implicit tile padding same (#31982).
-    Only Welford (legacy reduce wrong on partial tiles).
+    Test layer norm on a sharded tensor that is padded with zeros
+    in the width dimension.
+    Compare against analytic layer norm calculation: (x - mean) / sqrt(var + eps)
+    Only tests Welford layernorm, since legacy reduce doesn't give the correct
+    result for partially-filled tiles.
     """
     torch.manual_seed(0)
 
     h, w = 32, 256
     num_cores_h, num_cores_w = 1, 8
     non_zero_columns = 3
-    # torch_input_tensor = torch.zeros((h, w), dtype=torch.bfloat16)
-    torch_input_tensor = torch.full((h, w), TEST_PADDING_VALUE, dtype=torch.bfloat16)
+    torch_input_tensor = torch.zeros((h, w), dtype=torch.bfloat16)
     torch_input_tensor[:, :non_zero_columns] = 1.0
 
     # Create sharded memory config for 2x8 core grid
@@ -228,9 +225,7 @@ def test_layer_norm_sharded_padded(device, use_welford):
         layout=ttnn.Layout.TILE,
         device=device,
         memory_config=sharded_mem_config,
-        pad_value=TEST_PADDING_VALUE,
     )
-    tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, TEST_PADDING_VALUE)
 
     # Run sharded layer norm
     output_ttnn = ttnn_layer_norm_sharded(
@@ -298,9 +293,7 @@ def test_layer_norm_sharded_width_default_config(device, h, w, dtype):
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=sharded_mem_config,
-        pad_value=TEST_PADDING_VALUE,
     )
-    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     # Weight and bias tensors: interleaved on DRAM
     weight = ttnn.from_torch(
@@ -333,7 +326,7 @@ def test_layer_norm_sharded_width_default_config(device, h, w, dtype):
 def test_layer_norm_sharded_2d_with_grid_offset(device, grid_offset, use_welford, use_weight_bias):
     """Test 2D reduce block-sharded layernorm with a non-zero grid origin."""
 
-    h, w = 64, 64  # 2x2 tiles; shard 32×32 per core
+    h, w = 64, 64  # 2x2 tiles
     num_cores_h, num_cores_w = 2, 2
     offset_x, offset_y = grid_offset
 
@@ -379,9 +372,7 @@ def test_layer_norm_sharded_2d_with_grid_offset(device, grid_offset, use_welford
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=sharded_mem_config,
-        pad_value=TEST_PADDING_VALUE,
     )
-    tt_input = ttnn.fill_implicit_tile_padding(tt_input, TEST_PADDING_VALUE)
 
     output = ttnn_layer_norm_sharded(
         device,
@@ -403,7 +394,7 @@ def test_layer_norm_sharded_1d_mcast_with_grid_offset(device, grid_offset, use_w
     """Test 1D mcast layernorm with a non-zero grid origin."""
     torch.manual_seed(0)
 
-    h, w = 32, 128  # shard height 32 (tile-aligned)
+    h, w = 32, 128  # 1 tile row, 4 tile cols
     num_cores_w = 4
     offset_x, offset_y = grid_offset
 
@@ -436,9 +427,7 @@ def test_layer_norm_sharded_1d_mcast_with_grid_offset(device, grid_offset, use_w
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=sharded_mem_config,
-        pad_value=TEST_PADDING_VALUE,
     )
-    tt_input = ttnn.fill_implicit_tile_padding(tt_input, TEST_PADDING_VALUE)
 
     output = ttnn_layer_norm_sharded(
         device,

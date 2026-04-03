@@ -10,7 +10,6 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-# Non-zero implicit tile padding on activations (#31982); weight left default tilization.
 TEST_PADDING_VALUE = -42
 
 pytestmark = pytest.mark.use_module_device
@@ -18,7 +17,8 @@ pytestmark = pytest.mark.use_module_device
 
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("h", [32, 384])
-@pytest.mark.parametrize("w", [64, 1024, 97])
+@pytest.mark.parametrize("w", [64, 1024])
+@pytest.mark.parametrize("h, w", [(31, 65)])  # added shape which is non-multiple of 32
 def test_rms_norm(device, batch_size, h, w):
     torch.manual_seed(0)
 
@@ -27,9 +27,7 @@ def test_rms_norm(device, batch_size, h, w):
     golden_function = ttnn.get_golden_function(ttnn.rms_norm)
     torch_output_tensor = golden_function(torch_input_tensor, torch_weight)
 
-    input_tensor = ttnn.from_torch(
-        torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT, pad_value=TEST_PADDING_VALUE
-    )
+    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT)
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     weight = ttnn.from_torch(torch_weight, device=device, layout=ttnn.TILE_LAYOUT)
     output_tensor = ttnn.rms_norm(input_tensor, weight=weight)
@@ -42,6 +40,7 @@ def test_rms_norm(device, batch_size, h, w):
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("h", [128])
 @pytest.mark.parametrize("w", [32, 4096])
+@pytest.mark.parametrize("h, w", [(31, 65)])  # added shape which is non-multiple of 32
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4, ttnn.MathFidelity.HiFi2])
 @pytest.mark.parametrize("math_approx_mode", [True, False])
 @pytest.mark.parametrize("fp32_dest_acc_en", [True, False])
@@ -57,9 +56,7 @@ def test_rms_norm_row_major(device, batch_size, h, w, math_fidelity, math_approx
     golden_function = ttnn.get_golden_function(ttnn.rms_norm)
     torch_output_tensor = golden_function(torch_input_tensor, torch_weight)
 
-    input_tensor = ttnn.from_torch(
-        torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT, pad_value=TEST_PADDING_VALUE
-    )
+    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT)
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     # For ROW_MAJOR layout, weight's last padded dim needs to equal tile width,
@@ -97,13 +94,9 @@ def test_rms_norm_with_weight_and_residual(device, batch_size, h, w, dtype):
     golden_function = ttnn.get_golden_function(ttnn.rms_norm)
     torch_output_tensor = golden_function(torch_input_tensor + torch_residual_input_tensor, torch_weight)
 
-    input_tensor = ttnn.from_torch(
-        torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT, pad_value=TEST_PADDING_VALUE
-    )
+    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT)
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
-    residual_input_tensor = ttnn.from_torch(
-        torch_residual_input_tensor, device=device, layout=ttnn.TILE_LAYOUT, pad_value=TEST_PADDING_VALUE
-    )
+    residual_input_tensor = ttnn.from_torch(torch_residual_input_tensor, device=device, layout=ttnn.TILE_LAYOUT)
     residual_input_tensor = ttnn.fill_implicit_tile_padding(residual_input_tensor, TEST_PADDING_VALUE)
     weight = ttnn.from_torch(torch_weight, device=device, layout=ttnn.TILE_LAYOUT)
     output_tensor = ttnn.rms_norm(input_tensor, residual_input_tensor=residual_input_tensor, weight=weight)

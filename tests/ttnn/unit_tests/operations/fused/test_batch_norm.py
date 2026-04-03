@@ -150,13 +150,7 @@ def test_BN_fp32_full_value(device, channel_size, eps, weight, bias):
     weight_torch = weight_torch.view(1, channel_size, 1, 1) if weight else None
     bias_torch = bias_torch.view(1, channel_size, 1, 1) if bias else None
 
-    input_tensor_tt = ttnn.from_torch(
-        input_tensor_torch,
-        dtype=ttnn.float32,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        pad_value=TEST_PADDING_VALUE,
-    )
+    input_tensor_tt = ttnn.from_torch(input_tensor_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_tt = ttnn.fill_implicit_tile_padding(input_tensor_tt, TEST_PADDING_VALUE)
     batch_mean_tt = ttnn.from_torch(batch_mean_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     batch_var_tt = ttnn.from_torch(batch_var_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
@@ -348,6 +342,7 @@ def test_batch_norm(input_shapes, training, check_mean, check_var, weight, bias,
     "input_shapes",
     [
         torch.Size([3, 2, 32, 32]),
+        torch.Size([7, 3, 23, 23]),  # changed shape to non-multiple of 32 (tile-size)
     ],
 )
 @pytest.mark.parametrize("mem_layout", [ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.TensorMemoryLayout.HEIGHT_SHARDED])
@@ -381,6 +376,7 @@ def test_batch_norm_program_cache_and_default(input_shapes, mem_layout, device):
     "input_shapes",
     [
         torch.Size([3, 2, 32, 32]),
+        torch.Size([7, 3, 23, 23]),  # changed shape to non-multiple of 32 (tile-size)
     ],
 )
 def test_batch_norm_qid_Default(input_shapes, device):
@@ -403,6 +399,7 @@ def test_batch_norm_qid_Default(input_shapes, device):
     "input_shapes",
     [
         torch.Size([3, 2, 32, 32]),
+        torch.Size([7, 3, 23, 23]),  # changed shape to non-multiple of 32 (tile-size)
     ],
 )
 def test_batch_norm_qid(input_shapes, device):
@@ -467,6 +464,7 @@ def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_d
     torch_input_tensor, tt_input_tensor = data_gen_with_range_batch_norm(
         input_shapes, 5, 10, device, is_input=True, testing_dtype=input_dtype
     )
+    tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, TEST_PADDING_VALUE)
     torch_mean_tensor, tt_mean_tensor = data_gen_with_range_batch_norm(
         input_shapes, 4, 10, device, testing_dtype=param_dtype
     )
@@ -481,8 +479,6 @@ def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_d
     torch_bias_tensor, tt_bias_tensor = (
         data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=param_dtype) if bias else (None, None)
     )
-
-    tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, TEST_PADDING_VALUE)
 
     # Helper function to execute batch_norm for a given compute config
     # and return torch and tt tensors to compare

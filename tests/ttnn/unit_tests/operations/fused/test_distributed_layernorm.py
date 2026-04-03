@@ -15,7 +15,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
-# Non-zero tile padding exposes bugs where compute reads implicit pad (e.g. ZEROACC / SFPU); see #31982.
 TEST_PADDING_VALUE = -42
 
 
@@ -136,15 +135,10 @@ def run_distributed_layernorm(
 inp_shapes = [
     (1, 1, 2048, 8192),
     (1, 1, 128, 8192),
-    (1, 1, 97, 8192),  # non-32-multiple height
-    (1, 1, 128, 8256),  # non-32-multiple width
+    (2, 1, 128, 8192),
+    (1, 1, 2047, 8191),  # Non-tile-aligned shape for implicit padding testing
 ]
-inp_shape_ids = [
-    "inp_shape0",
-    "inp_shape1",
-    "inp_shape2",
-    "inp_shape3",
-]  # fourth id is for non-32-multiple width/height
+inp_shape_ids = ["inp_shape0", "inp_shape1", "inp_shape2", "inp_shape3"]  # 4th id is for non-tile-aligned shape
 
 stats_dtypes = [ttnn.bfloat16, ttnn.bfloat8_b]
 stats_dtypes_ids = ["BFLOAT16_stats", "BFLOAT8_B_stats"]
