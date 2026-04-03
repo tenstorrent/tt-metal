@@ -88,11 +88,14 @@ def test_lm_head(
 
     Torch dtypes are set inline; TTNN dtypes are derived automatically.
     """
+    if batch_seq_len != ttnn.TILE_SIZE and run_pcc_check:
+        pytest.skip("PCC check is only run for seq_len == TILE_SIZE to avoid slicing complexities")
+
     # Derive TTNN dtypes from torch dtypes
     torch_activations_dtype = torch.bfloat16
     torch_weights_dtype = torch.bfloat16
-    activations_dtype = TORCH_TO_TTNN_DTYPE[torch_activations_dtype]
-    weights_dtype = TORCH_TO_TTNN_DTYPE[torch_weights_dtype]
+    ttnn_activations_dtype = ttnn.bfloat16
+    ttnn_weights_dtype = ttnn.bfloat16
 
     num_devices = mesh_device.get_num_devices()
     mesh_shape = mesh_device.shape
@@ -129,8 +132,8 @@ def test_lm_head(
         torch_weights=weights,
         num_links=num_links,
         topology=topology,
-        activations_dtype=activations_dtype,
-        weights_dtype=weights_dtype,
+        activations_dtype=ttnn_activations_dtype,
+        weights_dtype=ttnn_weights_dtype,
     )
 
     tt_input = ttnn.from_torch(
@@ -138,7 +141,7 @@ def test_lm_head(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape),
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        dtype=activations_dtype,
+        dtype=ttnn_activations_dtype,
     )
     logger.debug(f"Created ttnn input (sp and tp sharding): {tt_input.shape}")
 
@@ -146,6 +149,9 @@ def test_lm_head(
     tt_output = tt_model(tt_input)
     logger.debug(f"TTNN output shape (sharded): {tt_output.shape}")
 
+    # For now, we only run the PCC check on input tensors with seq_len == TILE_SIZE to avoid slicing
+    # because we have yet to decide in which order tokens will be distributed in seq_len (See Zigzag
+    # attention for more details).
     if not run_pcc_check:
         logger.debug("run_pcc_check=False, skipping PCC validation")
         return

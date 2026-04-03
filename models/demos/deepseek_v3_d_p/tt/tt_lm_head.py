@@ -7,7 +7,7 @@ TTNN implementation of the LM Head (language model output projection) for DeepSe
 
 Projects hidden states to vocabulary logits:
     Input:  [dispatch_group_size, seq_len, emb_dim]
-    Output: [dispatch_group_size, seq_len, vocab_size]
+    Output: [dispatch_group_size, TILE_SIZE, vocab_size]
 
 Weight Sharding (across mesh columns):
     - weight: Sharded on output dimension (-1) across mesh columns
@@ -36,8 +36,9 @@ class TtLMHead(LightweightModule):
 
     Architecture:
         Input: x [dispatch_group_size, seq_len, emb_dim]
-        1. output = x @ weight → [dispatch_group_size, seq_len, vocab_size]
-        2. All-gather output across mesh columns → [dispatch_group_size, seq_len, vocab_size]
+        1. x_narrow = narrow x to last TILE_SIZE tokens → [dispatch_group_size, TILE_SIZE, emb_dim]
+        2. output = x @ weight → [dispatch_group_size, TILE_SIZE, vocab_size]
+        3. All-gather output across mesh columns → [dispatch_group_size, TILE_SIZE, vocab_size]
     """
 
     def __init__(
@@ -48,8 +49,8 @@ class TtLMHead(LightweightModule):
         torch_weights: dict = None,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Ring,
-        activations_dtype=ttnn.bfloat8_b,
-        weights_dtype=ttnn.bfloat4_b,
+        activations_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat16,
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_HIFI2,
     ):
         """
@@ -62,8 +63,8 @@ class TtLMHead(LightweightModule):
             torch_weights: Optional dict with key 'weight' containing torch tensor [vocab_size, emb_dim]
             num_links: Number of ethernet links to use for CCL (default: 1)
             topology: CCL topology - Linear or Ring (default: Ring)
-            activations_dtype: Data type for activations (default: bfloat8_b)
-            weights_dtype: Data type for weights (default: bfloat4_b)
+            activations_dtype: Data type for activations (default: bfloat16)
+            weights_dtype: Data type for weights (default: bfloat16)
             compute_kernel_config: Compute kernel configuration
         """
         super().__init__()
