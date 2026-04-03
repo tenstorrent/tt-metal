@@ -648,18 +648,14 @@ class MochiTransformer3DModel(Module):
         logger.info(f"Spatial output after permuting: {spatial_BCTHW.shape}")
         return spatial_BCTHW
 
-    def forward(
+    def forward_full(
         self,
-        spatial: ttnn.Tensor,
-        prompt: ttnn.Tensor,
-        timestep: ttnn.Tensor,
-        prompt_attention_mask: ttnn.Tensor,
-    ) -> ttnn.Tensor:
-        """
-        Inputs are all torch tensors
-        Output is torch tensor
-        """
-
+        spatial: torch.Tensor,
+        prompt: torch.Tensor,
+        timestep: torch.Tensor,
+        prompt_attention_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """The full forward function including preprocessing and postprocessing using PyTorch."""
         B, C, T, H, W = spatial.shape
         pH, pW = H // self.patch_size, W // self.patch_size
         N = T * pH * pW
@@ -669,6 +665,32 @@ class MochiTransformer3DModel(Module):
         temb_11BD, prompt_1BLP = self.prepare_timestep_text_features(timestep, prompt, prompt_attention_mask)
 
         spatial_1BNI, N = self.preprocess_spatial_input(spatial)
+
+        proj_out_1BNI = self.forward(
+            temb_11BD=temb_11BD,
+            prompt_1BLP=prompt_1BLP,
+            rope_cos_1HND=rope_cos_1HND,
+            rope_sin_1HND=rope_sin_1HND,
+            spatial_1BNI=spatial_1BNI,
+            trans_mat=trans_mat,
+            N=N,
+        )
+
+        spatial_out = self.postprocess_spatial_output(proj_out_1BNI, T, H, W, N)
+
+        return spatial_out
+
+    def forward(
+        self,
+        *,
+        temb_11BD: ttnn.Tensor,
+        prompt_1BLP: ttnn.Tensor,
+        rope_cos_1HND: ttnn.Tensor,
+        rope_sin_1HND: ttnn.Tensor,
+        spatial_1BNI: ttnn.Tensor,
+        trans_mat: ttnn.Tensor,
+        N: int,
+    ) -> ttnn.Tensor:
         spatial_1BND = self.patch_embed(spatial_1BNI)
 
         for idx, block in enumerate(self.transformer_blocks):
@@ -707,6 +729,4 @@ class MochiTransformer3DModel(Module):
 
         proj_out_1BNI = self.proj_out(spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config)
 
-        spatial_out = self.postprocess_spatial_output(proj_out_1BNI, T, H, W, N)
-
-        return spatial_out
+        return proj_out_1BNI

@@ -110,12 +110,19 @@ def test_sd35_pipeline(
                 num_inference_steps=num_inference_steps,
                 seed=0,
                 traced=traced,
+                vae_traced=False,
+                encoder_traced=False,
                 profiler=benchmark_profiler,
                 profiler_iteration=0,
             )
 
         # Save image
-        output_filename = f"sd35_new_{image_w}_{image_h}.png"
+
+        output_filename = f"sd35_new_{image_w}_{image_h}"
+        if traced:
+            output_filename += "_traced"
+        output_filename += ".png"
+
         images[0].save(output_filename)
         logger.info(f"Image saved as {output_filename}")
 
@@ -149,9 +156,15 @@ def test_sd35_pipeline(
                 num_inference_steps=num_inference_steps,
                 seed=0,
                 traced=traced,
+                vae_traced=False,
+                encoder_traced=False,
             )
 
-            output_filename = f"sd35_new_{image_w}_{image_h}_{i}.png"
+            output_filename = f"sd35_new_{image_w}_{image_h}_{i:02}"
+            if traced:
+                output_filename += "_traced"
+            output_filename += ".png"
+
             images[0].save(output_filename)
             logger.info(f"Image saved as {output_filename}")
 

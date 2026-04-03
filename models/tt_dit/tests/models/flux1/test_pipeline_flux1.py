@@ -163,6 +163,8 @@ def test_flux1_pipeline(
                 num_inference_steps=num_inference_steps,
                 seed=seed,
                 traced=traced,
+                vae_traced=False,
+                encoder_traced=False,
                 profiler=benchmark_profiler,
                 profiler_iteration=0,
             )

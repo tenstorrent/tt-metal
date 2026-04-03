@@ -11,6 +11,7 @@ import torch
 
 import ttnn
 
+from ..utils.tracing import Tracer
 from .module import Module, Parameter
 
 
@@ -44,12 +45,19 @@ class RMSNorm(Module):
             self.weight = None
             self.bias = None
 
-    def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        *,
+        compute_kernel_config=None,
+        program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None,
+    ) -> ttnn.Tensor:
         return ttnn.experimental.dit_rms_norm_unary_fused(
             x,
             weight=self.weight.data if self.weight is not None else None,
             bias=self.bias.data if self.bias is not None else None,
             epsilon=self.norm_eps,
+            program_config=program_config,
             compute_kernel_config=compute_kernel_config,
             activation=self.fused_activation,
         )
@@ -298,6 +306,7 @@ class DistributedLayerNorm(Module):
             core_range_set = ttnn.CoreRangeSet(
                 {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
             )
+            Tracer.warn_if_live()
             self._recip_tensors[key] = ttnn.create_layer_norm_reciprocals(mesh_device, core_range_set, width_per_device)
 
         self.recip_tensor = self._recip_tensors[key]

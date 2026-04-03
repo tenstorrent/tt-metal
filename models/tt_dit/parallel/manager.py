@@ -131,6 +131,8 @@ class CCLManager:
                 output_buffer = bf16_tensor(torch.empty(output_buffer_shape), device=self.mesh_device)
                 buffers.append([intermediate_buffer, output_buffer])
 
+            # It is okay for these buffers to be allocated after trace capture, as long as they hold
+            # only temporary values consumed before trace replay.
             self._ping_pong_buffer_cache[cache_key] = buffers
             self._ping_pong_buffer_indices[cache_key] = 0
             ttnn.synchronize_device(self.mesh_device)
@@ -175,6 +177,8 @@ class CCLManager:
                 )
                 buffers.append(output_buffer)
 
+            # It is okay for these buffers to be allocated after trace capture, as long as they hold
+            # only temporary values consumed before trace replay.
             self._ping_pong_buffer_cache[cache_key] = buffers
             self._ping_pong_buffer_indices[cache_key] = 0
             ttnn.synchronize_device(self.mesh_device)
@@ -291,6 +295,8 @@ class CCLManager:
                 )
                 buffers.append(output_buffer)
 
+            # It is okay for these buffers to be allocated after trace capture, as long as they hold
+            # only temporary values consumed before trace replay.
             self._ping_pong_buffer_cache[cache_key] = buffers
             self._ping_pong_buffer_indices[cache_key] = 0
             ttnn.synchronize_device(self.mesh_device)
