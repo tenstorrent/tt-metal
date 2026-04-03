@@ -9,7 +9,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // This file is a modified version of llvm/ADT/SmallVector.cpp.
-// Modifications were made by Tenstorrent AI ULC. in 2025 to integrate into internal codebase.
+// Modifications were made by Tenstorrent USA, Inc. in 2025 to integrate into internal codebase.
 //
 //===----------------------------------------------------------------------===//
 //

@@ -9,7 +9,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // This file is a modified version of code from llvm/Support/MemAlloc.h.
-// Modifications were made by Tenstorrent AI ULC. in 2025 to adapt it for internal use.
+// Modifications were made by Tenstorrent USA, Inc. in 2025 to adapt it for internal use.
 //
 //===----------------------------------------------------------------------===//
 /// \file
