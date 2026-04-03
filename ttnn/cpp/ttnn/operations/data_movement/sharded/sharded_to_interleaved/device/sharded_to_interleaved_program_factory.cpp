@@ -136,7 +136,7 @@ ShardedToInterleavedProgramFactory::cached_program_t ShardedToInterleavedProgram
             used_cores,
             tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     } else {
-        std::vector<uint32_t> writer_compile_time_args = {out_cb_index, num_units_per_row};
+        std::vector<uint32_t> writer_compile_time_args = {out_cb_index};
         TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
         unary_writer_kernel_id = tt_metal::CreateKernel(
