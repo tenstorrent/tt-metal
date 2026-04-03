@@ -181,4 +181,4 @@ def test_ring_joint_sdpa_program_cache(
             pcc_threshold,
         )
 
-    assert submesh.num_program_cache_entries() == 1
+    assert submesh.cache_entries_counter.total == 1

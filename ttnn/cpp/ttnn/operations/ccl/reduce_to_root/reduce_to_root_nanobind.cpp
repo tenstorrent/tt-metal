@@ -66,20 +66,19 @@ void bind_reduce_to_root(nb::module_& mod) {
     ttnn::bind_function<"reduce_to_root">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::reduce_to_root,
-            nb::arg("input_tensor_l").noconvert(),
-            nb::arg("input_tensor_s").noconvert(),
-            nb::arg("input_tensor_m").noconvert(),
-            nb::arg("root_coord"),
-            nb::kw_only(),
-            nb::arg("scale_fp32") = 1.0f,
-            nb::arg("topology").noconvert() = nb::cast(tt::tt_fabric::Topology::Linear),
-            nb::arg("output_tensor_l") = nb::none(),
-            nb::arg("output_tensor_s") = nb::none(),
-            nb::arg("output_tensor_m") = nb::none(),
-            nb::arg("intermediate_tensor") = nb::none(),
-            nb::arg("input_mux_cores") = nb::none()));
+        &ttnn::reduce_to_root,
+        nb::arg("input_tensor_l").noconvert(),
+        nb::arg("input_tensor_s").noconvert(),
+        nb::arg("input_tensor_m").noconvert(),
+        nb::arg("root_coord"),
+        nb::kw_only(),
+        nb::arg("scale_fp32") = 1.0f,
+        nb::arg("topology").noconvert() = nb::cast(tt::tt_fabric::Topology::Linear),
+        nb::arg("output_tensor_l") = nb::none(),
+        nb::arg("output_tensor_s") = nb::none(),
+        nb::arg("output_tensor_m") = nb::none(),
+        nb::arg("intermediate_tensor") = nb::none(),
+        nb::arg("input_mux_cores") = nb::none());
 
     mod.def(
         "reduce_to_root_tensor_spec",

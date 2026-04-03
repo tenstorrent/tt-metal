@@ -11,7 +11,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     mesh_tensor_to_torch,
 )
 
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader, parse_dtype, parse_layout
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 TIMEOUT = 300
@@ -56,15 +56,18 @@ def mesh_device_fixture():
 
 
 def run(
-    input_a_shape,
-    input_a_dtype,
-    input_a_layout,
-    input_a_memory_config,
+    input_a_shape=None,
+    input_a_dtype=None,
+    input_a_layout=None,
+    input_a_memory_config=None,
     output_memory_config=None,
     memory_config=None,
     storage_type="StorageType::DEVICE",
     *,
     device,
+    shape=None,
+    dtype=None,
+    layout=None,
     **kwargs,
 ) -> list:
     torch.manual_seed(0)
@@ -72,10 +75,30 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
+    # V2 / model_traced_sample vectors use input_a_*; vectors_export JSON uses shape/dtype/layout/memory_config.
+    shape_val = input_a_shape if input_a_shape is not None else shape
+    dtype_val = input_a_dtype if input_a_dtype is not None else dtype
+    layout_val = input_a_layout if input_a_layout is not None else layout
+
+    if shape_val is None:
+        raise ValueError("Missing tensor shape (expected input_a_shape or shape).")
+
+    if isinstance(dtype_val, str):
+        dtype_val = parse_dtype(dtype_val)
+    if dtype_val is None:
+        dtype_val = ttnn.bfloat16
+
+    if isinstance(layout_val, str):
+        layout_val = parse_layout(layout_val)
+    if layout_val is None:
+        layout_val = ttnn.TILE_LAYOUT
+
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
+    if output_memory_config is None and input_a_memory_config is not None:
+        output_memory_config = input_a_memory_config
 
-    shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
+    shape = tuple(shape_val) if isinstance(shape_val, (list, tuple)) else shape_val
 
     # PyTorch reference: zeros with the given shape
     torch_output_tensor = torch.zeros(shape, dtype=torch.float32)
@@ -84,8 +107,8 @@ def run(
     # ttnn.zeros creates a zero tensor with the given shape
     output_tensor = ttnn.zeros(
         shape,
-        dtype=input_a_dtype,
-        layout=input_a_layout,
+        dtype=dtype_val,
+        layout=layout_val,
         device=device,
         memory_config=output_memory_config,
         **op_kwargs,

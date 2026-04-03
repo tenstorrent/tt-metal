@@ -35,6 +35,8 @@ void kernel_main() {
         tlocal_dst_addr += dfb.get_stride_size();
     }
 
+    dfb.finish();
+
     // TODO: This will be replaced with some dfb.commit or noc.async_write_barrier call
     LocalDFBInterface& local_dfb_interface = g_dfb_interface[cb_id];
     for (uint32_t i = 0; i < local_dfb_interface.num_txn_ids; i++) {
