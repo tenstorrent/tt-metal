@@ -147,16 +147,21 @@ class Molmo2Model(LightweightModule):
         pixel_values: torch.Tensor,
         pooled_patches_idx: torch.Tensor,
         max_frames_per_chunk: int = 8,
+        use_data_parallel: bool = False,
+        frames_per_device: int = 8,
     ) -> Tuple[ttnn.Tensor, torch.Tensor]:
         """
         Process image through vision backbone (fully on TTNN).
 
         For videos with many frames, processes in chunks to avoid OOM.
+        With use_data_parallel=True, uses all 8 devices to process frames in parallel.
 
         Args:
             pixel_values: Preprocessed image tensor [B, C, H, W]
             pooled_patches_idx: Patch indices for pooling [B, N_out, K_pool]
-            max_frames_per_chunk: Max frames to process at once (default 8)
+            max_frames_per_chunk: Max frames to process at once (default 8, used when data_parallel=False)
+            use_data_parallel: Use data parallelism across devices (default False)
+            frames_per_device: Frames per device per pass when using data parallel (default 8)
 
         Returns:
             Tuple of:
@@ -176,8 +181,28 @@ class Molmo2Model(LightweightModule):
         vit = self.vision_backbone.image_vit
         patch_features = vit.patch_size * vit.patch_size * 3  # 14*14*3 = 588
 
-        # Check if we need chunked processing for video frames
-        if batch_size > max_frames_per_chunk:
+        # Check if we need data parallel or chunked processing for video frames
+        is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
+        num_devices = self.mesh_device.get_num_devices() if is_mesh_device else 1
+
+        # Auto-enable data parallel for videos with enough frames
+        # DP provides ~2x speedup by distributing frames across devices
+        auto_dp = is_mesh_device and batch_size >= num_devices and batch_size > 1
+
+        if (use_data_parallel or auto_dp) and is_mesh_device and batch_size >= num_devices:
+            # Data parallel: shard frames across all devices
+            # Auto-calculate frames_per_device if batch divides evenly, else use provided value
+            effective_frames_per_device = frames_per_device
+            if batch_size % num_devices == 0:
+                # Perfect split: each device gets batch_size/num_devices frames
+                effective_frames_per_device = max(1, batch_size // num_devices)
+            logger.info(
+                f"embed_image: Auto-enabled data parallel for {batch_size} frames across {num_devices} devices, {effective_frames_per_device} frames/device"
+            )
+            return self._embed_image_data_parallel(
+                pixel_values, pooled_patches_idx, effective_frames_per_device, num_devices
+            )
+        elif batch_size > max_frames_per_chunk:
             logger.info(f"embed_image: Chunked processing {batch_size} frames in chunks of {max_frames_per_chunk}")
             return self._embed_image_chunked(pixel_values, pooled_patches_idx, max_frames_per_chunk)
 
@@ -330,8 +355,9 @@ class Molmo2Model(LightweightModule):
                 vit_features_torch = ttnn.to_torch(vit_features, mesh_composer=mesh_composer)[0]
             else:
                 vit_features_torch = ttnn.to_torch(vit_features)
-
-            logger.debug(f"    ViT chunk output shape: {vit_features_torch.shape}")
+            logger.debug(
+                f"    ViT chunk {chunk_start//max_frames_per_chunk} shape: {vit_features_torch.shape}, expected seq_len: {chunk_size * 729}, mean={vit_features_torch.mean().item():.4f}, std={vit_features_torch.std().item():.4f}"
+            )
             all_vit_features.append(vit_features_torch)
 
             # Cleanup
@@ -351,60 +377,326 @@ class Molmo2Model(LightweightModule):
         # ============================================================
         # STAGE 2: Pool + Project on ALL features together
         # This preserves cross-frame attention via GLOBAL indices
+        # Use chunked pooling for large videos to avoid OOM
         # ============================================================
-        logger.debug(f"  Stage 2: Pooling + projection on all {batch_size} frames")
-
-        # Prepare GLOBAL pooling indices (no chunk-local adjustment!)
         valid = pooled_patches_idx >= 0
         valid_token = torch.any(valid, dim=-1)  # [batch_size, N_out]
-        clipped_idx = torch.clip(pooled_patches_idx, min=0)
-        flat_idx = clipped_idx.reshape(1, -1).to(torch.int32)
-        valid_mask = valid.reshape(1, 1, -1, 1).float()
 
-        # Move tensors to device
-        combined_features_ttnn = ttnn.from_torch(
-            combined_vit_features,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
-        )
+        # Threshold for using chunked pooling (based on memory analysis)
+        max_frames_for_single_pool = 32
 
-        idx_ttnn = ttnn.from_torch(
-            flat_idx,
-            device=self.mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
-        )
+        if batch_size <= max_frames_for_single_pool:
+            # Small video: use single pooling pass
+            logger.debug(f"  Stage 2: Single-pass pooling on {batch_size} frames")
 
-        valid_mask_ttnn = ttnn.from_torch(
-            valid_mask,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
-        )
+            clipped_idx = torch.clip(pooled_patches_idx, min=0)
+            flat_idx = clipped_idx.reshape(1, -1).to(torch.int32)
+            valid_mask = valid.reshape(1, 1, -1, 1).float()
 
-        # Run pooling + projection on ALL features with GLOBAL indices
-        visual_embeddings = self.vision_backbone.pool_and_project_ttnn(
-            image_features=combined_features_ttnn,
-            pooled_patches_idx_ttnn=idx_ttnn,
-            valid_mask_ttnn=valid_mask_ttnn,
-            n_out=n_out,
-            k_pool=k_pool,
-            batch_size=batch_size,
-        )
+            combined_features_ttnn = ttnn.from_torch(
+                combined_vit_features,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
 
-        # Cleanup
-        ttnn.deallocate(combined_features_ttnn)
-        ttnn.deallocate(idx_ttnn)
-        ttnn.deallocate(valid_mask_ttnn)
+            idx_ttnn = ttnn.from_torch(
+                flat_idx,
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
+
+            valid_mask_ttnn = ttnn.from_torch(
+                valid_mask,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
+
+            visual_embeddings = self.vision_backbone.pool_and_project_ttnn(
+                image_features=combined_features_ttnn,
+                pooled_patches_idx_ttnn=idx_ttnn,
+                valid_mask_ttnn=valid_mask_ttnn,
+                n_out=n_out,
+                k_pool=k_pool,
+                batch_size=batch_size,
+            )
+
+            ttnn.deallocate(combined_features_ttnn)
+            ttnn.deallocate(idx_ttnn)
+            ttnn.deallocate(valid_mask_ttnn)
+        else:
+            # Large video: use chunked pooling to reduce memory
+            logger.debug(f"  Stage 2: Chunked pooling on {batch_size} frames")
+
+            combined_features_ttnn = ttnn.from_torch(
+                combined_vit_features,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
+
+            visual_embeddings = self.vision_backbone.pool_and_project_chunked_ttnn(
+                image_features=combined_features_ttnn,
+                pooled_patches_idx=pooled_patches_idx,  # torch tensor, not flattened
+                valid_mask=valid,  # torch tensor
+                n_out=n_out,
+                k_pool=k_pool,
+                batch_size=batch_size,
+                max_frames_per_pool_chunk=32,
+            )
+            # Note: combined_features_ttnn is deallocated inside pool_and_project_chunked_ttnn
 
         logger.info(f"embed_image_chunked: Complete, output shape: {visual_embeddings.shape}")
+
+        return visual_embeddings, valid_token
+
+    def _embed_image_data_parallel(
+        self,
+        pixel_values: torch.Tensor,
+        pooled_patches_idx: torch.Tensor,
+        frames_per_device: int = 8,
+        num_devices: int = 8,
+    ) -> Tuple[ttnn.Tensor, torch.Tensor]:
+        """
+        Process video frames with DATA PARALLELISM across devices.
+
+        Instead of replicating work across devices (wasteful), this method
+        SHARDS frames across devices so each device processes different frames
+        in parallel.
+
+        For 64 frames with 8 devices and frames_per_device=8:
+          - Device 0: frames 0-7
+          - Device 1: frames 8-15
+          - ...
+          - Device 7: frames 56-63
+          - All 64 frames processed in ONE parallel pass!
+
+        For 384 frames: 384 / (8 devices * 8 frames) = 6 sequential passes
+
+        Args:
+            pixel_values: [total_frames, C, H, W] where total_frames can be large
+            pooled_patches_idx: [total_frames, N_out, K_pool] pooling indices (GLOBAL)
+            frames_per_device: Frames each device processes per pass (default: 8)
+            num_devices: Number of devices in mesh (default: 8)
+
+        Returns:
+            Tuple of (visual_embeddings, valid_token)
+        """
+        from loguru import logger
+
+        is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
+        if not is_mesh_device:
+            logger.warning("Data parallel requires mesh device, falling back to chunked")
+            return self._embed_image_chunked(pixel_values, pooled_patches_idx, frames_per_device)
+
+        total_frames = pooled_patches_idx.shape[0]
+        n_out = pooled_patches_idx.shape[1]
+        k_pool = pooled_patches_idx.shape[2]
+
+        vit = self.vision_backbone.image_vit
+        num_patches_per_frame = (vit.image_size // vit.patch_size) ** 2  # 729
+        patch_features = vit.patch_size * vit.patch_size * 3  # 588
+        pool_dim = vit.hidden_dim * 2  # 2304 (concat of 2 layers)
+
+        frames_per_pass = frames_per_device * num_devices
+        num_passes = (total_frames + frames_per_pass - 1) // frames_per_pass
+
+        logger.info(
+            f"embed_image_data_parallel: {total_frames} frames, "
+            f"{frames_per_device} frames/device, {num_devices} devices, "
+            f"{frames_per_pass} frames/pass, {num_passes} passes"
+        )
+
+        # Mesh mappers for sharding and gathering
+        shard_mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
+        replicate_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+
+        # ============================================================
+        # STAGE 1: Run ViT encoding with data parallelism
+        # ============================================================
+        all_vit_features = []
+
+        for pass_idx in range(num_passes):
+            pass_start = pass_idx * frames_per_pass
+            pass_end = min(pass_start + frames_per_pass, total_frames)
+            actual_frames_this_pass = pass_end - pass_start
+
+            logger.debug(
+                f"  Pass {pass_idx + 1}/{num_passes}: frames {pass_start}-{pass_end} "
+                f"({actual_frames_this_pass} frames)"
+            )
+
+            # Get frames for this pass
+            pass_pixels = pixel_values[pass_start:pass_end]  # [actual_frames, C, H, W]
+
+            # Pad to full frames_per_pass if needed for even sharding
+            if actual_frames_this_pass < frames_per_pass:
+                pad_frames = frames_per_pass - actual_frames_this_pass
+                # Pad with zeros (will be masked out later)
+                if pass_pixels.dim() == 4:
+                    pad_shape = (pad_frames,) + pass_pixels.shape[1:]
+                else:
+                    pad_shape = (pad_frames,) + pass_pixels.shape[1:]
+                padding = torch.zeros(pad_shape, dtype=pass_pixels.dtype)
+                pass_pixels = torch.cat([pass_pixels, padding], dim=0)
+
+            # Reshape for sharding: [num_devices, frames_per_device, C, H, W]
+            pass_pixels = pass_pixels.reshape(num_devices, frames_per_device, *pass_pixels.shape[1:])
+
+            # CPU preprocessing: unfold patches
+            # Each device's data: [frames_per_device, C, H, W] -> [frames_per_device, num_patches, patch_features]
+            device_patches_list = []
+            for dev_idx in range(num_devices):
+                dev_pixels = pass_pixels[dev_idx]  # [frames_per_device, C, H, W]
+                if dev_pixels.dim() == 4:
+                    # Unfold patches on CPU
+                    B, C, H, W = dev_pixels.shape
+                    x = dev_pixels.unfold(2, vit.patch_size, vit.patch_size)
+                    x = x.unfold(3, vit.patch_size, vit.patch_size)
+                    x = x.permute(0, 2, 3, 4, 5, 1).reshape(B * num_patches_per_frame, patch_features)
+                    device_patches_list.append(x)
+                else:
+                    device_patches_list.append(dev_pixels.reshape(-1, patch_features))
+
+            # Stack for sharding: [num_devices, frames_per_device * num_patches, patch_features]
+            all_patches = torch.stack(device_patches_list, dim=0).float()
+            # Reshape to [num_devices, 1, frames_per_device * num_patches, patch_features]
+            all_patches = all_patches.unsqueeze(1)
+
+            # Transfer to devices with SHARDING (each device gets its own frames)
+            patches_ttnn = ttnn.from_torch(
+                all_patches,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=shard_mapper,
+            )
+
+            # Run patch embedding projection on each device (weights are replicated)
+            embedded = ttnn.matmul(patches_ttnn, vit.patch_embed_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(patches_ttnn)
+            embedded = ttnn.add(embedded, vit.patch_embed_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+            # Add positional embedding (tiled for frames_per_device frames)
+            pos_tiles = [vit.positional_embedding] * frames_per_device
+            pos_tiled = ttnn.concat(pos_tiles, dim=2)
+            embedded = ttnn.add(embedded, pos_tiled, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(pos_tiled)
+
+            # Run ViT forward on each device's data
+            vit_output = self.vision_backbone.encode_image(embedded)
+            ttnn.deallocate(embedded)
+
+            # Gather results from all devices
+            # Output shape per device: [1, 1, frames_per_device * num_patches, pool_dim]
+            # After gather: [num_devices, 1, frames_per_device * num_patches, pool_dim]
+            vit_features_torch = ttnn.to_torch(vit_output, mesh_composer=mesh_composer)
+            ttnn.deallocate(vit_output)
+
+            # Reshape: [num_devices, 1, frames*patches, dim] -> [1, 1, total_patches, dim]
+            vit_features_torch = vit_features_torch.reshape(1, 1, -1, pool_dim)
+
+            # Trim padding if we padded earlier
+            actual_patches = actual_frames_this_pass * num_patches_per_frame
+            vit_features_torch = vit_features_torch[:, :, :actual_patches, :]
+
+            all_vit_features.append(vit_features_torch)
+            ttnn.synchronize_device(self.mesh_device)
+
+        # Concatenate all passes
+        combined_vit_features = torch.cat(all_vit_features, dim=2)
+        logger.info(f"  Combined ViT features: {combined_vit_features.shape}")
+
+        # ============================================================
+        # STAGE 2: Pool + Project (same as chunked version)
+        # ============================================================
+        valid = pooled_patches_idx >= 0
+        valid_token = torch.any(valid, dim=-1)
+
+        max_frames_for_single_pool = 32
+        batch_size = total_frames
+
+        if batch_size <= max_frames_for_single_pool:
+            logger.debug(f"  Stage 2: Single-pass pooling on {batch_size} frames")
+
+            clipped_idx = torch.clip(pooled_patches_idx, min=0)
+            flat_idx = clipped_idx.reshape(1, -1).to(torch.int32)
+            valid_mask = valid.reshape(1, 1, -1, 1).float()
+
+            combined_features_ttnn = ttnn.from_torch(
+                combined_vit_features,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=replicate_mapper,
+            )
+
+            idx_ttnn = ttnn.from_torch(
+                flat_idx,
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=replicate_mapper,
+            )
+
+            valid_mask_ttnn = ttnn.from_torch(
+                valid_mask,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=replicate_mapper,
+            )
+
+            visual_embeddings = self.vision_backbone.pool_and_project_ttnn(
+                image_features=combined_features_ttnn,
+                pooled_patches_idx_ttnn=idx_ttnn,
+                valid_mask_ttnn=valid_mask_ttnn,
+                n_out=n_out,
+                k_pool=k_pool,
+                batch_size=batch_size,
+            )
+
+            ttnn.deallocate(combined_features_ttnn)
+            ttnn.deallocate(idx_ttnn)
+            ttnn.deallocate(valid_mask_ttnn)
+        else:
+            logger.debug(f"  Stage 2: Chunked pooling on {batch_size} frames")
+
+            combined_features_ttnn = ttnn.from_torch(
+                combined_vit_features,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=replicate_mapper,
+            )
+
+            visual_embeddings = self.vision_backbone.pool_and_project_chunked_ttnn(
+                image_features=combined_features_ttnn,
+                pooled_patches_idx=pooled_patches_idx,
+                valid_mask=valid,
+                n_out=n_out,
+                k_pool=k_pool,
+                batch_size=batch_size,
+                max_frames_per_pool_chunk=32,
+            )
+
+        logger.info(f"embed_image_data_parallel: Complete, output shape: {visual_embeddings.shape}")
 
         return visual_embeddings, valid_token
 
@@ -527,83 +819,71 @@ class Molmo2Model(LightweightModule):
         valid_visual_ttnn = ttnn.reshape(valid_visual_ttnn, [1, 1, num_valid, hidden_dim])
         # NOTE: Do NOT deallocate original - reshape may return a view
 
-        # Build selector matrix on CPU (fast, input_ids-sized sparse matrix)
+        # Find image positions in input_ids
         image_positions = (input_ids[0] == self.image_patch_id).nonzero(as_tuple=True)[0]
         logger.info(
             f"prepare_inputs_for_multimodal: image_patch_id={self.image_patch_id}, found {len(image_positions)} image positions, num_valid={num_valid}"
         )
-        logger.info(f"  input_ids first 20: {input_ids[0][:20].tolist()}")
-        logger.info(f"  input_ids LAST 20: {input_ids[0][-20:].tolist()}")
-        logger.info(f"  input_ids ALL: {input_ids[0].tolist()}")
-        logger.info(f"  input_ids unique tokens: {input_ids[0].unique().tolist()[:20]}...")
         if len(image_positions) != num_valid:
             logger.warning(
                 f"  MISMATCH! len(image_positions)={len(image_positions)} != num_valid={num_valid}, returning text-only embeddings!"
             )
             ttnn.deallocate(valid_visual_ttnn)
             return text_embeddings_ttnn
-        logger.info(f"  image_positions (first 10): {image_positions[:10].tolist()}")
 
-        selector = torch.zeros(seq_len, num_valid, dtype=torch.bfloat16)
-        for i, pos in enumerate(image_positions):
-            selector[pos, i] = 1.0
+        # O(n) index-based fusion instead of O(n²) selector matrix
+        # This avoids creating a [seq_len, num_valid] dense matrix which would be
+        # 5GB+ for 256 frames (50k visual tokens)
+        #
+        # Move to CPU, scatter visual embeddings at image positions, move back
+        mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0) if is_mesh_device else None
 
-        # DEBUG: Synchronize device before creating new tensor
-        logger.info(f"  DEBUG: About to create selector_ttnn, syncing device first...")
-        try:
-            ttnn.synchronize_device(self.mesh_device)
-            logger.info(f"  DEBUG: Device sync completed successfully")
-        except Exception as e:
-            logger.error(f"  DEBUG: Device sync FAILED: {e}")
-            raise
+        # Get text embeddings on CPU
+        if is_mesh_device:
+            text_emb_cpu = ttnn.to_torch(text_embeddings_ttnn, mesh_composer=mesh_composer)[0]
+        else:
+            text_emb_cpu = ttnn.to_torch(text_embeddings_ttnn)
+        ttnn.deallocate(text_embeddings_ttnn)
 
-        selector_ttnn = ttnn.from_torch(
-            selector.unsqueeze(0).unsqueeze(0),  # [1, 1, seq_len, num_valid]
+        # Get visual embeddings on CPU
+        if is_mesh_device:
+            visual_cpu = ttnn.to_torch(valid_visual_ttnn, mesh_composer=mesh_composer)[0]
+        else:
+            visual_cpu = ttnn.to_torch(valid_visual_ttnn)
+        ttnn.deallocate(valid_visual_ttnn)
+
+        # text_emb_cpu shape: [1, seq_len, hidden_dim] (squeezed from [1, 1, seq_len, hidden_dim])
+        # visual_cpu shape: [1, num_valid, hidden_dim] (squeezed from [1, 1, num_valid, hidden_dim])
+        # Ensure 4D for consistency
+        if text_emb_cpu.dim() == 3:
+            text_emb_cpu = text_emb_cpu.unsqueeze(1)  # [1, 1, seq_len, hidden_dim]
+        if visual_cpu.dim() == 3:
+            visual_cpu = visual_cpu.unsqueeze(1)  # [1, 1, num_valid, hidden_dim]
+
+        logger.info(f"  O(n) fusion: text_emb_cpu shape={text_emb_cpu.shape}, visual_cpu shape={visual_cpu.shape}")
+        logger.info(
+            f"  O(n) fusion: visual_cpu stats: mean={visual_cpu.mean().item():.4f}, std={visual_cpu.std().item():.4f}"
+        )
+        logger.info(
+            f"  O(n) fusion: text_emb_cpu stats (before): mean={text_emb_cpu.mean().item():.4f}, std={text_emb_cpu.std().item():.4f}"
+        )
+
+        # Fuse: ADD visual to text at image positions (O(n) indexing instead of O(n²) matmul)
+        # Reference: x.view(-1, x.shape[-1])[is_image_patch] += image_features
+        text_emb_cpu[0, 0, image_positions, :] += visual_cpu[0, 0, :, :]
+        logger.info(
+            f"  O(n) fusion: text_emb_cpu stats (after): mean={text_emb_cpu.mean().item():.4f}, std={text_emb_cpu.std().item():.4f}"
+        )
+
+        # Move fused embeddings back to device
+        fused_ttnn = ttnn.from_torch(
+            text_emb_cpu,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper,
         )
-
-        # visual_contribution = selector @ valid_visual: [1, 1, seq_len, hidden_dim]
-        visual_contribution = ttnn.matmul(selector_ttnn, valid_visual_ttnn)
-        ttnn.deallocate(selector_ttnn)
-        ttnn.deallocate(valid_visual_ttnn)
-
-        # Debug: check visual_contribution values before fusion
-        try:
-            is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
-            if is_mesh_device:
-                mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-                vis_contrib = ttnn.to_torch(visual_contribution, mesh_composer=mesh_composer)[0]
-                text_emb = ttnn.to_torch(text_embeddings_ttnn, mesh_composer=mesh_composer)[0]
-            else:
-                vis_contrib = ttnn.to_torch(visual_contribution)
-                text_emb = ttnn.to_torch(text_embeddings_ttnn)
-            logger.info(f"prepare_inputs_for_multimodal DEBUG: visual_contribution shape={vis_contrib.shape}")
-            logger.info(
-                f"prepare_inputs_for_multimodal DEBUG: visual_contribution stats: min={vis_contrib.min().item():.4f}, max={vis_contrib.max().item():.4f}, mean={vis_contrib.mean().item():.4f}"
-            )
-            logger.info(f"prepare_inputs_for_multimodal DEBUG: text_embeddings shape={text_emb.shape}")
-            logger.info(
-                f"prepare_inputs_for_multimodal DEBUG: text_embeddings stats: min={text_emb.min().item():.4f}, max={text_emb.max().item():.4f}, mean={text_emb.mean().item():.4f}"
-            )
-            # Check visual contrib at image positions
-            logger.info(
-                f"prepare_inputs_for_multimodal DEBUG: visual_contrib at pos 0: first 5 = {vis_contrib[0,0,0,:5].tolist()}"
-            )
-            logger.info(
-                f"prepare_inputs_for_multimodal DEBUG: text_emb at pos 0: first 5 = {text_emb[0,0,0,:5].tolist()}"
-            )
-        except Exception as e:
-            logger.warning(f"prepare_inputs_for_multimodal DEBUG: Failed to inspect: {e}")
-
-        # Fuse: ADD visual to text at image positions (matching HuggingFace reference)
-        # Reference: x.view(-1, x.shape[-1])[is_image_patch] += image_features
-        fused_ttnn = ttnn.add(text_embeddings_ttnn, visual_contribution)
-        ttnn.deallocate(text_embeddings_ttnn)
-        ttnn.deallocate(visual_contribution)
 
         return fused_ttnn
 

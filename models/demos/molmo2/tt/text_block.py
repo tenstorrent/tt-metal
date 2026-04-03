@@ -131,6 +131,8 @@ class TextBlock(LightweightModule):
         kv_cache: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
         page_table: Optional[ttnn.Tensor] = None,
         user_id: int = 0,
+        chunk_page_table: Optional[ttnn.Tensor] = None,
+        chunk_start_idx: Optional[int] = None,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         Forward pass through decoder block.
@@ -144,6 +146,8 @@ class TextBlock(LightweightModule):
             kv_cache: Optional (k_cache, v_cache) tuple
             page_table: Optional page table for paged attention (vLLM)
             user_id: Batch index for multi-user batching (which user's KV cache slot to fill)
+            chunk_page_table: Page table for current chunk (chunked prefill)
+            chunk_start_idx: Starting position of current chunk (enables chunked attention)
 
         Returns:
             Tuple of (output, updated_kv_cache)
@@ -152,7 +156,16 @@ class TextBlock(LightweightModule):
         residual = x
         x = self.attn_norm(x)
         attn_out, new_kv_cache = self.self_attn(
-            x, rot_mats, transformation_mats, attn_mask, start_pos, kv_cache, page_table, user_id
+            x,
+            rot_mats,
+            transformation_mats,
+            attn_mask,
+            start_pos,
+            kv_cache,
+            page_table,
+            user_id,
+            chunk_page_table=chunk_page_table,
+            chunk_start_idx=chunk_start_idx,
         )
         x = ttnn.add(residual, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)

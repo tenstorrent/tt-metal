@@ -41,6 +41,7 @@ class VisionBlock(LightweightModule):
         weight_cache_path=None,
         state_dict_prefix: str = None,
         dtype=ttnn.bfloat8_b,
+        use_tensor_parallel: bool = False,  # ViT uses data parallelism by default
     ):
         """
         Initialize VisionBlock.
@@ -57,6 +58,8 @@ class VisionBlock(LightweightModule):
             weight_cache_path: Path to cache weights
             state_dict_prefix: Override prefix for state dict keys
             dtype: Data type for weights
+            use_tensor_parallel: If True, use TP=8 (shard weights). If False, replicate weights
+                                 for data parallelism. Default False for ViT (uses DP for frames).
         """
         super().__init__()
 
@@ -89,6 +92,7 @@ class VisionBlock(LightweightModule):
             head_dim=head_dim,
             weight_cache_path=weight_cache_path,
             dtype=dtype,
+            use_tensor_parallel=use_tensor_parallel,
         )
 
         # Pre-MLP LayerNorm
@@ -110,6 +114,7 @@ class VisionBlock(LightweightModule):
             intermediate_dim=intermediate_dim,
             weight_cache_path=weight_cache_path,
             dtype=dtype,
+            use_tensor_parallel=use_tensor_parallel,
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:

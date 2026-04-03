@@ -19,6 +19,10 @@ Dimensions:
     - head_dim: 72 (1152 / 16)
 
 All wq, wk, wv, wo projections have bias.
+
+Supports TP=8 tensor parallelism:
+    - Q, K, V projections: column-parallel (sharded by heads)
+    - Output projection: row-parallel with all_reduce
 """
 
 import math
@@ -34,6 +38,11 @@ class ImagePooling(LightweightModule):
     Cross-attention based image pooling for Molmo2.
 
     Pools multi-scale ViT features using attention with gathered patch neighborhoods.
+
+    Supports TP=8:
+        - 16 heads / 8 devices = 2 heads per device
+        - wq, wk, wv: column-parallel
+        - wo: row-parallel with all_reduce
     """
 
     def __init__(
@@ -72,6 +81,16 @@ class ImagePooling(LightweightModule):
         self.dtype = dtype
         self.tile_size = 32
 
+        # TP=8 configuration
+        self.is_mesh_device = mesh_device.__class__.__name__ == "MeshDevice"
+        self.num_devices = mesh_device.get_num_devices() if self.is_mesh_device else 1
+
+        # Calculate local heads per device for TP
+        assert (
+            num_heads % self.num_devices == 0
+        ), f"num_heads {num_heads} must be divisible by num_devices {self.num_devices}"
+        self.n_local_heads = num_heads // self.num_devices  # 16/8 = 2 heads per device
+
         # Pad head_dim to tile boundary if needed
         self.padded_head_dim = math.ceil(head_dim / self.tile_size) * self.tile_size
 
@@ -84,10 +103,22 @@ class ImagePooling(LightweightModule):
         else:
             cache_name = lambda name: weight_cache_path / f"{state_dict_prefix}.{name}"
 
-        is_mesh_device = mesh_device.__class__.__name__ == "MeshDevice"
-        mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh_device else None
+        # Mesh mappers for TP
+        if self.is_mesh_device:
+            # Column-parallel for Q, K, V (shard output dimension = heads)
+            col_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3)
+            # Row-parallel for output projection (shard input dimension)
+            row_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+            # Bias mappers
+            bias_col_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
+            bias_replicate_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+        else:
+            col_mesh_mapper = None
+            row_mesh_mapper = None
+            bias_col_mapper = None
+            bias_replicate_mapper = None
 
-        # Load wq: input_dim (2304) -> hidden_dim (1152)
+        # Load wq: input_dim (2304) -> hidden_dim (1152) - column-parallel
         wq = state_dict[f"{state_dict_prefix}.wq.weight"]
         bq = state_dict[f"{state_dict_prefix}.wq.bias"]
 
@@ -102,23 +133,23 @@ class ImagePooling(LightweightModule):
             wq_t.unsqueeze(0).unsqueeze(0),
             dtype=dtype,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=col_mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("wq.weight"),
+            cache_file_name=cache_name("wq.weight.tp8") if self.is_mesh_device else cache_name("wq.weight"),
         )
 
         self.bq = ttnn.as_tensor(
             bq,
             dtype=ttnn.bfloat16,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=bias_col_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("wq.bias"),
+            cache_file_name=cache_name("wq.bias.tp8") if self.is_mesh_device else cache_name("wq.bias"),
         )
 
-        # Load wk: input_dim (2304) -> hidden_dim (1152)
+        # Load wk: input_dim (2304) -> hidden_dim (1152) - column-parallel
         wk = state_dict[f"{state_dict_prefix}.wk.weight"]
         bk = state_dict[f"{state_dict_prefix}.wk.bias"]
 
@@ -132,23 +163,23 @@ class ImagePooling(LightweightModule):
             wk_t.unsqueeze(0).unsqueeze(0),
             dtype=dtype,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=col_mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("wk.weight"),
+            cache_file_name=cache_name("wk.weight.tp8") if self.is_mesh_device else cache_name("wk.weight"),
         )
 
         self.bk = ttnn.as_tensor(
             bk,
             dtype=ttnn.bfloat16,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=bias_col_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("wk.bias"),
+            cache_file_name=cache_name("wk.bias.tp8") if self.is_mesh_device else cache_name("wk.bias"),
         )
 
-        # Load wv: input_dim (2304) -> hidden_dim (1152)
+        # Load wv: input_dim (2304) -> hidden_dim (1152) - column-parallel
         wv = state_dict[f"{state_dict_prefix}.wv.weight"]
         bv = state_dict[f"{state_dict_prefix}.wv.bias"]
 
@@ -162,23 +193,23 @@ class ImagePooling(LightweightModule):
             wv_t.unsqueeze(0).unsqueeze(0),
             dtype=dtype,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=col_mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("wv.weight"),
+            cache_file_name=cache_name("wv.weight.tp8") if self.is_mesh_device else cache_name("wv.weight"),
         )
 
         self.bv = ttnn.as_tensor(
             bv,
             dtype=ttnn.bfloat16,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=bias_col_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("wv.bias"),
+            cache_file_name=cache_name("wv.bias.tp8") if self.is_mesh_device else cache_name("wv.bias"),
         )
 
-        # Load wo: hidden_dim (1152) -> hidden_dim (1152)
+        # Load wo: hidden_dim (1152) -> hidden_dim (1152) - row-parallel
         wo = state_dict[f"{state_dict_prefix}.wo.weight"]
         bo = state_dict[f"{state_dict_prefix}.wo.bias"]
 
@@ -194,17 +225,18 @@ class ImagePooling(LightweightModule):
             wo_t.unsqueeze(0).unsqueeze(0),
             dtype=dtype,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=row_mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("wo.weight"),
+            cache_file_name=cache_name("wo.weight.tp8") if self.is_mesh_device else cache_name("wo.weight"),
         )
 
+        # wo bias is replicated (added after all_reduce)
         self.bo = ttnn.as_tensor(
             bo,
             dtype=ttnn.bfloat16,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=bias_replicate_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name("wo.bias"),
@@ -246,6 +278,9 @@ class ImagePooling(LightweightModule):
         """
         Forward pass through cross-attention pooling.
 
+        With TP=8, each device processes n_local_heads (2 heads).
+        After output projection, all_reduce combines partial results.
+
         Args:
             query: Query tensor of shape [1, 1, num_queries, input_dim]
                    (typically mean of gathered features)
@@ -259,7 +294,7 @@ class ImagePooling(LightweightModule):
         num_queries = query.shape[-2]
         pool_size = key_value.shape[-2]
 
-        # Q projection
+        # Q projection (column-parallel: each device computes local heads)
         q = ttnn.linear(
             query,
             self.wq,
@@ -268,7 +303,7 @@ class ImagePooling(LightweightModule):
         )
         q = q + self.bq
 
-        # K projection
+        # K projection (column-parallel)
         k = ttnn.linear(
             key_value,
             self.wk,
@@ -277,7 +312,7 @@ class ImagePooling(LightweightModule):
         )
         k = k + self.bk
 
-        # V projection
+        # V projection (column-parallel)
         v = ttnn.linear(
             key_value,
             self.wv,
@@ -286,35 +321,35 @@ class ImagePooling(LightweightModule):
         )
         v = v + self.bv
 
-        # Reshape Q, K, V for multi-head attention
+        # Reshape Q, K, V for multi-head attention using LOCAL heads
         # Note: Using ttnn ops for head splitting
 
         # For cross-attention, we need special handling
         # Get batch dimensions from input tensors
         batch_seq = query.shape[1]  # B*N_out from vision_backbone
-        padded_hidden = self.num_heads * self.padded_head_dim
+        padded_local_hidden = self.n_local_heads * self.padded_head_dim  # Local heads only
 
-        # Q: [1, batch_seq, num_queries, padded_hidden] -> [batch_seq, num_heads, num_queries, head_dim]
-        # K: [1, batch_seq, pool_size, padded_hidden] -> [batch_seq, num_heads, pool_size, head_dim]
-        # V: [1, batch_seq, pool_size, padded_hidden] -> [batch_seq, num_heads, pool_size, head_dim]
+        # Q: [1, batch_seq, num_queries, padded_local_hidden] -> [batch_seq, n_local_heads, num_queries, head_dim]
+        # K: [1, batch_seq, pool_size, padded_local_hidden] -> [batch_seq, n_local_heads, pool_size, head_dim]
+        # V: [1, batch_seq, pool_size, padded_local_hidden] -> [batch_seq, n_local_heads, pool_size, head_dim]
 
-        q = ttnn.reshape(q, [batch_seq, num_queries, self.num_heads, self.padded_head_dim])
+        q = ttnn.reshape(q, [batch_seq, num_queries, self.n_local_heads, self.padded_head_dim])
         q = ttnn.permute(q, (0, 2, 1, 3))
         q = ttnn.typecast(q, dtype=ttnn.bfloat16)  # Changed from bfloat8_b
 
-        k = ttnn.reshape(k, [batch_seq, pool_size, self.num_heads, self.padded_head_dim])
+        k = ttnn.reshape(k, [batch_seq, pool_size, self.n_local_heads, self.padded_head_dim])
         k = ttnn.permute(k, (0, 2, 1, 3))
         k = ttnn.typecast(k, dtype=ttnn.bfloat16)  # Changed from bfloat8_b
 
-        v = ttnn.reshape(v, [batch_seq, pool_size, self.num_heads, self.padded_head_dim])
+        v = ttnn.reshape(v, [batch_seq, pool_size, self.n_local_heads, self.padded_head_dim])
         v = ttnn.permute(v, (0, 2, 1, 3))
         v = ttnn.typecast(v, dtype=ttnn.bfloat16)  # Changed from bfloat8_b
 
         # Use manual attention computation to handle mask correctly
         # (TTNN SDPA has issues with additive masks in cross-attention)
 
-        # Q @ K^T -> [batch_seq, num_heads, num_queries, pool_size]
-        k_t = ttnn.permute(k, (0, 1, 3, 2))  # [batch_seq, num_heads, head_dim, pool_size]
+        # Q @ K^T -> [batch_seq, n_local_heads, num_queries, pool_size]
+        k_t = ttnn.permute(k, (0, 1, 3, 2))  # [batch_seq, n_local_heads, head_dim, pool_size]
         attn_weights = ttnn.matmul(
             q,
             k_t,
@@ -328,7 +363,7 @@ class ImagePooling(LightweightModule):
 
         # Apply attention mask (additive mask: 0 for valid, -inf for invalid)
         if attn_mask is not None:
-            # Expand mask from [batch_seq, 1, 1, pool_size] to [batch_seq, num_heads, num_queries, pool_size]
+            # Expand mask from [batch_seq, 1, 1, pool_size] to [batch_seq, n_local_heads, num_queries, pool_size]
             # Broadcasting should handle this automatically
             attn_weights = ttnn.add(attn_weights, attn_mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -336,7 +371,7 @@ class ImagePooling(LightweightModule):
         attn_probs = ttnn.softmax(attn_weights, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn_weights)
 
-        # Attention output: attn_probs @ V -> [batch_seq, num_heads, num_queries, head_dim]
+        # Attention output: attn_probs @ V -> [batch_seq, n_local_heads, num_queries, head_dim]
         attn_output = ttnn.matmul(
             attn_probs,
             v,
@@ -349,19 +384,30 @@ class ImagePooling(LightweightModule):
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        # Reshape back: [batch_seq, num_heads, num_queries, head_dim] -> [1, batch_seq, num_queries, hidden_dim]
+        # Reshape back: [batch_seq, n_local_heads, num_queries, head_dim] -> [1, batch_seq, num_queries, local_hidden_dim]
         attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
-        attn_output = ttnn.reshape(attn_output, [1, batch_seq, num_queries, self.num_heads * self.padded_head_dim])
+        attn_output = ttnn.reshape(attn_output, [1, batch_seq, num_queries, self.n_local_heads * self.padded_head_dim])
 
-        # Output projection
+        # Output projection (row-parallel: each device has partial weights)
         output = ttnn.linear(
             attn_output,
             self.wo,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        output = output + self.bo
 
         ttnn.deallocate(attn_output)
+
+        # TP=8: All-reduce to combine partial results from all devices
+        if self.is_mesh_device and self.num_devices > 1:
+            output = ttnn.all_reduce(
+                output,
+                cluster_axis=1,
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        # Add output bias (replicated, added after all_reduce)
+        output = output + self.bo
 
         return output
