@@ -13,7 +13,7 @@ Tensor moreh_cumsum(
     const int64_t dim,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_cumsum");
+    TT_OP_SCOPE("ttnn::moreh_cumsum");
     return ttnn::cumsum(
         input, dim, input.dtype(), false, output, memory_config.has_value() ? *memory_config : input.memory_config());
 }

@@ -21,7 +21,7 @@ Tensor embedding_bw(
     const std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::embedding_bw");
+    TT_OP_SCOPE("ttnn::embedding_bw");
     auto num_embeddings = weight_tensor_arg.logical_shape()[-2];
 
     const auto& input_shape = input_tensor_arg.logical_shape();

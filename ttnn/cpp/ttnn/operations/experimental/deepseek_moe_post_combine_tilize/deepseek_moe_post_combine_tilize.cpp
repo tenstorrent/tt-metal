@@ -17,7 +17,7 @@ namespace ttnn::experimental {
 
 ttnn::Tensor deepseek_moe_post_combine_tilize(
     const ttnn::Tensor& input_tensor, const tt::tt_metal::MemoryConfig& output_memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::deepseek_moe_post_combine_tilize");
+    TT_OP_SCOPE("ttnn::experimental::deepseek_moe_post_combine_tilize");
     return ttnn::prim::deepseek_moe_post_combine_tilize(input_tensor, output_memory_config);
 }
 

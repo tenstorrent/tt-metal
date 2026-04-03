@@ -15,7 +15,7 @@ ttnn::Tensor mesh_partition(
     int32_t dim,
     std::optional<uint32_t> cluster_axis,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::mesh_partition");
+    TT_OP_SCOPE("ttnn::mesh_partition");
     if (ttnn::operations::ccl::detail::get_cluster_axis_size(input_tensor, cluster_axis) == 1) {
         return input_tensor;
     }

@@ -9,7 +9,7 @@
 namespace ttnn {
 
 Tensor to_dtype(const Tensor& input_tensor, const DataType& dtype) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::to_dtype");
+    TT_OP_SCOPE("ttnn::to_dtype");
     return tt::tt_metal::to_dtype(input_tensor, dtype);
 }
 

@@ -17,7 +17,7 @@ Tensor moreh_softmax(
     const operations::moreh::moreh_softmax::MorehSoftmaxOpParallelizationStrategy strategy,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_softmax");
+    TT_OP_SCOPE("ttnn::moreh_softmax");
     return ttnn::prim::moreh_softmax(
         input_tensor, dim, output_tensor, op, strategy, memory_config, compute_kernel_config);
 }
@@ -30,7 +30,7 @@ Tensor moreh_softmin(
     const operations::moreh::moreh_softmax::MorehSoftmaxOpParallelizationStrategy strategy,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_softmin");
+    TT_OP_SCOPE("ttnn::moreh_softmin");
     return ttnn::prim::moreh_softmax(
         input_tensor, dim, output_tensor, op, strategy, memory_config, compute_kernel_config);
 }
@@ -43,7 +43,7 @@ Tensor moreh_logsoftmax(
     const operations::moreh::moreh_softmax::MorehSoftmaxOpParallelizationStrategy strategy,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_logsoftmax");
+    TT_OP_SCOPE("ttnn::moreh_logsoftmax");
     return ttnn::prim::moreh_softmax(
         input_tensor, dim, output_tensor, op, strategy, memory_config, compute_kernel_config);
 }

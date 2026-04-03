@@ -25,7 +25,7 @@ ttnn::Tensor all_gather_concat(
     const std::optional<uint32_t> num_links,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::all_gather_concat");
+    TT_OP_SCOPE("ttnn::experimental::all_gather_concat");
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     return ttnn::experimental::prim::all_gather_concat(
         input_tensor,

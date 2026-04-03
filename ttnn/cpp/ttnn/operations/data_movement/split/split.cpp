@@ -82,7 +82,7 @@ std::vector<ttnn::Tensor> split(
     const SmallVector<int64_t>& split_sizes,
     int64_t dim,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::split");
+    TT_OP_SCOPE("ttnn::split");
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
 
     TT_FATAL(
@@ -146,7 +146,7 @@ std::vector<ttnn::Tensor> split(
     int64_t split_size,
     int64_t dim,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::split");
+    TT_OP_SCOPE("ttnn::split");
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
 
     TT_FATAL(split_size > 0, "split_size must be greater than 0, but got: {}", split_size);

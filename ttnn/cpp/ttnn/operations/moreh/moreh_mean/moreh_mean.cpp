@@ -18,7 +18,7 @@ Tensor moreh_mean(
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_mean");
+    TT_OP_SCOPE("ttnn::moreh_mean");
     ttnn::SmallVector<int64_t> dims = operations::get_dim(dim, input.logical_shape().rank());
     std::sort(dims.begin(), dims.end());
 

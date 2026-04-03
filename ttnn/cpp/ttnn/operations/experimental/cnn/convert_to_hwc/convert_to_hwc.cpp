@@ -46,7 +46,7 @@ namespace ttnn::experimental {
 
 ttnn::Tensor convert_to_hwc(
     const Tensor& input, const std::optional<MemoryConfig>& memory_config, const std::optional<DataType>& dtype) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::convert_to_hwc");
+    TT_OP_SCOPE("ttnn::experimental::convert_to_hwc");
     const auto& input_memory_config = input.memory_config();
     const bool is_dram_input = input_memory_config.buffer_type() == tt::tt_metal::BufferType::DRAM;
 

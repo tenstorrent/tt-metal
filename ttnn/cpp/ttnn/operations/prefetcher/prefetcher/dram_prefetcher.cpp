@@ -14,7 +14,7 @@ Tensor dram_prefetcher(
     const uint32_t num_layers,
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const bool enable_performance_mode) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::dram_prefetcher");
+    TT_OP_SCOPE("ttnn::dram_prefetcher");
     return ttnn::prim::dram_prefetcher(tensors, num_layers, global_cb, enable_performance_mode);
 }
 

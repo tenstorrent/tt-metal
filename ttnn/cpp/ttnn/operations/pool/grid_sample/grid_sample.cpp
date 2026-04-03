@@ -23,7 +23,7 @@ ttnn::Tensor grid_sample(
     bool use_precomputed_grid,
     bool batch_output_channels,
     const std::optional<MemoryConfig>& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::grid_sample");
+    TT_OP_SCOPE("ttnn::grid_sample");
     return ttnn::prim::grid_sample(
         input_tensor,
         grid,

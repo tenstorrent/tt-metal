@@ -123,7 +123,7 @@ ttnn::Tensor repeat(
     const ttnn::Tensor& input_tensor,
     const ttnn::SmallVector<uint32_t>& repetition_vector,
     const std::optional<MemoryConfig>& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::repeat");
+    TT_OP_SCOPE("ttnn::repeat");
     auto [working_tensor, working_repetition_vector] =
         operations::data_movement::detail::match_input_rank(input_tensor, repetition_vector);
     MemoryConfig output_mem_config = memory_config.value_or(input_tensor.memory_config());
@@ -197,7 +197,7 @@ ttnn::Tensor repeat(
 }
 
 ttnn::Tensor repeat(const ttnn::Tensor& input_tensor, const ttnn::Shape& repeat_dims) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::repeat");
+    TT_OP_SCOPE("ttnn::repeat");
     return ttnn::repeat(input_tensor, SmallVector<uint32_t>(repeat_dims.cbegin(), repeat_dims.cend()), std::nullopt);
 }
 

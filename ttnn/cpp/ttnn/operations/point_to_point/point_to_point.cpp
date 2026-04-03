@@ -15,7 +15,7 @@ ttnn::Tensor point_to_point(
     const ccl::Topology topology,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<ttnn::Tensor>& optional_intermediate_tensor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::point_to_point");
+    TT_OP_SCOPE("ttnn::point_to_point");
     // first output tensor in list is intermediate and is discarded
     return ttnn::prim::point_to_point(
                input_tensor,

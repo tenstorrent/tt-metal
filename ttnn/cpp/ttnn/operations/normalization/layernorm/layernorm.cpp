@@ -29,7 +29,7 @@ Tensor layer_norm(
     const std::optional<const prim::LayerNormProgramConfig>& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const Tensor>& recip_tensor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::layer_norm");
+    TT_OP_SCOPE("ttnn::layer_norm");
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
     auto rank = input_tensor.logical_shape().rank();
 

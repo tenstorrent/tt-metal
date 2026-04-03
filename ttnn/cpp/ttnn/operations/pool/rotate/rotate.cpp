@@ -16,7 +16,7 @@ Tensor rotate(
     bool expand,
     const std::string& interpolation_mode,
     const std::optional<MemoryConfig>& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::rotate");
+    TT_OP_SCOPE("ttnn::rotate");
     return ttnn::prim::rotate(input_tensor, angle, center, fill, expand, interpolation_mode, memory_config);
 }
 

@@ -27,7 +27,7 @@ Tensor pool_2d(
 
 Tensor global_avg_pool2d(
     const Tensor& input, const MemoryConfig& memory_config, const std::optional<DataType>& output_dtype) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::global_avg_pool2d");
+    TT_OP_SCOPE("ttnn::global_avg_pool2d");
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input tensor needs to be on device");
 
     // Handle different tensor ranks: 2D [H,W], 3D [H,W,C], or 4D [N,H,W,C]
@@ -94,7 +94,7 @@ Tensor global_avg_pool2d(
     const Tensor& input,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DataType>& output_dtype) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::global_avg_pool2d");
+    TT_OP_SCOPE("ttnn::global_avg_pool2d");
     auto memory_config = memory_config_arg.value_or(input.memory_config());
     auto result = tt::tt_metal::global_avg_pool2d(input, memory_config, output_dtype);
     return result;

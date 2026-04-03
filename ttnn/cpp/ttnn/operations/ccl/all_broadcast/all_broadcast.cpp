@@ -23,7 +23,7 @@ std::vector<ttnn::Tensor> all_broadcast(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<uint32_t> num_links,
     std::optional<ttnn::ccl::Topology> topology) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::all_broadcast");
+    TT_OP_SCOPE("ttnn::all_broadcast");
     // Default values for num_links and topology
     if (cluster_axis == std::nullopt) {
         auto mesh_shape = input_tensor.device()->get_view().shape();

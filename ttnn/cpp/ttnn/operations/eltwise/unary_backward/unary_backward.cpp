@@ -1556,7 +1556,7 @@ std::vector<std::optional<ttnn::Tensor>> gelu_bw(
     const std::string& approximate,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::gelu_bw");
+    TT_OP_SCOPE("ttnn::gelu_bw");
     std::vector<std::optional<Tensor>> result;
     if (!input_grad.has_value()) {
         input_grad = ttnn::empty_like(grad);

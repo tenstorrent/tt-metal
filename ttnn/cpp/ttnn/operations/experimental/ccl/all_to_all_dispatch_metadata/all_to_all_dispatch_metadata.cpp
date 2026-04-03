@@ -29,7 +29,7 @@ std::array<ttnn::Tensor, 3> all_to_all_dispatch_metadata(
     const std::optional<tt::tt_metal::CoreRangeSet>& worker_core_range_set,
     const std::optional<tt::tt_metal::CoreRangeSet>& mux_core_range_set,
     const std::optional<GlobalSemaphore>& cross_device_semaphore) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::all_to_all_dispatch_metadata");
+    TT_OP_SCOPE("ttnn::experimental::all_to_all_dispatch_metadata");
     auto* mesh_device = input_tensor.device();
 
     uint32_t num_links_ = num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, axis));

@@ -32,7 +32,7 @@ const Tensor& get<1>(const ComplexTensor& complex) {
 }
 
 ComplexTensor complex_tensor(const Tensor& real, const Tensor& imag) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::complex_tensor");
+    TT_OP_SCOPE("ttnn::complex_tensor");
     TT_ASSERT(real.padded_shape() == imag.padded_shape(), "Tensor shapes of real and imag should be identical");
     return ComplexTensor({real, imag});
 }

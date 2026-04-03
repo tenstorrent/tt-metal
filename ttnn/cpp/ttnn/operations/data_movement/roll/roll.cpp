@@ -14,7 +14,7 @@ namespace ttnn {
 
 ttnn::Tensor roll(
     const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int>& shifts, const ttnn::SmallVector<int>& input_dims) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::roll");
+    TT_OP_SCOPE("ttnn::roll");
     ttnn::Tensor result = input_tensor;
     auto size = result.logical_shape();
     int num_dims = size.rank();
@@ -81,7 +81,7 @@ ttnn::Tensor roll(
 }
 
 ttnn::Tensor roll(const ttnn::Tensor& input_tensor, const int shift) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::roll");
+    TT_OP_SCOPE("ttnn::roll");
     ttnn::SmallVector<int> shifts = {shift};
     ttnn::SmallVector<int> dims = {1};  // Rolling will happen on dimension 1 after flattening
 
@@ -104,7 +104,7 @@ ttnn::Tensor roll(const ttnn::Tensor& input_tensor, const int shift) {
 }
 
 ttnn::Tensor roll(const ttnn::Tensor& input_tensor, const int shift, const int dim) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::roll");
+    TT_OP_SCOPE("ttnn::roll");
     ttnn::SmallVector<int> shifts = {shift};
     ttnn::SmallVector<int> dims = {dim};
 

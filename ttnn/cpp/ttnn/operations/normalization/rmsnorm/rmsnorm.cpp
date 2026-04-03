@@ -29,7 +29,7 @@ Tensor rms_norm(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const prim::LayerNormProgramConfig>& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::rms_norm");
+    TT_OP_SCOPE("ttnn::rms_norm");
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
     auto rank = input_tensor.logical_shape().size();
 

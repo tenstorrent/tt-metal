@@ -20,7 +20,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> nlp_create_qkv_heads_decode
     const std::optional<const Tensor>& batch_offset,
     const std::optional<const uint32_t> slice_size,
     const std::optional<MemoryConfig>& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::nlp_create_qkv_heads_decode");
+    TT_OP_SCOPE("ttnn::experimental::nlp_create_qkv_heads_decode");
     const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_heads);
     const bool overlap_qk_coregrid_val = input_tensor.is_sharded() ? overlap_qk_coregrid.value_or(true) : true;
     // Check if input is on subcoregrids

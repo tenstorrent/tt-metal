@@ -18,7 +18,7 @@ Tensor sampling(
     const std::optional<uint32_t>& seed,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
     const std::optional<Tensor>& output_tensor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::sampling");
+    TT_OP_SCOPE("ttnn::sampling");
     return ttnn::prim::sampling(
         input_values_tensor, input_indices_tensor, k, p, temp, seed, sub_core_grids, output_tensor);
 }

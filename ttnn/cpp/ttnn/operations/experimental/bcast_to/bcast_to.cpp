@@ -56,7 +56,7 @@ Tensor broadcast_to(
     const Shape& output_shape,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::broadcast_to");
+    TT_OP_SCOPE("ttnn::experimental::broadcast_to");
     CMAKE_UNIQUE_NAMESPACE::check_shape(input, output_shape);
     return ttnn::prim::bcast_to(input, output_shape, memory_config, output);
 }

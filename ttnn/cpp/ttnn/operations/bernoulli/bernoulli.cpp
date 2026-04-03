@@ -17,7 +17,7 @@ Tensor bernoulli(
     const std::optional<DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::bernoulli");
+    TT_OP_SCOPE("ttnn::bernoulli");
     return ttnn::prim::bernoulli(input, seed, output, dtype, memory_config, compute_kernel_config);
 }
 

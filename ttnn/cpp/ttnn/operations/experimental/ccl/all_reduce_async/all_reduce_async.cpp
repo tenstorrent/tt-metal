@@ -167,7 +167,7 @@ ttnn::Tensor all_reduce_async(
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::all_reduce_async");
+    TT_OP_SCOPE("ttnn::experimental::all_reduce_async");
     topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
     auto* mesh_device_ptr = input_tensor.device();
     TT_FATAL(mesh_device_ptr != nullptr, "Mesh device is required for all_reduce_async operation");
@@ -293,7 +293,7 @@ ttnn::Tensor all_reduce_async(
     std::optional<ttnn::ccl::Topology> topology,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::all_reduce_async");
+    TT_OP_SCOPE("ttnn::experimental::all_reduce_async");
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     uint32_t resolved_num_links =
         num_preferred_links.value_or(ttnn::operations::ccl::common::get_num_links(mesh_device, cluster_axis));
@@ -448,7 +448,7 @@ ttnn::Tensor all_reduce_async(
     const std::optional<ttnn::MemoryConfig>& /*memory_config*/,
     std::optional<size_t> num_preferred_links,
     std::optional<ttnn::ccl::Topology> topology) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::all_reduce_async");
+    TT_OP_SCOPE("ttnn::experimental::all_reduce_async");
     auto topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required");
@@ -479,7 +479,7 @@ ttnn::Tensor all_reduce_async(
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::all_reduce_async");
+    TT_OP_SCOPE("ttnn::experimental::all_reduce_async");
     topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     ttnn::MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
 
@@ -512,7 +512,7 @@ std::vector<ttnn::Tensor> all_reduce_async(
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::all_reduce_async");
+    TT_OP_SCOPE("ttnn::experimental::all_reduce_async");
     topology = ::ttnn::ccl::get_usable_topology(input_tensors.at(0), topology, cluster_axis);
     ttnn::MemoryConfig out_memory_config = memory_config.value_or(input_tensors.at(0).memory_config());
 

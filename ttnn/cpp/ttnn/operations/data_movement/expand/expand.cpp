@@ -38,7 +38,7 @@ Tensor expand(
     const ttnn::Tensor& tensor,
     const ttsl::Span<const int32_t> shape_vector,
     const std::optional<MemoryConfig>& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::expand");
+    TT_OP_SCOPE("ttnn::expand");
     return ttnn::repeat(tensor, create_repetition_vector(tensor, shape_vector), memory_config);
 }
 

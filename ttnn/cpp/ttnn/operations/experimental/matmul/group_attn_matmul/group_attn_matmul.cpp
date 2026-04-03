@@ -19,7 +19,7 @@ ttnn::Tensor group_attn_matmul(
     std::optional<const DataType> output_dtype,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<Tensor> optional_output_tensor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::group_attn_matmul");
+    TT_OP_SCOPE("ttnn::experimental::group_attn_matmul");
     auto mem_config = memory_config.value_or(input_tensor_a.memory_config());
     bool row_major = false;
     // GroupAttnMatmul::validate will check that any sharded memory configs have same orientation

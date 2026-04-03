@@ -14,7 +14,7 @@ Tensor clone(
     const std::optional<DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::clone");
+    TT_OP_SCOPE("ttnn::clone");
     return ttnn::prim::clone(input, dtype, memory_config, compute_kernel_config);
 }
 }  // namespace ttnn

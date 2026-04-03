@@ -10,7 +10,7 @@
 namespace ttnn {
 
 ttnn::Tensor squeeze(const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int>& dim) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::squeeze");
+    TT_OP_SCOPE("ttnn::squeeze");
     const auto& original_logical_shape = input_tensor.logical_shape();
     const auto& padded_shape = input_tensor.padded_shape();
     auto input_tensor_rank = original_logical_shape.rank();
@@ -70,13 +70,13 @@ ttnn::Tensor squeeze(const ttnn::Tensor& input_tensor, const ttnn::SmallVector<i
 }
 
 ttnn::Tensor squeeze(const ttnn::Tensor& input_tensor, int dim) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::squeeze");
+    TT_OP_SCOPE("ttnn::squeeze");
     ttnn::SmallVector<int> dims{dim};
     return squeeze(input_tensor, dims);
 }
 
 ttnn::Tensor squeeze(const ttnn::Tensor& input_tensor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::squeeze");
+    TT_OP_SCOPE("ttnn::squeeze");
     auto input_tensor_rank = input_tensor.logical_shape().rank();
     ttnn::SmallVector<int> dims(input_tensor_rank);
     std::iota(dims.begin(), dims.end(), 0);

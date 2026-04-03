@@ -19,7 +19,7 @@ Tensor to_memory_config(
     const MemoryConfig& memory_config,
     std::optional<DataType> dtype,
     const std::optional<Tensor>& output_tensor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::to_memory_config");
+    TT_OP_SCOPE("ttnn::to_memory_config");
     using namespace tt::tt_metal;
 
     // Temporary until we see why buffer data not being populated

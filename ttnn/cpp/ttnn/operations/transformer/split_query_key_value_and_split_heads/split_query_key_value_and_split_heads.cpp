@@ -63,7 +63,7 @@ std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
     const bool transpose_key,
     const std::optional<MemoryConfig>& memory_config,
     const bool use_falcon7b_backend) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::transformer::split_query_key_value_and_split_heads");
+    TT_OP_SCOPE("ttnn::transformer::split_query_key_value_and_split_heads");
     const auto& input_shape = input_tensor.logical_shape();
     const auto& padded_input_shape = input_tensor.padded_shape();
     TT_FATAL(input_shape.rank() == 3, "Invalid input tensor: expected 3 dimensions, but found {}.", input_shape.rank());

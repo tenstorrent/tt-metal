@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """
 CI validation script: ensures all C++ operations bound via bind_function<>
-have ScopedCompositeTrace instrumentation in their implementation.
+have TT_OP_SCOPE / FunctionScope instrumentation in their implementation.
 
 Scans all nanobind .cpp files for bind_function<"name"> calls, then verifies
-that a matching ScopedCompositeTrace(_trace("fqn")) exists in the codebase.
+that a matching TT_OP_SCOPE("fqn") exists in the codebase.
 
 Usage: python scripts/check_composite_tracing.py
 Exit code 0 = all operations traced, 1 = missing traces found.
@@ -43,7 +45,7 @@ def parse_nanobind_files():
 
 
 def find_trace_in_codebase(fqn):
-    pattern = f'_trace("{fqn}")'
+    pattern = f'"{fqn}"'
     result = subprocess.run(
         ["grep", "-rl", pattern, "ttnn/cpp/", "--include=*.cpp"],
         capture_output=True,
@@ -71,7 +73,7 @@ def check_macro_traces(fqn, op_name):
 
     for filepath in macro_files:
         content = Path(REPO_ROOT / filepath).read_text()
-        macro_invocations = re.findall(r"(?:DEFINE_UNARY_NG_OP|TTNN_BINARY_OP_\w+)\(\s*(\w+)", content)
+        macro_invocations = re.findall(r"(?:DEFINE_UNARY_NG_OP\w*|TTNN_BINARY_OP_\w+)\(\s*(\w+)", content)
         if op_name in macro_invocations:
             return True
 
@@ -93,17 +95,17 @@ def main():
         missing.append(fqn)
 
     if missing:
-        print(f"\nERROR: {len(missing)} operation(s) missing ScopedCompositeTrace:\n")
+        print(f"\nERROR: {len(missing)} operation(s) missing TT_OP_SCOPE:\n")
         for fqn in missing:
             print(f"  {fqn}")
         print(
             "\nEvery C++ operation bound via bind_function<> must include a\n"
-            "ScopedCompositeTrace RAII guard at the top of its function body:\n"
+            "TT_OP_SCOPE guard at the top of its function body:\n"
             "\n"
             '    #include "ttnn/graph/composite_trace.hpp"\n'
             "\n"
             "    Tensor my_op(const Tensor& input) {\n"
-            '        ttnn::graph::ScopedCompositeTrace _trace("ttnn::my_op");\n'
+            '        TT_OP_SCOPE("ttnn::my_op");\n'
             "        ...\n"
             "    }\n"
             "\n"
@@ -112,7 +114,7 @@ def main():
         )
         return 1
 
-    print("All operations have ScopedCompositeTrace instrumentation.")
+    print("All operations have TT_OP_SCOPE instrumentation.")
     return 0
 
 

@@ -711,7 +711,7 @@ Tensor pow(
     float exponent,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::pow");
+    TT_OP_SCOPE("ttnn::pow");
     float exponent_floor = std::floor(exponent);
     if (static_cast<int32_t>(exponent_floor) == exponent) {
         int32_t exp = exponent;
@@ -726,7 +726,7 @@ Tensor pow(
     int32_t exponent,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::pow");
+    TT_OP_SCOPE("ttnn::pow");
     // For exponents 0, 1, 2, 3: use iterative approach
     if (exponent == 0 || exponent == 1 || exponent == 2 || exponent == 3) {
         uint32_t exp = exponent;
@@ -746,7 +746,7 @@ Tensor pow(
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::pow");
+    TT_OP_SCOPE("ttnn::pow");
     return ttnn::detail::invoke_binary_ng(
         input,
         exponent,
@@ -771,7 +771,7 @@ Tensor pow(
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::pow");
+    TT_OP_SCOPE("ttnn::pow");
     // As per binary infra, first input is always a tensor but this support needed for pytorch2 tracing
     // https://github.com/tenstorrent/pytorch2.0_ttnn/blob/main/docs/operations/aten.pow.Scalar.md
 

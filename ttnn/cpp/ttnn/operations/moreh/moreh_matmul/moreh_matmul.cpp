@@ -37,7 +37,7 @@ Tensor moreh_matmul(
     const std::optional<const Tensor>& bias,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_matmul");
+    TT_OP_SCOPE("ttnn::moreh_matmul");
     if (operations::moreh::moreh_matmul::is_dot_forward(input, other, transpose_input, transpose_other)) {
         return ttnn::moreh_dot(input, other, output, input.dtype(), memory_config, compute_kernel_config);
     }

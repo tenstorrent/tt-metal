@@ -18,7 +18,7 @@ std::array<Tensor, 2> deepseek_grouped_gate(
     float route_scale,
     float epsilon,
     const std::optional<MemoryConfig>& output_mem_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::deepseek_grouped_gate");
+    TT_OP_SCOPE("ttnn::experimental::deepseek_grouped_gate");
     return ttnn::prim::deepseek_grouped_gate(
         scores,
         bias,

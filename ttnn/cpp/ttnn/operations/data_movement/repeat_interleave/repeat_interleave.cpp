@@ -17,7 +17,7 @@ namespace ttnn {
 // repeat interleave supports repeats as 1 to inf, dim between 0 to 2
 ttnn::Tensor repeat_interleave(
     const ttnn::Tensor& input_a, uint32_t repeat, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::repeat_interleave");
+    TT_OP_SCOPE("ttnn::repeat_interleave");
     std::vector<Tensor> combined_tensors;
     combined_tensors.reserve(repeat);
     MemoryConfig mem_config = output_mem_config.value_or(input_a.memory_config());

@@ -23,7 +23,7 @@ Tensor adaptive_avg_pool2d(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     bool deallocate_input,
     bool reallocate_output) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::adaptive_avg_pool2d");
+    TT_OP_SCOPE("ttnn::adaptive_avg_pool2d");
     uint32_t output_h = output_size[0];
     uint32_t output_w = output_size[1];
 
@@ -67,7 +67,7 @@ Tensor adaptive_max_pool2d(
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
     bool deallocate_input,
     bool reallocate_output) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::adaptive_max_pool2d");
+    TT_OP_SCOPE("ttnn::adaptive_max_pool2d");
     uint32_t output_h = output_size[0];
     uint32_t output_w = output_size[1];
 

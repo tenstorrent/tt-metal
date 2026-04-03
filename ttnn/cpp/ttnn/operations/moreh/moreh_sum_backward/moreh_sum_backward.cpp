@@ -18,7 +18,7 @@ Tensor moreh_sum_backward(
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_sum_backward");
+    TT_OP_SCOPE("ttnn::moreh_sum_backward");
     TT_FATAL((input.has_value() || input_grad.has_value()), "either input or input_grad must have a value");
     uint32_t rank = input.has_value() ? input->logical_shape().rank() : input_grad->logical_shape().rank();
     ttnn::SmallVector<int64_t> dims = operations::get_dim(dim, rank);

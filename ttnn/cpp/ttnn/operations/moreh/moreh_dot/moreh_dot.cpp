@@ -16,7 +16,7 @@ Tensor moreh_dot(
     const std::optional<DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_dot");
+    TT_OP_SCOPE("ttnn::moreh_dot");
     return ttnn::prim::moreh_dot(input_a, input_b, output, dtype, memory_config, compute_kernel_config);
 }
 

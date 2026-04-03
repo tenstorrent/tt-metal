@@ -18,7 +18,7 @@ ttnn::Tensor interleaved_to_sharded(
     const std::optional<DataType>& data_type_arg,
     const std::optional<bool>& keep_l1_aligned,
     const std::optional<Tensor>& preallocated_output) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::interleaved_to_sharded");
+    TT_OP_SCOPE("ttnn::interleaved_to_sharded");
     return ttnn::prim::interleaved_to_sharded(
         input_tensor,
         sharded_memory_config,
@@ -35,7 +35,7 @@ ttnn::Tensor interleaved_to_sharded(
     const ShardOrientation shard_orientation,
     const std::optional<DataType>& data_type_arg,
     const std::optional<bool>& keep_l1_aligned) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::interleaved_to_sharded");
+    TT_OP_SCOPE("ttnn::interleaved_to_sharded");
     bool row_wise = shard_orientation == ShardOrientation::ROW_MAJOR;
     CoreCoord grid_size;
     CoreRangeSet grid_set;

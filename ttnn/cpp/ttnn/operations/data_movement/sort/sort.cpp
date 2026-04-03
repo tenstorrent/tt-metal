@@ -167,7 +167,7 @@ std::vector<Tensor> sort(
     const bool stable,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<std::tuple<Tensor&, Tensor&>> optional_output_tensors) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::sort");
+    TT_OP_SCOPE("ttnn::sort");
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
     const auto rank = input_tensor.logical_shape().rank();
 

@@ -71,7 +71,7 @@ ttnn::Tensor tilize_with_val_padding(
     std::optional<DataType> output_dtype,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::tilize_with_val_padding");
+    TT_OP_SCOPE("ttnn::tilize_with_val_padding");
     if (input_tensor.layout() == Layout::TILE) {
         return input_tensor;
     }
@@ -126,7 +126,7 @@ ttnn::Tensor tilize_with_val_padding(
     std::optional<DataType> output_dtype,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::tilize_with_val_padding");
+    TT_OP_SCOPE("ttnn::tilize_with_val_padding");
     // Handle empty tensors - no tiling needed for tensors with no data
     if (input_tensor.physical_volume() == 0) {
         // Create output tensor with same properties
@@ -155,7 +155,7 @@ ttnn::Tensor tilize_with_zero_padding(
     std::optional<DataType> output_dtype,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::tilize_with_zero_padding");
+    TT_OP_SCOPE("ttnn::tilize_with_zero_padding");
     using namespace tt::constants;
     auto padded_shape = input_tensor.padded_shape();
 

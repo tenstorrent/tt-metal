@@ -11,31 +11,31 @@ namespace ttnn {
 
 std::vector<ComplexTensor> polar_bw(
     const ComplexTensor& grad_tensor, const ComplexTensor& input_tensor, const MemoryConfig& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::polar_bw");
+    TT_OP_SCOPE("ttnn::polar_bw");
     return operations::complex_unary_backward::_polar_bw(grad_tensor, input_tensor, memory_config);
 }
 
 std::vector<ComplexTensor> conj_bw(
     const ComplexTensor& grad_tensor, const ComplexTensor& input_tensor, const MemoryConfig& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::conj_bw");
+    TT_OP_SCOPE("ttnn::conj_bw");
     return operations::complex_unary_backward::_conj_bw(grad_tensor, input_tensor, memory_config);
 }
 
 std::vector<ComplexTensor> imag_bw(
     const Tensor& grad_tensor, const ComplexTensor& input_tensor, const MemoryConfig& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::imag_bw");
+    TT_OP_SCOPE("ttnn::imag_bw");
     return operations::complex_unary_backward::_imag_bw(grad_tensor, input_tensor, memory_config);
 }
 
 std::vector<ComplexTensor> real_bw(
     const Tensor& grad_tensor, const ComplexTensor& input_tensor, const MemoryConfig& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::real_bw");
+    TT_OP_SCOPE("ttnn::real_bw");
     return operations::complex_unary_backward::_real_bw(grad_tensor, input_tensor, memory_config);
 }
 
 std::vector<ComplexTensor> angle_bw(
     const Tensor& grad_tensor, const ComplexTensor& input_tensor, const MemoryConfig& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::angle_bw");
+    TT_OP_SCOPE("ttnn::angle_bw");
     return operations::complex_unary_backward::_angle_bw(grad_tensor, input_tensor, memory_config);
 }
 

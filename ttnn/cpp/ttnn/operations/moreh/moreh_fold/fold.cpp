@@ -18,7 +18,7 @@ Tensor moreh_fold(
     const std::vector<uint32_t>& padding,
     const std::vector<uint32_t>& stride,
     const std::optional<MemoryConfig>& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_fold");
+    TT_OP_SCOPE("ttnn::moreh_fold");
     return ttnn::prim::moreh_fold(input, output, output_size, kernel_size, dilation, padding, stride, memory_config);
 }
 

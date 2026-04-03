@@ -13,7 +13,7 @@ ttnn::Tensor typecast(
     const DataType& dtype,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::typecast");
+    TT_OP_SCOPE("ttnn::experimental::typecast");
     return ttnn::prim::copy(
         input_tensor, output_mem_config.value_or(input_tensor.memory_config()), dtype, optional_output_tensor);
 }

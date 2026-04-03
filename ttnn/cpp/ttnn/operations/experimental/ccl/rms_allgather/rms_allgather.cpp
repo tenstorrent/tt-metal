@@ -28,7 +28,7 @@ ttnn::Tensor fused_rms_minimal(
     const std::optional<const ttnn::Tensor>& weight,
     const std::optional<const ttnn::Tensor>& stats,
     bool use_noc1_only) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::fused_rms_minimal");
+    TT_OP_SCOPE("ttnn::fused_rms_minimal");
     return ttnn::prim::rms_allgather(
         input_tensor,
         program_config,

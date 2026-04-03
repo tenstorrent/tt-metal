@@ -278,7 +278,7 @@ Tensor scatter(
     const std::optional<MemoryConfig>& output_memory_config,
     const std::optional<std::string>& opt_reduction_string,
     const std::optional<CoreRangeSet>& sub_core_grid) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::scatter");
+    TT_OP_SCOPE("ttnn::scatter");
     const ttnn::Shape& original_input_tensor_lshape = input_tensor.logical_shape();
     const auto input_tensor_rank = input_tensor.logical_shape().rank();
 
@@ -353,7 +353,7 @@ Tensor scatter_add(
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config,
     const std::optional<CoreRangeSet>& sub_core_grid) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::scatter_add");
+    TT_OP_SCOPE("ttnn::scatter_add");
     return scatter(
         input_tensor, dim, index_tensor, source_tensor, output_memory_config, std::make_optional("add"), sub_core_grid);
 }

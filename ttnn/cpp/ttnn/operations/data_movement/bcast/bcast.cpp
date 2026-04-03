@@ -19,7 +19,7 @@ Tensor bcast(
     BcastOpDim bcast_dim,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output_tensor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::bcast");
+    TT_OP_SCOPE("ttnn::bcast");
     using namespace tt::constants;
 
     auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());

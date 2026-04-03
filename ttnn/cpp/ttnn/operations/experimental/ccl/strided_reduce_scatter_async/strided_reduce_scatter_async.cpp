@@ -6,6 +6,7 @@
 #include "device/strided_reduce_scatter_async_op_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -28,6 +29,7 @@ ttnn::Tensor strided_reduce_scatter_async(
     const std::optional<uint32_t> mm_cores_y,
     const std::optional<uint32_t> mm_N_full_block_wt,
     const std::optional<uint32_t> chunk_width_in_mm_blocks) {
+    TT_OP_SCOPE("ttnn::experimental::strided_reduce_scatter_async");
     const int32_t rank = input_tensor.logical_shape().rank();
     const int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
 

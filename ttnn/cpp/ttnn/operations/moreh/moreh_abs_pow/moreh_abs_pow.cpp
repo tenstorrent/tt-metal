@@ -15,7 +15,7 @@ Tensor moreh_abs_pow(
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_abs_pow");
+    TT_OP_SCOPE("ttnn::moreh_abs_pow");
     return ttnn::prim::moreh_abs_pow(input, p, output, memory_config, compute_kernel_config);
 }
 

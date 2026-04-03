@@ -5,7 +5,6 @@
 #include "fill_rm.hpp"
 #include "device/fill_rm_device_operation.hpp"
 #include "ttnn/operation.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
@@ -21,7 +20,7 @@ ttnn::Tensor fill_rm(
     float val_hi,
     float val_lo,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::fill_rm");
+    TT_OP_SCOPE("ttnn::fill_rm");
     const auto output_memory_config = memory_config.value_or(any.memory_config());
     return ttnn::prim::fill_rm(N, C, H, W, hFill, wFill, any, val_hi, val_lo, output_memory_config);
 }
@@ -35,7 +34,7 @@ ttnn::Tensor fill_ones_rm(
     uint32_t wFill,
     const ttnn::Tensor& any,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::fill_ones_rm");
+    TT_OP_SCOPE("ttnn::fill_ones_rm");
     const auto output_memory_config = memory_config.value_or(any.memory_config());
     return ttnn::prim::fill_rm(N, C, H, W, hFill, wFill, any, 1.0f, 0.0f, output_memory_config);
 }

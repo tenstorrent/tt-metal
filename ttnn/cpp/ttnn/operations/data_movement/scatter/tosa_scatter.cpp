@@ -125,7 +125,7 @@ Tensor tosa_scatter(
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::tosa_scatter");
+    TT_OP_SCOPE("ttnn::tosa_scatter");
     const auto& input_shape{input_tensor.logical_shape()};
     const auto& index_shape{index_tensor.logical_shape()};
     const auto& source_shape{source_tensor.logical_shape()};

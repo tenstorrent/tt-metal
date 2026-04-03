@@ -20,7 +20,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> topk_router_gpt_func(
     const ttnn::Tensor& bias_tensor,
     uint32_t k,
     uint32_t num_experts) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::topk_router_gpt");
+    TT_OP_SCOPE("ttnn::experimental::topk_router_gpt");
     return ttnn::experimental::topk_router_gpt(input_tensor, weight_tensor, bias_tensor, k, num_experts);
 }
 

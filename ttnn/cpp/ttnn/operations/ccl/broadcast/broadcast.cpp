@@ -21,7 +21,7 @@ ttnn::Tensor broadcast(
     const ttnn::ccl::Topology topology,
     std::optional<uint32_t> cluster_axis,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::broadcast");
+    TT_OP_SCOPE("ttnn::broadcast");
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required for broadcast operation");
     uint32_t num_links_ = num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, cluster_axis));

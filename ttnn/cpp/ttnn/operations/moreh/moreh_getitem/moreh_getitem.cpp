@@ -13,7 +13,7 @@ Tensor moreh_getitem(
     const ttnn::SmallVector<uint32_t>& index_dims,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_getitem");
+    TT_OP_SCOPE("ttnn::moreh_getitem");
     if (!input.has_value()) {
         // FIXME: This is a hack to work around limitations in the decorator
         // infra which requires either an input tensor or a vector of input

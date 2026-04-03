@@ -82,7 +82,7 @@ ttnn::Tensor upsample(
     const std::string& mode,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::upsample");
+    TT_OP_SCOPE("ttnn::upsample");
     tt::tt_metal::MemoryConfig mem_config = output_mem_config.value_or(input_tensor.memory_config());
 
     // Parse scale factors from variant - extract as floats

@@ -21,7 +21,7 @@ ttnn::Tensor dit_rms_norm_unary_fused(
     const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<ttnn::operations::unary::UnaryWithParam>& activation) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::dit_rms_norm_unary_fused");
+    TT_OP_SCOPE("ttnn::experimental::dit_rms_norm_unary_fused");
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
 
     auto rank = input_tensor.logical_shape().size();

@@ -12,7 +12,7 @@ namespace ttnn {
 
 std::vector<std::optional<Tensor>> composite_example_multiple_return(
     const Tensor& input_tensor, bool return_output1, bool return_output2) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::composite_example_multiple_return");
+    TT_OP_SCOPE("ttnn::composite_example_multiple_return");
     return prim::example_multiple_return(input_tensor, return_output1, return_output2);
 }
 

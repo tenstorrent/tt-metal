@@ -101,7 +101,7 @@ ttnn::Tensor selective_reduce_combine(
     const std::optional<ttnn::MemoryConfig>& output_memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::selective_reduce_combine");
+    TT_OP_SCOPE("ttnn::experimental::selective_reduce_combine");
     using OperationType = ttnn::experimental::prim::SelectiveReduceCombineDeviceOperation;
     auto memory_config = output_memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
     return ttnn::device_operation::launch<OperationType>(

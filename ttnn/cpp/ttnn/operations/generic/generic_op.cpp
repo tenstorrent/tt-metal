@@ -11,12 +11,12 @@ namespace ttnn {
 Tensor generic_op(
     const std::vector<Tensor>& io_tensors,
     const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::generic_op");
+    TT_OP_SCOPE("ttnn::generic_op");
     return ttnn::prim::generic_op(io_tensors, mesh_program_descriptor);
 }
 
 Tensor generic_op(const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::generic_op");
+    TT_OP_SCOPE("ttnn::generic_op");
     TT_FATAL(!io_tensors.empty(), "io_tensors must not be empty");
     auto* mesh_device = io_tensors.front().device();
     TT_FATAL(mesh_device != nullptr, "Tensor must be on a device");

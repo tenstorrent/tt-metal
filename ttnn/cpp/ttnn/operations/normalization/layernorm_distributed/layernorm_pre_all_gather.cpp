@@ -20,7 +20,7 @@ ttnn::Tensor layer_norm_pre_all_gather(
     const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const ttnn::Tensor>& recip_tensor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::layer_norm_pre_all_gather");
+    TT_OP_SCOPE("ttnn::layer_norm_pre_all_gather");
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =

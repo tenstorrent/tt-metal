@@ -27,7 +27,7 @@ ttnn::Tensor slice_reshard_async(
     std::optional<size_t> num_preferred_links,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::ccl::Topology> topology) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::slice_reshard_async");
+    TT_OP_SCOPE("ttnn::experimental::slice_reshard_async");
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     return ttnn::prim::slice_reshard_async(
         input_tensor,

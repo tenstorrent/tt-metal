@@ -580,7 +580,7 @@ def import_graph(
             is_nested = real_function_depth > 0 or is_filtered
 
             # Consume matching Python I/O record only for top-level ops.
-            # Nested ops (including C++ ScopedCompositeTrace with the same
+            # Nested ops (including C++ FunctionScope / TT_OP_SCOPE with the same
             # normalized name) must NOT consume records from the queue.
             py_io_record = None
             if not is_nested and name in python_io_by_name and python_io_by_name[name]:

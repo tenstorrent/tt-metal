@@ -55,7 +55,7 @@ ttnn::Tensor reshape_on_device(
     const ttnn::Shape& logical_output_shape,
     const ttnn::Shape& padded_output_shape,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::reshape_on_device");
+    TT_OP_SCOPE("ttnn::reshape_on_device");
     using namespace tt::constants;
     auto output_mem_config = memory_config_arg.value_or(input_tensor.memory_config());
     // No-op (Will do a tensor copy)
@@ -97,7 +97,7 @@ ttnn::Tensor reshape_on_device(
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& logical_output_shape,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::reshape_on_device");
+    TT_OP_SCOPE("ttnn::reshape_on_device");
     return reshape_on_device(input_tensor, logical_output_shape, logical_output_shape, memory_config_arg);
 }
 
@@ -105,7 +105,7 @@ ttnn::Tensor reshape_on_device(
     const ttnn::Tensor& input_tensor,
     ttsl::Span<const int32_t> shape_vector,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::reshape_on_device");
+    TT_OP_SCOPE("ttnn::reshape_on_device");
     return reshape_on_device(
         input_tensor,
         operations::data_movement::detail::infer_dims_for_reshape(input_tensor, shape_vector),

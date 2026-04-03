@@ -22,7 +22,7 @@ ttnn::Tensor deepseek_moe_reduce_scatter(
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     std::optional<uint32_t> cluster_axis) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::deepseek_moe_reduce_scatter");
+    TT_OP_SCOPE("ttnn::experimental::deepseek_moe_reduce_scatter");
     uint32_t scatter_dim = (dim < 0) ? dim + input_tensors.at(0).logical_shape().rank() : (uint32_t)dim;
 
     // topology

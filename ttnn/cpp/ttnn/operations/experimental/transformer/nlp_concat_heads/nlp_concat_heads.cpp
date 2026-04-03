@@ -12,7 +12,7 @@
 namespace ttnn::experimental {
 
 ttnn::Tensor nlp_concat_heads(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::nlp_concat_heads");
+    TT_OP_SCOPE("ttnn::experimental::nlp_concat_heads");
     return ttnn::prim::nlp_concat_heads(input_tensor, memory_config);
 }
 

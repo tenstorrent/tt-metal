@@ -14,7 +14,7 @@ ttnn::Tensor nlp_concat_heads_boltz(
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::nlp_concat_heads_boltz");
+    TT_OP_SCOPE("ttnn::experimental::nlp_concat_heads_boltz");
     return ttnn::prim::nlp_concat_heads_boltz(
         input_tensor, memory_config.value_or(input_tensor.memory_config()), std::move(optional_output_tensor));
 }

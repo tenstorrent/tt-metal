@@ -14,7 +14,7 @@ namespace ttnn::experimental {
 
 std::vector<ttnn::Tensor> send_async(
     const ttnn::Tensor& input_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::send_async");
+    TT_OP_SCOPE("ttnn::experimental::send_async");
     return ttnn::prim::send_async(input_tensor, mesh_socket);
 }
 

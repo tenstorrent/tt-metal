@@ -196,7 +196,7 @@ std::vector<Tensor> topk(
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<Tensor>& indices_tensor,
     std::optional<std::tuple<Tensor&, Tensor&>> preallocated_output_tensors) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::topk");
+    TT_OP_SCOPE("ttnn::topk");
     // Store original shape for final output validation
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
 

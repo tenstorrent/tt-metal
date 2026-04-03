@@ -16,7 +16,7 @@ ttnn::Tensor nlp_concat_heads_decode(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::nlp_concat_heads_decode");
+    TT_OP_SCOPE("ttnn::experimental::nlp_concat_heads_decode");
     return ttnn::prim::nlp_concat_heads_decode(
         input_tensor, num_heads, memory_config, optional_output_tensor, sub_core_grids);
 }

@@ -1071,7 +1071,7 @@ std::vector<Tensor> max_pool2d(
     const DataType dtype,
     const Layout output_layout,
     bool config_tensor_in_dram) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::max_pool2d");
+    TT_OP_SCOPE("ttnn::max_pool2d");
     auto result = pool2d(
         input_tensor,
         Pool2DType::MAX_POOL2D,
@@ -1120,7 +1120,7 @@ Tensor avg_pool2d(
     const DataType dtype,
     const Layout output_layout,
     bool config_tensor_in_dram) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::avg_pool2d");
+    TT_OP_SCOPE("ttnn::avg_pool2d");
     auto result = pool2d(
         input_tensor,
         Pool2DType::AVG_POOL2D,

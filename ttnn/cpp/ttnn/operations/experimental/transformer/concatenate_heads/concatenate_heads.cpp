@@ -13,7 +13,7 @@ ttnn::Tensor concatenate_heads(
     const CoreCoord& compute_with_storage_grid_size,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::concatenate_heads");
+    TT_OP_SCOPE("ttnn::experimental::concatenate_heads");
     return ttnn::prim::concatenate_heads(
         input_tensor, compute_with_storage_grid_size, memory_config, optional_output_tensor);
 }

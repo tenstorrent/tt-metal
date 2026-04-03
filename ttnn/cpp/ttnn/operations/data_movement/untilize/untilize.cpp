@@ -44,7 +44,7 @@ ttnn::Tensor untilize(
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::untilize");
+    TT_OP_SCOPE("ttnn::untilize");
     bool fp32_dest_acc_en = input_tensor.dtype() == DataType::UINT32 || input_tensor.dtype() == DataType::FLOAT32;
 
     auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());

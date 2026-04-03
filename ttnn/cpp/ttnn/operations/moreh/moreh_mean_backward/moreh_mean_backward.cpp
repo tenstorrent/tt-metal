@@ -18,7 +18,7 @@ Tensor moreh_mean_backward(
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_mean_backward");
+    TT_OP_SCOPE("ttnn::moreh_mean_backward");
     auto output_grad_rank = output_grad.logical_shape().rank();
     auto input_grad_rank = output_grad_rank;
     if (!keepdim) {

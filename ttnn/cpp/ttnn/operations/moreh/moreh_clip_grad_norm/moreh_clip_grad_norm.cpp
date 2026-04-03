@@ -55,7 +55,7 @@ Tensor moreh_clip_grad_norm(
     const std::optional<const Tensor>& total_norm,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_clip_grad_norm");
+    TT_OP_SCOPE("ttnn::moreh_clip_grad_norm");
     // Early validation: if error_if_nonfinite is true, check if norm_type itself is NaN
     if (error_if_nonfinite && std::isnan(norm_type)) {
         TT_FATAL(

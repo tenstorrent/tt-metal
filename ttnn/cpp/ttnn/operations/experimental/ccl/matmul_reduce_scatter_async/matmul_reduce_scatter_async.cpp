@@ -33,7 +33,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::CoreGrid> core_grid) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::matmul_reduce_scatter_async");
+    TT_OP_SCOPE("ttnn::experimental::matmul_reduce_scatter_async");
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required for matmul_reduce_scatter_async operation");
     uint32_t resolved_num_links =

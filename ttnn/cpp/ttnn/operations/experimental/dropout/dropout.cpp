@@ -17,7 +17,7 @@ Tensor dropout(
     bool use_per_device_seed,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::dropout");
+    TT_OP_SCOPE("ttnn::experimental::dropout");
     return ttnn::prim::dropout(
         input_tensor,
         prob,

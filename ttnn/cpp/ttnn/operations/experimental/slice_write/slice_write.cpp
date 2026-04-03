@@ -23,7 +23,7 @@ ttnn::Tensor slice_write(
     const ttnn::SmallVector<uint32_t>& begins,
     const ttnn::SmallVector<uint32_t>& ends,
     const ttnn::SmallVector<uint32_t>& step) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::slice_write");
+    TT_OP_SCOPE("ttnn::experimental::slice_write");
     const auto& logical_input_shape = input_tensor.logical_shape();
     const auto& padded_input_shape = input_tensor.padded_shape();
     const auto& padded_output_shape = output_tensor.padded_shape();

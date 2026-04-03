@@ -50,7 +50,7 @@ Tensor moe_gate_mm(
     const Tensor& output_tensor,
     uint32_t layer_id,
     uint32_t column_id) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::deepseek::moe::moe_gate_mm");
+    TT_OP_SCOPE("ttnn::experimental::deepseek::moe::moe_gate_mm");
     auto [operation_attributes, tensor_args] =
         operations::experimental::deepseek::moe::moe_gate_mm::MoEGateMMDeviceOperation::invoke(
             input_tensor, w_tensor, output_tensor, layer_id, column_id);

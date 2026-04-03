@@ -37,7 +37,7 @@ Tensor gather(
     const Tensor& input_tensor,
     const Tensor& input_index_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::tosa_gather");
+    TT_OP_SCOPE("ttnn::tosa_gather");
     // TOSA Gather constraints
     constexpr int8_t dim = 1;
     constexpr bool sparse_grad = false;

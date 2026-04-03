@@ -42,7 +42,7 @@ Tensor batch_norm(
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::batch_norm");
+    TT_OP_SCOPE("ttnn::batch_norm");
     TT_FATAL(
         input.logical_shape().rank() >= 4,
         "batch_norm not supported for tensors with rank < 4. (rank={})",

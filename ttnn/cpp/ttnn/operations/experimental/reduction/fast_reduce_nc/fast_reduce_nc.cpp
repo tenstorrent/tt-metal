@@ -18,7 +18,7 @@ ttnn::Tensor fast_reduce_nc(
     const std::optional<const Tensor>& output,
     const ttnn::MemoryConfig& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::fast_reduce_nc");
+    TT_OP_SCOPE("ttnn::experimental::fast_reduce_nc");
     TT_FATAL(
         input.storage_type() == StorageType::DEVICE,
         "Input tensor storage type must be DEVICE but got {}",

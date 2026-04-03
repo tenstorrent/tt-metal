@@ -27,7 +27,7 @@
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,  \
         const std::optional<bool>& use_legacy,                                       \
         const std::optional<CoreRangeSet>& sub_core_grids) {                         \
-        ttnn::graph::ScopedCompositeTrace _trace("ttnn::" #NAME, lhs, rhs);          \
+        TT_OP_SCOPE("ttnn::" #NAME, lhs, rhs);                                       \
         return ttnn::detail::invoke_binary_ng(                                       \
             lhs,                                                                     \
             rhs,                                                                     \
@@ -55,7 +55,7 @@
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,  \
         const std::optional<bool>& use_legacy,                                       \
         const std::optional<CoreRangeSet>& sub_core_grids) {                         \
-        ttnn::graph::ScopedCompositeTrace _trace("ttnn::" #NAME, lhs);               \
+        TT_OP_SCOPE("ttnn::" #NAME, lhs);                                            \
         return ttnn::detail::invoke_binary_ng(                                       \
             lhs,                                                                     \
             rhs,                                                                     \
@@ -80,7 +80,7 @@
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,  \
         std::optional<bool> use_legacy,                                              \
         const std::optional<CoreRangeSet>& sub_core_grids) {                         \
-        ttnn::graph::ScopedCompositeTrace _trace("ttnn::" #NAME, lhs, rhs);          \
+        TT_OP_SCOPE("ttnn::" #NAME, lhs, rhs);                                       \
         return ttnn::detail::invoke_binary_ng(                                       \
             lhs,                                                                     \
             rhs,                                                                     \
@@ -103,7 +103,7 @@
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,  \
         std::optional<bool> use_legacy,                                              \
         const std::optional<CoreRangeSet>& sub_core_grids) {                         \
-        ttnn::graph::ScopedCompositeTrace _trace("ttnn::" #NAME);                    \
+        TT_OP_SCOPE("ttnn::" #NAME);                                                 \
         return ttnn::detail::invoke_binary_ng(                                       \
             lhs,                                                                     \
             rhs,                                                                     \
@@ -128,7 +128,7 @@
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,                      \
         std::optional<bool> use_legacy,                                                                  \
         const std::optional<CoreRangeSet>& sub_core_grids) {                                             \
-        ttnn::graph::ScopedCompositeTrace _trace("ttnn::" #NAME, lhs, rhs);                              \
+        TT_OP_SCOPE("ttnn::" #NAME, lhs, rhs);                                                           \
         return operations::binary::inplace_relational_binary<operations::binary::BinaryOpType::OP_TYPE>( \
             lhs, rhs, post_activations, lhs_activations, rhs_activations, use_legacy, sub_core_grids);   \
     }                                                                                                    \
@@ -140,7 +140,7 @@
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,                      \
         std::optional<bool> use_legacy,                                                                  \
         const std::optional<CoreRangeSet>& sub_core_grids) {                                             \
-        ttnn::graph::ScopedCompositeTrace _trace("ttnn::" #NAME, lhs);                                   \
+        TT_OP_SCOPE("ttnn::" #NAME, lhs);                                                                \
         return operations::binary::inplace_relational_binary<operations::binary::BinaryOpType::OP_TYPE>( \
             lhs, rhs, post_activations, lhs_activations, rhs_activations, use_legacy, sub_core_grids);   \
     }
@@ -154,7 +154,7 @@
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,  \
         std::optional<bool> use_legacy,                                              \
         const std::optional<CoreRangeSet>& sub_core_grids) {                         \
-        ttnn::graph::ScopedCompositeTrace _trace("ttnn::" #NAME, lhs, rhs);          \
+        TT_OP_SCOPE("ttnn::" #NAME, lhs, rhs);                                       \
         return ttnn::detail::invoke_binary_ng(                                       \
             lhs,                                                                     \
             rhs,                                                                     \
@@ -177,7 +177,7 @@
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,  \
         std::optional<bool> use_legacy,                                              \
         const std::optional<CoreRangeSet>& sub_core_grids) {                         \
-        ttnn::graph::ScopedCompositeTrace _trace("ttnn::" #NAME);                    \
+        TT_OP_SCOPE("ttnn::" #NAME);                                                 \
         return ttnn::detail::invoke_binary_ng(                                       \
             lhs,                                                                     \
             rhs,                                                                     \

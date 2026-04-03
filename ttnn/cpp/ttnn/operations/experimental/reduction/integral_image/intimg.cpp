@@ -10,7 +10,7 @@
 namespace ttnn::experimental {
 
 Tensor intimg(const Tensor& input_tensor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::intimg");
+    TT_OP_SCOPE("ttnn::experimental::intimg");
     return ttnn::prim::intimg(input_tensor);
 }
 

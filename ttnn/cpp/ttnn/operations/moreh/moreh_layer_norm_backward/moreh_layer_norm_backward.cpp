@@ -59,7 +59,7 @@ std::vector<std::optional<Tensor>> moreh_layer_norm_backward(
     const std::optional<const Tensor>& beta_grad,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_layer_norm_backward");
+    TT_OP_SCOPE("ttnn::moreh_layer_norm_backward");
     std::vector<std::optional<Tensor>> outputs;
     outputs.reserve(3);
 

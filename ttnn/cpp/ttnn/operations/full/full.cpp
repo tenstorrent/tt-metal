@@ -18,7 +18,7 @@ Tensor moreh_full(
     const DataType& dtype,
     const Layout& layout,
     const MemoryConfig& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_full");
+    TT_OP_SCOPE("ttnn::moreh_full");
     return ttnn::prim::full(shape, fill_value, mesh_device, dtype, layout, memory_config);
 }
 

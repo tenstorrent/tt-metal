@@ -288,7 +288,7 @@ Tensor matmul(
     std::optional<Tensor> optional_output_tensor,
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::matmul", input_tensor_a, input_tensor_b);
+    TT_OP_SCOPE("ttnn::matmul", input_tensor_a, input_tensor_b);
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -339,7 +339,7 @@ Tensor linear(
     std::optional<ttnn::Tensor> optional_output_tensor,
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::linear", input_tensor_a, input_tensor_b);
+    TT_OP_SCOPE("ttnn::linear", input_tensor_a, input_tensor_b);
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -380,7 +380,7 @@ std::vector<Tensor> matmul_batched_weights(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::matmul_batched_weights");
+    TT_OP_SCOPE("ttnn::matmul_batched_weights");
     TT_FATAL(transpose_a == false, "cannot transpose A in batched matmul");
     TT_FATAL(transpose_b == false, "cannot transpose B in batched matmul");
     TT_FATAL(memory_config.has_value(), "memory_config must be provided");
@@ -460,7 +460,7 @@ Tensor addmm(
     std::optional<const CoreGrid> core_grid,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     std::optional<Tensor> optional_output_tensor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::addmm");
+    TT_OP_SCOPE("ttnn::addmm");
     TT_FATAL(!output_tile.has_value(), "output_tile must not be provided");
 
     std::optional<CoreCoord> user_core_coord;
@@ -515,7 +515,7 @@ Tensor sparse_matmul(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::sparse_matmul");
+    TT_OP_SCOPE("ttnn::sparse_matmul");
     std::optional<CoreCoord> user_core_coord =
         core_grid.has_value() ? std::make_optional(CoreCoord(core_grid->x, core_grid->y)) : std::nullopt;
 

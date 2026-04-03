@@ -28,7 +28,7 @@ ttnn::Tensor llama_all_gather_matmul_async(
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const DataType> dtype,
     const std::optional<const GlobalCircularBuffer>& global_cb) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::llama_all_gather_matmul_async");
+    TT_OP_SCOPE("ttnn::experimental::llama_all_gather_matmul_async");
     auto output_tensors = ttnn::prim::llama_all_gather_matmul_async(
         input_tensor0,
         input_tensor1,

@@ -65,7 +65,7 @@ Tensor typecast(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::typecast");
+    TT_OP_SCOPE("ttnn::typecast");
     if (optional_output_tensor.has_value()) {
         TT_FATAL(
             output_dtype == optional_output_tensor.value().dtype(),
@@ -83,7 +83,7 @@ Tensor typecast(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::typecast");
+    TT_OP_SCOPE("ttnn::typecast");
     TT_FATAL(tt_input_dtype == input_tensor.dtype(), "input dtype and input tensor's dtype provided should match");
     if (optional_output_tensor.has_value()) {
         TT_FATAL(

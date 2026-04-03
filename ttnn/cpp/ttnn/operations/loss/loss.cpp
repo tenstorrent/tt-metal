@@ -60,7 +60,7 @@ Tensor mse_loss(
     operations::loss::LossReductionMode mode,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::mse_loss");
+    TT_OP_SCOPE("ttnn::mse_loss");
     return operations::loss::loss_utils::loss_function(ref, prediction, operations::loss::LossFunction::MSE, mode, memory_config, optional_output_tensor);
 }
 
@@ -70,7 +70,7 @@ Tensor l1_loss(
     operations::loss::LossReductionMode mode,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::l1_loss");
+    TT_OP_SCOPE("ttnn::l1_loss");
     return operations::loss::loss_utils::loss_function(ref, prediction, operations::loss::LossFunction::MAE, mode, memory_config, optional_output_tensor);
 }
 

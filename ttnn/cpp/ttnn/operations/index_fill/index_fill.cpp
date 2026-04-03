@@ -15,7 +15,7 @@ Tensor index_fill(
     const Tensor& index,
     const std::variant<float, int> value,
     const std::optional<MemoryConfig>& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::index_fill");
+    TT_OP_SCOPE("ttnn::index_fill");
     return ttnn::prim::index_fill(input, dim, index, value, memory_config);
 }
 

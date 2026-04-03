@@ -30,7 +30,7 @@ std::vector<std::optional<Tensor>> moreh_adam(
     const std::optional<const Tensor>& max_exp_avg_sq_out,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_adam");
+    TT_OP_SCOPE("ttnn::moreh_adam");
     return prim::moreh_adam(
         param_in,
         grad,

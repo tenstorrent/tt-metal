@@ -12,7 +12,7 @@
 namespace ttnn::experimental {
 
 Tensor rotate_half(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::rotate_half");
+    TT_OP_SCOPE("ttnn::experimental::rotate_half");
     using namespace tt::constants;
     using tt::tt_metal::PadValue;
 

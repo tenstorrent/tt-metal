@@ -17,7 +17,7 @@ std::array<ttnn::Tensor, 2> offset_cumsum(
     uint32_t cluster_axis,
     uint32_t num_links,
     const ttnn::MemoryConfig& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::deepseek_prefill::offset_cumsum");
+    TT_OP_SCOPE("ttnn::experimental::deepseek_prefill::offset_cumsum");
     const auto& shape = input_tensor.logical_shape();
     uint32_t n_routed_experts = shape[-1];
 

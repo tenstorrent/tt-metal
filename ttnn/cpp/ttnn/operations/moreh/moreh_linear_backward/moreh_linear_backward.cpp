@@ -117,7 +117,7 @@ std::vector<std::optional<Tensor>> moreh_linear_backward(
     const std::optional<ttnn::MemoryConfig>& weight_grad_memory_config,
     const std::optional<ttnn::MemoryConfig>& bias_grad_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_linear_backward");
+    TT_OP_SCOPE("ttnn::moreh_linear_backward");
     DeviceComputeKernelConfig compute_kernel = compute_kernel_config.value_or(init_device_compute_kernel_config(
         output_grad.device()->arch(), std::nullopt, tt::tt_metal::MathFidelity::HiFi4, true, false, false));
 

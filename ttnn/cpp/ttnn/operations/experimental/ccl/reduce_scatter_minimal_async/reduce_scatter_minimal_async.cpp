@@ -27,7 +27,7 @@ ttnn::Tensor reduce_scatter_minimal_async(
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::reduce_scatter_minimal_async");
+    TT_OP_SCOPE("ttnn::experimental::reduce_scatter_minimal_async");
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required for reduce_scatter_minimal_async operation");
     uint32_t resolved_num_links =

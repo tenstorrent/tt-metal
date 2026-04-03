@@ -417,7 +417,7 @@ std::vector<Tensor> remainder_bw(
     const Tensor& /*input_tensor*/,
     float /*scalar*/,
     const std::optional<MemoryConfig>& /*output_mem_config*/) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::remainder_bw");
+    TT_OP_SCOPE("ttnn::remainder_bw");
     std::vector<Tensor> grad;
     grad.emplace_back(grad_tensor);
     return grad;
@@ -428,7 +428,7 @@ std::vector<Tensor> remainder_bw(
     const Tensor& input_a,
     const Tensor& other,
     const std::optional<MemoryConfig>& output_mem_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::remainder_bw");
+    TT_OP_SCOPE("ttnn::remainder_bw");
     std::vector<Tensor> grad;
     grad.emplace_back(grad_tensor);
     Tensor result_div = ttnn::div(input_a, other, false, "floor", std::nullopt, output_mem_config);
@@ -442,7 +442,7 @@ std::vector<Tensor> fmod_bw(
     const Tensor& /*input_tensor*/,
     float /*scalar*/,
     const std::optional<MemoryConfig>& /*output_mem_config*/) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::fmod_bw");
+    TT_OP_SCOPE("ttnn::fmod_bw");
     std::vector<Tensor> grad;
     grad.emplace_back(grad_tensor);
     return grad;
@@ -453,7 +453,7 @@ std::vector<Tensor> fmod_bw(
     const Tensor& input_a,
     const Tensor& other,
     const std::optional<MemoryConfig>& output_mem_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::fmod_bw");
+    TT_OP_SCOPE("ttnn::fmod_bw");
     std::vector<Tensor> grad;
     grad.emplace_back(grad_tensor);
     Tensor result_div = ttnn::div(input_a, other, false, "trunc", std::nullopt, output_mem_config);
@@ -482,7 +482,7 @@ std::vector<std::optional<Tensor>> assign_bw(
     const Tensor& /*input_tensor*/,
     const std::optional<MemoryConfig>& /*output_mem_config*/,
     std::optional<Tensor> input_grad) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::assign_bw");
+    TT_OP_SCOPE("ttnn::assign_bw");
     std::vector<std::optional<ttnn::Tensor>> grad_tensor_res = {std::nullopt};
     grad_tensor_res[0] = input_grad.has_value() ? ttnn::assign(grad_tensor, input_grad.value()) : grad_tensor;
     return grad_tensor_res;
@@ -496,7 +496,7 @@ std::vector<std::optional<Tensor>> assign_bw(
     const std::optional<MemoryConfig>& /*output_mem_config*/,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::assign_bw");
+    TT_OP_SCOPE("ttnn::assign_bw");
     std::vector<std::optional<ttnn::Tensor>> grad_tensor_res = {std::nullopt, std::nullopt};
 
     operations::binary_backward::detail::preallocated_tensors_check(

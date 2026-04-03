@@ -23,7 +23,7 @@ Tensor moreh_nll_loss(
     const int32_t ignore_index,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_nll_loss");
+    TT_OP_SCOPE("ttnn::moreh_nll_loss");
     using namespace operations::moreh;
 
     const auto compute_kernel_config_val =

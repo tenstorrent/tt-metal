@@ -226,7 +226,7 @@ namespace ttnn {
 
 Tensor prod(
     const Tensor& input, std::optional<int64_t> dim, bool keepdim, const std::optional<MemoryConfig>& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::prod");
+    TT_OP_SCOPE("ttnn::prod");
     return operations::reduction::prod_impl(input, dim, keepdim, memory_config);
 }
 
@@ -235,7 +235,7 @@ Tensor prod(
     const Tensor& output,
     SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::prod");
+    TT_OP_SCOPE("ttnn::prod");
     return operations::reduction::prod_nc_impl(input, output, dims, memory_config);
 }
 

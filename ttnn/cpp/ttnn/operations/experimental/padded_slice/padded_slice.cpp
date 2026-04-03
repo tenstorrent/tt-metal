@@ -26,7 +26,7 @@ ttnn::Tensor padded_slice(
     const MemoryConfig& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& /*pad_value*/) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::padded_slice");
+    TT_OP_SCOPE("ttnn::experimental::padded_slice");
     // Ensure start and end vectors have matching sizes and correct tensor rank
 
     const auto& input_shape = input_tensor.logical_shape();

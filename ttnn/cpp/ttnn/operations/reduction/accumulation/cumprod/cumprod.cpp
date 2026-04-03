@@ -24,7 +24,7 @@ Tensor cumprod(
     const bool& reverse_order,
     std::optional<Tensor> optional_out,
     const std::optional<MemoryConfig>& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::cumprod");
+    TT_OP_SCOPE("ttnn::cumprod");
     return operations::reduction::accumulation::common::accumulation_invoke(
         input_tensor,
         dim,

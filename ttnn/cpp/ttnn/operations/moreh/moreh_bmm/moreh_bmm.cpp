@@ -15,7 +15,7 @@ Tensor moreh_bmm(
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_bmm");
+    TT_OP_SCOPE("ttnn::moreh_bmm");
     return ttnn::moreh_matmul(input, mat2, false, false, output, std::nullopt, memory_config, compute_kernel_config);
 }
 

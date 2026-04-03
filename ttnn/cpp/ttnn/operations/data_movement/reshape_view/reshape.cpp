@@ -335,7 +335,7 @@ ttnn::Tensor ttnn::reshape(
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode,
     const std::optional<CoreRangeSet>& sub_core_grid) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::reshape");
+    TT_OP_SCOPE("ttnn::reshape");
     MemoryConfig mem_config = memory_config.value_or(tensor.memory_config());
     auto layout = tensor.layout();
     auto tensor_shape = tensor.logical_shape();
@@ -431,7 +431,7 @@ ttnn::Tensor ttnn::reshape(
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode,
     const std::optional<CoreRangeSet>& sub_core_grid) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::reshape");
+    TT_OP_SCOPE("ttnn::reshape");
     return reshape(tensor, shape, shape, memory_config, pad_value, reshape_map_mode, sub_core_grid);
 }
 
@@ -442,7 +442,7 @@ ttnn::Tensor ttnn::reshape(
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode,
     const std::optional<CoreRangeSet>& sub_core_grid) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::reshape");
+    TT_OP_SCOPE("ttnn::reshape");
     return reshape(
         tensor,
         operations::data_movement::detail::infer_dims_for_reshape(tensor, shape_vector),

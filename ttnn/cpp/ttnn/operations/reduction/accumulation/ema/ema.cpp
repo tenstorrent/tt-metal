@@ -16,7 +16,7 @@ Tensor ema(
     std::optional<CoreGrid> core_grid,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::ema");
+    TT_OP_SCOPE("ttnn::ema");
     auto grid_size = core_grid.value_or(CoreGrid(0, 0)).to_CoreCoord();
     auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
     auto kernel_config = init_device_compute_kernel_config(

@@ -11,7 +11,7 @@
 namespace ttnn {
 
 Tensor stack(const std::vector<Tensor>& input_tensors, const int dim) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::stack");
+    TT_OP_SCOPE("ttnn::stack");
     TT_FATAL(!input_tensors.empty(), "Stack expects at least one tensor");
     std::vector<Tensor> expanded_tensors;
     expanded_tensors.reserve(input_tensors.size());

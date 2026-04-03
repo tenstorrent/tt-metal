@@ -10,7 +10,7 @@
 namespace ttnn {
 
 std::vector<ttnn::Tensor> chunk(const ttnn::Tensor& input_tensor, const uint32_t num_chunks, int dim) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::chunk");
+    TT_OP_SCOPE("ttnn::chunk");
     TT_FATAL(num_chunks > 0, "Number of chunks must be greater than zero");
 
     auto size = input_tensor.logical_shape();

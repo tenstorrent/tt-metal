@@ -18,7 +18,7 @@ Tensor moreh_arange(
     bool untilize_out,
     const DataType& dtype,
     const MemoryConfig& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_arange");
+    TT_OP_SCOPE("ttnn::moreh_arange");
     return ttnn::prim::moreh_arange(start, end, step, mesh_device, output, untilize_out, dtype, memory_config);
 }
 

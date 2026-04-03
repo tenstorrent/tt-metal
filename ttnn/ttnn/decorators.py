@@ -481,9 +481,8 @@ class FastOperation:
                 raise TypeError(enhanced_msg) from e
             raise
         finally:
-            if tracking:
+            if recording:
                 ttnn.graph.track_function_end()
-
 
         if recording:
             set_tensor_id(get_all_tensors(result), force=True)

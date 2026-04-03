@@ -10,7 +10,7 @@
 namespace ttnn::experimental {
 
 ttnn::Tensor convert_to_chw(const Tensor& input, const std::optional<DataType>& dtype) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::convert_to_chw");
+    TT_OP_SCOPE("ttnn::experimental::convert_to_chw");
     return ttnn::prim::convert_to_chw(input, dtype);
 }
 

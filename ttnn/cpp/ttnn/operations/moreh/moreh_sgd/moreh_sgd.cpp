@@ -26,7 +26,7 @@ std::vector<std::optional<Tensor>> moreh_sgd(
     const std::optional<MemoryConfig>& param_out_memory_config,
     const std::optional<MemoryConfig>& momentum_buffer_out_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_sgd");
+    TT_OP_SCOPE("ttnn::moreh_sgd");
     return ttnn::prim::moreh_sgd(
         param_in,
         grad,

@@ -21,7 +21,7 @@ ttnn::Tensor minimal_matmul(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::minimal_matmul");
+    TT_OP_SCOPE("ttnn::experimental::minimal_matmul");
     // Call device operation with chunks=1 (default), which returns a vector with 1 element
     auto outputs = ttnn::prim::minimal_matmul(
         input_tensor,

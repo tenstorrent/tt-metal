@@ -64,7 +64,7 @@ Tensor rand(
     float to,
     uint32_t seed,
     const std::optional<tt::tt_metal::distributed::MeshMapperConfig>& mesh_mapper) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::rand");
+    TT_OP_SCOPE("ttnn::rand");
     TT_FATAL(dtype != DataType::UINT8, "[ttnn::rand] DataType::UINT8 is not supported.");
 
     ttnn::Shape device_shape = shape;

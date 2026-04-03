@@ -358,7 +358,7 @@ ttnn::Tensor pad(
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::pad");
+    TT_OP_SCOPE("ttnn::pad");
     using PadSpecDim = operations::data_movement::PadSpecDim;
     const int original_rank = input_tensor.logical_shape().rank();
 
@@ -402,7 +402,7 @@ ttnn::Tensor pad(
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::pad");
+    TT_OP_SCOPE("ttnn::pad");
     using PadSpecDim = operations::data_movement::PadSpecDim;
     ttnn::SmallVector<PadSpecDim> padding_impl;
     std::transform(padding.begin(), padding.end(), std::back_inserter(padding_impl), [](auto& p) {
@@ -420,7 +420,7 @@ ttnn::Tensor pad(
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::pad");
+    TT_OP_SCOPE("ttnn::pad");
     using PadSpecDim = operations::data_movement::PadSpecDim;
     ttnn::SmallVector<PadSpecDim> padding_impl;
     const auto& log_shape = input_tensor.logical_shape();

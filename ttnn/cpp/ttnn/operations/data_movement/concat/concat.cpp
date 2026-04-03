@@ -268,7 +268,7 @@ ttnn::Tensor concat(
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     unsigned int groups,
     const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::concat");
+    TT_OP_SCOPE("ttnn::concat");
     TT_FATAL(!input_tensors.empty(), "ttnn.concat: expected a non-empty list of Tensors!");
     TT_FATAL(!optional_output_tensor.has_value(), "optional output tensor currently unsupported!");
     const auto mem_config =

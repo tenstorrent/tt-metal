@@ -15,7 +15,7 @@ Tensor moreh_full_like(
     const std::optional<DataType>& dtype,
     const std::optional<Layout>& layout,
     const std::optional<MemoryConfig>& memory_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_full_like");
+    TT_OP_SCOPE("ttnn::moreh_full_like");
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Full Like: Input must be on device");
     const auto& shape = input.logical_shape();
     return ttnn::prim::full(

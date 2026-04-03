@@ -10,7 +10,7 @@ namespace ttnn {
 
 ttnn::Tensor sharded_to_interleaved(
     const ttnn::Tensor& input_tensor, const MemoryConfig& memory_config, const std::optional<DataType>& output_dtype) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::sharded_to_interleaved");
+    TT_OP_SCOPE("ttnn::sharded_to_interleaved");
     if (!input_tensor.shard_spec().has_value()) {
         return input_tensor;
     }

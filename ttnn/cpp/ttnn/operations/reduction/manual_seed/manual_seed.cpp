@@ -14,7 +14,7 @@ Tensor manual_seed(
     std::optional<std::reference_wrapper<MeshDevice>> device,
     const std::optional<std::variant<uint32_t, Tensor>>& user_ids,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::manual_seed");
+    TT_OP_SCOPE("ttnn::manual_seed");
     return ttnn::prim::manual_seed(seeds, device, user_ids, sub_core_grids);
 }
 

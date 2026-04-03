@@ -23,7 +23,7 @@ ttnn::Tensor paged_update_cache(
     uint32_t batch_offset,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::paged_update_cache");
+    TT_OP_SCOPE("ttnn::experimental::paged_update_cache");
     return ttnn::prim::paged_update_cache(
         cache_tensor,
         input_tensor,
@@ -48,7 +48,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> paged_fused_update_cache(
     uint32_t batch_offset,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::paged_fused_update_cache");
+    TT_OP_SCOPE("ttnn::experimental::paged_fused_update_cache");
     return ttnn::prim::paged_fused_update_cache(
         cache_tensor1,
         input_tensor1,
@@ -71,7 +71,7 @@ ttnn::Tensor paged_fill_cache(
     uint32_t batch_idx,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::paged_fill_cache");
+    TT_OP_SCOPE("ttnn::experimental::paged_fill_cache");
     // Note: compute_kernel_config is not used by fill_cache operation
     (void)compute_kernel_config;
 

@@ -18,7 +18,7 @@ ttnn::Tensor rotary_embedding(
     const std::optional<uint32_t> token_index,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::rotary_embedding");
+    TT_OP_SCOPE("ttnn::experimental::rotary_embedding");
     using namespace tt::constants;
 
     using tt::tt_metal::PadValue;

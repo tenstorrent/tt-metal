@@ -19,7 +19,7 @@ ttnn::Tensor attn_matmul(
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::attn_matmul");
+    TT_OP_SCOPE("ttnn::experimental::attn_matmul");
     return ttnn::prim::attn_matmul(
         input_tensor_a,
         input_tensor_b,
@@ -43,7 +43,7 @@ ttnn::Tensor attn_matmul_from_cache(
     std::optional<const DataType> dtype,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<Tensor> optional_output_tensor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::attn_matmul_from_cache");
+    TT_OP_SCOPE("ttnn::experimental::attn_matmul_from_cache");
     TT_FATAL(num_tokens > 0, "Number of tokens must be at least 1!");
     TT_FATAL(
         num_tokens <= input_tensor_b.padded_shape()[2],

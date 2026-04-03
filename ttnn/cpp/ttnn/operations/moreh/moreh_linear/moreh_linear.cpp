@@ -16,7 +16,7 @@ Tensor moreh_linear(
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_linear");
+    TT_OP_SCOPE("ttnn::moreh_linear");
     return ttnn::moreh_matmul(input, weight, false, true, output, bias, memory_config, compute_kernel_config);
 }
 

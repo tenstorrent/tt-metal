@@ -16,7 +16,7 @@ Tensor indexed_fill(
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config,
     int64_t dim) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::indexed_fill");
+    TT_OP_SCOPE("ttnn::indexed_fill");
     auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
     return ttnn::prim::indexed_fill(batch_id, input_tensor_a, input_tensor_b, output_memory_config, dim);
 }

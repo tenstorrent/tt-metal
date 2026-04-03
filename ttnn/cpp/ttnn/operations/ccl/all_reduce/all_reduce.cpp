@@ -21,7 +21,7 @@ ttnn::Tensor all_reduce(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::all_reduce");
+    TT_OP_SCOPE("ttnn::all_reduce");
     // If cluster_axis is None, but mesh shape is not 1xM or Mx1, then we call all-reduce on cluster_axis=1, then
     // all-reduce on cluster_axis=0
     if (cluster_axis == std::nullopt) {

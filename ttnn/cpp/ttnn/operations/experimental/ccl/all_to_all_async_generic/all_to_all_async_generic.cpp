@@ -20,7 +20,7 @@ ttnn::Tensor all_to_all_async_generic(
     std::optional<ttnn::ccl::Topology> topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::all_to_all_async_generic");
+    TT_OP_SCOPE("ttnn::experimental::all_to_all_async_generic");
     auto* mesh_device = input_tensor.device();
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     topology_ = ::ttnn::ccl::convert_2d_to_1d_topology(topology_);

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,17 +11,19 @@
 
 namespace ttnn::graph {
 
-class ScopedCompositeTrace {
+class [[nodiscard]] FunctionScope {
 public:
     template <class... Args>
-    explicit ScopedCompositeTrace(std::string_view name, Args&&... args) {
+    explicit FunctionScope(std::string_view name, Args&&... args) {
         tt::tt_metal::GraphTracker::instance().track_function_start(name, std::forward<Args>(args)...);
     }
-    ~ScopedCompositeTrace() { tt::tt_metal::GraphTracker::instance().track_function_end(); }
-    ScopedCompositeTrace(const ScopedCompositeTrace&) = delete;
-    ScopedCompositeTrace& operator=(const ScopedCompositeTrace&) = delete;
-    ScopedCompositeTrace(ScopedCompositeTrace&&) = delete;
-    ScopedCompositeTrace& operator=(ScopedCompositeTrace&&) = delete;
+    ~FunctionScope() { tt::tt_metal::GraphTracker::instance().track_function_end(); }
+    FunctionScope(const FunctionScope&) = delete;
+    FunctionScope& operator=(const FunctionScope&) = delete;
+    FunctionScope(FunctionScope&&) = delete;
+    FunctionScope& operator=(FunctionScope&&) = delete;
 };
 
 }  // namespace ttnn::graph
+
+#define TT_OP_SCOPE(name, ...) ttnn::graph::FunctionScope _tt_op_scope(name, ##__VA_ARGS__)

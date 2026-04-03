@@ -18,7 +18,7 @@ Tensor moreh_softmax_backward(
     const ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOpParallelizationStrategy strategy,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_softmax_backward");
+    TT_OP_SCOPE("ttnn::moreh_softmax_backward");
     return ttnn::prim::moreh_softmax_backward(
         output_tensor, output_grad_tensor, dim, input_grad_tensor, op, strategy, memory_config, compute_kernel_config);
 }
@@ -32,7 +32,7 @@ Tensor moreh_softmin_backward(
     const ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOpParallelizationStrategy strategy,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_softmin_backward");
+    TT_OP_SCOPE("ttnn::moreh_softmin_backward");
     return ttnn::prim::moreh_softmax_backward(
         output_tensor, output_grad_tensor, dim, input_grad_tensor, op, strategy, memory_config, compute_kernel_config);
 }
@@ -46,7 +46,7 @@ Tensor moreh_logsoftmax_backward(
     const ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOpParallelizationStrategy strategy,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moreh_logsoftmax_backward");
+    TT_OP_SCOPE("ttnn::moreh_logsoftmax_backward");
     return ttnn::prim::moreh_softmax_backward(
         output_tensor, output_grad_tensor, dim, input_grad_tensor, op, strategy, memory_config, compute_kernel_config);
 }

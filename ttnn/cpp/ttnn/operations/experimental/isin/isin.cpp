@@ -121,7 +121,7 @@ Tensor isin(
     bool assume_unique,
     bool invert,
     const std::optional<Tensor>& opt_out) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::isin");
+    TT_OP_SCOPE("ttnn::experimental::isin");
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     // Validate that input tensors have compatible data types

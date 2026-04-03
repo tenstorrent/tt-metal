@@ -18,7 +18,7 @@ Tensor moe(
     uint16_t k,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& output_tensor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moe");
+    TT_OP_SCOPE("ttnn::moe");
     const auto& input_shape = input_tensor.logical_shape();
 
     // Zero-volume input: return zero-volume tensor with correct output shape

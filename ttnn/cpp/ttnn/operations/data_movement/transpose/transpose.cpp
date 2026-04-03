@@ -203,12 +203,12 @@ ttnn::Tensor transpose(
     int64_t dim2,
     const std::optional<MemoryConfig>& memory_config,
     float pad_value) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::transpose");
+    TT_OP_SCOPE("ttnn::transpose");
     return operations::data_movement::transpose::transpose_impl(input_tensor, dim1, dim2, memory_config, pad_value);
 }
 
 ttnn::Tensor transpose(const ttnn::Tensor& input_tensor, int64_t dim1, int64_t dim2, float pad_value) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::transpose");
+    TT_OP_SCOPE("ttnn::transpose");
     return transpose(input_tensor, dim1, dim2, std::nullopt, pad_value);
 }
 

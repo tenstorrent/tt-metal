@@ -148,7 +148,7 @@ Tensor group_norm(
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<Tensor>& negative_mask,
     bool use_welford) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::group_norm");
+    TT_OP_SCOPE("ttnn::group_norm");
     if (input_tensor.layout() == Layout::TILE and inplace.has_value()) {
         TT_FATAL(
             !inplace.value(),

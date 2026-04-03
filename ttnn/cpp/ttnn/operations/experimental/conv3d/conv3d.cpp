@@ -55,7 +55,7 @@ ttnn::Tensor conv3d(
     uint32_t groups_,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::conv3d");
+    TT_OP_SCOPE("ttnn::experimental::conv3d");
     // If no config provided, use conservative default blocking:
     // minimal spatial blocks (1,1,1), smallest valid channel blocks (TILE_WIDTH) to minimize L1 pressure
     auto config = config_opt.value_or(ttnn::experimental::prim::Conv3dConfig(

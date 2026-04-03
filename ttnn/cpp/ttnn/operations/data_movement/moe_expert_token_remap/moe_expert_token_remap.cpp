@@ -17,7 +17,7 @@ std::vector<ttnn::Tensor> moe_expert_token_remap(
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<ttnn::Tensor>& optional_reduced_tensor,
     const uint32_t reduction_size) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::moe_expert_token_remap");
+    TT_OP_SCOPE("ttnn::moe_expert_token_remap");
     return ttnn::prim::moe_expert_token_remap(
         topk_tensor,
         expert_mapping_tensor,

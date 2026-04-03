@@ -247,7 +247,7 @@ Tensor to_layout(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const float pad_value) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::to_layout");
+    TT_OP_SCOPE("ttnn::to_layout");
     return operations::core::CMAKE_UNIQUE_NAMESPACE::to_layout_impl(
         tensor_arg, layout, dtype, memory_config, sub_core_grids, pad_value);
 }

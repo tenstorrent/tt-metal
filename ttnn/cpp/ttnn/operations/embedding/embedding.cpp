@@ -23,7 +23,7 @@ ttnn::Tensor embedding(
     const std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::embedding");
+    TT_OP_SCOPE("ttnn::embedding");
     if (pad_token.has_value()) {
         embeddings_type = ttnn::prim::EmbeddingsType::PADDED;
     }

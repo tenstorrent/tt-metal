@@ -26,7 +26,7 @@ std::vector<ttnn::Tensor> minimal_matmul_split(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    ttnn::graph::ScopedCompositeTrace _trace("ttnn::experimental::minimal_matmul_split");
+    TT_OP_SCOPE("ttnn::experimental::minimal_matmul_split");
     // Validate chunks
     TT_FATAL(chunks >= 1, "minimal_matmul_split requires chunks >= 1, got chunks={}", chunks);
 
