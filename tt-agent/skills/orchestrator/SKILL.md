@@ -23,7 +23,7 @@ Trigger on high-level requests like:
 - "Profile the matmul kernel and improve throughput"
 - "Add a new model to tt-metal"
 
-If the request maps directly to a single tool (e.g., "run the profiler"), go there
+If the request maps directly to a single tool (e.g., "just run this pytest"), go there
 directly. Use the orchestrator when the request requires multiple steps or skills.
 
 ## Pipeline
@@ -54,16 +54,14 @@ analyze → scope → decompose → dispatch → verify → iterate
 
 | Situation | Dispatch to |
 |---|---|
-| Profile bottleneck, find hot kernels | `/tt:profiler` |
-| Optimize an existing op or kernel | `/tt:iterator` |
-| CI job is failing | `/tt:ci-fixer` |
-| Performance regression bisect | `/tt:bisect` |
-| Build, flash, or run on device | `/tt:device` |
-| Write or run tests for an op | `/tt:tester` |
-| Debug wrong outputs or crashes | `/tt:debugger` |
-| Design a new op or kernel | `/tt:designer` |
-| Review code before merging | `/tt:code-review` |
+| Build, run, or execute on device | `/tt:run` |
+| Profile bottleneck, optimize throughput | `/tt:optimizer` |
+| Debug wrong outputs, crashes, or CI failures | `/tt:debugger` |
+| Write or run tests for an op/kernel/model | `/tt:tester` |
 | Need codebase context before proceeding | `/tt:learn` |
+| Design a new op or kernel | `/tt:designer` (future) |
+| Review code before merging | `/tt:code-review` (future) |
+| Performance regression bisect | `/tt:bisect` (future) |
 
 ## Document Protocol
 

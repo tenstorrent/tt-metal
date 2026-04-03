@@ -184,3 +184,82 @@ All skills after tt-skill-creator are built using tt-skill-creator itself.
 
 **Why:** Validates the tool works. Every subsequent skill is both a deliverable and a
 test of tt-skill-creator's quality. "Use what you build."
+
+---
+
+## 2026-04-03: Recipes — per-repo execution patterns in knowledge/
+
+`knowledge/recipes/<repo>/` holds small, self-contained markdown files describing how
+to build, test, run, and manage environment for each repo (tt-metal, vLLM,
+tt-inference-server, etc.).
+
+**Why:** Execution patterns vary drastically across repos but are stable within a repo.
+Separating them from skills means repo engineers contribute recipes without understanding
+skill internals. Adding a new repo = adding a `recipes/<repo>/` directory with an
+`index.md` TOC and focused files (build.md, test.md, env.md, etc.). No skill changes required.
+
+**Format rules:** Plain markdown, no frontmatter, under 60 lines per file. Consumed by
+skills (primarily tt-run) during execution phases.
+
+---
+
+## 2026-04-03: Domain expertise in knowledge/<domain>/
+
+Subject-matter experts contribute domain knowledge as plain markdown in
+`knowledge/profiling/`, `knowledge/debugging/`, etc. These files describe patterns,
+methodologies, and interpretation guides — not step-by-step procedures (those are skills).
+
+**Why:** The profiling tech lead knows bottleneck signatures; the debug expert knows
+crash patterns. They should contribute that knowledge without writing skills. Skills
+load domain knowledge during relevant phases via progressive load tables.
+
+**Relationship to hardware/:** `knowledge/hardware/` holds silicon-stable facts.
+Domain knowledge in `profiling/` and `debugging/` is software-practice knowledge that
+may evolve with tooling, but is stable enough to maintain as static files (unlike APIs,
+which are always fetched fresh via tt-learn).
+
+---
+
+## 2026-04-03: Phase-based progressive loading for workflow skills
+
+Workflow skills declare phases. Each phase specifies what knowledge to load (Loads) and
+what it produces (Produces). After each phase, the agent summarizes in 3-5 lines and
+moves on. Loaded knowledge is consumed for that phase, not carried forward.
+
+**Why:** Workflow skills orchestrate multi-step processes (profile → analyze → optimize →
+verify) where each step needs different knowledge. Loading everything upfront wastes
+context and is impossible for repo-specific recipes (the repo isn't known until after
+workspace detection). Phase tables make dependencies explicit and context flat.
+
+**Structural invariant:** Every file referenced in a Loads column must exist on disk.
+Enforced by `test_skill_frontmatter.py`.
+
+---
+
+## 2026-04-03: Three contribution paths
+
+| Who | Contributes to | Format |
+|---|---|---|
+| Repo engineer | `knowledge/recipes/<repo>/` | "How to build/run in my repo" |
+| Domain expert | `knowledge/<domain>/` | "What I know about this discipline" |
+| Agent team | `skills/` | Workflow logic, execution runtime |
+
+**Why:** Each path is independent. A repo engineer never touches skills. A domain expert
+never touches recipes. The agent team wires knowledge into skills via phase tables. This
+separation scales with contributors and repos.
+
+---
+
+## 2026-04-03: tt-run replaces tt-device as tool-layer skill
+
+The original "tt-device" skill concept was too narrow (just device execution). tt-run is
+a tool-layer skill that handles: workspace detection, recipe loading, build orchestration,
+MCP routing (Bash vs tt-device-mcp), and job lifecycle. It is both directly invocable
+("just run this pytest") and loaded by workflow skills as their execution engine.
+
+**Why:** Every workflow skill needs to detect the workspace, build, and execute. Factoring
+this into a shared tool-layer skill avoids duplicating execution logic across
+tt-optimizer, tt-debugger, and tt-tester.
+
+**MCP routing rule:** "Device commands go through MCP, not Bash" is a safety invariant
+in CLAUDE.md, not gated behind skill loading.
