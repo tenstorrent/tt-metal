@@ -154,179 +154,268 @@ On both Wormhole and Blackhole, hand-tuned configs helps recover more lost perfo
 <details>
 <summary><strong>N150 Out of Box Results</strong> (click to expand)</summary>
 
-| M | K | N | Use Trace | Grid Size | In0 Storage Type | In1 Storage Type | Out Storage Type | Dtype | Math Fidelity | Inference Time Avg [ns] | TFLOPs (avg) | Host Based Utilization[%] (vs user selected grid 8x8) | Host Based Utilization[%] (vs full available grid 8x8) | Device Based Utilization[%] (vs user selected grid 8x8) | Device Based Utilization[%] (vs full available grid 8x8) |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 512 | 512 | 512 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 55973.53 | 4.80 | 7.32 | 7.32 | 37.06 | 37.06 |
-| 512 | 1024 | 1024 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 121200.08 | 8.86 | 13.52 | 13.52 | 17.98 | 17.98 |
-| 512 | 1024 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 145208.84 | 14.79 | 22.57 | 22.57 | 33.44 | 33.44 |
-| 1024 | 1024 | 1024 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 74584.48 | 28.79 | 43.93 | 43.93 | 82.97 | 82.97 |
-| 1024 | 1024 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 119950.77 | 35.81 | 54.64 | 54.64 | 111.96 | 111.96 |
-| 1024 | 2048 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 166697.50 | 51.53 | 78.63 | 78.63 | 120.95 | 120.95 |
-| 2048 | 2048 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 302381.52 | 56.82 | 86.69 | 86.69 | 133.31 | 133.31 |
-| 2048 | 2048 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 454194.55 | 56.74 | 86.57 | 86.57 | 140.08 | 140.08 |
-| 2048 | 3072 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 582509.04 | 66.36 | 101.26 | 101.26 | 142.65 | 142.65 |
-| 3072 | 3072 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 886585.71 | 65.40 | 99.79 | 99.79 | 116.96 | 116.96 |
-| 3072 | 3072 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1148452.76 | 67.32 | 102.72 | 102.72 | 122.27 | 122.27 |
-| 3072 | 4096 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1455891.13 | 70.80 | 108.03 | 108.03 | 119.31 | 119.31 |
-| 4096 | 4096 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1993181.71 | 68.95 | 105.22 | 105.22 | 120.67 | 120.67 |
-| 512 | 512 | 512 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 20344.26 | 13.19 | 20.13 | 20.13 | 35.32 | 35.32 |
-| 512 | 1024 | 1024 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 116643.91 | 9.21 | 14.05 | 14.05 | 17.98 | 17.98 |
-| 512 | 1024 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 142023.56 | 15.12 | 23.07 | 23.07 | 33.42 | 33.42 |
-| 1024 | 1024 | 1024 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 70252.42 | 30.57 | 46.64 | 46.64 | 82.77 | 82.77 |
-| 1024 | 1024 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 114989.28 | 37.35 | 56.99 | 56.99 | 111.61 | 111.61 |
-| 1024 | 2048 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 162110.33 | 52.99 | 80.85 | 80.85 | 120.68 | 120.68 |
-| 2048 | 2048 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 299358.37 | 57.39 | 87.57 | 87.57 | 133.28 | 133.28 |
-| 2048 | 2048 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 451588.63 | 57.06 | 87.07 | 87.07 | 140.00 | 140.00 |
-| 2048 | 3072 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 576858.52 | 67.01 | 102.25 | 102.25 | 142.65 | 142.65 |
-| 3072 | 3072 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 880234.24 | 65.87 | 100.51 | 100.51 | 116.99 | 116.99 |
-| 3072 | 3072 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1141150.00 | 67.75 | 103.37 | 103.37 | 122.26 | 122.26 |
-| 3072 | 4096 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1453046.80 | 70.94 | 108.25 | 108.25 | 119.37 | 119.37 |
-| 4096 | 4096 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1996965.41 | 68.82 | 105.02 | 105.02 | 120.68 | 120.68 |
-| 512 | 512 | 512 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 54650.31 | 4.91 | 3.75 | 3.75 | 24.22 | 24.22 |
-| 512 | 1024 | 1024 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 78711.51 | 13.64 | 10.41 | 10.41 | 13.54 | 13.54 |
-| 512 | 1024 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 92694.76 | 23.17 | 17.68 | 17.68 | 26.07 | 26.07 |
-| 1024 | 1024 | 1024 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 55363.18 | 38.79 | 29.59 | 29.59 | 66.63 | 66.63 |
-| 1024 | 1024 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 74808.60 | 57.41 | 43.80 | 43.80 | 86.65 | 86.65 |
-| 1024 | 2048 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 101757.05 | 84.42 | 64.40 | 64.40 | 99.64 | 99.64 |
-| 2048 | 2048 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 161459.45 | 106.40 | 81.18 | 81.18 | 127.04 | 127.04 |
-| 2048 | 2048 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 241677.76 | 106.63 | 81.35 | 81.35 | 133.83 | 133.83 |
-| 2048 | 3072 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 304355.62 | 127.01 | 96.90 | 96.90 | 138.57 | 138.57 |
-| 3072 | 3072 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 442688.47 | 130.98 | 99.93 | 99.93 | 139.77 | 139.77 |
-| 3072 | 3072 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 581233.50 | 133.01 | 101.48 | 101.48 | 143.41 | 143.41 |
-| 3072 | 4096 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 735058.78 | 140.23 | 106.99 | 106.99 | 124.98 | 124.98 |
-| 4096 | 4096 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 941264.63 | 146.02 | 111.40 | 111.40 | 128.27 | 128.27 |
-| 512 | 512 | 512 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 15096.66 | 17.78 | 13.57 | 13.57 | 22.03 | 22.03 |
-| 512 | 1024 | 1024 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 76015.00 | 14.13 | 10.78 | 10.78 | 13.53 | 13.53 |
-| 512 | 1024 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 87964.53 | 24.41 | 18.63 | 18.63 | 26.10 | 26.10 |
-| 1024 | 1024 | 1024 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 42505.26 | 50.52 | 38.55 | 38.55 | 66.15 | 66.15 |
-| 1024 | 1024 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 69255.83 | 62.02 | 47.31 | 47.31 | 85.42 | 85.42 |
-| 1024 | 2048 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 95026.49 | 90.40 | 68.97 | 68.97 | 98.88 | 98.88 |
-| 2048 | 2048 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 158042.91 | 108.70 | 82.93 | 82.93 | 126.92 | 126.92 |
-| 2048 | 2048 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 235555.17 | 109.40 | 83.47 | 83.47 | 133.55 | 133.55 |
-| 2048 | 3072 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 300457.48 | 128.65 | 98.15 | 98.15 | 138.61 | 138.61 |
-| 3072 | 3072 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 437684.06 | 132.47 | 101.07 | 101.07 | 139.72 | 139.72 |
-| 3072 | 3072 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 578484.54 | 133.64 | 101.96 | 101.96 | 143.40 | 143.40 |
-| 3072 | 4096 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 732436.18 | 140.73 | 107.37 | 107.37 | 125.07 | 125.07 |
-| 4096 | 4096 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 968348.98 | 141.93 | 108.28 | 108.28 | 128.45 | 128.45 |
-| 512 | 512 | 512 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 55770.87 | 4.81 | 1.84 | 1.84 | 14.30 | 14.30 |
-| 512 | 1024 | 1024 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 67188.74 | 15.98 | 6.10 | 6.10 | 7.74 | 7.74 |
-| 512 | 1024 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 74532.03 | 28.81 | 10.99 | 10.99 | 15.45 | 15.45 |
-| 1024 | 1024 | 1024 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 63579.08 | 33.78 | 12.88 | 12.88 | 45.58 | 45.58 |
-| 1024 | 1024 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 56970.12 | 75.39 | 28.76 | 28.76 | 54.62 | 54.62 |
-| 1024 | 2048 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 73502.06 | 116.87 | 44.58 | 44.58 | 61.34 | 61.34 |
-| 2048 | 2048 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 120718.48 | 142.31 | 54.29 | 54.29 | 72.92 | 72.92 |
-| 2048 | 2048 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 185465.81 | 138.95 | 53.00 | 53.00 | 74.90 | 74.90 |
-| 2048 | 3072 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 239021.78 | 161.72 | 61.69 | 61.69 | 77.61 | 77.61 |
-| 3072 | 3072 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 347371.10 | 166.92 | 63.67 | 63.67 | 79.82 | 79.82 |
-| 3072 | 3072 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 442318.92 | 174.78 | 66.67 | 66.67 | 80.19 | 80.19 |
-| 3072 | 4096 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 566976.07 | 181.81 | 69.35 | 69.35 | 81.22 | 81.22 |
-| 4096 | 4096 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 751388.07 | 182.91 | 69.78 | 69.78 | 82.28 | 82.28 |
-| 512 | 512 | 512 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 14667.51 | 18.30 | 6.98 | 6.98 | 13.65 | 13.65 |
-| 512 | 1024 | 1024 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 63383.58 | 16.94 | 6.46 | 6.46 | 7.75 | 7.75 |
-| 512 | 1024 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 69246.29 | 31.01 | 11.83 | 11.83 | 15.46 | 15.46 |
-| 1024 | 1024 | 1024 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 30727.39 | 69.89 | 26.66 | 26.66 | 43.59 | 43.59 |
-| 1024 | 1024 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 46913.62 | 91.55 | 34.92 | 34.92 | 54.00 | 54.00 |
-| 1024 | 2048 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 67462.92 | 127.33 | 48.57 | 48.57 | 61.44 | 61.44 |
-| 2048 | 2048 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 115046.50 | 149.33 | 56.96 | 56.96 | 72.98 | 72.98 |
-| 2048 | 2048 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 174438.95 | 147.73 | 56.35 | 56.35 | 74.93 | 74.93 |
-| 2048 | 3072 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 235798.36 | 163.93 | 62.53 | 62.53 | 77.58 | 77.58 |
-| 3072 | 3072 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 350399.02 | 165.47 | 63.12 | 63.12 | 79.83 | 79.83 |
-| 3072 | 3072 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 439946.65 | 175.72 | 67.03 | 67.03 | 80.16 | 80.16 |
-| 3072 | 4096 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 562393.67 | 183.29 | 69.92 | 69.92 | 81.19 | 81.19 |
-| 4096 | 4096 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 747754.57 | 183.80 | 70.11 | 70.11 | 82.26 | 82.26 |
+| M | K | N | Use Trace | Grid Size | In0 Storage Type | In1 Storage Type | Out Storage Type | Dtype | Math Fidelity | Inference Time Avg [ns] | TFLOPs (avg) | Host Based Utilization[%] | Device Based Utilization[%] |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 512 | 512 | 512 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 49049.85 | 5.47 | 4.18 | 19.04 |
+| 512 | 1024 | 1024 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 117115.97 | 9.17 | 6.99 | 9.01 |
+| 512 | 1024 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 141491.89 | 15.18 | 11.58 | 16.70 |
+| 1024 | 1024 | 1024 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 72388.65 | 29.67 | 22.63 | 41.69 |
+| 1024 | 1024 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 116362.57 | 36.91 | 28.16 | 56.83 |
+| 1024 | 2048 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 163326.26 | 52.59 | 40.13 | 60.52 |
+| 2048 | 2048 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 302200.32 | 56.85 | 43.37 | 66.74 |
+| 2048 | 2048 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 454769.13 | 56.67 | 43.23 | 70.08 |
+| 2048 | 3072 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 581557.75 | 66.47 | 50.71 | 71.31 |
+| 3072 | 3072 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 887527.47 | 65.33 | 49.84 | 58.18 |
+| 3072 | 3072 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1146514.42 | 67.43 | 51.44 | 60.97 |
+| 3072 | 4096 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1465699.67 | 70.33 | 53.66 | 59.36 |
+| 4096 | 4096 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 2016849.52 | 68.15 | 51.99 | 59.49 |
+| 512 | 512 | 512 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 19965.17 | 13.45 | 10.26 | 17.82 |
+| 512 | 1024 | 1024 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 115242.00 | 9.32 | 7.11 | 9.00 |
+| 512 | 1024 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 140731.33 | 15.26 | 11.64 | 16.70 |
+| 1024 | 1024 | 1024 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 68984.03 | 31.13 | 23.75 | 41.64 |
+| 1024 | 1024 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 113062.86 | 37.99 | 28.98 | 56.61 |
+| 1024 | 2048 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 159676.07 | 53.80 | 41.04 | 60.49 |
+| 2048 | 2048 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 298922.06 | 57.47 | 43.85 | 66.74 |
+| 2048 | 2048 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 450646.88 | 57.18 | 43.63 | 70.07 |
+| 2048 | 3072 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 576856.14 | 67.01 | 51.12 | 71.30 |
+| 3072 | 3072 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 886178.02 | 65.43 | 49.92 | 58.19 |
+| 3072 | 3072 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1142554.28 | 67.66 | 51.62 | 60.97 |
+| 3072 | 4096 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1458785.53 | 70.66 | 53.91 | 59.41 |
+| 4096 | 4096 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 2008533.48 | 68.43 | 52.21 | 59.46 |
+| 512 | 512 | 512 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 48458.58 | 5.54 | 2.11 | 13.09 |
+| 512 | 1024 | 1024 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 74362.75 | 14.44 | 5.51 | 7.03 |
+| 512 | 1024 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 87664.13 | 24.50 | 9.34 | 13.13 |
+| 1024 | 1024 | 1024 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 46341.42 | 46.34 | 17.68 | 33.86 |
+| 1024 | 1024 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 69828.03 | 61.51 | 23.46 | 45.22 |
+| 1024 | 2048 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 94122.89 | 91.26 | 34.81 | 53.13 |
+| 2048 | 2048 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 157222.75 | 109.27 | 41.68 | 63.83 |
+| 2048 | 2048 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 236735.34 | 108.85 | 41.52 | 67.23 |
+| 2048 | 3072 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 302987.10 | 127.58 | 48.67 | 69.27 |
+| 3072 | 3072 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 441465.38 | 131.34 | 50.10 | 69.82 |
+| 3072 | 3072 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 579712.39 | 133.36 | 50.87 | 71.69 |
+| 3072 | 4096 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 744667.05 | 138.42 | 52.80 | 62.62 |
+| 4096 | 4096 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 941920.28 | 145.91 | 55.66 | 64.38 |
+| 512 | 512 | 512 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 14207.36 | 18.89 | 7.21 | 11.28 |
+| 512 | 1024 | 1024 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 72386.26 | 14.83 | 5.66 | 7.03 |
+| 512 | 1024 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 86517.33 | 24.82 | 9.47 | 13.13 |
+| 1024 | 1024 | 1024 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 40965.08 | 52.42 | 20.00 | 33.54 |
+| 1024 | 1024 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 66068.17 | 65.01 | 24.80 | 45.07 |
+| 1024 | 2048 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 89848.04 | 95.61 | 36.47 | 52.97 |
+| 2048 | 2048 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 155975.82 | 110.14 | 42.02 | 63.73 |
+| 2048 | 2048 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 235431.19 | 109.46 | 41.75 | 67.18 |
+| 2048 | 3072 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 297122.00 | 130.10 | 49.63 | 69.28 |
+| 3072 | 3072 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 438799.86 | 132.14 | 50.41 | 69.84 |
+| 3072 | 3072 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 577411.65 | 133.89 | 51.07 | 71.69 |
+| 3072 | 4096 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 729207.99 | 141.36 | 53.92 | 62.60 |
+| 4096 | 4096 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 927324.30 | 148.21 | 56.54 | 64.35 |
+| 512 | 512 | 512 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 50134.66 | 5.35 | 2.04 | 14.96 |
+| 512 | 1024 | 1024 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 60689.45 | 17.69 | 6.75 | 8.70 |
+| 512 | 1024 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 69224.83 | 31.02 | 11.83 | 17.29 |
+| 1024 | 1024 | 1024 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 50826.07 | 42.25 | 16.12 | 47.96 |
+| 1024 | 1024 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 51388.74 | 83.58 | 31.88 | 55.95 |
+| 1024 | 2048 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 71642.40 | 119.90 | 45.74 | 65.40 |
+| 2048 | 2048 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 126240.25 | 136.09 | 51.91 | 73.96 |
+| 2048 | 2048 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 193784.24 | 132.98 | 50.73 | 75.38 |
+| 2048 | 3072 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 237233.64 | 162.94 | 62.16 | 77.91 |
+| 3072 | 3072 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 353837.01 | 163.87 | 62.51 | 79.74 |
+| 3072 | 3072 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 438330.17 | 176.37 | 67.28 | 80.72 |
+| 3072 | 4096 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 567185.88 | 181.74 | 69.33 | 81.70 |
+| 4096 | 4096 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 750935.08 | 183.02 | 69.82 | 82.25 |
+| 512 | 512 | 512 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 12259.48 | 21.90 | 8.35 | 14.47 |
+| 512 | 1024 | 1024 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 56591.03 | 18.97 | 7.24 | 8.70 |
+| 512 | 1024 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 61962.60 | 34.66 | 13.22 | 17.28 |
+| 1024 | 1024 | 1024 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 27215.48 | 78.91 | 30.10 | 44.84 |
+| 1024 | 1024 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 44860.84 | 95.74 | 36.52 | 55.64 |
+| 1024 | 2048 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 63495.64 | 135.28 | 51.61 | 65.21 |
+| 2048 | 2048 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 114889.14 | 149.53 | 57.04 | 73.89 |
+| 2048 | 2048 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 173368.45 | 148.64 | 56.70 | 75.34 |
+| 2048 | 3072 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 231659.41 | 166.86 | 63.65 | 77.88 |
+| 3072 | 3072 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 336377.62 | 172.37 | 65.75 | 79.74 |
+| 3072 | 3072 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 439398.29 | 175.94 | 67.12 | 80.73 |
+| 3072 | 4096 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 558745.86 | 184.48 | 70.37 | 81.68 |
+| 4096 | 4096 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 746693.61 | 184.06 | 70.21 | 82.24 |
 
 _All configurations: 78 configurations using default DRAM storage and auto-selected parameters._
 
 </details>
+
 
 <details>
-<summary><strong>P150 Out of Box Results</strong> (click to expand)</summary>
+<summary><strong>P150 Out of Box Results (13×10 grid)</strong> (click to expand)</summary>
 
-| M | K | N | Use Trace | Grid Size | In0 Storage Type | In1 Storage Type | Out Storage Type | Dtype | Math Fidelity | Inference Time Avg [ns] | TFLOPs (avg) | Host Based Utilization[%] (vs user selected grid 13x10) | Host Based Utilization[%] (vs full available grid 13x10) | Device Based Utilization[%] (vs user selected grid 13x10) | Device Based Utilization[%] (vs full available grid 13x10) |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 640 | 832 | 832 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 19991.40 | 44.32 | 24.66 | 24.66 | 35.32 | 35.32 |
-| 640 | 1664 | 1664 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 34759.04 | 101.96 | 56.74 | 56.74 | 76.14 | 76.14 |
-| 640 | 1664 | 3328 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 57649.61 | 122.96 | 68.42 | 68.42 | 95.19 | 95.19 |
-| 1280 | 1664 | 1664 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 50580.50 | 140.14 | 77.98 | 77.98 | 116.32 | 116.32 |
-| 1280 | 1664 | 3328 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 87013.24 | 162.93 | 90.66 | 90.66 | 149.96 | 149.96 |
-| 1280 | 3328 | 3328 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 135293.01 | 209.57 | 116.61 | 116.61 | 161.49 | 161.49 |
-| 2560 | 3328 | 3328 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 263173.58 | 215.47 | 119.90 | 119.90 | 171.35 | 171.35 |
-| 2560 | 3328 | 4992 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 373053.55 | 228.01 | 126.88 | 126.88 | 173.13 | 173.13 |
-| 2560 | 4992 | 4992 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 499389.17 | 255.49 | 142.17 | 142.17 | 174.82 | 174.82 |
-| 3840 | 4992 | 4992 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 805444.72 | 237.62 | 132.22 | 132.22 | 160.32 | 160.32 |
-| 3840 | 4992 | 6656 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1037194.73 | 246.03 | 136.90 | 136.90 | 161.10 | 161.10 |
-| 3840 | 6656 | 6656 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1422083.38 | 239.26 | 133.13 | 133.13 | 159.78 | 159.78 |
-| 5120 | 6656 | 6656 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1813414.10 | 250.17 | 139.20 | 139.20 | 160.30 | 160.30 |
-| 640 | 832 | 832 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 18892.29 | 46.90 | 26.10 | 26.10 | 35.33 | 35.33 |
-| 640 | 1664 | 1664 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 34592.15 | 102.46 | 57.01 | 57.01 | 75.98 | 75.98 |
-| 640 | 1664 | 3328 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 57380.20 | 123.53 | 68.74 | 68.74 | 95.05 | 95.05 |
-| 1280 | 1664 | 1664 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 50432.68 | 140.55 | 78.21 | 78.21 | 116.01 | 116.01 |
-| 1280 | 1664 | 3328 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 87151.53 | 162.67 | 90.52 | 90.52 | 149.96 | 149.96 |
-| 1280 | 3328 | 3328 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 133812.43 | 211.89 | 117.91 | 117.91 | 161.38 | 161.38 |
-| 2560 | 3328 | 3328 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 250968.93 | 225.95 | 125.73 | 125.73 | 171.07 | 171.07 |
-| 2560 | 3328 | 4992 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 366170.41 | 232.30 | 129.26 | 129.26 | 173.02 | 173.02 |
-| 2560 | 4992 | 4992 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 517077.45 | 246.75 | 137.31 | 137.31 | 174.97 | 174.97 |
-| 3840 | 4992 | 4992 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 798819.07 | 239.59 | 133.32 | 133.32 | 160.27 | 160.27 |
-| 3840 | 4992 | 6656 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1019012.93 | 250.42 | 139.35 | 139.35 | 160.98 | 160.98 |
-| 3840 | 6656 | 6656 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1433117.39 | 237.41 | 132.11 | 132.11 | 159.84 | 159.84 |
-| 5120 | 6656 | 6656 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1811723.71 | 250.40 | 139.33 | 139.33 | 160.29 | 160.29 |
-| 640 | 832 | 832 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 15997.89 | 55.39 | 15.41 | 15.41 | 19.97 | 19.97 |
-| 640 | 1664 | 1664 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 26283.26 | 134.85 | 37.52 | 37.52 | 47.66 | 47.66 |
-| 640 | 1664 | 3328 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 40736.20 | 174.01 | 48.41 | 48.41 | 63.69 | 63.69 |
-| 1280 | 1664 | 1664 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 34637.45 | 204.64 | 56.94 | 56.94 | 80.94 | 80.94 |
-| 1280 | 1664 | 3328 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 53198.34 | 266.49 | 74.14 | 74.14 | 114.86 | 114.86 |
-| 1280 | 3328 | 3328 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 79107.28 | 358.42 | 99.72 | 99.72 | 133.36 | 133.36 |
-| 2560 | 3328 | 3328 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 137176.51 | 413.39 | 115.01 | 115.01 | 161.62 | 161.62 |
-| 2560 | 3328 | 4992 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 199761.39 | 425.81 | 118.47 | 118.47 | 165.50 | 165.50 |
-| 2560 | 4992 | 4992 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 274508.00 | 464.80 | 129.32 | 129.32 | 169.59 | 169.59 |
-| 3840 | 4992 | 4992 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 401635.17 | 476.52 | 132.58 | 132.58 | 172.56 | 172.56 |
-| 3840 | 4992 | 6656 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 521671.77 | 489.16 | 136.10 | 136.10 | 173.29 | 173.29 |
-| 3840 | 6656 | 6656 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 695688.72 | 489.07 | 136.07 | 136.07 | 161.34 | 161.34 |
-| 5120 | 6656 | 6656 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 921540.26 | 492.28 | 136.96 | 136.96 | 161.43 | 161.43 |
-| 640 | 832 | 832 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 15497.21 | 57.17 | 15.91 | 15.91 | 19.95 | 19.95 |
-| 640 | 1664 | 1664 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 25835.04 | 137.19 | 38.17 | 38.17 | 47.68 | 47.68 |
-| 640 | 1664 | 3328 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 40481.09 | 175.10 | 48.72 | 48.72 | 63.68 | 63.68 |
-| 1280 | 1664 | 1664 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 34117.70 | 207.76 | 57.80 | 57.80 | 80.92 | 80.92 |
-| 1280 | 1664 | 3328 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 52723.88 | 268.89 | 74.81 | 74.81 | 114.81 | 114.81 |
-| 1280 | 3328 | 3328 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 78487.40 | 361.25 | 100.51 | 100.51 | 133.18 | 133.18 |
-| 2560 | 3328 | 3328 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 133950.71 | 423.34 | 117.78 | 117.78 | 161.51 | 161.51 |
-| 2560 | 3328 | 4992 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 194268.23 | 437.85 | 121.82 | 121.82 | 165.42 | 165.42 |
-| 2560 | 4992 | 4992 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 270254.61 | 472.11 | 131.35 | 131.35 | 169.60 | 169.60 |
-| 3840 | 4992 | 4992 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 396323.20 | 482.90 | 134.35 | 134.35 | 172.57 | 172.57 |
-| 3840 | 4992 | 6656 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 514459.61 | 496.02 | 138.00 | 138.00 | 173.29 | 173.29 |
-| 3840 | 6656 | 6656 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 690090.66 | 493.04 | 137.17 | 137.17 | 161.36 | 161.36 |
-| 5120 | 6656 | 6656 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 931229.59 | 487.16 | 135.54 | 135.54 | 161.48 | 161.48 |
-| 640 | 832 | 832 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 19850.73 | 44.64 | 6.21 | 6.21 | 10.75 | 10.75 |
-| 640 | 1664 | 1664 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 25806.43 | 137.34 | 19.11 | 19.11 | 26.28 | 26.28 |
-| 640 | 1664 | 3328 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 38423.54 | 184.48 | 25.66 | 25.66 | 34.83 | 34.83 |
-| 1280 | 1664 | 1664 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 30725.00 | 230.70 | 32.09 | 32.09 | 49.45 | 49.45 |
-| 1280 | 1664 | 3328 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 46062.47 | 307.77 | 42.81 | 42.81 | 64.79 | 64.79 |
-| 1280 | 3328 | 3328 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 67768.10 | 418.39 | 58.20 | 58.20 | 74.95 | 74.95 |
-| 2560 | 3328 | 3328 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 120871.07 | 469.15 | 65.26 | 65.26 | 81.62 | 81.62 |
-| 2560 | 3328 | 4992 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 173549.65 | 490.12 | 68.18 | 68.18 | 83.43 | 83.43 |
-| 2560 | 4992 | 4992 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 244150.16 | 522.59 | 72.70 | 72.70 | 85.44 | 85.44 |
-| 3840 | 4992 | 4992 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 358042.72 | 534.53 | 74.36 | 74.36 | 87.15 | 87.15 |
-| 3840 | 4992 | 6656 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 476706.03 | 535.30 | 74.47 | 74.47 | 87.63 | 87.63 |
-| 3840 | 6656 | 6656 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 622680.19 | 546.42 | 76.01 | 76.01 | 88.45 | 88.45 |
-| 5120 | 6656 | 6656 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 820362.57 | 552.99 | 76.93 | 76.93 | 89.14 | 89.14 |
-| 640 | 832 | 832 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 13802.05 | 64.20 | 8.93 | 8.93 | 10.59 | 10.59 |
-| 640 | 1664 | 1664 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 21860.60 | 162.13 | 22.55 | 22.55 | 26.26 | 26.26 |
-| 640 | 1664 | 3328 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 33442.97 | 211.95 | 29.49 | 29.49 | 34.80 | 34.80 |
-| 1280 | 1664 | 1664 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 25551.32 | 277.42 | 38.59 | 38.59 | 49.44 | 49.44 |
-| 1280 | 1664 | 3328 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 41031.84 | 345.51 | 48.06 | 48.06 | 64.79 | 64.79 |
-| 1280 | 3328 | 3328 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 63171.39 | 448.83 | 62.44 | 62.44 | 74.94 | 74.94 |
-| 2560 | 3328 | 3328 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 117020.61 | 484.59 | 67.41 | 67.41 | 81.61 | 81.61 |
-| 2560 | 3328 | 4992 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 166406.63 | 511.16 | 71.11 | 71.11 | 83.43 | 83.43 |
-| 2560 | 4992 | 4992 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 238742.83 | 534.43 | 74.34 | 74.34 | 85.45 | 85.45 |
-| 3840 | 4992 | 4992 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 355157.85 | 538.88 | 74.96 | 74.96 | 87.15 | 87.15 |
-| 3840 | 4992 | 6656 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 474371.91 | 537.94 | 74.83 | 74.83 | 87.63 | 87.63 |
-| 3840 | 6656 | 6656 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 618436.34 | 550.16 | 76.53 | 76.53 | 88.46 | 88.46 |
-| 5120 | 6656 | 6656 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 817525.39 | 554.91 | 77.19 | 77.19 | 89.14 | 89.14 |
+| M | K | N | Use Trace | Grid Size | In0 Storage Type | In1 Storage Type | Out Storage Type | Dtype | Math Fidelity | Inference Time Avg [ns] | TFLOPs (avg) | Host Based Utilization[%] | Device Based Utilization[%] |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 640 | 832 | 832 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 21712.78 | 40.81 | 11.35 | 19.30 |
+| 640 | 1664 | 1664 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 32711.03 | 108.35 | 30.15 | 41.21 |
+| 640 | 1664 | 3328 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 55029.39 | 128.81 | 35.84 | 51.05 |
+| 1280 | 1664 | 1664 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 48613.55 | 145.81 | 40.57 | 61.93 |
+| 1280 | 1664 | 3328 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 85642.34 | 165.53 | 46.06 | 76.81 |
+| 1280 | 3328 | 3328 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 128111.84 | 221.32 | 61.58 | 81.07 |
+| 2560 | 3328 | 3328 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 240602.49 | 235.69 | 65.57 | 85.65 |
+| 2560 | 3328 | 4992 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 344324.11 | 247.04 | 68.73 | 86.52 |
+| 2560 | 4992 | 4992 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 465774.54 | 273.93 | 76.21 | 87.42 |
+| 3840 | 4992 | 4992 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 700097.08 | 273.37 | 76.06 | 80.25 |
+| 3840 | 4992 | 6656 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 941648.48 | 270.99 | 75.40 | 80.79 |
+| 3840 | 6656 | 6656 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1211328.51 | 280.88 | 78.15 | 80.00 |
+| 5120 | 6656 | 6656 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1610884.67 | 281.62 | 78.35 | 80.37 |
+| 640 | 832 | 832 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 18069.74 | 49.03 | 13.64 | 18.82 |
+| 640 | 1664 | 1664 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 32436.85 | 109.26 | 30.40 | 41.08 |
+| 640 | 1664 | 3328 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 54368.97 | 130.38 | 36.27 | 51.04 |
+| 1280 | 1664 | 1664 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 48279.76 | 146.82 | 40.85 | 61.85 |
+| 1280 | 1664 | 3328 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 84846.02 | 167.09 | 46.49 | 76.75 |
+| 1280 | 3328 | 3328 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 127110.48 | 223.06 | 62.06 | 81.07 |
+| 2560 | 3328 | 3328 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 239679.81 | 236.59 | 65.83 | 85.66 |
+| 2560 | 3328 | 4992 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 343863.96 | 247.37 | 68.82 | 86.55 |
+| 2560 | 4992 | 4992 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 465235.71 | 274.25 | 76.30 | 87.40 |
+| 3840 | 4992 | 4992 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 699429.51 | 273.63 | 76.13 | 80.25 |
+| 3840 | 4992 | 6656 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 941219.33 | 271.12 | 75.43 | 80.79 |
+| 3840 | 6656 | 6656 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1211090.09 | 280.94 | 78.16 | 79.98 |
+| 5120 | 6656 | 6656 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1609773.64 | 281.81 | 78.41 | 80.37 |
+| 640 | 832 | 832 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 15618.80 | 56.73 | 7.89 | 10.32 |
+| 640 | 1664 | 1664 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 25348.66 | 139.82 | 19.45 | 25.32 |
+| 640 | 1664 | 3328 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 38230.42 | 185.41 | 25.79 | 33.98 |
+| 1280 | 1664 | 1664 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 32222.27 | 219.98 | 30.60 | 43.73 |
+| 1280 | 1664 | 3328 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 51093.10 | 277.47 | 38.60 | 61.60 |
+| 1280 | 3328 | 3328 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 73120.59 | 387.76 | 53.94 | 71.26 |
+| 2560 | 3328 | 3328 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 128996.37 | 439.60 | 61.15 | 81.32 |
+| 2560 | 3328 | 4992 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 185058.12 | 459.64 | 63.94 | 82.92 |
+| 2560 | 4992 | 4992 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 247588.16 | 515.33 | 71.69 | 84.72 |
+| 3840 | 4992 | 4992 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 361664.30 | 529.18 | 73.62 | 86.41 |
+| 3840 | 4992 | 6656 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 483880.04 | 527.37 | 73.36 | 86.70 |
+| 3840 | 6656 | 6656 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 619204.04 | 549.48 | 76.44 | 80.80 |
+| 5120 | 6656 | 6656 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 819244.38 | 553.75 | 77.03 | 80.87 |
+| 640 | 832 | 832 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 15175.34 | 58.39 | 8.12 | 10.30 |
+| 640 | 1664 | 1664 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 24542.81 | 144.41 | 20.09 | 25.19 |
+| 640 | 1664 | 3328 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 38168.43 | 185.71 | 25.83 | 33.89 |
+| 1280 | 1664 | 1664 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 31893.25 | 222.25 | 30.92 | 43.72 |
+| 1280 | 1664 | 3328 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 50685.41 | 279.70 | 38.91 | 61.45 |
+| 1280 | 3328 | 3328 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 72801.11 | 389.47 | 54.18 | 71.22 |
+| 2560 | 3328 | 3328 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 126972.20 | 446.61 | 62.13 | 81.31 |
+| 2560 | 3328 | 4992 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 181505.68 | 468.64 | 65.19 | 82.96 |
+| 2560 | 4992 | 4992 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 243880.75 | 523.17 | 72.78 | 84.73 |
+| 3840 | 4992 | 4992 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 358223.92 | 534.26 | 74.32 | 86.41 |
+| 3840 | 4992 | 6656 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 480144.02 | 531.47 | 73.93 | 86.74 |
+| 3840 | 6656 | 6656 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 614566.80 | 553.63 | 77.02 | 80.84 |
+| 5120 | 6656 | 6656 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 812776.09 | 558.16 | 77.65 | 80.83 |
+| 640 | 832 | 832 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 17251.97 | 51.36 | 7.14 | 10.91 |
+| 640 | 1664 | 1664 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 28364.66 | 124.95 | 17.38 | 28.63 |
+| 640 | 1664 | 3328 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 36702.16 | 193.13 | 26.87 | 38.32 |
+| 1280 | 1664 | 1664 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 31585.69 | 224.42 | 31.22 | 50.93 |
+| 1280 | 1664 | 3328 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 45259.00 | 313.24 | 43.57 | 67.30 |
+| 1280 | 3328 | 3328 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 63893.80 | 443.76 | 61.73 | 76.42 |
+| 2560 | 3328 | 3328 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 117444.99 | 482.84 | 67.17 | 82.31 |
+| 2560 | 3328 | 4992 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 161149.50 | 527.84 | 73.43 | 83.95 |
+| 2560 | 4992 | 4992 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 225834.85 | 564.97 | 78.59 | 85.86 |
+| 3840 | 4992 | 4992 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 331790.45 | 576.83 | 80.24 | 87.42 |
+| 3840 | 4992 | 6656 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 440454.48 | 579.36 | 80.60 | 87.85 |
+| 3840 | 6656 | 6656 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 567355.16 | 599.70 | 83.42 | 88.63 |
+| 5120 | 6656 | 6656 | False | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 749273.30 | 605.46 | 84.23 | 89.27 |
+| 640 | 832 | 832 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 13511.18 | 65.58 | 9.12 | 10.85 |
+| 640 | 1664 | 1664 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 21009.45 | 168.69 | 23.47 | 27.51 |
+| 640 | 1664 | 3328 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 30767.92 | 230.38 | 32.05 | 38.21 |
+| 1280 | 1664 | 1664 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 25050.64 | 282.96 | 39.36 | 50.65 |
+| 1280 | 1664 | 3328 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 39494.04 | 358.96 | 49.94 | 67.13 |
+| 1280 | 3328 | 3328 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 60267.45 | 470.46 | 65.45 | 76.38 |
+| 2560 | 3328 | 3328 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 110042.10 | 515.32 | 71.69 | 82.30 |
+| 2560 | 3328 | 4992 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 156936.65 | 542.01 | 75.40 | 83.96 |
+| 2560 | 4992 | 4992 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 219643.12 | 580.90 | 80.81 | 85.87 |
+| 3840 | 4992 | 4992 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 324723.72 | 589.38 | 81.99 | 87.42 |
+| 3840 | 4992 | 6656 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 435388.09 | 586.10 | 81.53 | 87.85 |
+| 3840 | 6656 | 6656 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 562322.14 | 605.07 | 84.17 | 88.62 |
+| 5120 | 6656 | 6656 | True | (13, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 743987.56 | 609.76 | 84.82 | 89.27 |
 
 _All configurations: 78 configurations using default DRAM storage and auto-selected parameters._
 
 </details>
 
+
+<details>
+<summary><strong>P150 Out of Box Results (11×10 grid)</strong> (click to expand)</summary>
+
+| M | K | N | Use Trace | Grid Size | In0 Storage Type | In1 Storage Type | Out Storage Type | Dtype | Math Fidelity | Inference Time Avg [ns] | TFLOPs (avg) | Host Based Utilization[%] | Device Based Utilization[%] |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 640 | 704 | 704 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 16806.13 | 37.75 | 12.41 | 18.53 |
+| 640 | 1408 | 1408 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 28903.48 | 87.79 | 28.87 | 41.77 |
+| 640 | 1408 | 2816 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 47180.65 | 107.57 | 35.37 | 51.42 |
+| 1280 | 1408 | 1408 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 42226.31 | 120.19 | 39.52 | 61.41 |
+| 1280 | 1408 | 2816 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 73273.18 | 138.53 | 45.55 | 75.98 |
+| 1280 | 2816 | 2816 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 108661.65 | 186.82 | 61.43 | 80.39 |
+| 2560 | 2816 | 2816 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 204129.22 | 198.90 | 65.40 | 85.08 |
+| 2560 | 2816 | 4224 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 292313.10 | 208.34 | 68.50 | 86.13 |
+| 2560 | 4224 | 4224 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 392649.17 | 232.66 | 76.50 | 87.02 |
+| 3840 | 4224 | 4224 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 589127.54 | 232.59 | 76.48 | 80.39 |
+| 3840 | 4224 | 5632 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 793492.79 | 230.25 | 75.71 | 80.62 |
+| 3840 | 5632 | 5632 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1020178.79 | 238.79 | 78.52 | 80.26 |
+| 5120 | 5632 | 5632 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1356883.05 | 239.38 | 78.71 | 80.51 |
+| 640 | 704 | 704 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 15704.63 | 40.39 | 13.28 | 18.49 |
+| 640 | 1408 | 1408 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 27759.08 | 91.41 | 30.06 | 41.64 |
+| 640 | 1408 | 2816 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 46129.23 | 110.02 | 36.18 | 51.34 |
+| 1280 | 1408 | 1408 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 41365.62 | 122.69 | 40.34 | 61.35 |
+| 1280 | 1408 | 2816 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 72484.02 | 140.03 | 46.04 | 75.97 |
+| 1280 | 2816 | 2816 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 108106.14 | 187.78 | 61.74 | 80.38 |
+| 2560 | 2816 | 2816 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 203180.31 | 199.83 | 65.70 | 85.06 |
+| 2560 | 2816 | 4224 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 291085.24 | 209.22 | 68.79 | 86.13 |
+| 2560 | 4224 | 4224 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 392005.44 | 233.04 | 76.62 | 87.03 |
+| 3840 | 4224 | 4224 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 588295.46 | 232.92 | 76.59 | 80.38 |
+| 3840 | 4224 | 5632 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 792543.89 | 230.53 | 75.80 | 80.63 |
+| 3840 | 5632 | 5632 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1019048.69 | 239.05 | 78.60 | 80.27 |
+| 5120 | 5632 | 5632 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1356115.34 | 239.51 | 78.75 | 80.52 |
+| 640 | 704 | 704 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 21262.17 | 29.84 | 4.91 | 10.64 |
+| 640 | 1408 | 1408 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 21822.45 | 116.28 | 19.12 | 24.85 |
+| 640 | 1408 | 2816 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 33488.27 | 151.55 | 24.92 | 32.93 |
+| 1280 | 1408 | 1408 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 28336.05 | 179.10 | 29.45 | 43.39 |
+| 1280 | 1408 | 2816 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 44577.12 | 227.70 | 37.43 | 61.02 |
+| 1280 | 2816 | 2816 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 62484.74 | 324.89 | 53.41 | 72.55 |
+| 2560 | 2816 | 2816 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 109882.35 | 369.49 | 60.75 | 80.56 |
+| 2560 | 2816 | 4224 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 156202.32 | 389.89 | 64.10 | 82.31 |
+| 2560 | 4224 | 4224 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 210812.09 | 433.33 | 71.24 | 84.39 |
+| 3840 | 4224 | 4224 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 305144.79 | 449.06 | 73.83 | 85.81 |
+| 3840 | 4224 | 5632 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 411376.95 | 444.13 | 73.02 | 86.55 |
+| 3840 | 5632 | 5632 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 523614.88 | 465.24 | 76.49 | 80.59 |
+| 5120 | 5632 | 5632 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 692412.85 | 469.09 | 77.12 | 80.74 |
+| 640 | 704 | 704 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 13041.50 | 48.64 | 8.00 | 10.16 |
+| 640 | 1408 | 1408 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 20992.76 | 120.88 | 19.87 | 24.75 |
+| 640 | 1408 | 2816 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 32780.17 | 154.82 | 25.45 | 32.84 |
+| 1280 | 1408 | 1408 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 27318.00 | 185.78 | 30.54 | 43.30 |
+| 1280 | 1408 | 2816 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 43470.86 | 233.49 | 38.39 | 60.90 |
+| 1280 | 2816 | 2816 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 60827.73 | 333.74 | 54.87 | 72.48 |
+| 2560 | 2816 | 2816 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 107693.67 | 377.00 | 61.98 | 80.57 |
+| 2560 | 2816 | 4224 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 153751.37 | 396.10 | 65.12 | 82.30 |
+| 2560 | 4224 | 4224 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 206961.63 | 441.40 | 72.57 | 84.39 |
+| 3840 | 4224 | 4224 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 301239.49 | 454.88 | 74.78 | 85.82 |
+| 3840 | 4224 | 5632 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 406239.03 | 449.74 | 73.94 | 86.54 |
+| 3840 | 5632 | 5632 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 519182.68 | 469.21 | 77.14 | 80.60 |
+| 5120 | 5632 | 5632 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 688164.23 | 471.99 | 77.60 | 80.74 |
+| 640 | 704 | 704 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 25565.62 | 24.81 | 4.08 | 11.46 |
+| 640 | 1408 | 1408 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 25570.39 | 99.24 | 16.32 | 28.21 |
+| 640 | 1408 | 2816 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 31387.81 | 161.69 | 26.58 | 38.03 |
+| 1280 | 1408 | 1408 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 25932.79 | 195.70 | 32.17 | 50.34 |
+| 1280 | 1408 | 2816 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 38523.67 | 263.48 | 43.32 | 65.78 |
+| 1280 | 2816 | 2816 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 55992.60 | 362.56 | 59.61 | 75.16 |
+| 2560 | 2816 | 2816 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 96886.16 | 419.06 | 68.89 | 81.50 |
+| 2560 | 2816 | 4224 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 136110.78 | 447.44 | 73.56 | 83.11 |
+| 2560 | 4224 | 4224 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 190069.68 | 480.62 | 79.02 | 85.13 |
+| 3840 | 4224 | 4224 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 275609.49 | 497.18 | 81.74 | 86.88 |
+| 3840 | 4224 | 5632 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 371630.19 | 491.63 | 80.83 | 87.32 |
+| 3840 | 5632 | 5632 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 479862.69 | 507.66 | 83.46 | 88.12 |
+| 5120 | 5632 | 5632 | False | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 631761.55 | 514.13 | 84.53 | 88.86 |
+| 640 | 704 | 704 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 11668.21 | 54.37 | 8.94 | 10.81 |
+| 640 | 1408 | 1408 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 18179.42 | 139.58 | 22.95 | 26.89 |
+| 640 | 1408 | 2816 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 26290.42 | 193.04 | 31.74 | 37.89 |
+| 1280 | 1408 | 1408 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 21364.69 | 237.55 | 39.05 | 49.94 |
+| 1280 | 1408 | 2816 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 33802.99 | 300.28 | 49.37 | 65.60 |
+| 1280 | 2816 | 2816 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 51698.68 | 392.67 | 64.56 | 75.13 |
+| 2560 | 2816 | 2816 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 93379.02 | 434.80 | 71.48 | 81.50 |
+| 2560 | 2816 | 4224 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 131630.90 | 462.67 | 76.06 | 83.09 |
+| 2560 | 4224 | 4224 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 184483.53 | 495.18 | 81.41 | 85.14 |
+| 3840 | 4224 | 4224 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 270500.18 | 506.57 | 83.28 | 86.88 |
+| 3840 | 4224 | 5632 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 366706.85 | 498.23 | 81.91 | 87.32 |
+| 3840 | 5632 | 5632 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 475039.48 | 512.81 | 84.31 | 88.12 |
+| 5120 | 5632 | 5632 | True | (11, 10) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 627701.28 | 517.45 | 85.07 | 88.86 |
+
+_All configurations: 78 configurations using default DRAM storage and auto-selected parameters._
+
+</details>
 
 ### All Data
 
@@ -334,351 +423,499 @@ _All configurations: 78 configurations using default DRAM storage and auto-selec
 <details>
 <summary><strong>N150 Manually Tuned Configurations</strong> (click to expand)</summary>
 
-| m | k | n | use_trace | grid_size | in0_sharded | out_sharded | in0_storage_type | in1_storage_type | out_storage_type | dtype | math_fidelity | inference_time_avg [ns] | TFLOPs (avg) | Host based utilization[%] (vs user selected grid 8x8) | Host based utilization[%] (vs full available grid 8x8) | Device based utilization[%] (vs user selected grid 8x8) | Device based utilization[%] (vs full available grid 8x8) |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 512 | 512 | 512 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 84612.37 | 3.17 | 2.42 | 2.42 | 21.63 | 21.63 |
-| 512 | 1024 | 1024 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 90272.43 | 11.89 | 9.07 | 9.07 | 31.88 | 31.88 |
-| 512 | 1024 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 90878.01 | 23.63 | 18.03 | 18.03 | 34.25 | 34.25 |
-| 512 | 1024 | 4096 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 154523.85 | 27.79 | 21.21 | 21.21 | 26.89 | 26.89 |
-| 1024 | 1024 | 1024 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 90143.68 | 23.82 | 18.18 | 18.18 | 48.84 | 48.84 |
-| 1024 | 1024 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 90701.58 | 47.35 | 36.13 | 36.13 | 54.48 | 54.48 |
-| 1024 | 2048 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 129213.33 | 66.48 | 50.72 | 50.72 | 57.82 | 57.82 |
-| 2048 | 2048 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 228013.99 | 75.35 | 57.48 | 57.48 | 64.93 | 64.93 |
-| 2048 | 2048 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 337741.37 | 76.30 | 58.21 | 58.21 | 64.49 | 64.49 |
-| 2048 | 3072 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 513935.09 | 75.21 | 57.38 | 57.38 | 65.47 | 65.47 |
-| 3072 | 3072 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 779812.34 | 74.35 | 56.73 | 56.73 | 64.49 | 64.49 |
-| 3072 | 3072 | 4096 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1151490.21 | 67.14 | 51.22 | 51.22 | 74.02 | 74.02 |
-| 3072 | 4096 | 4096 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1387200.36 | 74.31 | 56.69 | 56.69 | 75.10 | 75.10 |
-| 3328 | 2560 | 2560 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 735418.80 | 59.31 | 45.25 | 45.25 | 63.12 | 63.12 |
-| 4096 | 4096 | 4096 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 2017905.71 | 68.11 | 51.96 | 51.96 | 60.37 | 60.37 |
-| 8192 | 8192 | 8192 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 13529188.63 | 81.27 | 62.00 | 62.00 | 66.57 | 66.57 |
-| 16384 | 16384 | 16384 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 102859203.82 | 85.52 | 65.24 | 65.24 | 71.69 | 71.69 |
-| 512 | 512 | 512 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 88653.56 | 3.03 | 4.62 | 4.62 | 42.79 | 42.79 |
-| 512 | 1024 | 1024 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 89185.24 | 12.04 | 18.37 | 18.37 | 62.35 | 62.35 |
-| 512 | 1024 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 91834.07 | 23.38 | 35.68 | 35.68 | 66.08 | 66.08 |
-| 512 | 1024 | 4096 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 154418.95 | 27.81 | 42.44 | 42.44 | 53.00 | 53.00 |
-| 1024 | 1024 | 1024 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 94072.82 | 22.83 | 34.83 | 34.83 | 78.45 | 78.45 |
-| 1024 | 1024 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 97661.02 | 43.98 | 67.11 | 67.11 | 81.16 | 81.16 |
-| 1024 | 2048 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 180404.19 | 47.61 | 72.65 | 72.65 | 85.11 | 85.11 |
-| 2048 | 2048 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 341207.98 | 50.35 | 76.83 | 76.83 | 89.71 | 89.71 |
-| 2048 | 2048 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 509109.50 | 50.62 | 77.24 | 77.24 | 90.24 | 90.24 |
-| 2048 | 3072 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 738723.28 | 52.33 | 79.84 | 79.84 | 92.05 | 92.05 |
-| 3072 | 3072 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1122663.02 | 51.65 | 78.81 | 78.81 | 92.38 | 92.38 |
-| 3072 | 3072 | 4096 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1647167.21 | 46.93 | 71.62 | 71.62 | 91.67 | 91.67 |
-| 3072 | 4096 | 4096 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 2023537.16 | 50.94 | 77.73 | 77.73 | 92.19 | 92.19 |
-| 3328 | 2560 | 2560 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1015563.01 | 42.95 | 65.54 | 65.54 | 89.39 | 89.39 |
-| 4096 | 4096 | 4096 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 2718420.03 | 50.56 | 77.15 | 77.15 | 83.67 | 83.67 |
-| 8192 | 8192 | 8192 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 20818862.92 | 52.81 | 80.59 | 80.59 | 88.69 | 88.69 |
-| 16384 | 16384 | 16384 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 161610980.03 | 54.43 | 83.05 | 83.05 | 91.49 | 91.49 |
-| 512 | 512 | 512 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 121505.26 | 2.21 | 1.69 | 1.69 | 27.04 | 27.04 |
-| 512 | 1024 | 1024 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 122983.46 | 8.73 | 6.66 | 6.66 | 45.56 | 45.56 |
-| 512 | 1024 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 126917.36 | 16.92 | 12.91 | 12.91 | 51.89 | 51.89 |
-| 512 | 1024 | 4096 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 95338.82 | 45.05 | 34.37 | 34.37 | 52.67 | 52.67 |
-| 1024 | 1024 | 1024 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 126130.58 | 17.03 | 12.99 | 12.99 | 68.79 | 68.79 |
-| 1024 | 1024 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 132622.72 | 32.38 | 24.71 | 24.71 | 74.18 | 74.18 |
-| 1024 | 2048 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 145752.43 | 58.94 | 44.96 | 44.96 | 79.90 | 79.90 |
-| 2048 | 2048 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 192165.37 | 89.40 | 68.21 | 68.21 | 84.45 | 84.45 |
-| 2048 | 2048 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 276267.53 | 93.28 | 71.17 | 71.17 | 85.53 | 85.53 |
-| 2048 | 3072 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 397329.33 | 97.29 | 74.22 | 74.22 | 86.94 | 86.94 |
-| 3072 | 3072 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 597875.12 | 96.98 | 73.99 | 73.99 | 88.52 | 88.52 |
-| 3072 | 3072 | 4096 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 782024.86 | 98.86 | 75.42 | 75.42 | 89.13 | 89.13 |
-| 3328 | 2560 | 2560 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 538315.77 | 81.03 | 61.82 | 61.82 | 85.00 | 85.00 |
-| 4096 | 4096 | 4096 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 1464288.23 | 93.86 | 71.61 | 71.61 | 79.23 | 79.23 |
-| 8192 | 8192 | 8192 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 10931243.90 | 100.58 | 76.74 | 76.74 | 83.93 | 83.93 |
-| 16384 | 16384 | 16384 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 85825765.13 | 102.49 | 78.19 | 78.19 | 86.66 | 86.66 |
-| 512 | 512 | 512 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 129752.16 | 2.07 | 0.79 | 0.79 | 13.68 | 13.68 |
-| 512 | 1024 | 1024 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 122604.37 | 8.76 | 3.34 | 3.34 | 23.74 | 23.74 |
-| 512 | 1024 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 128130.91 | 16.76 | 6.39 | 6.39 | 27.88 | 27.88 |
-| 512 | 1024 | 4096 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 91786.38 | 46.79 | 17.85 | 17.85 | 27.21 | 27.21 |
-| 1024 | 1024 | 1024 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 149507.52 | 14.36 | 5.48 | 5.48 | 40.85 | 40.85 |
-| 1024 | 1024 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 139150.62 | 30.87 | 11.77 | 11.77 | 46.88 | 46.88 |
-| 1024 | 2048 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 139658.45 | 61.51 | 23.46 | 23.46 | 52.89 | 52.89 |
-| 2048 | 2048 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 139696.60 | 122.98 | 46.91 | 46.91 | 58.98 | 58.98 |
-| 2048 | 2048 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 205965.04 | 125.12 | 47.73 | 47.73 | 59.14 | 59.14 |
-| 2048 | 3072 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 282628.54 | 136.77 | 52.17 | 52.17 | 61.13 | 61.13 |
-| 3072 | 3072 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 421750.55 | 137.48 | 52.44 | 52.44 | 61.41 | 61.41 |
-| 3072 | 3072 | 4096 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 546963.21 | 141.34 | 53.92 | 53.92 | 63.14 | 63.14 |
-| 3328 | 2560 | 2560 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 396966.93 | 109.89 | 41.92 | 41.92 | 58.47 | 58.47 |
-| 4096 | 4096 | 4096 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 1011109.35 | 135.93 | 51.85 | 51.85 | 58.03 | 58.03 |
-| 8192 | 8192 | 8192 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 7065632.34 | 155.61 | 59.36 | 59.36 | 64.72 | 64.72 |
-| 16384 | 16384 | 16384 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 53833508.49 | 163.39 | 62.33 | 62.33 | 69.40 | 69.40 |
-| 512 | 512 | 512 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 115628.24 | 2.32 | 0.89 | 0.89 | 14.70 | 14.70 |
-| 512 | 1024 | 1024 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 118582.25 | 9.05 | 3.45 | 3.45 | 28.91 | 28.91 |
-| 512 | 1024 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 118482.11 | 18.12 | 6.91 | 6.91 | 34.74 | 34.74 |
-| 512 | 1024 | 4096 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 81930.16 | 52.42 | 20.00 | 20.00 | 33.97 | 33.97 |
-| 1024 | 1024 | 1024 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 118944.64 | 18.05 | 6.89 | 6.89 | 51.52 | 51.52 |
-| 1024 | 1024 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 112707.61 | 38.11 | 14.54 | 14.54 | 59.98 | 59.98 |
-| 1024 | 2048 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 129518.51 | 66.32 | 25.30 | 25.30 | 68.41 | 68.41 |
-| 2048 | 2048 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 113520.62 | 151.34 | 57.73 | 57.73 | 78.89 | 78.89 |
-| 2048 | 2048 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 151865.48 | 169.69 | 64.73 | 64.73 | 79.64 | 79.64 |
-| 2048 | 3072 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 213563.44 | 181.00 | 69.05 | 69.05 | 81.99 | 81.99 |
-| 3072 | 3072 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 310015.68 | 187.03 | 71.35 | 71.35 | 84.38 | 84.38 |
-| 3072 | 3072 | 4096 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 400180.82 | 193.19 | 73.69 | 73.69 | 85.22 | 85.22 |
-| 3072 | 4096 | 4096 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 541427.14 | 190.38 | 72.63 | 72.63 | 86.69 | 86.69 |
-| 3328 | 2560 | 2560 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 277886.39 | 156.97 | 59.88 | 59.88 | 81.68 | 81.68 |
-| 4096 | 4096 | 4096 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 709555.15 | 193.70 | 73.89 | 73.89 | 87.58 | 87.58 |
-| 8192 | 8192 | 8192 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 5611445.90 | 195.94 | 74.75 | 74.75 | 82.54 | 82.54 |
-| 16384 | 16384 | 16384 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 43941333.29 | 200.18 | 76.36 | 76.36 | 84.73 | 84.73 |
-| 512 | 512 | 512 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 14123.92 | 19.01 | 14.50 | 14.50 | 20.63 | 20.63 |
-| 512 | 1024 | 1024 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 29659.27 | 36.20 | 27.62 | 27.62 | 31.38 | 31.38 |
-| 512 | 1024 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 52039.62 | 41.27 | 31.48 | 31.48 | 34.03 | 34.03 |
-| 512 | 1024 | 4096 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 149126.05 | 28.80 | 21.97 | 21.97 | 27.00 | 27.00 |
-| 1024 | 1024 | 1024 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 38208.96 | 56.20 | 42.88 | 42.88 | 47.88 | 47.88 |
-| 1024 | 1024 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 67245.96 | 63.87 | 48.73 | 48.73 | 53.72 | 53.72 |
-| 1024 | 2048 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 124309.06 | 69.10 | 52.72 | 52.72 | 57.77 | 57.77 |
-| 2048 | 2048 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 224151.61 | 76.64 | 58.47 | 58.47 | 64.91 | 64.91 |
-| 2048 | 2048 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 334424.97 | 77.06 | 58.79 | 58.79 | 64.49 | 64.49 |
-| 2048 | 3072 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 504586.70 | 76.61 | 58.45 | 58.45 | 65.43 | 65.43 |
-| 3072 | 3072 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 774586.20 | 74.86 | 57.11 | 57.11 | 64.49 | 64.49 |
-| 3072 | 3072 | 4096 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1150176.53 | 67.22 | 51.28 | 51.28 | 74.02 | 74.02 |
-| 3072 | 4096 | 4096 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1385653.02 | 74.39 | 56.76 | 56.76 | 75.10 | 75.10 |
-| 3328 | 2560 | 2560 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 729329.59 | 59.81 | 45.63 | 45.63 | 63.13 | 63.13 |
-| 4096 | 4096 | 4096 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 2013006.21 | 68.28 | 52.09 | 52.09 | 60.34 | 60.34 |
-| 8192 | 8192 | 8192 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 13530323.51 | 81.26 | 62.00 | 62.00 | 66.59 | 66.59 |
-| 16384 | 16384 | 16384 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 102861723.90 | 85.51 | 65.24 | 65.24 | 71.69 | 71.69 |
-| 512 | 512 | 512 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 12838.84 | 20.91 | 31.90 | 31.90 | 40.90 | 40.90 |
-| 512 | 1024 | 1024 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 30744.08 | 34.93 | 53.29 | 53.29 | 61.18 | 61.18 |
-| 512 | 1024 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 54881.57 | 39.13 | 59.71 | 59.71 | 65.83 | 65.83 |
-| 512 | 1024 | 4096 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 152227.88 | 28.21 | 43.05 | 43.05 | 52.93 | 52.93 |
-| 1024 | 1024 | 1024 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 48365.59 | 44.40 | 67.75 | 67.75 | 77.32 | 77.32 |
-| 1024 | 1024 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 91853.14 | 46.76 | 71.35 | 71.35 | 80.76 | 80.76 |
-| 1024 | 2048 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 174067.02 | 49.35 | 75.30 | 75.30 | 85.13 | 85.13 |
-| 2048 | 2048 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 334734.92 | 51.32 | 78.31 | 78.31 | 89.70 | 89.70 |
-| 2048 | 2048 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 504348.28 | 51.10 | 77.97 | 77.97 | 90.23 | 90.23 |
-| 2048 | 3072 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 732171.54 | 52.79 | 80.56 | 80.56 | 92.05 | 92.05 |
-| 3072 | 3072 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1112482.55 | 52.12 | 79.53 | 79.53 | 92.38 | 92.38 |
-| 3072 | 3072 | 4096 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1642968.65 | 47.05 | 71.80 | 71.80 | 91.66 | 91.66 |
-| 3072 | 4096 | 4096 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 2021422.39 | 50.99 | 77.81 | 77.81 | 92.18 | 92.18 |
-| 3328 | 2560 | 2560 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1008021.83 | 43.27 | 66.03 | 66.03 | 89.39 | 89.39 |
-| 4096 | 4096 | 4096 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 2699337.01 | 50.92 | 77.69 | 77.69 | 83.65 | 83.65 |
-| 8192 | 8192 | 8192 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 20812532.90 | 52.83 | 80.61 | 80.61 | 88.69 | 88.69 |
-| 16384 | 16384 | 16384 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 161631321.91 | 54.42 | 83.04 | 83.04 | 91.49 | 91.49 |
-| 512 | 512 | 512 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 10554.79 | 25.43 | 19.40 | 19.40 | 26.00 | 26.00 |
-| 512 | 1024 | 1024 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 22611.62 | 47.49 | 36.23 | 36.23 | 42.30 | 42.30 |
-| 512 | 1024 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 36528.11 | 58.79 | 44.85 | 44.85 | 49.60 | 49.60 |
-| 512 | 1024 | 4096 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 89709.76 | 47.88 | 36.53 | 36.53 | 52.25 | 52.25 |
-| 1024 | 1024 | 1024 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 28476.72 | 75.41 | 57.53 | 57.53 | 67.64 | 67.64 |
-| 1024 | 1024 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 51629.54 | 83.19 | 63.47 | 63.47 | 71.69 | 71.69 |
-| 1024 | 2048 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 95155.24 | 90.27 | 68.87 | 68.87 | 79.16 | 79.16 |
-| 2048 | 2048 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 175530.91 | 97.87 | 74.67 | 74.67 | 84.43 | 84.43 |
-| 2048 | 2048 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 264625.55 | 97.38 | 74.30 | 74.30 | 85.51 | 85.51 |
-| 2048 | 3072 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 387396.81 | 99.78 | 76.13 | 76.13 | 86.83 | 86.83 |
-| 3072 | 3072 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 582458.97 | 99.55 | 75.95 | 75.95 | 88.51 | 88.51 |
-| 3072 | 3072 | 4096 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 772931.58 | 100.02 | 76.31 | 76.31 | 89.11 | 89.11 |
-| 3328 | 2560 | 2560 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 505228.04 | 86.34 | 65.87 | 65.87 | 84.97 | 84.97 |
-| 4096 | 4096 | 4096 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 1452474.59 | 94.62 | 72.19 | 72.19 | 79.24 | 79.24 |
-| 8192 | 8192 | 8192 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 10917260.65 | 100.71 | 76.84 | 76.84 | 83.93 | 83.93 |
-| 16384 | 16384 | 16384 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 85835871.70 | 102.48 | 78.18 | 78.18 | 86.66 | 86.66 |
-| 512 | 512 | 512 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 10738.37 | 25.00 | 9.54 | 9.54 | 13.02 | 13.02 |
-| 512 | 1024 | 1024 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 22263.53 | 48.23 | 18.40 | 18.40 | 21.95 | 21.95 |
-| 512 | 1024 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 34317.97 | 62.58 | 23.87 | 23.87 | 26.52 | 26.52 |
-| 512 | 1024 | 4096 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 86669.92 | 49.56 | 18.90 | 18.90 | 27.78 | 27.78 |
-| 1024 | 1024 | 1024 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 24468.90 | 87.76 | 33.48 | 33.48 | 39.89 | 39.89 |
-| 1024 | 1024 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 40321.35 | 106.52 | 40.63 | 40.63 | 45.41 | 45.41 |
-| 1024 | 2048 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 69277.29 | 123.99 | 47.30 | 47.30 | 52.43 | 52.43 |
-| 2048 | 2048 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 124495.03 | 138.00 | 52.64 | 52.64 | 59.06 | 59.06 |
-| 2048 | 2048 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 185513.50 | 138.91 | 52.99 | 52.99 | 59.12 | 59.12 |
-| 2048 | 3072 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 269632.34 | 143.36 | 54.69 | 54.69 | 61.11 | 61.11 |
-| 3072 | 3072 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 410118.10 | 141.38 | 53.93 | 53.93 | 61.40 | 61.40 |
-| 3072 | 3072 | 4096 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 533530.71 | 144.90 | 55.28 | 55.28 | 63.14 | 63.14 |
-| 3328 | 2560 | 2560 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 390450.95 | 111.72 | 42.62 | 42.62 | 58.46 | 58.46 |
-| 4096 | 4096 | 4096 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 1000778.68 | 137.33 | 52.39 | 52.39 | 58.01 | 58.01 |
-| 8192 | 8192 | 8192 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 7061519.62 | 155.70 | 59.40 | 59.40 | 64.73 | 64.73 |
-| 16384 | 16384 | 16384 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 53813524.25 | 163.46 | 62.35 | 62.35 | 69.40 | 69.40 |
-| 512 | 512 | 512 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 9961.13 | 26.95 | 10.28 | 10.28 | 13.94 | 13.94 |
-| 512 | 1024 | 1024 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 18336.77 | 58.56 | 22.34 | 22.34 | 26.75 | 26.75 |
-| 512 | 1024 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 28600.69 | 75.09 | 28.64 | 28.64 | 33.03 | 33.03 |
-| 512 | 1024 | 4096 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 63369.27 | 67.78 | 25.85 | 25.85 | 33.58 | 33.58 |
-| 1024 | 1024 | 1024 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 19872.19 | 108.06 | 41.22 | 41.22 | 50.36 | 50.36 |
-| 1024 | 1024 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 31621.46 | 135.82 | 51.81 | 51.81 | 58.72 | 58.72 |
-| 1024 | 2048 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 53360.46 | 160.98 | 61.41 | 61.41 | 67.96 | 67.96 |
-| 2048 | 2048 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 94625.95 | 181.56 | 69.26 | 69.26 | 78.85 | 78.85 |
-| 2048 | 2048 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 139770.51 | 184.37 | 70.33 | 70.33 | 79.67 | 79.67 |
-| 2048 | 3072 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 203270.91 | 190.16 | 72.54 | 72.54 | 81.93 | 81.93 |
-| 3072 | 3072 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 298464.30 | 194.27 | 74.11 | 74.11 | 84.35 | 84.35 |
-| 3072 | 3072 | 4096 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 392966.27 | 196.73 | 75.05 | 75.05 | 85.16 | 85.16 |
-| 3072 | 4096 | 4096 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 526990.89 | 195.60 | 74.62 | 74.62 | 86.69 | 86.69 |
-| 3328 | 2560 | 2560 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 253841.88 | 171.84 | 65.55 | 65.55 | 81.65 | 81.65 |
-| 4096 | 4096 | 4096 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 695135.59 | 197.72 | 75.42 | 75.42 | 87.57 | 87.57 |
-| 8192 | 8192 | 8192 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 5605390.07 | 196.15 | 74.83 | 74.83 | 82.55 | 82.55 |
-| 16384 | 16384 | 16384 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 43960659.50 | 200.09 | 76.33 | 76.33 | 84.73 | 84.73 |
+| m | k | n | use_trace | grid_size | in0_sharded | out_sharded | in0_storage_type | in1_storage_type | out_storage_type | dtype | math_fidelity | inference_time_avg [ns] | TFLOPs (avg) | Host based utilization[%] | Device based utilization[%] |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 512 | 512 | 512 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 189344.88 | 1.42 | 1.08 | 22.62 |
+| 512 | 1024 | 1024 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 99258.42 | 10.82 | 8.25 | 32.77 |
+| 512 | 1024 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 97284.32 | 22.07 | 16.84 | 34.45 |
+| 1024 | 1024 | 1024 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 120749.47 | 17.78 | 13.57 | 49.69 |
+| 1024 | 1024 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 91671.94 | 46.85 | 35.74 | 55.15 |
+| 1024 | 2048 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 128169.06 | 67.02 | 51.13 | 57.70 |
+| 2048 | 2048 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 229480.27 | 74.86 | 57.12 | 64.88 |
+| 2048 | 2048 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 340693.00 | 75.64 | 57.71 | 64.52 |
+| 2048 | 3072 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 502805.71 | 76.88 | 58.65 | 65.50 |
+| 3072 | 3072 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 776360.03 | 74.68 | 56.98 | 64.56 |
+| 3072 | 3072 | 4096 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1150054.93 | 67.22 | 51.29 | 74.19 |
+| 3072 | 4096 | 4096 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1389207.84 | 74.20 | 56.61 | 75.09 |
+| 3328 | 2560 | 2560 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 732071.40 | 59.59 | 45.46 | 63.14 |
+| 4096 | 4096 | 4096 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 2010309.70 | 68.37 | 52.16 | 59.50 |
+| 8192 | 8192 | 8192 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 13574202.06 | 81.00 | 61.80 | 66.47 |
+| 16384 | 16384 | 16384 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 103123269.08 | 85.30 | 65.08 | 71.34 |
+| 512 | 512 | 512 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 93035.70 | 2.89 | 4.40 | 44.07 |
+| 512 | 1024 | 1024 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 93307.50 | 11.51 | 17.56 | 64.02 |
+| 512 | 1024 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 112128.26 | 19.15 | 29.22 | 66.08 |
+| 1024 | 1024 | 1024 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 91037.75 | 23.59 | 35.99 | 79.19 |
+| 1024 | 1024 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 111722.95 | 38.44 | 58.66 | 82.43 |
+| 1024 | 2048 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 174596.31 | 49.20 | 75.07 | 85.07 |
+| 2048 | 2048 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 337867.74 | 50.85 | 77.59 | 89.65 |
+| 2048 | 2048 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 504572.39 | 51.07 | 77.93 | 90.21 |
+| 2048 | 3072 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 738823.41 | 52.32 | 79.83 | 92.04 |
+| 3072 | 3072 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1121571.06 | 51.70 | 78.88 | 92.41 |
+| 3072 | 3072 | 4096 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1642808.91 | 47.06 | 71.81 | 91.69 |
+| 3072 | 4096 | 4096 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 2014720.44 | 51.16 | 78.07 | 92.18 |
+| 3328 | 2560 | 2560 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1007418.63 | 43.30 | 66.07 | 89.41 |
+| 4096 | 4096 | 4096 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 2719264.03 | 50.54 | 77.12 | 83.21 |
+| 8192 | 8192 | 8192 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 20855908.39 | 52.72 | 80.44 | 88.69 |
+| 16384 | 16384 | 16384 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 161968553.07 | 54.31 | 82.87 | 91.45 |
+| 512 | 512 | 512 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 119028.09 | 2.26 | 1.72 | 28.66 |
+| 512 | 1024 | 1024 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 130574.70 | 8.22 | 6.27 | 47.41 |
+| 512 | 1024 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 139992.24 | 15.34 | 11.70 | 54.26 |
+| 1024 | 1024 | 1024 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 156178.47 | 13.75 | 10.49 | 69.68 |
+| 1024 | 1024 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 148391.72 | 28.94 | 22.08 | 74.89 |
+| 1024 | 2048 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 141558.65 | 60.68 | 46.30 | 80.51 |
+| 2048 | 2048 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 199165.34 | 86.26 | 65.81 | 84.56 |
+| 2048 | 2048 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 276868.34 | 93.08 | 71.01 | 85.57 |
+| 2048 | 3072 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 401518.34 | 96.27 | 73.45 | 86.95 |
+| 3072 | 3072 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 599691.87 | 96.69 | 73.77 | 88.56 |
+| 3072 | 3072 | 4096 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 787615.78 | 98.16 | 74.89 | 89.18 |
+| 3328 | 2560 | 2560 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 508947.37 | 85.71 | 65.39 | 85.08 |
+| 4096 | 4096 | 4096 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 1458923.82 | 94.21 | 71.87 | 79.43 |
+| 8192 | 8192 | 8192 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 10970010.76 | 100.23 | 76.47 | 83.94 |
+| 16384 | 16384 | 16384 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 85880508.42 | 102.42 | 78.14 | 86.65 |
+| 512 | 512 | 512 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 135769.84 | 1.98 | 0.75 | 14.51 |
+| 512 | 1024 | 1024 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 168268.68 | 6.38 | 2.43 | 24.59 |
+| 512 | 1024 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 149462.22 | 14.37 | 5.48 | 29.11 |
+| 1024 | 1024 | 1024 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 140597.82 | 15.27 | 5.83 | 41.49 |
+| 1024 | 1024 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 144655.70 | 29.69 | 11.33 | 47.81 |
+| 1024 | 2048 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 143754.48 | 59.75 | 22.79 | 53.93 |
+| 2048 | 2048 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 152657.03 | 112.54 | 42.93 | 59.82 |
+| 2048 | 2048 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 193004.61 | 133.52 | 50.93 | 59.35 |
+| 2048 | 3072 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 275108.81 | 140.51 | 53.60 | 61.20 |
+| 3072 | 3072 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 411884.78 | 140.77 | 53.70 | 61.57 |
+| 3072 | 3072 | 4096 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 539019.11 | 143.43 | 54.71 | 63.26 |
+| 3328 | 2560 | 2560 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 398464.20 | 109.47 | 41.76 | 58.62 |
+| 4096 | 4096 | 4096 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 991036.89 | 138.68 | 52.90 | 58.88 |
+| 8192 | 8192 | 8192 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 7067120.08 | 155.58 | 59.35 | 64.77 |
+| 16384 | 16384 | 16384 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 53927423.95 | 163.11 | 62.22 | 69.49 |
+| 512 | 512 | 512 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 144104.96 | 1.86 | 0.71 | 15.82 |
+| 512 | 1024 | 1024 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 132193.57 | 8.12 | 3.10 | 30.31 |
+| 512 | 1024 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 145878.79 | 14.72 | 5.62 | 36.66 |
+| 1024 | 1024 | 1024 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 139336.59 | 15.41 | 5.88 | 53.00 |
+| 1024 | 1024 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 131082.53 | 32.77 | 12.50 | 61.90 |
+| 1024 | 2048 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 137679.58 | 62.39 | 23.80 | 71.80 |
+| 2048 | 2048 | 2048 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 144732.00 | 118.70 | 45.28 | 79.49 |
+| 2048 | 2048 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 165123.94 | 156.06 | 59.53 | 79.87 |
+| 2048 | 3072 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 210511.68 | 183.62 | 70.05 | 82.24 |
+| 3072 | 3072 | 3072 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 314300.06 | 184.48 | 70.37 | 84.63 |
+| 3072 | 3072 | 4096 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 397737.03 | 194.37 | 74.15 | 85.47 |
+| 3072 | 4096 | 4096 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 535986.42 | 192.32 | 73.36 | 86.70 |
+| 3328 | 2560 | 2560 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 273964.41 | 159.22 | 60.74 | 81.62 |
+| 4096 | 4096 | 4096 | False | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 713081.36 | 192.74 | 73.52 | 87.66 |
+| 8192 | 8192 | 8192 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 5617418.29 | 195.73 | 74.67 | 82.57 |
+| 16384 | 16384 | 16384 | False | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 44032864.57 | 199.76 | 76.20 | 84.75 |
+| 512 | 512 | 512 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 12545.59 | 21.40 | 16.32 | 20.61 |
+| 512 | 1024 | 1024 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 28338.43 | 37.89 | 28.91 | 31.42 |
+| 512 | 1024 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 50821.30 | 42.26 | 32.24 | 34.04 |
+| 1024 | 1024 | 1024 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 37293.43 | 57.58 | 43.93 | 47.79 |
+| 1024 | 1024 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 65734.39 | 65.34 | 49.85 | 53.61 |
+| 1024 | 2048 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 123534.20 | 69.53 | 53.05 | 57.63 |
+| 2048 | 2048 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 224154.00 | 76.64 | 58.47 | 64.87 |
+| 2048 | 2048 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 334920.88 | 76.94 | 58.70 | 64.50 |
+| 2048 | 3072 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 500411.99 | 77.25 | 58.93 | 65.52 |
+| 3072 | 3072 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 773649.22 | 74.95 | 57.18 | 64.56 |
+| 3072 | 3072 | 4096 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1149344.44 | 67.26 | 51.32 | 74.19 |
+| 3072 | 4096 | 4096 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1386282.44 | 74.36 | 56.73 | 75.09 |
+| 3328 | 2560 | 2560 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 727927.68 | 59.92 | 45.72 | 63.13 |
+| 4096 | 4096 | 4096 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 2007951.74 | 68.45 | 52.22 | 59.45 |
+| 8192 | 8192 | 8192 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 13551716.80 | 81.13 | 61.90 | 66.47 |
+| 16384 | 16384 | 16384 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 103051669.60 | 85.36 | 65.12 | 71.34 |
+| 512 | 512 | 512 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 12753.01 | 21.05 | 32.12 | 40.77 |
+| 512 | 1024 | 1024 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 29408.93 | 36.51 | 55.71 | 61.25 |
+| 512 | 1024 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 54254.53 | 39.58 | 60.40 | 65.52 |
+| 1024 | 1024 | 1024 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 46966.08 | 45.72 | 69.77 | 77.17 |
+| 1024 | 1024 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 90940.00 | 47.23 | 72.07 | 80.67 |
+| 1024 | 2048 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 171875.95 | 49.98 | 76.26 | 85.03 |
+| 2048 | 2048 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 332493.78 | 51.67 | 78.84 | 89.59 |
+| 2048 | 2048 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 502057.08 | 51.33 | 78.32 | 90.18 |
+| 2048 | 3072 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 730600.36 | 52.91 | 80.73 | 92.03 |
+| 3072 | 3072 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1117739.68 | 51.87 | 79.15 | 92.40 |
+| 3072 | 3072 | 4096 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1636314.39 | 47.25 | 72.09 | 91.68 |
+| 3072 | 4096 | 4096 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 2020318.51 | 51.02 | 77.85 | 92.18 |
+| 3328 | 2560 | 2560 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1009585.86 | 43.21 | 65.93 | 89.40 |
+| 4096 | 4096 | 4096 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 2711439.13 | 50.69 | 77.34 | 83.19 |
+| 8192 | 8192 | 8192 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 20846247.67 | 52.74 | 80.48 | 88.70 |
+| 16384 | 16384 | 16384 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 162119269.37 | 54.26 | 82.79 | 91.45 |
+| 512 | 512 | 512 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 10795.59 | 24.87 | 18.97 | 26.13 |
+| 512 | 1024 | 1024 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 20890.24 | 51.40 | 39.21 | 43.97 |
+| 512 | 1024 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 34127.24 | 62.93 | 48.01 | 51.64 |
+| 1024 | 1024 | 1024 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 27542.11 | 77.97 | 59.49 | 67.47 |
+| 1024 | 1024 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 49431.32 | 86.89 | 66.29 | 72.10 |
+| 1024 | 2048 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 91581.34 | 93.80 | 71.56 | 78.55 |
+| 2048 | 2048 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 178198.81 | 96.41 | 73.55 | 84.30 |
+| 2048 | 2048 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 262610.91 | 98.13 | 74.87 | 85.53 |
+| 2048 | 3072 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 387239.46 | 99.82 | 76.16 | 86.94 |
+| 3072 | 3072 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 580282.21 | 99.92 | 76.23 | 88.56 |
+| 3072 | 3072 | 4096 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 771944.52 | 100.15 | 76.41 | 89.15 |
+| 3328 | 2560 | 2560 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 509407.52 | 85.63 | 65.33 | 85.09 |
+| 4096 | 4096 | 4096 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 1451368.33 | 94.70 | 72.25 | 79.43 |
+| 8192 | 8192 | 8192 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 10994498.73 | 100.01 | 76.30 | 83.95 |
+| 16384 | 16384 | 16384 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 85866348.74 | 102.44 | 78.16 | 86.65 |
+| 512 | 512 | 512 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 11241.44 | 23.88 | 9.11 | 13.16 |
+| 512 | 1024 | 1024 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 19986.63 | 53.72 | 20.49 | 23.14 |
+| 512 | 1024 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 32010.08 | 67.09 | 25.59 | 27.54 |
+| 1024 | 1024 | 1024 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 23140.91 | 92.80 | 35.40 | 39.72 |
+| 1024 | 1024 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 38383.01 | 111.90 | 42.69 | 45.99 |
+| 1024 | 2048 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 69217.68 | 124.10 | 47.34 | 52.68 |
+| 2048 | 2048 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 124399.66 | 138.10 | 52.68 | 58.89 |
+| 2048 | 2048 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 185031.89 | 139.27 | 53.13 | 59.29 |
+| 2048 | 3072 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 272057.06 | 142.08 | 54.20 | 61.18 |
+| 3072 | 3072 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 409138.20 | 141.72 | 54.06 | 61.56 |
+| 3072 | 3072 | 4096 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 537052.15 | 143.95 | 54.91 | 63.26 |
+| 3328 | 2560 | 2560 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 390379.43 | 111.74 | 42.63 | 58.62 |
+| 4096 | 4096 | 4096 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 977981.09 | 140.53 | 53.61 | 58.85 |
+| 8192 | 8192 | 8192 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 7068297.86 | 155.56 | 59.34 | 64.77 |
+| 16384 | 16384 | 16384 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 53902544.98 | 163.19 | 62.25 | 69.50 |
+| 512 | 512 | 512 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 9992.12 | 26.86 | 10.25 | 14.38 |
+| 512 | 1024 | 1024 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 16939.64 | 63.39 | 24.18 | 27.21 |
+| 512 | 1024 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 25794.51 | 83.25 | 31.76 | 34.89 |
+| 1024 | 1024 | 1024 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 18477.44 | 116.22 | 44.34 | 50.85 |
+| 1024 | 1024 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 29826.16 | 144.00 | 54.93 | 60.69 |
+| 1024 | 2048 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 51717.76 | 166.09 | 63.36 | 70.64 |
+| 2048 | 2048 | 2048 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 93846.32 | 183.06 | 69.83 | 78.81 |
+| 2048 | 2048 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 139184.00 | 185.15 | 70.63 | 79.79 |
+| 2048 | 3072 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 202205.18 | 191.17 | 72.92 | 82.18 |
+| 3072 | 3072 | 3072 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 296132.56 | 195.80 | 74.69 | 84.58 |
+| 3072 | 3072 | 4096 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 392537.12 | 196.95 | 75.13 | 85.49 |
+| 3072 | 4096 | 4096 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 530505.18 | 194.30 | 74.12 | 86.70 |
+| 3328 | 2560 | 2560 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 266108.51 | 163.92 | 62.53 | 81.62 |
+| 4096 | 4096 | 4096 | True | (8, 8) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 698316.10 | 196.81 | 75.08 | 87.66 |
+| 8192 | 8192 | 8192 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 5612254.14 | 195.91 | 74.73 | 82.59 |
+| 16384 | 16384 | 16384 | True | (8, 8) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 44041671.75 | 199.72 | 76.19 | 84.75 |
 
-_All configurations: 176 configurations with manually tuned parameters across different data types, math fidelities, and storage configurations._
+_All configurations: 156 configurations with manually tuned parameters across different data types, math fidelities, and storage configurations._
 
 </details>
 
+
 <details>
-<summary><strong>P150  Manually Tuned Configurations</strong> (click to expand)</summary>
+<summary><strong>P150 Manually Tuned Configurations (13×10 grid)</strong> (click to expand)</summary>
 
-| m | k | n | use_trace | grid_size | in0_sharded | out_sharded | in0_storage_type | in1_storage_type | out_storage_type | dtype | math_fidelity | inference_time_avg [ns] | TFLOPs (avg) | Host based utilization[%] (vs user selected grid 13x10) | Host based utilization[%] (vs full available grid 13x10) | Device based utilization[%] (vs user selected grid 13x10) | Device based utilization[%] (vs full available grid 13x10) |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 640 | 832 | 832 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 36697.39 | 24.14 | 6.72 | 6.72 | 20.28 | 20.28 |
-| 640 | 1664 | 1664 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 35555.36 | 99.68 | 27.73 | 27.73 | 39.26 | 39.26 |
-| 640 | 1664 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 42245.39 | 167.79 | 46.68 | 46.68 | 50.94 | 50.94 |
-| 640 | 1664 | 6656 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 113909.24 | 124.46 | 34.63 | 34.63 | 40.72 | 40.72 |
-| 1280 | 1664 | 1664 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 35939.22 | 197.23 | 54.87 | 54.87 | 71.41 | 71.41 |
-| 1280 | 1664 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 58212.28 | 243.54 | 67.76 | 67.76 | 77.06 | 77.06 |
-| 1280 | 3328 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 111327.17 | 254.69 | 70.86 | 70.86 | 82.09 | 82.09 |
-| 2560 | 3328 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 217838.29 | 260.32 | 72.43 | 72.43 | 86.88 | 86.88 |
-| 2560 | 3328 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 321521.76 | 264.56 | 73.61 | 73.61 | 87.58 | 87.58 |
-| 2560 | 4992 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 485599.04 | 262.75 | 73.10 | 73.10 | 88.60 | 88.60 |
-| 3840 | 4992 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 735976.70 | 260.04 | 72.35 | 72.35 | 88.06 | 88.06 |
-| 3840 | 4992 | 6656 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1026942.73 | 248.49 | 69.13 | 69.13 | 89.58 | 89.58 |
-| 3840 | 6656 | 6656 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1331794.26 | 255.48 | 71.08 | 71.08 | 90.25 | 90.25 |
-| 4160 | 4160 | 4160 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 605995.66 | 237.60 | 66.10 | 66.10 | 88.26 | 88.26 |
-| 5120 | 6656 | 6656 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1810293.20 | 250.60 | 69.72 | 69.72 | 80.15 | 80.15 |
-| 10240 | 13312 | 13312 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 14010906.22 | 259.03 | 72.07 | 72.07 | 84.82 | 84.82 |
-| 20480 | 26624 | 26624 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 110125403.40 | 263.64 | 73.35 | 73.35 | 88.12 | 88.12 |
-| 640 | 832 | 832 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 34289.36 | 25.84 | 14.38 | 14.38 | 40.17 | 40.17 |
-| 640 | 1664 | 1664 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 36208.63 | 97.88 | 54.47 | 54.47 | 74.69 | 74.69 |
-| 640 | 1664 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 54569.24 | 129.90 | 72.28 | 72.28 | 80.55 | 80.55 |
-| 640 | 1664 | 6656 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 135552.88 | 104.58 | 58.20 | 58.20 | 68.59 | 68.59 |
-| 1280 | 1664 | 1664 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 52042.01 | 136.20 | 75.79 | 75.79 | 84.29 | 84.29 |
-| 1280 | 1664 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 101253.99 | 140.01 | 77.91 | 77.91 | 87.37 | 87.37 |
-| 1280 | 3328 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 195150.38 | 145.29 | 80.85 | 80.85 | 90.31 | 90.31 |
-| 2560 | 3328 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 384092.33 | 147.64 | 82.15 | 82.15 | 93.07 | 93.07 |
-| 2560 | 3328 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 573692.32 | 148.27 | 82.50 | 82.50 | 93.42 | 93.42 |
-| 2560 | 4992 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 857324.60 | 148.82 | 82.81 | 82.81 | 93.98 | 93.98 |
-| 3840 | 4992 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1301124.10 | 147.09 | 81.85 | 81.85 | 93.67 | 93.67 |
-| 3840 | 4992 | 6656 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1789925.10 | 142.57 | 79.33 | 79.33 | 94.52 | 94.52 |
-| 3840 | 6656 | 6656 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 2331688.40 | 145.92 | 81.20 | 81.20 | 94.88 | 94.88 |
-| 4160 | 4160 | 4160 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1004629.14 | 143.32 | 79.75 | 79.75 | 93.79 | 93.79 |
-| 5120 | 6656 | 6656 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 3095042.71 | 146.58 | 81.56 | 81.56 | 90.20 | 90.20 |
-| 10240 | 13312 | 13312 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 24004840.85 | 151.19 | 84.13 | 84.13 | 92.62 | 92.62 |
-| 20480 | 26624 | 26624 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 192015709.88 | 151.21 | 84.14 | 84.14 | 94.16 | 94.16 |
-| 640 | 832 | 832 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 49817.56 | 17.79 | 4.95 | 4.95 | 22.84 | 22.84 |
-| 640 | 1664 | 1664 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 50454.14 | 70.25 | 19.54 | 19.54 | 48.05 | 48.05 |
-| 640 | 1664 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 50408.84 | 140.62 | 39.12 | 39.12 | 61.42 | 61.42 |
-| 640 | 1664 | 6656 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 77371.60 | 183.23 | 50.98 | 50.98 | 71.64 | 71.64 |
-| 1280 | 1664 | 1664 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 52106.38 | 136.04 | 37.85 | 37.85 | 74.46 | 74.46 |
-| 1280 | 1664 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 57754.52 | 245.47 | 68.29 | 68.29 | 78.39 | 78.39 |
-| 1280 | 3328 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 107409.95 | 263.97 | 73.44 | 73.44 | 83.90 | 83.90 |
-| 2560 | 3328 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 204694.27 | 277.03 | 77.08 | 77.08 | 87.87 | 87.87 |
-| 2560 | 3328 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 304663.18 | 279.20 | 77.68 | 77.68 | 88.77 | 88.77 |
-| 2560 | 4992 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 449116.23 | 284.09 | 79.04 | 79.04 | 89.81 | 89.81 |
-| 3840 | 4992 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 676503.18 | 282.90 | 78.71 | 78.71 | 90.09 | 90.09 |
-| 3840 | 4992 | 6656 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 895266.53 | 285.03 | 79.30 | 79.30 | 90.64 | 90.64 |
-| 4160 | 4160 | 4160 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 530016.42 | 271.66 | 75.58 | 75.58 | 89.54 | 89.54 |
-| 5120 | 6656 | 6656 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 1620857.72 | 279.89 | 77.87 | 77.87 | 86.08 | 86.08 |
-| 10240 | 13312 | 13312 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 12695147.99 | 285.88 | 79.54 | 79.54 | 88.80 | 88.80 |
-| 20480 | 26624 | 26624 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 100645096.30 | 288.48 | 80.26 | 80.26 | 90.24 | 90.24 |
-| 640 | 832 | 832 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 52630.90 | 16.84 | 2.34 | 2.34 | 11.46 | 11.46 |
-| 640 | 1664 | 1664 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 54087.64 | 65.53 | 9.12 | 9.12 | 24.27 | 24.27 |
-| 640 | 1664 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 52387.71 | 135.31 | 18.82 | 18.82 | 31.61 | 31.61 |
-| 640 | 1664 | 6656 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 74348.45 | 190.68 | 26.53 | 26.53 | 37.56 | 37.56 |
-| 1280 | 1664 | 1664 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 52790.64 | 134.27 | 18.68 | 18.68 | 46.97 | 46.97 |
-| 1280 | 1664 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 52280.43 | 271.17 | 37.72 | 37.72 | 60.39 | 60.39 |
-| 1280 | 3328 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 65488.82 | 432.95 | 60.23 | 60.23 | 72.75 | 72.75 |
-| 2560 | 3328 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 115182.40 | 492.32 | 68.49 | 68.49 | 82.23 | 82.23 |
-| 2560 | 3328 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 167500.97 | 507.82 | 70.64 | 70.64 | 83.65 | 83.65 |
-| 2560 | 4992 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 247991.09 | 514.50 | 71.57 | 71.57 | 85.70 | 85.70 |
-| 3840 | 4992 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 377418.99 | 507.09 | 70.54 | 70.54 | 86.22 | 86.22 |
-| 3840 | 4992 | 6656 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 500438.21 | 509.92 | 70.94 | 70.94 | 87.44 | 87.44 |
-| 4160 | 4160 | 4160 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 332837.10 | 432.59 | 60.18 | 60.18 | 85.23 | 85.23 |
-| 5120 | 6656 | 6656 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 951454.64 | 476.80 | 66.33 | 66.33 | 77.36 | 77.36 |
-| 10240 | 13312 | 13312 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 7375755.31 | 492.05 | 68.45 | 68.45 | 82.43 | 82.43 |
-| 20480 | 26624 | 26624 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 57947320.94 | 501.04 | 69.70 | 69.70 | 85.76 | 85.76 |
-| 640 | 832 | 832 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 52835.94 | 16.77 | 2.33 | 2.33 | 12.35 | 12.35 |
-| 640 | 1664 | 1664 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 51479.34 | 68.85 | 9.58 | 9.58 | 28.77 | 28.77 |
-| 640 | 1664 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 54669.38 | 129.66 | 18.04 | 18.04 | 38.38 | 38.38 |
-| 640 | 1664 | 6656 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 59664.25 | 237.61 | 33.05 | 33.05 | 42.69 | 42.69 |
-| 1280 | 1664 | 1664 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 53291.32 | 133.01 | 18.50 | 18.50 | 55.24 | 55.24 |
-| 1280 | 1664 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 58846.47 | 240.91 | 33.51 | 33.51 | 68.20 | 68.20 |
-| 1280 | 3328 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 61798.10 | 458.81 | 63.83 | 63.83 | 76.22 | 76.22 |
-| 2560 | 3328 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 111608.51 | 508.09 | 70.68 | 70.68 | 82.75 | 82.75 |
-| 2560 | 3328 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 163090.23 | 521.55 | 72.55 | 72.55 | 84.35 | 84.35 |
-| 2560 | 4992 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 237457.75 | 537.32 | 74.75 | 74.75 | 86.02 | 86.02 |
-| 3840 | 4992 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 351142.88 | 545.04 | 75.82 | 75.82 | 87.55 | 87.55 |
-| 3840 | 4992 | 6656 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 461122.99 | 553.39 | 76.98 | 76.98 | 88.53 | 88.53 |
-| 3840 | 6656 | 6656 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 619695.19 | 549.05 | 76.38 | 76.38 | 88.79 | 88.79 |
-| 4160 | 4160 | 4160 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 280294.42 | 513.68 | 71.46 | 71.46 | 86.07 | 86.07 |
-| 5120 | 6656 | 6656 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 821077.82 | 552.51 | 76.86 | 76.86 | 89.46 | 89.46 |
-| 10240 | 13312 | 13312 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 6369481.09 | 569.79 | 79.26 | 79.26 | 89.09 | 89.09 |
-| 20480 | 26624 | 26624 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 50517842.77 | 574.73 | 79.95 | 79.95 | 90.32 | 90.32 |
-| 640 | 832 | 832 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 13802.05 | 64.20 | 17.86 | 17.86 | 19.44 | 19.44 |
-| 640 | 1664 | 1664 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 25210.38 | 140.58 | 39.11 | 39.11 | 41.45 | 41.45 |
-| 640 | 1664 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 41136.74 | 172.31 | 47.94 | 47.94 | 50.81 | 50.81 |
-| 640 | 1664 | 6656 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 112667.08 | 125.83 | 35.01 | 35.01 | 40.70 | 40.70 |
-| 1280 | 1664 | 1664 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 29637.81 | 239.17 | 66.54 | 66.54 | 71.74 | 71.74 |
-| 1280 | 1664 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 57098.87 | 248.28 | 69.08 | 69.08 | 77.05 | 77.05 |
-| 1280 | 3328 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 109405.52 | 259.16 | 72.10 | 72.10 | 82.09 | 82.09 |
-| 2560 | 3328 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 212080.48 | 267.38 | 74.39 | 74.39 | 86.89 | 86.89 |
-| 2560 | 3328 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 320448.88 | 265.44 | 73.85 | 73.85 | 87.58 | 87.58 |
-| 2560 | 4992 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 483181.48 | 264.06 | 73.47 | 73.47 | 88.60 | 88.60 |
-| 3840 | 4992 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 739099.98 | 258.94 | 72.04 | 72.04 | 88.06 | 88.06 |
-| 3840 | 4992 | 6656 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1032824.52 | 247.07 | 68.74 | 68.74 | 89.58 | 89.58 |
-| 3840 | 6656 | 6656 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1330227.85 | 255.78 | 71.16 | 71.16 | 90.25 | 90.25 |
-| 4160 | 4160 | 4160 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 619726.18 | 232.33 | 64.64 | 64.64 | 88.28 | 88.28 |
-| 5120 | 6656 | 6656 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1840307.71 | 246.51 | 68.58 | 68.58 | 80.22 | 80.22 |
-| 10240 | 13312 | 13312 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 14059517.38 | 258.13 | 71.82 | 71.82 | 84.83 | 84.83 |
-| 20480 | 26624 | 26624 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 110259437.56 | 263.32 | 73.26 | 73.26 | 88.12 | 88.12 |
-| 640 | 832 | 832 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 14052.39 | 63.05 | 35.09 | 35.09 | 38.94 | 38.94 |
-| 640 | 1664 | 1664 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 28407.57 | 124.76 | 69.42 | 69.42 | 75.20 | 75.20 |
-| 640 | 1664 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 52430.63 | 135.20 | 75.23 | 75.23 | 80.59 | 80.59 |
-| 640 | 1664 | 6656 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 134701.73 | 105.25 | 58.56 | 58.56 | 68.61 | 68.61 |
-| 1280 | 1664 | 1664 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 50668.72 | 139.90 | 77.84 | 77.84 | 84.37 | 84.37 |
-| 1280 | 1664 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 99153.52 | 142.98 | 79.56 | 79.56 | 87.39 | 87.39 |
-| 1280 | 3328 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 194213.39 | 145.99 | 81.24 | 81.24 | 90.31 | 90.31 |
-| 2560 | 3328 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 382096.77 | 148.41 | 82.58 | 82.58 | 93.07 | 93.07 |
-| 2560 | 3328 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 571453.57 | 148.85 | 82.83 | 82.83 | 93.43 | 93.43 |
-| 2560 | 4992 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 857646.47 | 148.77 | 82.78 | 82.78 | 93.98 | 93.98 |
-| 3840 | 4992 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1304125.79 | 146.75 | 81.66 | 81.66 | 93.67 | 93.67 |
-| 3840 | 4992 | 6656 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1785779.00 | 142.90 | 79.51 | 79.51 | 94.51 | 94.51 |
-| 3840 | 6656 | 6656 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 2330758.57 | 145.98 | 81.23 | 81.23 | 94.88 | 94.88 |
-| 4160 | 4160 | 4160 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1000201.70 | 143.95 | 80.10 | 80.10 | 93.80 | 93.80 |
-| 5120 | 6656 | 6656 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 3093960.29 | 146.63 | 81.59 | 81.59 | 90.19 | 90.19 |
-| 10240 | 13312 | 13312 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 24003100.40 | 151.20 | 84.13 | 84.13 | 92.62 | 92.62 |
-| 20480 | 26624 | 26624 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 192018663.88 | 151.20 | 84.14 | 84.14 | 94.16 | 94.16 |
-| 640 | 832 | 832 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 12733.94 | 69.58 | 19.36 | 19.36 | 21.50 | 21.50 |
-| 640 | 1664 | 1664 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 21758.08 | 162.89 | 45.32 | 45.32 | 48.33 | 48.33 |
-| 640 | 1664 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 33099.65 | 214.15 | 59.58 | 59.58 | 63.84 | 63.84 |
-| 640 | 1664 | 6656 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 73077.68 | 194.00 | 53.97 | 53.97 | 71.87 | 71.87 |
-| 1280 | 1664 | 1664 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 29385.09 | 241.22 | 67.11 | 67.11 | 73.62 | 73.62 |
-| 1280 | 1664 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 53842.07 | 263.30 | 73.26 | 73.26 | 78.26 | 78.26 |
-| 1280 | 3328 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 103471.28 | 274.02 | 76.24 | 76.24 | 83.86 | 83.86 |
-| 2560 | 3328 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 202224.25 | 280.42 | 78.02 | 78.02 | 87.87 | 87.87 |
-| 2560 | 3328 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 297992.23 | 285.45 | 79.42 | 79.42 | 88.66 | 88.66 |
-| 2560 | 4992 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 446817.87 | 285.55 | 79.45 | 79.45 | 89.80 | 89.80 |
-| 3840 | 4992 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 668561.46 | 286.27 | 79.65 | 79.65 | 90.08 | 90.08 |
-| 3840 | 4992 | 6656 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 891573.43 | 286.21 | 79.63 | 79.63 | 90.63 | 90.63 |
-| 4160 | 4160 | 4160 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 521609.78 | 276.04 | 76.80 | 76.80 | 89.53 | 89.53 |
-| 5120 | 6656 | 6656 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 1621217.73 | 279.82 | 77.85 | 77.85 | 86.08 | 86.08 |
-| 10240 | 13312 | 13312 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 12689447.40 | 286.01 | 79.57 | 79.57 | 88.79 | 88.79 |
-| 20480 | 26624 | 26624 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 100723884.11 | 288.25 | 80.20 | 80.20 | 90.25 | 90.25 |
-| 640 | 832 | 832 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 12676.72 | 69.90 | 9.72 | 9.72 | 10.69 | 10.69 |
-| 640 | 1664 | 1664 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 21307.47 | 166.34 | 23.14 | 23.14 | 24.43 | 24.43 |
-| 640 | 1664 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 31361.58 | 226.02 | 31.44 | 31.44 | 32.91 | 32.91 |
-| 640 | 1664 | 6656 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 69360.73 | 204.39 | 28.43 | 28.43 | 37.57 | 37.57 |
-| 1280 | 1664 | 1664 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 22337.44 | 317.33 | 44.14 | 44.14 | 47.55 | 47.55 |
-| 1280 | 1664 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 33791.07 | 419.54 | 58.36 | 58.36 | 62.73 | 62.73 |
-| 1280 | 3328 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 59156.42 | 479.30 | 66.68 | 66.68 | 72.96 | 72.96 |
-| 2560 | 3328 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 111274.72 | 509.61 | 70.89 | 70.89 | 82.23 | 82.23 |
-| 2560 | 3328 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 166401.86 | 511.18 | 71.11 | 71.11 | 83.76 | 83.76 |
-| 2560 | 4992 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 247528.55 | 515.46 | 71.71 | 71.71 | 85.73 | 85.73 |
-| 3840 | 4992 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 373282.43 | 512.71 | 71.32 | 71.32 | 86.21 | 86.21 |
-| 3840 | 4992 | 6656 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 495998.86 | 514.48 | 71.57 | 71.57 | 87.44 | 87.44 |
-| 4160 | 4160 | 4160 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 329563.62 | 436.89 | 60.78 | 60.78 | 85.21 | 85.21 |
-| 5120 | 6656 | 6656 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 944659.71 | 480.23 | 66.81 | 66.81 | 77.32 | 77.32 |
-| 10240 | 13312 | 13312 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 7358946.80 | 493.17 | 68.61 | 68.61 | 82.43 | 82.43 |
-| 20480 | 26624 | 26624 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 57930517.20 | 501.19 | 69.72 | 69.72 | 85.76 | 85.76 |
-| 640 | 832 | 832 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 12028.22 | 73.66 | 10.25 | 10.25 | 11.37 | 11.37 |
-| 640 | 1664 | 1664 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 19409.66 | 182.60 | 25.40 | 25.40 | 27.27 | 27.27 |
-| 640 | 1664 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 28054.71 | 252.66 | 35.15 | 35.15 | 37.52 | 37.52 |
-| 640 | 1664 | 6656 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 54278.37 | 261.19 | 36.33 | 36.33 | 42.70 | 42.70 |
-| 1280 | 1664 | 1664 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 20141.60 | 351.93 | 48.96 | 48.96 | 52.69 | 52.69 |
-| 1280 | 1664 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 31869.41 | 444.84 | 61.88 | 61.88 | 67.75 | 67.75 |
-| 1280 | 3328 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 55818.56 | 507.96 | 70.66 | 70.66 | 76.12 | 76.12 |
-| 2560 | 3328 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 105066.30 | 539.73 | 75.08 | 75.08 | 82.65 | 82.65 |
-| 2560 | 3328 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 156538.49 | 543.38 | 75.59 | 75.59 | 84.36 | 84.36 |
-| 2560 | 4992 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 231699.94 | 550.67 | 76.60 | 76.60 | 86.25 | 86.25 |
-| 3840 | 4992 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 344796.18 | 555.07 | 77.22 | 77.22 | 87.66 | 87.66 |
-| 3840 | 4992 | 6656 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 459423.07 | 555.44 | 77.27 | 77.27 | 88.54 | 88.54 |
-| 3840 | 6656 | 6656 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 614922.05 | 553.31 | 76.97 | 76.97 | 88.79 | 88.79 |
-| 4160 | 4160 | 4160 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 275506.97 | 522.61 | 72.70 | 72.70 | 86.06 | 86.06 |
-| 5120 | 6656 | 6656 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 815215.11 | 556.49 | 77.41 | 77.41 | 89.45 | 89.45 |
-| 10240 | 13312 | 13312 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 6350989.34 | 571.45 | 79.49 | 79.49 | 89.10 | 89.10 |
-| 20480 | 26624 | 26624 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 50457413.20 | 575.42 | 80.05 | 80.05 | 90.32 | 90.32 |
+| m | k | n | use_trace | grid_size | in0_sharded | out_sharded | in0_storage_type | in1_storage_type | out_storage_type | dtype | math_fidelity | inference_time_avg [ns] | TFLOPs (avg) | Host based utilization[%] | Device based utilization[%] |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 640 | 832 | 832 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 75457.10 | 11.74 | 3.27 | 21.94 |
+| 640 | 1664 | 1664 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 70288.18 | 50.42 | 14.03 | 43.39 |
+| 640 | 1664 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 40769.58 | 173.86 | 48.37 | 52.52 |
+| 1280 | 1664 | 1664 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 39958.95 | 177.39 | 49.35 | 74.07 |
+| 1280 | 1664 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 53186.42 | 266.55 | 74.16 | 78.15 |
+| 1280 | 3328 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 98295.21 | 288.45 | 80.25 | 82.48 |
+| 2560 | 3328 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 184173.58 | 307.90 | 85.66 | 87.05 |
+| 2560 | 3328 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 272345.54 | 312.33 | 86.90 | 87.72 |
+| 2560 | 4992 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 402534.01 | 316.97 | 88.19 | 88.82 |
+| 3840 | 4992 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 605387.69 | 316.14 | 87.96 | 88.42 |
+| 3840 | 4992 | 6656 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 953752.99 | 267.56 | 74.44 | 89.61 |
+| 3840 | 6656 | 6656 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1202008.72 | 283.06 | 78.75 | 90.25 |
+| 4160 | 4160 | 4160 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 540964.60 | 266.16 | 74.05 | 88.30 |
+| 5120 | 6656 | 6656 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1610448.36 | 281.70 | 78.37 | 80.36 |
+| 10240 | 13312 | 13312 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 12741436.96 | 284.84 | 79.25 | 85.15 |
+| 20480 | 26624 | 26624 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 121961472.03 | 238.06 | 66.23 | 88.66 |
+| 640 | 832 | 832 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 39501.19 | 22.43 | 12.48 | 43.35 |
+| 640 | 1664 | 1664 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 49021.24 | 72.30 | 40.23 | 78.08 |
+| 640 | 1664 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 72267.06 | 98.09 | 54.58 | 82.44 |
+| 1280 | 1664 | 1664 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 49014.09 | 144.62 | 80.47 | 85.20 |
+| 1280 | 1664 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 92902.18 | 152.60 | 84.91 | 87.96 |
+| 1280 | 3328 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 177481.17 | 159.75 | 88.89 | 90.55 |
+| 2560 | 3328 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 342683.79 | 165.48 | 92.08 | 93.16 |
+| 2560 | 3328 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 509531.50 | 166.94 | 92.89 | 93.50 |
+| 2560 | 4992 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 758373.74 | 168.24 | 93.62 | 94.08 |
+| 3840 | 4992 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1139256.95 | 167.99 | 93.48 | 93.82 |
+| 3840 | 4992 | 6656 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1648690.70 | 154.78 | 86.13 | 94.53 |
+| 3840 | 6656 | 6656 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 2130918.50 | 159.67 | 88.85 | 94.88 |
+| 4160 | 4160 | 4160 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 910582.54 | 158.12 | 87.99 | 93.81 |
+| 5120 | 6656 | 6656 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 2819695.47 | 160.89 | 89.53 | 90.35 |
+| 10240 | 13312 | 13312 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 24094412.33 | 150.63 | 83.82 | 92.99 |
+| 20480 | 26624 | 26624 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 206423821.45 | 140.65 | 78.27 | 94.44 |
+| 640 | 832 | 832 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 52590.37 | 16.85 | 4.69 | 24.34 |
+| 640 | 1664 | 1664 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 66699.98 | 53.14 | 14.78 | 54.65 |
+| 640 | 1664 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 101697.44 | 69.70 | 19.39 | 69.25 |
+| 1280 | 1664 | 1664 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 107707.98 | 65.81 | 18.31 | 76.03 |
+| 1280 | 1664 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 71091.65 | 199.42 | 55.48 | 80.59 |
+| 1280 | 3328 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 107970.24 | 262.60 | 73.06 | 85.25 |
+| 2560 | 3328 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 187711.72 | 302.10 | 84.05 | 88.43 |
+| 2560 | 3328 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 276799.20 | 307.30 | 85.50 | 88.81 |
+| 2560 | 4992 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 405554.77 | 314.61 | 87.53 | 89.94 |
+| 3840 | 4992 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 605087.28 | 316.30 | 88.00 | 90.25 |
+| 3840 | 4992 | 6656 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 792479.52 | 322.00 | 89.59 | 90.75 |
+| 4160 | 4160 | 4160 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 485947.13 | 296.29 | 82.44 | 89.54 |
+| 5120 | 6656 | 6656 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 1483962.54 | 305.71 | 85.05 | 86.31 |
+| 10240 | 13312 | 13312 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 11748938.56 | 308.90 | 85.94 | 89.06 |
+| 20480 | 26624 | 26624 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 107333085.54 | 270.50 | 75.26 | 90.53 |
+| 640 | 832 | 832 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 83723.07 | 10.58 | 1.47 | 12.18 |
+| 640 | 1664 | 1664 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 82621.57 | 42.90 | 5.97 | 27.78 |
+| 640 | 1664 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 94332.70 | 75.14 | 10.45 | 35.94 |
+| 1280 | 1664 | 1664 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 82144.74 | 86.29 | 12.00 | 53.43 |
+| 1280 | 1664 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 71823.60 | 197.38 | 27.46 | 67.18 |
+| 1280 | 3328 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 75774.19 | 374.18 | 52.05 | 77.03 |
+| 2560 | 3328 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 105798.24 | 535.99 | 74.56 | 83.15 |
+| 2560 | 3328 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 153512.95 | 554.09 | 77.08 | 83.77 |
+| 2560 | 4992 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 217642.78 | 586.24 | 81.55 | 85.91 |
+| 3840 | 4992 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 318372.25 | 601.14 | 83.63 | 86.49 |
+| 3840 | 4992 | 6656 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 417094.23 | 611.81 | 85.11 | 87.51 |
+| 4160 | 4160 | 4160 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 287544.73 | 500.73 | 69.66 | 85.08 |
+| 5120 | 6656 | 6656 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 841259.96 | 539.26 | 75.02 | 77.50 |
+| 10240 | 13312 | 13312 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 6194727.42 | 585.86 | 81.50 | 82.53 |
+| 20480 | 26624 | 26624 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 62483606.34 | 464.67 | 64.64 | 86.21 |
+| 640 | 832 | 832 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 85132.12 | 10.41 | 1.45 | 12.77 |
+| 640 | 1664 | 1664 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 102915.76 | 34.44 | 4.79 | 30.15 |
+| 640 | 1664 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 72741.51 | 97.45 | 13.56 | 40.12 |
+| 1280 | 1664 | 1664 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 104589.46 | 67.77 | 9.43 | 57.88 |
+| 1280 | 1664 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 100619.79 | 140.89 | 19.60 | 70.34 |
+| 1280 | 3328 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 73244.57 | 387.11 | 53.85 | 78.51 |
+| 2560 | 3328 | 3328 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 101878.64 | 556.61 | 77.43 | 83.26 |
+| 2560 | 3328 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 147645.47 | 576.11 | 80.14 | 84.32 |
+| 2560 | 4992 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 214996.34 | 593.46 | 82.56 | 86.17 |
+| 3840 | 4992 | 4992 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 311641.69 | 614.12 | 85.43 | 87.72 |
+| 3840 | 4992 | 6656 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 407338.14 | 626.46 | 87.15 | 88.49 |
+| 3840 | 6656 | 6656 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 543413.16 | 626.12 | 87.10 | 88.89 |
+| 4160 | 4160 | 4160 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 259199.14 | 555.49 | 77.28 | 86.27 |
+| 5120 | 6656 | 6656 | False | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 717132.09 | 632.60 | 88.00 | 89.47 |
+| 10240 | 13312 | 13312 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 5689792.63 | 637.85 | 88.73 | 89.29 |
+| 20480 | 26624 | 26624 | False | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 52462182.04 | 553.43 | 76.99 | 90.45 |
+| 640 | 832 | 832 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 13282.30 | 66.71 | 18.56 | 20.59 |
+| 640 | 1664 | 1664 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 23472.31 | 150.99 | 42.01 | 44.56 |
+| 640 | 1664 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 37662.98 | 188.21 | 52.36 | 54.64 |
+| 1280 | 1664 | 1664 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 28655.53 | 247.36 | 68.82 | 73.03 |
+| 1280 | 1664 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 52068.23 | 272.27 | 75.75 | 78.10 |
+| 1280 | 3328 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 97250.94 | 291.55 | 81.12 | 82.50 |
+| 2560 | 3328 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 183117.39 | 309.68 | 86.16 | 87.05 |
+| 2560 | 3328 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 271618.37 | 313.16 | 87.13 | 87.71 |
+| 2560 | 4992 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 401725.77 | 317.61 | 88.37 | 88.81 |
+| 3840 | 4992 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 604395.87 | 316.66 | 88.10 | 88.42 |
+| 3840 | 4992 | 6656 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 952718.26 | 267.85 | 74.52 | 89.60 |
+| 3840 | 6656 | 6656 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1201236.25 | 283.24 | 78.80 | 90.24 |
+| 4160 | 4160 | 4160 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 540421.01 | 266.43 | 74.13 | 88.30 |
+| 5120 | 6656 | 6656 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1609930.99 | 281.79 | 78.40 | 80.37 |
+| 10240 | 13312 | 13312 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 12722597.12 | 285.26 | 79.37 | 85.15 |
+| 20480 | 26624 | 26624 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 121321547.03 | 239.31 | 66.58 | 88.66 |
+| 640 | 832 | 832 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 13475.42 | 65.75 | 36.59 | 41.34 |
+| 640 | 1664 | 1664 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 27432.44 | 129.20 | 71.89 | 76.58 |
+| 640 | 1664 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 49912.93 | 142.01 | 79.02 | 81.82 |
+| 1280 | 1664 | 1664 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 48174.86 | 147.14 | 81.87 | 85.19 |
+| 1280 | 1664 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 91440.68 | 155.04 | 86.27 | 88.02 |
+| 1280 | 3328 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 176091.19 | 161.02 | 89.60 | 90.53 |
+| 2560 | 3328 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 340666.77 | 166.46 | 92.63 | 93.17 |
+| 2560 | 3328 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 508291.72 | 167.35 | 93.12 | 93.49 |
+| 2560 | 4992 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 757009.98 | 168.55 | 93.79 | 94.08 |
+| 3840 | 4992 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1137721.54 | 168.22 | 93.60 | 93.83 |
+| 3840 | 4992 | 6656 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1647534.37 | 154.89 | 86.19 | 94.53 |
+| 3840 | 6656 | 6656 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 2130529.88 | 159.70 | 88.86 | 94.88 |
+| 4160 | 4160 | 4160 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 909597.87 | 158.29 | 88.08 | 93.82 |
+| 5120 | 6656 | 6656 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 2818577.29 | 160.95 | 89.56 | 90.36 |
+| 10240 | 13312 | 13312 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 24077782.63 | 150.73 | 83.87 | 92.98 |
+| 20480 | 26624 | 26624 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 205641906.26 | 141.19 | 78.56 | 94.44 |
+| 640 | 832 | 832 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 12385.85 | 71.54 | 19.90 | 22.39 |
+| 640 | 1664 | 1664 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 20432.47 | 173.46 | 48.26 | 52.10 |
+| 640 | 1664 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 30994.42 | 228.70 | 63.63 | 68.21 |
+| 1280 | 1664 | 1664 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 28252.60 | 250.89 | 69.80 | 74.43 |
+| 1280 | 1664 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 51298.14 | 276.36 | 76.89 | 79.44 |
+| 1280 | 3328 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 94885.83 | 298.82 | 83.14 | 84.74 |
+| 2560 | 3328 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 180659.29 | 313.89 | 87.33 | 88.28 |
+| 2560 | 3328 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 268156.53 | 317.20 | 88.25 | 88.79 |
+| 2560 | 4992 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 397031.31 | 321.36 | 89.41 | 89.93 |
+| 3840 | 4992 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 592327.12 | 323.11 | 89.90 | 90.26 |
+| 3840 | 4992 | 6656 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 784502.03 | 325.28 | 90.50 | 90.75 |
+| 4160 | 4160 | 4160 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 478374.96 | 300.98 | 83.74 | 89.55 |
+| 5120 | 6656 | 6656 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 1475803.85 | 307.40 | 85.52 | 86.31 |
+| 10240 | 13312 | 13312 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 11736917.50 | 309.22 | 86.03 | 89.05 |
+| 20480 | 26624 | 26624 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 107297601.70 | 270.59 | 75.29 | 90.53 |
+| 640 | 832 | 832 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 12285.71 | 72.12 | 10.03 | 11.17 |
+| 640 | 1664 | 1664 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 20086.77 | 176.44 | 24.55 | 26.15 |
+| 640 | 1664 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 29890.54 | 237.14 | 32.99 | 34.69 |
+| 1280 | 1664 | 1664 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 20833.02 | 340.25 | 47.33 | 51.90 |
+| 1280 | 1664 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 31895.64 | 444.47 | 61.83 | 66.05 |
+| 1280 | 3328 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 53722.86 | 527.77 | 73.42 | 76.30 |
+| 2560 | 3328 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 97005.37 | 584.58 | 81.32 | 83.15 |
+| 2560 | 3328 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 142884.25 | 595.31 | 82.81 | 83.75 |
+| 2560 | 4992 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 208795.07 | 611.08 | 85.01 | 85.89 |
+| 3840 | 4992 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 309948.92 | 617.48 | 85.90 | 86.53 |
+| 3840 | 4992 | 6656 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 407702.92 | 625.90 | 87.07 | 87.49 |
+| 4160 | 4160 | 4160 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 282473.56 | 509.72 | 70.91 | 85.10 |
+| 5120 | 6656 | 6656 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 837078.09 | 541.95 | 75.39 | 77.48 |
+| 10240 | 13312 | 13312 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 6188557.15 | 586.44 | 81.58 | 82.53 |
+| 20480 | 26624 | 26624 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 62425124.65 | 465.10 | 64.70 | 86.21 |
+| 640 | 832 | 832 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 11794.57 | 75.12 | 10.45 | 11.70 |
+| 640 | 1664 | 1664 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 18849.37 | 188.03 | 26.16 | 28.30 |
+| 640 | 1664 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 27050.97 | 262.04 | 36.45 | 38.56 |
+| 1280 | 1664 | 1664 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 19550.32 | 362.57 | 50.44 | 54.74 |
+| 1280 | 1664 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 30477.05 | 465.16 | 64.71 | 68.20 |
+| 1280 | 3328 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 52626.13 | 538.77 | 74.95 | 77.67 |
+| 2560 | 3328 | 3328 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 96364.02 | 588.47 | 81.86 | 83.26 |
+| 2560 | 3328 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 141954.42 | 599.21 | 83.36 | 84.39 |
+| 2560 | 4992 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 207443.24 | 615.06 | 85.56 | 86.36 |
+| 3840 | 4992 | 4992 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 305113.79 | 627.26 | 87.26 | 87.83 |
+| 3840 | 4992 | 6656 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 403075.22 | 633.09 | 88.07 | 88.48 |
+| 3840 | 6656 | 6656 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 534386.63 | 636.70 | 88.57 | 88.87 |
+| 4160 | 4160 | 4160 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 247037.41 | 582.84 | 81.08 | 86.27 |
+| 5120 | 6656 | 6656 | True | (13, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 707356.93 | 641.34 | 89.22 | 89.48 |
+| 10240 | 13312 | 13312 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 5686080.46 | 638.27 | 88.79 | 89.29 |
+| 20480 | 26624 | 26624 | True | (13, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 52535061.84 | 552.66 | 76.88 | 90.45 |
 
-_All configurations: 176 configurations with manually tuned parameters across different data types, math fidelities, and storage configurations._
+_All configurations: 156 configurations with manually tuned parameters across different data types, math fidelities, and storage configurations._
+
+</details>
+
+
+<details>
+<summary><strong>P150 Manually Tuned Configurations (11×10 grid)</strong> (click to expand)</summary>
+
+| m | k | n | use_trace | grid_size | in0_sharded | out_sharded | in0_storage_type | in1_storage_type | out_storage_type | dtype | math_fidelity | inference_time_avg [ns] | TFLOPs (avg) | Host based utilization[%] | Device based utilization[%] |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 640 | 704 | 704 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 35109.52 | 18.07 | 5.94 | 21.87 |
+| 640 | 1408 | 1408 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 68364.14 | 37.12 | 12.20 | 43.97 |
+| 640 | 1408 | 2816 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 64859.39 | 78.25 | 25.73 | 51.63 |
+| 1280 | 1408 | 1408 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 58944.23 | 86.10 | 28.31 | 73.85 |
+| 1280 | 1408 | 2816 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 62234.40 | 163.10 | 53.63 | 78.45 |
+| 1280 | 2816 | 2816 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 84640.98 | 239.84 | 78.86 | 82.03 |
+| 2560 | 2816 | 2816 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 157265.66 | 258.17 | 84.89 | 86.70 |
+| 2560 | 2816 | 4224 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 232145.79 | 262.34 | 86.26 | 87.31 |
+| 2560 | 4224 | 4224 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 342166.42 | 266.98 | 87.79 | 88.60 |
+| 3840 | 4224 | 4224 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 514278.41 | 266.45 | 87.61 | 88.25 |
+| 3840 | 4224 | 5632 | False | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 805778.50 | 226.74 | 74.55 | 89.47 |
+| 3840 | 5632 | 5632 | False | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1015043.26 | 239.99 | 78.91 | 90.05 |
+| 4160 | 3520 | 3520 | False | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 455980.30 | 226.08 | 74.34 | 87.62 |
+| 5120 | 5632 | 5632 | False | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1357176.30 | 239.33 | 78.69 | 80.51 |
+| 10240 | 11264 | 11264 | False | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 10273447.04 | 252.93 | 83.17 | 85.14 |
+| 20480 | 22528 | 22528 | False | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 93141615.39 | 223.18 | 73.38 | 88.62 |
+| 640 | 704 | 704 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 66604.61 | 9.52 | 6.26 | 43.09 |
+| 640 | 1408 | 1408 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 61309.34 | 41.39 | 27.22 | 78.10 |
+| 640 | 1408 | 2816 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 62649.25 | 81.01 | 53.27 | 82.40 |
+| 1280 | 1408 | 1408 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 67882.54 | 74.76 | 49.17 | 85.80 |
+| 1280 | 1408 | 2816 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 79541.21 | 127.61 | 83.92 | 87.65 |
+| 1280 | 2816 | 2816 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 150749.68 | 134.66 | 88.56 | 90.26 |
+| 2560 | 2816 | 2816 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 290851.59 | 139.59 | 91.80 | 92.96 |
+| 2560 | 2816 | 4224 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 433068.28 | 140.63 | 92.48 | 93.27 |
+| 2560 | 4224 | 4224 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 643124.58 | 142.04 | 93.41 | 93.97 |
+| 3840 | 4224 | 4224 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 965204.24 | 141.97 | 93.36 | 93.74 |
+| 3840 | 4224 | 5632 | False | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1392495.63 | 131.21 | 86.28 | 94.46 |
+| 3840 | 5632 | 5632 | False | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1802048.68 | 135.18 | 88.90 | 94.78 |
+| 4160 | 3520 | 3520 | False | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 763409.14 | 135.04 | 88.80 | 93.43 |
+| 5120 | 5632 | 5632 | False | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 2382147.31 | 136.35 | 89.67 | 90.37 |
+| 10240 | 11264 | 11264 | False | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 19197545.05 | 135.35 | 89.01 | 92.94 |
+| 20480 | 22528 | 22528 | False | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 162659149.17 | 127.80 | 84.04 | 94.40 |
+| 640 | 704 | 704 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 68793.30 | 9.22 | 3.03 | 24.02 |
+| 640 | 1408 | 1408 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 86469.65 | 29.35 | 9.65 | 53.97 |
+| 640 | 1408 | 2816 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 88133.81 | 57.58 | 18.93 | 68.51 |
+| 1280 | 1408 | 1408 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 85117.82 | 59.62 | 19.61 | 75.28 |
+| 1280 | 1408 | 2816 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 85933.21 | 118.12 | 38.84 | 79.93 |
+| 1280 | 2816 | 2816 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 88441.37 | 229.54 | 75.47 | 84.19 |
+| 2560 | 2816 | 2816 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 158545.97 | 256.08 | 84.20 | 87.84 |
+| 2560 | 2816 | 4224 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 231699.94 | 262.85 | 86.43 | 88.27 |
+| 2560 | 4224 | 4224 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 343472.96 | 265.97 | 87.45 | 89.63 |
+| 3840 | 4224 | 4224 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 509290.70 | 269.06 | 88.47 | 89.95 |
+| 3840 | 4224 | 5632 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 671293.74 | 272.17 | 89.49 | 90.50 |
+| 4160 | 3520 | 3520 | False | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 405945.78 | 253.95 | 83.50 | 89.06 |
+| 5120 | 5632 | 5632 | False | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 1254584.79 | 258.90 | 85.13 | 86.21 |
+| 10240 | 11264 | 11264 | False | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 9690070.15 | 268.16 | 88.17 | 89.02 |
+| 20480 | 22528 | 22528 | False | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 84297084.81 | 246.60 | 81.08 | 90.51 |
+| 640 | 704 | 704 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 90179.44 | 7.03 | 1.16 | 12.03 |
+| 640 | 1408 | 1408 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 88517.67 | 28.67 | 4.71 | 27.49 |
+| 640 | 1408 | 2816 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 87776.18 | 57.82 | 9.51 | 35.68 |
+| 1280 | 1408 | 1408 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 90589.52 | 56.02 | 9.21 | 52.49 |
+| 1280 | 1408 | 2816 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 89445.11 | 113.48 | 18.66 | 66.17 |
+| 1280 | 2816 | 2816 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 90591.91 | 224.09 | 36.84 | 75.98 |
+| 2560 | 2816 | 2816 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 89898.11 | 451.63 | 74.25 | 82.34 |
+| 2560 | 2816 | 4224 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 128326.42 | 474.58 | 78.02 | 82.82 |
+| 2560 | 4224 | 4224 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 184021.00 | 496.42 | 81.61 | 85.22 |
+| 3840 | 4224 | 4224 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 268819.33 | 509.74 | 83.80 | 85.92 |
+| 3840 | 4224 | 5632 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 352022.65 | 519.01 | 85.33 | 87.05 |
+| 4160 | 3520 | 3520 | False | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 242948.53 | 424.32 | 69.76 | 84.22 |
+| 5120 | 5632 | 5632 | False | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 713405.61 | 455.29 | 74.85 | 77.41 |
+| 10240 | 11264 | 11264 | False | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 5212321.28 | 498.52 | 81.96 | 82.50 |
+| 20480 | 22528 | 22528 | False | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 47755134.11 | 435.30 | 71.56 | 86.17 |
+| 640 | 704 | 704 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 89387.89 | 7.10 | 1.17 | 12.60 |
+| 640 | 1408 | 1408 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 87842.94 | 28.89 | 4.75 | 29.87 |
+| 640 | 1408 | 2816 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 89638.23 | 56.62 | 9.31 | 40.29 |
+| 1280 | 1408 | 1408 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 90234.28 | 56.24 | 9.25 | 56.84 |
+| 1280 | 1408 | 2816 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 89008.81 | 114.04 | 18.75 | 69.35 |
+| 1280 | 2816 | 2816 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 90518.00 | 224.27 | 36.87 | 77.49 |
+| 2560 | 2816 | 2816 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 90601.44 | 448.13 | 73.67 | 82.63 |
+| 2560 | 2816 | 4224 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 126116.28 | 482.90 | 79.39 | 83.42 |
+| 2560 | 4224 | 4224 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 182321.07 | 501.05 | 82.37 | 85.71 |
+| 3840 | 4224 | 4224 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 265495.78 | 516.12 | 84.85 | 87.28 |
+| 3840 | 4224 | 5632 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 348038.67 | 524.95 | 86.30 | 87.92 |
+| 3840 | 5632 | 5632 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 459039.21 | 530.68 | 87.25 | 88.55 |
+| 4160 | 3520 | 3520 | False | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 212848.19 | 484.33 | 79.63 | 85.51 |
+| 5120 | 5632 | 5632 | False | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 606119.63 | 535.88 | 88.10 | 89.15 |
+| 10240 | 11264 | 11264 | False | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 4800310.13 | 541.31 | 88.99 | 89.36 |
+| 20480 | 22528 | 22528 | False | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 41390137.67 | 502.24 | 82.57 | 90.51 |
+| 640 | 704 | 704 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 11646.75 | 54.47 | 17.91 | 20.25 |
+| 640 | 1408 | 1408 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 20339.49 | 124.76 | 41.02 | 43.93 |
+| 640 | 1408 | 2816 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 31647.68 | 160.36 | 52.73 | 55.22 |
+| 1280 | 1408 | 1408 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 24659.63 | 205.81 | 67.67 | 72.29 |
+| 1280 | 1408 | 2816 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 44541.36 | 227.88 | 74.93 | 77.39 |
+| 1280 | 2816 | 2816 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 82864.76 | 244.98 | 80.55 | 82.01 |
+| 2560 | 2816 | 2816 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 155706.41 | 260.75 | 85.74 | 86.69 |
+| 2560 | 2816 | 4224 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 231106.28 | 263.52 | 86.65 | 87.30 |
+| 2560 | 4224 | 4224 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 340878.96 | 267.99 | 88.12 | 88.61 |
+| 3840 | 4224 | 4224 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi2 | 512647.63 | 267.29 | 87.89 | 88.24 |
+| 3840 | 4224 | 5632 | True | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 804674.63 | 227.05 | 74.66 | 89.47 |
+| 3840 | 5632 | 5632 | True | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1014523.51 | 240.12 | 78.95 | 90.05 |
+| 4160 | 3520 | 3520 | True | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 455625.06 | 226.26 | 74.40 | 87.60 |
+| 5120 | 5632 | 5632 | True | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1356294.16 | 239.48 | 78.74 | 80.52 |
+| 10240 | 11264 | 11264 | True | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 10270605.09 | 253.00 | 83.19 | 85.14 |
+| 20480 | 22528 | 22528 | True | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 92995870.11 | 223.53 | 73.50 | 88.62 |
+| 640 | 704 | 704 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 11873.25 | 53.43 | 35.14 | 40.32 |
+| 640 | 1408 | 1408 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 23658.28 | 107.26 | 70.54 | 75.82 |
+| 640 | 1408 | 2816 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 42738.91 | 118.75 | 78.09 | 81.28 |
+| 1280 | 1408 | 1408 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 41279.79 | 122.94 | 80.85 | 84.70 |
+| 1280 | 1408 | 2816 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 77943.80 | 130.22 | 85.64 | 87.58 |
+| 1280 | 2816 | 2816 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 149731.64 | 135.58 | 89.16 | 90.26 |
+| 2560 | 2816 | 2816 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 289113.52 | 140.43 | 92.35 | 92.96 |
+| 2560 | 2816 | 4224 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 431346.89 | 141.19 | 92.85 | 93.27 |
+| 2560 | 4224 | 4224 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 641434.19 | 142.42 | 93.66 | 93.97 |
+| 3840 | 4224 | 4224 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT16 | MathFidelity.HiFi4 | 963757.04 | 142.18 | 93.50 | 93.74 |
+| 3840 | 4224 | 5632 | True | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1391105.65 | 131.34 | 86.37 | 94.46 |
+| 3840 | 5632 | 5632 | True | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 1801297.66 | 135.24 | 88.94 | 94.78 |
+| 4160 | 3520 | 3520 | True | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 762751.10 | 135.15 | 88.88 | 93.44 |
+| 5120 | 5632 | 5632 | True | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 2381470.20 | 136.39 | 89.69 | 90.38 |
+| 10240 | 11264 | 11264 | True | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 19214992.52 | 135.23 | 88.93 | 92.94 |
+| 20480 | 22528 | 22528 | True | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi4 | 162690668.11 | 127.77 | 84.03 | 94.40 |
+| 640 | 704 | 704 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 10993.48 | 57.71 | 18.97 | 21.95 |
+| 640 | 1408 | 1408 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 18048.29 | 140.60 | 46.23 | 50.31 |
+| 640 | 1408 | 2816 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 26941.30 | 188.38 | 61.94 | 65.91 |
+| 1280 | 1408 | 1408 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 24721.62 | 205.29 | 67.50 | 73.35 |
+| 1280 | 1408 | 2816 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 44274.33 | 229.26 | 75.38 | 78.47 |
+| 1280 | 2816 | 2816 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 81319.81 | 249.64 | 82.08 | 84.03 |
+| 2560 | 2816 | 2816 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 153982.64 | 263.67 | 86.70 | 87.97 |
+| 2560 | 2816 | 4224 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 228586.20 | 266.43 | 87.60 | 88.26 |
+| 2560 | 4224 | 4224 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 337531.57 | 270.65 | 88.99 | 89.61 |
+| 3840 | 4224 | 4224 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 502891.54 | 272.48 | 89.59 | 89.94 |
+| 3840 | 4224 | 5632 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 666003.23 | 274.33 | 90.20 | 90.50 |
+| 4160 | 3520 | 3520 | True | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 401184.56 | 256.96 | 84.49 | 89.07 |
+| 5120 | 5632 | 5632 | True | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 1249651.91 | 259.92 | 85.46 | 86.20 |
+| 10240 | 11264 | 11264 | True | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 9682013.99 | 268.38 | 88.25 | 89.01 |
+| 20480 | 22528 | 22528 | True | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.HiFi2 | 84302687.64 | 246.58 | 81.08 | 90.51 |
+| 640 | 704 | 704 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 10864.73 | 58.39 | 9.60 | 10.88 |
+| 640 | 1408 | 1408 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 17616.75 | 144.04 | 23.68 | 25.67 |
+| 640 | 1408 | 2816 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 25961.40 | 195.49 | 32.14 | 34.12 |
+| 1280 | 1408 | 1408 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 18160.34 | 279.46 | 45.94 | 50.04 |
+| 1280 | 1408 | 2816 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 27532.58 | 368.66 | 60.61 | 64.09 |
+| 1280 | 2816 | 2816 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 46184.06 | 439.55 | 72.26 | 75.24 |
+| 2560 | 2816 | 2816 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 82945.82 | 489.49 | 80.47 | 81.81 |
+| 2560 | 2816 | 4224 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 122339.73 | 497.80 | 81.84 | 82.76 |
+| 2560 | 4224 | 4224 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 178172.59 | 512.72 | 84.29 | 85.21 |
+| 3840 | 4224 | 4224 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 263671.88 | 519.69 | 85.44 | 85.93 |
+| 3840 | 4224 | 5632 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT8_B | MathFidelity.LoFi | 346705.91 | 526.97 | 86.64 | 87.04 |
+| 4160 | 3520 | 3520 | True | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 238494.87 | 432.24 | 71.06 | 84.25 |
+| 5120 | 5632 | 5632 | True | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 708231.93 | 458.62 | 75.40 | 77.40 |
+| 10240 | 11264 | 11264 | True | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 5207881.93 | 498.95 | 82.03 | 82.51 |
+| 20480 | 22528 | 22528 | True | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 47675237.66 | 436.03 | 71.68 | 86.16 |
+| 640 | 704 | 704 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 10592.94 | 59.89 | 9.85 | 11.38 |
+| 640 | 1408 | 1408 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 16324.52 | 155.44 | 25.56 | 27.72 |
+| 640 | 1408 | 2816 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 23107.53 | 219.63 | 36.11 | 38.48 |
+| 1280 | 1408 | 1408 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 17061.23 | 297.46 | 48.90 | 53.86 |
+| 1280 | 1408 | 2816 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 26447.77 | 383.78 | 63.10 | 67.35 |
+| 1280 | 2816 | 2816 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 45492.65 | 446.24 | 73.36 | 76.06 |
+| 2560 | 2816 | 2816 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 82609.65 | 491.48 | 80.80 | 82.48 |
+| 2560 | 2816 | 4224 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 121622.09 | 500.74 | 82.32 | 83.37 |
+| 2560 | 4224 | 4224 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 177185.54 | 515.57 | 84.76 | 85.72 |
+| 3840 | 4224 | 4224 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 260114.67 | 526.80 | 86.61 | 87.29 |
+| 3840 | 4224 | 5632 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 343265.53 | 532.25 | 87.50 | 87.95 |
+| 3840 | 5632 | 5632 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 454320.91 | 536.20 | 88.15 | 88.55 |
+| 4160 | 3520 | 3520 | True | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 208148.96 | 495.26 | 81.42 | 85.51 |
+| 5120 | 5632 | 5632 | True | (11, 10) | True | True | L1 | DRAM | L1 | DataType.BFLOAT4_B | MathFidelity.LoFi | 600728.99 | 540.69 | 88.89 | 89.15 |
+| 10240 | 11264 | 11264 | True | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 4794666.77 | 541.95 | 89.10 | 89.38 |
+| 20480 | 22528 | 22528 | True | (11, 10) | False | False | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 41407389.64 | 502.03 | 82.54 | 90.51 |
+
+_All configurations: 156 configurations with manually tuned parameters across different data types, math fidelities, and storage configurations._
 
 </details>
