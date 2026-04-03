@@ -117,14 +117,14 @@ if is_blackhole():
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         # FSDP is needed for 2x2 with encoder now on device
-        [(2, 2), (2, 2), 0, 1, 2, False, {**DEVICE_PARAMS, **line_params}, ttnn.Topology.Linear, True],
-        [(2, 4), (2, 4), 0, 1, 1, True, {**DEVICE_PARAMS, **line_params}, ttnn.Topology.Linear, True],
+        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
+        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
         # BH on 2x4 with dynamic_load to avoid init-time DRAM OOM
-        [(2, 4), (2, 4), 1, 0, 2, True, {**DEVICE_PARAMS, **line_params}, ttnn.Topology.Linear, False],
+        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
         # WH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, False, {**DEVICE_PARAMS, **ring_params}, ttnn.Topology.Ring, True],
+        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, {**DEVICE_PARAMS, **ring_params}, ttnn.Topology.Ring, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
         [(4, 32), (4, 32), 1, 0, 2, False, {**DEVICE_PARAMS, **ring_params}, ttnn.Topology.Ring, False],
     ],
     ids=[
