@@ -25,10 +25,12 @@ Skills are flat under `skills/<name>/` — layers are metadata, not directories.
 | Content type | Where it goes | Rule |
 |---|---|---|
 | Procedural instructions | Skill (SKILL.md / sub-files) | Steps, decision trees, patterns |
-| Hardware invariants | `tt-agent/knowledge/hardware/` | Silicon facts only. Survives software releases. |
-| Canonical example pointers | `tt-agent/knowledge/references/` | Path + one-line description. No inlined content. |
+| Hardware invariants | `knowledge/hardware/` | Silicon facts only. Survives software releases. |
+| Canonical example pointers | `knowledge/references/` | Path + one-line description. No inlined content. |
+| Per-repo execution patterns | `knowledge/recipes/<repo>/` | Build, test, env, server lifecycle. Plain markdown, ≤60 lines. |
+| Domain expertise | `knowledge/<domain>/` | Profiling patterns, debug guides. Plain markdown, ≤80 lines. |
 | Volatile info (APIs, patterns) | Nowhere — use `tt-learn` | Agent reads fresh from source on demand |
-| Work products (findings, logs) | `~/.tt-agent/notes` | Dated, includes tt-metal commit hash |
+| Work products (findings, logs) | `~/.tt-agent/notes` | Dated, includes repo name and commit hash |
 
 **The cardinal rule: never inline volatile content.** Point to source files. Describe
 patterns and intent, not API signatures.
@@ -56,6 +58,23 @@ Must define explicit convergence criteria:
 - **Escalate:** [what to report when stuck]
 ```
 
+Must declare phases with a phase table. Each phase specifies what knowledge to load
+and what it produces:
+
+```markdown
+| Phase | Loads | Produces |
+|---|---|---|
+| Prepare | `skills/run/workspace-detect.md` | Workspace context |
+| Build | `knowledge/recipes/<repo>/build.md` (via tt-run) | Built artifacts |
+| ...   | ... | ... |
+```
+
+Rules for phase tables:
+- Every file referenced in Loads must exist on disk (enforced by tests)
+- Repo-specific recipes use `<repo>` placeholder — resolved at runtime after workspace detection
+- After each phase, summarize in 3-5 lines and move on. Loaded knowledge is consumed, not carried forward.
+- Persistent findings go to `~/.tt-agent/notes/`
+
 ---
 
 ## Quality Bar
@@ -78,13 +97,17 @@ Any skill involving code generation must verify:
 | Experiment log | `experiments-<task>.md` |
 | Plan | `plan-<task>.md` |
 | Profile | `profile-<workload>.md` |
+| Debug findings | `findings-debug-<target>.md` |
+| Perf findings | `findings-perf-<target>.md` |
 
 ---
 
 ## Self-Check
 
 Before finalizing any skill:
-- [ ] Correct layer directory
+- [ ] Correct layer in `metadata.layer`
 - [ ] No inlined API signatures — all volatile content points to source
 - [ ] Workflow skills define convergence criteria
+- [ ] Workflow skills have a phase table with Loads and Produces columns
+- [ ] All files referenced in Loads columns exist on disk
 - [ ] `pytest tt-agent/tests/test_skill_frontmatter.py` passes

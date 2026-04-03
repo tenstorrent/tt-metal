@@ -17,12 +17,15 @@ See `tt-agent/skills/` for available skills. Each skill declares its layer via
 
 - `tt-agent/knowledge/hardware/` — stable silicon facts
 - `tt-agent/knowledge/references/` — curated pointers to canonical examples
+- `tt-agent/knowledge/recipes/` — per-repo execution patterns (build, test, env)
+- `tt-agent/knowledge/profiling/` — profiling patterns and methodologies
+- `tt-agent/knowledge/debugging/` — crash patterns and debug guides
 - For volatile info (APIs, patterns): use `tt-learn`, never hardcode
 
 ## Notes
 
 Shared blackboard at `~/.tt-agent/notes`.
-Always include: date, tt-metal commit hash, sources read.
+Always include: date, repo name, commit hash, sources read.
 
 ## Quality Bar
 
