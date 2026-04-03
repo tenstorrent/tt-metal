@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -23,6 +23,7 @@ from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBl
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
+from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.prepare_weights import (
     create_gate_indices_tensor,
     get_layer_raw_tensors,
@@ -38,7 +39,6 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     SharedExpert,
     extract_routed_expert_output,
 )
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
 from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
 
@@ -584,6 +584,8 @@ def create_decoder_block_tensors(
         num_cores=NUM_SDPA_WORKERS,
     )
     sdpa_fwd_total_elements = sdpa_fwd_buffer_bytes // 2
+    # THIS BUFFER SIZE IS NOT CORRECT BECAUSE WE'RE INCORRECTLY DIVIDING BY 2
+    # TODO: Plan to remove this scratch buffer entirely once we reduce cb memory usage currently being overlapped with this buffer.
     sdpa_fwd_per_forwarder = sdpa_fwd_total_elements // 2
     sdpa_forwarder_mem = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -1393,6 +1395,7 @@ def test_decoder(
         127,
         pytest.param(511, marks=pytest.mark.skip_post_commit),
         pytest.param(1023, marks=pytest.mark.skip_post_commit),
+        pytest.param(11664, marks=pytest.mark.skip_post_commit),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
     ],
 )
 @pytest.mark.parametrize(

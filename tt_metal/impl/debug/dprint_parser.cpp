@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -238,6 +238,18 @@ void DPrintParser::PrintTensixRegisterData(int setwidth, uint32_t datum, uint16_
             break;
         case static_cast<std::uint8_t>(tt::DataFormat::Int32):
             intermediate_stream_ << setw(setwidth) << static_cast<int32_t>(datum) << " ";
+            break;
+        case static_cast<std::uint8_t>(tt::DataFormat::Int8):
+            intermediate_stream_ << setw(setwidth) << static_cast<int>(static_cast<int8_t>(datum & 0xff)) << " ";
+            intermediate_stream_ << setw(setwidth) << static_cast<int>(static_cast<int8_t>((datum >> 8) & 0xff)) << " ";
+            intermediate_stream_ << setw(setwidth) << static_cast<int>(static_cast<int8_t>((datum >> 16) & 0xff)) << " ";
+            intermediate_stream_ << setw(setwidth) << static_cast<int>(static_cast<int8_t>((datum >> 24) & 0xff)) << " ";
+            break;
+        case static_cast<std::uint8_t>(tt::DataFormat::UInt8):
+            intermediate_stream_ << setw(setwidth) << static_cast<unsigned int>(datum & 0xff) << " ";
+            intermediate_stream_ << setw(setwidth) << static_cast<unsigned int>((datum >> 8) & 0xff) << " ";
+            intermediate_stream_ << setw(setwidth) << static_cast<unsigned int>((datum >> 16) & 0xff) << " ";
+            intermediate_stream_ << setw(setwidth) << static_cast<unsigned int>((datum >> 24) & 0xff) << " ";
             break;
         default: intermediate_stream_ << "Unknown data format " << data_format << " "; break;
     }

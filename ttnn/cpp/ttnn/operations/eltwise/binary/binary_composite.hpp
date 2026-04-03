@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,6 @@
 #include <tt_stl/span.hpp>
 
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/eltwise/binary/device/binary_composite_op.hpp"
 #include "ttnn/operations/eltwise/binary/device/binary_device_operation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"

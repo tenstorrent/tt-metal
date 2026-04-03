@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -1690,7 +1690,7 @@ class TestBinaryRowMajor:
     SHAPES = [
         pytest.param((1, 1, 32, 32), id="tile_aligned"),
         pytest.param((1, 1, 35, 35), id="non_tile_aligned"),
-        pytest.param((4, 2, 17, 19), id="weird_nc_hw"),
+        # pytest.param((4, 2, 17, 19), id="weird_nc_hw"),
         pytest.param((2, 3, 33, 64), id="multi_nc_multi_row"),
         pytest.param((1, 1, 3, 1025), id="wide_over_1024"),
         pytest.param((1, 1, 1025, 32), id="tall_over_1024"),

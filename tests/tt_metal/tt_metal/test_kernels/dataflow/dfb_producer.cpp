@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -33,17 +33,18 @@ void kernel_main() {
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
     uint32_t producer_idx = static_cast<uint32_t>(__builtin_popcount(producer_mask & ((1u << hartid) - 1u)));
 
-    // DPRINT << "producer_idx: " << producer_idx << " num_entries_per_producer: " << num_entries_per_producer <<
-    // ENDL();
+    // DPRINT << "producer_idx: " << producer_idx << " num_entries_per_producer: " << num_entries_per_producer << ENDL();
 
     uint32_t entry_size = dfb.get_entry_size();
     const auto tensor_accessor = TensorAccessor(src_args, src_addr_base, entry_size);
+
+    DPRINT << "HERE" << ENDL();
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
         const uint32_t page_id = blocked_consumer
                                      ? chunk_offset + producer_idx * num_entries_per_producer + tile_id
                                      : chunk_offset + tile_id * num_producers + producer_idx;
-        // DPRINT << "producer tile id " << tile_id << " page id " << page_id << ENDL();
+        DPRINT << "producer tile id " << tile_id << " page id " << page_id << ENDL();
         if constexpr (implicit_sync) {
             dfb.read_in(noc, tensor_accessor, {.page_id = page_id});
         } else {

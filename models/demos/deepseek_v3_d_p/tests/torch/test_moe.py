@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -26,37 +26,26 @@ from loguru import logger
 
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
-from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe import (
-    create_shared_expert_weights,
-    create_torch_expert_weights,
-)
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
+    create_gate_weights,
+    create_shared_expert_weights,
+    create_torch_expert_weights,
     get_gate_outputs,
     initialize_test_inputs,
 )
 
 
 @pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_group_size, capacity_factor, model_id, layer_idx",
+    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_group_size, capacity_factor, use_gate, model_id, layer_idx",
     [
-        # Random weights (fast, for flow testing with proper dimensions)
-        pytest.param(32, 64, 128, 24, 4, 4, 2, None, None, id="random-weights"),
-        # Real HF weights (slow, downloads ~18GB) - DeepSeek V3 layer 3
-        pytest.param(
-            32,
-            DeepSeekV3Config.EMB_SIZE,
-            DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,
-            DeepSeekV3Config.NUM_ROUTED_EXPERTS,
-            DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN,
-            4,
-            4,
-            "deepseek-ai/DeepSeek-V3",
-            3,
-            id="hf-weights",
-            marks=pytest.mark.slow,
+        # fmt: off
+        pytest.param(32, 64, 128, 24, 4, 4, 2, False, None, None, id="random-weights"),
+        pytest.param(32, 224, 64, 256, 8, 4, 4, True, None, None, id="random-weights-gate"),
+        pytest.param(32,DeepSeekV3Config.EMB_SIZE,DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,DeepSeekV3Config.NUM_ROUTED_EXPERTS,DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN,4,4,False,"deepseek-ai/DeepSeek-V3",3,id="hf-weights",marks=pytest.mark.slow,
         ),
+        # fmt: on
     ],
 )
 def test_moe(
@@ -67,19 +56,22 @@ def test_moe(
     num_experts_per_tok,
     dispatch_group_size,
     capacity_factor,
+    use_gate,
     model_id,
     layer_idx,
 ):
     """
-    Test TorchMoe module with return_intermediates flag.
+    Test TorchMoe module with and without integrated gate.
 
-    Validates that the module produces correct output and intermediates.
+    Without gate: pre-computed weights/indices are passed to forward.
+    With gate: gate_weights are passed to TorchMoe, forward only takes x.
     Can run with random weights (fast) or real HF weights (slow).
     """
     use_hf_weights = model_id is not None
 
     logger.debug(f"\n{'='*60}")
-    logger.debug(f"TorchMoe Test {'(HF Weights)' if use_hf_weights else '(Random Weights)'}")
+    label = "HF Weights" if use_hf_weights else ("Gate" if use_gate else "Random Weights")
+    logger.debug(f"TorchMoe Test ({label})")
     if use_hf_weights:
         logger.debug(f"Model: {model_id}, Layer: {layer_idx}")
     logger.debug(f"{'='*60}\n")
@@ -94,17 +86,6 @@ def test_moe(
         capacity_factor=capacity_factor,
     )
 
-    # Initialize test inputs
-    x, weights, indices = initialize_test_inputs(
-        dispatch_group_size=dispatch_group_size,
-        seq_len_per_chip=seq_len_per_chip,
-        emb_dim=emb_dim,
-        num_routed_experts=num_routed_experts,
-        num_experts_per_tok=num_experts_per_tok,
-        max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
-        seed=42,
-    )
-
     # Create expert dispatch table
     expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
@@ -112,26 +93,46 @@ def test_moe(
         num_dispatch_groups=1,
     )
 
-    # Compute gate outputs
-    expert_offsets, expert_token_counts, cum_sum = get_gate_outputs(
-        indices,
-        dispatch_group_size,
-        num_routed_experts,
-        experts_per_chip,
-        seq_len_per_chip,
-        num_experts_per_tok,
-    )
-
-    # Create weights for random-weights mode
+    # Create weights
     if use_hf_weights:
         routed_expert_weights = None
         shared_expert_weights = None
+        gate_weights_dict = None
     else:
         logger.debug("Creating random weights for experts...")
         routed_expert_weights = create_torch_expert_weights(num_routed_experts, emb_dim, hidden_dim, seed=42)
         shared_expert_weights = create_shared_expert_weights(emb_dim, hidden_dim, seed=123)
+        if use_gate:
+            torch.manual_seed(42)
+            gate_weights_dict = create_gate_weights(num_routed_experts, emb_dim, dtype=torch.float32)
+        else:
+            gate_weights_dict = None
 
-    # Create MinimalMoE module
+    # Prepare gate inputs (pre-computed weights/indices) when not using gate
+    if not use_gate:
+        x, weights, indices = initialize_test_inputs(
+            dispatch_group_size=dispatch_group_size,
+            seq_len_per_chip=seq_len_per_chip,
+            emb_dim=emb_dim,
+            num_routed_experts=num_routed_experts,
+            num_experts_per_tok=num_experts_per_tok,
+            max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+            seed=42,
+        )
+        expert_offsets, expert_token_counts, _ = get_gate_outputs(
+            indices,
+            dispatch_group_size,
+            num_routed_experts,
+            experts_per_chip,
+            seq_len_per_chip,
+            num_experts_per_tok,
+            expert_dispatch_table=expert_dispatch_table,
+        )
+    else:
+        torch.manual_seed(42)
+        x = torch.randn(dispatch_group_size, seq_len_per_chip, emb_dim, dtype=torch.float32)
+
+    # Create TorchMoe module
     logger.debug(f"Creating MoE{' with HF weights from ' + model_id if use_hf_weights else ' with random weights'}...")
     moe = TorchMoe(
         dispatch_group_size=dispatch_group_size,
@@ -148,17 +149,17 @@ def test_moe(
         layer_idx=layer_idx,
         routed_expert_weights=routed_expert_weights,
         shared_expert_weights=shared_expert_weights,
+        gate_weights=gate_weights_dict,
     )
 
     if use_hf_weights:
-        # Log weight shapes from first routed expert
         logger.debug("Weight shapes (first routed expert):")
         logger.debug(f"  gate_proj: {moe.routed_experts[0].gate_proj.shape}")
         logger.debug(f"  up_proj: {moe.routed_experts[0].up_proj.shape}")
         logger.debug(f"  down_proj: {moe.routed_experts[0].down_proj.shape}")
 
-    # Test without intermediates (only for random weights mode - faster)
-    if not use_hf_weights:
+    # Test without intermediates (only for random weights without gate - faster)
+    if not use_hf_weights and not use_gate:
         logger.debug("Testing forward pass without intermediates...")
         final_output, intermediates = moe(
             x, weights, indices, expert_offsets, expert_token_counts, return_intermediates=False
@@ -170,9 +171,12 @@ def test_moe(
 
     # Test with intermediates
     logger.debug("\nTesting forward pass with intermediates...")
-    final_output_2, intermediates = moe(
-        x, weights, indices, expert_offsets, expert_token_counts, return_intermediates=True
-    )
+    if use_gate:
+        final_output_2, intermediates = moe(x, return_intermediates=True)
+    else:
+        final_output_2, intermediates = moe(
+            x, weights, indices, expert_offsets, expert_token_counts, return_intermediates=True
+        )
     assert intermediates is not None, "Expected intermediates when return_intermediates=True"
 
     # Verify intermediates shapes
@@ -184,7 +188,6 @@ def test_moe(
     logger.debug(f"  combined_output: {intermediates.combined_output.shape}")
     logger.debug(f"  routed_output: {intermediates.routed_output.shape}")
 
-    # Verify shapes
     assert intermediates.dispatched_buffer.shape == (
         1,
         dispatch_group_size,
@@ -201,11 +204,20 @@ def test_moe(
     )
     assert intermediates.routed_output.shape == (dispatch_group_size, seq_len_per_chip, emb_dim)
 
-    # Verify both runs produce same output (only for random weights mode)
-    if not use_hf_weights:
+    # Gate-specific checks
+    if use_gate:
+        assert intermediates.gate_scores is not None, "Expected gate_scores in intermediates"
+        assert intermediates.gate_indices is not None, "Expected gate_indices in intermediates"
+        logger.debug(f"Gate scores shape: {intermediates.gate_scores.shape}")
+        logger.debug(f"Gate indices shape: {intermediates.gate_indices.shape}")
+
+    # Verify both runs produce same output (only for random weights without gate)
+    if not use_hf_weights and not use_gate:
         assert torch.allclose(
             final_output, final_output_2
         ), "Outputs should be identical regardless of return_intermediates"
+
+    assert final_output_2.shape == x.shape, f"Expected output shape {x.shape}, got {final_output_2.shape}"
 
     # Verify no NaN/Inf
     assert not torch.isnan(final_output_2).any(), "Final output contains NaN values"
@@ -218,5 +230,5 @@ def test_moe(
     )
 
     logger.debug("\n" + "=" * 60)
-    logger.debug("TorchMoe Test PASSED!")
+    logger.debug(f"TorchMoe Test ({label}) PASSED!")
     logger.debug("=" * 60)
