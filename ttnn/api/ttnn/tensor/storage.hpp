@@ -201,6 +201,8 @@ struct DeviceStorage {
     // Update tensor topology
     void update_tensor_topology(const TensorTopology& tensor_topology);
 
+    const TensorSpec& get_tensor_spec() const;
+
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Serialization
 
@@ -208,13 +210,37 @@ struct DeviceStorage {
     auto attribute_values() const { return std::forward_as_tuple(); }
 
 private:
+    struct LocallyAllocatedState {
+        // Engaged and actively sharing an allocated MeshTensor.
+        LocallyAllocatedState() = default;
+        explicit LocallyAllocatedState(MeshTensor mesh_tensor) :
+            mesh_tensor_(std::make_shared<MeshTensor>(std::move(mesh_tensor))) {}
+        std::shared_ptr<MeshTensor> mesh_tensor_;
+
+        const TensorSpec& get_tensor_spec() const { return mesh_tensor_->tensor_spec(); }
+        const TensorTopology& get_tensor_topology() const { return mesh_tensor_->tensor_topology(); }
+    };
+    struct DeallocatedState {
+        // Tombstone of a deallocated MeshTensor.
+        // Transitionally preserve the tensor spec for backwards compatibility.
+        explicit DeallocatedState(const MeshTensor& mesh_tensor) :
+            tensor_spec_(mesh_tensor.tensor_spec()), tensor_topology_(mesh_tensor.tensor_topology()) {}
+        TensorSpec tensor_spec_;
+        TensorTopology tensor_topology_;
+
+        const TensorSpec& get_tensor_spec() const { return tensor_spec_; }
+        const TensorTopology& get_tensor_topology() const { return tensor_topology_; }
+    };
+
+    using States = std::variant<LocallyAllocatedState, DeallocatedState>;
+
     // Main internal constructor, performs all validation
     DeviceStorage(
-        std::shared_ptr<MeshTensor> mesh_tensor,
-        std::vector<distributed::MeshCoordinate> coords,
-        std::shared_ptr<MeshTensor> root_mesh_tensor);
+        States state, std::vector<distributed::MeshCoordinate> coords, std::shared_ptr<MeshTensor> root_mesh_tensor);
 
-    std::shared_ptr<MeshTensor> mesh_tensor_;
+    const std::shared_ptr<MeshTensor>& get_mesh_tensor_bypass_deallocate_check() const;
+
+    States state_;
     std::vector<distributed::MeshCoordinate> coords_;
 
     // Experimental features for viewing an existing DeviceStorage
