@@ -1,5 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
 # SPDX-License-Identifier: Apache-2.0
+
 # Modified from the 3Detr implementation in facebookresearch
 # https://github.com/facebookresearch/3detr
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
@@ -103,6 +105,7 @@ class PositionEmbeddingCoordsSine(nn.Module):
         orig_xyz = xyz
         xyz = orig_xyz.clone()
 
+        ncoords = xyz.shape[1]
         if self.normalize:
             xyz = shift_scale_points(xyz, src_range=input_range)
 
