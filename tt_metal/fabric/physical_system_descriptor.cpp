@@ -323,6 +323,10 @@ bool PhysicalSystemDescriptor::is_cross_host_eth_link(AsicID asic_id, uint8_t ch
                        return eth_conn.src_chan == chan_id;
                    }) != connection.second.end();
         });
+        if (connection_it == connections.end()) {
+            return true;
+        }
+
         TT_FATAL(
             connection_it != connections.end(),
             "Channel {} not found in asic connectivity graph for asic {}",

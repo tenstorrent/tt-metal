@@ -238,6 +238,24 @@ void export_channel_trimming_capture(tt::tt_metal::MetalEnvImpl& env) {
         emitter << YAML::Key << fmt::format("chip_{}", chip_id) << YAML::Value << YAML::BeginMap;
 
         for (const auto& [logical_core, channel_id] : mapped_cores) {
+            // for now skip the cross host eth link
+            if (control_plane.is_cross_host_eth_link(chip_id, channel_id)) {
+                log_info(
+                    tt::LogFabric,
+                    "Skipping export of channel trimming capture for cross-host eth link on NodeId {}, logical core "
+                    "{}, channel {}",
+                    fabric_node_id,
+                    logical_core,
+                    channel_id);
+                continue;
+            }
+
+            log_info(
+                tt::LogFabric,
+                "Exporting channel trimming capture for NodeId {}, logical core {}, channel {}",
+                fabric_node_id,
+                logical_core,
+                channel_id);
             eth_chan_directions direction = control_plane.get_eth_chan_direction(fabric_node_id, channel_id);
 
             const auto& soc_desc = umd_cluster.get_soc_descriptor(chip_id);
