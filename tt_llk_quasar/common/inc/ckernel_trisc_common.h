@@ -19,13 +19,10 @@ namespace ckernel::trisc
 // Num of words in buffer descriptor struct
 constexpr static std::uint32_t BD_NUM_WORDS = 3;
 
-// Default face dimensions
-constexpr static std::uint32_t FACE_R_DIM = 16;
-constexpr static std::uint32_t FACE_C_DIM = 16;
-
-// Default tile dimensions
-constexpr static std::uint32_t TILE_R_DIM = 32;
-constexpr static std::uint32_t TILE_C_DIM = 32;
+using ckernel::FACE_C_DIM;
+using ckernel::FACE_R_DIM;
+using ckernel::TILE_C_DIM;
+using ckernel::TILE_R_DIM;
 
 // Default number of faces
 constexpr static std::uint32_t NUM_FACES = 4;
