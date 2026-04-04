@@ -12,7 +12,7 @@
 |-------|-------------|--------|----------|--------|
 | 1 | Reference Discovery | ok | ~60s | none |
 | 2 | Reference Analysis | ok | ~15min | expm1 agent timed out |
-| 3 | Implementation | pending | - | - |
+| 3 | Implementation | ok | ~8min | committed by orchestrator (pre-commit hooks) |
 | 4 | Testing & Debugging | pending | - | - |
 | 5 | Documentation | pending | - | - |
 | 6 | Self-Reflection | pending | - | - |

@@ -28,6 +28,7 @@ ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp
 ttnn/cpp/ttnn/operations/eltwise/unary/unary.hpp
 ttnn/cpp/ttnn/operations/eltwise/unary/unary_nanobind.cpp
 ttnn/ttnn/operations/unary.py
+tt_metal/hw/sources.cmake
 
 ## Design Decisions
 
