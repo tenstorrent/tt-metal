@@ -32,3 +32,4 @@
 {"event":"complete","operation":"hardsigmoid","final_status":"SUCCESS","output_file":".claude-analysis/lgamma-1/hardsigmoid_analysis.md","ts":"2026-04-04T19:05:32+00:00"}
 {"event":"analysis_written","operation":"cosh","output_file":".claude-analysis/lgamma-1/cosh_analysis.md","sections":["dispatch_summary","call_chain","annotated_source","instruction_table","register_usage","addr_mode"],"ts":"2026-04-04T19:06:13+00:00"}
 {"event":"complete","operation":"cosh","final_status":"SUCCESS","output_file":".claude-analysis/lgamma-1/cosh_analysis.md","commit":"pending","ts":"2026-04-04T19:08:15+00:00"}
+{"event":"complete","operation":"hardtanh","final_status":"SUCCESS","output_file":".claude-analysis/lgamma-1/hardtanh_analysis.md","commit":"30957653457","ts":"2026-04-04T19:09:34+00:00"}
