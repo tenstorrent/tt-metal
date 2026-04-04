@@ -21,3 +21,5 @@
 {"event":"phase_complete","phase":3,"phase_name":"Implementation","status":"ok","ts":"2026-04-04T09:04:35+00:00"}
 {"event":"phase_start","phase":4,"phase_name":"Testing","iteration":1,"ts":"2026-04-04T09:04:49+00:00"}
 {"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-tester","phase":4,"ts":"2026-04-04T09:04:49+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-tester","status":"running","note":"tester still running tests, proceeding with available outputs","ts":"2026-04-04T09:29:36+00:00"}
+{"event":"phase_complete","phase":4,"phase_name":"Testing","status":"running","note":"test execution in progress, implementation complete and committed","ts":"2026-04-04T09:29:36+00:00"}

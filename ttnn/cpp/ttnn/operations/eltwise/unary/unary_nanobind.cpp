@@ -66,6 +66,8 @@ Tensor unary_composite_3param_to_4param_wrapper(
     return Func(input_tensor, parameter_a, parameter_b, memory_config, std::nullopt);
 }
 
+// BEGIN: Disabled binding functions - unused after batch nuke (clamp, clip)
+#if 0
 void bind_unary_clamp(nb::module_& mod) {
     const char* doc = R"doc(
         Applies clamp to :attr:`input_tensor` element-wise.
@@ -181,6 +183,8 @@ void bind_unary_clip(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("memory_config") = nb::none()});
 }
+#endif
+// END: Disabled binding functions (clamp, clip)
 
 template <
     ttnn::unique_string OpName,
@@ -414,60 +418,8 @@ void bind_unary_operation_overload_complex(
         ttnn::overload_t(func_complex, nb::arg("input_tensor"), nb::kw_only(), nb::arg("memory_config")));
 }
 
-template <ttnn::unique_string OpName>
-void bind_unary_operation_overload_complex_return_complex(
-    nb::module_& mod, const std::string& supported_dtype = "BFLOAT16", const std::string& info_doc = "") {
-    auto doc = fmt::format(
-        R"doc(
-        Applies {0} to :attr:`input_tensor` element-wise.
-
-        .. math::
-            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
-
-        Args:
-            input_tensor (ttnn.Tensor or ComplexTensor): the input tensor.
-
-        Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
-        Note:
-            Supported dtypes and layouts:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - {2}
-                 - TILE, ROW_MAJOR
-
-            {3}
-            More information about the `BFLOAT8_B  <../tensor.html#limitation-of-bfloat8-b>`_.
-        )doc",
-        std::string(OpName),
-        std::string("ttnn.") + std::string(OpName),
-        supported_dtype,
-        info_doc);
-
-    ttnn::bind_function<OpName>(
-        mod,
-        doc.c_str(),
-        ttnn::overload_t{
-            &unary_3param_wrapper<ttnn::reciprocal>,
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()},
-        ttnn::overload_t{
-            nb::overload_cast<const ComplexTensor&, const ttnn::MemoryConfig&>(&ttnn::reciprocal),
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config")});
-}
+// NOTE: bind_unary_operation_overload_complex_return_complex disabled — references nuked ttnn::reciprocal.
+// Will be restored when reciprocal is regenerated.
 
 template <ttnn::unique_string OpName, auto Func>
 void bind_unary_operation_with_fast_and_approximate_mode(
@@ -882,6 +834,9 @@ void bind_unary_operation_with_dim_parameter(
             Func, nb::arg("input_tensor"), nb::arg("dim") = -1, nb::kw_only(), nb::arg("memory_config") = nb::none()});
 }
 
+// BEGIN: Disabled binding functions - reference nuked operations (softplus, xielu, sigmoid_accurate, sigmoid)
+// These will be restored as the corresponding operations are regenerated.
+#if 0
 void bind_softplus(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
@@ -1188,6 +1143,8 @@ void bind_sigmoid(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("output_tensor") = nb::none());
 }
+#endif
+// END: Disabled binding functions
 
 void bind_unary_chain(nb::module_& mod) {
     auto doc = fmt::format(
