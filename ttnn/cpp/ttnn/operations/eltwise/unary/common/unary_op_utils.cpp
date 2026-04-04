@@ -75,6 +75,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::ATANH: return {"atanh_tile_init();", fmt::format("atanh_tile({});", idst)};
         case UnaryOpType::SOFTSIGN: return {"softsign_tile_init();", fmt::format("softsign_tile({});", idst)};
         case UnaryOpType::LGAMMA: return {"lgamma_tile_init();", fmt::format("lgamma_tile({});", idst)};
+        case UnaryOpType::SILU: return {"silu_tile_init();", fmt::format("silu_tile({});", idst)};
         default: TT_THROW("unexpected op type {}", op_type);
     };
 }
@@ -107,6 +108,9 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     }
     if (name == "atanh") {
         return UnaryWithParam(UnaryOpType::ATANH);
+    }
+    if (name == "silu") {
+        return UnaryWithParam(UnaryOpType::SILU);
     }
     TT_THROW("Unknown unary op: {}", name);
 }

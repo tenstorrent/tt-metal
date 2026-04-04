@@ -1814,6 +1814,12 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{output\_tensor}}_i = \ln(|\Gamma(\mathrm{{input\_tensor}}_i)|))doc",
         "",
         R"doc(BFLOAT16, FLOAT32)doc");
+
+    bind_unary_operation<"silu", &ttnn::silu>(
+        mod,
+        R"doc(\text{silu}(x) = x \times \sigma(x) = \frac{x}{1 + e^{-x}})doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     {
         auto doc = fmt::format(
             R"doc(

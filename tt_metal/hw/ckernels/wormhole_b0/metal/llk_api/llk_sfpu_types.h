@@ -14,4 +14,5 @@ enum class SfpuType {
     softsign,
     lgamma,
     rpow,
+    silu,
 };
