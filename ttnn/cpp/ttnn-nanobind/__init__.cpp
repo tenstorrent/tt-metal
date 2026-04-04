@@ -311,7 +311,13 @@ NB_MODULE(_ttnn, mod) {
     ttnn::operations::py_module(m_operations);
     // tt::operations::primary::py_module(m_primary_ops);
 
-    mod.attr("CONFIG") = &ttnn::CONFIG;
+    // CONFIG is a shared mutable global: Python code reads and writes properties
+    // via setattr (e.g. manage_config context manager).  We must bind by reference
+    // so mutations are visible across C++ and Python.  Suppress the leak warning
+    // for this one binding — the object is intentionally static-lifetime.
+    nb::set_leak_warnings(false);
+    mod.attr("CONFIG") = nb::cast(&ttnn::CONFIG, nb::rv_policy::reference);
+    nb::set_leak_warnings(true);
     mod.def(
         "get_python_operation_id",
         []() -> std::uint64_t { return ttnn::CoreIDs::instance().get_python_operation_id(); },
