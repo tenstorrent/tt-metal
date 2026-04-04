@@ -3,9 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
 #include "api/compute/binary_max_min.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
@@ -17,7 +14,6 @@
 #include "api/compute/eltwise_unary/sfpu_int_sum.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/compute_kernel_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 #include "api/debug/assert.h"

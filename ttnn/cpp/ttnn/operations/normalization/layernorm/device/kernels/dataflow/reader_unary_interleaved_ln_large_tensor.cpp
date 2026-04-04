@@ -89,7 +89,7 @@ void kernel_main() {
 #ifdef TILIZE_IN
     // ROW_MAJOR path: input a is a row-major tensor.
     // The compute kernel tilizes cb_in_rm (c_27) → cb_in (c_0) before each pass.
-    constexpr uint32_t elem_size_bytes = get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 1);
+    constexpr uint32_t elem_size_bytes = get_compile_time_arg_val(beta_args.next_compile_time_args_offset());
 
     constexpr uint32_t rm_row_stride_bytes = block_size * TILE_W * elem_size_bytes;
     constexpr uint32_t cb_id_in_rm = get_named_compile_time_arg_val("cb_in_rm");

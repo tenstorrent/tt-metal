@@ -53,7 +53,7 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
     tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
     tt::DataFormat scaler_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t scaler_single_tile_size = tt::tile_size(src0_cb_data_format);
+    uint32_t scaler_single_tile_size = tt::tile_size(scaler_cb_data_format);
     tt::DataFormat mask_h_cb_data_format = tt::DataFormat::Float16_b;
     uint32_t mask_h_single_tile_size = tt::tile_size(mask_h_cb_data_format);
     tt::DataFormat intermed_cb_data_format = (fp32_dest_acc_en) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
@@ -101,9 +101,10 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
             .set_page_size(tt::CBIndex::c_24, intermed_single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed0_config);
 
+    uint32_t intermed1_single_tile_size = tt::tile_size(intermed1_cb_data_format);
     tt::tt_metal::CircularBufferConfig cb_intermed1_config =
-        tt::tt_metal::CircularBufferConfig(intermed_single_tile_size, {{tt::CBIndex::c_25, intermed1_cb_data_format}})
-            .set_page_size(tt::CBIndex::c_25, intermed_single_tile_size);
+        tt::tt_metal::CircularBufferConfig(intermed1_single_tile_size, {{tt::CBIndex::c_25, intermed1_cb_data_format}})
+            .set_page_size(tt::CBIndex::c_25, intermed1_single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed1_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_16;  // output operands start at index 16

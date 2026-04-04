@@ -10,6 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+#include <bit>
 #include <utility>
 
 namespace ttnn::prim {
@@ -217,11 +218,11 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
                             .set_page_size(tt::CBIndex::c_0, in0_tile_size)
                             .set_globally_allocated_address(*src0_buffer);
     auto cb_in0_id = CreateCircularBuffer(program, all_device_cores, c_in0_config);
-    // in1 max scaler (row-0 fill for reduce LLK)
+    // in1 max scaler
     auto c_in1_config = CircularBufferConfig(max_scaler_CB_size, {{tt::CBIndex::c_1, max_scaler_cb_data_format}})
                             .set_page_size(tt::CBIndex::c_1, max_scaler_tile_size);
     CreateCircularBuffer(program, all_device_cores, c_in1_config);
-    // sum scaler (col-0 fill for matmul reduce)
+    // sum scaler
     auto c_sum_scaler_config =
         CircularBufferConfig(sum_scaler_CB_size, {{tt::CBIndex::c_13, sum_scaler_cb_data_format}})
             .set_page_size(tt::CBIndex::c_13, sum_scaler_tile_size);
@@ -279,11 +280,7 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
 
     // Runtime Args
     uint32_t mask_addr = tensor_args.mask.has_value() ? tensor_args.mask->buffer()->address() : 0;
-    union {
-        float f;
-        uint32_t u;
-    } s{};
-    s.f = attributes.scale.value_or(1.0f);  // scale for fused scale-mask-softmax
+    uint32_t scale_u = std::bit_cast<uint32_t>(attributes.scale.value_or(1.0f));  // scale for fused scale-mask-softmax
     uint32_t mask_start_tile_id = 0;
 
     uint32_t num_tiles_in_attn_mask = 0;
@@ -302,7 +299,7 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
 
                 // reader args
                 std::vector<uint32_t> reader_args;
-                reader_args.push_back(s.u);
+                reader_args.push_back(scale_u);
                 reader_args.push_back(mask_addr);
                 reader_args.push_back(mask_start_tile_id);
                 if (attributes.is_scale_causal_mask_hw_dims_softmax) {
@@ -341,7 +338,7 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
 
                 // reader args
                 std::vector<uint32_t> reader_args;
-                reader_args.push_back(s.u);
+                reader_args.push_back(scale_u);
                 reader_args.push_back(mask_addr);
                 reader_args.push_back(mask_start_tile_id);
                 if (attributes.is_scale_causal_mask_hw_dims_softmax) {

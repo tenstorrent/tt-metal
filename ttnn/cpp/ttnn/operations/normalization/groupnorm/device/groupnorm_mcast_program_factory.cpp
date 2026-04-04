@@ -5,6 +5,7 @@
 #include "groupnorm_mcast_program_factory.hpp"
 #include "groupnorm_program_utils.hpp"
 
+#include <bit>
 #include <string>
 #include <optional>
 
@@ -792,11 +793,7 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
     std::vector<KernelHandle> writer_kernel_ids;
     std::vector<KernelHandle> reader_sender_kernel_ids;
     std::vector<KernelHandle> reader_receiver_kernel_ids;
-    union {
-        float f;
-        uint32_t u;
-    } e{};
-    e.f = eps;
+    uint32_t eps_u = std::bit_cast<uint32_t>(eps);
 
     for (size_t i = 0; i < mcast_groups.size(); ++i) {
         auto group = mcast_groups[i];
@@ -926,7 +923,7 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         }
 
         std::vector<uint32_t> writer_mcast_sender_args;
-        writer_mcast_sender_args.push_back(e.u);
+        writer_mcast_sender_args.push_back(eps_u);
         writer_mcast_sender_args.push_back(out_dram_addr);
         writer_mcast_sender_args.push_back(gamma_dram_addr);
         writer_mcast_sender_args.push_back(beta_dram_addr);

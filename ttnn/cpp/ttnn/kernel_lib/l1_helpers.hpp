@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
 #include "experimental/endpoints.h"
+#include "experimental/core_local_mem.h"
 
 namespace dataflow_kernel_lib {
 
@@ -25,6 +26,18 @@ FORCE_INLINE volatile tt_l1_ptr uint32_t* addr_to_l1_ptr(uint32_t addr) {
 }
 
 /**
+ * @brief Create NOC source/destination args for a local L1 address on this core
+ *
+ * @param addr L1 memory address
+ * @param noc_id NOC index (defaults to the current core's noc_index)
+ * @return UnicastEndpoint src_args_type with this core's NOC coordinates and the given address
+ */
+FORCE_INLINE auto local_noc_addr(uint32_t addr, uint8_t noc_id = noc_index) {
+    return ::experimental::noc_traits_t<::experimental::UnicastEndpoint>::src_args_type{
+        .noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = addr};
+}
+
+/**
  * @brief Zero out the exact tile size for a CB using NOC reads from the hardware zeros region
  *
  * @tparam cb_id Circular buffer ID whose tile byte size should be used
@@ -36,25 +49,31 @@ FORCE_INLINE void zero_tile(uint32_t write_addr) {
     static_assert(bytes_to_zero % MEM_ZEROS_SIZE == 0, "CB tile size must be a multiple of MEM_ZEROS_SIZE");
     constexpr uint32_t num_zeros_reads = bytes_to_zero / MEM_ZEROS_SIZE;
 
-    experimental::Noc noc;
-    experimental::UnicastEndpoint zeros_src;
-    experimental::UnicastEndpoint local_dst;
-    uint32_t noc_x = my_x[noc_index];
-    uint32_t noc_y = my_y[noc_index];
+    ::experimental::Noc noc;
+    ::experimental::UnicastEndpoint ep;
+    const auto zeros_src = local_noc_addr(MEM_ZEROS_BASE, noc.get_noc_id());
 
-    noc.set_async_read_state<experimental::Noc::VcSelection::DEFAULT, MEM_ZEROS_SIZE>(
-        zeros_src, MEM_ZEROS_SIZE, {.noc_x = noc_x, .noc_y = noc_y, .addr = MEM_ZEROS_BASE});
+    noc.set_async_read_state<::experimental::Noc::VcSelection::DEFAULT, MEM_ZEROS_SIZE>(ep, MEM_ZEROS_SIZE, zeros_src);
 
     for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        noc.async_read_with_state<experimental::Noc::VcSelection::DEFAULT, MEM_ZEROS_SIZE>(
-            zeros_src,
-            local_dst,
-            MEM_ZEROS_SIZE,
-            {.noc_x = noc_x, .noc_y = noc_y, .addr = MEM_ZEROS_BASE},
-            {.noc_x = noc_x, .noc_y = noc_y, .addr = write_addr});
+        noc.async_read_with_state<::experimental::Noc::VcSelection::DEFAULT, 1>(
+            ep, ::experimental::CoreLocalMem<uint32_t>(write_addr), 0, zeros_src, {});
         write_addr += MEM_ZEROS_SIZE;
     }
     noc.async_read_barrier();
+}
+
+/**
+ * @brief Reserve, zero-fill, and push one tile into a circular buffer
+ *
+ * @tparam cb_id Circular buffer ID whose tile byte size should be used
+ */
+template <uint32_t cb_id>
+FORCE_INLINE void prepare_zero_tile() {
+    ::experimental::CircularBuffer cb(cb_id);
+    cb.reserve_back(1);
+    zero_tile<cb_id>(cb.get_write_ptr());
+    cb.push_back(1);
 }
 
 }  // namespace dataflow_kernel_lib

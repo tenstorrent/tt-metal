@@ -29,7 +29,7 @@ void kernel_main() {
     constexpr uint32_t num_groups_per_core = get_compile_time_arg_val(7);
     constexpr uint32_t num_batches_per_core = get_compile_time_arg_val(8);
     constexpr uint32_t block_w = get_compile_time_arg_val(9);
-)
+
     // compile_time_arg 11: reduce_factor_w (unused in welford path)
     // compile_time_arg 12: reduce_factor_c (unused in welford path)
 

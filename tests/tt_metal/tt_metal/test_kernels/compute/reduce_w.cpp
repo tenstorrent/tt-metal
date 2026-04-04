@@ -50,10 +50,10 @@ void kernel_main() {
 #if (MATH_ONLY == 1)
                 UNPACK((llk_unpack_AB_reduce(dfb_in.get_id(), dfb_in_scaler.get_id(), 0, 0)));
                 // REDUCE_OP is expected to come from add_define
-                reduce_tile_math(reduce_dst_idx);
+                reduce_tile_math<REDUCE_OP, REDUCE_DIM>(reduce_dst_idx);
 #elif (MATH_ONLY == 0)
-                // REDUCE_OP is expected to come from add_define
-                reduce_tile(dfb_in.get_id(), dfb_in_scaler.get_id(), 0, 0, reduce_dst_idx);
+                // REDUCE_OP and REDUCE_DIM are expected to come from add_define
+                reduce_tile<REDUCE_OP, REDUCE_DIM>(dfb_in.get_id(), dfb_in_scaler.get_id(), 0, 0, reduce_dst_idx);
 #endif
                 dfb_in.pop_front(onetile);
 #else

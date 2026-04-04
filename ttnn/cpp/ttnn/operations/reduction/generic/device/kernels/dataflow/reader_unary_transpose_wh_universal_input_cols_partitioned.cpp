@@ -21,8 +21,12 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t HtWt = get_compile_time_arg_val(2);
 
-    // Auto-detect chunk size - no longer passed from host
-    constexpr uint32_t row_chunk = compute_kernel_lib::DEST_AUTO_LIMIT;
+    constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);
+    constexpr bool use_welford = get_compile_time_arg_val(4) != 0;
+    // Welford must process one column at a time because the SFPU can only maintain
+    // a single running mean/M2 state. DEST_AUTO_LIMIT interleaves multiple columns
+    // per chunk, which would feed the Welford kernel tiles from the wrong columns.
+    constexpr uint32_t row_chunk = use_welford ? 1 : compute_kernel_lib::DEST_AUTO_LIMIT;
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
@@ -30,11 +34,10 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
-    constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
     dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in2, REDUCE_OP, REDUCE_DIM>(scaler_f);
 
-    constexpr auto tensor_args = TensorAccessorArgs<4>();
+    constexpr auto tensor_args = TensorAccessorArgs<5>();
     auto tensor_accessor = TensorAccessor(tensor_args, src_addr);
 
     experimental::Noc noc;
