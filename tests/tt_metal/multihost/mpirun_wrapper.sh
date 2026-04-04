@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 # Purpose: Wrapper script to find and execute the appropriate mpirun command
 # Usage: ./mpirun_wrapper.sh [mpirun arguments]
 

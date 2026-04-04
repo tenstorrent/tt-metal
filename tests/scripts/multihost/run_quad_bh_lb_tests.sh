@@ -1,6 +1,10 @@
 #!/bin/bash
 set -eo pipefail
 
+_MULTIHOST_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=multihost_gtest_env.sh
+source "${_MULTIHOST_SCRIPT_DIR}/multihost_gtest_env.sh"
+
 # Exit immediately if ARCH_NAME is not set or empty
 if [ -z "${ARCH_NAME}" ]; then
   echo "Error: ARCH_NAME is not set. Exiting." >&2
@@ -19,11 +23,11 @@ run_quad_bh_lb_unit_tests() {
   local mpirun_args="$mpi_args --mca btl_tcp_if_exclude docker0,lo"
   local rank_binding_quad_bh_lb="tests/tt_metal/distributed/config/quad_bh_lb_rank_bindings.yaml"
 
-  mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
+  mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery "${MULTIHOST_GTEST_FLAGS[@]}" ; fail+=$?
   mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation  --print-connectivity --send-traffic --hard-fail ; fail+=$?
 
   echo "LOG_METAL: Running health checks via tt-run"
-  tt-run --rank-binding "$rank_binding_quad_bh_lb" --mpi-args "$mpi_args" ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
+  tt-run --rank-binding "$rank_binding_quad_bh_lb" --mpi-args "$mpi_args" ./build/test/tt_metal/tt_fabric/test_physical_discovery "${MULTIHOST_GTEST_FLAGS[@]}" ; fail+=$?
   tt-run --rank-binding "$rank_binding_quad_bh_lb" --mpi-args "$mpi_args" ./build/tools/scaleout/run_cluster_validation  --print-connectivity --send-traffic --hard-fail ; fail+=$?
 
   # Record the end time

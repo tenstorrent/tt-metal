@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications."""
@@ -154,7 +154,7 @@ def interpret_exit_code(returncode: int) -> ExitCodeInterpretation:
             ci_exit_code=EXIT_RANK_FAILURE,
         )
 
-    # Exit code 124: timeout (from tt-run's own timeout or Unix timeout(1))
+    # Exit code 124: timeout (from tt-run --timeout or Unix timeout(1))
     if returncode == EXIT_TIMEOUT:
         return ExitCodeInterpretation(
             raw_code=124,
@@ -1277,6 +1277,12 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
     required=True,
     help="Rank binding configuration file (YAML). Relative paths are resolved against the launch directory.",
 )
+@click.option(
+    "--timeout",
+    type=click.FloatRange(min=0.0, min_open=True),
+    default=None,
+    help="Optional wall-clock timeout in seconds for the launched MPI job. Exits 124 if exceeded.",
+)
 @click.option("--dry-run", is_flag=True, help="Print command without executing")
 @click.option(
     "-v",
@@ -1314,6 +1320,7 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
 def main(
     ctx: click.Context,
     rank_binding: Path,
+    timeout: Optional[float],
     dry_run: bool,
     verbose: bool,
     mpi_args: Optional[List[str]],
@@ -1396,6 +1403,9 @@ def main(
 
         # Dry run to see command
         tt-run --rank-binding binding.yaml --dry-run ./my_app
+
+        # Wall-clock timeout for hung jobs
+        tt-run --rank-binding binding.yaml --timeout 60 ./my_app
 
     \b
     Environment Variables:
@@ -1751,13 +1761,11 @@ def main(
     try:
         # Respect an optional wall-clock timeout so CI jobs don't hang forever
         # when a remote rank crashes without triggering ULFM or orte abort.
-        # Set TT_RUN_TIMEOUT (seconds) in the environment to enable.
-        _timeout_str = os.environ.get("TT_RUN_TIMEOUT", "")
-        _timeout: float | None = float(_timeout_str) if _timeout_str else None
         try:
-            proc.wait(timeout=_timeout)
+            proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            logger.error(f"{TT_RUN_PREFIX} MPI job exceeded TT_RUN_TIMEOUT={_timeout_str}s — killing process group")
+            timeout_display = f"{timeout:g}" if timeout is not None else "unknown"
+            logger.error(f"{TT_RUN_PREFIX} MPI job exceeded --timeout={timeout_display}s — killing process group")
             _kill_process_group()
             sys.exit(EXIT_TIMEOUT)  # 124, same convention as the Unix `timeout` command
 

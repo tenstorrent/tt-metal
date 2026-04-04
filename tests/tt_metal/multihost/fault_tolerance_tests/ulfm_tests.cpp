@@ -1,13 +1,16 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+//
 #include <tt-metalium/distributed_context.hpp>
+
 #include <gtest/gtest.h>
 #include "common/multihost_test_tools.hpp"
 #include "tt_metal/distributed/multihost/mpi_distributed_context.hpp"
+#include <mpi-ext.h>
+
 #include <csignal>
 #include <cstdlib>
-#include <mpi-ext.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -155,7 +158,7 @@ TEST(FaultTolerance, DisableBrokenBlock) {
 }
 
 // =====================================================================
-// Section 4.4 — Test infrastructure: agree() consensus and policy switching
+// Test infrastructure: agree() consensus and policy switching
 // =====================================================================
 
 TEST(FaultTolerance, AgreeConsensus) {
@@ -254,7 +257,7 @@ TEST(FaultTolerance, FailurePolicySwitching) {
 }
 
 // =====================================================================
-// Section 7.8 — Single-node testing gap: ULFM control-plane tests
+// Single-node testing: ULFM control-plane tests
 // These can run with `mpirun -np 2` on a single host.
 // They test the exit-code and signal-handling paths without requiring
 // actual Tenstorrent hardware.

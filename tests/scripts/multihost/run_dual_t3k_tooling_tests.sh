@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Dedicated test suite for tooling and MPI infrastructure tests on dual T3K.
@@ -59,7 +59,7 @@ echo "LOG_METAL: Running multihost ULFM annotation smoke tests"
 echo "LOG_METAL: Running ULFM fault tolerance tests"
 "${repo_root}/tests/tt_metal/multihost/run_fault_tolerance_tests.sh" || fail=$((fail + 1))
 
-# ── 4. Single-node ULFM gap tests (section 7.8) ───────────────────────
+# ── 4. Single-node ULFM gap tests ─────────────────────────────────────
 #
 # These test the ULFM control-plane paths that don't require actual
 # multi-host hardware: fast-fail exit code 70, MPI_Finalize watchdog,

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """ULFM (User Level Fault Mitigation) helpers for mpi4py-based Python MPI programs.

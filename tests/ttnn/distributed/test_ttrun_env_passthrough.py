@@ -818,6 +818,89 @@ def test_cli_wraps_popen_failures_in_click_exception(monkeypatch, tmp_path):
     assert "Error launching mpirun: launcher unavailable" in result.output
 
 
+@pytest.mark.unit
+def test_cli_timeout_option_passes_value_to_proc_wait(monkeypatch, tmp_path):
+    rank_binding = tmp_path / "rank_binding.yaml"
+    rank_binding.write_text("rank_bindings: []\n")
+
+    monkeypatch.setattr(
+        ttrun,
+        "parse_binding_config",
+        lambda *_args, **_kwargs: SimpleNamespace(rank_bindings=[], mesh_graph_desc_path=Path("/tmp/mesh")),
+    )
+    monkeypatch.setattr(ttrun, "get_launcher_environment", lambda: {})
+    monkeypatch.setattr(ttrun, "build_mpi_command", lambda *_args, **_kwargs: ["mpirun", "fake_program"])
+    monkeypatch.setattr(ttrun.atexit, "register", lambda _fn: None)
+    monkeypatch.setattr(ttrun.signal, "signal", lambda *_args, **_kwargs: None)
+
+    wait_timeouts: list[float | None] = []
+
+    class FakeProc:
+        pid = 4321
+        returncode = 0
+
+        def wait(self, timeout=None):
+            wait_timeouts.append(timeout)
+            return 0
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(ttrun.subprocess, "Popen", lambda *_args, **_kwargs: FakeProc())
+
+    result = CliRunner().invoke(
+        main,
+        ["--rank-binding", str(rank_binding), "--timeout", "1.5", "--skip-executable-check", "--bare", "fake_program"],
+    )
+
+    assert result.exit_code == 0
+    assert wait_timeouts == [1.5]
+
+
+@pytest.mark.unit
+def test_cli_timeout_option_kills_process_group_and_exits_124(monkeypatch, tmp_path):
+    rank_binding = tmp_path / "rank_binding.yaml"
+    rank_binding.write_text("rank_bindings: []\n")
+
+    monkeypatch.setattr(
+        ttrun,
+        "parse_binding_config",
+        lambda *_args, **_kwargs: SimpleNamespace(rank_bindings=[], mesh_graph_desc_path=Path("/tmp/mesh")),
+    )
+    monkeypatch.setattr(ttrun, "get_launcher_environment", lambda: {})
+    monkeypatch.setattr(ttrun, "build_mpi_command", lambda *_args, **_kwargs: ["mpirun", "fake_program"])
+    monkeypatch.setattr(ttrun.atexit, "register", lambda _fn: None)
+    monkeypatch.setattr(ttrun.signal, "signal", lambda *_args, **_kwargs: None)
+
+    wait_timeouts: list[float | int | None] = []
+    killpg_calls: list[tuple[int, int]] = []
+
+    class FakeProc:
+        pid = 5678
+        returncode = 0
+
+        def wait(self, timeout=None):
+            wait_timeouts.append(timeout)
+            if timeout == 0.25:
+                raise subprocess.TimeoutExpired("mpirun", timeout)
+            return 0
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(ttrun.subprocess, "Popen", lambda *_args, **_kwargs: FakeProc())
+    monkeypatch.setattr(ttrun.os, "killpg", lambda pid, sig: killpg_calls.append((pid, sig)))
+
+    result = CliRunner().invoke(
+        main,
+        ["--rank-binding", str(rank_binding), "--timeout", "0.25", "--skip-executable-check", "--bare", "fake_program"],
+    )
+
+    assert result.exit_code == ttrun.EXIT_TIMEOUT
+    assert wait_timeouts == [0.25, 10]
+    assert killpg_calls == [(5678, ttrun.signal.SIGTERM)]
+
+
 # --- Additional passthrough prefix tests ---
 
 
