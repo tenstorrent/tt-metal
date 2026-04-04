@@ -80,6 +80,8 @@ namespace ttnn {
             sub_core_grids);                                 \
     }
 
+DEFINE_UNARY_NG_OP(cosh, COSH)
+
 #undef DEFINE_UNARY_NG_OP
 
 }  // namespace ttnn

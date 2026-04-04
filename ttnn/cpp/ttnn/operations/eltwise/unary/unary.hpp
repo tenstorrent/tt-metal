@@ -97,6 +97,9 @@ Tensor unary_impl(
 // Unaries with fast_and_approximate_mode
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(mish, MISH)
 
+// Simple unaries (no parameter)
+REGISTER_UNARY_OPERATION(cosh, COSH)
+
 // Unaries with float parameter
 
 // -----------------------------------------------------------------------------

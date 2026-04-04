@@ -71,6 +71,15 @@ def _golden_function_logit(input_tensor_a, *args, eps=None, **kwargs):
 ttnn.attach_golden_function(ttnn.logit, golden_function=_golden_function_logit)
 
 
+def _golden_function_cosh(input_tensor_a, *args, **kwargs):
+    import torch
+
+    return torch.cosh(input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn.cosh, golden_function=_golden_function_cosh)
+
+
 SigmoidMode = ttnn._ttnn.operations.unary.SigmoidMode
 
 __all__ = []

@@ -16,6 +16,7 @@ namespace {
 
 std::string get_macro_definition(UnaryOpType op_type) {
     switch (op_type) {
+        case UnaryOpType::COSH: return "SFPU_OP_COSH_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -45,6 +46,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::DROPOUT: {
             return {"dropout_tile_init();", fmt::format("dropout_tile({});", idst)};
         }
+        case UnaryOpType::COSH: return {"cosh_tile_init();", fmt::format("cosh_tile({});", idst)};
         default: TT_THROW("unexpected op type {}", op_type);
     };
 }
@@ -77,6 +79,9 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     }
     if (name == "mish_approx") {
         return UnaryWithParam(UnaryOpType::MISH, static_cast<float>(true));
+    }
+    if (name == "cosh") {
+        return UnaryWithParam(UnaryOpType::COSH);
     }
     TT_THROW("Unknown unary op: {}", name);
 }

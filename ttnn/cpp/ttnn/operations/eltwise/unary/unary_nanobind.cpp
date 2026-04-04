@@ -1789,6 +1789,12 @@ void py_module(nb::module_& mod) {
 
     bind_unary_operation_with_fast_and_approximate_mode<"mish", &ttnn::mish>(
         mod, "[Supported range -20 to inf]", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+
+    bind_unary_operation<"cosh", &ttnn::cosh>(
+        mod,
+        R"doc(\mathrm{{output\_tensor}}_i = \cosh(\mathrm{{input\_tensor}}_i))doc",
+        "[supported range -9 to 9]",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 }
 
 }  // namespace ttnn::operations::unary
