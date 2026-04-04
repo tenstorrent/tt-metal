@@ -180,9 +180,6 @@ UNARY_OP_SCALAR_VARIANT(eq_unary, UNARY_EQ)
 UNARY_OP_SCALAR_VARIANT(ge_unary, UNARY_GE)
 UNARY_OP_SCALAR_VARIANT(le_unary, UNARY_LE)
 
-// Unaries with fast_and_approximate_mode
-REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(mish, MISH)
-
 REGISTER_UNARY_OPERATION(selu, SELU)
 
 // Unaries with float parameter

@@ -42,31 +42,16 @@ void pack_first_op_scalars(
         return;
     }
     switch (op.type()) {
-        case UnaryOpType::HARDSHRINK:
-        case UnaryOpType::MISH: packed_scalar1 = pack_scalar_runtime_arg(op, 0, input_dtype); break;
+        case UnaryOpType::HARDSHRINK: packed_scalar1 = pack_scalar_runtime_arg(op, 0, input_dtype); break;
         case UnaryOpType::WHERE_TSS:
             packed_scalar1 = pack_scalar_runtime_arg(op, 0, input_dtype);
             packed_scalar2 = pack_scalar_runtime_arg(op, 1, input_dtype);
             break;
-        case UnaryOpType::LOGIT: {
-            float value1 = *op.get_param_if<float>(0);
-            float value2 = 1.0f - value1;
-            packed_scalar1 = pack_scalar_runtime_arg_impl(value1, input_dtype);
-            packed_scalar2 = pack_scalar_runtime_arg_impl(value2, input_dtype);
-            if (value1 > 0.5f) {
-                const char* data_format = (input_dtype == DataType::FLOAT32) ? "Float32" : "Float16_b";
-                unary_defines["WHERE"] = fmt::format("where_tile<DataFormat::{0}>", data_format);
-                unary_defines["CLAMP"] = "clamp_tile";
-            } else if (value1 >= 0.0f) {
-                unary_defines["CLAMP"] = "clamp_tile";
-            }
-            break;
-        }
         default: break;
     }
 }
 
-bool needs_tmp0_cb(UnaryOpType t) { return t == UnaryOpType::HARDSHRINK || t == UnaryOpType::LOGIT; }
+bool needs_tmp0_cb(UnaryOpType t) { return t == UnaryOpType::HARDSHRINK; }
 
 uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout memory_layout) {
     auto num_cores = shard_spec.grid.num_cores();

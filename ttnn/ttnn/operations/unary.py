@@ -38,7 +38,6 @@ def register_ttnn_cpp_unary_function(unary_function):
 
         name_to_golden_function = {
             "identity": torch.clone,
-            "mish": lambda _x: torch.nn.functional.mish(_x.to(torch.float)),
             "cbrt": torch_cbrt,
             "hardsigmoid": torch.nn.functional.hardsigmoid,
             "selu": lambda _x: torch.nn.functional.selu(_x.to(torch.float)),
@@ -59,22 +58,12 @@ def register_ttnn_cpp_unary_function(unary_function):
 
 TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.identity,
-    ttnn.mish,
     ttnn.cbrt,
     ttnn.hardsigmoid,
     ttnn.selu,
 ]
 for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
     register_ttnn_cpp_unary_function(unary_function)
-
-
-def _golden_function_logit(input_tensor_a, *args, eps=None, **kwargs):
-    import torch
-
-    return torch.special.logit(input_tensor_a, eps=eps)
-
-
-ttnn.attach_golden_function(ttnn.logit, golden_function=_golden_function_logit)
 
 
 def _golden_function_cosh(input_tensor_a, *args, **kwargs):

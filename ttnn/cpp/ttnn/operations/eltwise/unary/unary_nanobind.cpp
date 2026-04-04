@@ -1712,57 +1712,6 @@ void bind_unary_composite_float_with_default(
             nb::arg("memory_config") = nb::none()});
 }
 
-namespace {
-Tensor logit_wrapper(const Tensor& t, std::optional<float> eps, const std::optional<MemoryConfig>& memory_config) {
-    return ttnn::logit(t, eps, memory_config, std::nullopt);
-}
-}  // namespace
-
-void bind_unary_logit(nb::module_& mod, const std::string& info_doc = "") {
-    auto doc = fmt::format(
-        R"doc(
-        Performs {0} function on :attr:`input_tensor`, :attr:`eps`.
-
-        Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-
-        Keyword args:
-            eps (float, optional): The epsilon for input clamp bound. Defaults to `None`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
-        Note:
-            Supported dtypes and layouts:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - FLOAT32, BFLOAT16, BFLOAT8_B
-                 - TILE, ROW_MAJOR
-
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor, eps = None)
-        )doc",
-        "logit",
-        "ttnn.logit",
-        info_doc);
-
-    ttnn::bind_function<"logit">(
-        mod,
-        doc.c_str(),
-        &logit_wrapper,
-        nb::arg("input_tensor"),
-        nb::kw_only(),
-        nb::arg("eps") = nb::none(),
-        nb::arg("memory_config") = nb::none());
-}
-
 template <ttnn::unique_string OpName, auto Func>
 void bind_unary_composite_rpow(
     nb::module_& mod,
@@ -1824,7 +1773,6 @@ void py_module(nb::module_& mod) {
     // They will be re-added as operations are regenerated.
 
     bind_identity(mod);
-    bind_unary_logit(mod);
     bind_unary_chain(mod);
 
     bind_unary_operation_subcoregrids<"cbrt">(
@@ -1833,9 +1781,6 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{output\_tensor}}_i = \verb|cbrt|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-
-    bind_unary_operation_with_fast_and_approximate_mode<"mish", &ttnn::mish>(
-        mod, "[Supported range -20 to inf]", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     bind_unary_operation<"cosh", &ttnn::cosh>(
         mod,

@@ -43,8 +43,6 @@ std::map<std::string, std::string> get_block_defines(
 template <typename T>
 bool is_parametrized_type(T val) {
     switch (val) {
-        case UnaryOpType::MISH:
-        case UnaryOpType::LOGIT:
         case UnaryOpType::HARDTANH: return true;
         default: return false;
     }

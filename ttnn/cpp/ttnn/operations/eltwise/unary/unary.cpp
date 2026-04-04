@@ -71,11 +71,7 @@ Tensor logit(
     std::optional<float> eps,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return ttnn::detail::unary_impl(
-        input_tensor,
-        {UnaryWithParam{UnaryOpType::LOGIT, {eps.value_or(-1.0f)}}},
-        memory_config,
-        optional_output_tensor);
+    TT_THROW("logit not implemented");
 }
 
 Tensor unary_chain(

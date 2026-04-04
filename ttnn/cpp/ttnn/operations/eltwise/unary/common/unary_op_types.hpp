@@ -110,7 +110,6 @@ enum class UnaryOpType {
     PRELU_SFPU,
     ZERO_POINT,
     ALT_COMPLEX_ROTATE90,
-    MISH,
     HARDMISH,
     MAXIMUM,
     MINIMUM,
@@ -129,7 +128,6 @@ enum class UnaryOpType {
     RPOW,
     CBRT,
     LOGSIGMOID,
-    LOGIT,
     XIELU,
     LGAMMA,
 };

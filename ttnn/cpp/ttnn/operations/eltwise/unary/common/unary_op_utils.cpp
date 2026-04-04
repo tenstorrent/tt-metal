@@ -39,8 +39,6 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     [[maybe_unused]] const T param0_raw = params[0];
     [[maybe_unused]] float param0 = static_cast<float>(params[0]);
     switch (op_type) {
-        case UnaryOpType::MISH: return {};  // MISH uses dedicated mish_kernel.cpp;
-        case UnaryOpType::LOGIT: return {};
         case UnaryOpType::HARDTANH: {
             float min_val = params.size() > 0 ? param0 : -1.0f;
             float max_val = params.size() > 1 ? static_cast<float>(params[1]) : 1.0f;
@@ -94,12 +92,6 @@ bool get_op_approx_mode(UnaryOpType op_type) {
 }
 
 UnaryWithParam string_to_unary_with_param(const std::string& name) {
-    if (name == "mish") {
-        return UnaryWithParam(UnaryOpType::MISH, static_cast<float>(false));
-    }
-    if (name == "mish_approx") {
-        return UnaryWithParam(UnaryOpType::MISH, static_cast<float>(true));
-    }
     if (name == "cosh") {
         return UnaryWithParam(UnaryOpType::COSH);
     }
@@ -189,9 +181,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
 
 std::string_view get_compute_kernel_path(UnaryOpType op_type, [[maybe_unused]] std::optional<DataType> input_dtype) {
     switch (op_type) {
-        case UnaryOpType::MISH: return "mish_kernel.cpp";
         case UnaryOpType::IDENTITY: return "eltwise_identity_kernel.cpp";
-        case UnaryOpType::LOGIT: return "logit_kernel.cpp";
         default: return "eltwise_sfpu.cpp";
     }
 }

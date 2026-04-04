@@ -15,7 +15,6 @@ def _get_golden_map_for_unary_op():
         ttnn.UnaryOpType.RELU: torch.nn.functional.relu,
         ttnn.UnaryOpType.RELU6: torch.nn.functional.relu6,
         ttnn.UnaryOpType.SILU: torch.nn.functional.silu,
-        ttnn.UnaryOpType.MISH: torch.nn.functional.mish,
         ttnn.UnaryOpType.SIGMOID: torch.nn.functional.sigmoid,
         ttnn.UnaryOpType.HARDSIGMOID: torch.nn.functional.hardsigmoid,
         ttnn.UnaryOpType.TANH: torch.nn.functional.tanh,

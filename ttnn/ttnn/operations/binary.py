@@ -17,7 +17,6 @@ def apply_activations(tensor, activations):
     act_func_map = {
         ttnn.UnaryOpType.RELU: torch.nn.functional.relu,
         ttnn.UnaryOpType.SILU: torch.nn.functional.silu,
-        ttnn.UnaryOpType.MISH: torch.nn.functional.mish,
         ttnn.UnaryOpType.SIGMOID: torch.nn.functional.sigmoid,
         ttnn.UnaryOpType.TANH: torch.nn.functional.tanh,
         ttnn.UnaryOpType.LOG: torch.log,
