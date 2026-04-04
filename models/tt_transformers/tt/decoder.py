@@ -367,9 +367,29 @@ class TransformerBlock(LightweightModule):
             rot_mats_local if (hasattr(self.attention, "is_sliding") and self.attention.is_sliding) else rot_mats_global
         )
 
-        # Post-norm: all-gather without normalization using attention_norm's configs
-        attn_norm_config = self.args.get_norm_config("attn", mode, self.prefetcher)
-        attn_in = self.attention_norm(x, mode, norm_config=attn_norm_config, gather_only=True)
+        # Post-norm: all-gather without normalization for attention input
+        if self.args.is_multichip and not TG:
+            if not self.args.is_distributed_norm(mode):
+                # Decode: use attention norm's sharded config for all-gather
+                attn_norm_config = self.args.get_norm_config("attn", mode, self.prefetcher)
+                attn_in = self.attention_norm(x, mode, norm_config=attn_norm_config, gather_only=True)
+            else:
+                # Prefill: explicit all-gather to DRAM
+                attn_in = ttnn.experimental.all_gather_async(
+                    x,
+                    persistent_output_buffer=None,
+                    dim=3,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                    num_links=self.tt_ccl.get_num_links(1),
+                    topology=self.args.ccl_topology(),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
+                )
+        else:
+            attn_in = x
 
         if batch_size > 1:
             attn_in = ttnn.reshape(attn_in, [batch_size, 1, attn_in.shape[-2] // batch_size, -1])
@@ -395,8 +415,8 @@ class TransformerBlock(LightweightModule):
         ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
         attn_normed = self.ff_norm(attn_out, mode, norm_config=ff_norm_config)
 
-        # Partition back to fractured for residual add
-        if self.num_devices > 1 and not self.args.is_distributed_norm(mode):
+        # Partition back to fractured for residual add (always needed in post-norm)
+        if self.num_devices > 1:
             attn_normed = ttnn.mesh_partition(
                 attn_normed,
                 memory_config=attn_normed.memory_config(),
@@ -411,9 +431,23 @@ class TransformerBlock(LightweightModule):
         if mode == "prefill":
             x.deallocate(True)
 
-        # FFN: all-gather without normalization using ff_norm's configs
-        ffn_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
-        ffn_in = self.ff_norm(hidden_states, mode, norm_config=ffn_norm_config, gather_only=True)
+        # FFN: all-gather without normalization
+        if self.args.is_multichip and not TG:
+            ffn_in = ttnn.experimental.all_gather_async(
+                hidden_states,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=self.tt_ccl.get_num_links(1),
+                topology=self.args.ccl_topology(),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
+        else:
+            ffn_in = hidden_states
 
         if TG and mode == "decode":
             ffn_in = ttnn.to_memory_config(ffn_in, memory_config=self.args.get_mlp_act_mem_config(mode))
@@ -428,7 +462,8 @@ class TransformerBlock(LightweightModule):
         if self.post_ff_norm is not None:
             post_ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
             ffn_out = self.post_ff_norm(ffn_out, mode, norm_config=post_ff_norm_config)
-            if self.num_devices > 1 and not self.args.is_distributed_norm(mode):
+            # Always partition in post-norm path (norm all-gathers, need fractured for residual add)
+            if self.num_devices > 1:
                 ffn_out = ttnn.mesh_partition(
                     ffn_out,
                     memory_config=ffn_out.memory_config(),

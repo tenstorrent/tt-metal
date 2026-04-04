@@ -111,8 +111,9 @@ class DistributedNorm(LightweightModule):
 
         # Skip norm if gather_only (used by post-norm architectures)
         if gather_only:
-            # For distributed norm (prefill), still need to all-gather the fractured tensor
-            if self.args.is_distributed_norm(mode) and self.enable_all_gather:
+            # For distributed norm (prefill), the initial all-gather was skipped.
+            # Need to explicitly all-gather the fractured tensor.
+            if self.args.is_multichip and self.args.is_distributed_norm(mode):
                 x = ttnn.experimental.all_gather_async(
                     x,
                     persistent_output_buffer=None,
@@ -120,7 +121,7 @@ class DistributedNorm(LightweightModule):
                     multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                     num_links=self.tt_ccl.get_num_links(1),
                     topology=self.args.ccl_topology(),
-                    memory_config=x.memory_config(),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                     chunks_per_sync=10,
                     num_workers_per_link=2,
