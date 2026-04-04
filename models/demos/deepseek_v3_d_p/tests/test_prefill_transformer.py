@@ -12,6 +12,7 @@ extracts those weights into our TT state_dict format, and compares forward passe
 """
 
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 import torch
@@ -19,6 +20,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import profiler
+from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Model, DeepseekV3MoE
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
@@ -132,9 +134,56 @@ def _hf_reference_forward(hf_model, token_ids):
     return h
 
 
+# --- Tokenization helpers ---
+
+PROMPTS_PATH = Path("models/demos/deepseek_v3/demo/test_prompts_1024.json")
+
+
+def _get_pad_id(tokenizer):
+    """Resolve pad token ID, matching generator.py logic."""
+    pad_id = getattr(tokenizer, "pad_token_id", None)
+    if pad_id is None:
+        pad_id = getattr(tokenizer, "eos_token_id", None)
+    if pad_id is None:
+        pad_id = 0
+    return int(pad_id)
+
+
+def _tokenize_prompts_to_isl(tokenizer, prompts_path, isl_total, sp_factor):
+    """Tokenize prompts from JSON, concatenate, truncate/pad to isl_total."""
+    prompts = load_prompts_from_json(str(prompts_path))
+    pad_id = _get_pad_id(tokenizer)
+
+    all_tokens = []
+    for prompt in prompts:
+        ids = tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt}],
+            add_generation_prompt=True,
+            tokenize=True,
+        )
+        all_tokens.extend(ids)
+        if len(all_tokens) >= isl_total:
+            break
+
+    # Truncate or pad
+    if len(all_tokens) >= isl_total:
+        all_tokens = all_tokens[:isl_total]
+    else:
+        all_tokens.extend([pad_id] * (isl_total - len(all_tokens)))
+
+    # Alignment check
+    isl_per_chip = isl_total // sp_factor
+    assert (
+        isl_per_chip % ttnn.TILE_SIZE == 0
+    ), f"isl_per_chip={isl_per_chip} must be divisible by TILE_SIZE={ttnn.TILE_SIZE}"
+
+    return torch.tensor(all_tokens, dtype=torch.int64).unsqueeze(0)  # [1, isl_total]
+
+
 # --- Test ---
 
 
+@pytest.mark.parametrize("tokenizer_enabled", [True, False], ids=["tokenized", "random"])
 @pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
 @pytest.mark.parametrize("isl_total", [1024])
 @pytest.mark.parametrize("num_layers", [6])
@@ -171,7 +220,11 @@ def test_prefill_transformer(
     num_links,
     topology,
     pcc_validation,
+    tokenizer_enabled,
+    request,
 ):
+    torch.manual_seed(42)
+
     profiler.clear()
     profiler.start("total_test_time")
     config = config_only
@@ -188,7 +241,8 @@ def test_prefill_transformer(
     logger.info(f"mesh_shape={mesh_shape}, sp_factor={sp_factor}, tp_factor={tp_factor}")
     logger.info(
         f"isl_total={isl_total}, isl_per_chip={isl_per_chip}, "
-        f"num_layers={num_layers}, gate_fallback_mode={gate_fallback_mode}"
+        f"num_layers={num_layers}, gate_fallback_mode={gate_fallback_mode}, "
+        f"tokenizer_enabled={tokenizer_enabled}"
     )
 
     # --- Build HF reference model and extract weights ---
@@ -198,8 +252,14 @@ def test_prefill_transformer(
     profiler.end("weights_creation")
 
     # --- Create input ---
-    torch.manual_seed(123)
-    token_ids = torch.randint(0, config.vocab_size, (1, isl_total), dtype=torch.int64)
+    if tokenizer_enabled:
+        profiler.start("tokenization")
+        tok = request.getfixturevalue("tokenizer")
+        token_ids = _tokenize_prompts_to_isl(tok, PROMPTS_PATH, isl_total, sp_factor)
+        profiler.end("tokenization")
+        logger.info(f"Tokenized input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}")
+    else:
+        token_ids = torch.randint(0, config.vocab_size, (1, isl_total), dtype=torch.int64)
 
     # --- Torch reference (only when pcc_validation is enabled) ---
     torch_output = None
@@ -224,6 +284,7 @@ def test_prefill_transformer(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         gate_fallback_mode=gate_fallback_mode,
+        capacity_factor=32,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_transformer_creation")
@@ -355,6 +416,8 @@ def test_prefill_transformer_layer_by_layer(
     topology,
 ):
     """Layer-by-layer PCC check: embed -> layer_0 -> ... -> layer_N -> norm."""
+    torch.manual_seed(42)
+
     profiler.clear()
     profiler.start("total_test_time")
     config = config_only
@@ -395,7 +458,6 @@ def test_prefill_transformer_layer_by_layer(
     profiler.end("tt_transformer_creation")
 
     # --- Input ---
-    torch.manual_seed(123)
     token_ids = torch.randint(0, config.vocab_size, (1, isl_total), dtype=torch.int64)
 
     # --- HF: step-by-step forward ---
