@@ -42,9 +42,8 @@ bool can_construct_on_device(
     const std::optional<Tile>& optional_tile,
     bool enable_device_typecast,
     bool preserve_nan_values) {
-    bool res = device != nullptr && !device->is_remote_only() && (device->num_sub_devices() == 0) &&
-               tensor_shape.volume() > 0 && can_exec_ops_on_device(src_dtype) && can_exec_ops_on_device(dst_dtype) &&
-               enable_device_typecast &&
+    bool res = device != nullptr && !device->is_remote_only() && tensor_shape.volume() > 0 &&
+               can_exec_ops_on_device(src_dtype) && can_exec_ops_on_device(dst_dtype) && enable_device_typecast &&
                // TODO: Remove preserve_nan_values check after
                // https://github.com/tenstorrent/tt-metal/issues/31406
                !preserve_nan_values;
@@ -407,22 +406,42 @@ Tensor convert_python_tensor_to_tt_tensor(
         preserve_nan_values,
         enable_bfloat_opt);
 
-    auto set_layout = [&](Layout target) {
+    auto set_layout = [&](Layout target, const std::optional<CoreRangeSet>& core_range_set = std::nullopt) {
         if (output.layout() != target) {
             output =
-                ttnn::to_layout(output, target, std::nullopt, std::nullopt, std::nullopt, pad_value.value_or(0.0f));
+                ttnn::to_layout(output, target, std::nullopt, std::nullopt, core_range_set, pad_value.value_or(0.0f));
         }
     };
 
     if (device) {
-        output = output.to_device(device.value(), memory_config, cq_id);
-        if (output.dtype() != dst_dtype) {
-            // Need to perform final data conversion on device, typecast requires TILE layout.
-            set_layout(Layout::TILE);
-            output = ttnn::typecast(output, dst_dtype);
+        // When sub-devices are loaded, on-device operations (tilize, typecast) must target
+        // cores belonging to a single sub-device. Pick the sub-device with the most TENSIX
+        // worker cores to maximise parallelism or avoid single core factories
+        std::optional<CoreRangeSet> core_range_set;
+        auto active_id = device.value()->get_active_sub_device_manager_id();
+        auto default_id = device.value()->get_default_sub_device_manager_id();
+        if (active_id != default_id) {
+            auto num_sds = device.value()->num_sub_devices();
+            SubDeviceId best_sd{0};
+            uint32_t max_cores = 0;
+            for (uint32_t i = 0; i < num_sds; ++i) {
+                SubDeviceId sd{static_cast<uint8_t>(i)};
+                auto nc = device.value()->num_worker_cores(HalProgrammableCoreType::TENSIX, sd);
+                if (nc > max_cores) {
+                    max_cores = nc;
+                    best_sd = sd;
+                }
+            }
+            core_range_set = device.value()->worker_cores(HalProgrammableCoreType::TENSIX, best_sd);
         }
 
-        set_layout(layout);
+        output = output.to_device(device.value(), memory_config, cq_id);
+        if (output.dtype() != dst_dtype) {
+            set_layout(Layout::TILE, core_range_set);
+            output = ttnn::typecast(output, dst_dtype, std::nullopt, std::nullopt, core_range_set);
+        }
+
+        set_layout(layout, core_range_set);
     } else {
         set_layout(layout);
     }
