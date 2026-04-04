@@ -168,8 +168,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
 
     auto zero_init_semaphore_id = tt::tt_metal::CreateSemaphore(program, sender_core_grid, 0);
     auto zero_init_barrier_semaphore_id = tt::tt_metal::CreateSemaphore(program, sender_core_grid, 0);
-
-    constexpr uint32_t read_batch_size = 8;
+    constexpr uint32_t read_batch_size = 32;
 
     // c_0: dispatched_buffer scratch (reader-only, batched DRAM reads)
     detail::create_tensor_cb(
@@ -179,6 +178,30 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         /*buffering_factor=*/read_batch_size,
         /*cb_id=*/tt::CBIndex::c_0,
         "dispatched_buffer_scratch");
+    // c_17: 1-page CB on sender cores only (for future untilize output)
+    detail::create_tensor_cb(
+        program,
+        sender_core_grid,
+        dispatched_buffer,
+        /*buffering_factor=*/1,
+        /*cb_id=*/tt::CBIndex::c_17,
+        "untilize_output");
+    // c_18: 1-page CB for compute→reader ack signal
+    {
+        uint32_t ack_page_size = l1_alignment;
+        tt::tt_metal::CircularBufferConfig ack_cb_config =
+            tt::tt_metal::CircularBufferConfig(ack_page_size, {{tt::CBIndex::c_18, tt::DataFormat::UInt8}})
+                .set_page_size(tt::CBIndex::c_18, ack_page_size);
+        tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, ack_cb_config);
+    }
+    // c_19: 1-page CB for untilized output from compute (same page size as dispatched_buffer)
+    detail::create_tensor_cb(
+        program,
+        sender_core_grid,
+        dispatched_buffer,
+        /*buffering_factor=*/read_batch_size,
+        /*cb_id=*/tt::CBIndex::c_19,
+        "untilized_data");
     // c_1: dispatched_metadata scratch (reader-only, batched DRAM reads)
     detail::create_tensor_cb(
         program,
@@ -396,6 +419,8 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         reader_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_7));  // zi_cb_id
         reader_compile_time_args.push_back(num_zero_init_cores);                      // num_idle_cores
     }
+    reader_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_17));  // cb_untilize_out_id
+    reader_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_18));  // cb_compute_ack_id
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -417,6 +442,19 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             .compile_args = compile_time_args,
             .defines = writer_defines});
 
+    // Compute kernel: waits on c_17 pages, acks via c_18 (on sender cores only)
+    [[maybe_unused]] tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/compute/"
+        "untilize_combine.cpp",
+        sender_core_grid,
+        tt::tt_metal::ComputeConfig{
+            .compile_args = {
+                static_cast<uint32_t>(tt::CBIndex::c_17),  // cb_untilize_out_id
+                static_cast<uint32_t>(tt::CBIndex::c_18),  // cb_compute_ack_id
+                static_cast<uint32_t>(tt::CBIndex::c_0),   // cb_in_id (untilize input)
+                static_cast<uint32_t>(tt::CBIndex::c_19),  // cb_untilized_id (untilize output)
+            }});
     // Pre-compute NOC coordinates for all sender cores (for inter-core barrier signaling)
     std::vector<std::pair<uint32_t, uint32_t>> sender_noc_coords;
     for (const auto& sc : sender_cores) {
