@@ -84,7 +84,10 @@ std::array<ttnn::Tensor, 2> gate_up_matmul(
     uint32_t M = (x.physical_volume() / x_shape[-1]) / tt::constants::TILE_HEIGHT;
     uint32_t N = w_shape[-1] / tt::constants::TILE_WIDTH;
 
-    // Fixed tiling — tune as needed
+    // K_block=4, M_block=1 was measured as optimal (170ms vs 200ms with larger blocks).
+    // Larger blocks make the kernel computation faster but increase the compiled binary
+    // size (TENSIX COMPUTE 2: 4380 B → 5604 B), which costs more instruction-cache load
+    // time per invocation.  At 1024 expert calls that overhead dominates the compute gain.
     constexpr uint32_t K_block_tiles = 4;
     constexpr uint32_t N_block_tiles = 4;
     constexpr uint32_t M_block_tiles = 1;
