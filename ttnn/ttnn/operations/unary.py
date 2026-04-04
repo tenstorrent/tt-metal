@@ -39,6 +39,7 @@ def register_ttnn_cpp_unary_function(unary_function):
         name_to_golden_function = {
             "identity": torch.clone,
             "mish": lambda _x: torch.nn.functional.mish(_x.to(torch.float)),
+            "cbrt": torch_cbrt,
         }
 
         golden_keys = set(name_to_golden_function.keys())
@@ -57,6 +58,7 @@ def register_ttnn_cpp_unary_function(unary_function):
 TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.identity,
     ttnn.mish,
+    ttnn.cbrt,
 ]
 for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
     register_ttnn_cpp_unary_function(unary_function)

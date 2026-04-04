@@ -1787,6 +1787,13 @@ void py_module(nb::module_& mod) {
     bind_unary_logit(mod);
     bind_unary_chain(mod);
 
+    bind_unary_operation_subcoregrids<"cbrt">(
+        mod,
+        &ttnn::cbrt,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|cbrt|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+
     bind_unary_operation_with_fast_and_approximate_mode<"mish", &ttnn::mish>(
         mod, "[Supported range -20 to inf]", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 }

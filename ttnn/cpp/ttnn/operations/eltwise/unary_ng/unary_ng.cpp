@@ -80,6 +80,8 @@ namespace ttnn {
             sub_core_grids);                                 \
     }
 
+DEFINE_UNARY_NG_OP(cbrt, CBRT)
+
 #undef DEFINE_UNARY_NG_OP
 
 }  // namespace ttnn

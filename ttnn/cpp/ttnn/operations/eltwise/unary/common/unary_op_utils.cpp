@@ -16,6 +16,7 @@ namespace {
 
 std::string get_macro_definition(UnaryOpType op_type) {
     switch (op_type) {
+        case UnaryOpType::CBRT: return "SFPU_OP_CBRT_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -45,6 +46,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::DROPOUT: {
             return {"dropout_tile_init();", fmt::format("dropout_tile({});", idst)};
         }
+        case UnaryOpType::CBRT: return {"cbrt_tile_init();", fmt::format("cbrt_tile({});", idst)};
         default: TT_THROW("unexpected op type {}", op_type);
     };
 }
