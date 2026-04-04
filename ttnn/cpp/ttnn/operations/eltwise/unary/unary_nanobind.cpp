@@ -1789,6 +1789,12 @@ void py_module(nb::module_& mod) {
 
     bind_unary_operation_with_fast_and_approximate_mode<"mish", &ttnn::mish>(
         mod, "[Supported range -20 to inf]", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+
+    bind_unary_operation<"selu", &ttnn::selu>(
+        mod,
+        R"doc(\text{selu}(x) = \text{scale} \times (\max(0, x) + \min(0, \alpha \times (\exp(x) - 1)))  \text{ where } \text{scale} = 1.0507 \text{ and } \alpha = 1.6733)doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 }
 
 }  // namespace ttnn::operations::unary

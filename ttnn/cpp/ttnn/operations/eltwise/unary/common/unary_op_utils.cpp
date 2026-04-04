@@ -16,6 +16,7 @@ namespace {
 
 std::string get_macro_definition(UnaryOpType op_type) {
     switch (op_type) {
+        case UnaryOpType::SELU: return "SFPU_OP_SELU_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -45,6 +46,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::DROPOUT: {
             return {"dropout_tile_init();", fmt::format("dropout_tile({});", idst)};
         }
+        case UnaryOpType::SELU: return {"selu_tile_init();", fmt::format("selu_tile({});", idst)};
         default: TT_THROW("unexpected op type {}", op_type);
     };
 }
