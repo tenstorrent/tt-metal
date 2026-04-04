@@ -76,6 +76,7 @@ class ModelArgs(TTModelArgs):
             max_seq_len=max_seq_len,
             optimizations=optimizations,
             cache_hf=cache_hf,
+            use_hf_rope=True,  # Gemma 4 uses HF-style rotary embeddings
         )
 
         # Gemma 4 does not use fused QK ops (rotary embedding + paged cache update)
@@ -393,3 +394,24 @@ class ModelArgs(TTModelArgs):
     def get_kv_source_layer(self, layer_num):
         """Get the source layer index for KV sharing."""
         return self.kv_sharing_map.get(layer_num, layer_num)
+
+    def get_layer_intermediate_size(self, layer_num):
+        """Get intermediate_size for a layer.
+        Note: E4B does NOT use double-wide MLP (use_double_wide_mlp=False).
+        Larger models may have 2x intermediate_size for KV-shared layers.
+        """
+        return self.hidden_dim
+
+    def get_layer_rotary_dim(self, layer_num):
+        """Get the number of dimensions that receive RoPE for a specific layer."""
+        hd = self.get_layer_head_dim(layer_num)
+        lt = self.layer_types[layer_num] if self.layer_types else "sliding_attention"
+        if lt == "full_attention":
+            return int(hd * self.partial_rotary_factor)
+        return hd  # Sliding layers get full rotation
+
+    def is_sliding_layer(self, layer_num):
+        """Check if a layer uses sliding window attention."""
+        if self.layer_types:
+            return self.layer_types[layer_num] == "sliding_attention"
+        return True
