@@ -302,10 +302,7 @@ def _open_ttnn_device(
             if not can_retry:
                 raise
 
-            print(
-                f"Device open failed (attempt {attempt}/{retries}): {err_text}. "
-                f"Retrying in {sleep_s:.1f}s..."
-            )
+            print(f"Device open failed (attempt {attempt}/{retries}): {err_text}. " f"Retrying in {sleep_s:.1f}s...")
             if sleep_s > 0:
                 time.sleep(sleep_s)
 

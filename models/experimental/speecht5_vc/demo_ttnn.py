@@ -80,9 +80,7 @@ def load_speaker_embedding(
         if speaker_embeddings.ndim == 1:
             speaker_embeddings = speaker_embeddings.unsqueeze(0)
         if speaker_embeddings.shape[-1] != 512:
-            raise ValueError(
-                f"Speaker embedding must have last dimension 512, got {speaker_embeddings.shape}."
-            )
+            raise ValueError(f"Speaker embedding must have last dimension 512, got {speaker_embeddings.shape}.")
         return speaker_embeddings.float()
 
     # Default fallback: CMU Arctic x-vectors (same source used in the TTS demo).
