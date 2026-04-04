@@ -7,6 +7,7 @@
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/complex_unary/device/complex_unary_op.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::complex_binary {
 
@@ -41,9 +42,8 @@ ComplexTensor multiply(const ComplexTensor& ab, const ComplexTensor& cd, const M
 }
 
 ComplexTensor divide(
-    const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config) {
-    return ttnn::operations::complex_binary::multiply(
-        input_a, ttnn::reciprocal(input_b, output_mem_config), output_mem_config);
+    const ComplexTensor& /*input_a*/, const ComplexTensor& /*input_b*/, const MemoryConfig& /*output_mem_config*/) {
+    TT_THROW("reciprocal operation not yet reimplemented after nuke");
 }
 
 }  // namespace ttnn::operations::complex_binary

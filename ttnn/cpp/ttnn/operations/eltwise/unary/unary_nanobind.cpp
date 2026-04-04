@@ -414,6 +414,10 @@ void bind_unary_operation_overload_complex(
         ttnn::overload_t(func_complex, nb::arg("input_tensor"), nb::kw_only(), nb::arg("memory_config")));
 }
 
+// BEGIN: Binding functions disabled during SFPU nuke.
+// These reference operations (reciprocal, softplus, xielu, sigmoid, etc.) that have been
+// removed and not yet reimplemented. They will be re-enabled as operations are regenerated.
+#if 0
 template <ttnn::unique_string OpName>
 void bind_unary_operation_overload_complex_return_complex(
     nb::module_& mod, const std::string& supported_dtype = "BFLOAT16", const std::string& info_doc = "") {
@@ -468,6 +472,8 @@ void bind_unary_operation_overload_complex_return_complex(
             nb::kw_only(),
             nb::arg("memory_config")});
 }
+
+#endif  // end first #if 0 block (reciprocal-related templates)
 
 template <ttnn::unique_string OpName, auto Func>
 void bind_unary_operation_with_fast_and_approximate_mode(
@@ -525,6 +531,8 @@ void bind_unary_operation_with_fast_and_approximate_mode(
             nb::arg("output_tensor") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()});
 }
+
+#if 0  // resume disabled block (float_parameter, softplus, xielu, sigmoid, etc.)
 
 template <ttnn::unique_string OpName, auto Func>
 void bind_unary_operation_with_float_parameter(
@@ -1188,6 +1196,9 @@ void bind_sigmoid(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("output_tensor") = nb::none());
 }
+
+#endif
+// END: Binding functions disabled during SFPU nuke.
 
 void bind_unary_chain(nb::module_& mod) {
     auto doc = fmt::format(

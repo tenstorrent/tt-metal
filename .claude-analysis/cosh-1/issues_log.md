@@ -12,7 +12,7 @@
 |-------|-------------|--------|----------|--------|
 | 1 | Reference Discovery | ok | ~2min | None |
 | 2 | Reference Analysis | ok | ~5min | None |
-| 3 | Implementation | pending | - | - |
+| 3 | Implementation | ok | ~10min | None |
 | 4 | Testing & Debugging | pending | - | - |
 | 5 | Documentation | pending | - | - |
 | 6 | Self-Reflection | pending | - | - |

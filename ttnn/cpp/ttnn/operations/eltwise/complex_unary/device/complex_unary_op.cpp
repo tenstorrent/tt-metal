@@ -8,6 +8,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
+#include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::complex_unary {
 
@@ -19,30 +20,20 @@ Tensor _angle(const ComplexTensor& input, const MemoryConfig& output_mem_config)
     return atan2(input[1], input[0], output_mem_config);
 }
 
-Tensor _is_imag(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-    return ttnn::eqz(input[0], output_mem_config);
+Tensor _is_imag(const ComplexTensor& /*input*/, const MemoryConfig& /*output_mem_config*/) {
+    TT_THROW("eqz operation not yet reimplemented after nuke");
 }
 
-Tensor _is_real(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-    return ttnn::eqz(input[1], output_mem_config);
+Tensor _is_real(const ComplexTensor& /*input*/, const MemoryConfig& /*output_mem_config*/) {
+    TT_THROW("eqz operation not yet reimplemented after nuke");
 }
 
-ComplexTensor _conj(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-    return ComplexTensor({input[0], ttnn::neg(input[1], output_mem_config)});
+ComplexTensor _conj(const ComplexTensor& /*input*/, const MemoryConfig& /*output_mem_config*/) {
+    TT_THROW("neg operation not yet reimplemented after nuke");
 }
 
-ComplexTensor _polar(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-    const Tensor& input_a = input.real();
-    const Tensor& input_b = input.imag();
-    Tensor c = ttnn::cos(input_b, output_mem_config);
-    Tensor r = ttnn::multiply(input_a, c, std::nullopt, output_mem_config);
-    c.deallocate();
-
-    Tensor s = ttnn::sin(input_b, output_mem_config);
-    Tensor i = ttnn::multiply(input_a, s, std::nullopt, output_mem_config);
-    s.deallocate();
-
-    return ComplexTensor({r, i});
+ComplexTensor _polar(const ComplexTensor& /*input*/, const MemoryConfig& /*output_mem_config*/) {
+    TT_THROW("cos/sin operations not yet reimplemented after nuke");
 }
 
 }  // namespace ttnn::operations::complex_unary
