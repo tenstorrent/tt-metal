@@ -123,7 +123,8 @@ class TtPrefillTransformer(LightweightModule):
         """
         rope_tensors = self.rope_setup.get_rope_tensors(self.seq_len)
 
-        h = self.embed(token_ids)  # [1, 1, seq_per_chip, emb_dim/tp]
+        h = self.embed(token_ids)  # [1, seq_per_chip, emb_dim/tp]
+        h = ttnn.unsqueeze_to_4D(h)  # [1, 1, seq_per_chip, emb_dim/tp]
 
         for i, layer in enumerate(self.layers):
             signpost(f"forward_layer_{i}_start")
