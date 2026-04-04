@@ -155,7 +155,7 @@ distributed::MeshDevice* DeviceStorage::get_device_bypass_deallocate_check() con
     if (const auto* allocated = std::get_if<LocallyAllocatedState>(&state_)) {
         return allocated->mesh_tensor_->mesh_buffer().device();
     }
-    return nullptr;
+    return std::get<DeallocatedState>(state_).get_device();
 }
 
 distributed::MeshDevice& DeviceStorage::get_device() const { return *get_mesh_buffer().device(); }
