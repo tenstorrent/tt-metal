@@ -1799,6 +1799,12 @@ void py_module(nb::module_& mod) {
         R"doc(\text{selu}(x) = \text{scale} \times (\max(0, x) + \min(0, \alpha \times (\exp(x) - 1))))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+
+    bind_unary_operation<"silu", &ttnn::silu>(
+        mod,
+        R"doc(\text{silu}(x) = x \times \sigma(x) = \frac{x}{1 + e^{-x}})doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     {
         auto doc = fmt::format(
             R"doc(

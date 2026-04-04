@@ -65,6 +65,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::CBRT: return {"cbrt_tile_init();", fmt::format("cbrt_tile({});", idst)};
         case UnaryOpType::HARDSIGMOID: return {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
         case UnaryOpType::SELU: return {"selu_tile_init();", fmt::format("selu_tile({});", idst)};
+        case UnaryOpType::SILU: return {"silu_tile_init();", fmt::format("silu_tile({});", idst)};
         default: TT_THROW("unexpected op type {}", op_type);
     };
 }
@@ -94,6 +95,9 @@ bool get_op_approx_mode(UnaryOpType op_type) {
 UnaryWithParam string_to_unary_with_param(const std::string& name) {
     if (name == "cosh") {
         return UnaryWithParam(UnaryOpType::COSH);
+    }
+    if (name == "silu") {
+        return UnaryWithParam(UnaryOpType::SILU);
     }
     TT_THROW("Unknown unary op: {}", name);
 }

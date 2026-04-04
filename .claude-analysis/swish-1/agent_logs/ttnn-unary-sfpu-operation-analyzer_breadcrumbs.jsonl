@@ -1,0 +1,6 @@
+{"ts":"2026-04-04T18:59:41+00:00","event":"start","agent":"ttnn-unary-sfpu-operation-analyzer","operation":"selu","input_files":["ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp"]}
+{"ts":"2026-04-04T18:59:44+00:00","event":"start","agent":"ttnn-unary-sfpu-operation-analyzer","operation":"cbrt","input_files":["ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp"]}
+{"event":"start","operation":"cbrt","input_files":["ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp"],"ts":"2026-04-04T18:59:54+00:00"}
+{"ts":"2026-04-04T19:00:01+00:00","event":"start","agent":"ttnn-unary-sfpu-operation-analyzer","operation":"cosh","input_files":["ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp"]}
+{"event":"start","operation":"cosh","input_files":["ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp"],"ts":"2026-04-04T19:00:04+00:00"}
+{"event":"start","operation":"selu","input_files":["ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp"],"ts":"2026-04-04T19:00:05+00:00"}
