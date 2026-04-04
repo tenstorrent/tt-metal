@@ -37,4 +37,10 @@ Direct mirror of `cosh` implementation, changing only the arithmetic operator fr
 - Input range [-4, 4] is used for testing to stay within reasonable precision bounds.
 
 ## Test Results
-(to be filled after testing)
+- **Status**: ALL PASSED (9/9)
+- **Iterations**: 1 (passed on first try)
+- **bfloat16 tests**: 4/4 passed (shapes: [1,1,32,32], [1,1,64,64], [1,3,320,384], [4,1,32,32]) with PCC >= 0.999
+- **float32 tests**: 4/4 passed (same shapes) with PCC >= 0.999
+- **Range test**: 1/1 passed (zeros, small positive, negative values)
+- **No hangs detected**
+- **Total test time**: 12.24s
