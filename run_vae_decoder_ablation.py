@@ -38,8 +38,8 @@ B, C, T = 1, 16, 21  # 81 video frames → (81-1)//4+1 = 21 latent frames (encod
 H, W = 60, 104  # 480p
 TARGET_HEIGHT, TARGET_WIDTH = 480, 832
 MESH_SHAPE = (2, 4)
-H_AXIS, W_AXIS = 0, 1
-NUM_LINKS = 2  # matches BH 2x4 pipeline config
+H_AXIS, W_AXIS = 0, 1  # BH 2x4 production: tp_axis=0 (H, 2-way), sp_axis=1 (W, 4-way)
+NUM_LINKS = 2  # BH 2x4 production config
 USE_CACHE = False  # uncached
 
 # Ablation from env
@@ -48,8 +48,10 @@ label = f"ABLATE={ablate}" if ablate else "BASELINE"
 
 print(f"\n{'='*60}")
 print(f"WAN 2.2 VAE Decoder — {label}")
+h_factor = MESH_SHAPE[H_AXIS]
+w_factor = MESH_SHAPE[W_AXIS]
 print(f"Latent: ({B}, {C}, {T}, {H}, {W}) on {MESH_SHAPE[0]}x{MESH_SHAPE[1]} mesh")
-print(f"Per-device shapes match 4x32 Galaxy 720p")
+print(f"Per-device: H={H//h_factor}, W={W//w_factor} (H×{h_factor} W×{w_factor})")
 print(f"{'='*60}\n")
 
 # --- Device setup ---

@@ -20,16 +20,19 @@ mesh_device = ttnn.open_mesh_device(
     num_command_queues=2,
 )
 
+# BH 2x4 with H-parallel 2-way (tp_axis=0), W-parallel 4-way (sp_axis=1), num_links=2.
+# is_fsdp=True required: 14B model weights (28 GB BF16) exceed per-chip DRAM without sharding.
 pipeline = WanPipeline.create_pipeline(
     mesh_device=mesh_device,
-    sp_axis=0,
-    tp_axis=1,
-    num_links=1,
+    sp_axis=1,  # W splits 4-way along mesh axis 1
+    tp_axis=0,  # H splits 2-way along mesh axis 0
+    num_links=2,  # BH production num_links
     dynamic_load=True,
     topology=ttnn.Topology.Linear,
     is_fsdp=True,
     target_height=HEIGHT,
     target_width=WIDTH,
+    vae_use_cache=False,
 )
 
 prompt = "A cat sitting on a windowsill watching rain fall outside."
