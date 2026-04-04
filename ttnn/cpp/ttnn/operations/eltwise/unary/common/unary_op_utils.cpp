@@ -23,6 +23,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::HARDTANH: return "SFPU_OP_HARDTANH_INCLUDE";
         case UnaryOpType::ATANH: return "SFPU_OP_ATANH_INCLUDE";
         case UnaryOpType::SOFTSIGN: return "SFPU_OP_SOFTSIGN_INCLUDE";
+        case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -69,6 +70,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::SELU: return {"selu_tile_init();", fmt::format("selu_tile({});", idst)};
         case UnaryOpType::ATANH: return {"atanh_tile_init();", fmt::format("atanh_tile({});", idst)};
         case UnaryOpType::SOFTSIGN: return {"softsign_tile_init();", fmt::format("softsign_tile({});", idst)};
+        case UnaryOpType::LGAMMA: return {"lgamma_tile_init();", fmt::format("lgamma_tile({});", idst)};
         default: TT_THROW("unexpected op type {}", op_type);
     };
 }

@@ -12,4 +12,5 @@ enum class SfpuType {
     selu,
     hardtanh,
     softsign,
+    lgamma,
 };
