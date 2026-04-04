@@ -477,7 +477,10 @@ class WanCausalConv3d(Module):
                 if self.conv_config.sub_device_id is None:
                     self.conv_config.sub_device_id = self.ccl_manager._conv3d_sd_id
 
-                # Ensure NP (CQ1) has finished writing halo data before conv3d (CQ0) reads it.
+                # Keep dispatch-level event for now: ensures NP completes before conv3d,
+                # making the in-kernel semaphore a no-op wait (already ≥ expected count).
+                # True T-slice pipelining (removing the event) requires ensuring the semaphore
+                # reset runs before NP starts signaling — see HALO_BUFFER_DESIGN.md.
                 if self.ccl_manager._pending_np_event is not None:
                     ttnn.wait_for_event(
                         cq_id=ttnn.QueueId(0),
