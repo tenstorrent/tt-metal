@@ -13,9 +13,19 @@ the process prints a diagnostic message and calls os._exit(1) to avoid silent ha
 
 Usage:
     source python_env/bin/activate && export PYTHONPATH=$(pwd)
+
+    # Fast mode (~30-60 combos, 5-15 min for large shapes) — use this first:
     python models/tt_dit/tests/models/wan2_2/bruteforce_conv3d_sweep.py \
-        --C_in 96 --C_out 96 --kernel 3,3,3 --T 83 --H 186 --W 42 \
-        --mesh 2x4 --output sweep_results_v3/up3_96x96.json \
+        --C_in 96 --C_out 96 --kernel 3,3,3 --T 63 --H 242 --W 210 \
+        --grid-size 12x10 --fast \
+        --output sweep_results/up3_96x96_fast.json
+
+    # Exhaustive mode (~300+ combos, hours) — use --baseline to warm-start from fast:
+    python models/tt_dit/tests/models/wan2_2/bruteforce_conv3d_sweep.py \
+        --C_in 96 --C_out 96 --kernel 3,3,3 --T 63 --H 242 --W 210 \
+        --grid-size 12x10 \
+        --baseline sweep_results/up3_96x96_fast.json \
+        --output sweep_results/up3_96x96_full.json \
         --timeout 60
 """
 
@@ -33,8 +43,8 @@ import torch
 import ttnn
 from models.tt_dit.utils.conv3d import _BLOCKINGS, _DEFAULT_BLOCKINGS, aligned_channels
 
-WARMUP = 2
-RUNS = 4
+WARMUP = 1
+RUNS = 2
 TILE_SIZE = 2048  # bf16 tile = 32*32*2
 FP32_TILE_SIZE = 4096  # fp32 tile = 32*32*4
 TILE_HEIGHT = 32
@@ -159,37 +169,90 @@ def t_needed_to_hide_weight_read(cin_block, cout_block, kernel_size):
     return max(1, math.ceil(weight_us / tilize_per_mrow_us))
 
 
-def build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=120):
+def build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=120, fast=False):
+    """Generate candidate (Cin, Cout, T, H, W) blocking combinations.
+
+    fast=True: focused set (~30-60 combos, ~5-15 min for large shapes).
+        - Only the largest valid Cin (fewest DRAM passes)
+        - Only largest valid Cout (most output parallelism)
+        - Only clean divisors of T_out (no partial last blocks)
+        - Small focused spatial set proven to work well across shapes
+    fast=False: exhaustive search (~100-500 combos, hours for large shapes).
+    """
     padded_cin = aligned_channels(C_in)
     kT = kernel_size[0]
-
-    cins = [c for c in range(32, padded_cin + 1, 32) if valid_cin(c, padded_cin, kernel_size)]
-    couts = [c for c in range(32, aligned_channels(C_out) + 1, 32) if valid_cout(c, C_out)]
-
     T_out = T - (kT - 1) if kT > 1 else T
-
-    t_blocks_set = {1}
-    if kT > 1 and T_out > 0:
-        for t in range(2, min(T_out + 1, 32)):
-            if T_out % t == 0:
-                t_blocks_set.add(t)
-        for t in [3, 5, 6, 7, 9, 11, 13, 15, 21]:
-            if 1 < t <= T_out:
-                t_blocks_set.add(t)
-        t_blocks_set = {t for t in t_blocks_set if t <= min(T_out, 21)}
-    t_blocks = sorted(t_blocks_set)
-
-    tensor_vol = H * W
-    if tensor_vol > 2000:
-        hw = [(h, w) for h in [2, 4, 8, 16, 32] for w in [2, 4, 8, 16, 32] if h * w <= 256 and h <= H and w <= W]
-    else:
-        hw = [(h, w) for h in [1, 2, 4, 8, 16, 32] for w in [1, 2, 4, 8, 16, 32] if h * w <= 256 and h <= H and w <= W]
-
     padded_cout = aligned_channels(C_out)
-    if tensor_vol > 2000 and padded_cout > 64:
-        couts = [c for c in couts if c >= 64]
-    if tensor_vol > 10000 and padded_cout > 96:
-        couts = [c for c in couts if c >= 96]
+
+    if fast:
+        # Cin: largest valid only (fewest C_in blocks = best DRAM amortisation).
+        # Also try padded_cin//2 if valid and gives more core parallelism.
+        all_cins = [c for c in range(32, padded_cin + 1, 32) if valid_cin(c, padded_cin, kernel_size)]
+        cins = [all_cins[-1]]  # largest
+        if len(all_cins) >= 2 and all_cins[-2] >= padded_cin // 2:
+            cins.append(all_cins[-2])
+
+        # Cout: largest valid only.
+        all_couts = [c for c in range(32, padded_cout + 1, 32) if valid_cout(c, C_out) and valid_matmul_subblock(c)]
+        couts = [all_couts[-1]] if all_couts else []
+
+        # T: include divisors of both T_in and T_out (T_out = T_in - kT + 1).
+        # T_out may be prime (e.g. T_in=63 → T_out=61) so using T_in divisors
+        # too avoids missing good values like T=7 for T_in=63.
+        # Cap at 21 — larger blocks rarely help due to L1 pressure.
+        t_blocks_set = {1}
+        if kT > 1 and T_out > 1:
+            for t in range(2, min(T + 1, 22)):  # T_in divisors
+                if T % t == 0:
+                    t_blocks_set.add(t)
+            for t in range(2, min(T_out + 1, 22)):  # T_out divisors
+                if T_out % t == 0:
+                    t_blocks_set.add(t)
+            # Also include a fixed useful set that covers typical layer T values
+            for t in [3, 6, 7, 9]:
+                if 1 < t <= min(T_out, 21):
+                    t_blocks_set.add(t)
+        t_blocks = sorted(t_blocks_set)
+
+        # Spatial: focused set based on empirical wins across shapes.
+        # H=4 is critical for conv_out (H=8 can silently OOM).
+        # W=4 and W=8 cover most cases. Avoid W>8 for large shapes.
+        tensor_vol = H * W
+        if tensor_vol > 10000:
+            # Full-res large shapes: small spatial blocks to avoid OOM
+            hw_candidates = [(4, 4), (4, 8), (8, 4), (8, 8), (4, 16), (16, 4)]
+        elif tensor_vol > 2000:
+            hw_candidates = [(4, 4), (4, 8), (8, 4), (8, 8), (4, 16), (16, 4), (16, 8), (8, 16)]
+        else:
+            hw_candidates = [(4, 4), (4, 8), (8, 4), (8, 8), (4, 16), (16, 4), (16, 8), (8, 16), (16, 16)]
+        hw = [(h, w) for h, w in hw_candidates if h <= H and w <= W]
+    else:
+        cins = [c for c in range(32, padded_cin + 1, 32) if valid_cin(c, padded_cin, kernel_size)]
+        couts = [c for c in range(32, padded_cout + 1, 32) if valid_cout(c, C_out)]
+
+        t_blocks_set = {1}
+        if kT > 1 and T_out > 0:
+            for t in range(2, min(T_out + 1, 32)):
+                if T_out % t == 0:
+                    t_blocks_set.add(t)
+            for t in [3, 5, 6, 7, 9, 11, 13, 15, 21]:
+                if 1 < t <= T_out:
+                    t_blocks_set.add(t)
+            t_blocks_set = {t for t in t_blocks_set if t <= min(T_out, 21)}
+        t_blocks = sorted(t_blocks_set)
+
+        tensor_vol = H * W
+        if tensor_vol > 2000:
+            hw = [(h, w) for h in [2, 4, 8, 16, 32] for w in [2, 4, 8, 16, 32] if h * w <= 256 and h <= H and w <= W]
+        else:
+            hw = [
+                (h, w) for h in [1, 2, 4, 8, 16, 32] for w in [1, 2, 4, 8, 16, 32] if h * w <= 256 and h <= H and w <= W
+            ]
+
+        if tensor_vol > 2000 and padded_cout > 64:
+            couts = [c for c in couts if c >= 64]
+        if tensor_vol > 10000 and padded_cout > 96:
+            couts = [c for c in couts if c >= 96]
 
     combos = []
     skipped_l1 = 0
@@ -261,6 +324,11 @@ def main():
     parser.add_argument("--grid-size", type=str, default=None)
     parser.add_argument("--mesh", type=str, default=None, help="Mesh shape e.g. 2x4")
     parser.add_argument("--output", type=str, required=True)
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Fast mode: focused candidates (~30-60 combos, 5-15 min) vs exhaustive (~300+, hours).",
+    )
     parser.add_argument("--timeout", type=int, default=60, help="Per-combo hang timeout in seconds (default: 60)")
     parser.add_argument(
         "--baseline",
@@ -282,7 +350,7 @@ def main():
     else:
         _num_cores = 120
 
-    combos = build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=_num_cores)
+    combos = build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=_num_cores, fast=args.fast)
     print(f"Shape: C_in={C_in} C_out={C_out} kernel={kernel_size} T={T} H={H} W={W}")
     print(f"Grid: {args.grid_size or 'auto'}")
     print(f"Mesh: {args.mesh or 'single device'}")
