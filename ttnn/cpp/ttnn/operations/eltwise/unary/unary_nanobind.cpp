@@ -66,6 +66,8 @@ Tensor unary_composite_3param_to_4param_wrapper(
     return Func(input_tensor, parameter_a, parameter_b, memory_config, std::nullopt);
 }
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-function"
 void bind_unary_clamp(nb::module_& mod) {
     const char* doc = R"doc(
         Applies clamp to :attr:`input_tensor` element-wise.
@@ -181,6 +183,8 @@ void bind_unary_clip(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("memory_config") = nb::none()});
 }
+
+#pragma clang diagnostic pop
 
 template <
     ttnn::unique_string OpName,
@@ -881,6 +885,11 @@ void bind_unary_operation_with_dim_parameter(
         ttnn::overload_t{
             Func, nb::arg("input_tensor"), nb::arg("dim") = -1, nb::kw_only(), nb::arg("memory_config") = nb::none()});
 }
+
+// These binding functions are defined but not yet called from py_module (post-nuke).
+// Suppress unused function warnings until they are re-enabled.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-function"
 
 void bind_softplus(nb::module_& mod) {
     auto doc = fmt::format(
@@ -1777,6 +1786,7 @@ void bind_unary_composite_rpow(
             nb::kw_only(),
             nb::arg("memory_config") = nb::none()});
 }
+#pragma clang diagnostic pop
 }  // namespace
 
 void py_module(nb::module_& mod) {

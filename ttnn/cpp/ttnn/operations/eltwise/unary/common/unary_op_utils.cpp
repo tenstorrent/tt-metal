@@ -22,14 +22,17 @@ std::string get_macro_definition(UnaryOpType op_type) {
 
 template <typename T>
 std::pair<std::string, std::string> get_op_init_and_func_parameterized(
-    UnaryOpType op_type, std::span<const T> params, const std::string& idst, std::optional<DataType> input_dtype) {
+    UnaryOpType op_type,
+    std::span<const T> params,
+    [[maybe_unused]] const std::string& idst,
+    [[maybe_unused]] std::optional<DataType> input_dtype) {
     TT_FATAL(
         is_parametrized_type(op_type),
         "operator should support at least one parameter but op_type {} does not",
         op_type);
     // TODO don't cast T to float when precision needs to be preserved
-    const T param0_raw = params[0];
-    float param0 = static_cast<float>(params[0]);
+    [[maybe_unused]] const T param0_raw = params[0];
+    [[maybe_unused]] float param0 = static_cast<float>(params[0]);
     switch (op_type) {
         case UnaryOpType::MISH:
             return {};// MISH uses dedicated mish_kernel.cpp;
@@ -39,7 +42,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
 }
 
 std::pair<std::string, std::string> get_op_init_and_func_default(
-    UnaryOpType op_type, std::string idst, std::optional<DataType> input_dtype) {
+    UnaryOpType op_type, std::string idst, [[maybe_unused]] std::optional<DataType> input_dtype) {
     switch (op_type) {
         case UnaryOpType::IDENTITY: return {"identity_tile_init();", fmt::format("identity_tile({});", idst)};
         case UnaryOpType::DROPOUT: {
@@ -163,7 +166,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
     defines[get_macro_definition(op_type)] = "1";
 }
 
-std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<DataType> input_dtype) {
+std::string_view get_compute_kernel_path(UnaryOpType op_type, [[maybe_unused]] std::optional<DataType> input_dtype) {
     switch (op_type) {
         case UnaryOpType::MISH: return "mish_kernel.cpp";
         case UnaryOpType::IDENTITY: return "eltwise_identity_kernel.cpp";
