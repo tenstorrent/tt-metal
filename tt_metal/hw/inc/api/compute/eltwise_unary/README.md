@@ -19,3 +19,67 @@ Instead of creating a new `llk_math_eltwise_unary_sfpu_<op>.h` for each op, use 
 3. **Use the macros to define your init and compute functions.**
 4. **Add the include guard to `sfpu_split_includes.h`.**
 5. **Register in `unary_op_utils.cpp` (macro definition, init/func, approx mode).**
+### Example: Adding a New Op (e.g., max)
+
+```cpp
+#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "binary_max_min.h"
+
+namespace ckernel {
+    // Init function for max
+    template <bool fast_and_approx = true>
+    ALWI void binary_max_tile_init() {
+        MATH(SFPU_UNARY_KERNEL_INIT(max, fast_and_approx));
+    }
+    // Compute function for max
+    template <bool fast_and_approx = true>
+    ALWI void binary_max_tile(uint32_t idst) {
+        MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_max, RC, fast_and_approx, idst));
+    }
+}
+```
+
+### Example: Adding a New Op (e.g., negative)
+
+```cpp
+#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "ckernel_sfpu_negative.h"
+
+namespace ckernel {
+    template <bool fast_and_approx = true>
+    ALWI void negative_tile_init() {
+        MATH(SFPU_UNARY_KERNEL_INIT(negative, fast_and_approx));
+    }
+    template <bool fast_and_approx = true>
+    ALWI void negative_tile(uint32_t idst) {
+        MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_negative, RC, fast_and_approx, idst));
+    }
+}
+```
+
+## Step-by-Step: Adding a New Op
+
+1. **Implement your op in the low-level kernel (e.g., `ckernel_sfpu_<op>.h`).**
+2. **In your API header (e.g., `eltwise_unary/<op>.h`), include both the macro header and the specific kernel header:**
+   - `#include "llk_math_eltwise_unary_sfpu_macros.h"`
+   - `#include "ckernel_sfpu_<op>.h"` (only include the kernel header needed for your op)
+3. **Use the macros to define your init and compute functions.**
+   - Choose the macro that matches your op's requirements or, if your op requires a new macro, add it to `llk_math_eltwise_unary_sfpu_macros.h` and document it.
+   - Pass the op name, type, and any required parameters.
+
+## Migration Notes
+
+- **Do not create new `llk_math_eltwise_unary_sfpu_<op>.h` files.**
+- **Remove old intermediate headers if you find them.**
+- **Use the macros in your API headers for all new and migrated ops.**
+- **Refer to `llk_math_eltwise_unary_sfpu_macros.h` for macro documentation and argument order.**
+
+## FAQ
+
+**Q: What if my op needs a special function pointer or extra runtime parameters?**
+
+A: Use the most specific macro available or add a new one if needed and document it
+
+**Q: How do I migrate an old op to the new macro system?**
+
+A: Remove the intermediate header, replace the function calls with the appropriate macro.

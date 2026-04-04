@@ -28,36 +28,6 @@ std::string get_macro_definition(UnaryOpType op_type) {
 std::pair<std::string, std::string> get_op_init_and_func(
     UnaryOpType op_type, const std::string& idst, std::optional<DataType> input_dtype) {
     switch (op_type) {
-        if (input_dtype.has_value() && input_dtype.value() == DataType::INT32) {
-            return {"negative_tile_init();", fmt::format("negative_tile_int32({});", idst)};
-        }
-        return {"negative_tile_init();", fmt::format("negative_tile({});", idst)};
-        if (input_dtype.has_value() && *input_dtype == DataType::INT32) {
-            return {"gez_tile_init();", fmt::format("gez_tile_int32({});", idst)};
-        }
-        return {"gez_tile_init();", fmt::format("gez_tile({});", idst)};
-        if (input_dtype.has_value() && *input_dtype == DataType::INT32) {
-            return {"gtz_tile_init();", fmt::format("gtz_tile_int32({});", idst)};
-        }
-        return {"gtz_tile_init();", fmt::format("gtz_tile({});", idst)};
-        if (input_dtype.has_value() && *input_dtype == DataType::INT32) {
-            return {"lez_tile_init();", fmt::format("lez_tile_int32({});", idst)};
-        }
-        return {"lez_tile_init();", fmt::format("lez_tile({});", idst)};
-        TT_FATAL(input_dtype.has_value(), "LOGICAL_NOT_UNARY requires input_dtype");
-        const char* df;
-        switch (*input_dtype) {
-            case DataType::INT32: df = "Int32"; break;
-            case DataType::UINT32: df = "UInt32"; break;
-            case DataType::UINT16: df = "UInt16"; break;
-            case DataType::FLOAT32: df = "Float32"; break;
-            case DataType::BFLOAT16: df = "Float16_b"; break;
-            case DataType::BFLOAT8_B: df = "Bfp8_b"; break;
-            case DataType::BFLOAT4_B: df = "Bfp4_b"; break;
-            default: TT_THROW("Unsupported dtype for logical_not: {}", *input_dtype);
-        }
-        return {"logical_not_tile_init();", fmt::format("logical_not_tile<DataFormat::{}>({});", df, idst)};
-    }
         case UnaryOpType::LTZ:
             if (input_dtype.has_value() && *input_dtype == DataType::INT32) {
                 return {"ltz_tile_init();", fmt::format("ltz_tile_int32({});", idst)};
@@ -143,21 +113,8 @@ std::map<std::string, std::string> get_defines_impl(
 
 }  // namespace
 
-std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<DataType> input_dtype) {
+std::string_view get_compute_kernel_path(UnaryOpType op_type, [[maybe_unused]] std::optional<DataType> input_dtype) {
     switch (op_type) {
-        TT_FATAL(input_dtype.has_value(), "UnaryNg lgamma: missing input dtype for kernel selection.");
-        if (input_dtype.value() == DataType::BFLOAT16) {
-            return "lgamma_fast_kernel.cpp";
-        }
-        return "lgamma_kernel.cpp";
-        if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
-            return "tanhshrink_sfpu_kernel.cpp";
-        }
-        return "tanhshrink_kernel.cpp";
-        if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
-            return "hardshrink_kernel_sfpu.cpp";
-        }
-        return "hardshrink_kernel.cpp";
         default: return "eltwise_sfpu.cpp";
     }
 }

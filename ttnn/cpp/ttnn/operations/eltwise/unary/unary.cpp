@@ -9,6 +9,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
@@ -93,6 +94,103 @@ Tensor unary_with_int32_param(
     const std::optional<Tensor>& optional_output_tensor) {
     return ttnn::detail::unary_impl(
         input_tensor, {EltwiseUnaryWithParam{op_type, param}}, memory_config, optional_output_tensor);
+}
+
+Tensor sub_sfpu(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const std::optional<tt::tt_metal::MemoryConfig>& /*memory_config*/,
+    const std::optional<Tensor>& /*optional_output_tensor*/) {
+    // Stub: binary sub_sfpu (Tensor - Tensor) not yet re-implemented
+    // Use ttnn::subtract instead
+    return ttnn::subtract(input_a, input_b);
+}
+
+Tensor sub_sfpu(
+    float lhs,
+    const Tensor& rhs,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    const std::optional<Tensor>& /*optional_output_tensor*/) {
+    // lhs - rhs = lhs + (-rhs) = -rhs + lhs
+    return ttnn::add(ttnn::neg(rhs, memory_config), lhs, std::nullopt, memory_config);
+}
+
+Tensor where_tss(
+    const Tensor& condition,
+    float t_true,
+    float t_false,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::detail::unary_impl(
+        condition,
+        {UnaryWithParam{UnaryOpType::WHERE_TSS, {t_true, t_false}}},
+        memory_config,
+        optional_output_tensor,
+        sub_core_grids);
+}
+
+operations::complex::ComplexTensor reciprocal(
+    const operations::complex::ComplexTensor& /*input*/, const tt::tt_metal::MemoryConfig& /*mem_config*/) {
+    // Stub: complex reciprocal not yet re-implemented after nuke
+    TT_THROW("Complex reciprocal not yet re-implemented");
+}
+
+Tensor abs(
+    const operations::complex::ComplexTensor& /*input_tensor*/,
+    const tt::tt_metal::MemoryConfig& /*output_mem_config*/) {
+    // Stub: complex abs not yet re-implemented after nuke
+    TT_THROW("Complex abs not yet re-implemented");
+}
+
+Tensor sigmoid(
+    const Tensor& input_tensor,
+    [[maybe_unused]] int vector_mode,
+    operations::unary::SigmoidMode mode,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    bool fast_and_approximate_mode = (mode == operations::unary::SigmoidMode::FAST_APPROXIMATE);
+    return ttnn::detail::unary_impl(
+        input_tensor,
+        {UnaryWithParam{UnaryOpType::SIGMOID, static_cast<float>(fast_and_approximate_mode)}},
+        memory_config,
+        optional_output_tensor);
+}
+
+Tensor softplus(
+    const Tensor& input_tensor,
+    float beta,
+    float threshold,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return ttnn::detail::unary_impl(
+        input_tensor,
+        {UnaryWithParam{UnaryOpType::SOFTPLUS, {beta, threshold}}},
+        memory_config,
+        optional_output_tensor);
+}
+
+Tensor xielu(
+    const Tensor& input_tensor,
+    float alpha_p,
+    float alpha_n,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return ttnn::detail::unary_impl(
+        input_tensor, {UnaryWithParam{UnaryOpType::XIELU, {alpha_p, alpha_n}}}, memory_config, optional_output_tensor);
+}
+
+Tensor clamp_tss(
+    const Tensor& input_tensor,
+    float min_val,
+    float max_val,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return ttnn::detail::unary_impl(
+        input_tensor,
+        {UnaryWithParam{UnaryOpType::CLAMP_TSS, {min_val, max_val}}},
+        memory_config,
+        optional_output_tensor);
 }
 
 }  // namespace ttnn

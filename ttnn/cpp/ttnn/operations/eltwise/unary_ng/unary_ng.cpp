@@ -51,19 +51,6 @@ Tensor unary_ng_impl(
 
 namespace ttnn {
 
-    const Tensor& input_tensor,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    using namespace operations::unary;
-    UnaryOpType op_type = UnaryOpType::ABS;
-    if (input_tensor.dtype() == DataType::INT32) {
-        op_type = UnaryOpType::ABS_INT32;
-    }
-    return operations::unary_ng::detail::unary_ng_impl(
-        input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor, sub_core_grids);
-}
-
 // Helper macro: most basic ops just forward a single UnaryOpType to unary_ng_impl.
 #define DEFINE_UNARY_NG_OP(op_name, OP_TYPE)                 \
     Tensor op_name(                                          \
