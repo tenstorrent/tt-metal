@@ -13,11 +13,14 @@
 | 1 | Reference Discovery | ok | ~60s | none |
 | 2 | Reference Analysis | ok | ~15min | expm1 agent timed out |
 | 3 | Implementation | ok | ~8min | committed by orchestrator (pre-commit hooks) |
-| 4 | Testing & Debugging | pending | - | - |
-| 5 | Documentation | pending | - | - |
+| 4 | Testing & Debugging | running | ~25min+ | test execution in progress, another agent in worktree |
+| 5 | Documentation | running | - | - |
 | 6 | Self-Reflection | pending | - | - |
 
 ## Issues
 | # | Phase | Severity | Description | Resolution |
 |---|-------|----------|-------------|------------|
 | 1 | 2 | LOW | expm1 analyzer agent timed out without producing analysis file | Proceeded with 4 of 5 analyses (exceeds minimum of 3) |
+| 2 | 3 | LOW | Implementor agent failed to commit; orchestrator committed on its behalf | Pre-commit hooks (clang-format, validate-metalium-includes) required 3 retries |
+| 3 | 4 | MEDIUM | Another agent (cbrt) running concurrently in same worktree | May cause device contention during test execution |
+| 4 | 4 | MEDIUM | Tester agent still running after >25 min | Tests involve runtime kernel compilation which is slow |
