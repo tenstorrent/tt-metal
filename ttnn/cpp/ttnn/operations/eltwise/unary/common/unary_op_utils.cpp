@@ -18,6 +18,7 @@ namespace {
 std::string get_macro_definition(UnaryOpType op_type) {
     switch (op_type) {
         case UnaryOpType::COSH: return "SFPU_OP_COSH_INCLUDE";
+        case UnaryOpType::SINH: return "SFPU_OP_SINH_INCLUDE";
         case UnaryOpType::CBRT: return "SFPU_OP_CBRT_INCLUDE";
         case UnaryOpType::SELU: return "SFPU_OP_SELU_INCLUDE";
         case UnaryOpType::HARDTANH: return "SFPU_OP_HARDTANH_INCLUDE";
@@ -69,6 +70,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             return {"dropout_tile_init();", fmt::format("dropout_tile({});", idst)};
         }
         case UnaryOpType::COSH: return {"cosh_tile_init();", fmt::format("cosh_tile({});", idst)};
+        case UnaryOpType::SINH: return {"sinh_tile_init();", fmt::format("sinh_tile({});", idst)};
         case UnaryOpType::CBRT: return {"cbrt_tile_init();", fmt::format("cbrt_tile({});", idst)};
         case UnaryOpType::HARDSIGMOID: return {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
         case UnaryOpType::SELU: return {"selu_tile_init();", fmt::format("selu_tile({});", idst)};
@@ -105,6 +107,9 @@ bool get_op_approx_mode(UnaryOpType op_type) {
 UnaryWithParam string_to_unary_with_param(const std::string& name) {
     if (name == "cosh") {
         return UnaryWithParam(UnaryOpType::COSH);
+    }
+    if (name == "sinh") {
+        return UnaryWithParam(UnaryOpType::SINH);
     }
     if (name == "atanh") {
         return UnaryWithParam(UnaryOpType::ATANH);
