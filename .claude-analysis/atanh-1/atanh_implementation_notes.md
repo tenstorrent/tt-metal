@@ -36,6 +36,17 @@ Used the canonical implementation from `tt_llk`'s `ckernel_sfpu_trigonometry.h` 
 - `ttnn/cpp/ttnn/operations/eltwise/unary/unary_nanobind.cpp`
 - `ttnn/ttnn/operations/unary.py`
 
+## Test File
+- `tests/ttnn/unit_tests/operations/eltwise/test_atanh.py`
+
+## Test Results
+- **Status**: PASS (all 9 tests)
+- **Iterations**: 1 (passed on first try)
+- **bfloat16**: 4/4 passed (PCC > 0.999), shapes: [1,1,32,32], [1,1,64,64], [1,3,320,384], [4,1,32,32]
+- **float32**: 4/4 passed (PCC > 0.999), shapes: [1,1,32,32], [1,1,64,64], [1,3,320,384], [4,1,32,32]
+- **Range tests**: 1/1 passed (zero, small values, near-boundary)
+- **Total time**: 5.30s
+
 ## Known Limitations
 - Domain restricted to |x| < 1 (mathematical definition)
 - Precision limited by the log approximation (3rd order Chebyshev polynomial in `_calculate_log_body_no_init_`)
