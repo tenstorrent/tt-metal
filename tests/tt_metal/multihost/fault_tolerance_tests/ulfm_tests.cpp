@@ -1,13 +1,16 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+//
 #include <tt-metalium/distributed_context.hpp>
+
 #include <gtest/gtest.h>
 #include "common/multihost_test_tools.hpp"
 #include "tt_metal/distributed/multihost/mpi_distributed_context.hpp"
+#include <mpi-ext.h>
+
 #include <csignal>
 #include <cstdlib>
-#include <mpi-ext.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>

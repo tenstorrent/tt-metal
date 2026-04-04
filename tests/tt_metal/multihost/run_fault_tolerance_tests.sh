@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Purpose: Run fault tolerance tests for tt_metal

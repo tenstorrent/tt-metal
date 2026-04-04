@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,6 +14,7 @@
 
 #include <tt-metalium/distributed_context.hpp>
 #include <fmt/format.h>
+
 namespace multihost::common {
 
 using ContextPtr = std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>;
