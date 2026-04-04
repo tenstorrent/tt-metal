@@ -297,7 +297,7 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
     init.producer_txn_descriptor = this->producer_txn_descriptor;
     init.consumer_txn_descriptor = this->consumer_txn_descriptor;
 
-    log_info(
+    log_debug(
         tt::LogMetal,
         "Serializing DFB {} with {} producers and {} consumers. risc_mask: 0x{:x} use_remapper: {}",
         this->id,
@@ -306,16 +306,16 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
         this->risc_mask,
         this->use_remapper);
 
-    log_info(tt::LogMetal, "Entry size: {}", this->entry_size);
-    log_info(tt::LogMetal, "Stride in entries: {}", this->stride_in_entries);
-    log_info(tt::LogMetal, "Capacity: {}", this->capacity);
-    log_info(tt::LogMetal, "Risc mask: 0x{:x}", this->risc_mask);
-    log_info(tt::LogMetal, "Producer txn descriptor: num_txn_ids={} threshold={} per_txn={} per_tc={}",
+    log_debug(tt::LogMetal, "Entry size: {}", this->entry_size);
+    log_debug(tt::LogMetal, "Stride in entries: {}", this->stride_in_entries);
+    log_debug(tt::LogMetal, "Capacity: {}", this->capacity);
+    log_debug(tt::LogMetal, "Risc mask: 0x{:x}", this->risc_mask);
+    log_debug(tt::LogMetal, "Producer txn descriptor: num_txn_ids={} threshold={} per_txn={} per_tc={}",
         this->producer_txn_descriptor.num_txn_ids,
         this->producer_txn_descriptor.num_entries_to_process_threshold,
         this->producer_txn_descriptor.num_entries_per_txn_id,
         this->producer_txn_descriptor.num_entries_per_txn_id_per_tc);
-    log_info(tt::LogMetal, "Consumer txn descriptor: num_txn_ids={} threshold={} per_txn={} per_tc={}",
+    log_debug(tt::LogMetal, "Consumer txn descriptor: num_txn_ids={} threshold={} per_txn={} per_tc={}",
         this->consumer_txn_descriptor.num_txn_ids,
         this->consumer_txn_descriptor.num_entries_to_process_threshold,
         this->consumer_txn_descriptor.num_entries_per_txn_id,
@@ -338,21 +338,21 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
         }
         TT_FATAL(rc != nullptr, "DFB {}: no risc_config for risc_id {} (bit {})", this->id, bit, bit);
 
-        log_info(tt::LogMetal, "New risc config (risc_id={}, is_producer={})", rc->risc_id, rc->is_producer);
+        log_debug(tt::LogMetal, "New risc config (risc_id={}, is_producer={})", rc->risc_id, rc->is_producer);
         ::experimental::dfb_initializer_per_risc_t per_risc = {};
 
         per_risc.num_tcs_and_init.num_tcs_to_rr = rc->config.num_tcs_to_rr;
         per_risc.num_tcs_and_init.tc_init_done = 0;  // set by device when this producer finishes TC init
         per_risc.num_tcs_and_init.broadcast_tc = rc->config.broadcast_tc;
-        log_info(tt::LogMetal, "Num tcs to rr: {}", rc->config.num_tcs_to_rr);
+        log_debug(tt::LogMetal, "Num tcs to rr: {}", rc->config.num_tcs_to_rr);
         // Copy per-risc arrays
         for (int i = 0; i < rc->config.num_tcs_to_rr; i++) {
             per_risc.base_addr[i] = rc->config.base_addr[i];
             per_risc.limit[i] = rc->config.limit[i];
             per_risc.packed_tile_counter[i] = rc->config.packed_tile_counter[i];
-            log_info(tt::LogMetal, "Base addr {}: {}", i, static_cast<uint32_t>(per_risc.base_addr[i]));
-            log_info(tt::LogMetal, "Limit {}: {}", i, static_cast<uint32_t>(per_risc.limit[i]));
-            log_info(tt::LogMetal, "Packed tile counter {}: {}", i, (uint32_t)per_risc.packed_tile_counter[i]);
+            log_trace(tt::LogMetal, "Base addr {}: {}", i, static_cast<uint32_t>(per_risc.base_addr[i]));
+            log_trace(tt::LogMetal, "Limit {}: {}", i, static_cast<uint32_t>(per_risc.limit[i]));
+            log_trace(tt::LogMetal, "Packed tile counter {}: {}", i, (uint32_t)per_risc.packed_tile_counter[i]);
         }
         per_risc.flags.remapper_pair_index = static_cast<uint8_t>(rc->config.remapper_pair_index) & 0x3F;
         per_risc.flags.remapper_en = this->use_remapper;
@@ -361,10 +361,10 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
         // Per-producer remapper fields
         per_risc.remapper_consumer_ids_mask = rc->config.remapper_consumer_ids_mask;
         per_risc.producer_client_type = rc->config.producer_client_type;
-        log_info(tt::LogMetal, "Is producer: {}", rc->is_producer);
-        log_info(tt::LogMetal, "Remapper en: {}", this->use_remapper);
+        log_debug(tt::LogMetal, "Is producer: {}", rc->is_producer);
+        log_debug(tt::LogMetal, "Remapper en: {}", this->use_remapper);
         if (this->use_remapper && rc->is_producer) {
-            log_info(
+            log_debug(
                 tt::LogMetal,
                 "Producer remapper: pair_idx={}, clientL={}, consumer_ids_mask=0x{:02x}",
                 rc->config.remapper_pair_index,
@@ -376,7 +376,7 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
         data.insert(data.end(), cfg_bytes, cfg_bytes + sizeof(per_risc));
     }
 
-    log_info(tt::LogMetal, "Serialized DFB {} size: {}", this->id, data.size());
+    log_debug(tt::LogMetal, "Serialized DFB {} size: {}", this->id, data.size());
 
     return data;
 }
@@ -425,7 +425,7 @@ uint32_t finalize_dfbs(
     dfb_size = tt::align(
         dfb_size, 64);  // workaround where non-64 byte aligned writes on sim seem to get zero padded to 64 bytes
 
-    log_info(
+    log_debug(
         tt::LogMetal,
         "Finalize dfb: dfb_offset == base_offset: {}, dfb size: {}, return value: {}",
         base_offset,
@@ -472,7 +472,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
 
     dfb->entry_size = config.entry_size;
 
-    log_info(
+    log_debug(
         tt::LogMetal,
         "Creating DFB {} with {} producers and {} consumers",
         dfb->id,
@@ -502,7 +502,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
         default: TT_FATAL(false, "Invalid access pattern", (uint32_t)config.cap);
     }
     dfb->capacity = capacity;
-    log_info(tt::LogMetal, "Capacity: {}", capacity);
+    log_debug(tt::LogMetal, "Capacity: {}", capacity);
 
     dfb->configs_finalized = false;
 
@@ -564,7 +564,7 @@ void ProgramImpl::finalize_dataflow_buffer_configs() {
             }
         }
 
-        log_info(
+        log_debug(
             tt::LogMetal,
             "Finalizing {} DFBs on core ({}, {}), core_needs_remapper={}",
             core_dfbs.size(),
@@ -666,7 +666,7 @@ void ProgramImpl::finalize_single_dfb_config(
                 producer_client_type = producer_risc_id % 4;
             }
             producer_client_types.push_back(producer_client_type);
-            log_info(
+            log_debug(
                 tt::LogMetal,
                 "Remapper: Producer[{}] (risc_id={}) assigned clientL={}",
                 producer_idx,
@@ -681,7 +681,7 @@ void ProgramImpl::finalize_single_dfb_config(
             uint8_t client_type = client_type_allocator.allocate_for_consumer(producer_client_types[0], consumer_risc_id);
             consumer_client_types.push_back(client_type);
 
-            log_info(
+            log_debug(
                 tt::LogMetal,
                 "Remapper: Consumer[{}] (risc_id={}) assigned clientR={} (tensix_id={})",
                 consumer_idx,
@@ -721,7 +721,7 @@ void ProgramImpl::finalize_single_dfb_config(
                     group.consumer_tcs.push_back(group.producer_tc);
                 }
 
-                log_info(
+                log_trace(
                     tt::LogMetal,
                     "Strided: Producer[{}] (risc_id={}) TC[{}] (tensix_id={}) pairs with Consumer[{}] (risc_id={}) "
                     "use_remapper={}",
@@ -740,7 +740,7 @@ void ProgramImpl::finalize_single_dfb_config(
                     group.producer_tc = tile_counter_allocator_.allocate(tensix_id);
                     group.consumer_tcs.push_back(group.producer_tc);  // shared
 
-                    log_info(
+                    log_trace(
                         tt::LogMetal,
                         "Blocked DM-DM: Producer[{}] TC[{}] (tensix_id={}) shared with Consumer[{}]",
                         producer_idx,
@@ -760,7 +760,7 @@ void ProgramImpl::finalize_single_dfb_config(
                         group.consumer_tcs.push_back(consumer_tc);
                     }
 
-                    log_info(
+                    log_trace(
                         tt::LogMetal,
                         "Blocked: Producer[{}] TC[{}] (tensix_id={}) maps to {} consumer TCs via Remapper",
                         producer_idx,
@@ -782,7 +782,7 @@ void ProgramImpl::finalize_single_dfb_config(
         risc_config.risc_id = risc_id;
         risc_config.is_producer = true;
 
-        log_info(
+        log_debug(
             tt::LogMetal,
             "Producer risc {} uses {} TCs",
             risc_id,
@@ -790,7 +790,7 @@ void ProgramImpl::finalize_single_dfb_config(
 
         for (uint8_t tc = 0; tc < num_producer_tcs; tc++) {
             risc_config.config.packed_tile_counter[tc] = tc_groups[producer_idx][tc].producer_tc;
-            log_info(
+            log_trace(
                 tt::LogMetal,
                 "\tAssigned TC[{}]: (0x{:x}, 0x{:x})",
                 tc,
@@ -828,7 +828,7 @@ void ProgramImpl::finalize_single_dfb_config(
             risc_config.config.consumer_tcs = packed;
             risc_config.config.remapper_consumer_ids_mask = consumer_ids_mask;
 
-            log_info(
+            log_debug(
                 tt::LogMetal,
                 "Producer[{}] remapper: pair_idx={}, clientL={}, consumer_ids_mask=0x{:02x}",
                 producer_idx,
@@ -848,7 +848,7 @@ void ProgramImpl::finalize_single_dfb_config(
         risc_config.risc_id = risc_id;
         risc_config.is_producer = false;
 
-        log_info(
+        log_debug(
             tt::LogMetal,
             "Consumer risc {} uses {} TCs",
             risc_id,
@@ -895,7 +895,7 @@ void ProgramImpl::finalize_single_dfb_config(
             } else {
                 TT_FATAL(false, "Unsupported consumer access pattern");
             }
-            log_info(
+            log_trace(
                 tt::LogMetal,
                 "\tAssigned TC[{}]: (0x{:x}, 0x{:x})",
                 tc,
@@ -921,7 +921,7 @@ void ProgramImpl::finalize_single_dfb_config(
                 /*is_producer=*/true,
                 producer_txn_ids,
                 num_producer_tcs);
-            log_info(
+            log_debug(
                 tt::LogMetal,
                 "DFB {} implicit sync: producer txn_ids=[{},{}] threshold={} per_txn={} per_tc={}",
                 dfb->id,
@@ -941,7 +941,7 @@ void ProgramImpl::finalize_single_dfb_config(
                 /*is_producer=*/false,
                 consumer_txn_ids,
                 num_consumer_tcs);
-            log_info(
+            log_debug(
                 tt::LogMetal,
                 "DFB {} implicit sync: "
                 "consumer txn_ids=[{},{}] threshold={} per_txn={} per_tc={}",
@@ -956,7 +956,7 @@ void ProgramImpl::finalize_single_dfb_config(
 
     dfb->configs_finalized = true;
     dfb->use_remapper = use_remapper;
-    log_info(
+    log_debug(
         tt::LogMetal, "DFB {} finalized risc_mask: 0x{:x} use_remapper: {}", dfb->id, dfb->risc_mask, use_remapper);
 }
 
