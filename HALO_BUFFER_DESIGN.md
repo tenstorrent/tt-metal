@@ -33,10 +33,30 @@ before handing it to conv3d.
 - **load_sub_device_manager is non-trivial:** It enqueues reset commands to all CQs (dispatch wait + go_signal_mcast for CQ0). These commands are asynchronous from the host but serialize against in-flight kernels on the device. This means the sub-device switch implicitly drains prior work, providing correct ordering with no extra synchronize calls.
 - **build_metal.sh install step required:** cmake --build only writes to build_Release/ttnn/. Python imports from ttnn/ttnn/. Running cmake --build without the install step leaves stale binaries, causing confusing "already fixed" bugs.
 
-## Open Questions
+## T-Slice Pipelining (in progress — commit 9fcb008213)
 
-- [ ] Can T-slice pipelining (true NP/conv3d overlap within a single call) be achieved? Requires in-kernel global semaphore polling across all 116 reader cores — needs NOC-based polling rather than local L1 spin. Currently the CQ1→CQ0 event makes them sequential.
-- [ ] Should the W-halo buffer be extended to cover H-halo rows so corner approximation matches the old path exactly?
+**Key insight from all_gather_matmul research:**
+No CQ0/CQ1 separation needed. all_gather_matmul dispatches both CCL writers
+and matmul compute on a **single CQ**; hardware-level concurrency (different cores)
+is coordinated by in-kernel semaphores — no dispatch-level trickery required.
+
+**Root cause of previous deadlock fixed:**
+Old bug: `noc_semaphore_inc(get_noc_addr(sem), 1)` updates writer's OWN L1 only.
+Fix (OpSignaler pattern, worker_sync_utils.hpp:41): iterate over all reader cores:
+  `noc_semaphore_inc(get_noc_addr(reader_x, reader_y, sem), 1)` → updates REMOTE core's L1
+Reader polls its LOCAL L1 with `noc_semaphore_wait_min` (no NOC round-trip needed).
+
+**Changes committed:**
+- NP writer: signals each of the 116 conv3d reader cores via remote NOC write
+- Factory: computes reader NOC coords = full grid minus fabric cores
+- Conv3d reader: re-enables `noc_semaphore_wait_min` at T-block boundaries
+
+**Next steps:**
+- [ ] Simplify vae_wan2_1.py: remove CQ1 dispatch, inter-CQ events, sub-device
+      load/unload — dispatch NP+conv3d on single CQ, semaphore handles ordering
+- [ ] End-to-end test: verify true overlap with Tracy profiling
+- [ ] Should the W-halo buffer be extended to cover H-halo rows so corner
+      approximation matches the old path exactly?
 
 ## State
 
