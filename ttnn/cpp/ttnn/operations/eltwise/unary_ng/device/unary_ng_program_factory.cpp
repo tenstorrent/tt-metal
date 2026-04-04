@@ -37,7 +37,7 @@ void pack_first_op_scalars(
     DataType input_dtype,
     uint32_t& packed_scalar1,
     uint32_t& packed_scalar2,
-    std::map<std::string, std::string>& unary_defines) {
+    [[maybe_unused]] std::map<std::string, std::string>& unary_defines) {
     if (op.empty()) {
         return;
     }

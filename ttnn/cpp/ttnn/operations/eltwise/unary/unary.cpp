@@ -67,10 +67,10 @@ Tensor identity(
 }
 
 Tensor logit(
-    const Tensor& input_tensor,
-    std::optional<float> eps,
-    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
+    const Tensor& /* input_tensor */,
+    std::optional<float> /* eps */,
+    const std::optional<tt::tt_metal::MemoryConfig>& /* memory_config */,
+    const std::optional<Tensor>& /* optional_output_tensor */) {
     TT_THROW("logit not implemented");
 }
 
