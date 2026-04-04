@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,8 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
 
 namespace tt::tt_metal {
 
@@ -227,8 +229,12 @@ BufferShardingArgs TensorLayout::compute_buffer_sharding_args(const tt::tt_metal
             nd_shard_spec->orientation,
             nd_shard_spec->shard_distribution_strategy);
     }
-    return BufferShardingArgs(
-        std::move(distribution_spec), std::move(shard_spec_buffer), memory_config_.memory_layout());
+    auto sharding_args =
+        BufferShardingArgs(std::move(distribution_spec), std::move(shard_spec_buffer), memory_config_.memory_layout());
+    if (tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(memory_config_)) {
+        tt::tt_metal::experimental::per_core_allocation::set_per_core_allocation(sharding_args, true);
+    }
+    return sharding_args;
 }
 
 size_t TensorLayout::compute_packed_buffer_size_bytes(const tt::tt_metal::Shape& shape) const {

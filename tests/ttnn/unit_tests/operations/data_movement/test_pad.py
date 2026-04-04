@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -21,11 +21,11 @@ torch.manual_seed(0)
 
 def random_torch_tensor(dtype, shape):
     if dtype == ttnn.uint16:
-        return torch.randint(0, 2**15, shape, dtype=torch.int16)
+        return torch.randint(0, 2**16, shape, dtype=torch.uint16)
     if dtype == ttnn.int32:
         return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
     if dtype == ttnn.uint32:
-        return torch.randint(0, 2**31, shape, dtype=torch.int32)
+        return torch.randint(0, 2**32, shape, dtype=torch.uint32)
     return torch.rand(shape).bfloat16().float()
 
 
@@ -55,6 +55,70 @@ def test_pad_rm(device, n, c, h, w, padding, torch_padding, value, dtype):
 
     assert output_tensor.shape == torch_output_tensor.shape
     assert torch.equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "shape,padding,torch_padding",
+    [
+        ((8, 1, 1, 1), ((0, 0), (0, 0), (0, 0), (0, 191)), (0, 191, 0, 0, 0, 0, 0, 0)),
+        ((1, 1, 1, 2), ((0, 0), (0, 0), (0, 0), (0, 254)), (0, 254, 0, 0, 0, 0, 0, 0)),
+        ((4, 1, 1, 4), ((0, 0), (0, 0), (0, 0), (0, 60)), (0, 60, 0, 0, 0, 0, 0, 0)),
+    ],
+)
+@pytest.mark.parametrize("value", [0])
+def test_pad_rm_small_to_large_width(device, shape, padding, torch_padding, value):
+    """Regression test for issue #39875: padding from very small width to large width
+    caused CB allocation to exceed L1 size due to using input width for stick batching."""
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand(shape).bfloat16().float()
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert torch.equal(torch_output_tensor, output_tensor)
+
+
+def run_pad_rm_small_to_large_width_with_program_cache(device, shape, padding, torch_padding, value):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand(shape).bfloat16().float()
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    with device.cache_entries_counter.measure():
+        output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert torch.equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "shape,padding,torch_padding",
+    [
+        ((8, 1, 1, 1), ((0, 0), (0, 0), (0, 0), (0, 191)), (0, 191, 0, 0, 0, 0, 0, 0)),
+    ],
+)
+@pytest.mark.parametrize("value", [0])
+def test_pad_rm_small_to_large_width_with_program_cache(device, shape, padding, torch_padding, value):
+    """Regression test for issue #39875 with program cache: ensure override_runtime_arguments
+    also uses output stick size for CB batching."""
+    for _ in range(2):
+        run_pad_rm_small_to_large_width_with_program_cache(device, shape, padding, torch_padding, value)
+        dummy_shape = [1, 1, 32, 32]
+        py_dummy_tensor = torch.randn(dummy_shape)
+        ttnn.from_torch(
+            py_dummy_tensor,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+    assert device.cache_entries_counter.total == 1
 
 
 def run_pad_with_program_cache(device, n, c, h, w, padding, torch_padding, value, dtype, layout):

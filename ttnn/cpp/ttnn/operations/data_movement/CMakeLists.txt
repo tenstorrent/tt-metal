@@ -56,7 +56,9 @@ target_sources(
             concat/concat.hpp
             copy/copy.hpp
             copy/device/copy_device_operation.hpp
-            copy/device/copy_program_factory.hpp
+            copy/device/copy_same_memory_config_program_factory.hpp
+            copy/device/copy_default_row_major_program_factory.hpp
+            copy/device/copy_default_tilized_program_factory.hpp
             copy/device/copy_device_operation_types.hpp
             fill_pad/fill_pad.hpp
             fill_pad/device/fill_pad_device_operation.hpp
@@ -94,15 +96,11 @@ target_sources(
             tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_multicore.cpp
             untilize/device/kernels/dataflow/reader_unary_start_id.cpp
             untilize/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multi_core.cpp
-            untilize/device/kernels/compute/pack_untilize_variable_num_blocks.cpp
             tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_dims_split_rows_multicore.cpp
             tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_multicore_both_dims.cpp
-            untilize/device/kernels/compute/common.cpp
             untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multicore.cpp
             tilize/device/kernels/compute/tilize_wh.cpp
-            untilize/device/kernels/compute/pack_untilize.cpp
             untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_wh_multicore.cpp
-            untilize/device/kernels/compute/pack_untilize_wh.cpp
             # bcast/
             bcast/bcast_nanobind.hpp
             bcast/device/bcast_device_operation.hpp
@@ -372,7 +370,9 @@ target_sources(
         concat/device/concat_s2i_program_factory.cpp
         copy/copy.cpp
         copy/device/copy_device_operation.cpp
-        copy/device/copy_program_factory.cpp
+        copy/device/copy_same_memory_config_program_factory.cpp
+        copy/device/copy_default_row_major_program_factory.cpp
+        copy/device/copy_default_tilized_program_factory.cpp
         expand/expand.cpp
         fill_pad/device/fill_pad_device_operation.cpp
         fill_pad/device/fill_pad_program_factory.cpp
@@ -398,6 +398,7 @@ target_sources(
         move/device/move_overlap_program_factory.cpp
         move/device/move_sharded_program_factory.cpp
         move/move.cpp
+        narrow/narrow.cpp
         non_zero_indices/device/non_zero_indices_device_operation.cpp
         non_zero_indices/device/non_zero_indices_program_factory.cpp
         non_zero_indices/non_zero_indices.cpp

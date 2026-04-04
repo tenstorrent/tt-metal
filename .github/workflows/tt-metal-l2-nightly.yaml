@@ -50,6 +50,16 @@ on:
         required: false
         type: boolean
         default: false
+      run_tt_train_cpp_model_tests:
+        description: 'Run tt-train-cpp-models'
+        required: false
+        type: boolean
+        default: false
+      run_tt_train_python_unit_tests:
+        description: 'Run tt-train-python-unit-tests'
+        required: false
+        type: boolean
+        default: false
       run_models_unit_tests:
         description: 'Run models-unit-tests'
         required: false
@@ -61,7 +71,7 @@ on:
         type: boolean
         default: false
       additional_test_categories:
-        description: 'Additional test categories to run (comma-separated, e.g., conv,pool,sdxl,train,sdpa,eltwise,matmul,experimental,docs_examples,ops_docs_check,misc,moreh,fused,reduction,data_movement,transformers)'
+        description: 'Additional test categories to run (comma-separated, e.g., conv,pool,sdxl,train,sdpa,eltwise,matmul,experimental,docs_examples,ops_docs_check,misc,moreh,fused,reduction,data_movement,transformers,compute_fused)'
         required: false
         type: string
         default: ''
@@ -280,6 +290,7 @@ jobs:
       run_fused_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',fused,') }}
       run_reduction_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',reduction,') }}
       run_misc_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',misc,') }}
+      run_compute_fused_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',compute_fused,') }}
   ttnn-ops-docs-check:
     needs: [build-artifact, generate-arch-matrix]
     if: |
@@ -441,6 +452,41 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       timeout: 90
       gtest_filter: "*"
+  tt-train-cpp-models:
+    needs: [build-artifact, generate-arch-matrix]
+    if: |
+      (github.event_name == 'schedule' || inputs.run_tt_train_cpp_model_tests) &&
+      needs.generate-arch-matrix.outputs.matrix-tt-train-tests != '[]'
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-tt-train-tests) }}
+    uses: ./.github/workflows/tt-train-run-models.yaml
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      timeout: 90
+  tt-train-python-unit-tests:
+    needs: [build-artifact, generate-arch-matrix]
+    if: |
+      (github.event_name == 'schedule' || inputs.run_tt_train_python_unit_tests) &&
+      needs.generate-arch-matrix.outputs.matrix-tt-train-tests != '[]'
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-tt-train-tests) }}
+    uses: ./.github/workflows/tt-train-post-commit.yaml
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      timeout: 10
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # FD Model Tests
   models-unit-tests:
     needs: [build-artifact, generate-arch-matrix]

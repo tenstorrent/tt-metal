@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -390,6 +390,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.indexed_fill": data_movement.test_indexed_fill,
     "ttnn.gather": data_movement.test_gather,
     "ttnn.sort": data_movement.test_sort,
+    "ttnn.narrow": data_movement.test_narrow,
     # Normalization
     "ttnn.group_norm": normalization.test_group_norm,
     "ttnn.layer_norm": normalization.test_layer_norm,

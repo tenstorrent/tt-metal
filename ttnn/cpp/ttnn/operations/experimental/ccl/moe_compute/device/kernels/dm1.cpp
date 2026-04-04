@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,9 @@ void print_tile_rows(
     uint8_t start_col = 0,
     uint8_t end_col = 32) {
     DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
+    DEVICE_PRINT("cb_idx: {} tile_idx: {}\n", cb_idx, tile_idx);
     DPRINT << "======" << ENDL();
+    DEVICE_PRINT("======\n");
     for (uint16_t r = start_row; r < end_row; ++r) {
         DPRINT << (uint)r << " : "
                << TileSlice(
@@ -33,8 +35,24 @@ void print_tile_rows(
                       true,
                       untilize)
                << ENDL();
+        DEVICE_PRINT(
+            "{} : {}\n",
+            r,
+            TileSlice(
+                cb_idx,
+                tile_idx,
+                SliceRange{
+                    .h0 = (uint8_t)r,
+                    .h1 = (uint8_t)(r + 1),
+                    .hs = (uint8_t)1,
+                    .w0 = (uint8_t)start_col,
+                    .w1 = (uint8_t)end_col,
+                    .ws = (uint8_t)1},
+                true,
+                untilize));
     }
     DPRINT << "++++++" << ENDL();
+    DEVICE_PRINT("++++++\n");
 }
 
 namespace detail {
@@ -64,7 +82,7 @@ void kernel_main() {
     constexpr uint32_t tile_width_size_bytes = get_named_compile_time_arg_val("tile_width_size_bytes");
 
     constexpr uint32_t combine_shard_width_tiles = get_named_compile_time_arg_val("combine_shard_width_tiles");
-    constexpr uint32_t num_tokens_total = get_named_compile_time_arg_val("num_tokens_total");
+    constexpr uint32_t buffer_size_total_tokens = get_named_compile_time_arg_val("buffer_size_total_tokens");
     constexpr uint32_t height_shard_dim = get_named_compile_time_arg_val("height_shard_dim");
     constexpr uint32_t width_shard_dim = get_named_compile_time_arg_val("width_shard_dim");
 
@@ -111,7 +129,7 @@ void kernel_main() {
 
     // constants needed for writing to combine sharded output
     constexpr uint32_t shard_offset_per_expert_bytes =
-        num_tokens_total / height_shard_dim * combine_shard_width_tiles * tile_width_size_bytes;
+        buffer_size_total_tokens / height_shard_dim * combine_shard_width_tiles * tile_width_size_bytes;
     cb_reserve_back(cb_s2c_in, 1);
     const uint32_t output_base_l1_addr = get_write_ptr(cb_s2c_in);
     cb_push_back(cb_s2c_in, 1);

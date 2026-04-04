@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -515,6 +515,8 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto";
     auto control_plane = make_control_plane(single_galaxy_mesh_graph_desc_path.string());
+
+    expect_galaxy_corner_folding_check(*control_plane);
 
     // Create physical system descriptor to access ASIC information
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
