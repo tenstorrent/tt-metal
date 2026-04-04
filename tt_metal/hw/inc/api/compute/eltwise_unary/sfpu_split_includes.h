@@ -39,3 +39,7 @@
 #if SFPU_OP_RPOW_INCLUDE
 #include "api/compute/eltwise_unary/rpow.h"
 #endif
+
+#if SFPU_OP_SOFTSHRINK_INCLUDE
+#include "api/compute/eltwise_unary/softshrink.h"
+#endif

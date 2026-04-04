@@ -15,4 +15,5 @@ enum class SfpuType {
     lgamma,
     rpow,
     silu,
+    softshrink,
 };
