@@ -1,5 +1,65 @@
 # Molmo2-8B TTNN Status
 
+## Long Video / Long ISL Test Results (2026-04-03)
+
+### Infrastructure Status: WORKING
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| DP=8 for vision | ✅ Working | 8 frames/device parallel processing |
+| TP=8 for attention | ✅ Working | Tensor parallel across 8 devices |
+| Chunked prefill | ✅ Working | 8192 token chunks for long sequences |
+| Paged attention | ✅ Working | 512 blocks allocated |
+| Decode trace | ✅ Working | 30.36 tok/s |
+
+### Test Configuration
+
+| Parameter | Value |
+|-----------|-------|
+| Video | 35s video (1050 frames source) |
+| Frames sampled | 72 (at 2 fps) |
+| DP config | 9 frames/device × 8 devices |
+| Input tokens | 15,692 |
+| max_seq_len | 32,768 |
+
+### Performance Metrics
+
+| Metric | Value |
+|--------|-------|
+| Vision processing | 63.7s (1.13 fps) |
+| Prefill TTFT | 4.8s |
+| E2E TTFT | 71.9s |
+| Decode throughput | **30.36 tok/s** |
+
+### Output Quality: ❌ GARBAGE
+
+**Output**: `"A woman 0.0.0.0.0.0 "`
+
+**Root Cause**: Projector scale mismatch
+
+```
+Visual embeddings: mean=-0.88, std=688.0, min=-41728, max=68096
+Expected (text):   mean=~0,    std=0.15, min=-0.6,  max=0.6
+```
+
+The projector amplifies features by **~4500x** instead of normalizing them. This causes visual embeddings to overwhelm text embeddings during fusion.
+
+### Frame Limit Analysis
+
+| Frames | Tokens | Passes | Status |
+|--------|--------|--------|--------|
+| 8 | ~1,700 | 1 | ✅ Works (output quality OK with 8 frames) |
+| 32 | ~6,500 | 1 | ✅ Infra works, quality degraded |
+| 64 | ~13,000 | 1-2 | ✅ Infra works, quality garbage |
+| 72 | ~15,700 | 1 | ✅ Infra works, quality garbage |
+| 128 | ~25,000 | 2 | Not tested (video only had 72 sampled frames) |
+
+### Blocking Issue
+
+**Projector scale bug** must be fixed before long video quality can be verified. The infrastructure (DP, TP, chunked prefill, paged attention, decode trace) is all working correctly.
+
+---
+
 ## Comprehensive Test Results (2026-03-31)
 
 ### Summary Matrix

@@ -58,6 +58,22 @@ class Molmo2AdapterConfig:
     projector_intermediate_dim: int = 12288
     projector_output_dim: int = 4096
 
+    # Pooling kernel sizes
+    # Images: 2x2 pooling -> 4 patches pooled per output token
+    # Videos: 3x3 pooling -> 9 patches pooled per output token
+    image_pooling_size: Tuple[int, int] = (2, 2)  # k_pool = 4
+    video_pooling_size: Tuple[int, int] = (3, 3)  # k_pool = 9
+
+    @property
+    def image_k_pool(self) -> int:
+        """Pooling kernel size for images."""
+        return self.image_pooling_size[0] * self.image_pooling_size[1]
+
+    @property
+    def video_k_pool(self) -> int:
+        """Pooling kernel size for videos."""
+        return self.video_pooling_size[0] * self.video_pooling_size[1]
+
 
 @dataclass
 class Molmo2TextConfig:
@@ -79,6 +95,16 @@ class Molmo2TextConfig:
     image_patch_id: int = 151938  # Token marking image patch positions
     bos_token_id: int = 151643
     eos_token_id: int = 151645
+
+    # Padding token IDs
+    vision_pad_id: int = 151654  # <|vision_pad|> - for seq len padding
+    image_pad_id: int = 151655  # <|image_pad|>
+    video_pad_id: int = 151656  # <|video_pad|>
+
+    # Video tokens
+    frame_start_id: int = 151943  # <frame_start>
+    frame_end_id: int = 151944  # <frame_end>
+    im_col_id: int = 151939  # <im_col>
 
 
 class Molmo2VisionModelArgs(ModelArgs):

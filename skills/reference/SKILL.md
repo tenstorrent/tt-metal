@@ -14,6 +14,57 @@ Create standalone PyTorch reference modules for each block to generate golden ou
 - Use the block mappings to understand which reference implementations to follow
 - Check similar models' reference implementations listed in ARCHITECTURE.md
 
+## CRITICAL: Read All Config Files Before Implementing Preprocessing
+
+**Before implementing ANY preprocessing code, read ALL `*config.json` files and their corresponding processor Python files.**
+
+### Config Files to Examine
+```bash
+# In the HuggingFace model directory:
+ls *.json *processing*.py
+```
+
+| File | What to Extract |
+|------|-----------------|
+| `preprocessor_config.json` | Image: size, pooling_size, normalization params |
+| `video_preprocessor_config.json` | Video: pooling_size, max_fps, sampling_fps, frame_sample_mode |
+| `*_processing_*.py` | Exact preprocessing logic, token formats |
+
+### Why This Matters
+
+Different modalities have different configs:
+```json
+// preprocessor_config.json (IMAGE)
+{"pooling_size": [2, 2], "size": {"height": 378, "width": 378}}
+
+// video_preprocessor_config.json (VIDEO)
+{"pooling_size": [3, 3], "max_fps": 2.0, "sampling_fps": 2}
+```
+
+**Common mistakes when ignoring configs:**
+- Using image pooling size `[2,2]` for video (should be `[3,3]`)
+- Hardcoding fps values instead of reading from config
+- Missing special token IDs defined in tokenizer_config.json
+
+### Best Practice: Use HF Processors Directly
+
+Prefer using HuggingFace's official processors over custom preprocessing:
+
+```python
+from transformers import AutoProcessor
+
+processor = AutoProcessor.from_pretrained("org/model", trust_remote_code=True)
+
+# Configs are automatically loaded correctly
+print(f"Image pooling: {processor.image_processor.pooling_size}")  # [2, 2]
+print(f"Video pooling: {processor.video_processor.pooling_size}")  # [3, 3]
+
+# Use the processor - it handles all the details
+result = processor(text=prompt, images=image, videos=video, return_tensors="pt")
+```
+
+This avoids bugs from manually reimplementing preprocessing logic.
+
 ## CRITICAL: Verify Official Package Works First
 
 **Before writing ANY reference code, verify the official package produces correct output!**

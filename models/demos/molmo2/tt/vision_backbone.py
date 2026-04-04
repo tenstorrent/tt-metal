@@ -143,6 +143,67 @@ class VisionBackbone(LightweightModule):
     # Class-level request counter for debugging
     _encode_image_request_count = 0
 
+    def _normalize_for_projector(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """
+        Normalize and clip pooled features before projector.
+
+        The Molmo2 ViT uses large LayerNorm gamma values (up to 18x) which causes
+        pooled features to have outliers (±40 after normalization). The SwiGLU
+        projector computes gate*up, which squares these outliers causing scale
+        explosion (e.g., 40*40=1600 becomes extreme after projection).
+
+        This normalizes to unit variance AND clips outliers to ±3 std to prevent
+        the quadratic explosion in SwiGLU.
+        """
+        from loguru import logger
+
+        is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
+
+        # Convert to torch, normalize, convert back
+        # (TTNN doesn't have a built-in var normalization that works well here)
+        if is_mesh_device:
+            x_torch = ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))[0]
+        else:
+            x_torch = ttnn.to_torch(x)
+
+        # Compute statistics
+        x_std = x_torch.std()
+        x_mean = x_torch.mean()
+
+        logger.debug(
+            f"Pooled features before normalization: mean={x_mean:.4f}, std={x_std:.4f}, min={x_torch.min():.4f}, max={x_torch.max():.4f}"
+        )
+
+        # Normalize to unit variance (keep mean, scale to std=1.0)
+        # Add small epsilon to avoid division by zero
+        eps = 1e-6
+        x_normalized = (x_torch - x_mean) / (x_std + eps)
+
+        # Clip outliers to ±3 std to prevent quadratic explosion in SwiGLU
+        # This is critical: without clipping, outliers of ±40 become ±1600 after gate*up
+        clip_value = 3.0
+        x_normalized = torch.clamp(x_normalized, -clip_value, clip_value)
+
+        logger.debug(
+            f"Pooled features after normalization+clip: mean={x_normalized.mean():.4f}, std={x_normalized.std():.4f}, min={x_normalized.min():.4f}, max={x_normalized.max():.4f}"
+        )
+
+        # Convert back to TTNN
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
+        x_out = ttnn.from_torch(
+            x_normalized,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+
+        # Deallocate input since we created a new tensor
+        ttnn.deallocate(x)
+
+        return x_out
+
     def encode_image(
         self,
         images_embedded: ttnn.Tensor,
@@ -180,9 +241,22 @@ class VisionBackbone(LightweightModule):
         # Extract features from specified layers and concat
         features = []
         used_indices = set(self.feature_layers)
+        is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
+        mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0) if is_mesh_device else None
         for layer_idx in self.feature_layers:
             features.append(hidden_states[layer_idx])
-            logger.info(f"  Using layer {layer_idx}, shape: {list(hidden_states[layer_idx].shape)}")
+            # Debug: check per-layer stats
+            try:
+                layer_torch = (
+                    ttnn.to_torch(hidden_states[layer_idx], mesh_composer=mesh_composer)[0]
+                    if is_mesh_device
+                    else ttnn.to_torch(hidden_states[layer_idx])
+                )
+                logger.info(
+                    f"  Layer {layer_idx}: shape={list(layer_torch.shape)}, mean={layer_torch.mean():.4f}, std={layer_torch.std():.4f}, min={layer_torch.min():.4f}, max={layer_torch.max():.4f}"
+                )
+            except:
+                logger.info(f"  Using layer {layer_idx}, shape: {list(hidden_states[layer_idx].shape)}")
 
         # CRITICAL: Deallocate unused hidden states to prevent memory leak
         # For video with 8 frames, each hidden state is ~27MB, 25 layers = ~670MB total
@@ -372,9 +446,12 @@ class VisionBackbone(LightweightModule):
         pooled_features = ttnn.reshape(pooled_features_raw, [1, 1, batch_size * n_out, -1])
         # NOTE: Do NOT deallocate pooled_features_raw - reshape may return a view
 
-        # 7. Project to language model dimension
+        # 7. Normalize pooled features before projection
+        pooled_features = self._normalize_for_projector(pooled_features)
+
+        # 8. Project to language model dimension
         visual_embeddings = self.image_projector(pooled_features)
-        # NOTE: Do NOT deallocate pooled_features - projection may use views internally
+        # NOTE: pooled_features deallocated inside _normalize_for_projector
 
         # 8. Filter by valid tokens (return only valid embeddings)
         # Convert to torch for filtering
@@ -439,10 +516,21 @@ class VisionBackbone(LightweightModule):
         Returns:
             Visual embeddings [1, 1, B*N_out, output_dim]
         """
+        from loguru import logger
+
         is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
+        mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0) if is_mesh_device else None
+
+        def _stats(t, name):
+            try:
+                x = ttnn.to_torch(t, mesh_composer=mesh_composer)[0] if is_mesh_device else ttnn.to_torch(t)
+                return f"{name}: shape={list(x.shape)}, mean={x.mean():.4f}, std={x.std():.4f}, min={x.min():.4f}, max={x.max():.4f}"
+            except:
+                return f"{name}: stats unavailable"
 
         # 1. Encode image through ViT
         image_features = self.encode_image(images_embedded)
+        logger.debug(_stats(image_features, "ViT features"))
         # image_features: [1, 1, B*T*N, pool_dim]
 
         # Squeeze to 2D for embedding lookup: [B*T*N, pool_dim]
@@ -468,6 +556,7 @@ class VisionBackbone(LightweightModule):
         # 3. Apply valid mask (zero out invalid positions)
         # valid_mask_ttnn: [1, 1, B*N_out*K_pool, 1]
         gathered = ttnn.mul(gathered, valid_mask_ttnn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        logger.debug(_stats(gathered, "gathered (after mask)"))
 
         # Reshape to [1, B*N_out, K_pool, pool_dim]
         to_pool = ttnn.reshape(gathered, [1, batch_size * n_out, k_pool, pool_dim])
@@ -481,6 +570,8 @@ class VisionBackbone(LightweightModule):
         # at the cost of slight accuracy reduction vs forward() which uses a proper masked mean.
         # Measured PCC gap vs forward() path: < 0.01 for typical inputs.
         query = ttnn.mul(query_sum, 1.0 / k_pool, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        logger.debug(_stats(query, "query (mean of gathered)"))
+        logger.debug(_stats(to_pool, "to_pool (key/value)"))
 
         # 5. Cross-attention pooling
         # query: [1, B*N_out, 1, pool_dim]
@@ -493,6 +584,7 @@ class VisionBackbone(LightweightModule):
             key_value=to_pool,
             attn_mask=None,
         )
+        logger.debug(_stats(pooled_features, "pooled_features (after pooling, before projection)"))
 
         ttnn.deallocate(query)
         ttnn.deallocate(to_pool)
@@ -502,7 +594,13 @@ class VisionBackbone(LightweightModule):
         # Reshape: [1, B*N_out, 1, hidden_dim] -> [1, 1, B*N_out, hidden_dim]
         pooled_features = ttnn.reshape(pooled_features, [1, 1, batch_size * n_out, -1])
 
-        # 6. Project to language model dimension
+        # 6. Normalize pooled features before projection
+        # The pooled features have std ~4.0 due to large LayerNorm gamma in ViT,
+        # but projector expects std ~1.0. Without normalization, SwiGLU (gate*up)
+        # causes quadratic explosion in scale.
+        pooled_features = self._normalize_for_projector(pooled_features)
+
+        # 7. Project to language model dimension
         visual_embeddings = self.image_projector(pooled_features)
         ttnn.deallocate(pooled_features)
 
@@ -625,6 +723,9 @@ class VisionBackbone(LightweightModule):
 
         # Reshape: [1, B*N_out, 1, hidden_dim] -> [1, 1, B*N_out, hidden_dim]
         pooled_features = ttnn.reshape(pooled_features, [1, 1, batch_size * n_out, -1])
+
+        # Normalize pooled features before projection
+        pooled_features = self._normalize_for_projector(pooled_features)
 
         # Project to language model dimension
         visual_embeddings = self.image_projector(pooled_features)
@@ -814,64 +915,69 @@ class VisionBackbone(LightweightModule):
             ttnn.deallocate(query)
             ttnn.deallocate(to_pool)
 
-            # Project
+            # Reshape pooled features for later normalization
             pooled = ttnn.reshape(pooled, [1, 1, chunk_frames * n_out, -1])
-            chunk_embeddings = self.image_projector(pooled)
-            logger.info(
-                f"  Chunk {chunk_start//max_frames_per_pool_chunk} after projector: chunk_embeddings shape={chunk_embeddings.shape}"
-            )
 
-            # DEBUG: Check projected stats
+            # Move pooled features to CPU (before normalization/projection)
             if is_mesh_device:
-                proj_debug = ttnn.to_torch(chunk_embeddings, mesh_composer=mesh_composer)[0]
+                pooled_torch = ttnn.to_torch(pooled, mesh_composer=mesh_composer)[0]
             else:
-                proj_debug = ttnn.to_torch(chunk_embeddings)
-            logger.info(
-                f"    Chunk {chunk_start//max_frames_per_pool_chunk} projected stats: mean={proj_debug.mean().item():.4f}, std={proj_debug.std().item():.4f}, min={proj_debug.min().item():.4f}, max={proj_debug.max().item():.4f}"
-            )
+                pooled_torch = ttnn.to_torch(pooled)
 
-            ttnn.deallocate(pooled)
+            # Ensure 4D shape
+            if pooled_torch.dim() == 3:
+                pooled_torch = pooled_torch.unsqueeze(1)
 
-            # Move to CPU for concatenation
-            if is_mesh_device:
-                chunk_torch = ttnn.to_torch(chunk_embeddings, mesh_composer=mesh_composer)[0]
-            else:
-                chunk_torch = ttnn.to_torch(chunk_embeddings)
-
-            # Ensure 4D shape for consistent concatenation
-            if chunk_torch.dim() == 3:
-                chunk_torch = chunk_torch.unsqueeze(1)  # [1, seq, dim] -> [1, 1, seq, dim]
             logger.debug(
-                f"  Chunk {chunk_start//max_frames_per_pool_chunk}: shape={chunk_torch.shape}, mean={chunk_torch.mean().item():.4f}, std={chunk_torch.std().item():.4f}, min={chunk_torch.min().item():.4f}, max={chunk_torch.max().item():.4f}"
+                f"  Chunk {chunk_start//max_frames_per_pool_chunk} pooled (before norm): shape={pooled_torch.shape}, mean={pooled_torch.mean().item():.4f}, std={pooled_torch.std().item():.4f}"
             )
-            all_embeddings.append(chunk_torch)
-            ttnn.deallocate(chunk_embeddings)
+            all_embeddings.append(pooled_torch)
+            ttnn.deallocate(pooled)
             ttnn.synchronize_device(self.mesh_device)
 
         # Deallocate embedding table
         ttnn.deallocate(image_features_2d)
 
-        # Concatenate all chunks along sequence dimension (dim=2)
-        combined = torch.cat(all_embeddings, dim=2)  # [1, 1, total_outputs, output_dim]
-        logger.info(f"pool_and_project_chunked: Complete, output shape: {combined.shape}")
+        # Concatenate all pooled features BEFORE normalization
+        combined_pooled = torch.cat(all_embeddings, dim=2)  # [1, 1, total_outputs, pool_dim]
+        logger.info(f"pool_and_project_chunked: Combined pooled shape: {combined_pooled.shape}")
         logger.info(
-            f"  Combined stats: mean={combined.mean().item():.4f}, std={combined.std().item():.4f}, min={combined.min().item():.4f}, max={combined.max().item():.4f}"
+            f"  Combined pooled stats (before norm): mean={combined_pooled.mean().item():.4f}, std={combined_pooled.std().item():.4f}, min={combined_pooled.min().item():.4f}, max={combined_pooled.max().item():.4f}"
         )
 
-        # DEBUG: Check individual chunk contributions
-        for i, chunk_emb in enumerate(all_embeddings):
-            logger.info(
-                f"  Chunk {i} contribution: shape={chunk_emb.shape}, mean={chunk_emb.mean().item():.4f}, std={chunk_emb.std().item():.4f}"
-            )
+        # Apply GLOBAL normalization (same as single-pass path)
+        eps = 1e-6
+        global_mean = combined_pooled.mean()
+        global_std = combined_pooled.std()
+        combined_normalized = (combined_pooled - global_mean) / (global_std + eps)
+        clip_value = 3.0
+        combined_normalized = torch.clamp(combined_normalized, -clip_value, clip_value)
+        logger.info(
+            f"  Combined pooled stats (after norm): mean={combined_normalized.mean().item():.4f}, std={combined_normalized.std().item():.4f}, min={combined_normalized.min().item():.4f}, max={combined_normalized.max().item():.4f}"
+        )
 
-        # Move back to device
-        visual_embeddings = ttnn.from_torch(
-            combined,
+        # Move normalized features to device and project
+        combined_ttnn = ttnn.from_torch(
+            combined_normalized,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper,
+        )
+
+        # Project all at once (this should fit since we're projecting, not pooling)
+        visual_embeddings = self.image_projector(combined_ttnn)
+        ttnn.deallocate(combined_ttnn)
+
+        # Get final stats
+        if is_mesh_device:
+            final_debug = ttnn.to_torch(visual_embeddings, mesh_composer=mesh_composer)[0]
+        else:
+            final_debug = ttnn.to_torch(visual_embeddings)
+        logger.info(f"pool_and_project_chunked: Complete, output shape: {visual_embeddings.shape}")
+        logger.info(
+            f"  Final projected stats: mean={final_debug.mean().item():.4f}, std={final_debug.std().item():.4f}, min={final_debug.min().item():.4f}, max={final_debug.max().item():.4f}"
         )
 
         return visual_embeddings

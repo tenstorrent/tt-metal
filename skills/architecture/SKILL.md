@@ -10,7 +10,43 @@ Identify existing TTNN implementations that share architectural blocks with the 
 
 ## Step-by-Step Process
 
-### 1. Identify Model Family
+### 1. Examine All Config Files
+
+**CRITICAL: Before any implementation, examine ALL `*config.json` files in the HuggingFace model directory.**
+
+```bash
+# List all config files
+ls ~/.cache/huggingface/hub/models--{org}--{model}/snapshots/*/*.json
+```
+
+Common config files to check:
+| File | Contains |
+|------|----------|
+| `config.json` | Model architecture (layers, dims, heads, vocab) |
+| `preprocessor_config.json` | Image preprocessing (size, normalization, pooling) |
+| `video_preprocessor_config.json` | Video preprocessing (fps, pooling, frame sampling) |
+| `tokenizer_config.json` | Tokenizer settings, special tokens |
+| `generation_config.json` | Generation parameters (temperature, top_k) |
+
+**Why this matters:**
+- Different modalities (image vs video) often have DIFFERENT configs
+- Pooling sizes, normalization params, special tokens are defined here
+- Hardcoding values that exist in configs leads to subtle bugs
+- Example: Video uses `pooling_size: [3,3]` while image uses `[2,2]`
+
+```python
+# Load and inspect all configs
+import json
+from pathlib import Path
+
+model_dir = Path("~/.cache/huggingface/hub/models--org--model/snapshots/xxx/")
+for config_file in model_dir.glob("*config*.json"):
+    print(f"\n=== {config_file.name} ===")
+    config = json.load(open(config_file))
+    print(json.dumps(config, indent=2))
+```
+
+### 2. Identify Model Family
 Classify the target model into one of these categories:
 - **Decoder-only LLM**: Llama, Falcon, Qwen, DeepSeek, Mistral
 - **Encoder-only**: BERT, SentenceBERT, SqueezeBERT
@@ -19,7 +55,7 @@ Classify the target model into one of these categories:
 - **Speech/Audio (ASR)**: Whisper, Wav2Vec2
 - **Text-to-Speech (TTS)**: SpeechT5, Qwen3-TTS, VITS, Bark
 
-### 2. Map Architectural Blocks
+### 3. Map Architectural Blocks
 For each block in the target model, find TTNN equivalents:
 
 | Block Type | Reference Implementations |
@@ -44,7 +80,7 @@ For each block in the target model, find TTNN equivalents:
 | Conv1d / ConvTranspose1d | 1D convolutions for audio processing |
 | ConvNeXt Block | Depthwise separable conv blocks for upsampling |
 
-### 3. Identify Weight Naming Conventions
+### 4. Identify Weight Naming Conventions
 Map HuggingFace weight names to TTNN patterns:
 
 ```python
@@ -59,7 +95,7 @@ Map HuggingFace weight names to TTNN patterns:
 "model.layers.{i}.mlp.down_proj.weight"   → layer_name + "feed_forward.w2.weight"
 ```
 
-### 4. Document Similarities and Differences
+### 5. Document Similarities and Differences
 Create ARCHITECTURE.md in your model folder with:
 
 ```markdown

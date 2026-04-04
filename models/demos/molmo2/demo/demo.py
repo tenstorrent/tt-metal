@@ -47,22 +47,19 @@ class PenaltyArgs:
     padded_vocab_size: int = 152064
 
 
+# Import HF processor wrapper (uses correct configs from HuggingFace)
+from models.demos.molmo2.tt.hf_processor import preprocess_image, preprocess_video
+
 # Import shared utilities from tt module
-from models.demos.molmo2.tt.utils import (
-    IMAGE_PROMPT,
-    VIDEO_MAX_FPS,
-    VIDEO_MAX_FRAMES,
-    VIDEO_PROMPT,
-    get_image_tokens,
-    get_video_tokens,
-    pad_input_ids,
-    preprocess_image_molmo2,
-    preprocess_video_molmo2,
-)
+from models.demos.molmo2.tt.utils import IMAGE_PROMPT, VIDEO_PROMPT, get_image_tokens, pad_input_ids
 
 # Default paths
 DEMO_DIR = Path(__file__).parent
 DEFAULT_IMAGE = DEMO_DIR / "dog.jpg"
+
+# Video defaults (HF processor uses these internally, but we expose them for CLI)
+VIDEO_MAX_FRAMES = 384  # HF default
+VIDEO_MAX_FPS = 2.0  # HF default
 
 # Re-export MODEL_ID for backwards compatibility
 MODEL_ID = "allenai/Molmo2-8B"
@@ -1941,7 +1938,9 @@ class Molmo2Generator:
             chunk_end = min(chunk_start + chunk_size, seq_len)
             actual_chunk_size = chunk_end - chunk_start
 
-            logger.debug(f"Processing chunk {chunk_idx + 1}/{num_chunks}: positions {chunk_start}-{chunk_end}")
+            logger.info(
+                f"CHUNKED PREFILL: chunk {chunk_idx + 1}/{num_chunks}: positions {chunk_start}-{chunk_end}, size={actual_chunk_size}"
+            )
 
             # Slice hidden states for this chunk
             chunk_hidden = ttnn.slice(
@@ -2110,6 +2109,24 @@ class Molmo2Generator:
             # On-device argmax (no CPU logits transfer)
             tt_next_token = self._argmax_on_device(logits)
 
+        # DEBUG: Log decode position and logits for first few decodes
+        if is_first or self.decode_position % 1000 == 0 or self.decode_position < 5:
+            logger.info(f"  DECODE: position={self.decode_position}, is_first={is_first}")
+            # Print logits stats for debugging
+            mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+            debug_logits = ttnn.to_torch(logits, mesh_composer=mesh_composer)[0]
+            if debug_logits.dim() == 4:
+                debug_logits = debug_logits[0, 0, 0, :]
+            elif debug_logits.dim() == 3:
+                debug_logits = debug_logits[0, 0, :]
+            top5_vals, top5_ids = debug_logits.topk(5)
+            logger.info(
+                f"    DECODE logits stats: mean={debug_logits.mean():.2f}, std={debug_logits.std():.2f}, min={debug_logits.min():.2f}, max={debug_logits.max():.2f}"
+            )
+            logger.info(
+                f"    DECODE top 5: {[(int(tid), float(tv)) for tid, tv in zip(top5_ids.tolist(), top5_vals.tolist())]}"
+            )
+
         # On-device position increment (no CPU tensor creation)
         ttnn.plus_one(self.current_pos)
         ttnn.plus_one(self.rot_mat_idxs)
@@ -2159,7 +2176,7 @@ class Molmo2Generator:
     def run_inference(
         self,
         image_inputs: dict,
-        prompt: str,
+        prompt: str = None,  # Deprecated for images: HF processor includes input_ids
         max_new_tokens: int = 100,
         use_trace: bool = False,
         use_decode_trace: bool = False,
@@ -2170,42 +2187,54 @@ class Molmo2Generator:
         Run full inference with autoregressive generation.
 
         Args:
-            image_inputs: Dict from preprocess_image_molmo2
-            prompt: Text prompt (should include <|image|> token)
+            image_inputs: Dict from preprocess_image (HF processor) or None for text-only
+                - input_ids: [1, seq_len] with visual tokens already inserted
+                - pixel_values: [n_crops, 3, H, W]
+                - image_token_pooling: [n_tokens, k_pool]
+            prompt: Text prompt (only needed for text-only, HF processor already tokenized images)
             max_new_tokens: Maximum tokens to generate
             use_trace: Whether to use tracing for prefill
-            use_decode_trace: Whether to use tracing for decode (disabled by default
-                              to avoid memory corruption from tensor allocation during trace)
-            use_vision_trace: Whether to use tracing for vision backbone (ViT + pooling)
-            use_unified_trace: Whether to use unified Vision+Prefill trace (eliminates CPU roundtrip)
+            use_decode_trace: Whether to use tracing for decode
+            use_vision_trace: Whether to use tracing for vision backbone
+            use_unified_trace: Whether to use unified Vision+Prefill trace
 
         Returns:
             Tuple of (output_text, perf_metrics)
         """
-        # Check if this is a text-only prompt (no image placeholder)
-        is_text_only = IMAGE_PROMPT not in prompt
+        # Check if using HF processor format (has input_ids already)
+        has_hf_input_ids = image_inputs is not None and "input_ids" in image_inputs
 
-        if is_text_only:
-            # Text-only: no image processing needed
-            content_with_images = prompt
+        if has_hf_input_ids:
+            # HF processor format: input_ids already tokenized
+            input_ids = image_inputs["input_ids"]
+            # Check if this is text-only (no pixel_values) or image (has pixel_values)
+            if "pixel_values" in image_inputs:
+                pixel_values = image_inputs["pixel_values"]
+                pooled_patches_idx = image_inputs["image_token_pooling"].unsqueeze(0)
+                logger.debug(f"Using HF processor input_ids (image): {input_ids.shape}")
+            else:
+                # Text-only from HF processor
+                pixel_values = None
+                pooled_patches_idx = None
+                logger.debug(f"Using HF processor input_ids (text-only): {input_ids.shape}")
+        elif prompt is not None and IMAGE_PROMPT not in prompt:
+            # Text-only: no image processing needed (legacy path)
+            messages = [{"role": "user", "content": prompt}]
+            full_prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            input_ids = self.tokenizer.encode(full_prompt, return_tensors="pt", add_special_tokens=False)
             pixel_values = None
             pooled_patches_idx = None
         else:
-            # Build prompt with image tokens
+            # Legacy format: manual token building (fallback)
             image_grid = image_inputs["image_grids"][0]
             image_tokens_str = get_image_tokens(image_grid)
             content_with_images = prompt.replace(IMAGE_PROMPT, image_tokens_str)
-            # Get pooling indices and pixel values
+            messages = [{"role": "user", "content": content_with_images}]
+            full_prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            input_ids = self.tokenizer.encode(full_prompt, return_tensors="pt", add_special_tokens=False)
             pooled_patches_idx = image_inputs["image_token_pooling"].unsqueeze(0)
             pixel_values = image_inputs["pixel_values"]
-
-        # Apply chat template (Molmo2 expects this format)
-        messages = [{"role": "user", "content": content_with_images}]
-        full_prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        logger.debug(f"Full prompt (first 200 chars): {full_prompt[:200]}...")
-
-        # Tokenize input
-        input_ids = self.tokenizer.encode(full_prompt, return_tensors="pt", add_special_tokens=False)
+            logger.debug(f"Using legacy format input_ids: {input_ids.shape}")
 
         # Run prefill
         logits, prefill_timing = self.run_prefill(
@@ -2222,12 +2251,38 @@ class Molmo2Generator:
         original_seq_len = prefill_timing.get("original_seq_len", input_ids.shape[1])
         mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
         logits_torch = ttnn.to_torch(logits, mesh_composer=mesh_composer)[0].squeeze()
+
+        # DEBUG: Log prefill diagnostics
+        logger.info(f"=== PREFILL DIAGNOSTICS ===")
+        logger.info(f"  input_ids shape: {input_ids.shape}, original_seq_len: {original_seq_len}")
+        logger.info(f"  input_ids (first 20): {input_ids[0, :20].tolist()}")
+        logger.info(f"  input_ids (last 20): {input_ids[0, -20:].tolist()}")
+        logger.info(f"  logits_torch shape: {logits_torch.shape}")
+        logger.info(
+            f"  logits_torch stats: mean={logits_torch.mean().item():.4f}, std={logits_torch.std().item():.4f}, min={logits_torch.min().item():.4f}, max={logits_torch.max().item():.4f}"
+        )
+
         if logits_torch.dim() == 2:
             next_token_logits = logits_torch[original_seq_len - 1, :]
+            logger.info(f"  Indexing logits at position {original_seq_len - 1}")
         else:
             next_token_logits = logits_torch
+            logger.info(f"  Using 1D logits directly")
+
+        logger.info(
+            f"  next_token_logits stats: mean={next_token_logits.mean().item():.4f}, std={next_token_logits.std().item():.4f}, min={next_token_logits.min().item():.4f}, max={next_token_logits.max().item():.4f}"
+        )
+
+        # Get top 5 predictions
+        top5_values, top5_indices = torch.topk(next_token_logits, 5)
+        logger.info(f"  Top 5 predictions:")
+        for i, (val, idx) in enumerate(zip(top5_values.tolist(), top5_indices.tolist())):
+            decoded = self.tokenizer.decode([idx])
+            logger.info(f"    {i+1}. token={idx}, logit={val:.2f}, decoded='{decoded}'")
 
         next_token = torch.argmax(next_token_logits).item()
+        logger.info(f"  Selected first token: {next_token} -> '{self.tokenizer.decode([next_token])}'")
+        logger.info(f"=== END PREFILL DIAGNOSTICS ===")
         generated_tokens = [next_token]
 
         # Put first token on device for CPU-free decode loop
@@ -2310,7 +2365,7 @@ class Molmo2Generator:
     def run_video_inference(
         self,
         video_inputs: dict,
-        prompt: str,
+        prompt: str = None,  # Deprecated: HF processor includes input_ids
         max_new_tokens: int = 200,
         use_trace: bool = False,
         use_decode_trace: bool = False,
@@ -2323,8 +2378,12 @@ class Molmo2Generator:
         Run full inference on a video input with autoregressive generation.
 
         Args:
-            video_inputs: Dict from preprocess_video_molmo2
-            prompt: Text prompt (should include <|video|> token)
+            video_inputs: Dict from preprocess_video (HF processor)
+                - input_ids: [1, seq_len] with visual tokens already inserted
+                - pixel_values: [n_frames, 3, H, W]
+                - image_token_pooling: [n_tokens, k_pool]
+                - n_frames, pooled_h, pooled_w, k_pool, timestamps
+            prompt: Deprecated (HF processor already includes tokenized input)
             max_new_tokens: Maximum tokens to generate
             use_trace: Whether to use tracing for prefill
             use_decode_trace: Whether to use tracing for decode
@@ -2339,20 +2398,22 @@ class Molmo2Generator:
         pooled_h = video_inputs["pooled_h"]
         pooled_w = video_inputs["pooled_w"]
 
-        # Build prompt with video tokens (replaces <|video|> with per-frame patch tokens)
-        video_tokens_str = get_video_tokens(n_frames, pooled_h, pooled_w, timestamps)
-        content_with_videos = prompt.replace(VIDEO_PROMPT, video_tokens_str)
+        # Use input_ids from HF processor (already tokenized with visual tokens)
+        input_ids = video_inputs["input_ids"]
+        logger.debug(f"Using HF processor input_ids: {input_ids.shape}")
 
-        # Apply chat template (Molmo2 expects this format)
-        messages = [{"role": "user", "content": content_with_videos}]
-        full_prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        logger.debug(f"Full prompt (first 200 chars): {full_prompt[:200]}...")
+        # pooled_patches_idx shape: [n_tokens, k_pool] from HF processor
+        # Reshape to [n_frames, n_out, k_pool] for compatibility with run_prefill
+        n_tokens = video_inputs["n_tokens"]
+        k_pool = video_inputs["k_pool"]
+        n_out = n_tokens // n_frames  # tokens per frame (81 for video with 3x3 pooling)
 
-        # Tokenize input
-        input_ids = self.tokenizer.encode(full_prompt, return_tensors="pt", add_special_tokens=False)
+        pooled_patches_idx = video_inputs["image_token_pooling"]  # [n_tokens, k_pool]
+        if pooled_patches_idx.dim() == 2 and pooled_patches_idx.shape[0] == n_tokens:
+            # Reshape from [n_tokens, k_pool] to [n_frames, n_out, k_pool]
+            pooled_patches_idx = pooled_patches_idx.reshape(n_frames, n_out, k_pool)
+            logger.debug(f"Reshaped pooled_patches_idx: {pooled_patches_idx.shape}")
 
-        # pooled_patches_idx shape: [n_frames, N_out, K_pool] -- no unsqueeze needed
-        pooled_patches_idx = video_inputs["image_token_pooling"]  # [n_frames, N_out, K_pool]
         pixel_values = video_inputs["pixel_values"]  # [n_frames, 3, H, W]
 
         num_visual_tokens = n_frames * pooled_h * pooled_w
@@ -2382,17 +2443,44 @@ class Molmo2Generator:
         original_seq_len = prefill_timing.get("original_seq_len", input_ids.shape[1])
         mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
         logits_torch = ttnn.to_torch(logits, mesh_composer=mesh_composer)[0].squeeze()
+
+        # DEBUG: Log prefill diagnostics for video
+        logger.info(f"=== VIDEO PREFILL DIAGNOSTICS ===")
+        logger.info(f"  input_ids shape: {input_ids.shape}, original_seq_len: {original_seq_len}")
+        logger.info(f"  input_ids (first 20): {input_ids[0, :20].tolist()}")
+        logger.info(f"  input_ids (last 20): {input_ids[0, -20:].tolist()}")
+        logger.info(f"  logits_torch shape: {logits_torch.shape}")
+        logger.info(
+            f"  logits_torch stats: mean={logits_torch.mean().item():.4f}, std={logits_torch.std().item():.4f}, min={logits_torch.min().item():.4f}, max={logits_torch.max().item():.4f}"
+        )
+
         if logits_torch.dim() == 2:
             # For chunked prefill, use the index within the last chunk
             if prefill_timing.get("chunked_prefill", False):
                 logits_idx = prefill_timing["last_token_idx_in_chunk"]
+                logger.info(f"  Using chunked prefill logits_idx: {logits_idx}")
             else:
                 logits_idx = original_seq_len - 1
+                logger.info(f"  Using standard logits_idx: {logits_idx}")
             next_token_logits = logits_torch[logits_idx, :]
         else:
             next_token_logits = logits_torch
+            logger.info(f"  Using 1D logits directly")
+
+        logger.info(
+            f"  next_token_logits stats: mean={next_token_logits.mean().item():.4f}, std={next_token_logits.std().item():.4f}, min={next_token_logits.min().item():.4f}, max={next_token_logits.max().item():.4f}"
+        )
+
+        # Get top 5 predictions
+        top5_values, top5_indices = torch.topk(next_token_logits, 5)
+        logger.info(f"  Top 5 predictions:")
+        for i, (val, idx) in enumerate(zip(top5_values.tolist(), top5_indices.tolist())):
+            decoded = self.tokenizer.decode([idx])
+            logger.info(f"    {i+1}. token={idx}, logit={val:.2f}, decoded='{decoded}'")
 
         next_token = torch.argmax(next_token_logits).item()
+        logger.info(f"  Selected first token: {next_token} -> '{self.tokenizer.decode([next_token])}'")
+        logger.info(f"=== END VIDEO PREFILL DIAGNOSTICS ===")
         generated_tokens = [next_token]
 
         # Put first token on device for CPU-free decode loop
@@ -2518,26 +2606,31 @@ class Molmo2Generator:
             image_inputs = image_inputs_list[user_id]
             prompt = prompts[user_id]
 
-            # Check if text-only prompt
-            is_text_only = IMAGE_PROMPT not in prompt
+            # Check if using HF processor format (has input_ids already)
+            has_hf_input_ids = image_inputs is not None and "input_ids" in image_inputs
 
-            if is_text_only:
-                content_with_images = prompt
+            if has_hf_input_ids:
+                # HF processor format: input_ids already tokenized with visual tokens
+                input_ids = image_inputs["input_ids"]
+                pixel_values = image_inputs["pixel_values"]
+                pooled_patches_idx = image_inputs["image_token_pooling"].unsqueeze(0)
+            elif IMAGE_PROMPT not in prompt:
+                # Text-only
+                messages = [{"role": "user", "content": prompt}]
+                full_prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+                input_ids = self.tokenizer.encode(full_prompt, return_tensors="pt", add_special_tokens=False)
                 pixel_values = None
                 pooled_patches_idx = None
             else:
+                # Legacy format
                 image_grid = image_inputs["image_grids"][0]
                 image_tokens_str = get_image_tokens(image_grid)
                 content_with_images = prompt.replace(IMAGE_PROMPT, image_tokens_str)
+                messages = [{"role": "user", "content": content_with_images}]
+                full_prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+                input_ids = self.tokenizer.encode(full_prompt, return_tensors="pt", add_special_tokens=False)
                 pooled_patches_idx = image_inputs["image_token_pooling"].unsqueeze(0)
                 pixel_values = image_inputs["pixel_values"]
-
-            # Apply chat template
-            messages = [{"role": "user", "content": content_with_images}]
-            full_prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-
-            # Tokenize
-            input_ids = self.tokenizer.encode(full_prompt, return_tensors="pt", add_special_tokens=False)
 
             # Run prefill for this user (user_id determines KV cache slot)
             logits, prefill_timing = self.run_prefill(
@@ -2694,17 +2787,18 @@ def run_video_demo(
     # Load tokenizer
     tokenizer = load_processor()
 
-    # Preprocess video
+    # Preprocess video using HF processor (correct pooling_size [3,3], max_fps=2.0)
     logger.info(f"Preprocessing video: {video_path}")
     video_extraction_start = time.perf_counter()
-    video_inputs = preprocess_video_molmo2(
+    video_inputs = preprocess_video(
         video_path,
-        max_frames=max_frames,
-        max_fps=max_fps,
+        prompt,
+        num_frames=max_frames,  # HF processor uses num_frames param
     )
     video_extraction_ms = (time.perf_counter() - video_extraction_start) * 1000
     n_frames = video_inputs["n_frames"]
-    logger.info(f"Extracted {n_frames} frames in {video_extraction_ms:.2f}ms")
+    k_pool = video_inputs["k_pool"]
+    logger.info(f"Extracted {n_frames} frames in {video_extraction_ms:.2f}ms (k_pool={k_pool})")
     logger.info(f"Frame extraction: {n_frames / (video_extraction_ms / 1000):.2f} frames/sec (CPU)")
 
     # Load weights
@@ -2737,7 +2831,7 @@ def run_video_demo(
 
         response, perf_metrics = generator.run_video_inference(
             video_inputs=video_inputs,
-            prompt=prompt,
+            # prompt not needed - HF processor already tokenized with visual tokens
             max_new_tokens=max_new_tokens,
             use_trace=use_trace,
             use_decode_trace=use_decode_trace,
@@ -2821,8 +2915,13 @@ def run_demo(
     # with paged attention. The page_table is allocated as a trace input tensor and gets updated
     # via ttnn.copy() before each trace execution.
 
-    if image_path is None:
+    # Determine if this is a text-only or image prompt
+    is_text_only = IMAGE_PROMPT not in prompt
+
+    # Only default to an image if prompt expects one but none provided
+    if not is_text_only and image_path is None:
         image_path = str(DEFAULT_IMAGE)
+        logger.info(f"No image provided, using default: {image_path}")
 
     logger.info("=" * 60)
     logger.info("Molmo2-8B Demo")
@@ -2831,10 +2930,20 @@ def run_demo(
     # Load tokenizer
     tokenizer = load_processor()
 
-    # Preprocess image using Molmo2 processor
-    logger.info("Preprocessing image...")
-    image_inputs = preprocess_image_molmo2(image_path)
-    logger.info(f"Image preprocessed: {image_inputs['image_num_crops'].item()} crops")
+    # Preprocess based on modality
+    if is_text_only:
+        # Text-only: use HF processor for tokenization
+        from models.demos.molmo2.tt.hf_processor import preprocess_text
+
+        logger.info("Text-only prompt (no <|image|> token)")
+        image_inputs = preprocess_text(prompt)
+        image_inputs["input_ids"] = image_inputs["input_ids"]  # Already correct shape
+        logger.info(f"Text tokenized: {image_inputs['input_ids'].shape[1]} tokens")
+    else:
+        # Image: preprocess with HF processor
+        logger.info(f"Preprocessing image: {image_path}")
+        image_inputs = preprocess_image(image_path, prompt)
+        logger.info(f"Image preprocessed: {image_inputs['n_crops']} crops, k_pool={image_inputs['k_pool']}")
 
     # Load weights
     state_dict = load_model_weights()
@@ -2886,7 +2995,7 @@ def run_demo(
 
         response, perf_metrics = generator.run_inference(
             image_inputs=image_inputs,
-            prompt=prompt,
+            # prompt not needed - HF processor already tokenized with visual tokens
             max_new_tokens=max_new_tokens,
             use_trace=use_trace,
             use_decode_trace=use_decode_trace,
@@ -2988,7 +3097,7 @@ def run_batched_demo(
     # Load tokenizer
     tokenizer = load_processor()
 
-    # Preprocess images
+    # Preprocess images using HF processor
     logger.info("Preprocessing images...")
     image_inputs_list = []
     prompts = []
@@ -3002,9 +3111,12 @@ def run_batched_demo(
         if IMAGE_PROMPT not in prompt:
             prompt = f"{IMAGE_PROMPT} {prompt}"
         prompts.append(prompt)
-        image_inputs = preprocess_image_molmo2(image_path)
+        # Use HF processor for correct preprocessing
+        image_inputs = preprocess_image(image_path, prompt)
         image_inputs_list.append(image_inputs)
-        logger.info(f"  Prompt {i}: image={Path(image_path).name}, prompt={prompt[:50]}...")
+        logger.info(
+            f"  Prompt {i}: image={Path(image_path).name}, k_pool={image_inputs['k_pool']}, prompt={prompt[:50]}..."
+        )
 
     # Load weights
     state_dict = load_model_weights()
@@ -3208,6 +3320,18 @@ def main():
         else:
             prompt = f"{VIDEO_PROMPT} Describe what happens in this video."
         max_seq_len = args.max_seq_len if args.max_seq_len is not None else 65536
+
+        # VIDEO: Force always-on features for optimal performance
+        # - paged_attention: Required for chunked prefill with long sequences
+        # - decode_trace: Required for good decode throughput (30+ tok/s)
+        # - data_parallel: Always use DP=8 (handled in embed_image routing)
+        use_paged_attention_video = True
+        use_decode_trace_video = True
+        if not args.paged_attention:
+            logger.info("Video: Auto-enabling paged attention (required for long sequences)")
+        if not args.use_decode_trace:
+            logger.info("Video: Auto-enabling decode trace (for 30+ tok/s throughput)")
+
         run_video_demo(
             video_path=args.video,
             prompt=prompt,
@@ -3218,22 +3342,31 @@ def main():
             max_frames=args.max_video_frames,
             max_fps=args.max_video_fps,
             use_trace=args.use_trace,
-            use_decode_trace=args.use_decode_trace,
+            use_decode_trace=use_decode_trace_video,
             use_vision_trace=args.use_vision_trace,
             use_unified_trace=args.use_unified_trace,
-            use_paged_attention=args.paged_attention,
+            use_paged_attention=use_paged_attention_video,
             batch_size=args.batch_size,
             num_devices=args.num_devices,
-            use_data_parallel=args.use_data_parallel,
+            use_data_parallel=True,  # Always use DP=8 for video
             frames_per_device=args.frames_per_device,
             repetition_penalty=args.repetition_penalty,
         )
     else:
-        # Image inference - auto-prepend <|image|> if user forgot it
-        if args.prompt is not None:
-            prompt = args.prompt if IMAGE_PROMPT in args.prompt else f"{IMAGE_PROMPT} {args.prompt}"
+        # Image or text-only inference
+        if args.image is not None:
+            # Image provided: auto-prepend <|image|> if user forgot it
+            if args.prompt is not None:
+                prompt = args.prompt if IMAGE_PROMPT in args.prompt else f"{IMAGE_PROMPT} {args.prompt}"
+            else:
+                prompt = f"{IMAGE_PROMPT} Describe this image in detail."
         else:
-            prompt = f"{IMAGE_PROMPT} Describe this image in detail."
+            # No image provided: text-only mode (don't add <|image|> token)
+            if args.prompt is not None:
+                prompt = args.prompt
+            else:
+                # Default to a simple text prompt
+                prompt = "Hello! How can I help you today?"
         max_seq_len = args.max_seq_len if args.max_seq_len is not None else 2048
         run_demo(
             image_path=args.image,

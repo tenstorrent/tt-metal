@@ -185,24 +185,27 @@ class Molmo2Model(LightweightModule):
         is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
         num_devices = self.mesh_device.get_num_devices() if is_mesh_device else 1
 
-        # Auto-enable data parallel for videos with enough frames
-        # DP provides ~2x speedup by distributing frames across devices
-        auto_dp = is_mesh_device and batch_size >= num_devices and batch_size > 1
+        # ROUTING LOGIC:
+        # - Single image (batch_size == 1): No DP overhead, process directly
+        # - Video (batch_size > 1): Always use DP=8, pad to multiple of 8
+        #   This ensures all 8 devices are utilized even for small videos (2-7 frames)
 
-        if (use_data_parallel or auto_dp) and is_mesh_device and batch_size >= num_devices:
-            # Data parallel: shard frames across all devices
-            # Auto-calculate frames_per_device if batch divides evenly, else use provided value
-            effective_frames_per_device = frames_per_device
-            if batch_size % num_devices == 0:
-                # Perfect split: each device gets batch_size/num_devices frames
-                effective_frames_per_device = max(1, batch_size // num_devices)
+        if batch_size > 1 and is_mesh_device:
+            # VIDEO PATH: Always use DP=8 with padding
+            # Calculate frames_per_device: pad total frames to multiple of num_devices
+            padded_frames = ((batch_size + num_devices - 1) // num_devices) * num_devices
+            effective_frames_per_device = padded_frames // num_devices
+            # Cap at 8 frames/device/pass (ViT memory limit)
+            effective_frames_per_device = min(effective_frames_per_device, 8)
             logger.info(
-                f"embed_image: Auto-enabled data parallel for {batch_size} frames across {num_devices} devices, {effective_frames_per_device} frames/device"
+                f"embed_image: Video with {batch_size} frames -> DP=8 "
+                f"(padded to {padded_frames}, {effective_frames_per_device} frames/device)"
             )
             return self._embed_image_data_parallel(
                 pixel_values, pooled_patches_idx, effective_frames_per_device, num_devices
             )
-        elif batch_size > max_frames_per_chunk:
+        elif batch_size > max_frames_per_chunk and not is_mesh_device:
+            # Fallback for non-mesh device with many frames
             logger.info(f"embed_image: Chunked processing {batch_size} frames in chunks of {max_frames_per_chunk}")
             return self._embed_image_chunked(pixel_values, pooled_patches_idx, max_frames_per_chunk)
 
@@ -383,7 +386,7 @@ class Molmo2Model(LightweightModule):
         valid_token = torch.any(valid, dim=-1)  # [batch_size, N_out]
 
         # Threshold for using chunked pooling (based on memory analysis)
-        max_frames_for_single_pool = 32
+        max_frames_for_single_pool = 64  # Increased from 32 - chunked pooling has scale bug
 
         if batch_size <= max_frames_for_single_pool:
             # Small video: use single pooling pass
@@ -452,7 +455,7 @@ class Molmo2Model(LightweightModule):
                 n_out=n_out,
                 k_pool=k_pool,
                 batch_size=batch_size,
-                max_frames_per_pool_chunk=32,
+                max_frames_per_pool_chunk=16,  # Reduced from 32 to avoid OOM on all_reduce
             )
             # Note: combined_features_ttnn is deallocated inside pool_and_project_chunked_ttnn
 
@@ -625,7 +628,7 @@ class Molmo2Model(LightweightModule):
         valid = pooled_patches_idx >= 0
         valid_token = torch.any(valid, dim=-1)
 
-        max_frames_for_single_pool = 32
+        max_frames_for_single_pool = 32  # Restored
         batch_size = total_frames
 
         if batch_size <= max_frames_for_single_pool:
@@ -693,7 +696,7 @@ class Molmo2Model(LightweightModule):
                 n_out=n_out,
                 k_pool=k_pool,
                 batch_size=batch_size,
-                max_frames_per_pool_chunk=32,
+                max_frames_per_pool_chunk=16,  # Reduced from 32 to avoid OOM on all_reduce
             )
 
         logger.info(f"embed_image_data_parallel: Complete, output shape: {visual_embeddings.shape}")
