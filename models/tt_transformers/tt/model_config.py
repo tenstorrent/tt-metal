@@ -699,7 +699,7 @@ class ModelArgs:
             # NOTE: Fused all gather matmul only supports a core grid of size num_devices x 1
             # TODO: #26657 refactor ACTUAL_DEVICE environment variable usage
             self._use_fused_all_gather_matmul = (
-                self.num_devices >= 4
+                (self.num_devices == 8 or (self.num_devices >= 4 and self.device_name == "P300"))
                 and os.getenv("ACTUAL_DEVICE", "") != "TG"
                 and (self.dim // ttnn.TILE_SIZE // self.num_devices) % self.num_devices == 0
                 and self.num_devices > 1
@@ -1050,15 +1050,16 @@ class ModelArgs:
 
             self.is_multichip = self.num_devices > 1
             self.is_p300 = self.device_name == "P300"
-            self.num_reduce_scatter_links = 2 if (self.is_galaxy or self.is_p300) else 1
+            self.num_reduce_scatter_links = 2 if self.is_p300 else 1
             self.num_all_gather_links = (
                 2 if (self.is_galaxy or self.is_p300) else 1
             )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
             self.ccl_dtype = ttnn.bfloat8_b
 
-            # model specific CCL configs
-            default_ln_ag = {"num_links": self.num_all_gather_links, "chunks_per_sync": 10, "num_workers_per_link": 2}
-            default_agmm = {"num_links": self.num_all_gather_links, "chunks_per_sync": 10, "num_workers_per_link": 2}
+            # model specific CCL configs — defaults use hardcoded 1 link (original behavior)
+            # P300-specific overrides are applied below
+            default_ln_ag = {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2}
+            default_agmm = {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2}
             default_mlp_rs = {
                 "num_links": self.num_reduce_scatter_links,
                 "chunks_per_sync": 10,
@@ -1067,7 +1068,7 @@ class ModelArgs:
             }
             default_sampling_force_argmax = {
                 "allow_force_argmax": False,
-                "num_links": self.num_all_gather_links,
+                "num_links": 1,
                 "chunks_per_sync": 10,
                 "num_workers_per_link": 2,
                 "topology": ttnn.Topology.Linear,
@@ -1092,16 +1093,19 @@ class ModelArgs:
                     },
                 }
             }
-            # P300-specific CCL tuning: reduce fabric mux overhead for small decode tensors
+            # P300-specific CCL tuning: 2-link defaults and reduced fabric mux overhead
             # num_workers_per_link=1 bypasses fabric mux (proven by Llama-8B team, commit 70cc1aec3f)
             # chunks_per_sync=1 reduces sync overhead for tiny payloads
             if self.is_p300:
+                default_ln_ag["num_links"] = 2
                 default_ln_ag["num_workers_per_link"] = 1
                 default_ln_ag["chunks_per_sync"] = 2
+                default_agmm["num_links"] = 2
                 default_agmm["num_workers_per_link"] = 1
                 default_agmm["chunks_per_sync"] = 1
                 default_mlp_rs["num_workers_per_link"] = 1
                 default_mlp_rs["chunks_per_sync"] = 1
+                default_sampling_force_argmax["num_links"] = 2
 
             # Model-specific CCL configs are tuned for Galaxy (TG) with 4 links
             # Only apply them on Galaxy, otherwise use defaults
@@ -1904,16 +1908,19 @@ class ModelArgs:
             else:
                 if self.use_fused_all_gather_matmul:
                     do_core_grid_size = (self.num_devices, 1)
-                    # K dimension is the gathered heads: n_heads * head_dim (not dim)
-                    gathered_k = self.n_heads * self.head_dim
                     do_per_core_N = (
                         self.dim // self.num_devices // ttnn.TILE_SIZE // (do_core_grid_size[0] * do_core_grid_size[1])
                     )
-                    # Cap in0_block_w to 32 to avoid L1 overflow
-                    in0_block_w = min(
-                        gathered_k // ttnn.TILE_SIZE // (do_core_grid_size[0] * do_core_grid_size[1]),
-                        32,
-                    )
+                    if self.is_p300:
+                        # P300: K dimension is gathered heads (n_heads*head_dim), cap at 32 to avoid L1 overflow
+                        gathered_k = self.n_heads * self.head_dim
+                        in0_block_w = min(
+                            gathered_k // ttnn.TILE_SIZE // (do_core_grid_size[0] * do_core_grid_size[1]),
+                            32,
+                        )
+                    else:
+                        # Original 8-device behavior: in0_block_w from dim
+                        in0_block_w = self.dim // ttnn.TILE_SIZE // (do_core_grid_size[0] * do_core_grid_size[1])
                     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                         compute_with_storage_grid_size=do_core_grid_size,
                         in0_block_w=in0_block_w,

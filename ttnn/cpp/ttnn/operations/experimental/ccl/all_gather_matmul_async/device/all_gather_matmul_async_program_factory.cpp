@@ -56,7 +56,9 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
     auto tensor_slicer =
         ttnn::ccl::InterleavedRingAllGatherTensorSlicer(input_tensor, all_gather_output_tensor, dim, ring_index);
     bool is_clockwise_direction = true;
-    const uint32_t num_transfers = ring_size - 1;
+    // For 8-device bidirectional rings, num_transfers = ring_size/2 = 4 (original behavior).
+    // For smaller rings (e.g. 4-device P300x2), use ring_size-1 (unidirectional).
+    const uint32_t num_transfers = (ring_size == 8) ? 4 : ring_size - 1;
     const uint32_t weight_tensor_width = weight_tensor.padded_shape()[3] / 32;
 
     ////////////////////////////////////////////////////////
