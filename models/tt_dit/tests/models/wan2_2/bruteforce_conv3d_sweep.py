@@ -172,11 +172,15 @@ def t_needed_to_hide_weight_read(cin_block, cout_block, kernel_size):
 def build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=120, fast=False):
     """Generate candidate (Cin, Cout, T, H, W) blocking combinations.
 
-    fast=True: focused set (~30-60 combos, ~5-15 min for large shapes).
-        - Only the largest valid Cin (fewest DRAM passes)
-        - Only largest valid Cout (most output parallelism)
-        - Only clean divisors of T_out (no partial last blocks)
-        - Small focused spatial set proven to work well across shapes
+    fast=True: 2-phase search (~6-10 combos, minimises JIT compilations).
+        Phase 1 — find best spatial with T=1: only 3 spatial candidates.
+        Phase 2 — fix best spatial, sweep clean T divisors of T_in.
+        Total: ~6-10 unique JIT compilations regardless of shape size.
+
+        Spatial set is derived from empirical wins:
+          (H=4, W=8), (H=8, W=4), (H=8, W=8)
+        H=4 is critical for conv_out (H=8 silently OOMs at large shapes).
+
     fast=False: exhaustive search (~100-500 combos, hours for large shapes).
     """
     padded_cin = aligned_channels(C_in)
@@ -185,47 +189,54 @@ def build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=120, fast=F
     padded_cout = aligned_channels(C_out)
 
     if fast:
-        # Cin: largest valid only (fewest C_in blocks = best DRAM amortisation).
-        # Also try padded_cin//2 if valid and gives more core parallelism.
-        all_cins = [c for c in range(32, padded_cin + 1, 32) if valid_cin(c, padded_cin, kernel_size)]
-        cins = [all_cins[-1]]  # largest
-        if len(all_cins) >= 2 and all_cins[-2] >= padded_cin // 2:
-            cins.append(all_cins[-2])
+        # Cin/Cout: pick the largest (cin, cout) pair that fits L1 for at least one
+        # of the fast spatial candidates. Weight CB = K_t × N_t × TILE_SIZE grows with
+        # cin×cout, so large layers (384→384 k333) need reduced cin or cout.
+        all_cins = sorted(
+            [c for c in range(32, padded_cin + 1, 32) if valid_cin(c, padded_cin, kernel_size)], reverse=True
+        )
+        all_couts = sorted(
+            [c for c in range(32, padded_cout + 1, 32) if valid_cout(c, C_out) and valid_matmul_subblock(c)],
+            reverse=True,
+        )
 
-        # Cout: largest valid only.
-        all_couts = [c for c in range(32, padded_cout + 1, 32) if valid_cout(c, C_out) and valid_matmul_subblock(c)]
-        couts = [all_couts[-1]] if all_couts else []
-
-        # T: include divisors of both T_in and T_out (T_out = T_in - kT + 1).
-        # T_out may be prime (e.g. T_in=63 → T_out=61) so using T_in divisors
-        # too avoids missing good values like T=7 for T_in=63.
-        # Cap at 21 — larger blocks rarely help due to L1 pressure.
+        # T: clean divisors of T_in (not T_out — T_out can be prime).
+        # E.g. T_in=63 → T_out=61 (prime), but 63=7×9 gives T=7,9.
         t_blocks_set = {1}
         if kT > 1 and T_out > 1:
-            for t in range(2, min(T + 1, 22)):  # T_in divisors
+            for t in range(2, min(T + 1, 22)):
                 if T % t == 0:
                     t_blocks_set.add(t)
-            for t in range(2, min(T_out + 1, 22)):  # T_out divisors
-                if T_out % t == 0:
-                    t_blocks_set.add(t)
-            # Also include a fixed useful set that covers typical layer T values
-            for t in [3, 6, 7, 9]:
+            for t in [3, 6, 7, 9]:  # common useful values even if not exact divisors
                 if 1 < t <= min(T_out, 21):
                     t_blocks_set.add(t)
         t_blocks = sorted(t_blocks_set)
 
-        # Spatial: focused set based on empirical wins across shapes.
-        # H=4 is critical for conv_out (H=8 can silently OOM).
-        # W=4 and W=8 cover most cases. Avoid W>8 for large shapes.
-        tensor_vol = H * W
-        if tensor_vol > 10000:
-            # Full-res large shapes: small spatial blocks to avoid OOM
-            hw_candidates = [(4, 4), (4, 8), (8, 4), (8, 8), (4, 16), (16, 4)]
-        elif tensor_vol > 2000:
-            hw_candidates = [(4, 4), (4, 8), (8, 4), (8, 8), (4, 16), (16, 4), (16, 8), (8, 16)]
-        else:
-            hw_candidates = [(4, 4), (4, 8), (8, 4), (8, 8), (4, 16), (16, 4), (16, 8), (8, 16), (16, 16)]
-        hw = [(h, w) for h, w in hw_candidates if h <= H and w <= W]
+        # Spatial: 3 known-good pairs from empirical sweeps (covers ~95% of wins).
+        # H=4 critical for conv_out (H=8 can silently OOM at full-res large shapes).
+        hw_fast = [(h, w) for h, w in [(4, 8), (8, 4), (8, 8)] if h <= H and w <= W]
+
+        # Find the (cin, cout) combination that maximises cin×cout (proxy for DRAM
+        # efficiency — fewer total passes), subject to having at least one valid (T,H,W).
+        # This avoids greedy "largest cin first" picking e.g. (Cin=192, Cout=32) over
+        # the better (Cin=96, Cout=96) for 192→192 k333 layers.
+        best_score = -1
+        combos = []
+        for cin in all_cins:
+            for cout in all_couts:
+                score = cin * cout
+                if score <= best_score:
+                    continue  # can't beat current best
+                candidates = [
+                    (cin, cout, t, h, w)
+                    for t in t_blocks
+                    for h, w in hw_fast
+                    if estimate_l1_bytes(cin, cout, t, h, w, kernel_size, C_in) <= L1_BUDGET
+                ]
+                if candidates:
+                    best_score = score
+                    combos = sorted(candidates, key=lambda c: (0 if c[2] == 1 else 1, c[2], c[3], c[4]))
+        return combos
     else:
         cins = [c for c in range(32, padded_cin + 1, 32) if valid_cin(c, padded_cin, kernel_size)]
         couts = [c for c in range(32, padded_cout + 1, 32) if valid_cout(c, C_out)]
