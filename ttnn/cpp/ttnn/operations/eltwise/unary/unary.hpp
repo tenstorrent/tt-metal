@@ -94,6 +94,9 @@ Tensor unary_impl(
             parameter);                                                                                           \
     }
 
+// Unaries without parameters
+REGISTER_UNARY_OPERATION(hardsigmoid, HARDSIGMOID)
+
 // Unaries with fast_and_approximate_mode
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(mish, MISH)
 

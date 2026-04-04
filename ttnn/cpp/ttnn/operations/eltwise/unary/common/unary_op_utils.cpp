@@ -45,6 +45,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::DROPOUT: {
             return {"dropout_tile_init();", fmt::format("dropout_tile({});", idst)};
         }
+        case UnaryOpType::HARDSIGMOID: return {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
         default: TT_THROW("unexpected op type {}", op_type);
     };
 }
