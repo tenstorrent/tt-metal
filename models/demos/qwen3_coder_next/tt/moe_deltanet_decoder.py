@@ -60,6 +60,14 @@ class ReplicatedGQAAttention(LightweightModule):
         self.wv = load_w("v_proj")
         self.wo = load_w("o_proj")
 
+    @property
+    def layer_past(self):
+        return None
+
+    @layer_past.setter
+    def layer_past(self, value):
+        pass
+
     def forward(self, x, current_pos=None, rot_mats=None, mode="decode", **kwargs):
         q = ttnn.linear(x, self.wq)
         k = ttnn.linear(x, self.wk)

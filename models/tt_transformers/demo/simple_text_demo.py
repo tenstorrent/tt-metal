@@ -287,12 +287,28 @@ def prepare_generator_args(
     model = []
     tt_kv_cache = []
 
+    # Check if model supports paged attention (qwen3_next uses recurrent state, not KV cache)
+    from models.tt_transformers.tt.model_config import ModelArgs as _MA
+
+    _tmp_args = _MA.__new__(_MA)
+    _tmp_args.CKPT_DIR = os.environ.get("HF_MODEL", "")
+    _is_qwen3_next = False
+    try:
+        import json as _json
+
+        _cfg_path = os.path.join(_tmp_args.CKPT_DIR, "config.json")
+        if os.path.exists(_cfg_path):
+            with open(_cfg_path) as _f:
+                _is_qwen3_next = _json.load(_f).get("model_type") == "qwen3_next"
+    except Exception:
+        pass
+
     paged_attention_config = (
         PagedAttentionConfig(
             block_size=page_params["page_block_size"],
             max_num_blocks=page_params["page_max_num_blocks_per_dp"],
         )
-        if paged_attention
+        if paged_attention and not _is_qwen3_next
         else None
     )
 
