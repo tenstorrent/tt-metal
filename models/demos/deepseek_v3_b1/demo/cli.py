@@ -128,7 +128,7 @@ def load_tokenizer(tokenizer_name_or_path: str):
 
 def run_demo(
     *,
-    prompt: str,
+    prompts: list[str],
     max_new_tokens: int,
     tokenizer_name_or_path: str,
     weights_mode: Literal["synthetic", "real", "state_dict"] = "real",
@@ -158,19 +158,23 @@ def run_demo(
 
         my_mesh_id = mesh_device.get_system_mesh_id()
         if my_mesh_id == 0:
+            prompt_ids = []
             tokenizer = load_tokenizer(tokenizer_name_or_path)
-            messages = [{"role": "user", "content": prompt}]
-            prompt = tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
-            )
-            logger.debug("Prompt with chat template: {}", prompt)
+            for prompt in prompts:
+                messages = [{"role": "user", "content": prompt}]
+                prompt = tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+                logger.debug("Prompt with chat template: {}", prompt)
 
-            prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
+                tokenized_prompt = tokenizer.encode(prompt, add_special_tokens=False)
+                logger.debug(f"Encoded prompt: {tokenized_prompt}")
+                prompt_ids.append(tokenized_prompt)
+
             if not prompt_ids:
                 raise RuntimeError("Chat template produced an empty prompt")
-            logger.debug(f"Encoded prompt: {prompt_ids}")
 
             logger.info("Running inference on prompt with {} tokens", len(prompt_ids))
             generated_tokens = model_pipeline.run_inference(
@@ -180,8 +184,9 @@ def run_demo(
                 return_generated_tokens=True,
             )
             assert generated_tokens is not None
-            generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
-            logger.info("Output ({} tokens): {}", len(generated_tokens), generated_text)
+            for slot_id in range(2):
+                generated_text = tokenizer.decode(generated_tokens[slot_id], skip_special_tokens=True)
+                logger.info("Output ({} tokens): {}", len(generated_tokens[slot_id]), generated_text)
 
         model_pipeline.barrier()
     logger.info("Pod pipeline complete")
@@ -202,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"--model-path must contain model.safetensors.index.json (missing {index_path})")
 
     run_demo(
-        prompt=args.prompt,
+        prompts=[args.prompt, args.prompt],
         max_new_tokens=args.max_new_tokens,
         tokenizer_name_or_path=args.tokenizer,
         weights_mode=args.weights,

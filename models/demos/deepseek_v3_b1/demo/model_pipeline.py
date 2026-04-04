@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
@@ -101,7 +102,7 @@ class ModelPipeline:
             )
         logger.info(f"Created ModelPipeline for mesh id {self.pipeline.my_mesh_id}.")
 
-    def prefill_forward(self, tokens: list[int]) -> list[DecodeResult]:
+    def prefill_forward(self, tokens: list[int], slot_id: int) -> list[DecodeResult]:
         """Prefill prompt tokens and return the DecodeResults from the last prompt token's outputs."""
         if self.pipeline.my_mesh_id != 0:
             raise RuntimeError("prefill_forward() should only be called on mesh id 0")
@@ -109,11 +110,11 @@ class ModelPipeline:
         logger.debug(f"Prefilling with {len(tokens)} tokens...")
         prompt_token_tensors = [
             to_spec_input(
-                tid, user_id=0, position_id=i, page_size_datums=self._page_size_datums, token_type=TokenType.BASE
+                tid, user_id=slot_id, position_id=i, page_size_datums=self._page_size_datums, token_type=TokenType.BASE
             )
             for i, tid in enumerate(tokens)
         ]
-        results = self.model.prefill(prompt_token_tensors)
+        results = self.model.prefill(prompt_token_tensors, slot_id)
         logger.debug(f"Done prefilling with {len(tokens)} tokens.")
         return results
 
@@ -139,7 +140,7 @@ class ModelPipeline:
 
     def run_inference(
         self,
-        prompt_token_ids: list[int],
+        prompt_token_ids: list[list[int]],
         max_new_tokens: int,
         on_token: Callable[[int], None] | None = None,
         eos_token_id: int | None = None,
@@ -162,7 +163,7 @@ class ModelPipeline:
         assert self.model is not None
         assert max_new_tokens >= 1, f"max_new_tokens must be >= 1, got {max_new_tokens}"
 
-        generated_tokens: list[int] = []
+        generated_tokens: list[list[int]] = [[] for _ in range(2)]
         verified_spec_tokens: list[int] = []
         unverified_spec_tokens: list[int] = []
 
@@ -170,17 +171,37 @@ class ModelPipeline:
             """Returns True if a token is the EOS token"""
             return eos_token_id is not None and token_id == eos_token_id
 
-        def emit(token_id: int) -> None:
+        def emit(token_id: int, slot_id: int) -> None:
             """Emit a token to the caller"""
             if on_token is not None:
                 on_token(token_id)
-            generated_tokens.append(token_id)
+            generated_tokens[slot_id].append(token_id)
 
         # --- Prefill --------------------------------------------------------
-        prefill_results = self.prefill_forward(prompt_token_ids)
-        return
+        for slot_id in range(2):
+            prefill_results = self.prefill_forward(prompt_token_ids[slot_id], slot_id)
+            pending: deque[DecodeResult] = deque(prefill_results)
+            self.position_id = self.model._position[slot_id]
+            # --- Speculative decode state machine --------------------------------
+            while len(generated_tokens[slot_id]) < max_new_tokens:
+                result = pending.popleft() if pending else self.model.read_result()
 
-        logger.debug("Generation complete ({} tokens generated)", len(generated_tokens))
+                print("Got MD from Device: ")
+                print(f"Token 0 Pos: {result.token_0_pos}, Token 1 Pos: {result.token_1_pos}")
+                print(f"Token 0 Type: {result.token_0_type}, Token 1 Type: {result.token_1_type}")
+                print(f"Token 0: {result.token_0}, Token 1: {result.token_1}")
+                print(f"Slot ID: {result.slot_id}")
+
+                if result.token_0_type == TokenType.BASE:
+                    emit(result.token_0, slot_id)
+
+                    if is_eos(result.token_0) or len(generated_tokens[slot_id]) >= max_new_tokens:
+                        break
+                    self.model.write_input(result.token_0, result.slot_id, self.position_id, token_type=TokenType.BASE)
+                    self.position_id += 1
+
+                logger.debug("Generation complete ({} tokens generated)", len(generated_tokens[slot_id]))
+
         return generated_tokens if return_generated_tokens else None
 
     def barrier(self) -> None:
