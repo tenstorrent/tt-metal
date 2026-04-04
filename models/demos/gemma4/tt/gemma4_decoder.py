@@ -16,7 +16,6 @@ Custom decoder that extends TransformerBlock with:
 import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.demos.gemma4.tt.gemma4_attention import Gemma4Attention
-from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.decoder import TransformerBlock
 
 
@@ -150,73 +149,27 @@ class Gemma4Decoder(TransformerBlock):
         """
         Forward pass with Gemma 4 specific per-layer gating and layer scalar.
 
-        per_layer_input: Optional tensor of shape [batch, seq, gating_dim] for per-layer input gating.
+        Delegates the core attention + MLP + norms to the base TransformerBlock,
+        then applies per-layer input gating and layer scalar on top.
         """
-        # Standard transformer block forward
-        residual = x
-        skip_mem_cfg = self.args.get_residual_mem_config(mode, self.prefetcher)
-
-        # Choose correct rotation matrices
-        rot_mats = (
-            rot_mats_local if (hasattr(self.attention, "is_sliding") and self.attention.is_sliding) else rot_mats_global
-        )
-
-        # Attention norm
-        attn_norm_config = self.args.get_norm_config("attn", mode, self.prefetcher)
-        attn_in = self.attention_norm(x, mode, norm_config=attn_norm_config)
-
-        if batch_size > 1:
-            attn_in = ttnn.reshape(attn_in, [batch_size, 1, attn_in.shape[-2] // batch_size, -1])
-
-        # Attention
-        attn_out = self.attention.forward(
-            attn_in,
+        # Run base transformer block forward (attention + norms + MLP + residuals)
+        out = super().forward(
+            x,
             current_pos,
-            rot_mats,
-            user_id,
-            mode,
+            rot_mats_global=rot_mats_global,
+            rot_mats_local=rot_mats_local,
+            user_id=user_id,
+            mode=mode,
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
+            batch_size=batch_size,
         )
 
-        if mode == Mode.PREFILL and batch_size > 1:
-            residual = ttnn.reshape(residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1])
-
-        attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
-
-        # Residual + attention output
-        if self.pre_ff_norm is None:
-            hidden_states = ttnn.add(residual, attn_out, memory_config=skip_mem_cfg)
-            residual = hidden_states
-        else:
-            hidden_states = attn_out
-
-        # Feed-forward norm
-        ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
-        hidden_states = self.ff_norm(hidden_states, mode, norm_config=ff_norm_config)
-
-        if self.pre_ff_norm is not None:
-            hidden_states = ttnn.add(residual, hidden_states, memory_config=skip_mem_cfg)
-            residual = hidden_states
-            pre_ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
-            hidden_states = self.pre_ff_norm(hidden_states, mode, norm_config=pre_ff_norm_config)
-
-        ttnn.deallocate(attn_out)
-
-        # MLP
-        hidden_states = self.feed_forward.forward(hidden_states, mode)
-
-        if self.post_ff_norm is not None:
-            post_ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
-            hidden_states = self.post_ff_norm(hidden_states, mode, norm_config=post_ff_norm_config)
-
-        # Residual + MLP output
-        out = ttnn.add(residual, hidden_states, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)
-
-        # Per-layer input gating
+        # Per-layer input gating (requires embed_tokens_per_layer, not yet implemented)
         if self._has_per_layer_gating and per_layer_input is not None:
+            skip_mem_cfg = self.args.get_residual_mem_config(mode, self.prefetcher)
             gating_residual = out
 
             # gate(h) -> gelu -> multiply by per_layer_input -> project -> norm -> residual

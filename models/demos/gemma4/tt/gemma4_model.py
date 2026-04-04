@@ -6,14 +6,14 @@
 Gemma 4 E4B Text Model
 
 Extends the base Transformer with Gemma 4 specific features:
-- Dual head_dim and partial rotary via custom Gemma4Attention
+- Dual head_dim (256 sliding / 512 global) and partial rotary via Gemma4Attention
 - V-norm on value projections
-- Per-layer input gating
+- Per-layer input gating (disabled for bring-up)
 - Layer scalar per decoder block
 - Final logit soft-capping: tanh(logits / 30) * 30
-
-Note: KV cache sharing is NOT implemented in this initial version.
-All 42 layers compute their own QKV independently.
+- KV cache sharing: layers 24-41 reuse KV from source layers (22/23)
+  - Prefill: shared layers receive pre-computed K/V tensors via shared_kv
+  - Decode: shared layers are redirected to source layer's KV cache
 """
 
 import torch
@@ -301,11 +301,19 @@ class TtGemma4TextModel(Transformer):
 
             layer_kv = kv_cache[i] if kv_cache is not None else None
 
-            # Set shared K/V for KV-shared layers (prefill only)
-            if mode == Mode.PREFILL and hasattr(self.args, "kv_sharing_map") and i in self.args.kv_sharing_map:
+            # KV sharing: redirect shared layers to source layer's KV cache.
+            # During decode, shared layers read from source cache (no K/V computation needed).
+            # During prefill, shared layers also receive pre-computed K/V tensors via shared_kv.
+            if hasattr(self.args, "kv_sharing_map") and i in self.args.kv_sharing_map:
                 src_idx = self.args.kv_sharing_map[i]
-                if src_idx in shared_kv_store:
+                if mode == Mode.PREFILL and src_idx in shared_kv_store:
                     layer.attention.shared_kv = shared_kv_store[src_idx]
+                elif mode == Mode.DECODE and kv_cache is not None:
+                    # In decode mode, shared layers use source layer's KV cache directly.
+                    # The attention layer's shared_kv flag tells it to skip K/V projection
+                    # and just read from the KV cache passed via layer_kv.
+                    layer_kv = kv_cache[src_idx]
+                    layer.attention.shared_kv = True  # Signal to skip K/V computation
 
             x = layer(
                 x,

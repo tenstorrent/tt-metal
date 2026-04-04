@@ -9,10 +9,11 @@ Custom attention implementation for Gemma 4 E4B that handles:
 - Dual head_dim (256 for sliding, 512 for global attention layers)
 - Partial rotary embeddings (25% of dims for global layers)
 - V-norm (RMSNorm without learnable scale)
-- Attention scale = head_dim^-0.5 (QK norms replace sqrt(d) scaling)
-
-Note: KV cache sharing is not implemented in this initial version.
-All layers compute their own QKV independently.
+- Attention scale = 1.0 (QK norms replace sqrt(d) scaling)
+- KV cache sharing: layers 24-41 share KV from source layers (22/23)
+  - Shared layers skip K/V projection and cache update
+  - Only Q is computed with norm + rotary
+  - Source layer's processed K/V (with rotary) is reused for SDPA
 """
 
 import torch
@@ -394,25 +395,27 @@ class Gemma4Attention(LightweightModule):
             self.last_k_heads = k_heads
             self.last_v_heads = v_heads
 
-        # Update KV cache
-        if kv_cache:
-            keys, values = kv_cache[0], kv_cache[1]
-        else:
-            keys, values = self.layer_past[0], self.layer_past[1]
+        # Update KV cache (skip for shared layers — source layer handles cache)
+        is_shared = self.shared_kv is not None
+        if not is_shared:
+            if kv_cache:
+                keys, values = kv_cache[0], kv_cache[1]
+            else:
+                keys, values = self.layer_past[0], self.layer_past[1]
 
-        # Typecast K/V to cache dtype before filling
-        k_fill = ttnn.typecast(k_heads, dtype=keys.dtype)
-        v_fill = ttnn.typecast(v_heads, dtype=values.dtype)
+            # Typecast K/V to cache dtype before filling
+            k_fill = ttnn.typecast(k_heads, dtype=keys.dtype)
+            v_fill = ttnn.typecast(v_heads, dtype=values.dtype)
 
-        if page_table is not None:
-            ttnn.experimental.paged_fill_cache(keys, k_fill, page_table, batch_idx=user_id)
-            ttnn.experimental.paged_fill_cache(values, v_fill, page_table, batch_idx=user_id)
-        else:
-            ttnn.fill_cache(keys, k_fill, user_id)
-            ttnn.fill_cache(values, v_fill, user_id)
+            if page_table is not None:
+                ttnn.experimental.paged_fill_cache(keys, k_fill, page_table, batch_idx=user_id)
+                ttnn.experimental.paged_fill_cache(values, v_fill, page_table, batch_idx=user_id)
+            else:
+                ttnn.fill_cache(keys, k_fill, user_id)
+                ttnn.fill_cache(values, v_fill, user_id)
 
-        ttnn.deallocate(k_fill)
-        ttnn.deallocate(v_fill)
+            ttnn.deallocate(k_fill)
+            ttnn.deallocate(v_fill)
 
         # Use bfloat16 for SDPA during bring-up for maximum accuracy
         attn_output = ttnn.transformer.scaled_dot_product_attention(
@@ -445,7 +448,15 @@ class Gemma4Attention(LightweightModule):
         return dense_out
 
     def forward_decode(self, x, current_pos, rot_mats=None, page_table=None, kv_cache=None):
-        """Decode forward pass."""
+        """Decode forward pass with KV sharing support.
+
+        When self.shared_kv is truthy, this is a KV-shared layer:
+        - Computes Q only (discards K/V from QKV split)
+        - Skips KV cache update (source layer handles it)
+        - Reads from source layer's KV cache (passed via kv_cache)
+        """
+        is_shared = self.shared_kv is not None and self.shared_kv is not False
+
         xqkv_fused = ttnn.linear(
             x,
             self.wqkv,
@@ -471,24 +482,43 @@ class Gemma4Attention(LightweightModule):
 
         norm_config = self.args.get_norm_config("attn", Mode.DECODE, None)
         q_heads_pre_rot = self.q_norm(q_heads_pre_rot, mode=Mode.DECODE, norm_config=norm_config)
-        k_heads_pre_rot = self.k_norm(k_heads_pre_rot, mode=Mode.DECODE, norm_config=norm_config)
-        v_heads = self.v_norm(v_heads, mode=Mode.DECODE, norm_config=norm_config)
 
-        # Apply rotary
-        q_heads, k_heads = self._apply_rotary_decode(q_heads_pre_rot, k_heads_pre_rot, rot_mats, current_pos)
-        ttnn.deallocate(q_heads_pre_rot)
-        ttnn.deallocate(k_heads_pre_rot)
+        if is_shared:
+            # Shared layer: discard K/V from split, only use Q
+            ttnn.deallocate(k_heads_pre_rot)
+            ttnn.deallocate(v_heads)
 
-        # KV cache update
+            # Apply rotary to Q only (shared K already has correct rotary from source)
+            int_current_pos = int(ttnn.to_torch(ttnn.get_device_tensors(current_pos)[0])[0])
+            q_heads = ttnn.experimental.rotary_embedding(q_heads_pre_rot, rot_mats[0], rot_mats[1], int_current_pos)
+            ttnn.deallocate(q_heads_pre_rot)
+            q_heads = ttnn.reshape(
+                q_heads,
+                (1, self.max_batch_size, self.n_local_heads, self.head_dim),
+                (1, self.max_batch_size, 32, self.head_dim),
+            )
+            q_heads = q_heads[:, :, : self.n_local_heads]
+        else:
+            # Normal layer: process K/V too
+            k_heads_pre_rot = self.k_norm(k_heads_pre_rot, mode=Mode.DECODE, norm_config=norm_config)
+            v_heads = self.v_norm(v_heads, mode=Mode.DECODE, norm_config=norm_config)
+
+            q_heads, k_heads = self._apply_rotary_decode(q_heads_pre_rot, k_heads_pre_rot, rot_mats, current_pos)
+            ttnn.deallocate(q_heads_pre_rot)
+            ttnn.deallocate(k_heads_pre_rot)
+
+        # KV cache: source layer's cache for shared layers, own cache otherwise
         if kv_cache:
             keys, values = kv_cache[0], kv_cache[1]
         else:
             keys, values = self.layer_past[0], self.layer_past[1]
 
-        ttnn.experimental.paged_update_cache(keys, k_heads, update_idxs_tensor=current_pos, page_table=page_table)
-        ttnn.experimental.paged_update_cache(values, v_heads, update_idxs_tensor=current_pos, page_table=page_table)
-        ttnn.deallocate(k_heads)
-        ttnn.deallocate(v_heads)
+        if not is_shared:
+            # Only update cache for non-shared layers
+            ttnn.experimental.paged_update_cache(keys, k_heads, update_idxs_tensor=current_pos, page_table=page_table)
+            ttnn.experimental.paged_update_cache(values, v_heads, update_idxs_tensor=current_pos, page_table=page_table)
+            ttnn.deallocate(k_heads)
+            ttnn.deallocate(v_heads)
 
         # SDPA decode
         attn_output = ttnn.transformer.scaled_dot_product_attention_decode(
@@ -512,6 +542,9 @@ class Gemma4Attention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config_hifi2,
         )
         ttnn.deallocate(attn_output)
+
+        # Clear shared_kv after use (one-shot)
+        self.shared_kv = None
 
         return dense_out
 

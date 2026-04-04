@@ -110,6 +110,16 @@ class ModelArgs(TTModelArgs):
             dec_opt._opt_settings["OpFidelity"][OpGroup.LI_O_DECODE] = MathFidelitySetting.HIFI4
             dec_opt._opt_settings["OpFidelity"][OpGroup.SDPA_DECODE] = MathFidelitySetting.HIFI4
 
+        # Override compute_kernel_config_hifi4 for Wormhole: use HiFi3 with fp32 accumulation.
+        # Wormhole has a known bug where HiFi4 + fp32_dest_acc_en=True produces WORSE accuracy
+        # than HiFi3 + fp32_dest_acc_en=True. This config is used for SDPA.
+        self.compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi3,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
     def _set_model_specific_params(self):
         """Set Gemma 4 specific parameters."""
         # Gemma 4 RMSNorm uses direct scale (weight * normed), NOT the Gemma 2 offset pattern ((1+weight) * normed).

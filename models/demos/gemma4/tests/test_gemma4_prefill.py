@@ -172,7 +172,7 @@ def test_gemma4_prefill(mesh_device, max_seq_len):
     # Assert minimum PCC: threshold accounts for cumulative bfloat16 error across 42 layers
     # with layer_scalar multiplication. Per-layer PCC > 0.78 proves architecture correctness.
     # End-to-end PCC is lower due to error amplification through norm + LM head (2560 → 262K).
-    min_pcc = 0.45
+    min_pcc = 0.60
     assert pcc_val >= min_pcc, f"PCC {pcc_val:.4f} below threshold {min_pcc}"
 
     # Also verify the correct token appears in top predictions

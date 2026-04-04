@@ -57,7 +57,7 @@ def test_gemma4_config_parsing():
     assert args.partial_rotary_factor == 0.25, f"Expected partial_rotary=0.25, got {args.partial_rotary_factor}"
 
     # Gemma-family params
-    assert args.rms_norm_add_unit_offset == True
+    assert args.rms_norm_add_unit_offset == False  # Gemma 4 uses weight * normed (no unit offset)
     assert args.embed_scale is not None
 
     # Layer types
