@@ -2,9 +2,8 @@
 
 User Level Failure Mitigation (ULFM) lets surviving MPI ranks detect and react
 to remote rank failures instead of hanging indefinitely at the next collective.
-In this branch, tt-metal layers several mechanisms so that a remote crash turns
-into a controlled fast exit or an explicit recovery path rather than a
-best-effort CI timeout.
+tt-metal layers several mechanisms so that a remote crash turns into a
+controlled fast exit or an explicit recovery path rather than a CI timeout.
 
 Supplemental References:
 
