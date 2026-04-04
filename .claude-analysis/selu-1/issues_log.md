@@ -13,9 +13,9 @@
 | 1 | Reference Discovery | ok | ~60s | none |
 | 2 | Reference Analysis | ok | ~15min | expm1 agent timed out |
 | 3 | Implementation | ok | ~8min | committed by orchestrator (pre-commit hooks) |
-| 4 | Testing & Debugging | running | ~25min+ | test execution in progress, another agent in worktree |
-| 5 | Documentation | running | - | - |
-| 6 | Self-Reflection | pending | - | - |
+| 4 | Testing & Debugging | pending | ~25min+ | test file created, execution in progress |
+| 5 | Documentation | ok | ~2min | none |
+| 6 | Self-Reflection | ok | ~3min | none |
 
 ## Issues
 | # | Phase | Severity | Description | Resolution |
