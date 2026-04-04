@@ -41,9 +41,11 @@ ComplexTensor multiply(const ComplexTensor& ab, const ComplexTensor& cd, const M
 }
 
 ComplexTensor divide(
-    const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config) {
-    return ttnn::operations::complex_binary::multiply(
-        input_a, ttnn::reciprocal(input_b, output_mem_config), output_mem_config);
+    const ComplexTensor& input_a [[maybe_unused]],
+    const ComplexTensor& input_b [[maybe_unused]],
+    const MemoryConfig& output_mem_config [[maybe_unused]]) {
+    // TODO: Restore when ttnn::reciprocal is regenerated after batch nuke
+    TT_THROW("complex_binary::divide not available - ttnn::reciprocal was nuked");
 }
 
 }  // namespace ttnn::operations::complex_binary
