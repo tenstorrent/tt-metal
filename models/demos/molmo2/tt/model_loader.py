@@ -98,7 +98,7 @@ def create_model(
         max_seq_len=max_seq_len,
         max_batch_size=max_batch_size,
         rope_theta=1000000.0,
-        rms_norm_eps=1e-5,
+        rms_norm_eps=1e-6,
         dtype=ttnn.bfloat8_b,
     )
 

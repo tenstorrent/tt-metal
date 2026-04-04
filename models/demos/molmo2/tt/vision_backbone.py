@@ -17,11 +17,97 @@ Pipeline:
     6. Filter by valid_token mask: [valid_tokens, 4096]
 """
 
-from typing import Tuple
+from typing import Dict, Tuple
 
 import torch
 
 import ttnn
+
+# HF-aligned: same threshold for DP vs non-DP video paths (avoid switching pooling implementations).
+MAX_FRAMES_FOR_SINGLE_POOL = 64
+
+# Upper bounds for buffers created once in VisionBackbone.__init__ (pooling mask + vision trace I/O).
+DEFAULT_PATCHES_PER_FRAME = (378 // 14) ** 2  # 729
+DEFAULT_VISION_TRACE_MAX_FRAMES = MAX_FRAMES_FOR_SINGLE_POOL
+DEFAULT_VISION_TRACE_MAX_N_OUT = 256  # covers 81 (video) and 169 (multi-crop) layouts
+DEFAULT_VISION_TRACE_MAX_K_POOL = 16
+
+
+def _masked_mean_query_hf(
+    query_sum: ttnn.Tensor,
+    valid_mask_ttnn: ttnn.Tensor,
+    batch_size: int,
+    n_out: int,
+    k_pool: int,
+    mesh_device,
+    mesh_mapper,
+    is_mesh_device: bool,
+) -> ttnn.Tensor:
+    """
+    Query = sum(gathered) / count(valid) per output slot (matches HF Molmo2VisionBackbone when pooling_attention_mask is true).
+    valid_mask_ttnn: [1, 1, B*N_out*K_pool, 1] with 1.0 = valid, 0 = pad.
+    """
+    mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0) if is_mesh_device else None
+    vm = ttnn.to_torch(valid_mask_ttnn, mesh_composer=mesh_composer)
+    if is_mesh_device:
+        vm = vm[0]
+    vm = vm.reshape(batch_size * n_out, k_pool).float()
+    denom = vm.sum(dim=-1, keepdim=True).clamp(min=1.0)
+    denom_4d = denom.reshape(1, batch_size * n_out, 1, 1).float()
+    denom_ttnn = ttnn.from_torch(
+        denom_4d,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mesh_mapper,
+    )
+    out = ttnn.div(query_sum, denom_ttnn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(denom_ttnn)
+    return out
+
+
+def _pooling_attn_mask_ttnn(
+    valid_bool: torch.Tensor,
+    batch_size: int,
+    n_out: int,
+    k_pool: int,
+    mesh_device,
+    mesh_mapper,
+) -> ttnn.Tensor:
+    """Additive mask for image_pooling_2d: 0 = attend, -inf = ignore (HF-aligned). valid_bool: [B, N_out, K_pool]."""
+    vm = valid_bool.reshape(batch_size * n_out, k_pool).float()
+    mask = torch.where(vm[:, None, None, :] > 0.5, 0.0, float("-inf"))
+    return ttnn.from_torch(
+        mask,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mesh_mapper,
+    )
+
+
+def _masked_mean_query_hf_device(
+    query_sum: ttnn.Tensor,
+    valid_mask_ttnn: ttnn.Tensor,
+    batch_size: int,
+    n_out: int,
+    k_pool: int,
+) -> ttnn.Tensor:
+    """
+    Same math as _masked_mean_query_hf but fully on device (no host reads).
+    Required for ttnn trace capture (reads / to_torch are not allowed during capture).
+    """
+    vm = ttnn.reshape(valid_mask_ttnn, [1, batch_size * n_out, k_pool, 1])
+    denom_sum = ttnn.sum(vm, dim=2, keepdim=True)
+    denom = ttnn.clamp(denom_sum, min=1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(denom_sum)
+    out = ttnn.div(query_sum, denom, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(denom)
+    return out
+
+
 from models.common.lightweightmodule import LightweightModule
 from models.demos.molmo2.tt.image_pooling import ImagePooling
 from models.demos.molmo2.tt.image_projector import ImageProjector
@@ -62,6 +148,13 @@ class VisionBackbone(LightweightModule):
         weight_cache_path=None,
         dtype=ttnn.bfloat16,  # Changed from bfloat8_b for better vision precision
         use_tensor_parallel: bool = False,  # ViT uses DP (data parallel) for frames, not TP
+        # Pre-allocated bounds (see _init_pooling_aux_buffers / _init_vision_trace_io_buffers)
+        max_pooling_slots: int = DEFAULT_VISION_TRACE_MAX_FRAMES * DEFAULT_VISION_TRACE_MAX_N_OUT,
+        max_k_pool: int = DEFAULT_VISION_TRACE_MAX_K_POOL,
+        vision_trace_max_frames: int = DEFAULT_VISION_TRACE_MAX_FRAMES,
+        patches_per_frame: int = DEFAULT_PATCHES_PER_FRAME,
+        vision_trace_max_n_out: int = DEFAULT_VISION_TRACE_MAX_N_OUT,
+        vision_trace_max_k_pool: int = DEFAULT_VISION_TRACE_MAX_K_POOL,
     ):
         """
         Initialize VisionBackbone.
@@ -140,58 +233,36 @@ class VisionBackbone(LightweightModule):
             dtype=dtype,
         )
 
-    # Class-level request counter for debugging
-    _encode_image_request_count = 0
+        self._max_pooling_slots = max_pooling_slots
+        self._max_k_pool = max_k_pool
+        self._vision_trace_max_frames = vision_trace_max_frames
+        self._patches_per_frame = patches_per_frame
+        self._vision_trace_max_n_out = vision_trace_max_n_out
+        self._vision_trace_max_k_pool = vision_trace_max_k_pool
+        self._vision_trace_max_tokens = vision_trace_max_frames * patches_per_frame
+        self._vision_trace_max_idx_len = vision_trace_max_frames * vision_trace_max_n_out * vision_trace_max_k_pool
+        self._vision_trace_max_valid_slots = vision_trace_max_frames * vision_trace_max_n_out
 
-    def _normalize_for_projector(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """
-        Normalize and clip pooled features before projector.
+        self._init_pooling_aux_buffers()
+        self._init_vision_trace_io_buffers()
 
-        The Molmo2 ViT uses large LayerNorm gamma values (up to 18x) which causes
-        pooled features to have outliers (±40 after normalization). The SwiGLU
-        projector computes gate*up, which squares these outliers causing scale
-        explosion (e.g., 40*40=1600 becomes extreme after projection).
-
-        This normalizes to unit variance AND clips outliers to ±3 std to prevent
-        the quadratic explosion in SwiGLU.
-        """
-        from loguru import logger
-
-        is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
-
-        # Convert to torch, normalize, convert back
-        # (TTNN doesn't have a built-in var normalization that works well here)
-        if is_mesh_device:
-            x_torch = ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))[0]
-        else:
-            x_torch = ttnn.to_torch(x)
-
-        # Compute statistics
-        x_std = x_torch.std()
-        x_mean = x_torch.mean()
-
-        logger.debug(
-            f"Pooled features before normalization: mean={x_mean:.4f}, std={x_std:.4f}, min={x_torch.min():.4f}, max={x_torch.max():.4f}"
+    def _init_pooling_aux_buffers(self) -> None:
+        """Pre-create zeros / -inf tensors for pooling attention mask (no per-forward alloc)."""
+        shape_4d = (self._max_pooling_slots, 1, 1, self._max_k_pool)
+        z = torch.zeros(shape_4d, dtype=torch.bfloat16)
+        ni = torch.full(shape_4d, float("-inf"), dtype=torch.bfloat16)
+        is_mesh = self.mesh_device.__class__.__name__ == "MeshDevice"
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh else None
+        self._pooling_attn_zeros_buf = ttnn.from_torch(
+            z,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
         )
-
-        # Normalize to unit variance (keep mean, scale to std=1.0)
-        # Add small epsilon to avoid division by zero
-        eps = 1e-6
-        x_normalized = (x_torch - x_mean) / (x_std + eps)
-
-        # Clip outliers to ±3 std to prevent quadratic explosion in SwiGLU
-        # This is critical: without clipping, outliers of ±40 become ±1600 after gate*up
-        clip_value = 3.0
-        x_normalized = torch.clamp(x_normalized, -clip_value, clip_value)
-
-        logger.debug(
-            f"Pooled features after normalization+clip: mean={x_normalized.mean():.4f}, std={x_normalized.std():.4f}, min={x_normalized.min():.4f}, max={x_normalized.max():.4f}"
-        )
-
-        # Convert back to TTNN
-        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
-        x_out = ttnn.from_torch(
-            x_normalized,
+        self._pooling_attn_neg_inf_buf = ttnn.from_torch(
+            ni,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -199,15 +270,114 @@ class VisionBackbone(LightweightModule):
             mesh_mapper=mesh_mapper,
         )
 
-        # Deallocate input since we created a new tensor
-        ttnn.deallocate(x)
+    def _init_vision_trace_io_buffers(self) -> None:
+        """Pre-allocate max-sized vision trace input buffers (demo / vLLM execute_trace copies into these)."""
+        self._vision_trace_embedded_full = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, self._vision_trace_max_tokens, self.vit_hidden_dim]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._vision_trace_idx_full = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, self._vision_trace_max_idx_len]),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._vision_trace_mask_full = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, self._vision_trace_max_idx_len, 1]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._vision_trace_valid_token_full = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([self._vision_trace_max_valid_slots]),
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
 
-        return x_out
+    def get_vision_trace_tensors(
+        self,
+        batch_size: int,
+        n_out: int,
+        k_pool: int,
+        num_patches: int,
+    ) -> Dict:
+        """
+        Return views into pre-allocated vision trace buffers for the given logical shape.
+
+        All buffers are allocated in __init__; this only slices to the active prefix.
+        """
+        num_tokens = batch_size * num_patches
+        idx_len = batch_size * n_out * k_pool
+        valid_slots = batch_size * n_out
+        if num_tokens > self._vision_trace_max_tokens:
+            raise ValueError(f"Vision trace: num_tokens={num_tokens} exceeds init max {self._vision_trace_max_tokens}")
+        if idx_len > self._vision_trace_max_idx_len:
+            raise ValueError(f"Vision trace: idx_len={idx_len} exceeds init max {self._vision_trace_max_idx_len}")
+        if valid_slots > self._vision_trace_max_valid_slots:
+            raise ValueError(
+                f"Vision trace: batch_size*n_out={valid_slots} exceeds init max {self._vision_trace_max_valid_slots}"
+            )
+        if batch_size > self._vision_trace_max_frames:
+            raise ValueError(f"Vision trace: batch_size={batch_size} exceeds init max {self._vision_trace_max_frames}")
+        if n_out > self._vision_trace_max_n_out or k_pool > self._vision_trace_max_k_pool:
+            raise ValueError(
+                f"Vision trace: n_out={n_out}, k_pool={k_pool} exceed init "
+                f"max_n_out={self._vision_trace_max_n_out}, max_k_pool={self._vision_trace_max_k_pool}"
+            )
+
+        embedded = self._vision_trace_embedded_full[:, :, :num_tokens, :]
+        idx = self._vision_trace_idx_full[:, :idx_len]
+        valid_mask = self._vision_trace_mask_full[:, :, :idx_len, :]
+        valid_token = self._vision_trace_valid_token_full[:valid_slots]
+        return {
+            "embedded": embedded,
+            "idx": idx,
+            "valid_mask": valid_mask,
+            "valid_token": valid_token,
+            "n_out": n_out,
+            "k_pool": k_pool,
+            "batch_size": batch_size,
+        }
+
+    def _pooling_attn_mask_from_valid_ttnn(
+        self,
+        valid_mask_ttnn: ttnn.Tensor,
+        batch_size: int,
+        n_out: int,
+        k_pool: int,
+    ) -> ttnn.Tensor:
+        """
+        Additive attention mask for image_pooling_2d from device valid_mask only.
+        Shape [B*N_out, 1, 1, K_pool]; uses pre-allocated zeros / -inf from __init__.
+        """
+        slots = batch_size * n_out
+        if slots > self._max_pooling_slots or k_pool > self._max_k_pool:
+            raise ValueError(
+                f"Pooling mask needs slots={slots}, k_pool={k_pool}; init bounds are "
+                f"max_pooling_slots={self._max_pooling_slots}, max_k_pool={self._max_k_pool}"
+            )
+        vm = ttnn.reshape(valid_mask_ttnn, [1, slots, k_pool, 1])
+        vm = ttnn.reshape(vm, [slots, k_pool, 1])
+        vm4 = ttnn.reshape(vm, [slots, 1, 1, k_pool])
+        zeros = self._pooling_attn_zeros_buf[0:slots, 0:1, 0:1, 0:k_pool]
+        neg_inf = self._pooling_attn_neg_inf_buf[0:slots, 0:1, 0:1, 0:k_pool]
+        return ttnn.where(vm4, zeros, neg_inf, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    # Class-level request counter for debugging
+    _encode_image_request_count = 0
 
     def encode_image(
         self,
         images_embedded: ttnn.Tensor,
         num_crops: int = 1,
+        trace_capture: bool = False,
     ) -> ttnn.Tensor:
         """
         Encode images through ViT and extract multi-scale features.
@@ -216,6 +386,7 @@ class VisionBackbone(LightweightModule):
             images_embedded: Embedded image patches [B*T, N, hidden_dim]
                              after patch embedding and positional embedding
             num_crops: Number of crops per image (T)
+            trace_capture: If True, skip host reads for per-layer debug stats (for ttnn trace capture).
 
         Returns:
             Concatenated multi-scale features [B, T*N, pool_input_dim]
@@ -245,18 +416,21 @@ class VisionBackbone(LightweightModule):
         mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0) if is_mesh_device else None
         for layer_idx in self.feature_layers:
             features.append(hidden_states[layer_idx])
-            # Debug: check per-layer stats
-            try:
-                layer_torch = (
-                    ttnn.to_torch(hidden_states[layer_idx], mesh_composer=mesh_composer)[0]
-                    if is_mesh_device
-                    else ttnn.to_torch(hidden_states[layer_idx])
-                )
-                logger.info(
-                    f"  Layer {layer_idx}: shape={list(layer_torch.shape)}, mean={layer_torch.mean():.4f}, std={layer_torch.std():.4f}, min={layer_torch.min():.4f}, max={layer_torch.max():.4f}"
-                )
-            except:
-                logger.info(f"  Using layer {layer_idx}, shape: {list(hidden_states[layer_idx].shape)}")
+            # Debug: per-layer stats (skip host reads during trace capture — forbidden)
+            if trace_capture:
+                logger.info(f"  Layer {layer_idx}: shape={list(hidden_states[layer_idx].shape)}")
+            else:
+                try:
+                    layer_torch = (
+                        ttnn.to_torch(hidden_states[layer_idx], mesh_composer=mesh_composer)[0]
+                        if is_mesh_device
+                        else ttnn.to_torch(hidden_states[layer_idx])
+                    )
+                    logger.info(
+                        f"  Layer {layer_idx}: shape={list(layer_torch.shape)}, mean={layer_torch.mean():.4f}, std={layer_torch.std():.4f}, min={layer_torch.min():.4f}, max={layer_torch.max():.4f}"
+                    )
+                except Exception:
+                    logger.info(f"  Using layer {layer_idx}, shape: {list(hidden_states[layer_idx].shape)}")
 
         # CRITICAL: Deallocate unused hidden states to prevent memory leak
         # For video with 8 frames, each hidden state is ~27MB, 25 layers = ~670MB total
@@ -446,12 +620,9 @@ class VisionBackbone(LightweightModule):
         pooled_features = ttnn.reshape(pooled_features_raw, [1, 1, batch_size * n_out, -1])
         # NOTE: Do NOT deallocate pooled_features_raw - reshape may return a view
 
-        # 7. Normalize pooled features before projection
-        pooled_features = self._normalize_for_projector(pooled_features)
-
-        # 8. Project to language model dimension
+        # 7. Project to language model dimension
         visual_embeddings = self.image_projector(pooled_features)
-        # NOTE: pooled_features deallocated inside _normalize_for_projector
+        ttnn.deallocate(pooled_features)
 
         # 8. Filter by valid tokens (return only valid embeddings)
         # Convert to torch for filtering
@@ -498,6 +669,7 @@ class VisionBackbone(LightweightModule):
         n_out: int,
         k_pool: int,
         batch_size: int = 1,
+        trace_capture: bool = False,
     ) -> ttnn.Tensor:
         """
         Full forward pass using TTNN ops (traceable).
@@ -515,6 +687,9 @@ class VisionBackbone(LightweightModule):
 
         Returns:
             Visual embeddings [1, 1, B*N_out, output_dim]
+
+        Args:
+            trace_capture: If True, skip all host tensor reads (required inside ttnn.begin_trace_capture).
         """
         from loguru import logger
 
@@ -525,12 +700,13 @@ class VisionBackbone(LightweightModule):
             try:
                 x = ttnn.to_torch(t, mesh_composer=mesh_composer)[0] if is_mesh_device else ttnn.to_torch(t)
                 return f"{name}: shape={list(x.shape)}, mean={x.mean():.4f}, std={x.std():.4f}, min={x.min():.4f}, max={x.max():.4f}"
-            except:
+            except Exception:
                 return f"{name}: stats unavailable"
 
         # 1. Encode image through ViT
-        image_features = self.encode_image(images_embedded)
-        logger.debug(_stats(image_features, "ViT features"))
+        image_features = self.encode_image(images_embedded, trace_capture=trace_capture)
+        if not trace_capture:
+            logger.debug(_stats(image_features, "ViT features"))
         # image_features: [1, 1, B*T*N, pool_dim]
 
         # Squeeze to 2D for embedding lookup: [B*T*N, pool_dim]
@@ -556,35 +732,42 @@ class VisionBackbone(LightweightModule):
         # 3. Apply valid mask (zero out invalid positions)
         # valid_mask_ttnn: [1, 1, B*N_out*K_pool, 1]
         gathered = ttnn.mul(gathered, valid_mask_ttnn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        logger.debug(_stats(gathered, "gathered (after mask)"))
+        if not trace_capture:
+            logger.debug(_stats(gathered, "gathered (after mask)"))
 
         # Reshape to [1, B*N_out, K_pool, pool_dim]
         to_pool = ttnn.reshape(gathered, [1, batch_size * n_out, k_pool, pool_dim])
 
-        # 4. Compute query (mean of valid features per output position)
-        # Sum along K_pool dimension
+        # 4. Query = masked mean (HF: sum / count(valid) per slot)
         query_sum = ttnn.sum(to_pool, dim=2, keepdim=True)  # [1, B*N_out, 1, pool_dim]
+        query = _masked_mean_query_hf_device(
+            query_sum,
+            valid_mask_ttnn,
+            batch_size,
+            n_out,
+            k_pool,
+        )
+        ttnn.deallocate(query_sum)
+        if not trace_capture:
+            logger.debug(_stats(query, "query (masked mean)"))
+            logger.debug(_stats(to_pool, "to_pool (key/value)"))
 
-        # Simplified mean: uses static K_pool as denominator instead of per-position valid counts.
-        # Trade-off: enables TTNN tracing (dynamic per-position valid counts break trace capture)
-        # at the cost of slight accuracy reduction vs forward() which uses a proper masked mean.
-        # Measured PCC gap vs forward() path: < 0.01 for typical inputs.
-        query = ttnn.mul(query_sum, 1.0 / k_pool, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        logger.debug(_stats(query, "query (mean of gathered)"))
-        logger.debug(_stats(to_pool, "to_pool (key/value)"))
-
-        # 5. Cross-attention pooling
-        # query: [1, B*N_out, 1, pool_dim]
-        # to_pool (key/value): [1, B*N_out, K_pool, pool_dim]
-        # attn_mask is skipped here: dynamic masking breaks TTNN trace capture.
-        # The non-traced forward() path passes the mask correctly.
+        # 5. Pooling KV mask (HF: -inf on invalid keys) — device-only, pre-alloc zeros/neg_inf from __init__
+        attn_mask_ttnn = self._pooling_attn_mask_from_valid_ttnn(
+            valid_mask_ttnn,
+            batch_size,
+            n_out,
+            k_pool,
+        )
 
         pooled_features = self.image_pooling_2d(
             query=query,
             key_value=to_pool,
-            attn_mask=None,
+            attn_mask=attn_mask_ttnn,
         )
-        logger.debug(_stats(pooled_features, "pooled_features (after pooling, before projection)"))
+        ttnn.deallocate(attn_mask_ttnn)
+        if not trace_capture:
+            logger.debug(_stats(pooled_features, "pooled_features (after pooling, before projection)"))
 
         ttnn.deallocate(query)
         ttnn.deallocate(to_pool)
@@ -594,14 +777,8 @@ class VisionBackbone(LightweightModule):
         # Reshape: [1, B*N_out, 1, hidden_dim] -> [1, 1, B*N_out, hidden_dim]
         pooled_features = ttnn.reshape(pooled_features, [1, 1, batch_size * n_out, -1])
 
-        # 6. Normalize pooled features before projection
-        # The pooled features have std ~4.0 due to large LayerNorm gamma in ViT,
-        # but projector expects std ~1.0. Without normalization, SwiGLU (gate*up)
-        # causes quadratic explosion in scale.
-        pooled_features = self._normalize_for_projector(pooled_features)
-
-        # 7. Project to language model dimension
-        visual_embeddings = self.image_projector(pooled_features)
+        # 6. Project to language model dimension
+        visual_embeddings = self.image_projector(pooled_features, trace_capture=trace_capture)
         ttnn.deallocate(pooled_features)
 
         return visual_embeddings
@@ -689,9 +866,19 @@ class VisionBackbone(LightweightModule):
         # Reshape to [1, B*N_out, K_pool, pool_dim]
         to_pool = ttnn.reshape(gathered, [1, batch_size * n_out, k_pool, pool_dim])
 
-        # Compute query (mean of features per output position)
         query_sum = ttnn.sum(to_pool, dim=2, keepdim=True)  # [1, B*N_out, 1, pool_dim]
-        query = ttnn.mul(query_sum, 1.0 / k_pool, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
+        query = _masked_mean_query_hf(
+            query_sum,
+            valid_mask_ttnn,
+            batch_size,
+            n_out,
+            k_pool,
+            self.mesh_device,
+            mesh_mapper,
+            is_mesh_device,
+        )
+        ttnn.deallocate(query_sum)
 
         # DEBUG: Check query and to_pool stats
         if is_mesh_device:
@@ -703,12 +890,27 @@ class VisionBackbone(LightweightModule):
         logger.info(f"  query stats: mean={query_debug.mean().item():.4f}, std={query_debug.std().item():.4f}")
         logger.info(f"  to_pool stats: mean={to_pool_debug.mean().item():.4f}, std={to_pool_debug.std().item():.4f}")
 
-        # Cross-attention pooling
+        vm_t = (
+            ttnn.to_torch(valid_mask_ttnn, mesh_composer=mesh_composer)[0]
+            if is_mesh_device
+            else ttnn.to_torch(valid_mask_ttnn)
+        )
+        valid_bool = vm_t.reshape(batch_size, n_out, k_pool) > 0.5
+        attn_mask_ttnn = _pooling_attn_mask_ttnn(
+            valid_bool,
+            batch_size,
+            n_out,
+            k_pool,
+            self.mesh_device,
+            mesh_mapper,
+        )
+
         pooled_features = self.image_pooling_2d(
             query=query,
             key_value=to_pool,
-            attn_mask=None,
+            attn_mask=attn_mask_ttnn,
         )
+        ttnn.deallocate(attn_mask_ttnn)
 
         # DEBUG: Check pooled stats
         if is_mesh_device:
@@ -723,9 +925,6 @@ class VisionBackbone(LightweightModule):
 
         # Reshape: [1, B*N_out, 1, hidden_dim] -> [1, 1, B*N_out, hidden_dim]
         pooled_features = ttnn.reshape(pooled_features, [1, 1, batch_size * n_out, -1])
-
-        # Normalize pooled features before projection
-        pooled_features = self._normalize_for_projector(pooled_features)
 
         # Project to language model dimension
         visual_embeddings = self.image_projector(pooled_features)
@@ -877,12 +1076,28 @@ class VisionBackbone(LightweightModule):
             to_pool = ttnn.reshape(gathered, [1, chunk_frames * n_out, k_pool, pool_dim])
             ttnn.deallocate(gathered)
 
-            # Compute query
+            valid_mask_chunk = ttnn.from_torch(
+                chunk_valid.reshape(1, 1, chunk_frames * n_out * k_pool, 1).float(),
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
             query_sum = ttnn.sum(to_pool, dim=2, keepdim=True)
-            query = ttnn.mul(query_sum, 1.0 / k_pool, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            query = _masked_mean_query_hf(
+                query_sum,
+                valid_mask_chunk,
+                chunk_frames,
+                n_out,
+                k_pool,
+                self.mesh_device,
+                mesh_mapper,
+                is_mesh_device,
+            )
             ttnn.deallocate(query_sum)
+            ttnn.deallocate(valid_mask_chunk)
 
-            # DEBUG: Check query and to_pool stats before pooling
             if is_mesh_device:
                 query_debug = ttnn.to_torch(query, mesh_composer=mesh_composer)[0]
                 to_pool_debug = ttnn.to_torch(to_pool, mesh_composer=mesh_composer)[0]
@@ -896,11 +1111,19 @@ class VisionBackbone(LightweightModule):
                 f"    Chunk {chunk_start//max_frames_per_pool_chunk} to_pool stats: mean={to_pool_debug.mean().item():.4f}, std={to_pool_debug.std().item():.4f}"
             )
 
-            # Cross-attention pooling
+            attn_mask_ttnn = _pooling_attn_mask_ttnn(
+                chunk_valid,
+                chunk_frames,
+                n_out,
+                k_pool,
+                self.mesh_device,
+                mesh_mapper,
+            )
             logger.info(
                 f"  Chunk {chunk_start//max_frames_per_pool_chunk} before pooling: query shape={query.shape}, to_pool shape={to_pool.shape}"
             )
-            pooled = self.image_pooling_2d(query=query, key_value=to_pool, attn_mask=None)
+            pooled = self.image_pooling_2d(query=query, key_value=to_pool, attn_mask=attn_mask_ttnn)
+            ttnn.deallocate(attn_mask_ttnn)
             logger.info(f"  Chunk {chunk_start//max_frames_per_pool_chunk} after pooling: pooled shape={pooled.shape}")
 
             # DEBUG: Check pooled stats
@@ -938,27 +1161,15 @@ class VisionBackbone(LightweightModule):
         # Deallocate embedding table
         ttnn.deallocate(image_features_2d)
 
-        # Concatenate all pooled features BEFORE normalization
+        # Concatenate pooled features (HF: no normalization between pooling and projector)
         combined_pooled = torch.cat(all_embeddings, dim=2)  # [1, 1, total_outputs, pool_dim]
         logger.info(f"pool_and_project_chunked: Combined pooled shape: {combined_pooled.shape}")
         logger.info(
-            f"  Combined pooled stats (before norm): mean={combined_pooled.mean().item():.4f}, std={combined_pooled.std().item():.4f}, min={combined_pooled.min().item():.4f}, max={combined_pooled.max().item():.4f}"
+            f"  Combined pooled stats: mean={combined_pooled.mean().item():.4f}, std={combined_pooled.std().item():.4f}, min={combined_pooled.min().item():.4f}, max={combined_pooled.max().item():.4f}"
         )
 
-        # Apply GLOBAL normalization (same as single-pass path)
-        eps = 1e-6
-        global_mean = combined_pooled.mean()
-        global_std = combined_pooled.std()
-        combined_normalized = (combined_pooled - global_mean) / (global_std + eps)
-        clip_value = 3.0
-        combined_normalized = torch.clamp(combined_normalized, -clip_value, clip_value)
-        logger.info(
-            f"  Combined pooled stats (after norm): mean={combined_normalized.mean().item():.4f}, std={combined_normalized.std().item():.4f}, min={combined_normalized.min().item():.4f}, max={combined_normalized.max().item():.4f}"
-        )
-
-        # Move normalized features to device and project
         combined_ttnn = ttnn.from_torch(
-            combined_normalized,
+            combined_pooled,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -966,7 +1177,6 @@ class VisionBackbone(LightweightModule):
             mesh_mapper=mesh_mapper,
         )
 
-        # Project all at once (this should fit since we're projecting, not pooling)
         visual_embeddings = self.image_projector(combined_ttnn)
         ttnn.deallocate(combined_ttnn)
 

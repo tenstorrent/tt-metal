@@ -86,7 +86,7 @@ class Molmo2TextConfig:
     num_key_value_heads: int = 8  # GQA 32/8
     head_dim: int = 128  # 4096 / 32
     vocab_size: int = 152064  # 151936 + 128 special tokens
-    rms_norm_eps: float = 1e-5
+    rms_norm_eps: float = 1e-6
     rope_theta: float = 1_000_000.0
     use_qk_norm: bool = True
     qk_norm_type: str = "qwen3"  # Per-head RMSNorm

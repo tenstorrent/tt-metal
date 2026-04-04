@@ -47,6 +47,7 @@ class TextAttention(LightweightModule):
         head_dim: int = 128,
         max_seq_len: int = 8192,
         rope_theta: float = 1000000.0,
+        rms_norm_eps: float = 1e-6,
         weight_cache_path=None,
         state_dict_prefix: str = "model.transformer.blocks",
         dtype=ttnn.bfloat8_b,
@@ -64,6 +65,7 @@ class TextAttention(LightweightModule):
             head_dim: Dimension per head (128)
             max_seq_len: Maximum sequence length (8192)
             rope_theta: RoPE theta (1,000,000)
+            rms_norm_eps: Epsilon for Q/K RMSNorm (HF text_config.layer_norm_eps = 1e-6)
             weight_cache_path: Path to cache weights
             state_dict_prefix: Prefix for state dict keys
             dtype: Data type for weights
@@ -79,6 +81,7 @@ class TextAttention(LightweightModule):
         self.dtype = dtype
 
         self.scale = head_dim**-0.5
+        self.rms_norm_eps = rms_norm_eps
 
         # Tile alignment
         self.tile_size = 32
@@ -334,8 +337,8 @@ class TextAttention(LightweightModule):
         v = ttnn.permute(v, (0, 2, 1, 3))
 
         # Apply QK-norm (RMSNorm on Q and K)
-        q = ttnn.rms_norm(q, weight=self.q_norm_weight, epsilon=1e-5)
-        k = ttnn.rms_norm(k, weight=self.k_norm_weight, epsilon=1e-5)
+        q = ttnn.rms_norm(q, weight=self.q_norm_weight, epsilon=self.rms_norm_eps)
+        k = ttnn.rms_norm(k, weight=self.k_norm_weight, epsilon=self.rms_norm_eps)
 
         # Apply RoPE using TTNN half-span op (prefill mode)
         if q.dtype != ttnn.bfloat16:
@@ -524,8 +527,8 @@ class TextAttention(LightweightModule):
         # RMSNorm doesn't support HEIGHT_SHARDED, convert to interleaved first
         q = ttnn.to_memory_config(q, ttnn.L1_MEMORY_CONFIG)
         k = ttnn.to_memory_config(k, ttnn.L1_MEMORY_CONFIG)
-        q = ttnn.rms_norm(q, weight=self.q_norm_weight, epsilon=1e-5)
-        k = ttnn.rms_norm(k, weight=self.k_norm_weight, epsilon=1e-5)
+        q = ttnn.rms_norm(q, weight=self.q_norm_weight, epsilon=self.rms_norm_eps)
+        k = ttnn.rms_norm(k, weight=self.k_norm_weight, epsilon=self.rms_norm_eps)
 
         # Ensure bfloat16 for rotary_embedding
         if q.dtype != ttnn.bfloat16:

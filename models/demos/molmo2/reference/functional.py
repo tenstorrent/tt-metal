@@ -292,7 +292,7 @@ def image_projector_forward(
 # ---------------------------------------------------------------------------
 
 
-def rmsnorm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:
+def rmsnorm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     """RMSNorm as used in Molmo2 text model (no bias)."""
     return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * weight
 
@@ -306,7 +306,7 @@ def text_attention_forward(
     num_kv_heads: int = 8,
     head_dim: int = 128,
     rope_theta: float = 1_000_000.0,
-    rms_norm_eps: float = 1e-5,
+    rms_norm_eps: float = 1e-6,
     prefix: str = "model.transformer.blocks",
     kv_cache: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
 ) -> torch.Tensor:
@@ -322,7 +322,7 @@ def text_attention_forward(
         num_kv_heads: 8
         head_dim: 128
         rope_theta: 1,000,000
-        rms_norm_eps: 1e-5
+        rms_norm_eps: HF text_config.layer_norm_eps (1e-6)
         prefix: key prefix
         kv_cache: optional tuple (k_cache, v_cache) from previous steps
     Returns:
@@ -431,7 +431,7 @@ def text_block_forward(
     num_kv_heads: int = 8,
     head_dim: int = 128,
     rope_theta: float = 1_000_000.0,
-    rms_norm_eps: float = 1e-5,
+    rms_norm_eps: float = 1e-6,
     prefix: str = "model.transformer.blocks",
 ) -> torch.Tensor:
     """
