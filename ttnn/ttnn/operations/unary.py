@@ -44,6 +44,10 @@ def register_ttnn_cpp_unary_function(unary_function):
             "softsign": torch.nn.functional.softsign,
             "lgamma": torch.lgamma,
             "silu": torch.nn.functional.silu,
+            "frac": torch.frac,
+            "floor": torch.floor,
+            "ceil": torch.ceil,
+            "trunc": torch.trunc,
         }
 
         golden_keys = set(name_to_golden_function.keys())
@@ -67,6 +71,10 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.softsign,
     ttnn.lgamma,
     ttnn.silu,
+    ttnn.frac,
+    ttnn.floor,
+    ttnn.ceil,
+    ttnn.trunc,
 ]
 for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
     register_ttnn_cpp_unary_function(unary_function)
