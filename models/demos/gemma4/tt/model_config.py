@@ -100,7 +100,11 @@ class ModelArgs(TTModelArgs):
             dec_opt._opt_settings["TensorPrecision"][TensorGroup.WO] = PrecisionSetting.BF16
             dec_opt._opt_settings["TensorPrecision"][TensorGroup.KV_CACHE] = PrecisionSetting.BF16
             dec_opt._opt_settings["TensorPrecision"][TensorGroup.ACTIVATION] = PrecisionSetting.BF16
-            # Use HIFI4 for ALL ops to reduce rounding error
+            # MLP ops benefit from HiFi3+fp32 (via HIFI4 override below).
+            # QKV/O matmuls in Gemma4Attention use compute_kernel_config_hifi2 directly
+            # (HiFi2 without fp32 is more accurate than HiFi3+fp32 for attention matmuls
+            # on Wormhole due to a hardware bug with fp32 accumulation).
+            # SDPA uses the overridden compute_kernel_config_hifi4 (HiFi3+fp32).
             dec_opt._opt_settings["OpFidelity"][OpGroup.LI_FF1_FF3] = MathFidelitySetting.HIFI4
             dec_opt._opt_settings["OpFidelity"][OpGroup.LI_FF2] = MathFidelitySetting.HIFI4
             dec_opt._opt_settings["OpFidelity"][OpGroup.LI_QKV_PREFILL] = MathFidelitySetting.HIFI4
