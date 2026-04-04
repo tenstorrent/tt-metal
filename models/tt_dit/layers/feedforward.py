@@ -113,7 +113,7 @@ class ParallelFeedForward(Module):
         addcmul_b: ttnn.Tensor,
         scalar: float = 1.0,
         compute_kernel_config=None,
-        parallel_config=None
+        parallel_config=None,
     ) -> ttnn.Tensor:
         """Fused FFN forward with addcmul fused at the RS final write step.
 
