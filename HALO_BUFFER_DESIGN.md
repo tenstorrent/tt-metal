@@ -90,3 +90,16 @@ python run_vae_decoder_ablation.py  # H=60 W=104 in script
 # set H=90 W=160 TARGET_HEIGHT=720 TARGET_WIDTH=1280 in run_vae_decoder_ablation.py
 python run_vae_decoder_ablation.py
 ```
+
+## Key lesson: atomic kernel/factory changes
+
+The T-slice semaphore requires THREE files to change together:
+1. `minimal_default_writer.cpp` — reads CRTA[5]=num_reader_cores (only when NP_PROGRESS_SEM defined)
+2. `neighbor_pad_async_program_factory.cpp` — provides 5+2N CRTA elements (only when progress_t_batch_size>0)
+3. `reader_vol2col.cpp` — polls local semaphore (only when CONV3D_INPUT_PROGRESS_SEM defined)
+
+If factory is reverted while #1 and #3 are active:
+- Writer reads CRTA[5] = garbage → undefined loop count → NOC atomic hang
+- Reader spins on semaphore that writer never signals → deadlock
+
+All three must be changed/reverted atomically. Status: reverted to stable baseline (1.11s at 480p).
