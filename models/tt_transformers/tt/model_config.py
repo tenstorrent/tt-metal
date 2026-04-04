@@ -77,6 +77,33 @@ class OpGroup(Enum):
     ACCURACY = "accuracy"  # This is a special group for accuracy mode, not an actual operator group
 
 
+def compute_padded_vocab_size(vocab_size: int, num_devices: int) -> int:
+    """Compute the padded vocab size such that it is a multiple of 32 * num_devices.
+
+    This ensures each device gets an equal share of the vocab that is also a multiple of 32.
+    """
+    if num_devices < 1:
+        raise ValueError("num_devices must be >= 1")
+    return nearest_multiple(vocab_size, 32 * num_devices)
+
+
+def should_pad_sampling_logits_to_power_of_2(
+    base_model_name: str, padded_vocab_size: int, sampling_splits: int
+) -> bool:
+    """Return True if sampling logits should be padded to the next power of 2.
+
+    This is only beneficial for large models (70B+) where the per-split vocab size is not
+    already a power of 2, since padding enables more efficient hardware operations.
+    """
+    if sampling_splits < 1:
+        raise ValueError("sampling_splits must be >= 1")
+    large_models = {"Llama-3.1-70B", "Llama-3.2-90B", "DeepSeek-R1-Distill-Llama-70B", "Qwen2.5-72B"}
+    if base_model_name not in large_models:
+        return False
+    per_split = padded_vocab_size // sampling_splits
+    return per_split & (per_split - 1) != 0  # True if not a power of 2
+
+
 class MathFidelitySetting(Enum):
     LOFI = "lofi"
     HIFI2 = "hifi2"

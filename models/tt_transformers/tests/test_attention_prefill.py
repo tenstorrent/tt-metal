@@ -15,7 +15,7 @@ from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, get_rot_transformation_mat, precompute_freqs
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.prefetcher import Prefetcher
-from models.tt_transformers.tt.rope import get_rot_mats, get_rot_mats_hf
+from models.tt_transformers.tt.rope import get_rot_mats
 
 
 @torch.no_grad()
@@ -91,7 +91,7 @@ def test_attention_inference(
     }
     reference_model = model_args.reference_attention(load_checkpoint=True)
 
-    rot_mats_fn = get_rot_mats_hf if model_args.use_hf_rope else get_rot_mats
+    rot_mats_fn = get_rot_mats
 
     # pre-compute the rotational embedding matrix and send to device
     rot_mats = rot_mats_fn(
@@ -103,17 +103,16 @@ def test_attention_inference(
     )
 
     transformation_mats = {}
-    if not model_args.use_hf_rope:
-        transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
-        transformation_mats_prefill = ttnn.as_tensor(
-            transformation_mat_torch,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        transformation_mats = {"prefill": transformation_mats_prefill}
+    transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
+    transformation_mats_prefill = ttnn.as_tensor(
+        transformation_mat_torch,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    transformation_mats = {"prefill": transformation_mats_prefill}
 
     generation_start_pos = 0
     generation_length = 3
