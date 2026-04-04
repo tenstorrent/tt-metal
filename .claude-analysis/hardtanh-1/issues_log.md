@@ -13,8 +13,8 @@
 | 1 | Reference Discovery | ok | 779s | Broken symlink for .claude/scripts in worktree |
 | 2 | Reference Analysis | ok | 1474s | None |
 | 3 | Implementation | ok | 1149s | None |
-| 4 | Testing & Debugging | pending | - | - |
-| 5 | Documentation | pending | - | - |
+| 4 | Testing & Debugging | ok | 3024s | 2 bugs fixed: SFPU kernel signature, nanobind docstring escaping |
+| 5 | Documentation | ok | 40s | None |
 | 6 | Self-Reflection | pending | - | - |
 
 ## Issues
