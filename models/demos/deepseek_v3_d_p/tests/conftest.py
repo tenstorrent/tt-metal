@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 from loguru import logger
-from transformers import AutoConfig
+from transformers import AutoConfig, AutoTokenizer
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
@@ -348,6 +348,29 @@ def config_only():
     config = AutoConfig.from_pretrained(str(config_path), trust_remote_code=True)
     logger.info(f"Loaded config from {config_path}")
     return config
+
+
+@pytest.fixture(scope="session")
+def tokenizer():
+    """Load DeepSeek tokenizer, searching known model locations."""
+    candidates = [
+        os.getenv("DEEPSEEK_V3_HF_MODEL"),
+        "models/demos/deepseek_v3/reference",
+        "/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528",
+    ]
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        p = Path(candidate)
+        if p.exists() and any(p.glob("tokenizer*")):
+            logger.info(f"Loading tokenizer from: {p}")
+            return AutoTokenizer.from_pretrained(str(p), trust_remote_code=True)
+
+    # Fall back to downloading config-only (includes tokenizer files)
+    cache_dir = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface"))
+    config_path = download_model_config_only(cache_dir)
+    logger.info(f"Loading tokenizer from downloaded config: {config_path}")
+    return AutoTokenizer.from_pretrained(str(config_path), trust_remote_code=True)
 
 
 @pytest.fixture(scope="session")
