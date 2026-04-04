@@ -12,13 +12,14 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, skip_with_llk_assert
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.fused_ops.kv_cache_branch.op import KVCacheBranch
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.micro_ops.kv_cache_update.op import KVCacheUpdate
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 @pytest.mark.parametrize("epsilon", [1e-6])
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize("position_id", [0, 1, 5, 7])
@@ -338,6 +339,7 @@ def test_kv_cache_branch(device, epsilon, use_fp32, position_id):
     logger.info("✓ KV cache branch test passed!)")
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 @pytest.mark.parametrize("position_id", [0, 1, 34, 128, 1130])
 def test_kv_cache_dram_shard(device, position_id):
     """Test KV cache shard untilize tilize operation"""

@@ -15,6 +15,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
+from models.common.utility_functions import is_llk_assert_enabled
 
 mem_configs = [
     ttnn.DRAM_MEMORY_CONFIG,
@@ -134,6 +135,10 @@ class TestTypecast:
         test_args.update({"output_mem_config": dst_mem_config})
         comparison_func = comparison_funcs.comp_pcc
         if tt_input_dtype == ttnn.bfloat4_b or tt_output_dtype == ttnn.bfloat4_b:
+            comparison_func = partial(comparison_funcs.comp_pcc, pcc=0.98)
+
+        # PCC can dip just under 0.99 when LLK asserts are on.
+        if is_llk_assert_enabled():
             comparison_func = partial(comparison_funcs.comp_pcc, pcc=0.98)
 
         run_single_pytorch_test(

@@ -197,10 +197,10 @@ void update_cur_exp_sum_inplace(uint32_t cb_prev_sum_exp, uint32_t cb_cur_sum_ex
     cb_wait_front(cb_exp_max_diff, onetile);
 
     const uint32_t exp_sum_dst_idx = 0;
+    reconfig_data_format(cb_prev_sum_exp, cb_exp_max_diff);  // reconfig data format to precise
     mul_bcast_cols_init_short(cb_prev_sum_exp, cb_exp_max_diff);
     tile_regs_acquire();
     // multiply previous exp sum with exp_max_diff
-    reconfig_data_format(cb_prev_sum_exp, cb_exp_max_diff);  // reconfig data format to precise
     mul_tiles_bcast_cols(cb_prev_sum_exp, cb_exp_max_diff, 0, 0, exp_sum_dst_idx);
 
     // copy current sum exp to next register

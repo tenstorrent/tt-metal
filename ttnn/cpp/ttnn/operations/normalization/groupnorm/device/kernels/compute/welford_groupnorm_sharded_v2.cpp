@@ -302,8 +302,8 @@ void kernel_main() {
                     const uint32_t mask_offset = g * block_w;
                     const uint32_t mask_index = mask_offset + block_w_index;
 
-                    mul_tiles_bcast_scalar_init_short(cb_input_mask_id, cb_ex2pe_id);
                     reconfig_data_format(cb_in0_id, cb_input_mask_id, cb_ex_global_id, cb_ex2pe_id);
+                    mul_tiles_bcast_scalar_init_short(cb_input_mask_id, cb_ex2pe_id);
                     tile_regs_acquire();
                     mul_tiles_bcast_scalar(cb_input_mask_id, cb_ex2pe_id, mask_index, g, dst0);
                     tile_regs_commit();
@@ -314,8 +314,8 @@ void kernel_main() {
 
                     // // c. a * b
                     cb_xmm.wait_front(2);
-                    mul_tiles_init(cb_xmm_id, cb_xmm_id);
                     reconfig_data_format(cb_input_mask_id, cb_xmm_id, cb_ex2pe_id, cb_xmm_id);
+                    mul_tiles_init(cb_xmm_id, cb_xmm_id);
                     tile_regs_acquire();
                     mul_tiles(cb_xmm_id, cb_xmm_id, 0, 1, dst0);
                     tile_regs_commit();
@@ -390,8 +390,8 @@ void kernel_main() {
                 ++tile_id;
 
                 if constexpr (do_gamma) {
-                    mul_bcast_rows_init_short(cb_x_id, cb_gamma_id);
                     reconfig_data_format_srcb(cb_xmm_id, cb_gamma_id);
+                    mul_bcast_rows_init_short(cb_x_id, cb_gamma_id);
 
                     cb_x.wait_front(1);
                     tile_regs_acquire();
@@ -406,8 +406,8 @@ void kernel_main() {
                 }
 
                 if constexpr (do_beta) {
-                    add_bcast_rows_init_short(cb_x_id, cb_beta_id);
                     reconfig_data_format_srcb(do_gamma ? cb_gamma_id : cb_xmm_id, cb_beta_id);
+                    add_bcast_rows_init_short(cb_x_id, cb_beta_id);
 
                     cb_x.wait_front(1);
                     tile_regs_acquire();

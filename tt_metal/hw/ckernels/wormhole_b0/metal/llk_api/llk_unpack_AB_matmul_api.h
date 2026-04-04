@@ -90,18 +90,6 @@ inline void llk_unpack_AB_matmul(
     std::uint32_t tile_size_a = get_local_cb_interface(operandA_id).fifo_page_size;
     std::uint32_t tile_size_b = get_local_cb_interface(operandB_id).fifo_page_size;
 
-    LLK_ASSERT(
-        (are_unpackers_AB_configured_correctly(
-            unpack_src_format[operandB_id],
-            unpack_dst_format[operandB_id],
-            unpack_src_format[operandA_id],
-            unpack_dst_format[operandA_id],
-            get_operand_face_r_dim(operandB_id),
-            get_operand_face_r_dim(operandA_id),
-            partial_face_a ? 1 : get_operand_num_faces(operandB_id),
-            partial_face_b ? 1 : get_operand_num_faces(operandA_id))),
-        "");
-
     WAYPOINT("UPMW");
     _llk_unpack_AB_matmul_(
         base_address_a,

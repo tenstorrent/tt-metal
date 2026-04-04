@@ -4,19 +4,20 @@
 
 #pragma once
 
-#include <api/debug/dprint.h>
 #include <api/compute/reg_api.h>
+#include <api/debug/dprint.h>
 
 #include <cstdint>
 
-#include "api/compute/compute_kernel_api.h"
 #include "api/compute/bcast.h"
+#include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/softplus.h"
 #include "api/compute/matmul.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh_dest.h"
@@ -44,6 +45,8 @@ void apply_mask_on_reg(
 
     const uint32_t mask_register = register_idx + 1U;  // mask register should be next to data register
     cb_wait_front(cb_attn_mask, onetile);
+    // Matmul leaves SrcA programmed for query; copy_tile_init does not reconfigure data formats.
+    reconfig_data_format_srca<false, true>(cb_attn_mask);
     copy_tile_init(cb_attn_mask);
     copy_tile(
         cb_attn_mask,

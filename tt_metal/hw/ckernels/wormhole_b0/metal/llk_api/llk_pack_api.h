@@ -160,11 +160,6 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 
     std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
-    LLK_ASSERT(
-        (are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-            pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output))),
-        "");
-
     _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, untilize>(tile_index, pack_tile_addr);
 }
 
@@ -217,11 +212,6 @@ inline void llk_pack_untilize(
             (block_c_index * ((num_faces > 2) ? num_faces / 2 : num_faces) * block_ct_dim * FACE_C_DIM)) /
             16;
 
-    LLK_ASSERT(
-        (are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-            pack_src_format[output_id], pack_dst_format[output_id], face_r_dim)),
-        "");
-
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
             pack_tile_addr, pack_dst_format[output_id], face_r_dim, 4, block_rt * block_ct_dim + tile_dst_rt_offset);
@@ -236,10 +226,6 @@ inline void llk_matmul_pack(
     std::uint8_t output_id = get_output_id(output);
 
     static_assert((!(untilize && out_of_order_output)) && "untilize out of order packing is not supported!");
-    LLK_ASSERT(
-        (are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-            pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output))),
-        "");
     LLK_ASSERT(((start_tile_index + ntiles - 1) < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
 
     for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
@@ -283,13 +269,6 @@ inline void llk_pack_rows(
 
     const std::uint8_t output_id = get_output_id(output);
     const std::uint32_t pack_addr = get_output_tile_address<true, false>(output_id, output_index);
-
-    // Pack rows uses pack_reads_per_xy_plane=1 (set in _llk_pack_rows_init_) for row packing,
-    // which differs from standard tile face_r_dim. Use ProgramByTile to skip face_r_dim check.
-    LLK_ASSERT(
-        (are_packers_configured_correctly<PackerProgramType::ProgramByTile>(
-            pack_src_format[output_id], pack_dst_format[output_id])),
-        "");
 
     _llk_pack_rows_(dst_index, pack_addr);
 }
@@ -347,11 +326,6 @@ inline void llk_pack_fast_tilize_block(
     const std::uint32_t num_faces = get_output_num_faces(output_id);
 
     const std::uint32_t pack_tile_addr = get_output_tile_address<true, false>(output_id, output_tile_index);
-
-    LLK_ASSERT(
-        (are_packers_configured_correctly<PackerProgramType::ProgramByTile>(
-            pack_src_format[output_id], pack_dst_format[output_id])),
-        "");
 
     _llk_pack_fast_tilize_block_(tile_index, pack_tile_addr, unit_dim, num_units, num_faces);
 }

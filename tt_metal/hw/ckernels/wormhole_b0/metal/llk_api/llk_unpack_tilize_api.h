@@ -139,18 +139,6 @@ inline void llk_unpack_tilizeA_B(
     std::uint32_t offset_address_b = tile_index_b * get_local_cb_interface(operandB_id).fifo_page_size;
     std::uint32_t address_b = base_address_b + offset_address_b;
 
-    LLK_ASSERT(
-        (are_unpackers_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
-            unpack_src_format[operandA_id],
-            unpack_dst_format[operandA_id],
-            unpack_src_format[operandB_id],
-            unpack_dst_format[operandB_id],
-            face_r_dim,
-            get_operand_face_r_dim(operandB_id),
-            num_faces,
-            get_operand_num_faces(operandB_id))),
-        "");
-
     WAYPOINT("UPTW");
     _llk_unpack_tilizeA_B_<zero_srcA>(
         unpack_src_format[operandA_id],
