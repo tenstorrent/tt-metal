@@ -33,21 +33,23 @@ ALWI void copy_tile_to_dst_init_short(
     uint32_t transpose = 0,
     uint32_t transpose_within_16x16_face = false,
     uint32_t call_line = __builtin_LINE()) {
-#ifndef ARCH_QUASAR
+#ifdef ARCH_QUASAR
+    state_configure(cbid, call_line);
+    UNPACK((llk_unpack_A_init<false, DST_ACCUM_MODE>(cbid)));
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(cbid)));
+#else
     state_configure(cbid, call_line);
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         transpose, transpose_within_16x16_face, cbid)));
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(cbid)));
-#endif  // TODO: AM; add Quasar implementation
+#endif
 }
 /**
  * Perform a init for the copy tile operation. This calls the short init function and initializes packer dst offset
  * registers.
  */
 ALWI void copy_tile_init(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
-#ifndef ARCH_QUASAR
     copy_tile_to_dst_init_short(cbid, 0, false, call_line);
-#endif  // TODO: AM; add Quasar implementation
 }
 
 // clang-format off

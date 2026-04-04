@@ -430,8 +430,10 @@ TEST_F(MeshDeviceFixture, TensixComputeUnpackUntilize) {
 /******************************
 Following tests are for Quasar
 *******************************/
-// Pack Untilize tests
-static void run_quasar_pack_untilize_test(IDevice* dev, uint32_t num_tiles_r, uint32_t num_tiles_c) {
+enum class PackUntilizeMode { BLOCK, DST };
+
+static void run_quasar_pack_untilize_test(
+    IDevice* dev, uint32_t num_tiles_r, uint32_t num_tiles_c, PackUntilizeMode mode) {
     Program program = CreateProgram();
     CoreCoord core = {0, 0};
 
@@ -448,19 +450,9 @@ static void run_quasar_pack_untilize_test(IDevice* dev, uint32_t num_tiles_r, ui
     uint32_t dram_buffer_src_addr = src_dram_buffer->address();
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-    // DFB needs at least num_tiles_c entries so cb_wait_front(block_ct_dim) can be satisfied
     uint32_t dfb_num_entries = std::max(2u, num_tiles_c);
 
-    tt_metal::experimental::dfb::DataflowBufferConfig l1_input_dfb_config = {
-        .entry_size = single_tile_size,
-        .num_entries = dfb_num_entries,
-        .num_producers = 1,
-        .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-        .num_consumers = 1,
-        .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = true,
-        .data_format = tt::DataFormat::Float16_b};
-    tt_metal::experimental::dfb::DataflowBufferConfig l1_output_dfb_config = {
+    tt_metal::experimental::dfb::DataflowBufferConfig l1_dfb_config = {
         .entry_size = single_tile_size,
         .num_entries = dfb_num_entries,
         .num_producers = 1,
@@ -470,8 +462,8 @@ static void run_quasar_pack_untilize_test(IDevice* dev, uint32_t num_tiles_r, ui
         .enable_implicit_sync = true,
         .data_format = tt::DataFormat::Float16_b};
 
-    uint32_t l1_input_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program, core, l1_input_dfb_config);
-    uint32_t l1_output_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program, core, l1_output_dfb_config);
+    uint32_t l1_input_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program, core, l1_dfb_config);
+    uint32_t l1_output_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program, core, l1_dfb_config);
 
     KernelHandle reader = tt_metal::experimental::quasar::CreateKernel(
         program,
@@ -487,13 +479,24 @@ static void run_quasar_pack_untilize_test(IDevice* dev, uint32_t num_tiles_r, ui
         tt_metal::experimental::quasar::QuasarDataMovementConfig{
             .num_threads_per_cluster = 1, .compile_args = {l1_output_dfb}});
 
-    // pack_untilize.cpp compile args: per_core_block_cnt, per_core_block_tile_cnt, cb_in0, cb_out0
+    std::string compute_kernel;
+    std::vector<uint32_t> compute_args;
+    if (mode == PackUntilizeMode::BLOCK) {
+        compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/pack_untilize.cpp";
+        compute_args = {num_tiles_r, num_tiles_c, l1_input_dfb, l1_output_dfb};
+    } else {
+        compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/dst_untilize.cpp";
+        uint32_t num_faces = 4;
+        uint32_t face_r_dim = 16;
+        compute_args = {num_tiles_r, num_tiles_c, num_faces, face_r_dim, l1_input_dfb, l1_output_dfb};
+    }
+
     KernelHandle compute = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/compute/pack_untilize.cpp",
+        compute_kernel,
         core,
         tt_metal::experimental::quasar::QuasarComputeConfig{
-            .num_threads_per_cluster = 1, .dst_full_sync_en = true, .compile_args = {num_tiles_r, num_tiles_c, l1_input_dfb, l1_output_dfb}});
+            .num_threads_per_cluster = 1, .dst_full_sync_en = true, .compile_args = compute_args});
 
     tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, l1_input_dfb, reader, compute);
     tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, l1_output_dfb, compute, writer);
@@ -517,23 +520,47 @@ static void run_quasar_pack_untilize_test(IDevice* dev, uint32_t num_tiles_r, ui
     EXPECT_EQ(golden, result_vec);
 }
 
+// Pack Untilize (via pack_untilize_block)
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize1x1) {
-    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 1, 1);
+    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 1, 1, PackUntilizeMode::BLOCK);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize1x2) {
-    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 1, 2);
+    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 1, 2, PackUntilizeMode::BLOCK);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize2x1) {
-    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 2, 1);
+    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 2, 1, PackUntilizeMode::BLOCK);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize2x2) {
-    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 2, 2);
+    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 2, 2, PackUntilizeMode::BLOCK);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize4x4) {
-    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 4, 4);
+    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 4, 4, PackUntilizeMode::BLOCK);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize4x8) {
-    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 4, 8);
+    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 4, 8, PackUntilizeMode::BLOCK);
+}
+
+// Pack Untilize Dst (tiles pre-loaded into dest via copy_tile)
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst1x1) {
+    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 1, 1, PackUntilizeMode::DST);
+}
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst1x2) {
+    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 1, 2, PackUntilizeMode::DST);
+}
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst2x1) {
+    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 2, 1, PackUntilizeMode::DST);
+}
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst2x2) {
+    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 2, 2, PackUntilizeMode::DST);
+}
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst4x2) {
+    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 4, 2, PackUntilizeMode::DST);
+}
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst8x2) {
+    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 8, 2, PackUntilizeMode::DST);
+}
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst2x8) {
+    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 2, 8, PackUntilizeMode::DST);
 }
 
 /**************************************
