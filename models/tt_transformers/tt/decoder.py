@@ -216,8 +216,17 @@ class TransformerBlock(LightweightModule):
     ) -> ttnn.Tensor:
         if self.args.is_post_norm:
             return self._forward_post_norm(
-                x, current_pos, rot_mats_global, rot_mats_local, user_id, mode,
-                page_table, chunk_page_table, chunk_start_idx, kv_cache, batch_size,
+                x,
+                current_pos,
+                rot_mats_global,
+                rot_mats_local,
+                user_id,
+                mode,
+                page_table,
+                chunk_page_table,
+                chunk_start_idx,
+                kv_cache,
+                batch_size,
             )
 
         TG = self.args.is_galaxy
@@ -358,24 +367,9 @@ class TransformerBlock(LightweightModule):
             rot_mats_local if (hasattr(self.attention, "is_sliding") and self.attention.is_sliding) else rot_mats_global
         )
 
-        # Post-norm: no pre-attention norm, just all-gather the fractured input for attention
-        if self.args.is_multichip and not TG:
-            input_mem_cfg = skip_mem_cfg if mode == Mode.DECODE else ttnn.DRAM_MEMORY_CONFIG
-            attn_in = ttnn.experimental.all_gather_async(
-                x,
-                persistent_output_buffer=None,
-                dim=3,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=self.tt_ccl.get_num_links(1),
-                topology=self.args.ccl_topology(),
-                memory_config=input_mem_cfg,
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
-            )
-        else:
-            attn_in = x
+        # Post-norm: all-gather without normalization using attention_norm's configs
+        attn_norm_config = self.args.get_norm_config("attn", mode, self.prefetcher)
+        attn_in = self.attention_norm(x, mode, norm_config=attn_norm_config, gather_only=True)
 
         if batch_size > 1:
             attn_in = ttnn.reshape(attn_in, [batch_size, 1, attn_in.shape[-2] // batch_size, -1])
@@ -410,33 +404,16 @@ class TransformerBlock(LightweightModule):
                 cluster_axis=1,
             )
 
-        hidden_states = ttnn.add(
-            residual, attn_normed, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
-        )
+        hidden_states = ttnn.add(residual, attn_normed, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
         residual = hidden_states
 
         ttnn.deallocate(attn_out)
         if mode == "prefill":
             x.deallocate(True)
 
-        # FFN: no pre-FFN norm, just all-gather for FFN input
-        if self.args.is_multichip and not TG:
-            ffn_mem_cfg = skip_mem_cfg if mode == Mode.DECODE else ttnn.DRAM_MEMORY_CONFIG
-            ffn_in = ttnn.experimental.all_gather_async(
-                hidden_states,
-                persistent_output_buffer=None,
-                dim=3,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=self.tt_ccl.get_num_links(1),
-                topology=self.args.ccl_topology(),
-                memory_config=ffn_mem_cfg,
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
-            )
-        else:
-            ffn_in = hidden_states
+        # FFN: all-gather without normalization using ff_norm's configs
+        ffn_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
+        ffn_in = self.ff_norm(hidden_states, mode, norm_config=ffn_norm_config, gather_only=True)
 
         if TG and mode == "decode":
             ffn_in = ttnn.to_memory_config(ffn_in, memory_config=self.args.get_mlp_act_mem_config(mode))

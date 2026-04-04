@@ -51,12 +51,16 @@ class DistributedNorm(LightweightModule):
             )
         self.TG = TG
 
-    def forward(self, x, mode: Mode, norm_config=None):
-        """Apply a norm, possibly gathering inputs if required."""
+    def forward(self, x, mode: Mode, norm_config=None, gather_only=False):
+        """Apply a norm, possibly gathering inputs if required.
+        If gather_only=True, only perform all-gather without normalization (for post-norm architectures).
+        """
 
         sharded_output_config = norm_config.get("sharded_output_config") if norm_config else None
 
         if self.TG:
+            if gather_only:
+                raise NotImplementedError("gather_only not yet supported for TG")
             if mode == Mode.DECODE:
                 return tt_sharded_distributed_rmsnorm(
                     x,
@@ -104,6 +108,10 @@ class DistributedNorm(LightweightModule):
             )
         else:
             x = ttnn.to_memory_config(x, input_mem_cfg)
+
+        # Skip norm if gather_only (used by post-norm architectures)
+        if gather_only:
+            return x
 
         x = self.norm(
             x, mode=mode, in_sharded=(mode == Mode.DECODE), out_sharded=(mode == Mode.DECODE), norm_config=norm_config

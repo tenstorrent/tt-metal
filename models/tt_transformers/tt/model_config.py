@@ -625,7 +625,7 @@ class ModelArgs:
         # Flag to indicate whether we use fused version of QK ops (rotary embedding + page cached update)
         # We currently disable this fusion of ops for vision-capable or multimodal models
         # we also disable fused qk when using HF-style rotary embedding
-        self.use_qk_fused = not self.is_multimodal and not self.use_hf_rope
+        self.use_qk_fused = not self.is_multimodal and not self.use_hf_rope and not self.is_post_norm
         if self.prefetcher is not None:
             self.use_qk_fused = False
 
@@ -2655,6 +2655,7 @@ class ModelArgs:
                 "Qwen2.5-72B": 32,
                 "Qwen2.5-7B": 16,
                 "QwQ-32B": 16,
+                "EXAONE-4.0-32B": 8,  # 27392/8/32=107 (prime), needs padding
             }.get(self.base_model_name, 0)
 
             # Override MLP padding cores from env var
