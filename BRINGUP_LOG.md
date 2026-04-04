@@ -996,3 +996,74 @@ python models/demos/molmo2/demo/demo.py \
 ```
 
 ---
+
+### 2026-04-03 — Long Video Infrastructure Verification
+
+**Status:** Infrastructure WORKING. Output quality blocked by projector scale bug.
+
+**Test Configuration:**
+- Video: 35s source (1050 frames), sampled to 72 frames at 2fps
+- DP=8: 9 frames/device × 8 devices = 72 frames in single pass
+- TP=8: Tensor parallel attention across 8 devices
+- Input tokens: 15,692
+- max_seq_len: 32,768
+- Chunked prefill: 2 chunks of 8192 tokens
+
+**Infrastructure Verified Working:**
+
+| Component | Status | Evidence |
+|-----------|--------|----------|
+| DP=8 vision | ✅ | `embed_image_data_parallel: 72 frames, 9 frames/device, 8 devices` |
+| Chunked ViT | ✅ | 3 pooling chunks processed correctly |
+| Chunked prefill | ✅ | 2 chunks of 8192 tokens each |
+| Paged attention | ✅ | 512 blocks allocated, page_table working |
+| Decode trace | ✅ | 30.36 tok/s throughput |
+
+**Performance:**
+
+| Metric | Value |
+|--------|-------|
+| Vision processing | 63.7s (1.13 fps for 72 frames) |
+| Prefill TTFT | 4.8s |
+| E2E TTFT | 71.9s |
+| Decode | 30.36 tok/s |
+
+**Output Quality: GARBAGE**
+
+Output: `"A woman 0.0.0.0.0.0 "`
+
+**Root Cause Identified:** Projector scale mismatch
+
+```
+Projector output: std=688.0, range=[-41728, 68096]
+Expected:         std=0.15,  range=[-0.6, 0.6]
+```
+
+The projector amplifies features by ~4500x instead of normalizing. This causes visual embeddings to overwhelm text embeddings during fusion, producing garbage output.
+
+**Note:** This same projector scale issue affects ALL video lengths > 8 frames. The 8-frame case may work due to different code path or the scale being borderline acceptable.
+
+**Test Videos Downloaded:**
+- 103 videos from `test.jsonl` downloaded to `models/demos/molmo2/verification/videos/`
+- Total size: 479MB
+- Longest videos: ~1050 frames (35s)
+
+**Command Used:**
+```bash
+python models/demos/molmo2/demo/demo.py \
+    --video models/demos/molmo2/verification/videos/2bc4b17a...mp4 \
+    --prompt "<|video|> Describe what happens in this video in detail." \
+    --max-video-frames 128 \
+    --use-data-parallel \
+    --frames-per-device 8 \
+    --paged-attention \
+    --use-decode-trace \
+    --max-seq-len 32768
+```
+
+**Next Steps:**
+1. Debug projector scale issue in `image_projector.py` or `vision_backbone.py`
+2. Compare projector output with PyTorch reference
+3. After fixing scale, verify output quality with 72+ frames
+
+---
