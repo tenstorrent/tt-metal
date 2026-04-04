@@ -8,23 +8,30 @@ In-process brute-force conv3d blocking sweep with T_out_block support.
 Sweeps (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block) combinations
 with accurate L1 pre-filtering based on the actual CB sizing from conv3d_program_factory.
 
+Includes hang detection: if a combo's warmup+timed section exceeds --timeout seconds,
+the process prints a diagnostic message and calls os._exit(1) to avoid silent hangs.
+
 Usage:
     source python_env/bin/activate && export PYTHONPATH=$(pwd)
     python models/tt_dit/tests/models/wan2_2/bruteforce_conv3d_sweep.py \
         --C_in 96 --C_out 96 --kernel 3,3,3 --T 83 --H 186 --W 42 \
-        --mesh 2x4 --output sweep_results_v3/up3_96x96.json
+        --mesh 2x4 --output sweep_results_v3/up3_96x96.json \
+        --timeout 60
 """
 
 import argparse
 import json
 import math
+import os
+import pathlib
 import statistics
+import threading
 import time
 
 import torch
 
 import ttnn
-from models.tt_dit.utils.conv3d import aligned_channels
+from models.tt_dit.utils.conv3d import _BLOCKINGS, _DEFAULT_BLOCKINGS, aligned_channels
 
 WARMUP = 2
 RUNS = 4
@@ -119,31 +126,65 @@ def estimate_l1_bytes(cin_block, cout_block, t_blk, h_blk, w_blk, kernel_size, C
 L1_BUDGET = 1_572_864 - 200 * 1024  # ~1,372 KB
 
 
-def build_all_blockings(C_in, C_out, kernel_size, H, W, T):
+def compute_parallelism(cin_block, cout_block, t_blk, h_blk, w_blk, kernel_size, H, W, T, C_in, C_out, num_cores=120):
+    """Return the number of cores used by this blocking configuration."""
+    padded_cin = aligned_channels(C_in)
+    padded_cout = aligned_channels(C_out)
+    kT = kernel_size[0]
+    T_out = T - (kT - 1) if kT > 1 else T
+
+    c_in_blocks = padded_cin // cin_block
+    c_out_blocks = padded_cout // cout_block
+
+    c_in_par = min(c_in_blocks, num_cores)
+    cores_per_out = max(1, num_cores // c_in_par)
+    c_out_par = min(c_out_blocks, cores_per_out)
+    remaining = max(1, cores_per_out // c_out_par)
+
+    T_out_blocks = max(1, math.ceil(T_out / t_blk))
+    H_out_blocks = max(1, math.ceil(H / h_blk))
+    W_out_blocks = max(1, math.ceil(W / w_blk))
+    spatial_par = min(T_out_blocks * H_out_blocks * W_out_blocks, remaining)
+
+    return c_in_par * c_out_par * spatial_par
+
+
+def t_needed_to_hide_weight_read(cin_block, cout_block, kernel_size):
+    kT, kH, kW = kernel_size
+    matmul_K_t = math.ceil(kT * kH * kW * cin_block / 32)
+    matmul_N_t = math.ceil(cout_block / 32)
+    weight_kb = matmul_K_t * matmul_N_t * 2
+    weight_us = weight_kb / 20
+    tilize_per_mrow_us = 4.0
+    return max(1, math.ceil(weight_us / tilize_per_mrow_us))
+
+
+def build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=120):
     padded_cin = aligned_channels(C_in)
     kT = kernel_size[0]
 
     cins = [c for c in range(32, padded_cin + 1, 32) if valid_cin(c, padded_cin, kernel_size)]
     couts = [c for c in range(32, aligned_channels(C_out) + 1, 32) if valid_cout(c, C_out)]
 
-    # T_out for this shape (no padding in sweep — raw conv)
     T_out = T - (kT - 1) if kT > 1 else T
 
-    # T_block candidates: 1 + multiples of 3 (for tile-row alignment with H=8,W=4)
-    t_blocks = [1]
-    if kT > 1:
-        for t in [3, 6, 9]:
-            if t <= T_out:
-                t_blocks.append(t)
+    t_blocks_set = {1}
+    if kT > 1 and T_out > 0:
+        for t in range(2, min(T_out + 1, 32)):
+            if T_out % t == 0:
+                t_blocks_set.add(t)
+        for t in [3, 5, 6, 7, 9, 11, 13, 15, 21]:
+            if 1 < t <= T_out:
+                t_blocks_set.add(t)
+        t_blocks_set = {t for t in t_blocks_set if t <= min(T_out, 21)}
+    t_blocks = sorted(t_blocks_set)
 
-    # Spatial candidates
     tensor_vol = H * W
     if tensor_vol > 2000:
         hw = [(h, w) for h in [2, 4, 8, 16, 32] for w in [2, 4, 8, 16, 32] if h * w <= 256 and h <= H and w <= W]
     else:
         hw = [(h, w) for h in [1, 2, 4, 8, 16, 32] for w in [1, 2, 4, 8, 16, 32] if h * w <= 256 and h <= H and w <= W]
 
-    # Filter small C_out_block for large tensors
     padded_cout = aligned_channels(C_out)
     if tensor_vol > 2000 and padded_cout > 64:
         couts = [c for c in couts if c >= 64]
@@ -152,6 +193,7 @@ def build_all_blockings(C_in, C_out, kernel_size, H, W, T):
 
     combos = []
     skipped_l1 = 0
+    skipped_par = 0
     for cin in cins:
         for cout in couts:
             if not valid_matmul_subblock(cout):
@@ -162,22 +204,50 @@ def build_all_blockings(C_in, C_out, kernel_size, H, W, T):
                     if est > L1_BUDGET:
                         skipped_l1 += 1
                         continue
+                    cores_used = compute_parallelism(
+                        cin, cout, t_blk, h, w, kernel_size, H, W, T, C_in, C_out, num_cores
+                    )
+                    if cores_used < num_cores * 0.25:
+                        skipped_par += 1
+                        continue
                     combos.append((cin, cout, t_blk, h, w))
     if skipped_l1:
         print(f"Skipped {skipped_l1} combos for estimated L1 OOM")
+    if skipped_par:
+        print(f"Skipped {skipped_par} combos for low parallelism (<25% cores)")
 
-    # Sort: put likely-fast combos first (larger C_in_block, moderate spatial)
-    # This ensures the probe cutoff has a good baseline early
     def combo_priority(c):
         cin, cout, t, h, w = c
-        # Prefer: high cin (fewer C_in blocks), h*w near 32, T=3
-        cin_score = -cin  # larger cin = better (fewer blocks)
-        spatial_score = abs(h * w - 32)  # prefer ~32 patches
-        t_score = 0 if t == 3 else (1 if t == 1 else 2)
-        return (cin_score, t_score, spatial_score)
+        t_first = 0 if t == 1 else 1
+        cin_score = -cin
+        t_opt = t_needed_to_hide_weight_read(cin, cout, kernel_size)
+        t_dist = abs(t - t_opt) if t > 1 else 0
+        spatial_score = abs(h * w - 32)
+        return (t_first, cin_score, t_dist, spatial_score)
 
     combos.sort(key=combo_priority)
     return combos
+
+
+def _run_once(device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, ckc):
+    t0 = time.perf_counter()
+    o = ttnn.experimental.conv3d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        bias_tensor=tt_bias,
+        config=cfg,
+        output_channels=C_out,
+        kernel_size=kernel_size,
+        stride=(1, 1, 1),
+        padding=(0, 0, 0),
+        padding_mode="zeros",
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=ckc,
+    )
+    ttnn.synchronize_device(device)
+    us = (time.perf_counter() - t0) * 1e6
+    ttnn.deallocate(o)
+    return us
 
 
 def main():
@@ -191,19 +261,33 @@ def main():
     parser.add_argument("--grid-size", type=str, default=None)
     parser.add_argument("--mesh", type=str, default=None, help="Mesh shape e.g. 2x4")
     parser.add_argument("--output", type=str, required=True)
+    parser.add_argument("--timeout", type=int, default=60, help="Per-combo hang timeout in seconds (default: 60)")
+    parser.add_argument(
+        "--baseline",
+        type=str,
+        default=None,
+        help="Previous sweep JSON. Combos > 2× that best_us are skipped immediately.",
+    )
     args = parser.parse_args()
+
+    TIMEOUT_S = args.timeout
 
     kernel_size = tuple(int(x) for x in args.kernel.split(","))
     C_in, C_out, T, H, W = args.C_in, args.C_out, args.T, args.H, args.W
     padded_cin = aligned_channels(C_in)
 
-    combos = build_all_blockings(C_in, C_out, kernel_size, H, W, T)
+    if args.grid_size:
+        gx, gy = args.grid_size.split("x")
+        _num_cores = int(gx) * int(gy)
+    else:
+        _num_cores = 120
+
+    combos = build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=_num_cores)
     print(f"Shape: C_in={C_in} C_out={C_out} kernel={kernel_size} T={T} H={H} W={W}")
     print(f"Grid: {args.grid_size or 'auto'}")
     print(f"Mesh: {args.mesh or 'single device'}")
     print(f"Total valid combos: {len(combos)}")
 
-    # Open device
     mesh_device = None
     if args.mesh:
         mr, mc = (int(x) for x in args.mesh.split("x"))
@@ -226,7 +310,6 @@ def main():
         packer_l1_acc=False,
     )
 
-    # Create tensors once
     torch.manual_seed(42)
     tt_input = ttnn.from_torch(
         torch.randn(1, T, H, W, padded_cin, dtype=torch.float32),
@@ -244,27 +327,71 @@ def main():
         pad_value=0,
     )
 
-    # Sweep
-    results = []
     best_us = float("inf")
+    t1_baseline: dict = {}
+    if args.baseline:
+        bl_path = pathlib.Path(args.baseline)
+        if bl_path.exists():
+            with open(bl_path) as f:
+                bl = json.load(f)
+            best_us = bl.get("best_us") or float("inf")
+            for r in bl.get("all_results", []):
+                if r.get("status") == "ok" and r.get("us") and r["blocking"][2] == 1:
+                    bl_cin, bl_cout, _, bl_h, bl_w = r["blocking"]
+                    key = (bl_cin, bl_cout, bl_h, bl_w)
+                    t1_baseline[key] = min(t1_baseline.get(key, float("inf")), r["us"])
+            print(f"Baseline: best={best_us:.0f}us from {bl_path.name}, {len(t1_baseline)} T=1 entries pre-loaded")
+        else:
+            print(f"Warning: baseline file {bl_path} not found, ignoring --baseline")
+
+    weight_cache = {}
+
+    def get_weight(cin):
+        if cin not in weight_cache:
+            tt_w = ttnn.from_torch(w, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, pad_value=0)
+            weight_cache[cin] = ttnn.experimental.prepare_conv3d_weights(
+                weight_tensor=tt_w, C_in_block=cin, device=device
+            )
+        return weight_cache[cin]
+
+    if args.mesh:
+        h_factor, w_factor = (int(x) for x in args.mesh.split("x"))
+        table_blk = _BLOCKINGS.get((h_factor, w_factor, C_in, C_out, kernel_size, H, W)) or _DEFAULT_BLOCKINGS.get(
+            (C_in, C_out, kernel_size)
+        )
+        if table_blk is not None:
+            cin, cout, t_blk, h_blk, w_blk = table_blk
+            cfg_tbl = ttnn.Conv3dConfig(
+                weights_dtype=ttnn.bfloat16,
+                output_layout=ttnn.ROW_MAJOR_LAYOUT,
+                T_out_block=t_blk,
+                W_out_block=w_blk,
+                H_out_block=h_blk,
+                C_out_block=cout,
+                C_in_block=cin,
+                compute_with_storage_grid_size=grid_size,
+            )
+            tbl_args = (device, tt_input, get_weight(cin), tt_bias, cfg_tbl, C_out, kernel_size, ckc)
+            try:
+                for _ in range(WARMUP):
+                    _run_once(*tbl_args)
+                tbl_us = statistics.mean(_run_once(*tbl_args) for _ in range(RUNS))
+                best_us = min(best_us, tbl_us)
+                if t_blk == 1:
+                    t1_baseline[(cin, cout, h_blk, w_blk)] = tbl_us
+                print(f"Table blocking ({cin},{cout},{t_blk},{h_blk},{w_blk}) = {tbl_us:.0f}us (seeding best)")
+            except Exception as e:
+                print(f"Table blocking failed: {e}")
+
+    results = []
     best_blk = None
     t_start = time.time()
     ok_count = 0
     fail_count = 0
 
-    # Pre-prepare weights per C_in_block (cache to avoid re-preparing)
-    weight_cache = {}
-
     for i, (cin, cout, t_blk, h_blk, w_blk) in enumerate(combos):
         try:
-            # Get or prepare weights for this C_in_block
-            if cin not in weight_cache:
-                tt_w = ttnn.from_torch(
-                    w, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, pad_value=0
-                )
-                tt_w = ttnn.experimental.prepare_conv3d_weights(weight_tensor=tt_w, C_in_block=cin, device=device)
-                weight_cache[cin] = tt_w
-            tt_weight = weight_cache[cin]
+            tt_weight = get_weight(cin)
 
             cfg = ttnn.Conv3dConfig(
                 weights_dtype=ttnn.bfloat16,
@@ -276,70 +403,94 @@ def main():
                 C_in_block=cin,
                 compute_with_storage_grid_size=grid_size,
             )
-            # Probe run: single call, skip if > 10× current best (avoids wasting time on slow combos)
-            probe_t0 = time.perf_counter()
-            out = ttnn.experimental.conv3d(
-                input_tensor=tt_input,
-                weight_tensor=tt_weight,
-                bias_tensor=tt_bias,
-                config=cfg,
-                output_channels=C_out,
-                kernel_size=kernel_size,
-                stride=(1, 1, 1),
-                padding=(0, 0, 0),
-                padding_mode="zeros",
-                dtype=ttnn.bfloat16,
-                compute_kernel_config=ckc,
-            )
-            ttnn.synchronize_device(device)
-            probe_us = (time.perf_counter() - probe_t0) * 1e6
-            ttnn.deallocate(out)
-            if best_us < float("inf") and probe_us > best_us * 10:
-                fail_count += 1
-                results.append({"blocking": [cin, cout, t_blk, h_blk, w_blk], "us": probe_us, "status": "slow"})
-                continue
+            probe_threshold = 2.0 if i < len(combos) * 0.20 else 1.4
 
-            # Warmup
-            for _ in range(WARMUP):
-                out = ttnn.experimental.conv3d(
-                    input_tensor=tt_input,
-                    weight_tensor=tt_weight,
-                    bias_tensor=tt_bias,
-                    config=cfg,
-                    output_channels=C_out,
-                    kernel_size=kernel_size,
-                    stride=(1, 1, 1),
-                    padding=(0, 0, 0),
-                    padding_mode="zeros",
-                    dtype=ttnn.bfloat16,
-                    compute_kernel_config=ckc,
+            spatial_key = (cin, cout, h_blk, w_blk)
+            if t_blk > 1 and best_us < float("inf"):
+                t1_us = t1_baseline.get(spatial_key)
+                if t1_us is not None and t1_us > best_us * 1.5:
+                    fail_count += 1
+                    results.append({"blocking": [cin, cout, t_blk, h_blk, w_blk], "us": t1_us, "status": "skip_t1_bad"})
+                    continue
+
+            probe_args = (device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, ckc)
+            probe_us = _run_once(*probe_args)
+            if best_us < float("inf"):
+                if probe_us > best_us * probe_threshold:
+                    fail_count += 1
+                    results.append({"blocking": [cin, cout, t_blk, h_blk, w_blk], "us": probe_us, "status": "slow"})
+                    continue
+                elif probe_us > best_us * (probe_threshold * 0.75):
+                    probe2 = _run_once(*probe_args)
+                    if min(probe_us, probe2) > best_us * (probe_threshold * 0.9):
+                        fail_count += 1
+                        results.append({"blocking": [cin, cout, t_blk, h_blk, w_blk], "us": probe_us, "status": "slow"})
+                        continue
+
+            us_out = [None]
+            exc_out = [None]
+
+            def _warmup_and_time():
+                try:
+                    for _ in range(WARMUP):
+                        out = ttnn.experimental.conv3d(
+                            input_tensor=tt_input,
+                            weight_tensor=tt_weight,
+                            bias_tensor=tt_bias,
+                            config=cfg,
+                            output_channels=C_out,
+                            kernel_size=kernel_size,
+                            stride=(1, 1, 1),
+                            padding=(0, 0, 0),
+                            padding_mode="zeros",
+                            dtype=ttnn.bfloat16,
+                            compute_kernel_config=ckc,
+                        )
+                        ttnn.synchronize_device(device)
+                        ttnn.deallocate(out)
+
+                    times = []
+                    for _ in range(RUNS):
+                        t0 = time.perf_counter()
+                        out = ttnn.experimental.conv3d(
+                            input_tensor=tt_input,
+                            weight_tensor=tt_weight,
+                            bias_tensor=tt_bias,
+                            config=cfg,
+                            output_channels=C_out,
+                            kernel_size=kernel_size,
+                            stride=(1, 1, 1),
+                            padding=(0, 0, 0),
+                            padding_mode="zeros",
+                            dtype=ttnn.bfloat16,
+                            compute_kernel_config=ckc,
+                        )
+                        ttnn.synchronize_device(device)
+                        times.append((time.perf_counter() - t0) * 1e6)
+                        ttnn.deallocate(out)
+
+                    us_out[0] = statistics.mean(times)
+                except Exception as e:
+                    exc_out[0] = e
+
+            thread = threading.Thread(target=_warmup_and_time, daemon=True)
+            thread.start()
+            thread.join(TIMEOUT_S)
+
+            if thread.is_alive():
+                print(
+                    f"HANG: ({cin},{cout},{t_blk},{h_blk},{w_blk}) — exiting. " f"Run: tt-smi -r 0,1,2,3,4,5,6,7",
+                    flush=True,
                 )
-                ttnn.synchronize_device(device)
-                ttnn.deallocate(out)
+                os._exit(1)
 
-            # Timed
-            times = []
-            for _ in range(RUNS):
-                t0 = time.perf_counter()
-                out = ttnn.experimental.conv3d(
-                    input_tensor=tt_input,
-                    weight_tensor=tt_weight,
-                    bias_tensor=tt_bias,
-                    config=cfg,
-                    output_channels=C_out,
-                    kernel_size=kernel_size,
-                    stride=(1, 1, 1),
-                    padding=(0, 0, 0),
-                    padding_mode="zeros",
-                    dtype=ttnn.bfloat16,
-                    compute_kernel_config=ckc,
-                )
-                ttnn.synchronize_device(device)
-                times.append((time.perf_counter() - t0) * 1e6)
-                ttnn.deallocate(out)
+            if exc_out[0] is not None:
+                raise exc_out[0]
 
-            us = statistics.mean(times)
+            us = us_out[0]
             ok_count += 1
+            if t_blk == 1:
+                t1_baseline[(cin, cout, h_blk, w_blk)] = us
             tag = ""
             if us < best_us:
                 best_us = us
@@ -360,17 +511,13 @@ def main():
     elapsed = time.time() - t_start
     print(f"\nDone in {elapsed:.0f}s ({elapsed/60:.1f} min). {ok_count} ok, {fail_count} failed.")
 
-    # Top 10
-    ok_results = sorted([r for r in results if r["us"]], key=lambda r: r["us"])
+    ok_results = sorted([r for r in results if r["status"] == "ok"], key=lambda r: r["us"])
     print(f"\nTop 10:")
     for r in ok_results[:10]:
         b = r["blocking"]
         print(f"  ({b[0]:3d},{b[1]:3d},{b[2]},{b[3]:2d},{b[4]:2d}) = {r['us']:.0f} us")
 
-    # Save
-    from pathlib import Path
-
-    out_path = Path(args.output)
+    out_path = pathlib.Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     final = {
         "C_in": C_in,
