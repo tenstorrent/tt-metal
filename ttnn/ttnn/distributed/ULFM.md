@@ -6,14 +6,25 @@ In this branch, tt-metal layers several mechanisms so that a remote crash turns
 into a controlled fast exit or an explicit recovery path rather than a
 best-effort CI timeout.
 
+Supplemental References:
+
+[OpenMPI Official Docs](https://docs.open-mpi.org/en/v5.0.x/features/ulfm.html)
+
+[Implicit Actions and Non-blocking Failure Recovery with MPI](https://arxiv.org/pdf/2212.08755)
+
 The current stack is:
 
 1. **C++ ULFM detection** - detects rank failure at most `MPIContext` call sites
 2. **`std::set_terminate` handler** - catches uncaught C++ failures outside normal MPI returns
 3. **`MPI_Finalize` watchdog** - prevents teardown hangs in `atexit`
 4. **ORTE/PRRTE abort-on-non-zero** - propagates early process crashes before a collective reports failure
-5. **Process-level timeout** - last-resort `TT_RUN_TIMEOUT` backstop
+5. **Process-level timeout** - last-resort `--timeout <seconds>` backstop
 6. **Python mpi4py wrapper** - ULFM handling for Python-level collectives
+
+This also adds structured diagnostic emission in
+`tt_metal/distributed/multihost/mpi_failure_diagnostics.{hpp,cpp}` and a CI
+wrapper in `tests/scripts/multihost/ulfm_github_workflow_wrappers.sh` that
+promotes those diagnostics to GitHub Actions annotations.
 
 ```mermaid
 flowchart TD
@@ -41,7 +52,7 @@ flowchart TD
         runtimeAbort["MPI runtime abort propagation"]
     end
 
-    subgraph layer5 [Layer 5: TT_RUN_TIMEOUT]
+    subgraph layer5 [Layer 5: tt-run Timeout]
         wallClock["Wall-clock timeout expires"]
         sigkill["Kill MPI process group"]
         timeoutExit["tt-run exits 124"]
@@ -184,13 +195,13 @@ rank exits non-zero:
 back to the `orte_` spelling when detection fails. `--bare` disables this
 default multihost bundle.
 
-### Layer 5 - Process-Level Timeout
+### Layer 5 - Process-Level Timeout (`--timeout`)
 
 File: `ttnn/ttnn/distributed/ttrun.py`
 
-Set `TT_RUN_TIMEOUT=<seconds>` in the environment to enable a wall-clock
-backstop. `tt-run` calls `proc.wait(timeout=N)` and, if that times out, kills
-the MPI process group and exits with code `124`.
+Pass `--timeout <seconds>` to `tt-run` to enable a wall-clock backstop.
+`tt-run` calls `proc.wait(timeout=N)` and, if that times out, kills the MPI
+process group and exits with code `124`.
 
 This is the last line of defense for cases that do not naturally exit:
 infinite loops, non-MPI deadlocks, or ranks stuck in device I/O.
@@ -228,7 +239,7 @@ Degradation behavior is intentionally narrow:
 | Code | Meaning | Produced by |
 | --- | --- | --- |
 | `70` | ULFM fast-fail / controlled fast exit | `handle_rank_failure()`, `mpi_terminate_handler()`, `mpi_finalize_alarm_handler()`, and Python `_ulfm_fast_fail()` |
-| `124` | Wall-clock timeout | `TT_RUN_TIMEOUT` path in `ttnn/ttnn/distributed/ttrun.py` |
+| `124` | Wall-clock timeout | `--timeout <seconds>` path in `ttnn/ttnn/distributed/ttrun.py` |
 
 `tt-run` interprets exit `70` as a rank-failure fast-fail category and exit
 `124` as a launcher timeout. In practice, `70` means "we detected a failure or
@@ -251,7 +262,7 @@ sequenceDiagram
     App->>Ctx: barrier()
     Ctx->>MPI: MPI_Barrier(comm)
     MPI-->>Ctx: MPIX_ERR_PROC_FAILED
-    Ctx->>Ctx: identify_failed_ranks()
+    Ctx->>Ctx: identify_failed_ranks() helper
     Ctx->>MPI: MPIX_Comm_revoke(comm)
     Ctx-->>App: throw MPIRankFailureException
     App->>Ctx: revoke_and_shrink()
@@ -365,8 +376,9 @@ important invariants that application code should understand:
 ## Runtime Requirements
 
 - The C++ fault-tolerant path is compiled only when the Open MPI headers expose
-  ULFM extensions. That capability is surfaced by
-  `MPIContext::supports_fault_tolerance()`.
+  ULFM extensions. This branch centralizes that probe in
+  `tt_metal/distributed/multihost/mpi_ulfm_config.hpp` as `OMPI_HAS_ULFM`, and
+  surfaces the result at runtime via `MPIContext::supports_fault_tolerance()`.
 - `set_failure_policy(FAULT_TOLERANT)` throws when that C++ ULFM support is not
   present.
 - Python helpers require `mpi4py`; full Python revoke / failed-rank / shrink
@@ -381,27 +393,30 @@ important invariants that application code should understand:
 
 ## Observability and Triage
 
-Branch-specific multihost tooling changes that matter when debugging ULFM
-failures:
+Multihost tooling changes that matter when debugging ULFM failures:
 
-- `ttnn/ttnn/distributed/ttrun.py` now sets `TT_METAL_LOGS_PATH` to the launch
-  directory by default, rank-scopes `TT_METAL_LOGS_PATH` and
-  `TT_METAL_JIT_SCRATCH`, and keeps `TT_METAL_CACHE` shared by default.
-- `tt_metal/llrt/rtoptions.cpp` caches the MPI rank early and derives the
-  effective Inspector RPC port as `base_port + world_rank`, with an overflow
-  guard.
-- `tt_metal/llrt/rtoptions.cpp` also places Inspector output under a per-rank
-  logs root, so post-failure triage can recover the right rank directory.
-
-For the deeper log-path and triage story, see:
-
-- `tt_metal/programming_examples/distributed/README.md`
-- `docs/source/tt-metalium/tools/triage.rst`
+- `ttnn/ttnn/distributed/ttrun.py` sets `TT_METAL_LOGS_PATH` to the launch
+  directory by default, provides a default `TT_METAL_JIT_SCRATCH`, and keeps
+  `TT_METAL_CACHE` shared by default.
+- [FUTURE] Rank-scoping `TT_METAL_LOGS_PATH` and `TT_METAL_JIT_SCRATCH` via
+  `<hostname>_rank_<N>` exists in helper/test code, but it is currently
+  disabled behind `ENABLE_RANK_SCOPED_ENV_VARS = False`.
+- `tt_metal/distributed/multihost/mpi_failure_diagnostics.cpp` emits stable
+  one-line `ULFM detected a rank failure; ...` records for remote ULFM
+  failures, local `std::terminate`, and the `MPI_Finalize` watchdog. These are
+  the structured fields that the shell smoke tests and CI grep for.
+- `tests/scripts/multihost/ulfm_github_workflow_wrappers.sh` promotes those
+  structured lines to GitHub Actions annotations: `policy=fast_fail` becomes
+  `::error`; `policy=fault_tolerant` becomes `::warning`.
+- Hostname attribution: diagnostics prefer
+  `RUNNER_NAME` over generic container names, and the changed multihost
+  workflows no longer force Docker `--hostname=mpirun-host`, which helps
+  preserve real host identity in logs and annotations.
 
 ## Automated Test Coverage
 
-There is an automated ULFM / launcher / triage harness in physical multihost
-CI:
+There is an automated ULFM / launcher / annotation harness in physical
+multihost CI:
 
 - Workflow/job: `.github/workflows/multi-host-physical.yaml` ->
   `tooling-and-mpi-t3k`
@@ -410,89 +425,43 @@ CI:
 Current coverage includes:
 
 - `tests/ttnn/distributed/test_ttrun_env_passthrough.py` for launcher env
-  propagation and rank-scoped path handling
-- `tests/tt_metal/multihost/run_fault_tolerance_tests.sh` for multihost C++
-  ULFM recovery tests
+  propagation, default `TT_METAL_LOGS_PATH` / `TT_METAL_JIT_SCRATCH` setup,
+  and shared `TT_METAL_CACHE` behavior
+- [FUTURE] The same file also contains rank-scoped path assertions, but those
+  cases are currently gated/skipped while `ENABLE_RANK_SCOPED_ENV_VARS`
+  remains false in this carveout
 - `tests/tt_metal/multihost/run_multihost_ulfm_annotation_tests.sh` for multihost
-  ULFM annotation smoke tests (remote hostname + fast-fail annotation)
+  structured diagnostic smoke tests, including FAST_FAIL `::error` and
+  FAULT_TOLERANT `::warning` annotation paths
+- `tests/tt_metal/multihost/run_fault_tolerance_tests.sh` for the selected
+  multihost C++ ULFM recovery filters run under `mpirun`
 - `tests/tt_metal/multihost/run_single_node_ulfm_tests.sh` for the single-node
-  control-plane paths: exit `70`, finalize watchdog, terminate handler,
-  `agree()`, `failed_ranks()`, `is_revoked()`, and policy switching
+  control-plane paths: exit `70`, structured FAST_FAIL diagnostics,
+  finalize watchdog, terminate handler, `agree()`, `failed_ranks()`,
+  `is_revoked()`, and policy switching
 - `tests/ttnn/distributed/test_ttrun_exit_codes.py` for exit-code
   interpretation and ORTE/PRRTE selection
 - `tests/ttnn/distributed/test_mpi_fault_python.py` for Python ULFM wrapper
   behavior
-- `tools/tests/triage/test_triage.py` as a non-blocking integration test when
-  Inspector and supporting tooling are available
 
 Current gaps:
 
 - The `tooling-and-mpi-t3k` job is gated by the `multihost_tooling` manual
   workflow input, so it is not yet part of every scheduled multihost run.
+- `run_fault_tolerance_tests.sh` intentionally runs a targeted subset of the
+  `ulfm_tests.cpp` surface; the rest of the control-plane coverage is split
+  into `run_single_node_ulfm_tests.sh`.
 - Coverage is strongest for T3K plus targeted single-node synthetic tests, not
   every multihost topology or recovery loop.
-- Rank-aware triage path tests (`tools/tests/triage/test_parse_inspector_logs_paths.py`,
-  `test_multihost_rank_resolution.py`, `test_multihost_rank_resolution_mpi.py`) are
-  not in-tree yet; `run_dual_t3k_tooling_tests.sh` does not invoke them.
 
 ## Known Limitations
 
-- `MPIRequest::wait()`, `test()`, and `cancel()` do not go through the same
-  ULFM-aware dispatch path as most `MPIContext` member functions.
+- `MPIRequest::wait()`, `test()`, and `cancel()` use the ULFM-aware dispatch
+  path only while their owning `MPIContext` is still alive. If `owner_.lock()`
+  fails, they fall back to plain `mpi_check(...)`.
 - A rank that is alive but not exiting will not trigger the ORTE/PRRTE
-  non-zero-exit propagation path. Use `TT_RUN_TIMEOUT` as the backstop.
+  non-zero-exit propagation path. Use `--timeout <seconds>` as the backstop.
 - In Python fault-tolerant mode, missing `Revoke()`, `Get_failed()`, or
   `Shrink()` methods in `mpi4py` limit how much recovery the helper can do.
 - `revoke_and_shrink()` is an expensive collective across survivors. Do not put
   it on a hot path.
-
-## Relevant Files
-
-- `tt_metal/distributed/multihost/mpi_distributed_context.hpp`
-- `tt_metal/distributed/multihost/mpi_distributed_context.cpp`
-- `tt_metal/api/tt-metalium/distributed_context.hpp`
-- `ttnn/ttnn/distributed/ttrun.py`
-- `ttnn/ttnn/distributed/mpi_fault.py`
-- `tt_metal/llrt/rtoptions.hpp`
-- `tt_metal/llrt/rtoptions.cpp`
-- `tests/scripts/multihost/run_dual_t3k_tooling_tests.sh`
-- `tests/tt_metal/multihost/run_single_node_ulfm_tests.sh`
-
-## Additional Manual Validation
-
-### Verify launcher selection and ULFM flags
-
-```bash
-# tt-run logs the resolved mpirun command during a real launch.
-# If it selected mpirun-ulfm, expect --with-ft ulfm.
-# If it fell back to plain mpirun, do not expect that flag automatically.
-python ttnn/ttnn/distributed/ttrun.py -n 2 -- python -c "print('hello')"
-```
-
-### Test TT_RUN_TIMEOUT
-
-```bash
-TT_RUN_TIMEOUT=10 python ttnn/ttnn/distributed/ttrun.py -n 2 -- python -c "import time; time.sleep(999)"
-# Expected: tt-run kills the process group and exits 124
-echo $?
-```
-
-### Simulate a rank crash
-
-```bash
-cat > /tmp/crash_rank0.py <<'EOF'
-from mpi4py import MPI
-import ctypes
-import time
-
-rank = MPI.COMM_WORLD.Get_rank()
-if rank == 0:
-    time.sleep(1)
-    ctypes.string_at(0)
-else:
-    MPI.COMM_WORLD.Barrier()
-EOF
-
-python ttnn/ttnn/distributed/ttrun.py -n 2 -- python /tmp/crash_rank0.py
-# Expected on a ULFM-capable runtime: surviving rank logs a ULFM diagnostic and exits 70
-```

@@ -335,7 +335,8 @@ static void handle_rank_failure(
 // ---------------------------------------------------------------------------
 
 // Generic check: used outside MPIContext member functions (static methods,
-// constructors before comm_ is valid, MPIRequest methods).
+// constructors before comm_ is valid, or MPIRequest fallback paths after
+// owner_.lock() fails).
 inline void mpi_check(int error_code, std::string_view call_text) {
     if (error_code != MPI_SUCCESS) {
         int rank = 0;
