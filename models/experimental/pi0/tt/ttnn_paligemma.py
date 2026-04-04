@@ -210,9 +210,12 @@ class PaliGemmaBackboneTTNN:
                 if len(value.shape) == 1:
                     block_weights[new_key] = tensor_1d_to_2d_ttnn(value, self.device, dtype=ttnn.bfloat16)
                 else:
+                    # VLM: bfloat8_b for MLP, bfloat16 for attention (precision-critical)
+                    is_mlp = "mlp." in new_key
+                    vlm_w_dtype = ttnn.bfloat8_b if is_mlp else ttnn.bfloat16
                     block_weights[new_key] = ttnn.from_torch(
                         value,
-                        dtype=ttnn.bfloat16,
+                        dtype=vlm_w_dtype,
                         layout=layout,
                         device=self.device,
                     )
@@ -223,9 +226,10 @@ class PaliGemmaBackboneTTNN:
         weights: Dict[str, torch.Tensor],
         layer_idx: int,
     ) -> Dict[str, ttnn.Tensor]:
-        """Extract expert block weights and convert to TTNN with fused QKV optimization."""
+        """Extract expert block weights and convert to TTNN with bfloat8_b for all weights."""
         prefix = f"model.layers.{layer_idx}."
         block_weights = {}
+        expert_weight_dtype = ttnn.bfloat8_b
 
         # OPTIMIZATION: Create fused QKV weight for single linear call
         q_key = f"{prefix}self_attn.q_proj.weight"
@@ -233,31 +237,17 @@ class PaliGemmaBackboneTTNN:
         v_key = f"{prefix}self_attn.v_proj.weight"
 
         if q_key in weights and k_key in weights and v_key in weights:
-            # Get Q, K, V weights, transpose for TTNN linear, and convert to TTNN
             wq_ttnn = ttnn.from_torch(
-                weights[q_key].T.contiguous(),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
+                weights[q_key].T.contiguous(), dtype=expert_weight_dtype, layout=ttnn.TILE_LAYOUT, device=self.device
             )
             wk_ttnn = ttnn.from_torch(
-                weights[k_key].T.contiguous(),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
+                weights[k_key].T.contiguous(), dtype=expert_weight_dtype, layout=ttnn.TILE_LAYOUT, device=self.device
             )
             wv_ttnn = ttnn.from_torch(
-                weights[v_key].T.contiguous(),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
+                weights[v_key].T.contiguous(), dtype=expert_weight_dtype, layout=ttnn.TILE_LAYOUT, device=self.device
             )
-
-            # Concatenate using TTNN: [hidden, Q_dim + K_dim + V_dim]
             block_weights["self_attn.wqkv"] = ttnn.concat(
-                [wq_ttnn, wk_ttnn, wv_ttnn],
-                dim=-1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                [wq_ttnn, wk_ttnn, wv_ttnn], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
             ttnn.deallocate(wq_ttnn)
             ttnn.deallocate(wk_ttnn)
@@ -266,31 +256,25 @@ class PaliGemmaBackboneTTNN:
         for key, value in weights.items():
             if key.startswith(prefix):
                 new_key = key[len(prefix) :]
-
-                # Skip individual Q, K, V weights (now fused)
                 if new_key in ["self_attn.q_proj.weight", "self_attn.k_proj.weight", "self_attn.v_proj.weight"]:
                     continue
 
-                # Transpose weight matrices for TTNN linear
-                if "weight" in new_key and "layernorm" not in new_key and "norm" not in new_key:
-                    value = value.T
-                    layout = ttnn.TILE_LAYOUT
-                elif "layernorm" in new_key or "norm" in new_key:
-                    # OPTIMIZATION: Pre-add Gemma-style +1 offset to norm weights
-                    value = value + 1.0
-                    layout = ttnn.TILE_LAYOUT
-                else:
-                    layout = ttnn.TILE_LAYOUT
+                is_norm = "layernorm" in new_key or "norm" in new_key
 
-                # Handle 1D tensors (biases, norms) using tensor_1d_to_2d_ttnn (no torch.unsqueeze)
                 if len(value.shape) == 1:
-                    block_weights[new_key] = tensor_1d_to_2d_ttnn(value, self.device, dtype=ttnn.bfloat16)
+                    if is_norm:
+                        block_weights[new_key] = tensor_1d_to_2d_ttnn(value + 1.0, self.device, dtype=ttnn.bfloat16)
+                    else:
+                        block_weights[new_key] = tensor_1d_to_2d_ttnn(value, self.device, dtype=ttnn.bfloat16)
+                elif "weight" in new_key and not is_norm:
+                    block_weights[new_key] = ttnn.from_torch(
+                        value.T.contiguous(), dtype=expert_weight_dtype, layout=ttnn.TILE_LAYOUT, device=self.device
+                    )
+                elif is_norm:
+                    block_weights[new_key] = tensor_1d_to_2d_ttnn(value + 1.0, self.device, dtype=ttnn.bfloat16)
                 else:
                     block_weights[new_key] = ttnn.from_torch(
-                        value,
-                        dtype=ttnn.bfloat16,
-                        layout=layout,
-                        device=self.device,
+                        value, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
                     )
         return block_weights
 
@@ -355,6 +339,7 @@ class PaliGemmaBackboneTTNN:
             )
             if use_cache:
                 new_cache.append(new_kv)
+
         # Final norm using TTNN
         hidden_states = rms_norm_ttnn(
             hidden_states,
@@ -400,6 +385,7 @@ class PaliGemmaBackboneTTNN:
             )
             if use_cache:
                 new_cache.append(new_kv)
+
         # Final norm using TTNN
         hidden_states = rms_norm_ttnn(
             hidden_states,
