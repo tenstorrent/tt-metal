@@ -105,7 +105,7 @@ REGISTER_UNARY_OPERATION(reciprocal, RECIP)
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(gelu, GELU)
 REGISTER_UNARY_OPERATION(relu, RELU)
 REGISTER_UNARY_OPERATION(sqrt_op, SQRT)
-REGISTER_UNARY_OPERATION(log, LOG)
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(log, LOG)
 REGISTER_UNARY_OPERATION(log1p, LOG1P)
 REGISTER_UNARY_OPERATION(tanh, TANH)
 REGISTER_UNARY_OPERATION(log2, LOG2)
@@ -161,27 +161,30 @@ REGISTER_UNARY_OPERATION(cbrt, CBRT)
 REGISTER_UNARY_OPERATION(logsigmoid, LOGSIGMOID)
 REGISTER_UNARY_OPERATION(lgamma, LGAMMA)
 REGISTER_UNARY_OPERATION(hardmish, HARDMISH)
+REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(hardshrink, HARDSHRINK)
 // fill takes a fill_value parameter, not a simple unary op
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(fill, FILL)
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(rpow, RPOW)
-REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(rsub_sfpu, RSUB)
-REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(sub_sfpu, SUB_UNARY_SFPU)
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(prelu_sfpu, PRELU_SFPU)
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(unary_fmod, FMOD)
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(unary_remainder, REMAINDER)
-REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(gt_unary, UNARY_GT)
-REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(lt_unary, UNARY_LT)
-REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(ne_unary, UNARY_NE)
-REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(eq_unary, UNARY_EQ)
-REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(ge_unary, UNARY_GE)
-REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(le_unary, UNARY_LE)
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(power_iterative, POWER_ITERATIVE)
+
+// These are binary-like SFPU ops (take Tensor + scalar_or_tensor)
+UNARY_OP_SCALAR_VARIANT(rsub_sfpu, RSUB)
+UNARY_OP_SCALAR_VARIANT(sub_sfpu, SUB_UNARY_SFPU)
+UNARY_OP_SCALAR_VARIANT(gt_unary, UNARY_GT)
+UNARY_OP_SCALAR_VARIANT(lt_unary, UNARY_LT)
+UNARY_OP_SCALAR_VARIANT(ne_unary, UNARY_NE)
+UNARY_OP_SCALAR_VARIANT(eq_unary, UNARY_EQ)
+UNARY_OP_SCALAR_VARIANT(ge_unary, UNARY_GE)
+UNARY_OP_SCALAR_VARIANT(le_unary, UNARY_LE)
 
 // Unaries with fast_and_approximate_mode
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(mish, MISH)
 
 // Unaries with float parameter
-REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(power, POWER)
+UNARY_OP_SCALAR_VARIANT(power, POWER)
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(leaky_relu, LEAKY_RELU)
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(elu, ELU)
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(heaviside, HEAVISIDE)
@@ -217,6 +220,7 @@ inline Tensor swish(
 // sqrt (avoid name clash with std::sqrt)
 inline Tensor sqrt(
     const Tensor& input_tensor,
+    [[maybe_unused]] bool fast_and_approximate_mode = false,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
@@ -253,6 +257,21 @@ Tensor clamp_tss(
     const Tensor& input_tensor,
     float min_val,
     float max_val,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+// Binary-like SFPU overloads (Tensor + Tensor) - stubs that throw
+// These were binary ops but are referenced through the unary path
+Tensor sub_sfpu(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+// float-Tensor overload
+Tensor sub_sfpu(
+    float lhs,
+    const Tensor& rhs,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 

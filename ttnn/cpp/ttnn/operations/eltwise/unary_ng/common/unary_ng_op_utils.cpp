@@ -110,7 +110,7 @@ std::map<std::string, std::string> get_defines_impl(
 
 }  // namespace
 
-std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<DataType> input_dtype) {
+std::string_view get_compute_kernel_path(UnaryOpType op_type, [[maybe_unused]] std::optional<DataType> input_dtype) {
     switch (op_type) {
         default: return "eltwise_sfpu.cpp";
     }
