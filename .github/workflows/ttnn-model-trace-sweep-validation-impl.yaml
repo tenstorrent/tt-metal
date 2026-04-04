@@ -277,7 +277,7 @@ jobs:
           echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
 
   run-sweeps-with-tracer:
-    name: Run validation sweeps (${{ matrix.validation_scope }}, ${{ matrix.test_group_name }}, ${{ matrix.batch_display }})
+    name: ${{ matrix.batch_display }}
     needs: [build-artifact, prepare-validation-inputs, generate-sweeps, compute-sweep-matrix]
     strategy:
       fail-fast: false

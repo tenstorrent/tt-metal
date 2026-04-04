@@ -157,7 +157,8 @@ def compute_validation_matrix(
             include.append(
                 {
                     **runner_config,
-                    "batch_display": f"{validation_scope}:{hardware_label}:{index}/{total_batches}",
+                    "batch_display": f"{validation_scope}:{hardware_label}:{batch}",
+                    "batch_ordinal": f"{index}/{total_batches}",
                     "module_selector": batch,
                     "suite_name": "model_traced",
                     "validation_scope": validation_scope,
