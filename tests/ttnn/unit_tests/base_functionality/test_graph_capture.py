@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pathlib
+import shutil
 import pytest
 import torch
 import ttnn
@@ -33,7 +34,10 @@ def test_graph_capture(tmp_path, device, scalar, size, mode):
 
     ttnn.graph.pretty_print(captured_graph)
 
-    ttnn.graph.visualize(captured_graph, file_name=tmp_path / pathlib.Path("graph.svg"))
+    if shutil.which("dot") is not None:
+        ttnn.graph.visualize(captured_graph, file_name=tmp_path / pathlib.Path("graph.svg"))
+    else:
+        pytest.skip("graphviz 'dot' binary not on PATH; skipping visualize")
 
 
 @pytest.mark.parametrize("k", [2])
