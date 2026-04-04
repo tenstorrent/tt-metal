@@ -172,10 +172,11 @@ LEAD_MODELS_BATCH_POLICY = {
 #   separately below so we do not overload ownership with capability.
 
 MODEL_TRACED_MESH_TEST_GROUPS = {
-    "1x1": "wormhole-n300-sweeps",
+    "1x1": "wormhole-n150-sweeps",
     "1x2": "wormhole-n300-sweeps",
+    "2x1": "wormhole-n300-sweeps",
     "1x4": "wormhole-t3k-sweeps",
-    "1x8": "wormhole-galaxy-sweeps",
+    "1x8": "wormhole-t3k-sweeps",
     "2x4": "wormhole-galaxy-sweeps",
     "4x8": "wormhole-galaxy-sweeps",
     "8x4": "wormhole-galaxy-sweeps",
