@@ -169,6 +169,54 @@ def t_needed_to_hide_weight_read(cin_block, cout_block, kernel_size):
     return max(1, math.ceil(weight_us / tilize_per_mrow_us))
 
 
+def _predict_spatial_candidates(H_out, W_out, C_out):
+    """Return 2-3 (H_out_block, W_out_block) candidates ranked by predicted performance.
+
+    Derived from empirical winners across all entries in the blocking table:
+
+    Narrow shapes (H/W > 2):  tall tensor → (8,4) mirrors the ratio
+    Large squares (H*W>10000): H=4 mandatory to avoid silent L1 OOM,
+                                especially for conv_out (C_out ≤ 32)
+    Medium squares (H*W>1000): (8,4) dominates
+    Small shapes (H*W < 400):  larger blocks reduce total block count
+
+    The probe+cutoff in the sweep loop means the 2nd/3rd candidate
+    costs only 1 extra JIT if the 1st is already clearly best.
+    """
+    vol = H_out * W_out
+    hw_ratio = H_out / max(W_out, 1)
+    conv_out_layer = C_out <= 32  # 96→3 pattern: H=4 always safe
+
+    if vol < 400:
+        # Small shape: large H_blk to minimise total block count and maximise
+        # parallelism across the spatial dimension that is larger.
+        if hw_ratio > 2:
+            return [(min(16, H_out), min(2, W_out)), (min(8, H_out), min(4, W_out))]
+        return [(min(16, H_out), min(4, W_out)), (min(8, H_out), min(8, W_out))]
+
+    if hw_ratio > 2:
+        # Tall narrow tensor (e.g. 184×40, 92×20): H=8, W=4 mirrors the ratio.
+        return [(8, 4), (4, 8)]
+
+    if conv_out_layer and vol > 5000:
+        # conv_out (C_out=3): H=4 mandatory for large shapes.
+        # H=8 triggers silent L1 OOM at 100ms+ for large-T conv_out.
+        return [(4, 8), (4, 4)]
+
+    if vol > 40000:
+        # Very large square (e.g. 240×208 vol=49920, 360×320 vol=115200):
+        # H=4 wins at 49920 (T=7,H=4,W=8=21ms), (8,8) wins at 115200.
+        return [(4, 8), (8, 8), (8, 4)]
+
+    if vol > 5000:
+        # Large/medium square (e.g. 184×160 vol=29440, 120×104, 92×80, 46×40):
+        # (8,4) dominates across all measured medium-large square shapes.
+        return [(8, 4), (4, 8)]
+
+    # Small-medium (e.g. 46×10, 30×26):
+    return [(8, 4), (4, 8)]
+
+
 def build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=120, fast=False):
     """Generate candidate (Cin, Cout, T, H, W) blocking combinations.
 
@@ -212,9 +260,9 @@ def build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=120, fast=F
                     t_blocks_set.add(t)
         t_blocks = sorted(t_blocks_set)
 
-        # Spatial: 3 known-good pairs from empirical sweeps (covers ~95% of wins).
-        # H=4 critical for conv_out (H=8 can silently OOM at full-res large shapes).
-        hw_fast = [(h, w) for h, w in [(4, 8), (8, 4), (8, 8)] if h <= H and w <= W]
+        # Spatial: 2-3 candidates predicted from shape heuristics derived from the
+        # blocking table. Avoids testing ~25 spatial pairs blindly.
+        hw_fast = _predict_spatial_candidates(H, W, C_out)
 
         # Find the (cin, cout) combination that maximises cin×cout (proxy for DRAM
         # efficiency — fewer total passes), subject to having at least one valid (T,H,W).
