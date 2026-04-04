@@ -1805,7 +1805,7 @@ void py_module(nb::module_& mod) {
             R"doc(
             Applies the HardTanh function element-wise.
 
-            Clamps the input tensor to the range [{min_val}, {max_val}].
+            Clamps the input tensor to the range [{{min_val}}, {{max_val}}].
 
             .. math::
                 \mathrm{{output\_tensor}}_i = \max(\mathrm{{min\_val}}, \min(\mathrm{{max\_val}}, \mathrm{{input\_tensor}}_i))

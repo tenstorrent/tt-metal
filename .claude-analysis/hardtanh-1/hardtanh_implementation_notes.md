@@ -31,3 +31,33 @@ ttnn/ttnn/operations/unary.py
 - No INT32 support (hardtanh is float-only).
 - Parameters are baked as compile-time defines, so each unique (min_val, max_val) pair triggers a kernel recompile.
 - Not registered in the unary_ng dispatch path.
+
+## Test Results
+- **Status**: PASS (after 1 test run, 2 implementation fixes)
+- **Test file**: tests/ttnn/unit_tests/operations/eltwise/test_hardtanh.py
+- **bfloat16** (is_fp32=False):
+  - **Parameters tested**: default(-1,1), narrow(-0.5,0.5), relu6-like(0,6), wide(-2,2)
+  - **Max ULP**: 0 (hardtanh is a clamp — exact on bfloat16)
+  - **allclose**: PASS (rtol=1.6e-2, atol=1e-2)
+- **fp32** (is_fp32=True):
+  - **Parameters tested**: default(-1,1), narrow(-0.5,0.5), relu6-like(0,6), wide(-2,2)
+  - **Max ULP**: 0 (hardtanh is a clamp — exact on fp32)
+  - **allclose**: PASS (rtol=1e-3, atol=1e-4)
+
+## Debug Log
+### Fix 1: SFPU kernel signature mismatch
+- **Error type**: build_error (on-device JIT compilation)
+- **Error**: `too few arguments to function` at `llk_math_eltwise_unary_sfpu_params.h:31`
+- **Hypothesis**: `calculate_hardtanh` takes `(iterations, param0, param1)` but `_llk_math_eltwise_unary_sfpu_params_` template calls `sfpu_func(args...)` where `args` is only `(param0, param1)`.
+- **Fix**: Removed `iterations` parameter from `calculate_hardtanh`, changed inner loop from `for(d < iterations)` to `for(d < ITERATIONS)` using the template parameter.
+- **Files modified**: ckernel_sfpu_hardtanh.h (wormhole_b0 and blackhole)
+
+### Fix 2: fmt::format doc string escaping
+- **Error type**: build_error (host compilation)
+- **Error**: `argument not found` in fmt::format for hardtanh nanobind doc string
+- **Hypothesis**: `{min_val}` and `{max_val}` interpreted as named format args by fmt::format.
+- **Fix**: Escaped as `{{min_val}}` and `{{max_val}}` in the doc R"doc()" string.
+- **Files modified**: unary_nanobind.cpp
+
+### New Files
+tests/ttnn/unit_tests/operations/eltwise/test_hardtanh.py

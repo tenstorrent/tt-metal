@@ -12,14 +12,14 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_hardtanh(const int iterations, std::uint32_t param0, std::uint32_t param1) {
+inline void calculate_hardtanh(std::uint32_t param0, std::uint32_t param1) {
     // param0 = min_val as IEEE 754 float bits (bitcast uint32_t)
     // param1 = max_val as IEEE 754 float bits (bitcast uint32_t)
     sfpi::vFloat min_val = Converter::as_float(param0);
     sfpi::vFloat max_val = Converter::as_float(param1);
 
 #pragma GCC unroll 8
-    for (int d = 0; d < iterations; d++) {
+    for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
 
         v_if(val < min_val) { val = min_val; }
