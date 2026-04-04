@@ -182,7 +182,7 @@ struct DeviceStorage {
     // owning_storage.
     //
     // Note that deallocation will affect BOTH the new DeviceStorage and the original owning_storage.
-
+    //
     // This is currently the recommended method to reinterpret an existing Tensor.
     // This is  internal functionality: it is not part of the public API.
     // TODO: implement a more robust mechanism for Tensor reinterpretation (#38093)
@@ -211,8 +211,11 @@ struct DeviceStorage {
 
 private:
     struct LocallyAllocatedState {
-        // Engaged and actively sharing an allocated MeshTensor.
-        LocallyAllocatedState() = default;
+        // Engaged and actively sharing a MeshTensor.
+        // This does not necessarily mean the associated MeshTensor is allocated.
+        // This means that deallocate is not called on *this instance of DeviceStorage,
+        // other DeviceStorage that shares the same MeshTensor may have deallocated the DeviceMemory.
+
         explicit LocallyAllocatedState(MeshTensor mesh_tensor) :
             mesh_tensor_(std::make_shared<MeshTensor>(std::move(mesh_tensor))) {}
         std::shared_ptr<MeshTensor> mesh_tensor_;
@@ -221,18 +224,42 @@ private:
         const TensorTopology& get_tensor_topology() const { return mesh_tensor_->tensor_topology(); }
     };
     struct DeallocatedState {
-        // Tombstone of a deallocated MeshTensor.
-        // Transitionally preserve the tensor spec for backwards compatibility.
-        explicit DeallocatedState(const MeshTensor& mesh_tensor) :
-            tensor_spec_(mesh_tensor.tensor_spec()), tensor_topology_(mesh_tensor.tensor_topology()) {}
-        TensorSpec tensor_spec_;
-        TensorTopology tensor_topology_;
+        // Represents the deallocated state.
+        DeallocatedState() : state_(DefaultConstructed{}) {}
 
-        const TensorSpec& get_tensor_spec() const { return tensor_spec_; }
-        const TensorTopology& get_tensor_topology() const { return tensor_topology_; }
+        // Preserve the tensor spec and topology after deallocation for backwards compatibility.
+        explicit DeallocatedState(const MeshTensor& mesh_tensor) :
+            state_(TombStone{
+                mesh_tensor.tensor_spec(),
+                mesh_tensor.tensor_topology(),
+                mesh_tensor.mesh_buffer_invariant_breaking()}) {}
+
+        struct DefaultConstructed {};
+        struct TombStone {
+            TensorSpec tensor_spec_;
+            TensorTopology tensor_topology_;
+            // This mesh_buffer_ must have been deallocated
+            // This is to allow access to the mesh_device_ without pointing to a freed-device.
+            // This should be removed once we kick mesh_device access after deallocation out.
+            std::shared_ptr<distributed::MeshBuffer> mesh_buffer_;
+        };
+        std::variant<DefaultConstructed, TombStone> state_;
+
+        const TensorSpec& get_tensor_spec() const {
+            TT_FATAL(std::holds_alternative<TombStone>(state_), "Tensor is not allocated");
+            return std::get<TombStone>(state_).tensor_spec_;
+        }
+        const TensorTopology& get_tensor_topology() const {
+            TT_FATAL(std::holds_alternative<TombStone>(state_), "Tensor is not allocated");
+            return std::get<TombStone>(state_).tensor_topology_;
+        }
+        distributed::MeshDevice* get_device() const {
+            TT_FATAL(std::holds_alternative<TombStone>(state_), "Tensor is not allocated");
+            return std::get<TombStone>(state_).mesh_buffer_->device();
+        }
     };
 
-    using States = std::variant<LocallyAllocatedState, DeallocatedState>;
+    using States = std::variant<DeallocatedState, LocallyAllocatedState>;
 
     // Main internal constructor, performs all validation
     DeviceStorage(
