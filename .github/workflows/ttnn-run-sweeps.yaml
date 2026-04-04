@@ -746,6 +746,49 @@ jobs:
           echo "enable-lto=${{ github.event.inputs['enable-lto'] || 'false' }}" >> $GITHUB_OUTPUT
           echo "tracy=$TRACY" >> $GITHUB_OUTPUT
 
+  display-workflow-options:
+    name: 📋 Display workflow options
+    needs: [resolve-inputs]
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    steps:
+      - name: Display selected workflow options
+        run: |
+          echo "::group::🔧 Workflow Configuration Options"
+          echo "┌─────────────────────────────────────────────────────────────┐"
+          echo "│                    TTNN Run Sweeps Configuration            │"
+          echo "├─────────────────────────────────────────────────────────────┤"
+          echo "│ Trigger:              ${{ github.event_name }}"
+          echo "│ Sweep Name:           ${{ needs.resolve-inputs.outputs.sweep-name }}"
+          echo "│ Suite Name:           ${{ needs.resolve-inputs.outputs.suite-name || 'Not specified' }}"
+          echo "│ Skip on Timeout:      ${{ needs.resolve-inputs.outputs.skip-on-timeout }}"
+          echo "│ Group By:             ${{ needs.resolve-inputs.outputs.generate-sweeps-group-by }}"
+          echo "│ Upload Results:       ${{ needs.resolve-inputs.outputs.upload-results }}"
+          echo "│ Measure Device Perf:  ${{ needs.resolve-inputs.outputs.measure-device-perf }}"
+          echo "│ Measure E2E Perf:     ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}"
+          echo "│ Measure Memory:       ${{ needs.resolve-inputs.outputs.measure-memory }}"
+          echo "│ Tracy:                ${{ needs.resolve-inputs.outputs.tracy }}"
+          echo "│ Architecture:         ${{ needs.resolve-inputs.outputs.arch }}"
+          echo "│ Runner Label:         ${{ needs.resolve-inputs.outputs.runner-label }}"
+          echo "│ Log Level:            ${{ needs.resolve-inputs.outputs.log-level }}"
+          echo "│ Use Database:         ${{ needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Model Traced)' || needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Lead Models)' }}"
+          echo "│ Mesh Shape Filter:    ${{ needs.resolve-inputs.outputs.mesh-shape || 'none' }}"
+          echo "│ Platform:             ${{ needs.resolve-inputs.outputs.platform }}"
+          echo "│ Build Type:           ${{ needs.resolve-inputs.outputs.build-type }}"
+          echo "│ Enable LTO:           ${{ needs.resolve-inputs.outputs.enable-lto }}"
+          echo "│ Cron (if scheduled):  ${{ github.event.schedule || 'N/A' }}"
+          echo "└─────────────────────────────────────────────────────────────┘"
+          echo "::endgroup::"
+
+          echo "::group::📊 Workflow Context Information"
+          echo "Run ID: ${{ github.run_id }}"
+          echo "Run Number: ${{ github.run_number }}"
+          echo "Run Attempt: ${{ github.run_attempt }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Branch/Ref: ${{ github.ref_name }}"
+          echo "::endgroup::"
+
   build-artifact:
     needs: [resolve-inputs]
     uses: ./.github/workflows/build-artifact.yaml
