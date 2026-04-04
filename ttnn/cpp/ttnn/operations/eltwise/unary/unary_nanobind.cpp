@@ -70,6 +70,7 @@ Tensor unary_composite_3param_to_4param_wrapper(
 #if 0
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-function"
+
 void bind_unary_clamp(nb::module_& mod) {
     const char* doc = R"doc(
         Applies clamp to :attr:`input_tensor` element-wise.
@@ -484,6 +485,8 @@ void bind_unary_operation_overload_complex_return_complex(
 // Will be restored when reciprocal is regenerated.
 
 #endif  // end first #if 0 block (reciprocal-related templates)
+// NOTE: bind_unary_operation_overload_complex_return_complex disabled — references nuked ttnn::reciprocal.
+// Will be restored when reciprocal is regenerated.
 
 template <ttnn::unique_string OpName, auto Func>
 void bind_unary_operation_with_fast_and_approximate_mode(
@@ -907,6 +910,7 @@ void bind_unary_operation_with_dim_parameter(
 // Suppress unused function warnings until they are re-enabled.
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-function"
+
 
 void bind_softplus(nb::module_& mod) {
     auto doc = fmt::format(
@@ -1836,6 +1840,9 @@ void py_module(nb::module_& mod) {
     bind_unary_operation<"hardsigmoid", &ttnn::hardsigmoid>(
         mod,
         R"doc(\text{hardsigmoid}(x) = \max(0, \min(1, x / 6 + 0.5)))doc",
+    bind_unary_operation<"selu", &ttnn::selu>(
+        mod,
+        R"doc(\text{selu}(x) = \text{scale} \times (\max(0, x) + \min(0, \alpha \times (\exp(x) - 1)))  \text{ where } \text{scale} = 1.0507 \text{ and } \alpha = 1.6733)doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 }

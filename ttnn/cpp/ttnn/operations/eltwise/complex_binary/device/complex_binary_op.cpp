@@ -50,5 +50,11 @@ ComplexTensor divide(
         // TODO: Restore when ttnn::reciprocal is regenerated after batch nuke
         TT_THROW("complex_binary::divide not available - ttnn::reciprocal was nuked");
     }
+    const ComplexTensor& input_a [[maybe_unused]],
+    const ComplexTensor& input_b [[maybe_unused]],
+    const MemoryConfig& output_mem_config [[maybe_unused]]) {
+        // TODO: Restore when ttnn::reciprocal is regenerated after batch nuke
+        TT_THROW("complex_binary::divide not available - ttnn::reciprocal was nuked");
+    }
 
 }  // namespace ttnn::operations::complex_binary
