@@ -62,7 +62,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            return _perf_unpack_loop_set_valid<true, true>(TILE_CNT * TILE_NUM_FACES);
+            _perf_unpack_loop_set_valid<true, true>(TILE_CNT * TILE_NUM_FACES);
+            return;
         }
         else
         {
@@ -116,7 +117,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            return _perf_math_loop_clear_valid<true, true>(TILE_CNT * TILE_NUM_FACES);
+            _perf_math_loop_clear_valid<true, true>(TILE_CNT * TILE_NUM_FACES);
+            return;
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {

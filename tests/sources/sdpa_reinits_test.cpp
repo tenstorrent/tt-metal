@@ -42,7 +42,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_unpack_AB_matmul_init_<>(false, 1, 1, 1, 16, 16);
         {
-            std::uint32_t mt = batch;
+            const std::uint32_t mt = batch;
             for (std::uint32_t kt = 0; kt < 1; ++kt)
             {
                 _llk_unpack_AB_matmul_<>(L1_ADDRESS(buffer_A0[0]), L1_ADDRESS(buffer_B0[0]), mt * 1 + kt, kt * 1, 128, 128, false, false, 1, 1, 1);
@@ -100,7 +100,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_unpack_AB_matmul_init_<>(false, 1, 1, 1, 16, 16);
         {
-            std::uint32_t mt = batch;
+            const std::uint32_t mt = batch;
             for (std::uint32_t kt = 0; kt < 1; ++kt)
             {
                 _llk_unpack_AB_matmul_<>(L1_ADDRESS(buffer_A3[0]), L1_ADDRESS(buffer_B3[0]), mt * 1 + kt, kt * 1, 128, 128, false, false, 1, 1, 1);
@@ -222,7 +222,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_packer_wait_for_math_done_();
         for (std::uint32_t i = 0; i < 1; ++i)
         {
-            std::uint32_t tile_idx = batch * 1 + i;
+            const std::uint32_t tile_idx = batch * 1 + i;
             _llk_pack_<DstSync::SyncHalf, false, false>(i, L1_ADDRESS(buffer_Res0[tile_idx]));
         }
         _llk_pack_dest_section_done_<DstSync::SyncHalf, false>();
@@ -242,7 +242,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_packer_wait_for_math_done_();
         for (std::uint32_t i = 0; i < 1; ++i)
         {
-            std::uint32_t tile_idx = batch * 1 + i;
+            const std::uint32_t tile_idx = batch * 1 + i;
             _llk_pack_<DstSync::SyncHalf, false, false>(i, L1_ADDRESS(buffer_Res1[tile_idx]));
         }
         _llk_pack_dest_section_done_<DstSync::SyncHalf, false>();
@@ -262,7 +262,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_packer_wait_for_math_done_();
         for (std::uint32_t i = 0; i < 1; ++i)
         {
-            std::uint32_t tile_idx = batch * 1 + i;
+            const std::uint32_t tile_idx = batch * 1 + i;
             _llk_pack_<DstSync::SyncHalf, false, false>(i, L1_ADDRESS(buffer_Res2[tile_idx]));
         }
         _llk_pack_dest_section_done_<DstSync::SyncHalf, false>();
@@ -281,7 +281,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_packer_wait_for_math_done_();
         for (std::uint32_t i = 0; i < 1; ++i)
         {
-            std::uint32_t tile_idx = batch * 1 + i;
+            const std::uint32_t tile_idx = batch * 1 + i;
             _llk_pack_<DstSync::SyncHalf, false, false>(i, L1_ADDRESS(buffer_Res3[tile_idx]));
         }
         _llk_pack_dest_section_done_<DstSync::SyncHalf, false>();

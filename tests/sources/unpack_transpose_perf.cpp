@@ -93,7 +93,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             // _llk_unpack_A     sets both A and B valid
-            return _perf_math_loop_clear_valid<true, true>(TILE_CNT * TILE_NUM_FACES);
+            _perf_math_loop_clear_valid<true, true>(TILE_CNT * TILE_NUM_FACES);
+            return;
         }
 
         for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
