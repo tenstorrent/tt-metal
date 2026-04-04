@@ -9,7 +9,15 @@
 - **Batched Demo (parallel):** `python models/demos/molmo2/demo/demo.py --input-file models/demos/molmo2/demo/sample_prompts/multi_prompts.json --batch-size 4 --use-decode-trace`
 - **Server:** `cd tt-inference-server && python run.py --model Molmo2-8B --workflow server --tt-device t3k --local-server`
 
-## Current Status (2026-03-30)
+## Current Status (2026-04-03)
+
+**Projector Scale Fix:** FIXED via `_normalize_for_projector()` in vision_backbone.py
+- Root cause: Molmo2 ViT uses large LayerNorm gamma (up to 18x) → pooled features with outliers ±40
+- SwiGLU projector computes gate*up → quadratic explosion (±40 * ±40 = ±1600)
+- Fix: Normalize to unit variance AND clip outliers to ±3 before projection
+- Result: Coherent output for images and videos
+
+## Previous Status (2026-03-30)
 
 **vLLM Server:** WORKING for concurrent text and image requests (max_concurrency=32)
 - True batched decode with 32 concurrent requests verified working

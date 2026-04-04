@@ -42,8 +42,12 @@ IMAGENET_MEAN = [0.48145466, 0.4578275, 0.40821073]
 IMAGENET_STD = [0.26862954, 0.26130258, 0.27577711]
 
 # Prefill sequence length buckets for trace reuse
-# Extended to support longer videos: 100 frames = ~19,600 tokens, 200 frames = ~39,200 tokens
-PREFILL_SEQ_BUCKETS = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]
+# Optimized for video processing: 1K, 4K, 8K, 16K, 32K
+# 128 frames = ~25K tokens -> 32K bucket
+PREFILL_SEQ_BUCKETS = [1024, 4096, 8192, 16384, 32768]
+
+# Padding token ID for sequence length padding
+VISION_PAD_TOKEN_ID = 151654  # <|vision_pad|>
 
 
 # =============================================================================
@@ -56,7 +60,7 @@ def get_padded_prefill_len(seq_len: int) -> int:
     Get the padded sequence length for prefill trace reuse.
 
     Pads to the next bucket size to allow trace reuse across similar sequence lengths.
-    Uses buckets: 128, 256, 512, 1024, 2048, 4096, 8192, 16384, then powers of 2.
+    Uses buckets: 1024, 4096, 8192, 16384, 32768.
     """
     for bucket in PREFILL_SEQ_BUCKETS:
         if seq_len <= bucket:
@@ -65,13 +69,13 @@ def get_padded_prefill_len(seq_len: int) -> int:
     return 2 ** (seq_len - 1).bit_length()
 
 
-def pad_input_ids(input_ids: torch.Tensor, pad_token_id: int = 0) -> Tuple[torch.Tensor, int, int]:
+def pad_input_ids(input_ids: torch.Tensor, pad_token_id: int = VISION_PAD_TOKEN_ID) -> Tuple[torch.Tensor, int, int]:
     """
     Pad input_ids to the next bucket size for trace reuse.
 
     Args:
         input_ids: Token IDs tensor [batch, seq_len]
-        pad_token_id: Token ID to use for padding (default 0)
+        pad_token_id: Token ID to use for padding (default: <|vision_pad|> = 151654)
 
     Returns:
         Tuple of (padded_input_ids, padded_len, original_len)
@@ -431,7 +435,7 @@ def preprocess_video_molmo2(
     from molmo_utils import process_vision_info
 
     if pooling_size is None:
-        pooling_size = [2, 2]
+        pooling_size = [2, 2]  # TODO: HF uses [3,3] for video but our pooling code doesn't support it yet
     pool_h, pool_w = pooling_size
     crop_patches = base_size // patch_size  # 27
 
