@@ -210,11 +210,16 @@ def test_demo(
 
 
 @pytest.mark.parametrize(
+    "mesh_device",
+    [pytest.param((1, 8), id="t3k_2x2")],  # Explicit 2x2 mesh for T3K
+    indirect=True,
+)
+@pytest.mark.parametrize(
     "device_params",
     [
         {
             "l1_small_size": YOLOV8L_L1_SMALL_SIZE,
-            "trace_region_size": YOLOV8L_TRACE_REGION_SIZE_E2E,
+            "trace_region_size": 35000000,
             "num_command_queues": 2,
         }
     ],
