@@ -96,10 +96,10 @@ This file.
 - Not registered in unary_ng dispatch path
 
 ## Timing Summary
-- **Total wall-clock**: ~107 minutes
+- **Total wall-clock**: ~120 minutes
 - **Phase 1 (Discovery)**: 779s (~13 min)
 - **Phase 2 (Analysis)**: 1474s (~25 min)
 - **Phase 3 (Implementation)**: 1149s (~19 min)
 - **Phase 4 (Testing)**: 3024s (~50 min)
-- **Phase 5 (Documentation)**: ongoing
-- **Phase 6 (Self-Reflection)**: pending
+- **Phase 5 (Documentation)**: 40s (~1 min)
+- **Phase 6 (Self-Reflection)**: 756s (~13 min)

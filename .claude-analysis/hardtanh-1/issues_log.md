@@ -15,7 +15,11 @@
 | 3 | Implementation | ok | 1149s | None |
 | 4 | Testing & Debugging | ok | 3024s | 2 bugs fixed: SFPU kernel signature, nanobind docstring escaping |
 | 5 | Documentation | ok | 40s | None |
-| 6 | Self-Reflection | pending | - | - |
+| 6 | Self-Reflection | ok | 756s | None |
 
 ## Issues
-(will be populated as issues arise)
+| # | Phase | Severity | Description | Resolution |
+|---|-------|----------|-------------|------------|
+| 1 | 0 | LOW | Broken symlinks for .claude/scripts, .claude/agents, .claude/skills in worktree | Fixed by pointing symlinks to main repo |
+| 2 | 4 | MEDIUM | SFPU kernel calculate_hardtanh signature mismatch with LLK template | Removed iterations runtime param, use ITERATIONS template param |
+| 3 | 4 | MEDIUM | fmt::format interprets {min_val}/{max_val} in nanobind docstring | Escaped braces as {{min_val}}/{{max_val}} |
