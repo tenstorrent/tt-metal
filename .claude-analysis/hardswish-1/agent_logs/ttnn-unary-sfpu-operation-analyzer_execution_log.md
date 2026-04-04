@@ -145,3 +145,57 @@ No errors or recovery needed. The tt_llk submodule was empty in the worktree so 
 - **Instructions**: SFPLOAD, SFPSTORE, SFPMAD, SFPLOADI, SFPSETCC, SFPENCC, SFPPUSHC, SFPPOPC, SFPCOMPC, SFPEXEXP, SFPSETEXP, SFPSETMAN, SFPNOT, SFPSETSGN, SFPIADD
 - **Init path**: `_init_exponential_<false,false,0x3F800000>()` -> `_init_sfpu_reciprocal_<false>()` sets vConstFloatPrgm0/1/2 to reciprocal polynomial coefficients
 - **Architecture parity**: WH and BH kernel implementations are identical. Only platform difference is in the params dispatch layer (WH uses set_addr_mod_base, BH does not).
+
+---
+
+# Execution Log: ttnn-unary-sfpu-operation-analyzer (softsign)
+
+## Metadata
+- **Operation**: softsign
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Status**: SUCCESS
+- **Output file**: `.claude-analysis/hardswish-1/softsign_analysis.md`
+- **Commit**: cf5ccac99be
+
+## Input Interpretation
+| Field | Value | Confidence |
+|-------|-------|------------|
+| Operation name | softsign | HIGH |
+| UnaryOpType | SOFTSIGN | HIGH |
+| Output directory | .claude-analysis/hardswish-1/ | HIGH |
+
+## Execution Timeline
+
+1. **Initialized breadcrumbs** and read reference files (sfpu-hardware-model.md, logging specs, diagram templates).
+2. **Traced dispatch path**: `get_op_init_and_func_default()` returns `softsign_tile_init()` / `softsign_tile(idst)`. Compute kernel: `eltwise_sfpu.cpp`. Macro: `SFPU_OP_SOFTSIGN_INCLUDE`. Approx mode: `false`.
+3. **Read API header**: `softsign.h` delegates to `llk_math_eltwise_unary_sfpu_softsign<APPROX>(idst)`.
+4. **Read LLK dispatch**: Both WH and BH identical. Dispatches to `_llk_math_eltwise_unary_sfpu_params_` with `calculate_softsign<APPROX, 8>` and `VectorMode::RC`. Init calls `softsign_init<APPROX>`.
+5. **Read core SFPU kernel**: `ckernel_sfpu_softsign.h` -- WH and BH identical. Computes `x / (1 + |x|)` using `abs`, `vConst1`, `_sfpu_reciprocal_<2>`, and multiply.
+6. **Read reciprocal helper (WH)**: `ckernel_sfpu_recip.h` -- quadratic polynomial initial estimate with `setman`/`SFPNOT` + 2 Newton-Raphson iterations. Init programs `vConstFloatPrgm0/1/2` with Sollya-optimized coefficients.
+7. **Read reciprocal helper (BH)**: `ckernel_sfpu_recip.h` -- hardware `SFPARECIP` + 2 NR iterations with NaN guard via `v_if (t < 0)`. Init programs `vConstFloatPrgm0 = 2.0f`.
+8. **Read params dispatch**: Standard 4-face iteration with SETRWC/inc_dst_addr between faces.
+9. **Read addr_mod config**: `SfpuType::softsign` only configures `ADDR_MOD_7` (dest.incr=0).
+10. **Verified all identifiers**: Function names, file paths, and SFPI intrinsic mappings all confirmed via grep.
+11. **Wrote analysis file**: Complete with all required sections including architecture-specific reciprocal implementations.
+
+## Recovery Summary
+No errors or recovery needed. The `sfpu/ckernel_sfpu_recip.h` file was not found in the worktree (tt_llk submodule not checked out), but was located in the parent repo at `tt_metal/third_party/tt_llk/tt_llk_{wormhole_b0,blackhole}/common/inc/sfpu/ckernel_sfpu_recip.h`.
+
+## Deviations
+None. Standard analysis flow followed.
+
+## Artifacts
+| File | Action | Description |
+|------|--------|-------------|
+| `.claude-analysis/hardswish-1/softsign_analysis.md` | Created | SFPU kernel analysis for softsign |
+| `.claude-analysis/hardswish-1/agent_logs/ttnn-unary-sfpu-operation-analyzer_breadcrumbs.jsonl` | Appended | Breadcrumb events |
+| `.claude-analysis/hardswish-1/agent_logs/ttnn-unary-sfpu-operation-analyzer_execution_log.md` | Updated | Appended softsign execution log |
+
+## Key Findings
+- **Kernel style**: SFPI abstractions (Style A) -- `vFloat`, `dst_reg`, `sfpi::abs`
+- **Math**: `softsign(x) = x / (1 + |x|)` = `x * reciprocal(|x| + 1)`
+- **Architecture divergence**: The core softsign kernel is identical on WH and BH, but the reciprocal helper differs significantly:
+  - WH: Pure-software quadratic polynomial estimate + 2 Newton-Raphson iterations (uses SFPSETMAN, SFPNOT, SFPSETSGN, many SFPMADs)
+  - BH: Hardware SFPARECIP instruction + 2 NR iterations with NaN guard (uses SFPARECIP, SFPMAD, v_if/v_endif CC manipulation)
+- **APPROXIMATION_MODE**: `false` -- not used in softsign kernel body. Passed through to `_init_sfpu_reciprocal_<false>()` which on BH programs `vConstFloatPrgm0 = 2.0f`.
+- **Init constants differ by architecture**: WH programs 3 polynomial coefficients; BH programs a single constant (2.0).

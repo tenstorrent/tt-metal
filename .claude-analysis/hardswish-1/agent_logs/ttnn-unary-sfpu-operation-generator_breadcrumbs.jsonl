@@ -10,3 +10,9 @@
 {"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"hardtanh","background":true,"ts":"2026-04-04T22:40:51+00:00"}
 {"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"selu","background":true,"ts":"2026-04-04T22:40:51+00:00"}
 {"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"softsign","background":true,"ts":"2026-04-04T22:40:51+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"hardsigmoid","status":"ok","ts":"2026-04-04T22:55:22+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"hardtanh","status":"ok","ts":"2026-04-04T22:55:22+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"selu","status":"ok","ts":"2026-04-04T22:55:22+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"softsign","status":"ok","ts":"2026-04-04T22:55:23+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"silu","status":"failed","error":"timeout","ts":"2026-04-04T22:55:23+00:00"}
+{"event":"phase_complete","phase":2,"phase_name":"Reference Analysis","status":"ok","analyzers_completed":4,"analyzers_failed":1,"issues":["silu analyzer timed out"],"ts":"2026-04-04T22:55:27+00:00"}
