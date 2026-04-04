@@ -184,6 +184,16 @@ class PatchEmbeddingTTNN:
 
         x = pixel_values
 
+        # Convert PyTorch tensor to TTNN if needed
+        if isinstance(x, torch.Tensor):
+            x = ttnn.from_torch(
+                x,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
         # Step 2: Permute to channel-last: (B, C, H, W) -> (B, H, W, C)
         # Note: This uses generic kernel since last 2 dims move, but unavoidable
         x = ttnn.permute(x, (0, 2, 3, 1))
