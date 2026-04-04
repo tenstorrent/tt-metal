@@ -158,7 +158,7 @@ TEST(FaultTolerance, DisableBrokenBlock) {
 }
 
 // =====================================================================
-// Section 4.4 — Test infrastructure: agree() consensus and policy switching
+// Test infrastructure: agree() consensus and policy switching
 // =====================================================================
 
 TEST(FaultTolerance, AgreeConsensus) {
@@ -257,7 +257,7 @@ TEST(FaultTolerance, FailurePolicySwitching) {
 }
 
 // =====================================================================
-// Section 7.8 — Single-node testing gap: ULFM control-plane tests
+// Single-node testing: ULFM control-plane tests
 // These can run with `mpirun -np 2` on a single host.
 // They test the exit-code and signal-handling paths without requiring
 // actual Tenstorrent hardware.
