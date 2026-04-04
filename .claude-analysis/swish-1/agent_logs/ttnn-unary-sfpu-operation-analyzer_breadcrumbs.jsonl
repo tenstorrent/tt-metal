@@ -17,3 +17,4 @@
 {"event":"analysis_written","operation":"cosh","output_file":".claude-analysis/swish-1/cosh_analysis.md","sections":["dispatch_summary","approx_mode_resolution","abstraction_layers","call_chain","params_dispatch","annotated_source","instruction_table","register_usage","addr_mode","local_sources"],"ts":"2026-04-04T19:07:29+00:00"}
 {"event":"complete","operation":"cbrt","final_status":"SUCCESS","output_file":".claude-analysis/swish-1/cbrt_analysis.md","commit":"b305b223349","ts":"2026-04-04T19:08:04+00:00"}
 {"event":"complete","operation":"cosh","final_status":"SUCCESS","output_file":".claude-analysis/swish-1/cosh_analysis.md","ts":"2026-04-04T19:08:39+00:00"}
+{"event":"analysis_written","operation":"selu","output_file":".claude-analysis/swish-1/selu_analysis.md","sections":["dispatch_summary","call_chain","annotated_source","instruction_table","register_usage","addr_mode_config","local_knowledge_sources"],"ts":"2026-04-04T19:11:39+00:00"}
