@@ -1929,6 +1929,48 @@ void py_module(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none());
     }
+
+    {
+        auto doc = fmt::format(
+            R"doc(
+            Performs softshrink function on :attr:`input_tensor`, :attr:`lambd`.
+
+            .. math::
+                \mathrm{{output\_tensor}}_i = \verb|softshrink|(\mathrm{{input\_tensor}}_i, \verb|lambd|)
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+
+            Keyword args:
+                lambd (float, optional): lambd value. Defaults to `0.5`.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+
+            Note:
+                Supported dtypes and layouts:
+
+                .. list-table::
+                   :header-rows: 1
+
+                   * - Dtypes
+                     - Layouts
+                   * - FLOAT32, BFLOAT16, BFLOAT8_B
+                     - TILE, ROW_MAJOR
+            )doc");
+
+        ttnn::bind_function<"softshrink">(
+            mod,
+            doc.c_str(),
+            &unary_4param_to_5param_wrapper<&ttnn::softshrink>,
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("lambd") = 0.5f,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none());
+    }
 }
 
 }  // namespace ttnn::operations::unary

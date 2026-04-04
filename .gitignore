@@ -1,4 +1,5 @@
 .cache
+.claude/worktrees/
 .clangd
 .devcontainer/
 .vscode

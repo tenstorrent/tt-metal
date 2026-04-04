@@ -47,3 +47,7 @@
 #if SFPU_OP_HARDSWISH_INCLUDE
 #include "api/compute/eltwise_unary/hardswish.h"
 #endif
+
+#if SFPU_OP_SOFTSHRINK_INCLUDE
+#include "api/compute/eltwise_unary/softshrink.h"
+#endif

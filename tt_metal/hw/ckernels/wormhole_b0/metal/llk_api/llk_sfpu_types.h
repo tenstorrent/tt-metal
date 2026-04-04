@@ -16,4 +16,5 @@ enum class SfpuType {
     rpow,
     silu,
     hardswish,
+    softshrink,
 };
