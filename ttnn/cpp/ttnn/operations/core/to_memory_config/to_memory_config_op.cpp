@@ -265,15 +265,6 @@ Tensor to_memory_config(
         optional_output_tensors.push_back(output_tensor);
     }
 
-    // if (tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED ||
-    //     memory_config.memory_layout() == TensorMemoryLayout::ND_SHARDED) {
-    //     return ttnn::prim::copy(
-    //         tensor,
-    //         memory_config,
-    //         dtype.value_or(tensor.dtype()),
-    //         optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
-    // }
-
     if (memory_config.is_sharded()) {
         // to_sharded path
         if (tensor.is_sharded()) {
@@ -281,36 +272,6 @@ Tensor to_memory_config(
             if (can_use_reshard(tensor, memory_config, dtype, output_tensor)) {
                 return ttnn::reshard(tensor, memory_config, output_tensor);
             }
-
-            // const auto input_memory_config = ttnn::get_memory_config(tensor);
-            // const auto input_shard_spec = input_memory_config.value().shard_spec().value();
-            // const auto output_shard_spec = memory_config.shard_spec().value();
-            // // Check if we need to use the s2i->i2s workaround
-            // bool use_reshard_workaround =
-            //     (input_shard_spec.shape[1] != output_shard_spec.shape[1]) &&
-            //     (input_memory_config.value().memory_layout() != memory_config.memory_layout() &&
-            //      tensor.layout() == Layout::ROW_MAJOR);
-            // if (!use_reshard_workaround) {
-            //     if (dtype.has_value()) {
-            //         return ttnn::prim::copy(
-            //             tensor,
-            //             memory_config,
-            //             dtype.value_or(tensor.dtype()),
-            //             optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
-            //     }
-            //     return ttnn::reshard(tensor, memory_config, output_tensor);
-            // }  // for row-major tensors where shard-spec[1] is different for input shard and output shard
-
-            // TT_FATAL(memory_config.is_sharded(), "Memory config must be sharded for this operation");
-            // Tensor temp =
-            //     ttnn::prim::sharded_to_interleaved(tensor, ttnn::DRAM_MEMORY_CONFIG, dtype.value_or(tensor.dtype()));
-            // const bool keep_l1_aligned = false;
-            // return ttnn::interleaved_to_sharded(
-            //     temp,
-            //     memory_config,
-            //     dtype.value_or(temp.dtype()),
-            //     keep_l1_aligned,
-            //     optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
         }
         if (can_use_interleaved_to_sharded(
                 tensor,
