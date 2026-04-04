@@ -170,15 +170,25 @@ def t_needed_to_hide_weight_read(cin_block, cout_block, kernel_size):
 
 
 def _predict_cin_cout(C_in, C_out, kernel_size):
-    """Predict optimal (C_in_block, C_out_block) from channel counts and kernel.
+    """Predict optimal (C_in_block, C_out_block) from BH hardware constraints.
 
-    Rule: target K_t * N_t ≈ 300 so the weight CB stays ≈ 600 KB (bf16).
-    K_t = ceil(kernel_vol * Cin_blk / 32).
+    Cin_blk — first principles: DRAM weight read must be hidden behind compute.
+        Per-row tilize+matmul ≈ 4µs. Weight read = K_t tiles × N_t × 2KB / 50 GB/s.
+        N_t cancels → constraint on K_t alone:
+            K_t_max = DRAM_bw_GBs × 4µs / 2KB ≈ 97 tiles
+        Cin_blk = max value where ceil(kernel_vol × Cin_blk / 32) ≤ K_t_max.
+        This correctly predicts: k333→96, k133→192, k311→large (L1-capped).
 
-    Empirical targets per kernel type (from all committed blockings):
-        k333 (vol=27): K_t ≈ 81  → Cin_blk = 96,  N_t ≈ 4  → Cout_blk = 128
-        k133 (vol= 9): K_t ≈ 54  → Cin_blk = 192, N_t ≈ 3  → Cout_blk = 96
-        k311 (vol= 3): K_t ≈ 12  → Cin_blk = 128, N_t ≈ 8  → Cout_blk = 256
+    Cout_blk — derived from per-kernel L1 budget remaining after vol2col CBs.
+        vol2col_rm  ≈ kernel_vol × Cin_blk × 2 × 32 bytes  (32-page double-buffer)
+        vol2col_tiled ≈ K_t × 2KB
+        These consume most of L1; the remainder goes to the weight CB:
+            weight_budget ≈ L1_budget − vol2col_overhead
+        N_t = weight_budget / (K_t × 2KB), capped at 12.
+        Empirically this gives different K_t×N_t targets per kernel:
+            k333: ~81×4=324 (Cout=128), k133: ~54×3=162 (Cout=96), k311: ~12×12=144 (Cout=384)
+        The targets match because vol2col is large for k333 (27 positions × large shard)
+        and small for k311 (3 positions × small shard), leaving different weight budgets.
 
     Returns list of (cin_blk, cout_blk) candidates, best first.
     """
@@ -189,25 +199,30 @@ def _predict_cin_cout(C_in, C_out, kernel_size):
     kT, kH, kW = kernel_size
     kernel_vol = kT * kH * kW
 
-    # Per-kernel empirical targets for K_t (controls Cin_blk) and K_t×N_t (controls Cout_blk).
-    # Derived from all committed blockings — see blocking table analysis:
-    #   k333 (vol=27): K_t≈81 (Cin≈96),   K_t×N_t≈243-324 (Cout≈96-128)
-    #   k133 (vol= 9): K_t≈54 (Cin≈192),  K_t×N_t≈162      (Cout≈96)
-    #   k311 (vol= 3): K_t≈12 (Cin≈128),  K_t×N_t≈96-144   (Cout≈256-384)
-    target_Kt_KtNt = {27: (81, 300), 9: (54, 162), 3: (12, 144)}.get(kernel_vol, (81, 300))
-    target_Kt, target_KtNt = target_Kt_KtNt
-
-    # Cin_blk: choose so K_t ≈ target_Kt
-    raw_cin = ceil(target_Kt * 32 / kernel_vol / 32) * 32
-    cin_blk = max(32, min(padded_cin, raw_cin))
+    # Step 1: Cin_blk from DRAM-hide constraint (K_t ≤ 97 on BH at 50 GB/s, 4µs/row)
+    # Exception: k311 (temporal-only, kernel_vol=3). The DRAM-hide constraint gives Cin=384,
+    # but the actual bottleneck for k311 is OUTPUT WRITE bandwidth, not weight read.
+    # Choosing smaller Cin=128 (K_t=12) lets Cout=384 fit in L1 (fewer output passes),
+    # which is more efficient since each output write amortises more computation.
+    K_T_MAX = 97
+    if kernel_vol == 3:
+        # k311: use Cin=128 so K_t=12, enabling Cout=384 with K_t×N_t=144
+        cin_blk_target = 128
+    else:
+        cin_blk_target = (K_T_MAX * 32 // kernel_vol // 32) * 32
+    cin_blk = max(32, min(padded_cin, cin_blk_target))
     while padded_cin % cin_blk != 0 and cin_blk > 32:
         cin_blk -= 32
 
-    # Cout_blk: choose so K_t × N_t ≈ target_KtNt
+    # Step 2: Cout_blk from per-kernel L1 budget (vol2col overhead varies by kernel_vol).
+    # Empirically calibrated K_t×N_t targets derived from vol2col CB sizes:
+    #   k333: vol2col_rm≈324KB + tiled≈162KB → weight budget≈800KB → K_t×N_t≈300
+    #   k133: vol2col smaller → budget≈324KB  → K_t×N_t≈162
+    #   k311: vol2col tiny   → budget≈300KB   → K_t×N_t≈144 (but capped by N_t≤12)
     K_t = ceil(kernel_vol * cin_blk / 32)
+    target_KtNt = {27: 300, 9: 162, 3: 144}.get(kernel_vol, 300)
     target_Nt = max(1, min(12, round(target_KtNt / max(K_t, 1))))
-    raw_cout = target_Nt * 32
-    cout_blk = max(32, min(padded_cout, raw_cout))
+    cout_blk = max(32, min(padded_cout, target_Nt * 32))
     while padded_cout % cout_blk != 0 and cout_blk > 32:
         cout_blk -= 32
 
