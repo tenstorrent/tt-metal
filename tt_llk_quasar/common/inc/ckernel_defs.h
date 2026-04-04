@@ -8,8 +8,8 @@
 #include <type_traits>
 
 #include "tensix.h"
+#include "tensix_types.h"
 
-// #include "tensix_types.h"
 // #include "ckernel_cmd.h"
 // #include "ckernel_enum.h"
 // #include "ckernel_ops.h"
@@ -58,5 +58,22 @@ enum ThreadId
 // For instructions that address lower/upper 16 bits of a register
 #define LO_16(REG) (2 * (REG))
 #define HI_16(REG) (2 * (REG) + 1)
+
+constexpr std::uint32_t FACE_HEIGHT = 16;
+constexpr std::uint32_t FACE_WIDTH  = 16;
+constexpr std::uint32_t TILE_HEIGHT = 32;
+constexpr std::uint32_t TILE_WIDTH  = 32;
+
+constexpr std::uint32_t FACE_R_DIM = FACE_HEIGHT;
+constexpr std::uint32_t FACE_C_DIM = FACE_WIDTH;
+
+constexpr std::uint32_t TILE_R_DIM = TILE_HEIGHT;
+constexpr std::uint32_t TILE_C_DIM = TILE_WIDTH;
+
+constexpr std::uint32_t TILE_NUM_FACES = ((TILE_R_DIM * TILE_C_DIM) / (FACE_R_DIM * FACE_C_DIM));
+
+constexpr std::uint32_t DEST_NUM_TILES_FP16      = (DEST_REGISTER_FULL_SIZE * DEST_FACE_WIDTH) / (TILE_HEIGHT * TILE_HEIGHT);
+constexpr std::uint32_t DEST_NUM_TILES_FP16_HALF = DEST_NUM_TILES_FP16 / 2;
+static_assert((DEST_NUM_TILES_FP16 & (DEST_NUM_TILES_FP16 - 1)) == 0);
 
 } // namespace ckernel
