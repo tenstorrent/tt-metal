@@ -94,6 +94,8 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
         if (operation_attributes.progress_semaphore.has_value()) {
             hw[4] = operation_attributes.progress_semaphore->address();
         }
+        // hw[5] = num_reader_cores — static, set once in create()
+        // hw[6+] = reader NOC coords — also static, set once in create()
 
         if (shared_vars.has_local_copy) {
             auto& lr = GetCommonRuntimeArgs(program, shared_vars.local_reader_kernel_id);
@@ -475,6 +477,19 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         worker_core_ranges,
         h_writer_kernel_config);
     {
+        // Compute conv3d reader core NOC coords: all compute cores minus the fabric (H writer) cores.
+        // When the progress semaphore is enabled, the H writer signals each reader core individually
+        // via noc_semaphore_inc(get_noc_addr(x, y, sem), 1) — the OpSignaler pattern.
+        std::vector<std::pair<uint32_t, uint32_t>> reader_noc_coords;
+        if (operation_attributes.progress_semaphore.has_value() && operation_attributes.progress_t_batch_size > 0) {
+            auto compute_grid = mesh_device->compute_with_storage_grid_size();
+            CoreRangeSet full_grid(CoreRange({0, 0}, {compute_grid.x - 1, compute_grid.y - 1}));
+            CoreRangeSet conv3d_cores = full_grid.subtract(worker_core_ranges);  // all cores minus fabric
+            for (const auto& core : corerange_to_cores(conv3d_cores, std::nullopt, true)) {
+                auto noc = mesh_device->worker_core_from_logical_core(core);
+                reader_noc_coords.emplace_back(noc.x, noc.y);
+            }
+        }
         std::vector<uint32_t> h_writer_crta = {
             input_buffer->address(),
             output_buffer->address(),
@@ -482,7 +497,14 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             operation_attributes.barrier_semaphore.address(),
             operation_attributes.progress_semaphore.has_value() ? operation_attributes.progress_semaphore->address()
                                                                 : 0u,
+            // CRTA[5]: number of conv3d reader cores to signal
+            static_cast<uint32_t>(reader_noc_coords.size()),
+            // CRTA[6+]: interleaved (x, y) NOC coords for each reader core
         };
+        for (const auto& [x, y] : reader_noc_coords) {
+            h_writer_crta.push_back(x);
+            h_writer_crta.push_back(y);
+        }
         SetCommonRuntimeArgs(program, h_writer_kernel_id, h_writer_crta);
     }
 

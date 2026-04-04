@@ -47,8 +47,11 @@ struct NeighborPadAsyncParams {
     // Optional progress semaphore: incremented by the H-fabric writer every
     // progress_t_batch_size outer_dim iterations so that conv3d's reader can
     // start processing T-slices before NeighborPad finishes all outer_dims.
+    // The writer signals each conv3d reader core via noc_semaphore_inc(get_noc_addr(x,y,sem),1)
+    // so each core's LOCAL L1 semaphore is updated — no remote poll needed in the reader.
     std::optional<GlobalSemaphore> progress_semaphore;
     uint32_t progress_t_batch_size = 0;  // 0 = disabled
+    // Reader core NOC coords are computed in the factory from the device grid minus the fabric cores.
 
     // Constructor required because GlobalSemaphore is not default constructible
     NeighborPadAsyncParams(

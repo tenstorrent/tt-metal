@@ -595,9 +595,18 @@ void kernel_main() {
                 // 3D blocking loops over assigned ranges:
                 for (uint32_t t_block = t_out_start; t_block < t_out_end; t_block += T_block_size) {
                     const uint32_t t_block_end = std::min(t_block + T_block_size, t_out_end);
-                    // NOTE: CONV3D_INPUT_PROGRESS_SEM (in-kernel semaphore spin) is disabled because
-                    // the writer increments only its own L1 — readers on other cores never see the update.
-                    // Inter-CQ ordering is instead guaranteed by the CQ1→CQ0 event mechanism at dispatch time.
+#if defined(CONV3D_INPUT_PROGRESS_SEM)
+                    // Wait for NP writer to signal that this T-batch's halo data is ready.
+                    // NP writer calls noc_semaphore_inc(get_noc_addr(MY_x, MY_y, sem), 1) for each
+                    // conv3d reader core — so the increment lands in OUR local L1 directly.
+                    // noc_semaphore_wait_min polls LOCAL L1: no NOC round-trip needed.
+                    {
+                        const uint32_t t_batches_needed = (t_block - t_out_start) / input_progress_t_batch_size + 1;
+                        volatile tt_l1_ptr uint32_t* sem_ptr =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(input_progress_sem_addr);
+                        noc_semaphore_wait_min(sem_ptr, t_batches_needed);
+                    }
+#endif
 
                     for (uint32_t h_block = h_out_start; h_block < h_out_end; h_block += H_block_size) {
                         const uint32_t h_block_end = std::min(h_block + H_block_size, h_out_end);

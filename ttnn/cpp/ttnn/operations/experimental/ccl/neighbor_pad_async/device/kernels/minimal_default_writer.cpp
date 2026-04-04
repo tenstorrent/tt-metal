@@ -69,6 +69,10 @@ void kernel_main() {
     const size_t barrier_sem = get_common_arg_val<uint32_t>(3);
 #if defined(NP_PROGRESS_SEM)
     const size_t progress_sem = get_common_arg_val<uint32_t>(4);
+    // Number of conv3d reader cores to signal and their NOC (x,y) coordinates.
+    // Packed as: [num_reader_cores, x0, y0, x1, y1, ...]
+    const uint32_t num_reader_cores = get_common_arg_val<uint32_t>(5);
+    // Reader core NOC coords start at CRTA index 6: x0=6, y0=7, x1=8, y1=9, ...
 #endif
 
     // Per-core runtime args
@@ -406,14 +410,21 @@ void kernel_main() {
         outer_dim_offset += (num_sticks_per_halo_dim * output_halo_dim_size);
 
 #if defined(NP_PROGRESS_SEM)
-        // Progress semaphore: notify conv3d reader that this T-batch is ready.
-        // Only direction==0 (forward H writer, not W writer) increments to avoid double-counting.
+        // Progress semaphore: notify all conv3d reader cores that T-batch is ready.
+        // Only direction==0 H writer increments to avoid double-counting with W writer.
         if constexpr (progress_t_batch_size > 0) {
             if (!direction && !is_w_fabric_writer) {
                 if ((outer_dim + 1) % progress_t_batch_size == 0) {
                     noc_async_write_barrier();
-                    // Use local NOC address for L1 semaphore increment
-                    noc_semaphore_inc(get_noc_addr(progress_sem), 1);
+                    // Signal each conv3d reader core at its OWN local L1 semaphore address.
+                    // This is the OpSignaler pattern from worker_sync_utils.hpp:
+                    //   get_noc_addr(x, y, sem_addr) targets the REMOTE core's L1,
+                    //   so each core sees the increment in its own local memory.
+                    for (uint32_t i = 0; i < num_reader_cores; i++) {
+                        const uint32_t reader_x = get_common_arg_val<uint32_t>(6 + i * 2);
+                        const uint32_t reader_y = get_common_arg_val<uint32_t>(6 + i * 2 + 1);
+                        noc_semaphore_inc(get_noc_addr(reader_x, reader_y, progress_sem), 1);
+                    }
                     noc_async_atomic_barrier();
                 }
             }
