@@ -9,3 +9,4 @@
 #pragma once
 
 #include "api/compute/eltwise_unary/hardsigmoid.h"
+#include "api/compute/eltwise_unary/softsign.h"
