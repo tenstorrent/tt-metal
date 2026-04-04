@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 // Pre-SDPA unified kernel
@@ -10,11 +10,11 @@
 // - NCRISC: CCL Broadcast Reader + RMSNorm reader + Mcast receiver (on matmul cores), Matmul reader + Gather sender (on
 // matmul cores),
 //           RMSNorm2 reader + Mcast2 receiver (on matmul2 cores), Matmul2 reader (on matmul2 cores),
-//           Matmul3 reader (on qnope cores), RoPE reader (on qrope cores), CreateQHeads sender (on qnope/qrope cores)
+//           Matmul3 reader (on qnope cores), RoPE reader (on qrope cores),
+//           CreateQHeads sender (on qnope/qrope cores) + receiver (on sdpa input cores)
 // - BRISC: CCL Broadcast Writer + RMSNorm writer + Mcast sender (on input core), Matmul writer (on matmul cores),
 // Gather receiver (on
-//          input core), Mcast2 sender (on input core), Matmul2 writer (on matmul2 cores),
-//          CreateQHeads receiver (on sdpa input cores) - matching gather pattern: NCRISC sender, BRISC receiver
+//          input core), Mcast2 sender (on input core), Matmul2 writer (on matmul2 cores)
 // - TRISC: RMSNorm compute (on input core), Matmul compute (on matmul cores), RMSNorm2 compute (on input core),
 //          Matmul2 compute (on matmul2 cores), Matmul3 compute (on qnope cores), RoPE compute (on qrope cores)
 //
@@ -42,8 +42,7 @@
 
 #include "../../../unified_kernels/sdpa_reduce_worker.hpp"
 #include "../../../unified_kernels/sdpa_reduce_forwarder.hpp"
-#include "../../../unified_kernels/all_reduce_sender.hpp"
-#include "../../../unified_kernels/all_reduce_receiver.hpp"
+#include "../../../unified_kernels/all_reduce.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr
 // Defined at namespace scope (local classes cannot have static data members)
@@ -83,14 +82,15 @@ struct Core {
 
     // First matmul on kv_b2 grid (5x8 + 12x2 = 64 cores) - receives scatter data from SDPA workers
     static constexpr bool is_matmul4_core = get_named_compile_time_arg_val("is_matmul4_core") == 1;
-    // Gather core (12, 9) - receives gather2, sends mcast3, receives gather3, CCL receiver
+    // Gather core (12, 9) - receives gather2, sends mcast3, CCL receiver
     static constexpr bool is_gather_receiver_core = get_named_compile_time_arg_val("is_gather_receiver_core") == 1;
     // Active matmul5 cores (112 cores: o_proj grid 12x8 + 8x2)
     static constexpr bool is_matmul5_core = get_named_compile_time_arg_val("is_matmul5_core") == 1;
-    // CCL sender core (11, 9) - reads from gather core, sends via fabric
-    static constexpr bool is_ccl_sender_core = get_named_compile_time_arg_val("is_ccl_sender_core") == 1;
-    // CCL receiver core = gather core (12, 9) - receives remote data, performs reduction
-    static constexpr bool is_ccl_receiver_core = get_named_compile_time_arg_val("is_ccl_receiver_core") == 1;
+    // CCL sender core (11, 9) - receives gather3, NOC-reads to receiver, sends via fabric
+    static constexpr bool is_allreduce_sender_core = get_named_compile_time_arg_val("is_allreduce_sender_core") == 1;
+    // CCL receiver core (12, 9) - receives remote data via fabric, performs reduction
+    static constexpr bool is_allreduce_receiver_core =
+        get_named_compile_time_arg_val("is_allreduce_receiver_core") == 1;
 };
 
 void kernel_main() {
@@ -107,6 +107,7 @@ void kernel_main() {
 
     uint32_t per_core_rta_arg_idx = 0;
 #if defined(COMPILE_FOR_NCRISC)
+    constexpr uint32_t bcast_writer_common_rt_count = 5;
     // CTArgs type aliases (required for Op templates)
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
@@ -180,14 +181,12 @@ void kernel_main() {
         .position_ids_tensor_address = get_named_compile_time_arg_val("qrope_position_ids_tensor_address"),
     };
 
-    // NCRISC: Sender args for QNOPE/QROPE cores
-    // Senders write to intermediate CB, then compute tilizes to output CB
-    // 3-phase synchronization: nope_phase1, nope_phase2, rope semaphores
+    // NCRISC: All CreateQHeads data movement (sender on qnope/qrope cores, receiver on sdpa input cores)
     constexpr uint32_t cqh_receiver_in_cb = get_named_compile_time_arg_val("cqh_receiver_in_cb");
-    using CreateQHeadsCTArgs = deepseek_b1_ops::CreateQHeads::SenderCTArgs<
+    using CreateQHeadsSenderCTArgs = deepseek_b1_ops::CreateQHeads::SenderCTArgs<
         get_named_compile_time_arg_val("cqh_qnope_data_size_bytes"),
         get_named_compile_time_arg_val("cqh_qrope_head_size_bytes")>;
-    deepseek_b1_ops::CreateQHeads::SenderArgs create_q_heads_args{
+    deepseek_b1_ops::CreateQHeads::SenderArgs create_q_heads_sender_args{
         0,  // sender_grid_start_x (logical 0)
         0,  // sender_grid_start_y (logical 0)
         get_named_compile_time_arg_val("cqh_head_stride_bytes"),
@@ -211,6 +210,18 @@ void kernel_main() {
         },
         get_write_ptr(cqh_receiver_in_cb),
     };
+    using CreateQHeadsReceiverCTArgs = deepseek_b1_ops::CreateQHeads::ReceiverCTArgs;
+    deepseek_b1_ops::CreateQHeads::ReceiverArgs create_q_heads_receiver_args{
+        get_named_compile_time_arg_val("cqh_nope_phase1_semaphore_addr"),
+        get_named_compile_time_arg_val("cqh_nope_phase2_semaphore_addr"),
+        get_named_compile_time_arg_val("cqh_rope_semaphore_addr"),
+        get_named_compile_time_arg_val("cqh_num_nope_senders"),
+        get_named_compile_time_arg_val("cqh_num_rope_senders"),
+        get_named_compile_time_arg_val("cqh_receiver_in_cb"),
+        get_named_compile_time_arg_val("cqh_out_cb"),
+        get_named_compile_time_arg_val("cqh_nope_tiles"),
+        get_named_compile_time_arg_val("cqh_rope_tiles"),
+    };
 
     // Matmul CTArgs type alias (NCRISC uses ReaderCTArgs)
     using DKV_MatmulCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
@@ -218,21 +229,33 @@ void kernel_main() {
     // Matmul reader args (NCRISC is no-op)
     deepseek_b1_ops::Matmul::ReaderArgs dkv_matmul_args{};
 
-    // Gather sender args (from compile-time args, passed to op as runtime args)
-    deepseek_b1_ops::Gather::SenderArgs dkv_gather_args{
-        get_named_compile_time_arg_val("dkv_gather_dest_noc_x"),
-        get_named_compile_time_arg_val("dkv_gather_dest_noc_y"),
-        get_named_compile_time_arg_val("dkv_gather_data_size_bytes"),
-        get_named_compile_time_arg_val("dkv_gather_receiver_semaphore_addr"),
-        get_named_compile_time_arg_val("dkv_gather_src_cb"),
-        get_named_compile_time_arg_val("dkv_gather_src_num_pages"),
-        get_named_compile_time_arg_val("dkv_gather_sender_grid_start_x"),
-        get_named_compile_time_arg_val("dkv_gather_sender_grid_start_y"),
-        get_named_compile_time_arg_val("dkv_gather_sender_grid_end_x"),
-        get_named_compile_time_arg_val("dkv_gather_sender_grid_end_y"),
-        get_named_compile_time_arg_val("dkv_gather_row_major"),
-        get_write_ptr(get_named_compile_time_arg_val(
-            "kv_rmsnorm_input_cb")),  // receiver_data_addr from CB write ptr (single-buffered)
+    // Gather args: both sender and receiver on NCRISC (ReceiverOnNCRISC mode)
+    deepseek_b1_ops::Gather::DMArgs dkv_gather_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("dkv_gather_dest_noc_x"),
+                get_named_compile_time_arg_val("dkv_gather_dest_noc_y"),
+                get_named_compile_time_arg_val("dkv_gather_data_size_bytes"),
+                get_named_compile_time_arg_val("dkv_gather_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("dkv_gather_src_cb"),
+                get_named_compile_time_arg_val("dkv_gather_src_num_pages"),
+                get_named_compile_time_arg_val("dkv_gather_sender_grid_start_x"),
+                get_named_compile_time_arg_val("dkv_gather_sender_grid_start_y"),
+                get_named_compile_time_arg_val("dkv_gather_sender_grid_end_x"),
+                get_named_compile_time_arg_val("dkv_gather_sender_grid_end_y"),
+                get_named_compile_time_arg_val("dkv_gather_row_major"),
+                get_write_ptr(get_named_compile_time_arg_val(
+                    "kv_rmsnorm_input_cb")),  // receiver_data_addr from CB write ptr (single-buffered)
+            },
+        .receiver =
+            {
+                get_named_compile_time_arg_val("dkv_gather_noc0_num_senders"),
+                get_named_compile_time_arg_val("dkv_gather_noc1_num_senders"),
+                get_named_compile_time_arg_val("dkv_gather_noc0_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("dkv_gather_noc1_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("dkv_gather_dst_cb"),
+                get_named_compile_time_arg_val("dkv_gather_dst_num_pages"),
+            },
     };
 
     using KV_RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
@@ -254,354 +277,41 @@ void kernel_main() {
         .position_ids_tensor_address = get_named_compile_time_arg_val("krope_position_ids_tensor_address"),
     };
 
-    deepseek_b1_ops::KVCacheUpdate::ReaderArgs kv_cache_update_args{};
-
-    deepseek_b1_ops::FlashMLADecode::ReaderArgs flash_mla_args;
-    if constexpr (Core::is_mla_core) {
-        flash_mla_args = {
-            .k_addr = get_common_arg_val<uint32_t>(13),
-            .local_cur_pos = 0,  // set via flash_mla.set_local_cur_pos() below
-            .cur_batch = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .core_num_in_reduce = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .is_mcast_sender = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .mcast_start_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .mcast_start_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .vc = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .St = get_named_compile_time_arg_val("St"),
-            .DHt = get_named_compile_time_arg_val("DHt"),
-            .Sk_chunk_t = get_named_compile_time_arg_val("Sk_chunk_t"),
-            .num_cores_per_head = get_named_compile_time_arg_val("num_cores_per_head"),
-            .k_chunk_size = get_named_compile_time_arg_val("k_chunk_size"),
-            .mcast_semaphore_addr = get_named_compile_time_arg_val("mla_mcast_semaphore_addr"),
-            .k_page_size = get_named_compile_time_arg_val("k_page_size"),
-            .k_num_pages = get_named_compile_time_arg_val("k_num_pages"),
-            .ncrisc_brisc_sync_semaphore_addr = get_named_compile_time_arg_val("mla_ncrisc_brisc_sync_semaphore_addr"),
-            .receiver_ready_semaphore_addr = get_named_compile_time_arg_val("mla_receiver_ready_semaphore_addr"),
-            .kv_cache_cur_pos_ready_semaphore_addr =
-                get_named_compile_time_arg_val("mla_kv_cache_cur_pos_ready_semaphore_addr"),
-            .kv_cache_cur_pos_ready_value = get_named_compile_time_arg_val("mla_kv_cache_cur_pos_ready_value"),
-            .cb_k_in = get_named_compile_time_arg_val("mla_k_in_cb"),
-        };
-    }
-
-    using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::ReaderCTArgs;
-
-    // Matmul4 CTArgs
-    using Matmul4CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
-    deepseek_b1_ops::Matmul::ReaderArgs matmul4_args{};
-
-    // Gather2 sender args (UsePerCoreSenderIdx: each core gets a contiguous index
-    // via gather2_sender_idx, avoiding gaps from the non-rectangular kv_b2 grid)
-    deepseek_b1_ops::Gather::SenderArgs gather2_args{
-        get_named_compile_time_arg_val("gather2_dest_noc_x"),
-        get_named_compile_time_arg_val("gather2_dest_noc_y"),
-        get_named_compile_time_arg_val("gather2_data_size_bytes"),
-        get_semaphore(get_named_compile_time_arg_val("gather2_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("gather2_src_cb"),
-        get_named_compile_time_arg_val("gather2_src_num_pages"),
-        get_named_compile_time_arg_val("gather2_sender_grid_start_x"),
-        get_named_compile_time_arg_val("gather2_sender_grid_start_y"),
-        get_named_compile_time_arg_val("gather2_sender_grid_end_x"),
-        get_named_compile_time_arg_val("gather2_sender_grid_end_y"),
-        get_named_compile_time_arg_val("gather2_row_major"),
-        get_common_arg_val<uint32_t>(15),  // gather2_receiver_data_addr
-        get_named_compile_time_arg_val("gather2_sender_idx"),
-    };
-
-    // Mcast3 receiver args
-    deepseek_b1_ops::Mcast::ReceiverArgs mcast3_args{
-        get_semaphore(get_named_compile_time_arg_val("mcast3_data_receiver_semaphore")),
-        get_named_compile_time_arg_val("mcast3_dst_cb"),
-        get_named_compile_time_arg_val("mcast3_dst_num_pages"),
-    };
-
-    // Matmul5 CTArgs
-    using Matmul5CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
-    deepseek_b1_ops::Matmul::ReaderArgs matmul5_args{};
-
-    // Gather3 sender args (UsePerCoreSenderIdx: each core gets a contiguous index
-    // via gather3_sender_idx, avoiding gaps from the non-rectangular o_proj grid)
-    deepseek_b1_ops::Gather::SenderArgs gather3_args{
-        get_named_compile_time_arg_val("gather3_dest_noc_x"),
-        get_named_compile_time_arg_val("gather3_dest_noc_y"),
-        get_named_compile_time_arg_val("gather3_data_size_bytes"),
-        get_semaphore(get_named_compile_time_arg_val("gather3_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("gather3_src_cb"),
-        get_named_compile_time_arg_val("gather3_src_num_pages"),
-        get_named_compile_time_arg_val("gather3_sender_grid_start_x"),
-        get_named_compile_time_arg_val("gather3_sender_grid_start_y"),
-        get_named_compile_time_arg_val("gather3_sender_grid_end_x"),
-        get_named_compile_time_arg_val("gather3_sender_grid_end_y"),
-        get_named_compile_time_arg_val("gather3_row_major"),
-        get_common_arg_val<uint32_t>(16),  // gather3_receiver_data_addr
-        get_named_compile_time_arg_val("gather3_sender_idx"),
-    };
-
-    // ========================================================================o
-    // All CCLs are placed after other ops setup due to appended fabric rtas
-    // ========================================================================
-    // CCL Broadcast CTArgs type alias
-    using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
-        get_named_compile_time_arg_val("bcast_cb0_id"),
-        get_named_compile_time_arg_val("bcast_num_pages_to_read"),
-        get_named_compile_time_arg_val("bcast_tensor0_page_size"),
-        get_named_compile_time_arg_val("bcast_num_targets_forward_direction"),
-        get_named_compile_time_arg_val("bcast_num_targets_backward_direction"),
-        get_named_compile_time_arg_val("bcast_is_sender"),
-        get_named_compile_time_arg_val("bcast_core_noc_x"),
-        get_named_compile_time_arg_val("bcast_core_noc_y"),
-        get_named_compile_time_arg_val("bcast_is_secondary_sender"),
-        get_named_compile_time_arg_val("bcast_has_secondary_target"),
-        get_named_compile_time_arg_val("bcast_start_distance_in_hops_forward"),
-        get_named_compile_time_arg_val("bcast_range_hops_forward"),
-        get_named_compile_time_arg_val("bcast_start_distance_in_hops_backward"),
-        get_named_compile_time_arg_val("bcast_range_hops_backward")>;
-
-    deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
-
-    if constexpr (!Core::skip_ccl && Core::is_input_core) {
-        uint32_t offset_fabric_args = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
-        bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
-            get_common_arg_val<uint32_t>(0),   // tensor_address0
-            get_common_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
-            get_common_arg_val<uint32_t>(2),   // wait_output_semaphore
-            get_common_arg_val<uint32_t>(3),   // reset_global_semaphore
-            get_common_arg_val<uint32_t>(4),   // out_ready_sem_noc0_x
-            get_common_arg_val<uint32_t>(5),   // out_ready_sem_noc0_y
-            get_common_arg_val<uint32_t>(6),   // out_ready_sem_wait_value
-            get_common_arg_val<uint32_t>(7),   // barrier_sem
-            get_common_arg_val<uint32_t>(8),   // barrier_sem_noc0_x
-            get_common_arg_val<uint32_t>(9),   // barrier_sem_noc0_y
-            get_common_arg_val<uint32_t>(10),  // ring_index
-            get_common_arg_val<uint32_t>(11),  // secondary_sync_sem
-            get_common_arg_val<uint32_t>(12),  // num_connections (computed from len(dst_nodes))
-            per_core_rta_arg_idx,
-        };
-        per_core_rta_arg_idx += offset_fabric_args;
-    }
-
-    using SdpaReduceWorkerCTArgs = deepseek_b1_ops::SdpaReduceWorker::ReaderCTArgs<
-        get_named_compile_time_arg_val("sdpa_cb_local_l"),
-        get_named_compile_time_arg_val("sdpa_cb_local_ms"),
-        get_named_compile_time_arg_val("sdpa_cb_neighbor_l"),
-        get_named_compile_time_arg_val("sdpa_cb_neighbor_ms"),
-        get_named_compile_time_arg_val("sdpa_ms_tile_size_bytes"),
-        get_named_compile_time_arg_val("sdpa_l_chunk_size_bytes"),
-        get_named_compile_time_arg_val("sdpa_num_l_chunks"),
-        get_named_compile_time_arg_val("sdpa_tiles_per_l_chunk"),
-        get_named_compile_time_arg_val("sdpa_position_enabled"),
-        get_named_compile_time_arg_val("sdpa_per_device_chunk_size")>;
-
-    deepseek_b1_ops::SdpaReduceWorker::ReaderArgs sdpa_reduce_worker_args;
-    if constexpr (Core::is_sdpa_worker_core) {
-        sdpa_reduce_worker_args = {
-            .r1_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .r2_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .r1_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .r2_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-        };
-        if constexpr (SdpaReduceWorkerCTArgs::position_enabled) {
-            sdpa_reduce_worker_args.pos_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
-            sdpa_reduce_worker_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
-            sdpa_reduce_worker_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
-            sdpa_reduce_worker_args.r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
-        }
-    }
-
-    using SdpaReduceForwarderCTArgs = deepseek_b1_ops::SdpaReduceForwarder::CTArgs<
-        get_named_compile_time_arg_val("sdpa_fwd_slots_per_round"),
-        get_named_compile_time_arg_val("sdpa_fwd_slot_size"),
-        get_named_compile_time_arg_val("sdpa_fwd_r2_buffer_offset")>;
-
-    deepseek_b1_ops::SdpaReduceForwarder::ForwarderArgs sdpa_reduce_forwarder_args;
-    if constexpr (Core::is_sdpa_forwarder_core) {
-        sdpa_reduce_forwarder_args = {
-            .buffer_base = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .buffer_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
-            .r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
-        };
-        uint32_t fabric_args_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
-        sdpa_reduce_forwarder_args.rta_offset = per_core_rta_arg_idx;
-        per_core_rta_arg_idx += fabric_args_offset;
-    }
-
-    // CCL Sender NCRISC CTArgs (reads from gather core)
-    using CCLSenderReaderCTArgs = deepseek_b1_ops::AllReduceSender::ReaderCTArgs<
-        get_named_compile_time_arg_val("ccl_sender_cb0_id"),
-        get_named_compile_time_arg_val("ccl_sender_num_tiles"),
-        get_named_compile_time_arg_val("ccl_sender_tensor_page_size"),
-        get_named_compile_time_arg_val("ccl_sender_data_noc_x"),
-        get_named_compile_time_arg_val("ccl_sender_data_noc_y")>;
-
-    // CCL Receiver NCRISC CTArgs (waits for remote data)
-    // Note: skip_local_push=1 because gather3 already pushed to CB7 (gather3_dst_cb)
-    using CCLReceiverReaderCTArgs = deepseek_b1_ops::AllReduceReceiver::ReaderCTArgs<
-        get_named_compile_time_arg_val("ccl_receiver_cb_in1"),
-        get_named_compile_time_arg_val("ccl_receiver_cb_in2"),
-        get_named_compile_time_arg_val("ccl_receiver_remote_sender_noc_x"),
-        get_named_compile_time_arg_val("ccl_receiver_remote_sender_noc_y"),
-        get_named_compile_time_arg_val("ccl_receiver_num_standard_tiles"),
-        get_named_compile_time_arg_val("ccl_receiver_cb_residual"),
-        get_named_compile_time_arg_val("ccl_receiver_has_residual"),
-        get_named_compile_time_arg_val("ccl_receiver_skip_local_push")>;
-
-    deepseek_b1_ops::AllReduceSender::RTArgs ccl_sender_args{};
-    deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
-
-    if constexpr (Core::is_ccl_sender_core) {
-        ccl_sender_args = {
-            .tensor_address = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-        };
-    }
-
-    if constexpr (Core::is_ccl_receiver_core) {
-        ccl_receiver_args = {
-            .sender_semaphore_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-        };
-    }
-// ============================================================================
-// BRISC (Writer + Mcast Sender) - WriterConfigDescriptor compiles as BRISC
-// Named compile-time args: bcast writer + rmsnorm writer, mcast sender, matmul writer, gather receiver
-// ============================================================================
-#elif defined(COMPILE_FOR_BRISC)
-
-    // CTArgs type aliases (required for Op templates)
-    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
-    using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;  // BRISC is no-op
-    using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
-        get_named_compile_time_arg_val("mcast_num_cores"),
-        get_named_compile_time_arg_val("mcast_is_part_of_receiver_grid"),
-        Core::is_input_core && Core::is_full_mcast_grid_core>;  // loopback = false
-
-    // RMSNorm writer args (BRISC is no-op)
-    deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm_args{};
-
-    // RMSNorm2 writer args (BRISC is no-op)
-    deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm2_args{};
-
-    // Mcast CB indices from named compile-time args
-    constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
-    constexpr uint32_t mcast_dst_cb = get_named_compile_time_arg_val("mcast_dst_cb");
-
-    // Mcast sender args (from compile-time args, passed to op as runtime args)
-    deepseek_b1_ops::Mcast::SenderArgs mcast_args{
-        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-        get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),
-        get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"),
-        get_named_compile_time_arg_val("mcast_data_size_bytes"),
-        mcast_src_cb,
-        get_named_compile_time_arg_val("mcast_src_num_pages"),
-        get_read_ptr(mcast_src_cb),
-        get_write_ptr(mcast_dst_cb),
-    };
-
-    // Matmul CTArgs type alias (BRISC uses WriterCTArgs)
-    using MatmulCTArgs = deepseek_b1_ops::KNSlicedMatmul::WriterCTArgs;
-    using Matmul2CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
-    using Matmul3CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
-
-    // Matmul writer args (BRISC is no-op)
-    deepseek_b1_ops::KNSlicedMatmul::WriterArgs matmul_args{};
-
-    // Gather receiver args (from compile-time args, passed to op as runtime args)
-    deepseek_b1_ops::GatherReduce::ReceiverArgs gather_reduce_args{
-        get_named_compile_time_arg_val("gather_reduce_noc0_num_senders"),
-        get_named_compile_time_arg_val("gather_reduce_noc1_num_senders"),
-        get_named_compile_time_arg_val("gather_reduce_noc0_receiver_semaphore_addr"),
-        get_named_compile_time_arg_val("gather_reduce_noc1_receiver_semaphore_addr"),
-        get_named_compile_time_arg_val("gather_reduce_dst_cb"),
-        get_named_compile_time_arg_val("gather_reduce_dst_num_tiles"),
-    };
-
-    // BRISC: Receiver args for SDPA input cores
-    using CreateQHeadsCTArgs = deepseek_b1_ops::CreateQHeads::ReceiverCTArgs;
-    deepseek_b1_ops::CreateQHeads::ReceiverArgs create_q_heads_args{
-        get_named_compile_time_arg_val("cqh_nope_phase1_semaphore_addr"),
-        get_named_compile_time_arg_val("cqh_nope_phase2_semaphore_addr"),
-        get_named_compile_time_arg_val("cqh_rope_semaphore_addr"),
-        get_named_compile_time_arg_val("cqh_num_nope_senders"),
-        get_named_compile_time_arg_val("cqh_num_rope_senders"),
-        get_named_compile_time_arg_val("cqh_receiver_in_cb"),
-        get_named_compile_time_arg_val("cqh_out_cb"),
-        get_named_compile_time_arg_val("cqh_nope_tiles"),
-        get_named_compile_time_arg_val("cqh_rope_tiles"),
-    };
-
-    // Matmul2 writer args (BRISC is no-op)
-    deepseek_b1_ops::Matmul::WriterArgs matmul2_args{};
-
-    // Matmul2 CB indices and parameters from named compile-time args
-    constexpr uint32_t matmul2_in0 = get_named_compile_time_arg_val("matmul2_in0");
-
-    // Matmul3 writer args (BRISC is no-op)
-    deepseek_b1_ops::Matmul::WriterArgs matmul3_args{};
-
-    // Qrope CTArgs type alias (BRISC uses WriterCTArgs, no-op)
-    using QRopeCTArgs = deepseek_b1_ops::Rope::WriterCTArgs;
-
-    // Qrope writer args (BRISC is no-op)
-    deepseek_b1_ops::Rope::WriterArgs qrope_args{};
-
-    // Mcast2 sender args (for input core to mcast rmsnorm2 output to all matmul2 cores)
-    // Uses same grid and semaphores as first mcast
-    // Reads from rmsnorm2_output_cb, writes to matmul2_in0 with loopback
-    constexpr uint32_t mcast2_src_cb = get_named_compile_time_arg_val("rmsnorm2_output_cb");
-    deepseek_b1_ops::Mcast::SenderArgs mcast2_args{
-        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-        get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),
-        get_named_compile_time_arg_val("mcast2_data_receiver_semaphore_addr"),
-        get_named_compile_time_arg_val("mcast2_data_size_bytes"),
-        mcast2_src_cb,  // Wait for rmsnorm2_output_cb
-        get_named_compile_time_arg_val("mcast2_src_num_pages"),
-        get_read_ptr(mcast2_src_cb),  // Read from rmsnorm2_output_cb
-        get_write_ptr(matmul2_in0),   // Write to matmul2_in0 (loopback)
-    };
-
-    // Matmul writer args (BRISC is no-op)
-    using DKV_MatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
-    deepseek_b1_ops::Matmul::WriterArgs dkv_matmul_args{};
-
-    // Gather receiver args (from compile-time args, passed to op as runtime args)
-    deepseek_b1_ops::Gather::ReceiverArgs dkv_gather_args{
-        get_named_compile_time_arg_val("dkv_gather_noc0_num_senders"),
-        get_named_compile_time_arg_val("dkv_gather_noc1_num_senders"),
-        get_named_compile_time_arg_val("dkv_gather_noc0_receiver_semaphore_addr"),
-        get_named_compile_time_arg_val("dkv_gather_noc1_receiver_semaphore_addr"),
-        get_named_compile_time_arg_val("dkv_gather_dst_cb"),
-        get_named_compile_time_arg_val("dkv_gather_dst_num_pages"),
-    };
-
-    using KV_RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
-    deepseek_b1_ops::RMSNorm::WriterArgs kv_rmsnorm_args{};
-
-    using K_RopeCTArgs = deepseek_b1_ops::Rope::WriterCTArgs;
-
-    // Writer args (empty - no-op)
-    deepseek_b1_ops::Rope::WriterArgs krope_args{};
-
     deepseek_b1_ops::KVCacheUpdate::WriterArgs kv_cache_update_args{
-        .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(0),
-        .local_cur_pos = 0,  // set via kv_cache_update.set_local_cur_pos() below
-        .kv_cache_input_cb = get_named_compile_time_arg_val("kv_cache_input_cb"),
+        .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(bcast_writer_common_rt_count + 0),
+        .local_cur_pos = 0,
         .kv_cache_intermed_cb = get_named_compile_time_arg_val("kv_cache_intermed_cb"),
+        .kv_cache_intermed_sync_cb = get_named_compile_time_arg_val("kv_cache_intermed_sync_cb"),
         .kv_cache_output_cb = get_named_compile_time_arg_val("kv_cache_output_cb"),
         .kv_rmsnorm_output_cb = get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
         .krope_output_cb = get_named_compile_time_arg_val("krope_output_cb"),
         .grid_start_y = get_named_compile_time_arg_val("kv_cache_grid_start_y"),
-        .full_grid_mcast_start_x = get_named_compile_time_arg_val("full_grid_mcast_start_x"),
-        .full_grid_mcast_start_y = get_named_compile_time_arg_val("full_grid_mcast_start_y"),
-        .full_grid_mcast_end_x = get_named_compile_time_arg_val("full_grid_mcast_end_x"),
-        .full_grid_mcast_end_y = get_named_compile_time_arg_val("full_grid_mcast_end_y"),
-        .full_grid_mcast_num_dests = get_named_compile_time_arg_val("full_grid_mcast_num_dests"),
         .kv_cache_cur_pos_ready_semaphore_addr =
             get_named_compile_time_arg_val("kv_cache_cur_pos_ready_semaphore_addr"),
+        .k_chunk_size = get_named_compile_time_arg_val("k_chunk_size"),
+        .num_cores_per_head = get_named_compile_time_arg_val("num_cores_per_head"),
+        .mla_sender_noc_x =
+            {
+                get_named_compile_time_arg_val("mla_sender_noc_x_0"),
+                get_named_compile_time_arg_val("mla_sender_noc_x_1"),
+                get_named_compile_time_arg_val("mla_sender_noc_x_2"),
+                get_named_compile_time_arg_val("mla_sender_noc_x_3"),
+                get_named_compile_time_arg_val("mla_sender_noc_x_4"),
+                get_named_compile_time_arg_val("mla_sender_noc_x_5"),
+                get_named_compile_time_arg_val("mla_sender_noc_x_6"),
+                get_named_compile_time_arg_val("mla_sender_noc_x_7"),
+            },
+        .mla_sender_noc_y =
+            {
+                get_named_compile_time_arg_val("mla_sender_noc_y_0"),
+                get_named_compile_time_arg_val("mla_sender_noc_y_1"),
+                get_named_compile_time_arg_val("mla_sender_noc_y_2"),
+                get_named_compile_time_arg_val("mla_sender_noc_y_3"),
+                get_named_compile_time_arg_val("mla_sender_noc_y_4"),
+                get_named_compile_time_arg_val("mla_sender_noc_y_5"),
+                get_named_compile_time_arg_val("mla_sender_noc_y_6"),
+                get_named_compile_time_arg_val("mla_sender_noc_y_7"),
+            },
     };
 
     deepseek_b1_ops::FlashMLADecode::WriterArgs flash_mla_args;
@@ -665,6 +375,332 @@ void kernel_main() {
         get_named_compile_time_arg_val("vDHt"),
         get_named_compile_time_arg_val("mla_out_o_cb")>;
 
+    // Matmul4 CTArgs
+    using Matmul4CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
+    deepseek_b1_ops::Matmul::ReaderArgs matmul4_args{};
+
+    // Gather2 sender args (UsePerCoreSenderIdx: each core gets a contiguous index
+    // via gather2_sender_idx, avoiding gaps from the non-rectangular kv_b2 grid)
+    deepseek_b1_ops::Gather::DMArgs gather2_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("gather2_dest_noc_x"),
+                get_named_compile_time_arg_val("gather2_dest_noc_y"),
+                get_named_compile_time_arg_val("gather2_data_size_bytes"),
+                get_semaphore(get_named_compile_time_arg_val("gather2_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("gather2_src_cb"),
+                get_named_compile_time_arg_val("gather2_src_num_pages"),
+                get_named_compile_time_arg_val("gather2_sender_grid_start_x"),
+                get_named_compile_time_arg_val("gather2_sender_grid_start_y"),
+                get_named_compile_time_arg_val("gather2_sender_grid_end_x"),
+                get_named_compile_time_arg_val("gather2_sender_grid_end_y"),
+                get_named_compile_time_arg_val("gather2_row_major"),
+                get_common_arg_val<uint32_t>(bcast_writer_common_rt_count + 2),  // gather2_receiver_data_addr
+                get_named_compile_time_arg_val("gather2_sender_idx"),
+            },
+        .receiver = {},
+    };
+
+    // Mcast3 receiver args
+    deepseek_b1_ops::Mcast::ReceiverArgs mcast3_args{
+        get_semaphore(get_named_compile_time_arg_val("mcast3_data_receiver_semaphore")),
+        get_named_compile_time_arg_val("mcast3_dst_cb"),
+        get_named_compile_time_arg_val("mcast3_dst_num_pages"),
+    };
+
+    // Matmul5 CTArgs
+    using Matmul5CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
+    deepseek_b1_ops::Matmul::ReaderArgs matmul5_args{};
+
+    // Gather3 sender args (UsePerCoreSenderIdx: each core gets a contiguous index
+    // via gather3_sender_idx, avoiding gaps from the non-rectangular o_proj grid)
+    deepseek_b1_ops::Gather::DMArgs gather3_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("gather3_dest_noc_x"),
+                get_named_compile_time_arg_val("gather3_dest_noc_y"),
+                get_named_compile_time_arg_val("gather3_data_size_bytes"),
+                get_semaphore(get_named_compile_time_arg_val("gather3_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("gather3_src_cb"),
+                get_named_compile_time_arg_val("gather3_src_num_pages"),
+                get_named_compile_time_arg_val("gather3_sender_grid_start_x"),
+                get_named_compile_time_arg_val("gather3_sender_grid_start_y"),
+                get_named_compile_time_arg_val("gather3_sender_grid_end_x"),
+                get_named_compile_time_arg_val("gather3_sender_grid_end_y"),
+                get_named_compile_time_arg_val("gather3_row_major"),
+                get_common_arg_val<uint32_t>(bcast_writer_common_rt_count + 3),  // gather3_receiver_data_addr
+                get_named_compile_time_arg_val("gather3_sender_idx"),
+            },
+        .receiver = {},
+    };
+
+    // ========================================================================o
+    // All CCLs are placed after other ops setup due to appended fabric rtas
+    // ========================================================================
+    // CCL Broadcast CTArgs type alias
+    using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
+        get_named_compile_time_arg_val("bcast_data_cb_id"),
+        get_named_compile_time_arg_val("bcast_num_pages_to_read"),
+        get_named_compile_time_arg_val("bcast_tensor0_page_size"),
+        get_named_compile_time_arg_val("bcast_num_neighbors"),
+        get_named_compile_time_arg_val("bcast_num_links"),
+        get_named_compile_time_arg_val("bcast_is_root"),
+        get_named_compile_time_arg_val("bcast_chunk_size_bytes"),
+        get_named_compile_time_arg_val("bcast_last_chunk_size_bytes"),
+        get_named_compile_time_arg_val("bcast_num_chunks")>;
+
+    deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
+
+    if constexpr (!Core::skip_ccl && Core::is_input_core) {
+        uint32_t offset_fabric_args = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
+            get_common_arg_val<uint32_t>(0),  // tensor_address0
+            get_common_arg_val<uint32_t>(1),  // my_noc_x
+            get_common_arg_val<uint32_t>(2),  // my_noc_y
+            {
+                get_common_arg_val<uint32_t>(3),  // sem_bank_addrs[0]
+                get_common_arg_val<uint32_t>(4),  // sem_bank_addrs[1]
+            },
+            per_core_rta_arg_idx,  // per_core_rta_arg_idx_offset
+            offset_fabric_args,    // per_core_rta_num_args
+        };
+        per_core_rta_arg_idx += offset_fabric_args;
+    }
+
+    using SdpaReduceWorkerCTArgs = deepseek_b1_ops::SdpaReduceWorker::ReaderCTArgs<
+        get_named_compile_time_arg_val("sdpa_cb_local_l"),
+        get_named_compile_time_arg_val("sdpa_cb_local_ms"),
+        get_named_compile_time_arg_val("sdpa_cb_neighbor_l"),
+        get_named_compile_time_arg_val("sdpa_cb_neighbor_ms"),
+        get_named_compile_time_arg_val("sdpa_ms_tile_size_bytes"),
+        get_named_compile_time_arg_val("sdpa_l_chunk_size_bytes"),
+        get_named_compile_time_arg_val("sdpa_num_l_chunks"),
+        get_named_compile_time_arg_val("sdpa_tiles_per_l_chunk"),
+        get_named_compile_time_arg_val("sdpa_position_enabled"),
+        get_named_compile_time_arg_val("sdpa_per_device_chunk_size")>;
+
+    deepseek_b1_ops::SdpaReduceWorker::ReaderArgs sdpa_reduce_worker_args;
+    if constexpr (Core::is_sdpa_worker_core) {
+        sdpa_reduce_worker_args = {
+            .r1_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r1_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+        };
+        if constexpr (SdpaReduceWorkerCTArgs::position_enabled) {
+            sdpa_reduce_worker_args.pos_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            sdpa_reduce_worker_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            sdpa_reduce_worker_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            sdpa_reduce_worker_args.r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        }
+    }
+
+    using SdpaReduceForwarderCTArgs = deepseek_b1_ops::SdpaReduceForwarder::CTArgs<
+        get_named_compile_time_arg_val("sdpa_fwd_slots_per_round"),
+        get_named_compile_time_arg_val("sdpa_fwd_slot_size"),
+        get_named_compile_time_arg_val("sdpa_fwd_r2_buffer_offset")>;
+
+    deepseek_b1_ops::SdpaReduceForwarder::ForwarderArgs sdpa_reduce_forwarder_args;
+    if constexpr (Core::is_sdpa_forwarder_core) {
+        sdpa_reduce_forwarder_args = {
+            .buffer_base = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .buffer_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+            .r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+        };
+        uint32_t fabric_args_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        sdpa_reduce_forwarder_args.rta_offset = per_core_rta_arg_idx;
+        per_core_rta_arg_idx += fabric_args_offset;
+    }
+
+    // CCL All-Reduce NCRISC CTArgs: writer (sender core) + reader (receiver core)
+    using AllReduceWriterCTArgs = deepseek_b1_ops::AllReduce::WriterCTArgs<
+        get_named_compile_time_arg_val("allreduce_local_data_cb_id"),
+        get_named_compile_time_arg_val("allreduce_input_num_tiles"),
+        get_named_compile_time_arg_val("allreduce_page_size_bytes"),
+        get_named_compile_time_arg_val("allreduce_tiles_per_chunk"),
+        get_named_compile_time_arg_val("allreduce_last_chunk_tiles"),
+        get_named_compile_time_arg_val("allreduce_num_chunks"),
+        get_named_compile_time_arg_val("allreduce_num_links"),
+        get_named_compile_time_arg_val("allreduce_writer_link_index"),
+        get_named_compile_time_arg_val("allreduce_writer_signal_local_ready"),
+        get_named_compile_time_arg_val("allreduce_skip_local_push")>;
+
+    using AllReduceReaderCTArgs = deepseek_b1_ops::AllReduce::ReaderCTArgs<
+        get_named_compile_time_arg_val("allreduce_recv_local_data_cb_id"),
+        get_named_compile_time_arg_val("allreduce_remote_data_cb_id"),
+        get_named_compile_time_arg_val("allreduce_residual_cb_id"),
+        get_named_compile_time_arg_val("allreduce_has_residual"),
+        get_named_compile_time_arg_val("allreduce_total_num_tiles"),
+        get_named_compile_time_arg_val("allreduce_page_size_bytes"),
+        get_named_compile_time_arg_val("allreduce_tiles_per_chunk"),
+        get_named_compile_time_arg_val("allreduce_last_chunk_tiles"),
+        get_named_compile_time_arg_val("allreduce_num_chunks"),
+        get_named_compile_time_arg_val("allreduce_num_links")>;
+
+    deepseek_b1_ops::AllReduce::SenderArgs ccl_sender_args{};
+    deepseek_b1_ops::AllReduce::ReceiverArgs ccl_receiver_args{};
+
+    if constexpr (Core::is_allreduce_sender_core) {
+        ccl_sender_args.intermediate_buffer_address = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        ccl_sender_args.dest_noc_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        ccl_sender_args.dest_noc_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        ccl_sender_args.per_core_rta_start_idx = per_core_rta_arg_idx;
+    }
+
+    if constexpr (Core::is_allreduce_receiver_core) {
+        ccl_receiver_args.sem_bank_addr_0 = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        ccl_receiver_args.sem_bank_addr_1 = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        ccl_receiver_args.sender_noc_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        ccl_receiver_args.sender_noc_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        ccl_receiver_args.sender_local_data_l1_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        ccl_receiver_args.local_ready_sem_bank_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+    }
+// ============================================================================
+// BRISC (Writer + Mcast Sender) - WriterConfigDescriptor compiles as BRISC
+// Named compile-time args: bcast writer + rmsnorm writer, mcast sender, matmul writer, gather receiver
+// ============================================================================
+#elif defined(COMPILE_FOR_BRISC)
+
+    // CTArgs type aliases (required for Op templates)
+    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
+    using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;  // BRISC is no-op
+    using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
+        get_named_compile_time_arg_val("mcast_num_cores"),
+        get_named_compile_time_arg_val("mcast_is_part_of_receiver_grid"),
+        Core::is_input_core && Core::is_full_mcast_grid_core>;  // loopback = false
+
+    // RMSNorm writer args (BRISC is no-op)
+    deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm_args{};
+
+    // RMSNorm2 writer args (BRISC is no-op)
+    deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm2_args{};
+
+    // Mcast CB indices from named compile-time args
+    constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
+    constexpr uint32_t mcast_dst_cb = get_named_compile_time_arg_val("mcast_dst_cb");
+
+    // Mcast sender args (from compile-time args, passed to op as runtime args)
+    deepseek_b1_ops::Mcast::SenderArgs mcast_args{
+        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+        get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),
+        get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"),
+        get_named_compile_time_arg_val("mcast_data_size_bytes"),
+        mcast_src_cb,
+        get_named_compile_time_arg_val("mcast_src_num_pages"),
+        get_read_ptr(mcast_src_cb),
+        get_write_ptr(mcast_dst_cb),
+    };
+
+    // Matmul CTArgs type alias (BRISC uses WriterCTArgs)
+    using MatmulCTArgs = deepseek_b1_ops::KNSlicedMatmul::WriterCTArgs;
+    using Matmul2CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
+    using Matmul3CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
+
+    // Matmul writer args (BRISC is no-op)
+    deepseek_b1_ops::KNSlicedMatmul::WriterArgs matmul_args{};
+
+    // Gather receiver args (from compile-time args, passed to op as runtime args)
+    deepseek_b1_ops::GatherReduce::ReceiverArgs gather_reduce_args{
+        get_named_compile_time_arg_val("gather_reduce_noc0_num_senders"),
+        get_named_compile_time_arg_val("gather_reduce_noc1_num_senders"),
+        get_named_compile_time_arg_val("gather_reduce_noc0_receiver_semaphore_addr"),
+        get_named_compile_time_arg_val("gather_reduce_noc1_receiver_semaphore_addr"),
+        get_named_compile_time_arg_val("gather_reduce_dst_cb"),
+        get_named_compile_time_arg_val("gather_reduce_dst_num_tiles"),
+    };
+
+    // Matmul2 writer args (BRISC is no-op)
+    deepseek_b1_ops::Matmul::WriterArgs matmul2_args{};
+
+    // Matmul2 CB indices and parameters from named compile-time args
+    constexpr uint32_t matmul2_in0 = get_named_compile_time_arg_val("matmul2_in0");
+
+    // Matmul3 writer args (BRISC is no-op)
+    deepseek_b1_ops::Matmul::WriterArgs matmul3_args{};
+
+    // Qrope CTArgs type alias (BRISC uses WriterCTArgs, no-op)
+    using QRopeCTArgs = deepseek_b1_ops::Rope::WriterCTArgs;
+
+    // Qrope writer args (BRISC is no-op)
+    deepseek_b1_ops::Rope::WriterArgs qrope_args{};
+
+    // Mcast2 sender args (for input core to mcast rmsnorm2 output to all matmul2 cores)
+    // Uses same grid and semaphores as first mcast
+    // Reads from rmsnorm2_output_cb, writes to matmul2_in0 with loopback
+    constexpr uint32_t mcast2_src_cb = get_named_compile_time_arg_val("rmsnorm2_output_cb");
+    deepseek_b1_ops::Mcast::SenderArgs mcast2_args{
+        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+        get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),
+        get_named_compile_time_arg_val("mcast2_data_receiver_semaphore_addr"),
+        get_named_compile_time_arg_val("mcast2_data_size_bytes"),
+        mcast2_src_cb,  // Wait for rmsnorm2_output_cb
+        get_named_compile_time_arg_val("mcast2_src_num_pages"),
+        get_read_ptr(mcast2_src_cb),  // Read from rmsnorm2_output_cb
+        get_write_ptr(matmul2_in0),   // Write to matmul2_in0 (loopback)
+    };
+
+    // Matmul writer args (BRISC is no-op)
+    using DKV_MatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
+    deepseek_b1_ops::Matmul::WriterArgs dkv_matmul_args{};
+
+    // Gather: BRISC is no-op (ReceiverOnNCRISC mode)
+    deepseek_b1_ops::Gather::DMArgs dkv_gather_args{
+        .sender = {},
+        .receiver = {},
+    };
+
+    using KV_RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
+    deepseek_b1_ops::RMSNorm::WriterArgs kv_rmsnorm_args{};
+
+    using K_RopeCTArgs = deepseek_b1_ops::Rope::WriterCTArgs;
+
+    // Writer args (empty - no-op)
+    deepseek_b1_ops::Rope::WriterArgs krope_args{};
+
+    deepseek_b1_ops::KVCacheUpdate::ReaderArgs kv_cache_update_args{
+        .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(0),
+        .local_cur_pos = 0,  // set via kv_cache_update.set_local_cur_pos() below
+        .kv_cache_input_cb = get_named_compile_time_arg_val("kv_cache_input_cb"),
+        .grid_start_y = get_named_compile_time_arg_val("kv_cache_grid_start_y"),
+    };
+
+    deepseek_b1_ops::FlashMLADecode::ReaderArgs flash_mla_args;
+    if constexpr (Core::is_mla_core) {
+        flash_mla_args = {
+            .k_addr = get_common_arg_val<uint32_t>(0),
+            .local_cur_pos = 0,  // set via flash_mla.set_local_cur_pos() below
+            .cur_batch = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .core_num_in_reduce = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .is_mcast_sender = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .mcast_start_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .mcast_start_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .vc = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .St = get_named_compile_time_arg_val("St"),
+            .DHt = get_named_compile_time_arg_val("DHt"),
+            .Sk_chunk_t = get_named_compile_time_arg_val("Sk_chunk_t"),
+            .num_cores_per_head = get_named_compile_time_arg_val("num_cores_per_head"),
+            .k_chunk_size = get_named_compile_time_arg_val("k_chunk_size"),
+            .mcast_semaphore_addr = get_named_compile_time_arg_val("mla_mcast_semaphore_addr"),
+            .k_page_size = get_named_compile_time_arg_val("k_page_size"),
+            .k_num_pages = get_named_compile_time_arg_val("k_num_pages"),
+            .ncrisc_brisc_sync_semaphore_addr = get_named_compile_time_arg_val("mla_ncrisc_brisc_sync_semaphore_addr"),
+            .receiver_ready_semaphore_addr = get_named_compile_time_arg_val("mla_receiver_ready_semaphore_addr"),
+            .kv_cache_cur_pos_ready_semaphore_addr =
+                get_named_compile_time_arg_val("mla_kv_cache_cur_pos_ready_semaphore_addr"),
+            .kv_cache_cur_pos_ready_value = get_named_compile_time_arg_val("mla_kv_cache_cur_pos_ready_value"),
+            .cb_k_in = get_named_compile_time_arg_val("mla_k_in_cb"),
+        };
+    }
+
+    using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::ReaderCTArgs;
+
     // Matmul4/2 CTArgs (BRISC is no-op for matmul)
     using Matmul4CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
     using Matmul5CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
@@ -672,13 +708,17 @@ void kernel_main() {
     deepseek_b1_ops::Matmul::WriterArgs matmul5_args{};
 
     // Gather2 receiver args
-    deepseek_b1_ops::Gather::ReceiverArgs gather2_args{
-        get_named_compile_time_arg_val("gather2_noc0_num_senders"),
-        get_named_compile_time_arg_val("gather2_noc1_num_senders"),
-        get_semaphore(get_named_compile_time_arg_val("gather2_noc0_receiver_semaphore_id")),
-        get_semaphore(get_named_compile_time_arg_val("gather2_noc1_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("gather2_dst_cb"),
-        get_named_compile_time_arg_val("gather2_dst_num_pages"),
+    deepseek_b1_ops::Gather::DMArgs gather2_args{
+        .sender = {},
+        .receiver =
+            {
+                get_named_compile_time_arg_val("gather2_noc0_num_senders"),
+                get_named_compile_time_arg_val("gather2_noc1_num_senders"),
+                get_semaphore(get_named_compile_time_arg_val("gather2_noc0_receiver_semaphore_id")),
+                get_semaphore(get_named_compile_time_arg_val("gather2_noc1_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("gather2_dst_cb"),
+                get_named_compile_time_arg_val("gather2_dst_num_pages"),
+            },
     };
 
     // Mcast3 sender args
@@ -698,14 +738,18 @@ void kernel_main() {
         get_write_ptr(mcast3_dst_cb),  // CB 4 address (now allocated on gather core too)
     };
 
-    // Gather3 receiver args
-    deepseek_b1_ops::Gather::ReceiverArgs gather3_args{
-        get_named_compile_time_arg_val("gather3_noc0_num_senders"),
-        get_named_compile_time_arg_val("gather3_noc1_num_senders"),
-        get_semaphore(get_named_compile_time_arg_val("gather3_noc0_receiver_semaphore_id")),
-        get_semaphore(get_named_compile_time_arg_val("gather3_noc1_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("gather3_dst_cb"),
-        get_named_compile_time_arg_val("gather3_dst_num_pages"),
+    // Gather3 receiver args (on sender core 11,9 instead of gather core 12,9)
+    deepseek_b1_ops::Gather::DMArgs gather3_args{
+        .sender = {},
+        .receiver =
+            {
+                get_named_compile_time_arg_val("gather3_noc0_num_senders"),
+                get_named_compile_time_arg_val("gather3_noc1_num_senders"),
+                get_semaphore(get_named_compile_time_arg_val("gather3_noc0_receiver_semaphore_id")),
+                get_semaphore(get_named_compile_time_arg_val("gather3_noc1_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("gather3_dst_cb"),
+                get_named_compile_time_arg_val("gather3_dst_num_pages"),
+            },
     };
 
     // ========================================================================o
@@ -713,19 +757,19 @@ void kernel_main() {
     // ========================================================================
     // CCL Broadcast CTArgs type alias
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
-        get_named_compile_time_arg_val("bcast_cb0_id"),
+        get_named_compile_time_arg_val("bcast_data_cb_id"),
         get_named_compile_time_arg_val("bcast_num_pages_to_read"),
-        get_named_compile_time_arg_val("bcast_is_sender"),
+        get_named_compile_time_arg_val("bcast_is_root"),
         get_named_compile_time_arg_val("bcast_use_socket")>;
 
-    // CCL Broadcast reader runtime args (only populated when not skip_ccl)
+    // CCL Broadcast reader runtime args (socket fields are BRISC common RT args 2..4).
     deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
 
     if constexpr (!Core::skip_ccl) {
         bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{
-            get_named_compile_time_arg_val("bcast_socket_config_addr"),  // socket_config_addr
-            get_named_compile_time_arg_val("bcast_socket_page_size"),    // socket_page_size
-            get_named_compile_time_arg_val("bcast_socket_num_pages"),    // socket_num_pages
+            get_common_arg_val<uint32_t>(2),  // socket_config_addr
+            get_common_arg_val<uint32_t>(3),  // socket_page_size
+            get_common_arg_val<uint32_t>(4),  // socket_num_pages
         };
     }
 
@@ -797,28 +841,25 @@ void kernel_main() {
         per_core_rta_arg_idx += fabric_args_offset;
     }
 
-    // CCL Sender BRISC CTArgs (sends via fabric)
-    using CCLSenderWriterCTArgs = deepseek_b1_ops::AllReduceSender::WriterCTArgs<
-        get_named_compile_time_arg_val("ccl_sender_packet_cb_id"),
-        get_named_compile_time_arg_val("ccl_sender_input_num_tiles"),
-        get_named_compile_time_arg_val("ccl_sender_page_size_bytes"),
-        get_named_compile_time_arg_val("ccl_sender_payload_size_bytes"),
-        get_named_compile_time_arg_val("ccl_sender_data_noc_x"),
-        get_named_compile_time_arg_val("ccl_sender_data_noc_y"),
-        get_named_compile_time_arg_val("ccl_sender_remote_receiver_noc_x"),
-        get_named_compile_time_arg_val("ccl_sender_remote_receiver_noc_y"),
-        get_named_compile_time_arg_val("ccl_sender_dst_num_hops"),
-        get_named_compile_time_arg_val("ccl_sender_num_connections")>;
+    // CCL All-Reduce BRISC CTArgs: writer (sender core)
+    using AllReduceWriterCTArgs = deepseek_b1_ops::AllReduce::WriterCTArgs<
+        get_named_compile_time_arg_val("allreduce_local_data_cb_id"),
+        get_named_compile_time_arg_val("allreduce_input_num_tiles"),
+        get_named_compile_time_arg_val("allreduce_page_size_bytes"),
+        get_named_compile_time_arg_val("allreduce_tiles_per_chunk"),
+        get_named_compile_time_arg_val("allreduce_last_chunk_tiles"),
+        get_named_compile_time_arg_val("allreduce_num_chunks"),
+        get_named_compile_time_arg_val("allreduce_num_links"),
+        get_named_compile_time_arg_val("allreduce_writer_link_index"),
+        get_named_compile_time_arg_val("allreduce_writer_signal_local_ready"),
+        get_named_compile_time_arg_val("allreduce_skip_local_push")>;
 
-    deepseek_b1_ops::AllReduceSender::RTArgs ccl_sender_args{};
-    if constexpr (Core::is_ccl_sender_core) {
-        ccl_sender_args = {
-            .receiver_base_address = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .receive_semaphore_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-        };
-        uint32_t fabric_args_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
-        ccl_sender_args.fabric_args_start_index = per_core_rta_arg_idx;
-        per_core_rta_arg_idx += fabric_args_offset;
+    deepseek_b1_ops::AllReduce::SenderArgs ccl_sender_args{};
+    if constexpr (Core::is_allreduce_sender_core) {
+        ccl_sender_args.intermediate_buffer_address = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        ccl_sender_args.dest_noc_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        ccl_sender_args.dest_noc_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        ccl_sender_args.per_core_rta_start_idx = per_core_rta_arg_idx;
     }
 
 // ============================================================================
@@ -848,7 +889,7 @@ void kernel_main() {
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
         get_common_arg_val<uint32_t>(0),   // epsilon
         get_common_arg_val<float>(1),      // scalar (1/sqrt(7168))
-        get_common_arg_val<uint32_t>(15),  // rmsnorm_gamma_addr
+        get_common_arg_val<uint32_t>(16),  // rmsnorm_gamma_addr
     };
 
     // Mcast compute args (no-op for TRISC)
@@ -875,7 +916,7 @@ void kernel_main() {
         k_offset,
         get_named_compile_time_arg_val("matmul_k_per_core"),
         get_named_compile_time_arg_val("matmul_act_total_tiles"),
-        get_common_arg_val<uint32_t>(8),  // matmul_weights_addr
+        get_common_arg_val<uint32_t>(9),  // matmul_weights_addr
     };
 
     // Gather reduce compute args
@@ -889,7 +930,7 @@ void kernel_main() {
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm2_args{
         get_common_arg_val<uint32_t>(0),   // epsilon (same as rmsnorm1)
         get_common_arg_val<float>(2),      // scalar (1/sqrt(1536))
-        get_common_arg_val<uint32_t>(16),  // rmsnorm2_gamma_addr
+        get_common_arg_val<uint32_t>(17),  // rmsnorm2_gamma_addr
     };
 
     // Matmul2 CTArgs type alias (out_w is compile-time for TRISC)
@@ -902,7 +943,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("matmul2_in1"),
         get_named_compile_time_arg_val("matmul2_out"),
         get_named_compile_time_arg_val("matmul2_k_num_tiles"),
-        get_common_arg_val<uint32_t>(9),  // matmul2_weights_addr
+        get_common_arg_val<uint32_t>(10),  // matmul2_weights_addr
     };
 
     // Mcast2 compute args (no-op for TRISC)
@@ -918,7 +959,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("matmul3_in1"),
         get_named_compile_time_arg_val("matmul3_out"),
         get_named_compile_time_arg_val("matmul3_k_num_tiles"),
-        get_common_arg_val<uint32_t>(11),  // matmul3_weights_addr
+        get_common_arg_val<uint32_t>(12),  // matmul3_weights_addr
     };
 
     // Qrope CTArgs type alias
@@ -933,12 +974,12 @@ void kernel_main() {
         get_named_compile_time_arg_val("qrope_rotated_in_interm_cb"),
         get_named_compile_time_arg_val("qrope_cos_sin_interm_cb"),
         get_named_compile_time_arg_val("qrope_output_cb"),
-        get_common_arg_val<uint32_t>(14),  // qrope_trans_mat_addr
+        get_common_arg_val<uint32_t>(15),  // qrope_trans_mat_addr
     };
 
     // CreateQHeads compute args (tilization on SDPA input cores)
-    using CreateQHeadsCTArgs = deepseek_b1_ops::CreateQHeads::ComputeCTArgs;
-    deepseek_b1_ops::CreateQHeads::ComputeArgs create_q_heads_args{
+    using CreateQHeadsReceiverCTArgs = deepseek_b1_ops::CreateQHeads::ComputeCTArgs;
+    deepseek_b1_ops::CreateQHeads::ComputeArgs create_q_heads_receiver_args{
         get_named_compile_time_arg_val("cqh_receiver_in_cb"),
         get_named_compile_time_arg_val("cqh_out_cb"),
         get_named_compile_time_arg_val("cqh_nope_tiles"),
@@ -955,7 +996,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("dkv_matmul_in1"),
         get_named_compile_time_arg_val("dkv_matmul_out"),
         get_named_compile_time_arg_val("dkv_matmul_k_num_tiles"),
-        get_common_arg_val<uint32_t>(10),  // dkv_matmul_weights_addr
+        get_common_arg_val<uint32_t>(11),  // dkv_matmul_weights_addr
     };
 
     // Gather compute args (no-op for TRISC)
@@ -974,7 +1015,7 @@ void kernel_main() {
     deepseek_b1_ops::RMSNorm::ComputeArgs kv_rmsnorm_args{
         get_common_arg_val<uint32_t>(0),   // epsilon
         get_common_arg_val<float>(3),      // kv_scalar (1/sqrt(512))
-        get_common_arg_val<uint32_t>(17),  // kv_rmsnorm_gamma_addr
+        get_common_arg_val<uint32_t>(18),  // kv_rmsnorm_gamma_addr
     };
 
     using K_RopeCTArgs = deepseek_b1_ops::Rope::
@@ -996,13 +1037,14 @@ void kernel_main() {
         .rotated_in_interm_cb = krope_rotated_in_interm_cb,
         .cos_sin_interm_cb = krope_cos_sin_interm_cb,
         .out_cb = krope_output_cb,
-        .trans_mat_address_override = get_common_arg_val<uint32_t>(14),
+        .trans_mat_address_override = get_common_arg_val<uint32_t>(15),
     };
 
     deepseek_b1_ops::KVCacheUpdate::ComputeArgs kv_cache_update_args{
         .kv_cache_input_cb = get_common_arg_val<uint32_t>(4),
         .kv_cache_output_cb = get_common_arg_val<uint32_t>(5),
         .kv_cache_intermed_cb = get_common_arg_val<uint32_t>(6),
+        .kv_cache_intermed_sync_cb = get_common_arg_val<uint32_t>(7),
     };
     deepseek_b1_ops::FlashMLADecode::ComputeArgs flash_mla_args;
     if constexpr (Core::is_mla_core) {
@@ -1049,7 +1091,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("matmul4_in1"),
         get_named_compile_time_arg_val("matmul4_out"),
         get_named_compile_time_arg_val("matmul4_k_num_tiles"),
-        get_common_arg_val<uint32_t>(12),  // matmul4_weights_addr
+        get_common_arg_val<uint32_t>(13),  // matmul4_weights_addr
     };
 
     // Gather2 compute args (no-op)
@@ -1066,7 +1108,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("matmul5_in1"),
         get_named_compile_time_arg_val("matmul5_out"),
         get_named_compile_time_arg_val("matmul5_k_num_tiles"),
-        get_common_arg_val<uint32_t>(13),  // matmul5_weights_addr
+        get_common_arg_val<uint32_t>(14),  // matmul5_weights_addr
     };
 
     // Gather3 compute args (no-op)
@@ -1104,16 +1146,16 @@ void kernel_main() {
     using SdpaReduceForwarderCTArgs = deepseek_b1_ops::SdpaReduceForwarder::CTArgs<0, 0, 0>;
     deepseek_b1_ops::SdpaReduceForwarder::ForwarderArgs sdpa_reduce_forwarder_args;
 
-    // CCL Receiver compute CTArgs (reduction)
-    using CCLReceiverComputeCTArgs = deepseek_b1_ops::AllReduceReceiver::ComputeCTArgs<
-        get_named_compile_time_arg_val("ccl_receiver_cb_in0"),
-        get_named_compile_time_arg_val("ccl_receiver_cb_in1"),
-        get_named_compile_time_arg_val("ccl_receiver_cb_out0"),
-        get_named_compile_time_arg_val("ccl_receiver_cb_residual"),
-        get_named_compile_time_arg_val("ccl_receiver_has_residual"),
-        get_named_compile_time_arg_val("ccl_receiver_num_tiles")>;
+    // CCL All-Reduce TRISC CTArgs: compute (receiver core)
+    using AllReduceComputeCTArgs = deepseek_b1_ops::AllReduce::ComputeCTArgs<
+        get_named_compile_time_arg_val("allreduce_cb_remote"),
+        get_named_compile_time_arg_val("allreduce_cb_local"),
+        get_named_compile_time_arg_val("allreduce_cb_out"),
+        get_named_compile_time_arg_val("allreduce_cb_residual"),
+        get_named_compile_time_arg_val("allreduce_has_residual"),
+        get_named_compile_time_arg_val("allreduce_num_tiles")>;
 
-    deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
+    deepseek_b1_ops::AllReduce::ComputeArgs ccl_compute_args{};
 
     deepseek_compute_kernel_init();
 #endif
@@ -1124,9 +1166,9 @@ void kernel_main() {
 #if defined(COMPILE_FOR_BRISC)
     uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(1);
 #elif defined(COMPILE_FOR_NCRISC)
-    uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(14);
+    uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(bcast_writer_common_rt_count + 1);
 #elif defined(COMPILE_FOR_TRISC)
-    uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(7);
+    uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(8);
 #endif
 
     // ====================================================================
@@ -1284,15 +1326,33 @@ void kernel_main() {
                 }
 
                 // ================================================================
-                // CreateQHeads
+                // CreateQHeads (all data movement on NCRISC)
                 // ================================================================
                 {
                     DeviceZoneScopedN("CREATE_Q_HEADS");
                     constexpr bool is_create_q_heads_sender = Core::is_qnope_core || Core::is_qrope_core;
-                    deepseek_b1_ops::CreateQHeads::
-                        Op<CreateQHeadsCTArgs, is_create_q_heads_sender, Core::is_sdpa_input_core, false, true>
-                            create_q_heads;
-                    create_q_heads(create_q_heads_args);
+#if defined(COMPILE_FOR_NCRISC)
+                    deepseek_b1_ops::CreateQHeads::Op<
+                        CreateQHeadsSenderCTArgs,
+                        is_create_q_heads_sender,
+                        Core::is_sdpa_input_core,
+                        true,
+                        false,
+                        true>
+                        create_q_heads_sender;
+                    create_q_heads_sender(create_q_heads_sender_args);
+#endif
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_TRISC)
+                    deepseek_b1_ops::CreateQHeads::Op<
+                        CreateQHeadsReceiverCTArgs,
+                        is_create_q_heads_sender,
+                        Core::is_sdpa_input_core,
+                        true,
+                        false,
+                        true>
+                        create_q_heads_receiver;
+                    create_q_heads_receiver(create_q_heads_receiver_args);
+#endif
                 }
             }
 
@@ -1321,7 +1381,8 @@ void kernel_main() {
                 // ================================================================
                 {
                     DeviceZoneScopedN("DKV_GATHER");
-                    deepseek_b1_ops::Gather::Op<Core::is_knope_core, Core::is_kv_rmsnorm_core, true> dkv_gather;
+                    deepseek_b1_ops::Gather::Op<Core::is_knope_core, Core::is_kv_rmsnorm_core, true, false, true>
+                        dkv_gather;
                     dkv_gather(dkv_gather_args);
                 }
 
@@ -1457,56 +1518,28 @@ void kernel_main() {
         }
 
         // ========================================================================
-        // Gather3: 112 active matmul5 cores -> gather core (12, 9)
+        // Gather3: 112 active matmul5 cores -> sender core (11, 9)
         // Collects [1, 64] * 112 = [1, 7168]
         // ========================================================================
         {
             DeviceZoneScopedN("GATHER3");
-            deepseek_b1_ops::Gather::Op<Core::is_matmul5_core, Core::is_gather_receiver_core, true, true> gather3;
+            deepseek_b1_ops::Gather::Op<Core::is_matmul5_core, Core::is_allreduce_sender_core, true, true> gather3;
             gather3(gather3_args);
         }
 
-#if defined(COMPILE_FOR_BRISC)
-        // Signal CCL sender that gather3 is complete (gather receiver only)
-        if constexpr (Core::is_gather_receiver_core && Core::is_ccl_receiver_core) {
-            static_assert(noc_mode == DM_DYNAMIC_NOC, "CCL signal must be sent on dynamic NOC");
-            constexpr uint8_t CCL_SIGNAL_NOC = 0;
-            constexpr uint32_t gather3_completion_semaphore_id =
-                get_named_compile_time_arg_val("gather3_completion_semaphore_id");
-            constexpr uint32_t ccl_sender_noc_x = get_named_compile_time_arg_val("ccl_sender_noc_x");
-            constexpr uint32_t ccl_sender_noc_y = get_named_compile_time_arg_val("ccl_sender_noc_y");
-            uint64_t ccl_sender_semaphore_addr = get_noc_addr(
-                ccl_sender_noc_x, ccl_sender_noc_y, get_semaphore(gather3_completion_semaphore_id), CCL_SIGNAL_NOC);
-            noc_semaphore_inc(ccl_sender_semaphore_addr, 1, CCL_SIGNAL_NOC);
-            noc_async_atomic_barrier(CCL_SIGNAL_NOC);
-        }
-#endif
-
         // ========================================================================
         // CCL All-Reduce: Exchange [1, 7168] between devices
-        // - CCL Sender (11, 9): Reads gather3 output from gather core, sends via fabric
-        // - CCL Receiver (12, 9): Receives remote data, performs reduction
-
-        // Note: skip_local_push=1 is set for CCLReceiverReaderCTArgs because
-        // gather3 already pushed to CB7 (gather3_dst_cb). The receiver just
-        // needs to wait for remote data and perform the reduction.
+        // - Sender core (11, 9): NCRISC writer (link 1) + BRISC writer (link 0)
+        //   gather3 writes directly to sender's local_data_cb; writer NOC-copies
+        //   to receiver and sends via fabric.
+        // - Receiver core (12, 9): NCRISC reader + TRISC compute
         // ========================================================================
-        if constexpr (Core::is_ccl_sender_core) {
-            DeviceZoneScopedN("CCL_SENDER_SEND");
-#if defined(COMPILE_FOR_NCRISC)
-            // Wait for gather3 to complete before reading from gather core
-            constexpr uint32_t gather3_completion_semaphore_id =
-                get_named_compile_time_arg_val("ccl_sender_gather3_completion_semaphore_id");
-            volatile tt_l1_ptr uint32_t* gather3_completion_semaphore_addr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(gather3_completion_semaphore_id));
-            noc_semaphore_wait(gather3_completion_semaphore_addr, 1);
-            noc_semaphore_set(gather3_completion_semaphore_addr, 0);
+        if constexpr (Core::is_allreduce_sender_core) {
+            DeviceZoneScopedN("CCL_SENDER_WRITER");
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+            deepseek_b1_ops::AllReduce::WriterSingleLink<AllReduceWriterCTArgs> ccl_writer;
+            ccl_writer(ccl_sender_args);
 
-            deepseek_b1_ops::AllReduceSender::Op<CCLSenderReaderCTArgs> ccl_sender_reader;
-            ccl_sender_reader(ccl_sender_args);
-#elif defined(COMPILE_FOR_BRISC)
-            deepseek_b1_ops::AllReduceSender::Op<CCLSenderWriterCTArgs> ccl_sender_writer;
-            ccl_sender_writer(ccl_sender_args);
             constexpr uint32_t ccl_sync_sem_addr = get_named_compile_time_arg_val("ccl_sync_semaphore_addr");
             constexpr uint32_t input_noc_coord_x = get_named_compile_time_arg_val("input_noc_coord_x");
             constexpr uint32_t input_noc_coord_y = get_named_compile_time_arg_val("input_noc_coord_y");
@@ -1516,24 +1549,25 @@ void kernel_main() {
 #endif
         }
 
-        if constexpr (Core::is_ccl_receiver_core) {
+        if constexpr (Core::is_allreduce_receiver_core) {
             DeviceZoneScopedN("CCL_RECEIVER");
 #if defined(COMPILE_FOR_NCRISC)
             // TODO: We're popping the RMSNorm input and then re-pushing it here as the residual
             // Should avoid this and not pop in RMSNorm
-            deepseek_b1_ops::AllReduceReceiver::Op<CCLReceiverReaderCTArgs> ccl_receiver_reader;
-            ccl_receiver_reader(ccl_receiver_args);
+            deepseek_b1_ops::AllReduce::Reader<AllReduceReaderCTArgs> ccl_reader;
+            ccl_reader(ccl_receiver_args);
 #elif defined(COMPILE_FOR_TRISC)
-            deepseek_b1_ops::AllReduceReceiver::Op<CCLReceiverComputeCTArgs> ccl_receiver_compute;
-            ccl_receiver_compute(ccl_receiver_args);
+            deepseek_b1_ops::AllReduce::Compute<AllReduceComputeCTArgs> ccl_compute;
+            ccl_compute(ccl_compute_args);
 #elif defined(COMPILE_FOR_BRISC)
             volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
-            // SDPA forwarder cores use both riscs to send over fabric, so we need to wait for both
+            // Both NCRISC and BRISC signal on each forwarder core and each CCL
+            // sender core, so total = 2*fwd_cores + 2*ccl_cores.
             noc_semaphore_wait(
                 ccl_sync_sem,
                 2 * get_named_compile_time_arg_val("sdpa_fwd_num_cores") +
-                    get_named_compile_time_arg_val("ccl_sender_num_cores"));
+                    2 * get_named_compile_time_arg_val("num_ccl_sender_cores"));
             noc_semaphore_set(ccl_sync_sem, 0);
 #endif
         }
@@ -1550,6 +1584,6 @@ void kernel_main() {
     // ====================================================================
     {
         DeviceZoneScopedN("MCAST_TEARDOWN");
-        mcast.teardown();
+        mcast.teardown(mcast_args);
     }
 }

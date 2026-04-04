@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,8 +31,9 @@ void kernel_main() {
     constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(20);
     constexpr uint32_t is_causal = get_compile_time_arg_val(21);
     constexpr uint32_t is_balanced = get_compile_time_arg_val(22);
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(23) == 1;
 
-    constexpr auto q_args = TensorAccessorArgs<23>();
+    constexpr auto q_args = TensorAccessorArgs<24>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -52,6 +53,7 @@ void kernel_main() {
     const uint32_t joint_v_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t q_per_core = global_q_end - global_q_start;
 
     const uint32_t is_chain_participant = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_injector = get_arg_val<uint32_t>(argidx++);
@@ -156,6 +158,10 @@ void kernel_main() {
     const auto joint_k_generator = PaddedAddrGenerator(joint_k_reader, joint_input_tile_logical);
     const auto joint_v_generator = PaddedAddrGenerator(joint_v_reader, joint_input_tile_logical);
 
+    // Tracks whether Q has been pushed for q_per_core == 1 optimization.
+    // When q_per_core == 1, Q is identical across ring iterations so we only push it once.
+    bool q_pushed = false;
+
     /**
      * Iterate over ring indices.
      * On the first iteration, read from local K, V.
@@ -201,7 +207,9 @@ void kernel_main() {
             iter_num_kv_chunks /= 2;
         }
 
-        for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
+        for (uint32_t q_iter = 0; global_q_start + q_iter < global_q_end; ++q_iter) {
+            uint32_t global_q_chunk = remap_q_index(global_q_start + q_iter, num_q_chunks, use_zigzag_balancing);
+
             // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
             const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
             const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
@@ -231,6 +239,10 @@ void kernel_main() {
             const bool should_forward = is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
                                         (q_iter_local < next_core_q_chunks);
             const bool should_receive = is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
+
+            // When q_per_core == 1, Q is identical across ring iterations: compute keeps it
+            // fronted in the CB, so we only need to read it once on the first active ring iteration.
+            const bool need_q_read = (q_per_core > 1) || !q_pushed;
 
             for (uint32_t k_chunk = 0; k_chunk < iter_num_kv_chunks; ++k_chunk) {
                 /**
@@ -327,7 +339,7 @@ void kernel_main() {
                 // Push Q one subblock at a time so compute can start QK matmul incrementally.
                 // Placed after K forward so no outstanding NOC writes remain
                 // (noc_async_read_barrier inside subblock read would deadlock with in-flight writes).
-                if (k_chunk == 0) {
+                if (k_chunk == 0 && need_q_read) {
                     if constexpr (use_q_subblock_push) {
                         for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
                             const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
@@ -352,6 +364,7 @@ void kernel_main() {
                             false /*transpose*/
                         );
                     }
+                    q_pushed = true;
                 }
 
                 // V: either read locally (injector or not participant) or receive from previous core

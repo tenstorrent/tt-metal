@@ -1,5 +1,5 @@
 
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -139,7 +139,10 @@ void MetalEnvImpl::initialize_base_objects() {
         platform_arch,
         is_base_routing_fw_enabled,
         this->rtoptions_->get_enable_2_erisc_mode(),
-        get_profiler_dram_bank_size_for_hal_allocation(*this->rtoptions_));
+        get_profiler_dram_bank_size_for_hal_allocation(*this->rtoptions_),
+        this->rtoptions_->get_dram_backed_cq(),
+        this->rtoptions_->get_simulator_enabled(),
+        this->rtoptions_->get_enable_blackhole_dram_programmable_cores());
 
     this->rtoptions_->ParseAllFeatureEnv(*hal_);
     this->cluster_->set_hal(hal_.get());

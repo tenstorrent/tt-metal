@@ -27,7 +27,7 @@ on:
       system-type:
         description: 'Select system type to test'
         required: false
-        default: "P150 (1xP150)"
+        default: "all"
         type: choice
         options:
           - all

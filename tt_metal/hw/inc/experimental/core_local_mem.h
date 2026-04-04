@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,7 @@
 #include "experimental/lock.h"
 #include "tools/profiler/noc_debugging_metadata.hpp"
 #include "tools/profiler/noc_debugging_profiler.hpp"
+#include "internal/debug/sanitize.h"
 
 namespace experimental {
 

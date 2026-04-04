@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 
 #include <circular_buffer_constants.h>
 #include "data_format.hpp"
+#include <algorithm>
 #include <cstdint>
 #include <tt_backend_api_types.hpp>
 #include <cstddef>
@@ -201,6 +202,29 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
 
     vector<DataFormat> dst_formats = tt::get_pack_dst_formats(
         desc.buf_dataformat_arr);
+
+    // Fp8_e4m3 is always unpacked to Float16 (A-family) in source/dest registers.
+    // Without fp32_dest_acc, the dest register holds Float16 (A-family) data when
+    // the input is Fp8, so non-Fp8 output CBs need A-family pack_src to match.
+    // With fp32_dest_acc, dest holds Float32 and pack_src semantics differ, so skip.
+    // CBs that are themselves Fp8_e4m3 are already handled by get_single_pack_src_format.
+    if (!fp32_dest_acc_en &&
+        std::any_of(desc.buf_dataformat_arr.begin(), desc.buf_dataformat_arr.end(), [](DataFormat f) {
+            return f == DataFormat::Fp8_e4m3;
+        })) {
+        for (size_t i = 0; i < src_formats.size(); i++) {
+            if (desc.buf_dataformat_arr[i] == DataFormat::Fp8_e4m3) {
+                continue;
+            }
+            switch (src_formats[i]) {
+                case DataFormat::Float16_b: src_formats[i] = DataFormat::Float16; break;
+                case DataFormat::Bfp8_b: src_formats[i] = DataFormat::Bfp8; break;
+                case DataFormat::Bfp4_b: src_formats[i] = DataFormat::Bfp4; break;
+                case DataFormat::Bfp2_b: src_formats[i] = DataFormat::Bfp2; break;
+                default: break;
+            }
+        }
+    }
 
     TT_ASSERT(src_formats.size() == max_cbs);
     TT_ASSERT(dst_formats.size() == max_cbs);
@@ -399,7 +423,13 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     out << "#if !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_UNPACK)\n";
     emit_pack_data_formats(out, fmts.pack_src, fmts.pack_dst, max_cbs);
     emit_pack_tile_dims(out, desc, max_cbs);
-    out << "#endif\n\n";
+    // For Blackhole tilize workaround, PACK needs access to unpack_src_format to determine
+    // if the original input format is 8-bit (Int8, UInt8, Fp8_e4m3, Lf8) since those formats
+    // do not require the tilize workaround. This is needed to determine whether to skip the workaround in llk_pack_init.
+    out << "#if defined(UCK_CHLKC_PACK)\n";
+    emit_formats_array(out, "constexpr std::int32_t", "unpack_src_format", max_cbs, fmts.unpack_src);
+    out << "#endif\n";   // if pack
+    out << "#endif\n\n"; // if not math and not unpack
 
     out << "#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || "
            "defined(UCK_CHLKC_ISOLATE_SFPU)\n";

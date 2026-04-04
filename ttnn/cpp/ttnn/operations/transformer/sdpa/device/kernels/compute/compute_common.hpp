@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,6 +23,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -832,8 +833,8 @@ void calculate_exponential_first_column() {
     if constexpr (SDPA_EXP_APPROX_MODE) {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
-            sfpi::vFloat result = ckernel::sfpu::
-                _calculate_exponential_piecewise_<EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+            sfpi::vFloat result =
+                ckernel::sfpu::ckernel_sfpu_exp_accurate<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
                     val, scale_bf16);
             sfpi::dst_reg[0] = result;
 
@@ -925,11 +926,11 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
         sfpi::vFloat diff_worker = worker_max_vec - cur_max;
 
         // Exponentials of differences
-        sfpi::vFloat exp_prev = ckernel::sfpu::
-            _calculate_exponential_piecewise_<EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+        sfpi::vFloat exp_prev =
+            ckernel::sfpu::ckernel_sfpu_exp_accurate<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
                 diff_prev, scale_bf16);
-        sfpi::vFloat exp_worker = ckernel::sfpu::
-            _calculate_exponential_piecewise_<EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+        sfpi::vFloat exp_worker =
+            ckernel::sfpu::ckernel_sfpu_exp_accurate<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
                 diff_worker, scale_bf16);
 
         // Store exponentials for optional debug/pack-out
@@ -1649,8 +1650,11 @@ void sdpa_inner_loop(
     const uint32_t cb_out,
     const LightweightMaskContext& lw_mask = {},
     const bool is_causal = false,
-    const bool is_balanced = false) {
+    const bool is_balanced = false,
+    const bool use_zigzag_balancing = false,
+    const bool is_last_ring_iter = true) {
     uint32_t KV_chunks_processed_in_iter = 0;
+    const uint32_t q_per_core = iter_q_end - iter_q_start;
 
     for (uint32_t q_iter = iter_q_start; q_iter < iter_q_end; ++q_iter) {
         uint32_t q_low_idx;
@@ -1679,19 +1683,17 @@ void sdpa_inner_loop(
                 q_high_idx = Skt;
             }
         } else if (sdpa_type == RING) {
-            const uint32_t q_chunk = q_iter % q_num_chunks;
+            uint32_t q_chunk = remap_q_index(q_iter, q_num_chunks, use_zigzag_balancing) % q_num_chunks;
 
             if (is_causal) {
                 q_low_idx = q_chunk * Sq_chunk_t;
                 q_high_idx = q_low_idx + Sq_chunk_t;
                 q_high_idx = (q_high_idx + Sk_chunk_t - 1) / Sk_chunk_t;
             }
-            if (is_balanced) {
-                if (q_chunk < q_num_chunks / 2) {
-                    continue;
-                }
+            if (is_balanced && (q_chunk < q_num_chunks / 2)) {
+                continue;
             }
-        }
+        }  // If ring attention
 
         // Set up ping pong buffers
         uint32_t alias_prev_sum = cb_sum_A;
@@ -2017,7 +2019,11 @@ void sdpa_inner_loop(
             cb_pop_front(alias_prev_max, Sq_chunk_t);
         }
 
-        cb_pop_front(cb_q_in, q_chunk_tiles);
+        // When q_per_core == 1, Q is identical across ring iterations so we keep it
+        // fronted in the CB and only pop on the last iteration to avoid redundant DRAM re-reads.
+        if (q_per_core > 1 || is_last_ring_iter) {
+            cb_pop_front(cb_q_in, q_chunk_tiles);
+        }
     }
 
     if constexpr (sdpa_type == RING) {
@@ -2356,7 +2362,9 @@ void sdpa_ring(
     const uint32_t cb_out,
     const LightweightMaskContext& lw_mask,
     const bool is_causal,
-    const bool is_balanced) {
+    const bool is_balanced,
+    const bool is_last_ring_iter,
+    const bool use_zigzag_balancing = false) {
     sdpa_inner_loop<
         RING,
         cb_qk_im,
@@ -2431,7 +2439,9 @@ void sdpa_ring(
         cb_out,
         lw_mask,
         is_causal,
-        is_balanced);
+        is_balanced,
+        use_zigzag_balancing,
+        is_last_ring_iter);
 }
 
 /**

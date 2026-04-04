@@ -6,7 +6,7 @@ transformer_config:
   intermediate_dim: 14336
   dropout_prob: 0.0
   num_blocks: 32
-  vocab_size: 32000
+  vocab_size: 128000
   max_sequence_length: 2048
   runner_type: default
-  theta: 10000.0
+  theta: 500000.0

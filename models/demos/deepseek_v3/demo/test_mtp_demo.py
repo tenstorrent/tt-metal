@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -73,7 +73,7 @@ def _write_demo_artifact(prompts: list[str], results: dict, artifact_name: str) 
     "prompts_file,num_prompts,max_new_tokens",
     [
         pytest.param(
-            Path("models/demos/deepseek_v3/demo/test_prompts.json"),
+            Path("models/demos/deepseek_v3/demo/demo_aime24_gpqa_short.json"),
             2,
             32,
             id="smoke_2_prompts_32_tokens",
@@ -97,10 +97,13 @@ def test_mtp_demp_compare_outputs(
         repeat_batches=1,
         force_recalculate=force_recalculate_weight_config,
         signpost=True,
+        sampling_temperature=0.0,
+        sampling_top_k=1,
+        sampling_top_p=1.0,
     )
 
     baseline = run_demo(enable_mtp=False, **common_kwargs)
-    mtp = run_demo(enable_mtp=True, **common_kwargs)
+    mtp = run_demo(enable_mtp=True, sample_on_device=False, **common_kwargs)
 
     _assert_demo_outputs_match(baseline, mtp)
 
