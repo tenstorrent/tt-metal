@@ -420,12 +420,14 @@ void kernel_main() {
                     // This is the OpSignaler pattern from worker_sync_utils.hpp:
                     //   get_noc_addr(x, y, sem_addr) targets the REMOTE core's L1,
                     //   so each core sees the increment in its own local memory.
+                    // No noc_async_atomic_barrier() needed: atomics are in-order with the
+                    // preceding noc_async_write_barrier() flush, so halos reach DRAM before
+                    // any reader core unblocks. The reader polls LOCAL L1 — no round-trip.
                     for (uint32_t i = 0; i < num_reader_cores; i++) {
                         const uint32_t reader_x = get_common_arg_val<uint32_t>(6 + i * 2);
                         const uint32_t reader_y = get_common_arg_val<uint32_t>(6 + i * 2 + 1);
                         noc_semaphore_inc(get_noc_addr(reader_x, reader_y, progress_sem), 1);
                     }
-                    noc_async_atomic_barrier();
                 }
             }
         }

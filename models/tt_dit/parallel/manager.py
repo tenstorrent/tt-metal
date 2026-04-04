@@ -398,9 +398,11 @@ class CCLManager:
         Returns the compact halo tensor. Conv3d reads interior from the original tensor.
         Handles both H and W halos (dims can have 1 or 2 elements).
 
-        Loads the 2-sub-device halo manager (SD0=fabric, SD1=compute) and dispatches NP to
-        CQ1 on SD0. Records a CQ1 completion event so that the caller can order conv3d on
-        CQ0 after NP completes before deactivating the halo manager.
+        Dispatches NP on CQ0 targeting SD0 (fabric cores), same CQ as conv3d (SD1).
+        Like all_gather_matmul: single CQ drives both CCL writers (SD0) and compute (SD1)
+        concurrently. Dispatch fires go to SD0 then SD1; they run on different cores.
+        In-kernel semaphore handles T-batch ordering. Deactivate then correctly waits for
+        BOTH NP and conv3d completions before sending the reset go_signal to SD0.
         """
         # Load halo sub-device manager (SD0=fabric, SD1=compute).
         fabric_sd_id, _ = self.activate_halo_sub_devices()
@@ -412,9 +414,19 @@ class CCLManager:
             tensor.shape, dims[0], pad_left[0], dtype=tensor.get_dtype(), dim2=dim2, padding2=padding2
         )
 
-        # Dispatch NeighborPad to CQ1 targeting SD0 (4 fabric cores).
+        # When progress semaphore is active, force num_links=1 so a SINGLE direction-0
+        # fabric core handles all T outer_dims. This ensures local outer_dim == global
+        # T-slice: the signal condition (outer_dim+1)%T_batch==0 fires at correct boundaries.
+        # With num_links=2, two direction-0 cores split outer_dims; core 1's
+        # outer_dim_offset_start_id is in sticks (not T-slices) making global T-batch
+        # computation wrong — core 1 never fires signals, causing reader deadlock.
+        effective_num_links = [1] * len(num_links) if progress_t_batch_size > 0 else num_links
+
+        # Dispatch NeighborPad on CQ0 (same CQ as conv3d) targeting SD0 (fabric cores).
+        # Single-CQ dispatch: NP (SD0) and conv3d (SD1) run concurrently on device.
+        # deactivate_halo_sub_devices() naturally waits for both NP+conv3d before reset.
         result = self.dispatch_on_cq(
-            1,
+            0,
             ttnn.experimental.neighbor_pad_async,
             tensor,
             dims,
@@ -424,7 +436,7 @@ class CCLManager:
             axes,
             neighbor_sems,
             [barrier_sem],
-            num_links=num_links,
+            num_links=effective_num_links,
             topology=self.topology,
             persistent_output_buffer=halo_buf,
             progress_semaphore=progress_semaphore,
@@ -433,13 +445,7 @@ class CCLManager:
             sub_device_id=fabric_sd_id,
         )
 
-        # Record CQ1 completion event so conv3d on CQ0 can wait for halo data.
-        self._pending_np_event = ttnn.record_event(
-            self.mesh_device,
-            cq_id=ttnn.QueueId(1),
-            sub_device_ids=[fabric_sd_id],
-        )
-
+        self._pending_np_event = None
         return result
 
     def get_barrier_semaphore(self, mesh_axis):
