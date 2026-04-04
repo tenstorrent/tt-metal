@@ -32,53 +32,29 @@ from models.experimental.groot_n16.tt.ttnn_common import (
 )
 
 
-def siglip2_patch_embeddings(
-    pixel_values: ttnn.Tensor,
-    proj_weight: ttnn.Tensor,
-    proj_bias: Optional[ttnn.Tensor],
+def siglip2_patch_embeddings_cpu(
+    pixel_values: torch.Tensor,
     patch_size: int = 14,
-) -> ttnn.Tensor:
+) -> torch.Tensor:
     """
-    Convert image pixels to patch embeddings using fold + linear.
+    Extract patches from image on CPU.
 
     Args:
-        pixel_values: [batch, H, W, 4] in NHWC format (padded from 3 to 4 channels)
-        proj_weight: Preprocessed patch projection weight
-        proj_bias: Optional projection bias
+        pixel_values: [batch, 3, H, W] in NCHW format
 
     Returns:
-        [batch, num_patches, hidden_size] patch embeddings
+        [batch, num_patches, patch_size*patch_size*3] flattened patches
     """
-    batch_size, img_h, img_w, img_c = pixel_values.shape
-    patch_count = img_h // patch_size
-    patch_count_all = patch_count * patch_count
+    batch_size, channels, h, w = pixel_values.shape
+    patch_h = h // patch_size
+    patch_w = w // patch_size
 
-    # Reshape for fold: [B, H, W/patch, C*patch]
-    pixel_values = ttnn.reshape(
-        pixel_values,
-        (batch_size, img_h, img_w // patch_size, img_c * patch_size),
-    )
-
-    # Fold patches vertically
-    pixel_values = ttnn.fold(pixel_values, patch_size, 1)
-    pixel_values = ttnn.to_layout(pixel_values, layout=ttnn.TILE_LAYOUT)
-
-    # Linear projection
-    patch_embeddings = ttnn.linear(
-        pixel_values,
-        proj_weight,
-        bias=proj_bias,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=CORE_GRID_BH,
-    )
-    ttnn.deallocate(pixel_values)
-
-    # Reshape to [batch, num_patches, hidden_size]
-    patch_embeddings = ttnn.to_layout(patch_embeddings, layout=ttnn.ROW_MAJOR_LAYOUT)
-    patch_embeddings = ttnn.reshape(patch_embeddings, (batch_size, patch_count_all, -1))
-
-    return patch_embeddings
+    # Reshape to extract patches: [B, C, pH, ps, pW, ps]
+    x = pixel_values.reshape(batch_size, channels, patch_h, patch_size, patch_w, patch_size)
+    # Permute to [B, pH, pW, ps, ps, C] then flatten patches
+    x = x.permute(0, 2, 4, 3, 5, 1).contiguous()
+    x = x.reshape(batch_size, patch_h * patch_w, patch_size * patch_size * channels)
+    return x
 
 
 def siglip2_attention(
@@ -92,66 +68,64 @@ def siglip2_attention(
     """
     Multi-head self-attention for SigLIP2.
 
-    Uses fused QKV projection. 16 heads, 72 head_dim, 1152 hidden.
+    Uses fused QKV projection with nlp_create_qkv_heads for head_dim=72
+    (which is not tile-aligned). The op handles padding internally.
+    Uses SDPA for efficient attention computation.
     """
-    *_, hidden_size = hidden_states.shape
-    head_dim = hidden_size // num_heads
-    scale = 1.0 / math.sqrt(head_dim)
+    batch_size, seq_len, hidden_size = hidden_states.shape
 
-    # Fused QKV
+    # Reshape to 4D for nlp_create_qkv_heads: [B, 1, seq, hidden]
+    hidden_4d = ttnn.reshape(hidden_states, (batch_size, 1, seq_len, hidden_size))
+
+    # Fused QKV projection
     qkv = ttnn.linear(
-        hidden_states,
-        qkv_weight,
-        bias=qkv_bias,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
+        hidden_4d, qkv_weight, bias=qkv_bias,
+        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16,
         core_grid=CORE_GRID_BH,
     )
-    ttnn.reallocate(hidden_states)
 
-    query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(
+    # Split into Q, K, V heads with padding handled internally
+    q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads(
         qkv,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
         num_heads=num_heads,
+        num_kv_heads=num_heads,
+        transpose_k_heads=False,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn.deallocate(qkv)
-    value = ttnn.reallocate(value)
 
-    # Scale query
-    query = ttnn.mul(query, scale)
+    # Use scaled_dot_product_attention
+    attn_output = ttnn.transformer.scaled_dot_product_attention(
+        q_heads, k_heads, v_heads,
+        is_causal=False,
+    )
+    ttnn.deallocate(q_heads)
+    ttnn.deallocate(k_heads)
+    ttnn.deallocate(v_heads)
 
-    # Attention scores
-    attention_scores = ttnn.matmul(
-        query, key,
+    # Concatenate heads back
+    attn_concat = ttnn.experimental.nlp_concat_heads(
+        attn_output,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=CORE_GRID_BH,
     )
-    ttnn.deallocate(query)
-    ttnn.deallocate(key)
+    ttnn.deallocate(attn_output)
 
-    attention_probs = ttnn.softmax_in_place(attention_scores, numeric_stable=True)
+    # Reshape back to 3D: [B, 1, seq, padded_hidden] -> [B, seq, hidden]
+    # Slice to remove padding from head_dim (padded 72->96 = 96*16=1536 vs 72*16=1152)
+    attn_3d = ttnn.reshape(attn_concat, (batch_size, seq_len, -1))
+    ttnn.deallocate(attn_concat)
 
-    context = ttnn.matmul(
-        attention_probs, value,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=CORE_GRID_BH,
-    )
-    ttnn.deallocate(attention_probs)
-    ttnn.deallocate(value)
+    # If padded, slice back to hidden_size
+    if attn_3d.shape[-1] > hidden_size:
+        attn_3d = ttnn.slice(attn_3d, [0, 0, 0], [batch_size, seq_len, hidden_size])
 
-    context = ttnn.transformer.concatenate_heads(
-        context, memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-
+    # Output projection
     output = ttnn.linear(
-        context, proj_weight, bias=proj_bias,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
+        attn_3d, proj_weight, bias=proj_bias,
+        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b,
         core_grid=CORE_GRID_BH,
     )
-    ttnn.deallocate(context)
+    ttnn.deallocate(attn_3d)
 
     return output
 
@@ -260,28 +234,19 @@ class SigLIP2VisionEncoderTTNN:
     def _preprocess_weights(self, weights: Dict[str, torch.Tensor]):
         """Preprocess all SigLIP2 weights for TTNN."""
         # Patch embedding: conv2d -> linear
-        conv_weight = weights.get("embeddings.patch_embedding.weight")
-        conv_bias = weights.get("embeddings.patch_embedding.bias")
+        # Patch embedding weight is already in linear format: [1152, 588]
+        # where 588 = 3 * 14 * 14 (in_channels * patch_h * patch_w)
+        linear_weight = weights.get("embeddings.patch_embedding.weight")
+        linear_bias = weights.get("embeddings.patch_embedding.bias")
 
-        if conv_weight is not None:
-            out_ch, in_ch, kh, kw = conv_weight.shape
-            # Pad channels 3 -> 4
-            pad_val = 4 - in_ch
-            w_padded = F.pad(conv_weight, (0, 0, 0, 0, 0, pad_val))
-            w_reshaped = w_padded.permute(2, 3, 1, 0).reshape(-1, out_ch)
-
-            self.patch_proj_weight = ttnn.from_torch(
-                w_reshaped.to(torch.bfloat16),
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-            )
-            self.patch_proj_bias = ttnn.from_torch(
-                conv_bias.unsqueeze(0).to(torch.bfloat16),
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-            ) if conv_bias is not None else None
+        if linear_weight is not None:
+            # Weight is [out_features, in_features] = [1152, 588]
+            # preprocess_linear_weight transposes to [588, 1152] for ttnn
+            # TTNN handles tile padding internally
+            self.patch_proj_weight = preprocess_linear_weight(linear_weight, self.device)
+            self.patch_proj_bias = preprocess_linear_bias(
+                linear_bias, self.device,
+            ) if linear_bias is not None else None
 
         # Position embeddings
         pos_embed = weights.get("embeddings.position_embedding.weight")
@@ -364,25 +329,27 @@ class SigLIP2VisionEncoderTTNN:
         Returns:
             [batch, num_patches, hidden_size] vision features
         """
-        # NCHW -> NHWC, pad channels 3 -> 4
-        pv = pixel_values.permute(0, 2, 3, 1)
-        if pv.shape[-1] == 3:
-            pv = F.pad(pv, (0, 1))
+        # Extract patches on CPU: [B, num_patches, 588]
+        patches = siglip2_patch_embeddings_cpu(
+            pixel_values, patch_size=self.config.patch_size,
+        )
 
-        pv_tt = ttnn.from_torch(
-            pv.to(torch.bfloat16),
+        # Transfer to device and project
+        patches_tt = ttnn.from_torch(
+            patches.to(torch.bfloat16),
             dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             device=self.device,
         )
 
-        # Patch embeddings
-        embeddings = siglip2_patch_embeddings(
-            pv_tt,
-            self.patch_proj_weight,
-            self.patch_proj_bias,
-            patch_size=self.config.patch_size,
+        # Linear projection: [B, num_patches, 588] -> [B, num_patches, 1152]
+        embeddings = ttnn.linear(
+            patches_tt, self.patch_proj_weight, bias=self.patch_proj_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
+            core_grid=CORE_GRID_BH,
         )
+        ttnn.deallocate(patches_tt)
 
         # Add position embeddings
         embeddings = ttnn.add(

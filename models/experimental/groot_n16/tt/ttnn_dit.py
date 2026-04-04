@@ -4,19 +4,18 @@
 """
 AlternateVLDiT (Diffusion Transformer) - TTNN Implementation for GR00T N1.6.
 
-32-layer transformer with alternating VL attention pattern:
-    - Even layers: self-attention over [action_tokens; selected_backbone_tokens]
-      * Alternates which backbone tokens to include (image vs text) every 2 blocks
-    - Odd layers: self-attention over action_tokens only
+32-layer transformer with alternating attention pattern:
+    - Even blocks: cross-attention (Q from actions [1536], K/V from backbone [2048])
+    - Odd blocks: self-attention (Q/K/V all from actions [1536])
 
-There are NO separate cross-attention weights. The "cross-attention" is achieved
-by concatenating backbone features into the KV of self-attention. All blocks
-share the same structure: attn1 (self-attn) + ff (GEGLU FFN) + norm1 (AdaLN).
+All blocks share the same weight structure (attn1 + ff + norm1), but even blocks
+have K/V weights of shape [1536, 2048] while odd blocks have [1536, 1536].
 
 Uses AdaLN (Adaptive Layer Normalization) conditioned on timestep.
+Output: two-stage projection with SiLU-gated split.
 
 Inner dim: 32 heads * 48 head_dim = 1536
-Output dim: 1024 (via two-stage proj_out_1 -> proj_out_2)
+Output dim: 1024 (via proj_out_1 [1536→3072, SiLU gate] -> proj_out_2 [1536→1024])
 """
 
 import math
@@ -30,7 +29,6 @@ from models.experimental.groot_n16.tt.ttnn_common import (
     CORE_GRID_BH,
     preprocess_linear_weight,
     preprocess_linear_bias,
-    preprocess_layernorm_params,
 )
 
 
@@ -38,26 +36,15 @@ class AdaLayerNormTTNN:
     """
     Adaptive Layer Normalization: (1 + scale(t)) * LN(x) + shift(t)
 
-    Weight keys: norm.weight, norm.bias (optional), linear.weight, linear.bias
-    The linear projects timestep embedding to 2*hidden_size (scale + shift).
+    norm1.linear.weight shape: [3072, 1536] -> projects timestep to 2*inner_dim (scale + shift)
     """
 
     def __init__(self, weights: Dict[str, torch.Tensor], prefix: str, hidden_size: int, device: Any):
         self.device = device
         self.hidden_size = hidden_size
 
-        ln_w = weights.get(f"{prefix}norm.weight")
-        ln_b = weights.get(f"{prefix}norm.bias")
-        if ln_w is not None:
-            self.norm_weight = ttnn.from_torch(
-                ln_w.unsqueeze(0).to(torch.bfloat16), dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT, device=device,
-            )
-            self.norm_bias = ttnn.from_torch(
-                ln_b.unsqueeze(0).to(torch.bfloat16), dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT, device=device,
-            ) if ln_b is not None else None
-
+        # The AdaLN in GR00T uses a linear to project timestep_emb -> scale, shift
+        # No separate LayerNorm weight/bias in the actual model (just the linear)
         proj_w = weights.get(f"{prefix}linear.weight")
         proj_b = weights.get(f"{prefix}linear.bias")
         if proj_w is not None:
@@ -66,7 +53,7 @@ class AdaLayerNormTTNN:
 
     def __call__(self, hidden_states: ttnn.Tensor, timestep_emb: ttnn.Tensor) -> ttnn.Tensor:
         """Apply AdaLN: (1 + scale) * LN(x) + shift."""
-        # Project timestep -> scale, shift
+        # Project timestep -> scale, shift [batch, 1, 2*hidden]
         scale_shift = ttnn.linear(
             timestep_emb, self.proj_weight, bias=self.proj_bias,
             memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH,
@@ -77,10 +64,9 @@ class AdaLayerNormTTNN:
                            [scale_shift.shape[0], 1, 2 * self.hidden_size])
         ttnn.deallocate(scale_shift)
 
-        # LayerNorm
+        # LayerNorm (without learned weight/bias)
         normed = ttnn.layer_norm(
-            hidden_states, weight=self.norm_weight, bias=self.norm_bias,
-            epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG,
+            hidden_states, epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         # (1 + scale) * normed + shift
@@ -98,11 +84,12 @@ class AdaLayerNormTTNN:
         return output
 
 
-class DiTSelfAttentionTTNN:
+class DiTAttentionTTNN:
     """
-    Self-attention for DiT blocks.
-
-    Weight keys: to_q.{weight,bias}, to_k.{weight,bias}, to_v.{weight,bias}, to_out.0.{weight,bias}
+    Attention for DiT blocks. Handles both self-attention and cross-attention
+    based on the weight shapes:
+        - Even blocks: Q [1536,1536], K/V [1536,2048] (cross-attention)
+        - Odd blocks: Q/K/V all [1536,1536] (self-attention)
     """
 
     def __init__(self, weights: Dict[str, torch.Tensor], prefix: str,
@@ -121,21 +108,25 @@ class DiTSelfAttentionTTNN:
                 setattr(self, f"{attr}_bias",
                         preprocess_linear_bias(b, device) if b is not None else None)
 
-    def __call__(self, hidden_states: ttnn.Tensor,
-                 kv_states: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
-        """
-        Self-attention, optionally with separate KV source.
+        # Detect if this is cross-attention based on K weight input dim
+        k_w = weights.get(f"{prefix}to_k.weight")
+        self.is_cross_attention = (k_w is not None and k_w.shape[1] != k_w.shape[0])
 
+    def __call__(self, hidden_states: ttnn.Tensor,
+                 encoder_hidden_states: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
+        """
         Args:
-            hidden_states: [B, q_seq, dim] - query source
-            kv_states: [B, kv_seq, dim] - if provided, K/V come from here (for VL concat)
-                       If None, K/V come from hidden_states (pure self-attention)
+            hidden_states: [B, q_seq, inner_dim] action tokens (Q source)
+            encoder_hidden_states: [B, kv_seq, backbone_dim] backbone features (K/V source for cross-attn)
         """
         scale = 1.0 / math.sqrt(self.head_dim)
-        kv_source = kv_states if kv_states is not None else hidden_states
 
+        # Q always from action tokens
         q = ttnn.linear(hidden_states, self.to_q_weight, bias=self.to_q_bias,
                         memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH)
+
+        # K/V from backbone (cross-attn) or action tokens (self-attn)
+        kv_source = encoder_hidden_states if (self.is_cross_attention and encoder_hidden_states is not None) else hidden_states
         k = ttnn.linear(kv_source, self.to_k_weight, bias=self.to_k_bias,
                         memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH)
         v = ttnn.linear(kv_source, self.to_v_weight, bias=self.to_v_bias,
@@ -192,7 +183,7 @@ class DiTFFNTTNN:
             self.gate_bias = preprocess_linear_bias(b_gate, device) if b_gate is not None else None
             self.down_weight = preprocess_linear_weight(w_down, device)
             self.down_bias = preprocess_linear_bias(b_down, device) if b_down is not None else None
-            self.gate_out_dim = w_gate.shape[0]
+            self.gate_out_dim = w_gate.shape[0]  # 6144 = 2 * 3072
 
     def __call__(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         gate_proj = ttnn.linear(hidden_states, self.gate_weight, bias=self.gate_bias,
@@ -219,57 +210,36 @@ class DiTBlockTTNN:
     """
     Single AlternateVLDiT block.
 
-    All blocks have the same structure: AdaLN -> SelfAttn -> Residual -> FFN -> Residual
-    The difference is what goes into the KV of self-attention:
-        - Even blocks: KV = concat(action_tokens, selected_backbone_tokens)
-        - Odd blocks: KV = action_tokens only
-
-    Weight keys under prefix: norm1.*, attn1.*, ff.*
+    Even blocks: AdaLN -> CrossAttn(Q=actions, K/V=backbone) -> Residual -> FFN -> Residual
+    Odd blocks: AdaLN -> SelfAttn(Q/K/V=actions) -> Residual -> FFN -> Residual
     """
 
     def __init__(self, weights: Dict[str, torch.Tensor], prefix: str,
                  config: DiTConfig, block_idx: int, device: Any):
         self.device = device
         self.block_idx = block_idx
-        self.is_vl_block = (block_idx % 2 == 0)  # even blocks attend to VL features
         inner_dim = config.inner_dim
 
         self.adaln = AdaLayerNormTTNN(weights, f"{prefix}norm1.", inner_dim, device)
-        self.self_attn = DiTSelfAttentionTTNN(
+        self.attn = DiTAttentionTTNN(
             weights, f"{prefix}attn1.",
             config.num_attention_heads, config.attention_head_dim, device,
         )
         self.ffn = DiTFFNTTNN(weights, f"{prefix}ff.", device)
 
-    def __call__(
-        self,
-        hidden_states: ttnn.Tensor,
-        timestep_emb: ttnn.Tensor,
-        backbone_features: Optional[ttnn.Tensor] = None,
-    ) -> ttnn.Tensor:
-        """
-        Forward pass.
-
-        For VL blocks (even): concatenate backbone features into KV sequence.
-        Q comes from action tokens only, KV comes from [action; backbone].
-        Only action-token outputs are returned (first q_seq tokens of output).
-        """
+    def __call__(self, hidden_states: ttnn.Tensor, timestep_emb: ttnn.Tensor,
+                 backbone_features: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
         # AdaLN
         normed = self.adaln(hidden_states, timestep_emb)
 
-        if self.is_vl_block and backbone_features is not None:
-            # Concatenate action tokens + backbone features for KV
-            kv_input = ttnn.concat([normed, backbone_features], dim=1)
-            attn_out = self.self_attn(normed, kv_states=kv_input)
-            ttnn.deallocate(kv_input)
-        else:
-            attn_out = self.self_attn(normed)
+        # Attention (cross or self based on weight shapes)
+        attn_out = self.attn(normed, encoder_hidden_states=backbone_features)
 
         # Residual
         hidden_states = ttnn.add(hidden_states, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
 
-        # FFN (no separate AdaLN for FFN based on weight structure)
+        # FFN + Residual
         ffn_out = self.ffn(hidden_states)
         hidden_states = ttnn.add(hidden_states, ffn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(ffn_out)
@@ -281,7 +251,9 @@ class AlternateVLDiTTTNN:
     """
     Complete AlternateVLDiT for GR00T N1.6.
 
-    32 blocks + two-stage output projection (proj_out_1 -> proj_out_2).
+    32 blocks + SiLU-gated output projection.
+    proj_out_1: 1536 -> 3072 (split into 2x1536, SiLU gate)
+    proj_out_2: 1536 -> 1024
     """
 
     def __init__(self, config: DiTConfig, weights: Dict[str, torch.Tensor], device: Any):
@@ -293,7 +265,7 @@ class AlternateVLDiTTTNN:
             prefix = f"transformer_blocks.{i}."
             self.blocks.append(DiTBlockTTNN(weights, prefix, config, i, device))
 
-        # Two-stage output projection: inner_dim -> output_dim
+        # Output projection with SiLU gating
         for proj_name in ["proj_out_1", "proj_out_2"]:
             w = weights.get(f"{proj_name}.weight")
             b = weights.get(f"{proj_name}.bias")
@@ -302,44 +274,49 @@ class AlternateVLDiTTTNN:
                 setattr(self, f"{proj_name}_bias",
                         preprocess_linear_bias(b, device) if b is not None else None)
 
-    def __call__(
-        self,
-        hidden_states: ttnn.Tensor,
-        timestep_emb: ttnn.Tensor,
-        backbone_features: ttnn.Tensor,
-        image_mask: Optional[ttnn.Tensor] = None,
-    ) -> ttnn.Tensor:
+        # proj_out_1 output dim for gating (3072 = 2 * 1536)
+        w1 = weights.get("proj_out_1.weight")
+        self.proj_out_1_dim = w1.shape[0] if w1 is not None else 3072
+
+    def __call__(self, hidden_states: ttnn.Tensor, timestep_emb: ttnn.Tensor,
+                 backbone_features: ttnn.Tensor) -> ttnn.Tensor:
         """
-        Forward through all 32 DiT blocks.
+        Forward through 32 DiT blocks + output projection.
 
         Args:
-            hidden_states: [B, action_seq, inner_dim]
-            timestep_emb: [B, 1, inner_dim]
-            backbone_features: [B, vl_seq, backbone_dim] VLM features
-            image_mask: Optional mask for selecting image vs text tokens
+            hidden_states: [B, action_seq, 1536]
+            timestep_emb: [B, 1, 1536]
+            backbone_features: [B, vl_seq, 2048]
 
         Returns:
-            [B, action_seq, output_dim]
+            [B, action_seq, 1024]
         """
-        for i, block in enumerate(self.blocks):
-            # For even (VL) blocks: select which backbone tokens to attend to
-            vl_features = None
-            if i % 2 == 0:
-                # Alternate image/text selection every attend_text_every_n_blocks
-                # For now pass all backbone features; image_mask filtering can be added
-                vl_features = backbone_features
+        for block in self.blocks:
+            hidden_states = block(hidden_states, timestep_emb, backbone_features)
 
-            hidden_states = block(hidden_states, timestep_emb, vl_features)
-
-        # Two-stage output projection
-        output = ttnn.linear(
+        # SiLU-gated output projection
+        # proj_out_1: 1536 -> 3072
+        h = ttnn.linear(
             hidden_states, self.proj_out_1_weight, bias=self.proj_out_1_bias,
             memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH,
         )
-        output = ttnn.silu(output)
+
+        # Split 3072 -> 2x1536, SiLU gate
+        half = self.proj_out_1_dim // 2
+        gate = ttnn.slice(h, [0, 0, 0], [h.shape[0], h.shape[1], half])
+        value = ttnn.slice(h, [0, 0, half], [h.shape[0], h.shape[1], self.proj_out_1_dim])
+        ttnn.deallocate(h)
+
+        gate = ttnn.silu(gate)
+        gated = ttnn.mul(gate, value)
+        ttnn.deallocate(gate)
+        ttnn.deallocate(value)
+
+        # proj_out_2: 1536 -> 1024
         output = ttnn.linear(
-            output, self.proj_out_2_weight, bias=self.proj_out_2_bias,
+            gated, self.proj_out_2_weight, bias=self.proj_out_2_bias,
             memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH,
         )
+        ttnn.deallocate(gated)
 
         return output

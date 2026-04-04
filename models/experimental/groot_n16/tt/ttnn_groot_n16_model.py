@@ -37,6 +37,7 @@ from models.experimental.groot_n16.tt.ttnn_common import (
     preprocess_linear_weight,
     preprocess_linear_bias,
     preprocess_layernorm_params,
+    preprocess_rmsnorm_params,
     to_tt_tensor,
 )
 from models.experimental.groot_n16.tt.ttnn_siglip2 import SigLIP2VisionEncoderTTNN
@@ -72,14 +73,30 @@ class PixelShuffleConnectorTTNN:
         # Layer 0: 4*vision_dim -> language_dim (with GELU)
         # Layer 1: language_dim -> language_dim
         # Connector keys after stripping "backbone.model.mlp1." prefix:
-        # 0.weight/bias, 1.weight/bias, 3.weight/bias (3-layer MLP, index 2 is GELU)
-        for idx in ["0", "1", "3"]:
-            w = connector_weights.get(f"{idx}.weight")
-            b = connector_weights.get(f"{idx}.bias")
-            if w is not None:
-                setattr(self, f"proj{idx}_weight", preprocess_linear_weight(w, device))
-                setattr(self, f"proj{idx}_bias",
-                        preprocess_linear_bias(b, device) if b is not None else None)
+        # 0.weight [4608] (LayerNorm), 0.bias [4608]
+        # 1.weight [2048, 4608] (Linear), 1.bias [2048]
+        # 3.weight [2048, 2048] (Linear), 3.bias [2048]
+        # Index 2 is GELU activation (no weights)
+
+        # Layer 0: LayerNorm over pixel-shuffled features (4608 = 4 * 1152)
+        ln_w = connector_weights.get("0.weight")
+        ln_b = connector_weights.get("0.bias")
+        if ln_w is not None:
+            self.ln_weight, self.ln_bias = preprocess_layernorm_params(ln_w, ln_b, device)
+
+        # Layer 1: Linear 4608 -> 2048
+        w1 = connector_weights.get("1.weight")
+        b1 = connector_weights.get("1.bias")
+        if w1 is not None:
+            self.proj1_weight = preprocess_linear_weight(w1, device)
+            self.proj1_bias = preprocess_linear_bias(b1, device) if b1 is not None else None
+
+        # Layer 3: Linear 2048 -> 2048
+        w3 = connector_weights.get("3.weight")
+        b3 = connector_weights.get("3.bias")
+        if w3 is not None:
+            self.proj3_weight = preprocess_linear_weight(w3, device)
+            self.proj3_bias = preprocess_linear_bias(b3, device) if b3 is not None else None
 
     def pixel_shuffle_downsample(self, vision_features: torch.Tensor, h: int, w: int) -> torch.Tensor:
         """
@@ -114,23 +131,23 @@ class PixelShuffleConnectorTTNN:
         # Transfer to device
         shuffled_tt = to_tt_tensor(shuffled, self.device)
 
-        # MLP layer 0
-        h = ttnn.linear(
-            shuffled_tt, self.proj0_weight, bias=self.proj0_bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH,
+        # Layer 0: LayerNorm over pixel-shuffled features
+        h = ttnn.layer_norm(
+            shuffled_tt, weight=self.ln_weight, bias=self.ln_bias,
+            epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(shuffled_tt)
 
-        # MLP layer 1
+        # Layer 1: Linear 4608 -> 2048
         h = ttnn.linear(
             h, self.proj1_weight, bias=self.proj1_bias,
             memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH,
         )
 
-        # GELU activation (index 2 in the Sequential)
+        # Layer 2: GELU activation
         h = ttnn.gelu(h)
 
-        # MLP layer 3
+        # Layer 3: Linear 2048 -> 2048
         output = ttnn.linear(
             h, self.proj3_weight, bias=self.proj3_bias,
             memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH,

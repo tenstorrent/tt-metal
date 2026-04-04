@@ -29,6 +29,20 @@ from models.experimental.groot_n16.tt.ttnn_common import (
 )
 
 
+def _to_tt_linear_weight(weight: torch.Tensor, device, dtype=ttnn.bfloat8_b) -> ttnn.Tensor:
+    """Convert weight stored as [in_features, out_features] to TTNN tensor.
+
+    Unlike preprocess_linear_weight which transposes [out, in] -> [in, out],
+    this keeps the weight as-is since embodiment weights are already [in, out].
+    """
+    return ttnn.from_torch(
+        weight.to(torch.bfloat16),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+
+
 class CategorySpecificMLPTTNN:
     """
     Per-embodiment 2-layer MLP: input -> hidden (SiLU) -> output.
@@ -44,19 +58,21 @@ class CategorySpecificMLPTTNN:
         self.layer1_weights = {}
         self.layer2_weights = {}
 
-        w1 = weights.get("layer1.W")  # [num_cat, hidden_dim, input_dim]
+        w1 = weights.get("layer1.W")  # [num_cat, input_dim, hidden_dim]
         b1 = weights.get("layer1.b")  # [num_cat, hidden_dim]
-        w2 = weights.get("layer2.W")  # [num_cat, output_dim, hidden_dim]
+        w2 = weights.get("layer2.W")  # [num_cat, hidden_dim, output_dim]
         b2 = weights.get("layer2.b")  # [num_cat, output_dim]
 
         if w1 is not None:
             for cat_id in range(min(num_categories, w1.shape[0])):
+                # W is stored as [in, out], ttnn linear expects [in, out]
+                # so we do NOT transpose (preprocess_linear_weight transposes, so skip it)
                 self.layer1_weights[cat_id] = (
-                    preprocess_linear_weight(w1[cat_id], device),
+                    _to_tt_linear_weight(w1[cat_id], device),
                     preprocess_linear_bias(b1[cat_id], device) if b1 is not None else None,
                 )
                 self.layer2_weights[cat_id] = (
-                    preprocess_linear_weight(w2[cat_id], device),
+                    _to_tt_linear_weight(w2[cat_id], device),
                     preprocess_linear_bias(b2[cat_id], device) if b2 is not None else None,
                 )
 
@@ -147,12 +163,12 @@ class MultiEmbodimentActionEncoderTTNN:
         self.w3 = {}
 
         for name, storage in [("W1", self.w1), ("W2", self.w2), ("W3", self.w3)]:
-            w = weights.get(f"{name}.W")  # [num_cat, out_dim, in_dim]
+            w = weights.get(f"{name}.W")  # [num_cat, in_dim, out_dim]
             b = weights.get(f"{name}.b")  # [num_cat, out_dim]
             if w is not None:
                 for cat_id in range(min(config.max_num_embodiments, w.shape[0])):
                     storage[cat_id] = (
-                        preprocess_linear_weight(w[cat_id], device),
+                        _to_tt_linear_weight(w[cat_id], device),
                         preprocess_linear_bias(b[cat_id], device) if b is not None else None,
                     )
 
