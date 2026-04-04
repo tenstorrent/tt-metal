@@ -481,25 +481,27 @@ def main():
                     results.append({"blocking": [cin, cout, t_blk, h_blk, w_blk], "us": t1_us, "status": "skip_t1_bad"})
                     continue
 
+            # Run the entire combo (probe + warmup + timed) inside the timeout
+            # thread so that slow JIT compilation is also caught by TIMEOUT_S.
             probe_args = (device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, ckc)
-            probe_us = _run_once(*probe_args)
-            if best_us < float("inf"):
-                if probe_us > best_us * probe_threshold:
-                    fail_count += 1
-                    results.append({"blocking": [cin, cout, t_blk, h_blk, w_blk], "us": probe_us, "status": "slow"})
-                    continue
-                elif probe_us > best_us * (probe_threshold * 0.75):
-                    probe2 = _run_once(*probe_args)
-                    if min(probe_us, probe2) > best_us * (probe_threshold * 0.9):
-                        fail_count += 1
-                        results.append({"blocking": [cin, cout, t_blk, h_blk, w_blk], "us": probe_us, "status": "slow"})
-                        continue
-
             us_out = [None]
+            probe_out = [None]
             exc_out = [None]
 
-            def _warmup_and_time():
+            def _probe_warmup_and_time():
                 try:
+                    # Probe: triggers JIT compile + 1 measurement
+                    probe_out[0] = _run_once(*probe_args)
+
+                    # Cutoff after probe (inside thread so JIT time is counted)
+                    if best_us < float("inf"):
+                        if probe_out[0] > best_us * probe_threshold:
+                            return  # leave us_out[0] = None → treated as slow
+                        if probe_out[0] > best_us * (probe_threshold * 0.75):
+                            probe2 = _run_once(*probe_args)
+                            if min(probe_out[0], probe2) > best_us * (probe_threshold * 0.9):
+                                return  # slow
+
                     for _ in range(WARMUP):
                         out = ttnn.experimental.conv3d(
                             input_tensor=tt_input,
@@ -541,19 +543,26 @@ def main():
                 except Exception as e:
                     exc_out[0] = e
 
-            thread = threading.Thread(target=_warmup_and_time, daemon=True)
+            thread = threading.Thread(target=_probe_warmup_and_time, daemon=True)
             thread.start()
             thread.join(TIMEOUT_S)
 
             if thread.is_alive():
                 print(
-                    f"HANG: ({cin},{cout},{t_blk},{h_blk},{w_blk}) — exiting. " f"Run: tt-smi -r 0,1,2,3,4,5,6,7",
+                    f"HANG/SLOW-JIT: ({cin},{cout},{t_blk},{h_blk},{w_blk}) >{TIMEOUT_S}s — exiting. "
+                    f"Run: tt-smi -r 0,1,2,3,4,5,6,7",
                     flush=True,
                 )
                 os._exit(1)
 
             if exc_out[0] is not None:
                 raise exc_out[0]
+
+            # Probe was slow (cutoff fired inside thread) — record as slow and skip
+            if us_out[0] is None and probe_out[0] is not None:
+                fail_count += 1
+                results.append({"blocking": [cin, cout, t_blk, h_blk, w_blk], "us": probe_out[0], "status": "slow"})
+                continue
 
             us = us_out[0]
             ok_count += 1
