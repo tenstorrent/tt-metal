@@ -66,6 +66,16 @@ Tensor unary_composite_3param_to_4param_wrapper(
     return Func(input_tensor, parameter_a, parameter_b, memory_config, std::nullopt);
 }
 
+template <auto Func>
+Tensor unary_two_float_5param_to_6param_wrapper(
+    const Tensor& input_tensor,
+    float parameter_a,
+    float parameter_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output_tensor) {
+    return Func(input_tensor, parameter_a, parameter_b, memory_config, output_tensor, std::nullopt);
+}
+
 void bind_unary_clamp(nb::module_& mod) {
     const char* doc = R"doc(
         Applies clamp to :attr:`input_tensor` element-wise.
@@ -1789,6 +1799,52 @@ void py_module(nb::module_& mod) {
 
     bind_unary_operation_with_fast_and_approximate_mode<"mish", &ttnn::mish>(
         mod, "[Supported range -20 to inf]", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+
+    {
+        auto doc = fmt::format(
+            R"doc(
+            Applies the HardTanh function element-wise.
+
+            Clamps the input tensor to the range [{min_val}, {max_val}].
+
+            .. math::
+                \mathrm{{output\_tensor}}_i = \max(\mathrm{{min\_val}}, \min(\mathrm{{max\_val}}, \mathrm{{input\_tensor}}_i))
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+
+            Keyword Args:
+                min_val (float, optional): minimum value of the linear region range. Defaults to `-1.0`.
+                max_val (float, optional): maximum value of the linear region range. Defaults to `1.0`.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+
+            Note:
+                Supported dtypes and layouts:
+
+                .. list-table::
+                   :header-rows: 1
+
+                   * - Dtypes
+                     - Layouts
+                   * - BFLOAT16, BFLOAT8_B, FLOAT32
+                     - TILE, ROW_MAJOR
+            )doc");
+
+        ttnn::bind_function<"hardtanh">(
+            mod,
+            doc.c_str(),
+            &unary_two_float_5param_to_6param_wrapper<&ttnn::hardtanh>,
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("min_val") = -1.0f,
+            nb::arg("max_val") = 1.0f,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none());
+    }
 }
 
 }  // namespace ttnn::operations::unary
