@@ -248,6 +248,7 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ matrix.arch }}
         RUNNER_LABEL: ${{ matrix.runner_label }}
+        TEST_GROUP_NAME: ${{ matrix.test_group_name }}
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
         TT_SMI_RESET_COMMAND: ${{ matrix.tt_smi_cmd }}
