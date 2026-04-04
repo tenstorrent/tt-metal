@@ -7,7 +7,6 @@
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/complex_unary/device/complex_unary_op.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::complex_binary {
 
@@ -42,19 +41,9 @@ ComplexTensor multiply(const ComplexTensor& ab, const ComplexTensor& cd, const M
 }
 
 ComplexTensor divide(
-    const ComplexTensor& /*input_a*/, const ComplexTensor& /*input_b*/, const MemoryConfig& /*output_mem_config*/) {
-    TT_THROW("reciprocal operation not yet reimplemented after nuke");
-    const ComplexTensor& input_a [[maybe_unused]],
-    const ComplexTensor& input_b [[maybe_unused]],
-    const MemoryConfig& output_mem_config [[maybe_unused]]) {
-        // TODO: Restore when ttnn::reciprocal is regenerated after batch nuke
-        TT_THROW("complex_binary::divide not available - ttnn::reciprocal was nuked");
-    }
-    const ComplexTensor& input_a [[maybe_unused]],
-    const ComplexTensor& input_b [[maybe_unused]],
-    const MemoryConfig& output_mem_config [[maybe_unused]]) {
-        // TODO: Restore when ttnn::reciprocal is regenerated after batch nuke
-        TT_THROW("complex_binary::divide not available - ttnn::reciprocal was nuked");
-    }
+    const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config) {
+    return ttnn::operations::complex_binary::multiply(
+        input_a, ttnn::reciprocal(input_b, output_mem_config), output_mem_config);
+}
 
 }  // namespace ttnn::operations::complex_binary

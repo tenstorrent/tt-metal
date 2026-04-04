@@ -67,9 +67,6 @@ Tensor unary_composite_3param_to_4param_wrapper(
 }
 
 // BEGIN: Disabled binding functions - unused after batch nuke (clamp, clip)
-#if 0
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wunused-function"
 template <auto Func>
 Tensor unary_two_float_5param_to_6param_wrapper(
     const Tensor& input_tensor,
@@ -80,6 +77,7 @@ Tensor unary_two_float_5param_to_6param_wrapper(
     return Func(input_tensor, parameter_a, parameter_b, memory_config, output_tensor, std::nullopt);
 }
 
+#if 0
 void bind_unary_clamp(nb::module_& mod) {
     const char* doc = R"doc(
         Applies clamp to :attr:`input_tensor` element-wise.
@@ -197,8 +195,6 @@ void bind_unary_clip(nb::module_& mod) {
 }
 #endif
 // END: Disabled binding functions (clamp, clip)
-
-#pragma clang diagnostic pop
 
 template <
     ttnn::unique_string OpName,
@@ -1821,7 +1817,6 @@ void bind_unary_composite_rpow(
             nb::kw_only(),
             nb::arg("memory_config") = nb::none()});
 }
-#pragma clang diagnostic pop
 }  // namespace
 
 void py_module(nb::module_& mod) {
@@ -1846,12 +1841,17 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(\mathrm{{output\_tensor}}_i = \cosh(\mathrm{{input\_tensor}}_i))doc",
         "[supported range -9 to 9]",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+
     bind_unary_operation<"hardsigmoid", &ttnn::hardsigmoid>(
         mod,
         R"doc(\text{hardsigmoid}(x) = \max(0, \min(1, x / 6 + 0.5)))doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+
     bind_unary_operation<"selu", &ttnn::selu>(
         mod,
-        R"doc(\text{selu}(x) = \text{scale} \times (\max(0, x) + \min(0, \alpha \times (\exp(x) - 1)))  \text{ where } \text{scale} = 1.0507 \text{ and } \alpha = 1.6733)doc",
+        R"doc(\text{selu}(x) = \text{scale} \times (\max(0, x) + \min(0, \alpha \times (\exp(x) - 1))))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     {

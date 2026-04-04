@@ -375,7 +375,10 @@ import ttnn.experimental_loader.golden_functions
 
 import ttnn.operations
 
-from ttnn.operations.unary import SigmoidMode
+try:
+    from ttnn.operations.unary import SigmoidMode
+except (ImportError, AttributeError):
+    pass
 
 divide = ttnn.div
 sub = ttnn.subtract

@@ -19,7 +19,6 @@ std::string get_macro_definition(UnaryOpType op_type) {
     switch (op_type) {
         case UnaryOpType::COSH: return "SFPU_OP_COSH_INCLUDE";
         case UnaryOpType::CBRT: return "SFPU_OP_CBRT_INCLUDE";
-        case UnaryOpType::HARDSIGMOID: return "SFPU_OP_HARDSIGMOID_INCLUDE";
         case UnaryOpType::SELU: return "SFPU_OP_SELU_INCLUDE";
         case UnaryOpType::HARDTANH: return "SFPU_OP_HARDTANH_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
@@ -30,8 +29,6 @@ template <typename T>
 std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     UnaryOpType op_type,
     std::span<const T> params,
-    const std::string& idst [[maybe_unused]],
-    std::optional<DataType> input_dtype [[maybe_unused]]) {
     [[maybe_unused]] const std::string& idst,
     [[maybe_unused]] std::optional<DataType> input_dtype) {
     TT_FATAL(
@@ -57,33 +54,22 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         }
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };
-    }
+}
 
-    std::pair<std::string, std::string> get_op_init_and_func_default(
-        UnaryOpType op_type, std::string idst, [[maybe_unused]] std::optional<DataType> input_dtype) {
-        switch (op_type) {
-            case UnaryOpType::IDENTITY: return {"identity_tile_init();", fmt::format("identity_tile({});", idst)};
-            case UnaryOpType::DROPOUT: {
-                return {"dropout_tile_init();", fmt::format("dropout_tile({});", idst)};
-            }
-            case UnaryOpType::COSH: return {"cosh_tile_init();", fmt::format("cosh_tile({});", idst)};
-            case UnaryOpType::CBRT: return {"cbrt_tile_init();", fmt::format("cbrt_tile({});", idst)};
-            case UnaryOpType::HARDSIGMOID:
-                return {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
-            default: TT_THROW("unexpected op type {}", op_type);
-        };
-    }
-    std::pair<std::string, std::string> get_op_init_and_func_default(
-        UnaryOpType op_type, std::string idst, std::optional<DataType> input_dtype) {
-        switch (op_type) {
-            case UnaryOpType::IDENTITY: return {"identity_tile_init();", fmt::format("identity_tile({});", idst)};
-            case UnaryOpType::DROPOUT: {
-                return {"dropout_tile_init();", fmt::format("dropout_tile({});", idst)};
-            }
-            case UnaryOpType::SELU: return {"selu_tile_init();", fmt::format("selu_tile({});", idst)};
-            default: TT_THROW("unexpected op type {}", op_type);
-        };
-    }
+std::pair<std::string, std::string> get_op_init_and_func_default(
+    UnaryOpType op_type, std::string idst, [[maybe_unused]] std::optional<DataType> input_dtype) {
+    switch (op_type) {
+        case UnaryOpType::IDENTITY: return {"identity_tile_init();", fmt::format("identity_tile({});", idst)};
+        case UnaryOpType::DROPOUT: {
+            return {"dropout_tile_init();", fmt::format("dropout_tile({});", idst)};
+        }
+        case UnaryOpType::COSH: return {"cosh_tile_init();", fmt::format("cosh_tile({});", idst)};
+        case UnaryOpType::CBRT: return {"cbrt_tile_init();", fmt::format("cbrt_tile({});", idst)};
+        case UnaryOpType::HARDSIGMOID: return {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
+        case UnaryOpType::SELU: return {"selu_tile_init();", fmt::format("selu_tile({});", idst)};
+        default: TT_THROW("unexpected op type {}", op_type);
+    };
+}
 
 template <typename T>
 std::map<std::string, std::string> get_defines_impl(

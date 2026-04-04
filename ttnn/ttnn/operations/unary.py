@@ -95,6 +95,9 @@ def _golden_function_hardtanh(input_tensor_a, *args, min_val=-1.0, max_val=1.0, 
 ttnn.attach_golden_function(ttnn.hardtanh, golden_function=_golden_function_hardtanh)
 
 
-SigmoidMode = ttnn._ttnn.operations.unary.SigmoidMode
+try:
+    SigmoidMode = ttnn._ttnn.operations.unary.SigmoidMode
+except AttributeError:
+    pass
 
 __all__ = []

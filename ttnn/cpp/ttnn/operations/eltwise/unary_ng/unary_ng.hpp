@@ -27,11 +27,6 @@ namespace ttnn {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,            \
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
-DECLARE_UNARY_NG_OP(cosh)
-DECLARE_UNARY_NG_OP(cbrt)
-
 #undef DECLARE_UNARY_NG_OP
-
-Tensor abs(const ComplexTensor& input_tensor, const tt::tt_metal::MemoryConfig& output_mem_config);
 
 }  // namespace ttnn

@@ -13,7 +13,8 @@ def _golden_function(input_tensor, *args, **kwargs):
     return torch.exp(input_tensor)
 
 
-ttnn.attach_golden_function(ttnn.exp, _golden_function)
+if hasattr(ttnn, "exp"):
+    ttnn.attach_golden_function(ttnn.exp, _golden_function)
 
 
 def _golden_function(

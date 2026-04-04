@@ -14,5 +14,8 @@ for loader, module_name, is_pkg in pkgutil.walk_packages(__path__):
     _module = module_from_spec(spec)
     # Register the module in sys.modules before executing it
     sys.modules[f"{module_name}"] = _module
-    spec.loader.exec_module(_module)
+    try:
+        spec.loader.exec_module(_module)
+    except AttributeError:
+        pass  # Skip modules referencing nuked operations
     globals()[module_name] = _module
