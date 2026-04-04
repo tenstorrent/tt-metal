@@ -433,19 +433,25 @@ class TransformerBlock(LightweightModule):
 
         # FFN: all-gather without normalization
         if self.args.is_multichip and not TG:
-            ffn_in = ttnn.experimental.all_gather_async(
-                hidden_states,
-                persistent_output_buffer=None,
-                dim=3,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=self.tt_ccl.get_num_links(1),
-                topology=self.args.ccl_topology(),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
-            )
+            if not self.args.is_distributed_norm(mode):
+                # Decode: use ff_norm's sharded config (produces correct format for MLP DRAM-sharded matmul)
+                ffn_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
+                ffn_in = self.ff_norm(hidden_states, mode, norm_config=ffn_norm_config, gather_only=True)
+            else:
+                # Prefill: explicit all-gather to DRAM interleaved
+                ffn_in = ttnn.experimental.all_gather_async(
+                    hidden_states,
+                    persistent_output_buffer=None,
+                    dim=3,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                    num_links=self.tt_ccl.get_num_links(1),
+                    topology=self.args.ccl_topology(),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
+                )
         else:
             ffn_in = hidden_states
 
