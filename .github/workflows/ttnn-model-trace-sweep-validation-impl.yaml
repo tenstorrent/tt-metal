@@ -41,6 +41,8 @@ jobs:
   prepare-validation-inputs:
     name: Prepare validation inputs
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
     outputs:
       master-json-artifact-name: ${{ steps.set-artifact-names.outputs.master-json-artifact-name }}
       preflight-artifact-name: ${{ steps.set-artifact-names.outputs.preflight-artifact-name }}
@@ -99,7 +101,7 @@ jobs:
         run: |
           python3 model_tracer/config_hash_preflight.py \
             model_tracer/traced_operations/ttnn_operations_master.json \
-            ${{ inputs.allow-partial-hash-changes == 'true' && '--allow-partial' || '' }} \
+            ${{ inputs.allow-partial-hash-changes && '--allow-partial' || '' }} \
             --report validation_artifacts/config_hash_preflight.txt
 
       - name: Upload master JSON artifact
@@ -184,6 +186,7 @@ jobs:
             generate_scope_vectors \
               model_traced \
               --model-traced all \
+              --suite-name model_traced \
               --group-by hw \
               --master-trace /work/model_tracer/traced_operations/ttnn_operations_master.json \
               --tag ci-validate-model-traced
