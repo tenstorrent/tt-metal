@@ -31,8 +31,8 @@ mypy==1.9.0
 # For Mistral-7B-v0.3 demo tests
 protobuf==3.20.2
 
-# For TT-Transformers Qwen3 support
-transformers == 4.53.0
+# For TT-Transformers Qwen3 and EXAONE 4.0 support
+transformers >= 4.54.0
 huggingface-hub >= 0.30.0
 
 # testing

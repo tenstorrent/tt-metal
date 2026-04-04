@@ -214,6 +214,12 @@ class TransformerBlock(LightweightModule):
         kv_cache=None,
         batch_size=1,
     ) -> ttnn.Tensor:
+        if self.args.is_post_norm:
+            return self._forward_post_norm(
+                x, current_pos, rot_mats_global, rot_mats_local, user_id, mode,
+                page_table, chunk_page_table, chunk_start_idx, kv_cache, batch_size,
+            )
+
         TG = self.args.is_galaxy
         residual = x
 
@@ -320,3 +326,146 @@ class TransformerBlock(LightweightModule):
         )
 
         return out  # fractured across devices
+
+    def _forward_post_norm(
+        self,
+        x,
+        current_pos,
+        rot_mats_global,
+        rot_mats_local,
+        user_id,
+        mode,
+        page_table,
+        chunk_page_table,
+        chunk_start_idx,
+        kv_cache,
+        batch_size,
+    ):
+        """Post-norm forward pass for EXAONE 4.0.
+
+        Post-norm applies norm AFTER attention/FFN (not before).
+        Flow: attention(x) → norm → residual add → FFN(x) → norm → residual add
+        """
+        TG = self.args.is_galaxy
+        residual = x
+        skip_mem_cfg = self.args.get_residual_mem_config(mode, self.prefetcher)
+
+        assert (
+            x.memory_config() == skip_mem_cfg
+        ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
+
+        rot_mats = (
+            rot_mats_local if (hasattr(self.attention, "is_sliding") and self.attention.is_sliding) else rot_mats_global
+        )
+
+        # Post-norm: no pre-attention norm, just all-gather the fractured input for attention
+        if self.args.is_multichip and not TG:
+            input_mem_cfg = skip_mem_cfg if mode == Mode.DECODE else ttnn.DRAM_MEMORY_CONFIG
+            attn_in = ttnn.experimental.all_gather_async(
+                x,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=self.tt_ccl.get_num_links(1),
+                topology=self.args.ccl_topology(),
+                memory_config=input_mem_cfg,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
+        else:
+            attn_in = x
+
+        if batch_size > 1:
+            attn_in = ttnn.reshape(attn_in, [batch_size, 1, attn_in.shape[-2] // batch_size, -1])
+
+        attn_out = self.attention.forward(
+            attn_in,
+            current_pos,
+            rot_mats,
+            user_id,
+            mode,
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            chunk_start_idx=chunk_start_idx,
+            kv_cache=kv_cache,
+        )
+
+        if mode == Mode.PREFILL and batch_size > 1:
+            residual = ttnn.reshape(residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1])
+
+        attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
+
+        # Post-attention norm: ff_norm has post_attention_layernorm weights
+        ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
+        attn_normed = self.ff_norm(attn_out, mode, norm_config=ff_norm_config)
+
+        # Partition back to fractured for residual add
+        if self.num_devices > 1 and not self.args.is_distributed_norm(mode):
+            attn_normed = ttnn.mesh_partition(
+                attn_normed,
+                memory_config=attn_normed.memory_config(),
+                dim=3,
+                cluster_axis=1,
+            )
+
+        hidden_states = ttnn.add(
+            residual, attn_normed, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
+        )
+        residual = hidden_states
+
+        ttnn.deallocate(attn_out)
+        if mode == "prefill":
+            x.deallocate(True)
+
+        # FFN: no pre-FFN norm, just all-gather for FFN input
+        if self.args.is_multichip and not TG:
+            ffn_mem_cfg = skip_mem_cfg if mode == Mode.DECODE else ttnn.DRAM_MEMORY_CONFIG
+            ffn_in = ttnn.experimental.all_gather_async(
+                hidden_states,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=self.tt_ccl.get_num_links(1),
+                topology=self.args.ccl_topology(),
+                memory_config=ffn_mem_cfg,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
+        else:
+            ffn_in = hidden_states
+
+        if TG and mode == "decode":
+            ffn_in = ttnn.to_memory_config(ffn_in, memory_config=self.args.get_mlp_act_mem_config(mode))
+
+        ffn_out = self.feed_forward.forward(ffn_in, mode)
+
+        # Post-FFN norm: post_ff_norm has post_feedforward_layernorm weights
+        activation_dtype = self.args.decoders_optimizations.get_tensor_dtype(
+            decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
+        )
+
+        if self.post_ff_norm is not None:
+            post_ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
+            ffn_out = self.post_ff_norm(ffn_out, mode, norm_config=post_ff_norm_config)
+            if self.num_devices > 1 and not self.args.is_distributed_norm(mode):
+                ffn_out = ttnn.mesh_partition(
+                    ffn_out,
+                    memory_config=ffn_out.memory_config(),
+                    dim=3,
+                    cluster_axis=1,
+                )
+
+        out = ttnn.add(
+            residual,
+            ffn_out,
+            memory_config=skip_mem_cfg,
+            dtype=self.args.ccl_dtype
+            if TG and not self.args.is_distributed_norm(mode)
+            else activation_dtype or ttnn.bfloat16,
+        )
+
+        return out

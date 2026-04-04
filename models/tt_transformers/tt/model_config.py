@@ -472,6 +472,7 @@ class ModelArgs:
         "Phi-4": "models/tt_transformers/model_params/phi-4",
         "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
         "Qwen3-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen3-VL-32B-Instruct",
+        "EXAONE-4.0-32B": "models/tt_transformers/model_params/EXAONE-4.0-32B",
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
@@ -2672,6 +2673,10 @@ class ModelArgs:
 
         self.layer_types = text_config.get("layer_types", None)
 
+        # Post-norm architecture detection (e.g., EXAONE 4.0)
+        # Post-norm models apply norm AFTER attention/FFN, not before
+        self.is_post_norm = text_config.get("model_type", "") in ("exaone4",)
+
         # Sliding window attention
         self.sliding_window = text_config.get("sliding_window", None)
 
@@ -3030,6 +3035,15 @@ class ModelArgs:
             else:
                 # Standard: convert to Meta format
                 state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
+
+        # Post-norm models (e.g. EXAONE 4.0) have no input_layernorm, so no attention_norm
+        # key exists after mapping. Add dummy identity weights so RMSNorm construction succeeds.
+        # In post-norm mode, attention_norm is skipped in the forward pass.
+        if self.is_post_norm:
+            for i in range(self.n_layers):
+                attn_norm_key = f"layers.{i}.attention_norm.weight"
+                if attn_norm_key not in state_dict:
+                    state_dict[attn_norm_key] = torch.ones(self.dim)
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]

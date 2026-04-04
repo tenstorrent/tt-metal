@@ -765,6 +765,10 @@ def get_base_model_name(model_name: str) -> str:
     # Explicitly handle phi-4 which doesn't follow the <Size>B format
     if "phi-4" in model_name.lower():
         return "Phi-4"
+    # Handle EXAONE 4.0 naming (e.g. "EXAONE-4.0-32B" -> "EXAONE-4.0-32B")
+    if "exaone" in model_name.lower():
+        match = re.search(r"(.*?\d+[bB])", model_name)
+        return match.group(1) if match else model_name
     # Remove the suffix after B- (case insensitive), e.g. "Llama-3.1-70B-Instruct" -> "Llama-3.1-70B"
     match = re.search(r"(.*?\d+[bB])-", model_name)
     return match.group(1) if match else model_name
