@@ -8,6 +8,10 @@
 #include "api/compute/eltwise_unary/cosh.h"
 #endif
 
+#if SFPU_OP_SINH_INCLUDE
+#include "api/compute/eltwise_unary/sinh.h"
+#endif
+
 #if SFPU_OP_CBRT_INCLUDE
 #include "api/compute/eltwise_unary/cbrt.h"
 #endif
