@@ -75,6 +75,15 @@ def _golden_function_cosh(input_tensor_a, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.cosh, golden_function=_golden_function_cosh)
 
 
+def _golden_function_atanh(input_tensor_a, *args, **kwargs):
+    import torch
+
+    return torch.atanh(input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn.atanh, golden_function=_golden_function_atanh)
+
+
 def _golden_function_hardtanh(input_tensor_a, *args, min_val=-1.0, max_val=1.0, **kwargs):
     import torch
 

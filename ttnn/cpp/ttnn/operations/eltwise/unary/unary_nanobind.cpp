@@ -1799,6 +1799,13 @@ void py_module(nb::module_& mod) {
         R"doc(\text{selu}(x) = \text{scale} \times (\max(0, x) + \min(0, \alpha \times (\exp(x) - 1))))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+
+    bind_unary_operation<"atanh", &ttnn::atanh>(
+        mod,
+        R"doc(\mathrm{{output\_tensor}}_i = \text{atanh}(\mathrm{{input\_tensor}}_i))doc",
+        "[supported range -1 to 1]",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+
     {
         auto doc = fmt::format(
             R"doc(
