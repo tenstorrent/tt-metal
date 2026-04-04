@@ -70,8 +70,9 @@ class Gemma4Attention(LightweightModule):
         self.n_local_heads = self.n_heads  # 8
         self.n_local_kv_heads = self.n_kv_heads  # 2
 
-        # Attention scale
-        self.scale = self.head_dim**-0.5
+        # Attention scale: Gemma 4 uses QK norms, so attention scaling = 1.0 (no additional sqrt(d) scaling)
+        # HF Gemma4TextAttention sets self.scaling = 1.0 (line 1143 in modeling_gemma4.py)
+        self.scale = 1.0
 
         self.compute_kernel_config_hifi2 = configuration.compute_kernel_config_hifi2
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
@@ -168,11 +169,11 @@ class Gemma4Attention(LightweightModule):
             self.k_norm = lambda x, mode, norm_config: x
 
         # V-norm: RMSNorm without learnable scale
-        # Gemma 4 V-norm has with_scale=False => no weight parameter
-        # With add_unit_offset=True, zeros weight => effective weight = 0 + 1 = 1 (identity scale)
+        # Gemma 4 V-norm has with_scale=False => no weight parameter in checkpoint
+        # We use ones as weight (identity scale) since V-norm only normalizes, no learned scaling
         if getattr(args, "use_v_norm", False):
             v_norm_key = f"{layer_name}.v_norm"
-            v_norm_state = {f"{v_norm_key}.weight": torch.zeros(self.head_dim)}
+            v_norm_state = {f"{v_norm_key}.weight": torch.ones(self.head_dim)}
             fn_v_norm = RMSNorm(
                 device=self.mesh_device,
                 dim=self.head_dim,
@@ -182,13 +183,18 @@ class Gemma4Attention(LightweightModule):
                 weight_cache_path=None,  # Constant weights, no caching needed
                 weight_dtype=ttnn.bfloat16,
                 weight_key=v_norm_key,
-                add_unit_offset=True,
+                add_unit_offset=False,  # Gemma 4 uses direct scale, not offset
                 is_distributed=False,
                 tt_ccl=self.tt_ccl,
             )
             self.v_norm = lambda x, mode, norm_config: norm_reshard(x, fn_v_norm, mode, norm_config)
         else:
             self.v_norm = lambda x, mode, norm_config: x
+
+        # KV sharing state: set by the model before forward for shared layers
+        self.shared_kv = None  # Set to (k_heads, v_heads) for KV-shared layers
+        self.last_k_heads = None  # Stored after forward for source layers
+        self.last_v_heads = None
 
         # Initialize KV cache
         if not use_paged_kv_cache:
@@ -244,7 +250,13 @@ class Gemma4Attention(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
     ):
-        """Prefill forward pass."""
+        """
+        Prefill forward pass with KV sharing support.
+
+        If self.shared_kv is set (by the model), skips K/V projection and uses
+        shared K/V from source layer. After forward, stores processed K/V in
+        self.last_k_heads / self.last_v_heads for potential sharing with later layers.
+        """
         batch_size = x_11SH.shape[0]
         if batch_size > 1:
             x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
@@ -252,63 +264,135 @@ class Gemma4Attention(LightweightModule):
         seq_len = x_11SH.shape[-2]
         original_seq_len = seq_len
 
-        # Reshape for large sequences
-        if seq_len > self.MAX_QKV_MM_SEQ_LEN and seq_len % self.MAX_QKV_MM_SEQ_LEN != 0:
-            padded_seq_len = (
-                (seq_len + self.MAX_QKV_MM_SEQ_LEN - 1) // self.MAX_QKV_MM_SEQ_LEN
-            ) * self.MAX_QKV_MM_SEQ_LEN
-            pad_len = padded_seq_len - seq_len
-            x_11SH = ttnn.pad(x_11SH, padding=[(0, 0), (0, 0), (0, pad_len), (0, 0)], value=0.0)
-            seq_len = padded_seq_len
+        if self.shared_kv is not None:
+            # KV-shared layer: only compute Q, reuse K/V from source layer
+            k_heads, v_heads = self.shared_kv
 
-        if seq_len > self.MAX_QKV_MM_SEQ_LEN:
-            x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
+            # Reshape for large sequences (same as full path)
+            if seq_len > self.MAX_QKV_MM_SEQ_LEN and seq_len % self.MAX_QKV_MM_SEQ_LEN != 0:
+                padded_seq_len = (
+                    (seq_len + self.MAX_QKV_MM_SEQ_LEN - 1) // self.MAX_QKV_MM_SEQ_LEN
+                ) * self.MAX_QKV_MM_SEQ_LEN
+                pad_len = padded_seq_len - seq_len
+                x_11SH = ttnn.pad(x_11SH, padding=[(0, 0), (0, 0), (0, pad_len), (0, 0)], value=0.0)
+                seq_len = padded_seq_len
 
-        # QKV matmul
-        xqkv_fused = ttnn.linear(
-            x_11SH,
-            self.wqkv,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-        )
+            if seq_len > self.MAX_QKV_MM_SEQ_LEN:
+                x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
 
-        if seq_len > self.MAX_QKV_MM_SEQ_LEN:
-            xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
-        if original_seq_len != seq_len:
-            xqkv_fused = xqkv_fused[:, :, :original_seq_len, :]
-            seq_len = original_seq_len
+            # Q-only matmul: compute full QKV but only use Q
+            xqkv_fused = ttnn.linear(
+                x_11SH,
+                self.wqkv,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+            )
 
-        if batch_size > 1:
-            xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len // batch_size, -1])
+            if seq_len > self.MAX_QKV_MM_SEQ_LEN:
+                xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
+            if original_seq_len != seq_len:
+                xqkv_fused = xqkv_fused[:, :, :original_seq_len, :]
+                seq_len = original_seq_len
 
-        ttnn.deallocate(x_11SH)
+            if batch_size > 1:
+                xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len // batch_size, -1])
 
-        # Split QKV into heads
-        (
-            q_heads_pre_rot,
-            k_heads_pre_rot,
-            v_heads,
-        ) = ttnn.experimental.nlp_create_qkv_heads(
-            xqkv_fused,
-            num_heads=self.n_local_heads,
-            num_kv_heads=self.n_local_kv_heads,
-            transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(xqkv_fused)
+            ttnn.deallocate(x_11SH)
 
-        # QK norms
-        norm_config = self.args.get_norm_config("attn", Mode.PREFILL, None)
-        q_heads_pre_rot = self.q_norm(q_heads_pre_rot, mode=Mode.PREFILL, norm_config=norm_config)
-        k_heads_pre_rot = self.k_norm(k_heads_pre_rot, mode=Mode.PREFILL, norm_config=norm_config)
+            # Split to get Q heads (K/V from split are discarded)
+            (
+                q_heads_pre_rot,
+                _k_unused,
+                _v_unused,
+            ) = ttnn.experimental.nlp_create_qkv_heads(
+                xqkv_fused,
+                num_heads=self.n_local_heads,
+                num_kv_heads=self.n_local_kv_heads,
+                transpose_k_heads=False,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(xqkv_fused)
+            ttnn.deallocate(_k_unused)
+            ttnn.deallocate(_v_unused)
 
-        # V-norm
-        v_heads = self.v_norm(v_heads, mode=Mode.PREFILL, norm_config=norm_config)
+            # Q norm + rotary (Q only — shared K already has rotary from source layer)
+            norm_config = self.args.get_norm_config("attn", Mode.PREFILL, None)
+            q_heads_pre_rot = self.q_norm(q_heads_pre_rot, mode=Mode.PREFILL, norm_config=norm_config)
 
-        # Apply partial rotary embeddings
-        q_heads, k_heads = self._apply_rotary_prefill(q_heads_pre_rot, k_heads_pre_rot, rot_mats)
-        ttnn.deallocate(q_heads_pre_rot)
-        ttnn.deallocate(k_heads_pre_rot)
+            # Apply rotary to Q only (shared K already has correct rotary from source)
+            if q_heads_pre_rot.dtype != ttnn.bfloat16:
+                q_heads_pre_rot = ttnn.typecast(q_heads_pre_rot, dtype=ttnn.bfloat16)
+            q_heads = ttnn.experimental.rotary_embedding(q_heads_pre_rot, rot_mats[0], rot_mats[1])
+            ttnn.deallocate(q_heads_pre_rot)
+
+            # Store for potential downstream sharing (though shared layers typically aren't sources)
+            self.last_k_heads = k_heads
+            self.last_v_heads = v_heads
+
+        else:
+            # Normal (non-shared) layer: compute full QKV
+
+            # Reshape for large sequences
+            if seq_len > self.MAX_QKV_MM_SEQ_LEN and seq_len % self.MAX_QKV_MM_SEQ_LEN != 0:
+                padded_seq_len = (
+                    (seq_len + self.MAX_QKV_MM_SEQ_LEN - 1) // self.MAX_QKV_MM_SEQ_LEN
+                ) * self.MAX_QKV_MM_SEQ_LEN
+                pad_len = padded_seq_len - seq_len
+                x_11SH = ttnn.pad(x_11SH, padding=[(0, 0), (0, 0), (0, pad_len), (0, 0)], value=0.0)
+                seq_len = padded_seq_len
+
+            if seq_len > self.MAX_QKV_MM_SEQ_LEN:
+                x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
+
+            # QKV matmul
+            xqkv_fused = ttnn.linear(
+                x_11SH,
+                self.wqkv,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+            )
+
+            if seq_len > self.MAX_QKV_MM_SEQ_LEN:
+                xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
+            if original_seq_len != seq_len:
+                xqkv_fused = xqkv_fused[:, :, :original_seq_len, :]
+                seq_len = original_seq_len
+
+            if batch_size > 1:
+                xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len // batch_size, -1])
+
+            ttnn.deallocate(x_11SH)
+
+            # Split QKV into heads
+            (
+                q_heads_pre_rot,
+                k_heads_pre_rot,
+                v_heads,
+            ) = ttnn.experimental.nlp_create_qkv_heads(
+                xqkv_fused,
+                num_heads=self.n_local_heads,
+                num_kv_heads=self.n_local_kv_heads,
+                transpose_k_heads=False,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(xqkv_fused)
+
+            # QK norms
+            norm_config = self.args.get_norm_config("attn", Mode.PREFILL, None)
+            q_heads_pre_rot = self.q_norm(q_heads_pre_rot, mode=Mode.PREFILL, norm_config=norm_config)
+            k_heads_pre_rot = self.k_norm(k_heads_pre_rot, mode=Mode.PREFILL, norm_config=norm_config)
+
+            # V-norm
+            v_heads = self.v_norm(v_heads, mode=Mode.PREFILL, norm_config=norm_config)
+
+            # Apply partial rotary embeddings
+            q_heads, k_heads = self._apply_rotary_prefill(q_heads_pre_rot, k_heads_pre_rot, rot_mats)
+            ttnn.deallocate(q_heads_pre_rot)
+            ttnn.deallocate(k_heads_pre_rot)
+
+            # Store processed K/V for potential sharing with later layers
+            self.last_k_heads = k_heads
+            self.last_v_heads = v_heads
 
         # Update KV cache
         if kv_cache:
@@ -316,10 +400,21 @@ class Gemma4Attention(LightweightModule):
         else:
             keys, values = self.layer_past[0], self.layer_past[1]
 
-        ttnn.experimental.paged_fill_cache(keys, k_heads, page_table, batch_idx=user_id)
-        ttnn.experimental.paged_fill_cache(values, v_heads, page_table, batch_idx=user_id)
+        # Typecast K/V to cache dtype before filling
+        k_fill = ttnn.typecast(k_heads, dtype=keys.dtype)
+        v_fill = ttnn.typecast(v_heads, dtype=values.dtype)
 
-        # SDPA
+        if page_table is not None:
+            ttnn.experimental.paged_fill_cache(keys, k_fill, page_table, batch_idx=user_id)
+            ttnn.experimental.paged_fill_cache(values, v_fill, page_table, batch_idx=user_id)
+        else:
+            ttnn.fill_cache(keys, k_fill, user_id)
+            ttnn.fill_cache(values, v_fill, user_id)
+
+        ttnn.deallocate(k_fill)
+        ttnn.deallocate(v_fill)
+
+        # Use bfloat16 for SDPA during bring-up for maximum accuracy
         attn_output = ttnn.transformer.scaled_dot_product_attention(
             q_heads,
             k_heads,
@@ -330,8 +425,8 @@ class Gemma4Attention(LightweightModule):
         )
 
         ttnn.deallocate(q_heads)
-        ttnn.deallocate(k_heads)
-        ttnn.deallocate(v_heads)
+        # Don't deallocate k_heads/v_heads - they may be needed for sharing
+        # They'll be cleaned up when the next forward pass overwrites last_k_heads/last_v_heads
 
         # Concat heads and output projection
         attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -343,6 +438,9 @@ class Gemma4Attention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config_hifi2,
         )
         ttnn.deallocate(attn_output)
+
+        # Clear shared_kv after use (one-shot)
+        self.shared_kv = None
 
         return dense_out
 
@@ -430,27 +528,19 @@ class Gemma4Attention(LightweightModule):
             k_rot = ttnn.experimental.rotary_embedding(k_heads, rot_mats[0], rot_mats[1])
             return q_rot, k_rot
 
-        # Partial rotation (global layers): head_dim=512, rotary_dim=128
-        # Split into rotary and pass-through parts
-        rotary_dim = self.rotary_dim
+        # Global layers: head_dim=512, cos/sin are also 512-dim
+        # Apply rotation to the FULL 512-dim Q/K vector.
+        # rotate_half pairs dim[i] with dim[256+i], matching HF exactly.
+        # cos/sin have real values in first 64+192_zeros pattern (duplicated),
+        # so only the first 64 dims of each half actually get rotated.
+        if q_heads.dtype != ttnn.bfloat16:
+            q_heads = ttnn.typecast(q_heads, dtype=ttnn.bfloat16)
+        if k_heads.dtype != ttnn.bfloat16:
+            k_heads = ttnn.typecast(k_heads, dtype=ttnn.bfloat16)
 
-        q_rot_part = q_heads[:, :, :, :rotary_dim]
-        q_pass_part = q_heads[:, :, :, rotary_dim:]
-        k_rot_part = k_heads[:, :, :, :rotary_dim]
-        k_pass_part = k_heads[:, :, :, rotary_dim:]
-
-        if q_rot_part.dtype != ttnn.bfloat16:
-            q_rot_part = ttnn.typecast(q_rot_part, dtype=ttnn.bfloat16)
-        if k_rot_part.dtype != ttnn.bfloat16:
-            k_rot_part = ttnn.typecast(k_rot_part, dtype=ttnn.bfloat16)
-
-        q_rotated = ttnn.experimental.rotary_embedding(q_rot_part, rot_mats[0], rot_mats[1])
-        k_rotated = ttnn.experimental.rotary_embedding(k_rot_part, rot_mats[0], rot_mats[1])
-
-        q_out = ttnn.concat([q_rotated, q_pass_part], dim=-1)
-        k_out = ttnn.concat([k_rotated, k_pass_part], dim=-1)
-
-        return q_out, k_out
+        q_rot = ttnn.experimental.rotary_embedding(q_heads, rot_mats[0], rot_mats[1])
+        k_rot = ttnn.experimental.rotary_embedding(k_heads, rot_mats[0], rot_mats[1])
+        return q_rot, k_rot
 
     def _apply_rotary_decode(self, q_heads, k_heads, rot_mats, current_pos):
         """Apply rotary embeddings for decode. Handles partial rotary for global layers."""
@@ -475,34 +565,24 @@ class Gemma4Attention(LightweightModule):
             k_rot = k_rot[:, :, : self.n_local_kv_heads]
             return q_rot, k_rot
 
-        # Partial rotation (global layers)
-        rotary_dim = self.rotary_dim
+        # Global layers: full 512-dim rotation (matching HF rotate_half pairing)
+        q_rot = ttnn.experimental.rotary_embedding(q_heads, rot_mats[0], rot_mats[1], int_current_pos)
+        k_rot = ttnn.experimental.rotary_embedding(k_heads, rot_mats[0], rot_mats[1], int_current_pos)
 
-        q_rot_part = q_heads[:, :, :, :rotary_dim]
-        q_pass_part = q_heads[:, :, :, rotary_dim:]
-        k_rot_part = k_heads[:, :, :, :rotary_dim]
-        k_pass_part = k_heads[:, :, :, rotary_dim:]
-
-        q_rotated = ttnn.experimental.rotary_embedding(q_rot_part, rot_mats[0], rot_mats[1], int_current_pos)
-        k_rotated = ttnn.experimental.rotary_embedding(k_rot_part, rot_mats[0], rot_mats[1], int_current_pos)
-
-        q_rotated = ttnn.reshape(
-            q_rotated,
-            (1, self.max_batch_size, self.n_local_heads, rotary_dim),
-            (1, self.max_batch_size, 32, rotary_dim),
+        q_rot = ttnn.reshape(
+            q_rot,
+            (1, self.max_batch_size, self.n_local_heads, self.head_dim),
+            (1, self.max_batch_size, 32, self.head_dim),
         )
-        k_rotated = ttnn.reshape(
-            k_rotated,
-            (1, self.max_batch_size, self.n_local_kv_heads, rotary_dim),
-            (1, self.max_batch_size, 32, rotary_dim),
+        k_rot = ttnn.reshape(
+            k_rot,
+            (1, self.max_batch_size, self.n_local_kv_heads, self.head_dim),
+            (1, self.max_batch_size, 32, self.head_dim),
         )
-        q_rotated = q_rotated[:, :, : self.n_local_heads]
-        k_rotated = k_rotated[:, :, : self.n_local_kv_heads]
+        q_rot = q_rot[:, :, : self.n_local_heads]
+        k_rot = k_rot[:, :, : self.n_local_kv_heads]
 
-        q_out = ttnn.concat([q_rotated, q_pass_part], dim=-1)
-        k_out = ttnn.concat([k_rotated, k_pass_part], dim=-1)
-
-        return q_out, k_out
+        return q_rot, k_rot
 
     def forward(
         self,

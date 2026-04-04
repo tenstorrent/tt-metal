@@ -16,6 +16,7 @@ Note: KV cache sharing is NOT implemented in this initial version.
 All 42 layers compute their own QKV independently.
 """
 
+import torch
 from tqdm import tqdm
 
 import ttnn
@@ -83,21 +84,20 @@ class TtGemma4TextModel(Transformer):
             self.embd = Embedding(**embd_kwargs)
 
         # RoPE setup with dual head_dim:
-        # Global rope: rotary_dim = int(global_head_dim * partial_rotary_factor) = 128
-        # Local rope: head_dim = 256 (full rotation)
+        # Global rope: proportional RoPE with partial_rotary_factor=0.25
+        #   - rotary_dim = int(global_head_dim * partial_rotary_factor) = 128
+        #   - But inv_freq uses denominator = global_head_dim (512), not rotary_dim (128)
+        # Local rope: head_dim = 256 (full rotation, standard frequencies)
         DefaultRopeSetup = HfRotarySetup if self.args.use_hf_rope else RotarySetup
         ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else DefaultRopeSetup
 
         global_rotary_dim = int(args.global_head_dim * args.partial_rotary_factor)
-        self.rope_setup = ActualRopeSetupClass(
+        self.rope_setup = self._create_proportional_rope_setup(
             device=mesh_device,
-            batch_size=args.max_batch_size,
-            head_dim=global_rotary_dim,  # 128 for partial rotation
+            global_head_dim=args.global_head_dim,  # 512
+            partial_rotary_factor=args.partial_rotary_factor,  # 0.25
             max_seq_len=args.max_seq_len,
             rope_theta=args.rope_theta,  # 1000000
-            rope_scaling=args.rope_scaling,
-            use_qk_fused=False,
-            prefetcher=prefetcher,
         )
 
         if args.rope_theta_local:
@@ -165,6 +165,14 @@ class TtGemma4TextModel(Transformer):
             max_columns_per_device=self.args.max_columns_per_device_lm_head,
             prefetcher=prefetcher,
         )
+        # Override LM head compute kernel for higher accuracy during bring-up
+        # Default is HiFi2/no-fp32-acc; use HiFi4 for better precision on logits
+        self.lm_head.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
 
         # On-device sampling
         sampling_splits = self.args.num_devices if list(self.mesh_device.shape) != [1, 1] else 2
@@ -173,6 +181,65 @@ class TtGemma4TextModel(Transformer):
             self.sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=self.tt_ccl)
         else:
             self.sampling = None
+
+    def _create_proportional_rope_setup(self, device, global_head_dim, partial_rotary_factor, max_seq_len, rope_theta):
+        """Create RoPE setup with proportional frequency scaling for global attention.
+
+        HF Gemma4's proportional RoPE for global layers (head_dim=512):
+        1. Computes 64 real inv_freq values + 192 zeros = 256 total inv_freq
+        2. freqs = outer(positions, inv_freq) → [seq_len, 256]
+        3. cos/sin duplicated: [cos, cos] → [seq_len, 512]
+        4. rotate_half pairs dim[i] with dim[i+256] (half of 512)
+
+        We generate full 512-dim cos/sin so ttnn.rotary_embedding's rotate_half
+        (which pairs dim[i] with dim[head_dim/2+i]) matches HF exactly.
+        """
+        rope_angles = int(partial_rotary_factor * global_head_dim // 2)  # 64
+        nope_angles = global_head_dim // 2 - rope_angles  # 192
+
+        # 64 real frequencies + 192 zeros = 256 inv_freq (matching HF's _compute_proportional_rope_parameters)
+        inv_freq_rotated = 1.0 / (rope_theta ** (torch.arange(0, 2 * rope_angles, 2).float() / global_head_dim))
+        inv_freq = torch.cat([inv_freq_rotated, torch.zeros(nope_angles)], dim=0)  # [256]
+
+        # Generate cos/sin for all positions: [max_seq_len, 256]
+        positions = torch.arange(max_seq_len).float()
+        freqs = torch.outer(positions, inv_freq)  # [max_seq_len, 256]
+
+        # HF format: duplicate [cos_0..cos_255, cos_0..cos_255] → [seq_len, 512]
+        cos_hf = torch.cat([torch.cos(freqs), torch.cos(freqs)], dim=-1)
+        sin_hf = torch.cat([torch.sin(freqs), torch.sin(freqs)], dim=-1)
+
+        # Add batch dimensions: [1, 1, seq_len, rotary_dim]
+        cos_4d = cos_hf.unsqueeze(0).unsqueeze(0)
+        sin_4d = sin_hf.unsqueeze(0).unsqueeze(0)
+
+        mapper = ttnn.ReplicateTensorToMesh(device)
+        cos_matrix = ttnn.from_torch(
+            cos_4d, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=mapper
+        )
+        sin_matrix = ttnn.from_torch(
+            sin_4d, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=mapper
+        )
+
+        # Create a lightweight wrapper matching HfRotarySetup interface
+        class ProportionalRopeSetup:
+            def __init__(self, cos_mat, sin_mat):
+                self.cos_matrix_prefill = cos_mat
+                self.sin_matrix_prefill = sin_mat
+                # For decode, use the same matrices (will be indexed by position)
+                self.cos_matrix = cos_mat
+                self.sin_matrix = sin_mat
+
+            def get_both_trans_mats(self):
+                return {}
+
+            def get_rot_mats(self, rot_mat_idxs):
+                """Get rotation matrices for decode mode."""
+                cos_gathered = ttnn.embedding(rot_mat_idxs, self.cos_matrix_prefill[0, 0], layout=ttnn.TILE_LAYOUT)
+                sin_gathered = ttnn.embedding(rot_mat_idxs, self.sin_matrix_prefill[0, 0], layout=ttnn.TILE_LAYOUT)
+                return [cos_gathered, sin_gathered]
+
+        return ProportionalRopeSetup(cos_matrix, sin_matrix)
 
     def _apply_logit_softcapping(self, logits):
         """Apply logit soft-capping: tanh(logits / cap) * cap"""
@@ -208,6 +275,16 @@ class TtGemma4TextModel(Transformer):
         if mode == Mode.DECODE and self.prefetcher is not None:
             self.prefetcher.run()
 
+        # KV sharing: track source layer K/V for shared layers
+        # kv_sharing_map: {shared_layer_idx: source_layer_idx}
+        shared_kv_store = {}  # source_layer_idx -> (k_heads, v_heads)
+
+        # Determine which layers are KV sources (last non-shared layer of each type)
+        kv_source_layers = set()
+        if hasattr(self.args, "kv_sharing_map"):
+            for src_idx in self.args.kv_sharing_map.values():
+                kv_source_layers.add(src_idx)
+
         for i, layer in enumerate(self.layers):
             activation_dtype = self.args.decoders_optimizations.get_tensor_dtype(
                 decoder_id=i, tensor=TensorGroup.ACTIVATION
@@ -222,8 +299,13 @@ class TtGemma4TextModel(Transformer):
             elif activation_dtype is not None and x.dtype != activation_dtype:
                 x = ttnn.typecast(x, activation_dtype)
 
-            # Each layer gets its own KV cache (no sharing in initial bring-up)
             layer_kv = kv_cache[i] if kv_cache is not None else None
+
+            # Set shared K/V for KV-shared layers (prefill only)
+            if mode == Mode.PREFILL and hasattr(self.args, "kv_sharing_map") and i in self.args.kv_sharing_map:
+                src_idx = self.args.kv_sharing_map[i]
+                if src_idx in shared_kv_store:
+                    layer.attention.shared_kv = shared_kv_store[src_idx]
 
             x = layer(
                 x,
@@ -238,6 +320,10 @@ class TtGemma4TextModel(Transformer):
                 kv_cache=layer_kv,
                 batch_size=batch_size,
             )
+
+            # Store K/V from source layers for sharing
+            if mode == Mode.PREFILL and i in kv_source_layers:
+                shared_kv_store[i] = (layer.attention.last_k_heads, layer.attention.last_v_heads)
 
         if mode == Mode.DECODE and self.prefetcher is not None:
             self.prefetcher.stop()

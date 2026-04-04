@@ -9,7 +9,9 @@ from loguru import logger
 import ttnn
 from models.tt_transformers.tt.common import calculate_prefill_warmup_seq_lens, cap_seq_lens_to_max_prefill_chunk_size
 from models.tt_transformers.tt.load_checkpoints import map_hf_to_meta_keys, split_hf_keys
+from models.tt_transformers.tt.model_config import MathFidelitySetting
 from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
+from models.tt_transformers.tt.model_config import OpGroup, PrecisionSetting, TensorGroup
 
 # File names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
@@ -84,10 +86,36 @@ class ModelArgs(TTModelArgs):
         self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
         self.padded_vocab_size = 262144  # Gemma 4 vocab size (no padding needed, already power of 2)
 
+        # Force BF16 for LM head output during bring-up (default bfloat8_b destroys logit precision)
+        self.lm_head_dtype = ttnn.bfloat16
+
+        # Force BF16 for ALL weights AND activations during bring-up to minimize numerical error.
+        # Default settings use BFP8 for all weights and bfloat8_b for MLP activations,
+        # which causes too much cumulative error across 42 layers with layer_scalar.
+        for dec_id, dec_opt in self.optimizations.decoder_optimizations.items():
+            # All weight tensors to BF16
+            dec_opt._opt_settings["TensorPrecision"][TensorGroup.FF1_FF3] = PrecisionSetting.BF16
+            dec_opt._opt_settings["TensorPrecision"][TensorGroup.FF2] = PrecisionSetting.BF16
+            dec_opt._opt_settings["TensorPrecision"][TensorGroup.WQKV] = PrecisionSetting.BF16
+            dec_opt._opt_settings["TensorPrecision"][TensorGroup.WO] = PrecisionSetting.BF16
+            dec_opt._opt_settings["TensorPrecision"][TensorGroup.KV_CACHE] = PrecisionSetting.BF16
+            dec_opt._opt_settings["TensorPrecision"][TensorGroup.ACTIVATION] = PrecisionSetting.BF16
+            # Use HIFI4 for ALL ops to reduce rounding error
+            dec_opt._opt_settings["OpFidelity"][OpGroup.LI_FF1_FF3] = MathFidelitySetting.HIFI4
+            dec_opt._opt_settings["OpFidelity"][OpGroup.LI_FF2] = MathFidelitySetting.HIFI4
+            dec_opt._opt_settings["OpFidelity"][OpGroup.LI_QKV_PREFILL] = MathFidelitySetting.HIFI4
+            dec_opt._opt_settings["OpFidelity"][OpGroup.LI_O_PREFILL] = MathFidelitySetting.HIFI4
+            dec_opt._opt_settings["OpFidelity"][OpGroup.SDPA_PREFILL] = MathFidelitySetting.HIFI4
+            dec_opt._opt_settings["OpFidelity"][OpGroup.LI_QKV_DECODE] = MathFidelitySetting.HIFI4
+            dec_opt._opt_settings["OpFidelity"][OpGroup.LI_O_DECODE] = MathFidelitySetting.HIFI4
+            dec_opt._opt_settings["OpFidelity"][OpGroup.SDPA_DECODE] = MathFidelitySetting.HIFI4
+
     def _set_model_specific_params(self):
         """Set Gemma 4 specific parameters."""
-        # Gemma-family: RMSNorm adds +1 to weights, embeddings scaled by sqrt(dim)
-        self.rms_norm_add_unit_offset = True
+        # Gemma 4 RMSNorm uses direct scale (weight * normed), NOT the Gemma 2 offset pattern ((1+weight) * normed).
+        # HF Gemma4RMSNorm initializes weights to ones and multiplies directly; checkpoint stores actual scale values.
+        # Setting add_unit_offset=False avoids incorrectly adding 1 to already-correct weights.
+        self.rms_norm_add_unit_offset = False
         self.embed_scale = self.dim**0.5
 
         # Parse Gemma 4 specific config values from the HF config

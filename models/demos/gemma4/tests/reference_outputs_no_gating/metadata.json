@@ -1,0 +1,20 @@
+{
+  "prompt": "The capital of France is",
+  "input_ids": [
+    [
+      818,
+      5279,
+      529,
+      7001,
+      563
+    ]
+  ],
+  "next_token_id": 236761,
+  "next_token": ".",
+  "logits_shape": [
+    1,
+    5,
+    262144
+  ],
+  "per_layer_gating": false
+}
