@@ -18,7 +18,6 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from conftest import is_galaxy
 from models.common.utility_functions import profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
@@ -57,9 +56,16 @@ from tests.ttnn.utils_for_testing import comp_pcc
     "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, capacity_factor, gate_fallback_mode, run_pcc_check",
     [
         # fmt: off
+<<<<<<< HEAD
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, GateComputeMode.DEVICE, False), # skip PCC validation; gate on device requires 256 experts.
         pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 8, 2, GateComputeMode.HOST_ALL, True),  # run PCC validation; reduced isl per chip to 1600 and experts to 64 for faster execution.
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, GateComputeMode.HOST_ALL, True, marks=pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")),
+=======
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 2, False),
+        # skip PCC validation
+        # pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 2, True),  # run PCC validation
+        # pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, True, marks=pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")),
+>>>>>>> 702b67d37e1 (Currently works)
         # fmt: on
     ],
 )

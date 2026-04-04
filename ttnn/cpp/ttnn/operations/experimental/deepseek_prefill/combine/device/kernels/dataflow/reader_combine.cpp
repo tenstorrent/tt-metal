@@ -86,6 +86,11 @@ void kernel_main() {
     // Zero-init args follow immediately after the TensorAccessorArgs block
     constexpr uint32_t zi_cb_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
     constexpr uint32_t num_idle_cores = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
+    constexpr uint32_t cb_untilize_out_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 2);
+    constexpr uint32_t cb_compute_ack_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 3);
+#else
+    constexpr uint32_t cb_untilize_out_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
+    constexpr uint32_t cb_compute_ack_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
 #endif
 
     // ===== Runtime Args =====
@@ -162,7 +167,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_base_addr) + offset;
 
     // Set up scratch buffers for batched reads
-    constexpr uint32_t read_batch_size = 8;
+    constexpr uint32_t read_batch_size = 32;
     cb_reserve_back(cb_dispatched_buffer_id, read_batch_size);
     uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
     cb_reserve_back(cb_dispatched_metadata_id, read_batch_size);
@@ -199,6 +204,17 @@ void kernel_main() {
                     metadata_base + t * aligned_dispatched_metadata_page_size);
             }
             noc_async_read_barrier();
+
+            // Push one page to untilize output CB (compute kernel reads value to check for sentinel)
+            cb_reserve_back(cb_untilize_out_id, 1);
+            volatile tt_l1_ptr uint32_t* untilize_page =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_untilize_out_id));
+            untilize_page[0] = 0;  // not sentinel
+            cb_push_back(cb_untilize_out_id, 1);
+
+            // Wait for compute kernel to ack via CB
+            cb_wait_front(cb_compute_ack_id, 1);
+            cb_pop_front(cb_compute_ack_id, 1);
         }
 
         for (uint32_t batch_start = start_page; batch_start < end_page; batch_start += read_batch_size) {
@@ -276,6 +292,13 @@ void kernel_main() {
             }
         }
     }
+
+    // Push sentinel (-1) to untilize compute kernel to signal exit
+    cb_reserve_back(cb_untilize_out_id, 1);
+    volatile tt_l1_ptr uint32_t* untilize_sentinel =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_untilize_out_id));
+    untilize_sentinel[0] = 0xFFFFFFFF;
+    cb_push_back(cb_untilize_out_id, 1);
 
     // Push sentinel to signal writer that all dispatches are done
     cb_reserve_back(cb_route_info_id, 1);
