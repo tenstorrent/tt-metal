@@ -111,3 +111,60 @@ None.
 - **APPROXIMATION_MODE**: false -- takes the precise path in _calculate_exponential_piecewise_ (exp(|x|) + reciprocal for negative inputs)
 - **Cross-architecture differences**: None -- WH and BH implementations are byte-identical
 - **Special considerations**: Fixed constants alpha=1.6732632 and scale=1.0507009 are hardcoded (not user-configurable). Init configures vConstFloatPrgm0/1/2 for reciprocal polynomial.
+
+---
+
+# Execution Log: ttnn-unary-sfpu-operation-analyzer (hardsigmoid)
+
+## Metadata
+- **Operation**: hardsigmoid
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Status**: SUCCESS
+- **Output file**: `.claude-analysis/lgamma-1/hardsigmoid_analysis.md`
+
+## Input Interpretation
+- **Operation name**: `hardsigmoid` (confidence: HIGH -- explicitly provided)
+- **Output directory**: `.claude-analysis/lgamma-1/` (confidence: HIGH -- explicitly provided)
+- **Output filename**: `hardsigmoid_analysis.md` (confidence: HIGH -- explicitly provided)
+
+## Execution Timeline
+
+### Phase 1: Dispatch Tracing
+- Read `unary_op_utils.cpp` to find HARDSIGMOID dispatch configuration
+- Found: `eltwise_sfpu.cpp` compute kernel, `hardsigmoid_tile_init()` / `hardsigmoid_tile(idst)` SFPU chain
+- Non-parameterized type (no extra params)
+- Include guard: `SFPU_OP_COMPUTE_KERNEL_API_INCLUDE` (default)
+- Approximation mode: `false` (default case in `get_op_approx_mode`)
+
+### Phase 2: Abstraction Layer Tracing
+- API header: `tt_metal/hw/inc/api/compute/eltwise_unary/hardsigmoid.h`
+- LLK dispatch: `llk_math_eltwise_unary_sfpu_hardsigmoid.h` (WH and BH identical)
+- Core SFPU: `ckernel_sfpu_hardsigmoid.h` (WH and BH identical)
+- Params dispatch: `llk_math_eltwise_unary_sfpu_params.h` in tt_llk
+
+### Phase 3: Kernel Analysis
+- Kernel style: SFPI-based (Style A)
+- Key pattern: SFPMAD for linear transform, two `v_if` conditional clamp blocks for [0, 1] clamping
+- SFPU instructions: SFPLOAD, SFPMAD, SFPSETCC, SFPPUSHC, SFPENCC, SFPLOADI, SFPPOPC, SFPMOV, SFPSTORE
+- Address mode: ADDR_MOD_7 with all-zero increments
+
+### Phase 4: Verification
+- All function names verified via grep (calculate_hardsigmoid, llk_math_eltwise_unary_sfpu_hardsigmoid, llk_math_eltwise_unary_sfpu_hardsigmoid_init)
+- All file paths verified to exist
+- WH and BH implementations confirmed identical
+
+## Recovery Summary
+No errors or recovery needed.
+
+## Deviations
+None.
+
+## Artifacts
+- `.claude-analysis/lgamma-1/hardsigmoid_analysis.md` -- main analysis output
+
+## SFPU-Specific Analysis Summary
+- **Kernel complexity**: Low (piecewise linear with two clamp blocks)
+- **CC usage**: Two independent `v_if` blocks, no nesting, max CC stack depth 1
+- **APPROXIMATION_MODE**: Template parameter exists but is unused in kernel logic (no `if constexpr` branches)
+- **Cross-architecture differences**: None -- WH and BH implementations are identical
+- **Special considerations**: Uses `sfpi::vConst1` (Fixed Const 2 = 1.0f) for upper clamp. Algorithm is `max(0, min(1, x/6 + 0.5))`.
