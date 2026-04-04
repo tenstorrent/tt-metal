@@ -637,10 +637,14 @@ class ModelArgs:
                 self.n_heads % self.cluster_shape[1] == 0
             ), f"n_heads must be divisible by num_devices: {self.n_heads} % {self.cluster_shape[1]}"
 
-            assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
+            if not getattr(self, "is_qwen3_next", False):
+                assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
-            self.min_kv_prefill_shard_seqlen = (ttnn.TILE_SIZE * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
+            if self.n_kv_heads >= self.cluster_shape[1]:
+                self.min_kv_prefill_shard_seqlen = (ttnn.TILE_SIZE * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
+            else:
+                self.min_kv_prefill_shard_seqlen = ttnn.TILE_SIZE * 8 * 8  # replicated KV heads
 
             # All Gather Matmul for Dense Out (DO) - computed flag stored as instance attribute
             # NOTE: Fused all gather matmul only supports a core grid of size num_devices x 1
@@ -2562,7 +2566,35 @@ class ModelArgs:
         return activation_map.get(hidden_activation, ttnn.UnaryOpType.SILU)
 
     def _set_model_specific_params(self):
-        return
+        # Qwen3-Coder-Next (qwen3_next): hybrid DeltaNet + GQA + MoE
+        if getattr(self.hf_config, "model_type", None) == "qwen3_next":
+            hf_dict = self.hf_config.to_dict()
+            self.is_qwen3_next = True
+            self.full_attention_interval = hf_dict.get("full_attention_interval", 4)
+            self.moe_intermediate_size = hf_dict.get("moe_intermediate_size", 512)
+            self.shared_expert_intermediate_size = hf_dict.get("shared_expert_intermediate_size", 512)
+            self.num_experts = hf_dict.get("num_experts", 512)
+            self.linear_num_key_heads = hf_dict.get("linear_num_key_heads", 16)
+            self.linear_num_value_heads = hf_dict.get("linear_num_value_heads", 32)
+            self.linear_key_head_dim = hf_dict.get("linear_key_head_dim", 128)
+            self.linear_value_head_dim = hf_dict.get("linear_value_head_dim", 128)
+            self.linear_conv_kernel_dim = hf_dict.get("linear_conv_kernel_dim", 4)
+            self.partial_rotary_factor = hf_dict.get("partial_rotary_factor", 0.25)
+            self.norm_topk_prob = hf_dict.get("norm_topk_prob", True)
+            self.hidden_size = self.dim  # alias for MoE code
+            self.moe = True
+            self.is_mixture_of_experts = True
+            self.fuse_qkv = False
+            self.fuse_mlp = False
+        else:
+            self.is_qwen3_next = False
+
+    def is_linear_attention_layer(self, layer_idx):
+        """For Qwen3-Coder-Next: DeltaNet layers are non-GQA layers."""
+        if not getattr(self, "is_qwen3_next", False):
+            return False
+        fai = getattr(self, "full_attention_interval", 4)
+        return layer_idx % fai != (fai - 1)
 
     def _set_params_from_dict(self, config):
         eos_token_id = config.get("eos_token_id", None)
@@ -2793,6 +2825,14 @@ class ModelArgs:
 
         from transformers import AutoConfig
 
+        # Register qwen3_next model type (hybrid DeltaNet+GQA+MoE, not yet in HF transformers)
+        from transformers.models.auto.configuration_auto import CONFIG_MAPPING
+
+        if "qwen3_next" not in CONFIG_MAPPING:
+            from transformers.models.qwen3_moe.configuration_qwen3_moe import Qwen3MoeConfig
+
+            CONFIG_MAPPING.register("qwen3_next", Qwen3MoeConfig)
+
         if self.dummy_weights:
             logger.info(f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}")
             self.hf_config = AutoConfig.from_pretrained(
@@ -2902,6 +2942,9 @@ class ModelArgs:
             "Attention": "attention",
             "TransformerBlock": "",
             "": "",  # If no module is given, just get layer prefix
+            # Qwen3-Coder-Next specific (HF key format, not Meta)
+            "GatedDeltaNet": "linear_attn",
+            "MoELayer": "mlp",
         }
 
         vision_module_map = {
@@ -2987,6 +3030,48 @@ class ModelArgs:
 
             # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             state_dict = model.state_dict()
+        elif getattr(self, "is_qwen3_next", False):
+            # Qwen3-Coder-Next: load directly from safetensors (HF model class doesn't match architecture)
+            import json as json_mod
+
+            from safetensors import safe_open
+
+            index_path = os.path.join(self.CKPT_DIR, "model.safetensors.index.json")
+            with open(index_path) as f:
+                index = json_mod.load(f)
+            state_dict = {}
+            loaded_shards = {}
+            for key, shard_file in index["weight_map"].items():
+                if shard_file not in loaded_shards:
+                    loaded_shards[shard_file] = safe_open(
+                        os.path.join(self.CKPT_DIR, shard_file), framework="pt", device="cpu"
+                    )
+                state_dict[key] = loaded_shards[shard_file].get_tensor(key)
+            self.is_mixture_of_experts = any(".experts." in k for k in state_dict.keys())
+
+            # Strip 'model.' prefix and split fused DeltaNet projections
+            from models.demos.qwen3_coder_next.utils.weight_loading import preprocess_deltanet_state_dict
+
+            # Strip 'model.' prefix
+            state_dict = {k.replace("model.", "", 1) if k.startswith("model.") else k: v for k, v in state_dict.items()}
+            # Rename keys to match tt_transformers expectations
+            renamed = {}
+            for k, v in list(state_dict.items()):
+                nk = (
+                    k.replace("input_layernorm.", "attention_norm.")
+                    .replace("post_attention_layernorm.", "ffn_norm.")
+                    .replace("embed_tokens.weight", "tok_embeddings.weight")
+                )
+                if k == "lm_head.weight":
+                    nk = "output.weight"
+                if nk != k:
+                    state_dict.pop(k)
+                    renamed[nk] = v
+            state_dict.update(renamed)
+            # Split fused DeltaNet projections
+            for li in range(self.n_layers):
+                if li % self.full_attention_interval != (self.full_attention_interval - 1):
+                    preprocess_deltanet_state_dict(state_dict, li)
         else:
             # Always HuggingFace since we only support HF_MODEL now
             model_cls = self.get_hf_model_cls()
@@ -3020,7 +3105,9 @@ class ModelArgs:
                 else:
                     # Standard: convert to Meta format
                     state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
-        else:
+        elif not getattr(self, "is_qwen3_next", False):
+            # Standard text models: convert HF keys to Meta format
+            # (Qwen3-Coder-Next already did this during safetensors loading above)
             self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
             self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
             state_dict = standardize_hf_keys(state_dict)
@@ -3038,7 +3125,9 @@ class ModelArgs:
                 state_dict.pop(k)
         if getattr(self, "is_mixture_of_experts", False):
             self.moe = True
-            self.num_experts = max([int(item[-11]) + 1 for item in keys_dict if "block_sparse_moe.experts" in item])
+            if not getattr(self, "is_qwen3_next", False):
+                # Mixtral-style: parse num_experts from state dict keys
+                self.num_experts = max([int(item[-11]) + 1 for item in keys_dict if "block_sparse_moe.experts" in item])
         return state_dict
 
     # =========================================================================

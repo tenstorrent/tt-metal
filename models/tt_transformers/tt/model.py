@@ -10,6 +10,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.sampling.generator import SamplingGenerator
+from models.demos.qwen3_coder_next.tt.moe_deltanet_decoder import MoEDeltaNetDecoderBlock
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode, copy_host_to_device
 from models.tt_transformers.tt.decoder import TransformerBlock
@@ -88,23 +89,40 @@ class Transformer(LightweightModule):
 
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
-        self.layers = [
-            TransformerBlock(
-                args=args,
-                mesh_device=mesh_device,
-                tt_ccl=self.tt_ccl,
-                dtype=dtype,
-                state_dict=state_dict,
-                weight_cache_path=weight_cache_path,
-                layer_num=i,
-                transformation_mats=self.trans_mats_dict,
-                paged_attention_config=paged_attention_config,
-                use_paged_kv_cache=use_paged_kv_cache,
-                attention_class=attention_class,
-                prefetcher=prefetcher,
-            )
-            for i in tqdm(range(self.n_layers))
-        ]
+        if getattr(args, "is_qwen3_next", False):
+            # Qwen3-Coder-Next: hybrid DeltaNet + GQA + MoE decoder blocks
+            self.layers = [
+                MoEDeltaNetDecoderBlock(
+                    args=args,
+                    mesh_device=mesh_device,
+                    tt_ccl=self.tt_ccl,
+                    dtype=dtype,
+                    state_dict=state_dict,
+                    layer_num=i,
+                    weight_cache_path=weight_cache_path,
+                    prefetcher=prefetcher,
+                    attention_class=attention_class,
+                )
+                for i in tqdm(range(self.n_layers))
+            ]
+        else:
+            self.layers = [
+                TransformerBlock(
+                    args=args,
+                    mesh_device=mesh_device,
+                    tt_ccl=self.tt_ccl,
+                    dtype=dtype,
+                    state_dict=state_dict,
+                    weight_cache_path=weight_cache_path,
+                    layer_num=i,
+                    transformation_mats=self.trans_mats_dict,
+                    paged_attention_config=paged_attention_config,
+                    use_paged_kv_cache=use_paged_kv_cache,
+                    attention_class=attention_class,
+                    prefetcher=prefetcher,
+                )
+                for i in tqdm(range(self.n_layers))
+            ]
         self.norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
