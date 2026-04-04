@@ -218,7 +218,7 @@ class TestEndToEnd:
             t0 = time.time()
             img = model.encode_vision(pixel_values)
             backbone = to_tt_tensor(ttnn.to_torch(img), tt_device)
-            actions = model.run_flow_matching(backbone, state, embodiment_id=0)
+            model.run_flow_matching(backbone, state, embodiment_id=0)
             times.append(time.time() - t0)
 
         avg_ms = sum(times) / len(times) * 1000

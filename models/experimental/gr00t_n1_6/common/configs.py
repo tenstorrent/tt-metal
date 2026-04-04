@@ -11,7 +11,6 @@ Model card: https://huggingface.co/nvidia/GR00T-N1.6-3B
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass

@@ -12,7 +12,6 @@ Target: >= 99% accuracy (PCC >= 0.99)
 """
 
 import logging
-import os
 import sys
 import time
 

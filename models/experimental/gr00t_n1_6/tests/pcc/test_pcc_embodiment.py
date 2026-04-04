@@ -138,12 +138,11 @@ def test_action_encoder_pcc(config, weight_loader, tt_device):
         ref_output = torch.matmul(h, w3) + b3
 
     # TTNN
+    timestep_weights = weight_loader.get_timestep_encoder_weights()
     action_enc = MultiEmbodimentActionEncoderTTNN(
         action_weights,
-        emb_cfg.max_num_embodiments,
-        emb_cfg.max_action_dim,
-        emb_cfg.action_hidden_dim,
-        emb_cfg.action_output_dim,
+        emb_cfg,
+        timestep_weights,
         tt_device,
     )
     action_tt = to_tt_tensor(action_input, tt_device)

@@ -171,7 +171,7 @@ class TestEndToEndPerf:
         vision_times = []
         for _ in range(n_runs):
             t0 = time.time()
-            img = model.encode_vision(pixel_values)
+            model.encode_vision(pixel_values)
             vision_times.append(time.time() - t0)
 
         # Flow matching

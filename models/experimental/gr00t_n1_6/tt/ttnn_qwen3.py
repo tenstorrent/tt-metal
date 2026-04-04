@@ -40,7 +40,6 @@ def precompute_freqs_cis(
     theta: float = 1_000_000.0,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Precompute RoPE cos/sin: [max_seq, head_dim//2] in float32."""
-    half = head_dim // 2
     freqs = 1.0 / (theta ** (torch.arange(0, head_dim, 2).float() / head_dim))
     t = torch.arange(max_seq_len, dtype=torch.float32)
     freqs = torch.outer(t, freqs)

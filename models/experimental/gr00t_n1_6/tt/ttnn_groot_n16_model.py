@@ -355,7 +355,6 @@ class Gr00tN16ModelTTNN:
 
         # Extract features at image token positions only
         # These are the backbone features the DiT cross-attends to
-        total_seq_len = input_ids.shape[1]
         start_pos = image_positions[0]
         end_pos = image_positions[-1] + 1
         batch_size = input_ids.shape[0]
