@@ -161,15 +161,37 @@ jobs:
         env:
           SCOPE_TARGET: ${{ inputs.scope-targets }}
         run: |
-          mkdir -p tests/sweep_framework/vectors_export
+          EXPORT_DIR="tests/sweep_framework/vectors_export"
+          SCOPED_VECTORS_DIR="tests/sweep_framework/validation_vectors"
+
+          rm -rf "$EXPORT_DIR" "$SCOPED_VECTORS_DIR"
+          mkdir -p "$EXPORT_DIR" "$SCOPED_VECTORS_DIR"
+
+          generate_scope_vectors() {
+            local scope_name="$1"
+            shift
+
+            rm -rf "$EXPORT_DIR"
+            mkdir -p "$EXPORT_DIR"
+
+            python3 tests/sweep_framework/sweeps_parameter_generator.py "$@"
+
+            mkdir -p "$SCOPED_VECTORS_DIR/$scope_name"
+            cp -a "$EXPORT_DIR"/. "$SCOPED_VECTORS_DIR/$scope_name"/
+          }
+
           if [[ "${SCOPE_TARGET}" == "model_traced" || "${SCOPE_TARGET}" == "all" ]]; then
-            python3 tests/sweep_framework/sweeps_parameter_generator.py \
+            generate_scope_vectors \
+              model_traced \
               --model-traced all \
               --group-by hw \
               --master-trace /work/model_tracer/traced_operations/ttnn_operations_master.json \
               --tag ci-validate-model-traced
-          elif [[ "${SCOPE_TARGET}" == "lead_models" ]]; then
-            python3 tests/sweep_framework/sweeps_parameter_generator.py \
+          fi
+
+          if [[ "${SCOPE_TARGET}" == "lead_models" || "${SCOPE_TARGET}" == "all" ]]; then
+            generate_scope_vectors \
+              lead_models \
               --model-traced lead \
               --suite-name model_traced \
               --group-by hw \
@@ -177,11 +199,20 @@ jobs:
               --tag ci-validate-lead-models
           fi
 
-      - name: Upload sweep vectors
+      - name: Upload model traced sweep vectors
+        if: ${{ inputs.scope-targets == 'model_traced' || inputs.scope-targets == 'all' }}
         uses: actions/upload-artifact@v4
         with:
-          name: sweeps-vectors-all
-          path: /work/tests/sweep_framework/vectors_export/
+          name: sweeps-vectors-model_traced
+          path: /work/tests/sweep_framework/validation_vectors/model_traced/
+          retention-days: 1
+
+      - name: Upload lead models sweep vectors
+        if: ${{ inputs.scope-targets == 'lead_models' || inputs.scope-targets == 'all' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweeps-vectors-lead_models
+          path: /work/tests/sweep_framework/validation_vectors/lead_models/
           retention-days: 1
 
   compute-sweep-matrix:
@@ -211,30 +242,83 @@ jobs:
           name: ${{ needs.prepare-validation-inputs.outputs.master-json-artifact-name }}
           path: /tmp/validation-master-json
 
-      - name: Download sweep vectors
+      - name: Download model traced sweep vectors
+        if: ${{ inputs.scope-targets == 'model_traced' || inputs.scope-targets == 'all' }}
         uses: actions/download-artifact@v4
         with:
-          pattern: sweeps-vectors-*
-          path: /tmp/validation-vectors
-          merge-multiple: true
+          name: sweeps-vectors-model_traced
+          path: /tmp/validation-vectors/model_traced
+
+      - name: Download lead models sweep vectors
+        if: ${{ inputs.scope-targets == 'lead_models' || inputs.scope-targets == 'all' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: sweeps-vectors-lead_models
+          path: /tmp/validation-vectors/lead_models
 
       - name: Compute execution matrix
         id: set-matrix
         env:
           MANIFEST_PATH: ${{ inputs.manifest-path }}
           MASTER_JSON_PATH: /tmp/validation-master-json/ttnn_operations_master.json
-          VECTORS_DIR: /tmp/validation-vectors
+          VECTORS_ROOT: /tmp/validation-vectors
+          SCOPE_TARGET: ${{ inputs.scope-targets }}
         run: |
           matrix_json=$(
-            python3 tests/sweep_framework/framework/compute_validation_sweep_matrix.py \
-              --manifest-path "$MANIFEST_PATH" \
-              --master-json-path "$MASTER_JSON_PATH" \
-              --vectors-dir "$VECTORS_DIR"
+            python3 - <<'PY'
+            import json
+            import os
+            import subprocess
+            import sys
+            from pathlib import Path
+
+            manifest_path = os.environ["MANIFEST_PATH"]
+            master_json_path = os.environ["MASTER_JSON_PATH"]
+            vectors_root = Path(os.environ["VECTORS_ROOT"])
+            scope_target = os.environ["SCOPE_TARGET"]
+
+            include = []
+
+            if scope_target == "all":
+                scopes = ["model_traced", "lead_models"]
+            elif scope_target in {"model_traced", "lead_models"}:
+                scopes = [scope_target]
+            else:
+                print(f"Unsupported validation scope target: {scope_target}", file=sys.stderr)
+                sys.exit(1)
+
+            for scope in scopes:
+                vectors_dir = vectors_root / scope
+                if not vectors_dir.exists():
+                    print(f"Missing vectors directory for scope '{scope}': {vectors_dir}", file=sys.stderr)
+                    sys.exit(1)
+
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "tests/sweep_framework/framework/compute_validation_sweep_matrix.py",
+                        "--manifest-path",
+                        manifest_path,
+                        "--master-json-path",
+                        master_json_path,
+                        "--vectors-dir",
+                        str(vectors_dir),
+                        "--validation-scope",
+                        scope,
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                include.extend(json.loads(result.stdout).get("include", []))
+
+            print(json.dumps({"include": include}, separators=(",", ":")))
+            PY
           )
           echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
 
   run-sweeps-with-tracer:
-    name: Run validation sweeps (${{ matrix.test_group_name }}, ${{ matrix.batch_display }})
+    name: Run validation sweeps (${{ matrix.validation_scope }}, ${{ matrix.test_group_name }}, ${{ matrix.batch_display }})
     needs: [build-artifact, prepare-validation-inputs, generate-sweeps, compute-sweep-matrix]
     strategy:
       fail-fast: false
@@ -253,7 +337,7 @@ jobs:
         GITHUB_ACTIONS: true
         TT_SMI_RESET_COMMAND: ${{ matrix.tt_smi_cmd }}
         TRACY_NO_INVARIANT_CHECK: 1
-        LEAD_MODELS_RUN: ${{ inputs.scope-targets == 'lead_models' && '1' || '0' }}
+        LEAD_MODELS_RUN: ${{ matrix.validation_scope == 'lead_models' && '1' || '0' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work
     defaults:
@@ -279,9 +363,8 @@ jobs:
       - name: Download sweep vectors
         uses: actions/download-artifact@v4
         with:
-          pattern: sweeps-vectors-*
+          name: ${{ matrix.vectors_artifact_name }}
           path: /work/tests/sweep_framework/vectors_export
-          merge-multiple: true
 
       - name: Run sweeps with tracer
         run: |
@@ -291,6 +374,7 @@ jobs:
           # is produced by generic_ops_tracer.py and should remain in tracer format.
           cat <<EOF > /work/tests/sweep_framework/results_export/${{ matrix.test_group_name }}_metadata.json
           {
+            "validation_scope": "${{ matrix.validation_scope }}",
             "trace_ids": ${{ toJSON(matrix.trace_ids) }},
             "hardware_group": "${{ matrix.hardware_group }}",
             "module_selector": "${{ matrix.module_selector }}",
@@ -313,10 +397,11 @@ jobs:
       - name: Compute artifact suffix
         shell: bash
         run: |
+          SCOPE_LABEL="${{ matrix.validation_scope }}"
           DISPLAY_LABEL="${{ matrix.batch_display }}"
           GROUP_LABEL="${{ matrix.test_group_name }}"
           SUITE_LABEL="${{ matrix.suite_name }}"
-          FINGERPRINT="$GROUP_LABEL|$DISPLAY_LABEL"
+          FINGERPRINT="$SCOPE_LABEL|$GROUP_LABEL|$DISPLAY_LABEL"
           if [[ -n "$SUITE_LABEL" ]]; then
             FINGERPRINT="$FINGERPRINT|$SUITE_LABEL"
           fi

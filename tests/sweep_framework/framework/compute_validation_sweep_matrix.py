@@ -91,7 +91,11 @@ def _get_trace_ids_by_hardware(trace_ids: list[int], registry: dict) -> dict:
 
 
 def compute_validation_matrix(
-    manifest_path: Path, master_json_path: Path, vectors_dir: Path, batch_size: int = 10
+    manifest_path: Path,
+    master_json_path: Path,
+    vectors_dir: Path,
+    validation_scope: str,
+    batch_size: int = 10,
 ) -> dict:
     """Build matrix entries for validation sweeps using shared routing helpers."""
     with open(master_json_path, "r", encoding="utf-8") as file:
@@ -153,9 +157,11 @@ def compute_validation_matrix(
             include.append(
                 {
                     **runner_config,
-                    "batch_display": f"{hardware_label}:{index}/{total_batches}",
+                    "batch_display": f"{validation_scope}:{hardware_label}:{index}/{total_batches}",
                     "module_selector": batch,
                     "suite_name": "model_traced",
+                    "validation_scope": validation_scope,
+                    "vectors_artifact_name": f"sweeps-vectors-{validation_scope}",
                     "trace_ids": trace_id_list,
                     "hardware_group": hardware_label,
                 }
@@ -170,6 +176,12 @@ def main():
     parser.add_argument("--manifest-path", required=True, help="Path to model_tracer/sweep_manifest.yaml")
     parser.add_argument("--master-json-path", required=True, help="Path to reconstructed ttnn_operations_master.json")
     parser.add_argument("--vectors-dir", required=True, help="Directory containing generated vector JSON files")
+    parser.add_argument(
+        "--validation-scope",
+        required=True,
+        choices=["model_traced", "lead_models"],
+        help="Validation scope represented by the supplied vectors directory",
+    )
     parser.add_argument("--batch-size", type=int, default=10, help="Maximum number of modules per matrix batch")
     args = parser.parse_args()
 
@@ -177,6 +189,7 @@ def main():
         manifest_path=Path(args.manifest_path),
         master_json_path=Path(args.master_json_path),
         vectors_dir=Path(args.vectors_dir),
+        validation_scope=args.validation_scope,
         batch_size=args.batch_size,
     )
     print(json.dumps(matrix, separators=(",", ":")))
