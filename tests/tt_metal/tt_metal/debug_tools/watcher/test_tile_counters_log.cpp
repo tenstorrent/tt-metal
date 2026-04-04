@@ -3,9 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <chrono>
 #include <string>
+#include <thread>
 #include <vector>
 
+#include <fmt/format.h>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -33,8 +36,7 @@ constexpr uint32_t NUM_CONSUMERS = 4;
 constexpr uint32_t NUM_ENTRIES_PER_DFB = 16;
 constexpr uint32_t NUM_ENTRIES_PER_PRODUCER = NUM_ENTRIES_PER_DFB / NUM_PRODUCERS;
 constexpr uint32_t NUM_ENTRIES_PER_CONSUMER = NUM_ENTRIES_PER_DFB / NUM_CONSUMERS;
-constexpr uint32_t NUM_CONSUMERS_TO_RUN = 2;              // 2 consumers run, 2 exit early -> 32 TCs mismatch
-constexpr uint32_t TOTAL_TCS = NUM_DFBS * NUM_CONSUMERS;  // Use all 64 TCs
+constexpr uint32_t NUM_CONSUMERS_TO_RUN = 2;  // 2 consumers run, 2 exit early -> 32 TCs mismatch
 
 void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // Set up program
@@ -48,8 +50,14 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
     const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_tile_counters.cpp";
 
-    // Allocate and zero-init L1 sync flag for host-device handshake
-    uint32_t tensix_sync_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    // Allocate L1 buffer for sync flag (avoids overlap with DFB allocations which start from L1 base)
+    tt_metal::InterleavedBufferConfig sync_buffer_config{
+        .device = device,
+        .size = sizeof(uint32_t),
+        .page_size = sizeof(uint32_t),
+        .buffer_type = tt_metal::BufferType::L1};
+    auto sync_buffer = CreateBuffer(sync_buffer_config);
+    uint32_t tensix_sync_addr = sync_buffer->address();
     std::vector<uint32_t> zero_data = {0};
     tt::tt_metal::detail::WriteToDeviceL1(device, logical_core, tensix_sync_addr, zero_data);
 
@@ -103,27 +111,36 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     std::vector<std::string> expected_mismatch_patterns;
     for (uint32_t dfb = 0; dfb < NUM_DFBS; dfb++) {
         for (uint32_t consumer = NUM_CONSUMERS_TO_RUN; consumer < NUM_CONSUMERS; consumer++) {
-            uint32_t tc_idx = consumer * NUM_DFBS + dfb;
+            uint32_t tc_idx = (consumer * NUM_DFBS) + dfb;
             expected_mismatch_patterns.push_back(fmt::format("TC[{}]: posted=", tc_idx));
         }
     }
     log_info(tt::LogTest, "Polling {} TC mismatch patterns...", expected_mismatch_patterns.size());
 
-    constexpr uint32_t timeout_ms = 30000;
-    auto start = std::chrono::steady_clock::now();
-    // Wait for TC mismatch string to appear
-    while (!FileContainsAllStrings(fixture->log_file_name, expected_mismatch_patterns)) {
-        auto elapsed =
-            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
-        ASSERT_LT(elapsed, timeout_ms) << "Timed out waiting for watcher to log TC mismatches";
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    }
-    log_info(tt::LogTest, "TC patterns found!");
+    // Must release sync flag to unblock kernel, regardless of test outcome
+    auto release_threads = [&]() {
+        std::vector<uint32_t> release_data = {1};
+        tt::tt_metal::detail::WriteToDeviceL1(device, logical_core, tensix_sync_addr, release_data);
+        distributed::Finish(mesh_device->mesh_command_queue());
+    };
 
-    // Release sync flag to unblock kernels
-    std::vector<uint32_t> release_data = {1};
-    tt::tt_metal::detail::WriteToDeviceL1(device, logical_core, tensix_sync_addr, release_data);
-    distributed::Finish(mesh_device->mesh_command_queue());
+    // Poll for TC mismatch patterns in watcher log
+    constexpr uint32_t timeout_ms = 30000;
+    constexpr uint32_t poll_interval_ms = 1000;
+    auto start = std::chrono::steady_clock::now();
+
+    while (!FileContainsAllStrings(fixture->log_file_name, expected_mismatch_patterns)) {
+        auto elapsed_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+        if (elapsed_ms >= timeout_ms) {
+            release_threads();
+            FAIL() << "Timed out after " << timeout_ms << "ms waiting for watcher to log TC mismatches";
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
+    }
+
+    log_info(tt::LogTest, "TC patterns found!");
+    release_threads();
 }
 
 TEST_F(MeshWatcherDumpAllFixture, TestWatcherTileCounterLog) {

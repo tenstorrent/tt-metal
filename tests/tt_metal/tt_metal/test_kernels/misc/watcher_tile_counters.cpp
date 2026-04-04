@@ -12,15 +12,15 @@
 #include "risc_common.h"
 
 void kernel_main() {
-    // Common compile-time args for both producer and consumer
+    // Compile-time args: arg[0]=num_dfbs (same for both), arg[1]=entries per thread (differs)
     constexpr uint32_t num_dfbs = get_compile_time_arg_val(0);
-    constexpr uint32_t num_entries_per_dfb = get_compile_time_arg_val(1);
+    constexpr uint32_t num_entries_per_thread = get_compile_time_arg_val(1);
 
 #ifdef DFB_PRODUCER
     // Producer: post tiles to all DFBs
     for (uint32_t dfb_id = 0; dfb_id < num_dfbs; dfb_id++) {
         experimental::DataflowBuffer dfb(dfb_id);
-        for (uint32_t entry = 0; entry < num_entries_per_dfb; entry++) {
+        for (uint32_t entry = 0; entry < num_entries_per_thread; entry++) {
             dfb.reserve_back(1);
             dfb.push_back(1);
         }
@@ -38,7 +38,7 @@ void kernel_main() {
     // Running consumers: ack all entries from all DFBs
     for (uint32_t dfb_id = 0; dfb_id < num_dfbs; dfb_id++) {
         experimental::DataflowBuffer dfb(dfb_id);
-        for (uint32_t entry = 0; entry < num_entries_per_dfb; entry++) {
+        for (uint32_t entry = 0; entry < num_entries_per_thread; entry++) {
             dfb.wait_front(1);
             dfb.pop_front(1);
         }

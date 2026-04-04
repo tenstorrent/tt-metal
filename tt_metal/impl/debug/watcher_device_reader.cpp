@@ -1101,7 +1101,7 @@ void WatcherDeviceReader::Core::DumpSyncRegs() const {
             uint32_t ackd = data[0];
 
             if (rcvd != ackd) {
-                fprintf(reader_.f, "cb[%d](rcv %d!=ack %d) ", operand, rcvd, ackd);
+                fprintf(reader_.f, "cb[%u](rcv %u!=ack %u) ", operand, rcvd, ackd);
             }
         }
     }
@@ -1116,7 +1116,7 @@ void WatcherDeviceReader::Core::DumpSyncRegs() const {
 
         std::vector<uint32_t> data;
         for (uint32_t i = 0; i < hal.get_num_tile_counters(); i++) {
-            uint32_t tile_base_addr = overlay_tile_counters_base_addr + overlay_tile_counters_base_size * i;
+            uint32_t tile_base_addr = overlay_tile_counters_base_addr + (overlay_tile_counters_base_size * i);
 
             uint32_t posted_addr = tile_base_addr + overlay_tile_counters_read_posted_offset;
             data =
@@ -1128,7 +1128,7 @@ void WatcherDeviceReader::Core::DumpSyncRegs() const {
             uint32_t ackd = data[0];
 
             if (posted != ackd) {
-                fprintf(reader_.f, "\n  TC[%d]: posted=%d acked=%d ", i, posted, ackd);
+                fprintf(reader_.f, "\n  TC[%u]: posted=%u acked=%u ", i, posted, ackd);
             }
         }
     }
