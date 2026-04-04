@@ -164,3 +164,43 @@
 - vConstFloatPrgm0 shared between reciprocal (2.0) and log (ln2) — init order critical
 - WHERE uses SFPLOADMACRO for 3-4 cycles/row superscalar execution
 - The reciprocal path selection depends on APPROX and fp32_dest_acc_en flags
+
+---
+
+## Operation: where_tss
+## Output: `.claude-analysis/hardtanh-1/where_tss_analysis.md`
+
+---
+
+### Phase 1: Dispatch Resolution
+- WHERE_TSS is NOT in `get_op_init_and_func_parameterized` or `get_op_init_and_func_default` — would throw TT_FATAL via standard dispatch
+- Uses custom compute kernel `where_tss_kernel.cpp` (NOT `eltwise_sfpu.cpp`)
+- Custom kernel: copies condition tile to DEST[0], fills DEST[1] with true_value, fills DEST[2] with false_value, then calls `SFPU_OP_CHAIN_0`
+- SFPU_OP_CHAIN_0 expands to `where_tile<DataFormat>(0, 1, 2, 0)`
+- Approx mode: `false` (default, unused by implementation)
+
+### Phase 2: API and LLK Layer Tracing
+- API header: `where.h` at `tt_metal/hw/inc/api/compute/eltwise_unary/where.h` (missing from worktree, read from main repo)
+- `where_tile<data_format>()` → `llk_math_eltwise_ternary_sfpu_where<APPROX, data_format>()` — note: uses **ternary** SFPU dispatch despite being a unary op
+- LLK dispatch: `llk_math_eltwise_ternary_sfpu_where.h` (in ckernels llk_api/llk_sfpu/)
+- Params dispatch: `llk_math_eltwise_ternary_sfpu_params.h` (shared ternary params handler)
+- Core SFPU: `ckernel_sfpu_where.h` (in tt_llk)
+
+### Phase 3: Core SFPU Analysis
+- Kernel style: **B_raw_TTI** — pure raw instructions with SFPLOADMACRO superscalar dispatch
+- CC pattern: SFPSETCC(EQ0) on condition → CC-guarded SFPLOAD overwrites true with false where cond=0 → SFPENCC re-enable → SFPSTORE
+- SFPLOADMACRO: Programs 3 instruction templates via `_init_where_` for superscalar execution
+- Two sub-paths: in-place output (3 cycles/32 elements), separate output (4 cycles/32 elements)
+- For WHERE_TSS (dst_index_out=0=dst_index_in0): takes the in-place path (3 cycles)
+- WH and BH implementations functionally identical; differ only in ADDR_MOD indices (WH: 2/3, BH: 6/7)
+
+### Phase 4: Verification
+- All function names verified: `_calculate_where_`, `_init_where_` ✓
+- All 7 SFPU instruction types verified present in kernel file ✓
+- All 9 abstraction layer file paths verified to exist ✓
+
+### Key Findings
+- WHERE_TSS is a unary operation using ternary SFPU dispatch — unique hybrid pattern
+- SFPLOADMACRO achieves 3 cycles/32 elements throughput (vs 6 without it)
+- `APPROXIMATION_MODE` template parameter is accepted but completely unused
+- Address modes: ADDR_MOD_7/6 (BH) or ADDR_MOD_3/2 (WH) with dest.incr=0 and dest.incr=2 respectively
