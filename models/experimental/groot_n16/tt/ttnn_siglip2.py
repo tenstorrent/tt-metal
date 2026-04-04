@@ -37,23 +37,27 @@ def siglip2_patch_embeddings_cpu(
     patch_size: int = 14,
 ) -> torch.Tensor:
     """
-    Extract patches from image on CPU.
+    Extract patches from image on CPU in (C, H, W) order per patch.
+
+    The weight is stored as [out_features, C*pH*pW] in (c,h,w) order,
+    so patch features must also be flattened in (c,h,w) order.
 
     Args:
         pixel_values: [batch, 3, H, W] in NCHW format
 
     Returns:
-        [batch, num_patches, patch_size*patch_size*3] flattened patches
+        [batch, num_patches, C*patch_size*patch_size] flattened patches in (c,h,w) order
     """
     batch_size, channels, h, w = pixel_values.shape
     patch_h = h // patch_size
     patch_w = w // patch_size
 
-    # Reshape to extract patches: [B, C, pH, ps, pW, ps]
+    # Reshape: [B, C, pH, ps, pW, ps]
     x = pixel_values.reshape(batch_size, channels, patch_h, patch_size, patch_w, patch_size)
-    # Permute to [B, pH, pW, ps, ps, C] then flatten patches
-    x = x.permute(0, 2, 4, 3, 5, 1).contiguous()
-    x = x.reshape(batch_size, patch_h * patch_w, patch_size * patch_size * channels)
+    # Permute to [B, pH, pW, C, ps, ps] — keeps (C, h, w) order within each patch
+    x = x.permute(0, 2, 4, 1, 3, 5).contiguous()
+    # Flatten: [B, num_patches, C*ps*ps]
+    x = x.reshape(batch_size, patch_h * patch_w, channels * patch_size * patch_size)
     return x
 
 
@@ -68,64 +72,45 @@ def siglip2_attention(
     """
     Multi-head self-attention for SigLIP2.
 
-    Uses fused QKV projection with nlp_create_qkv_heads for head_dim=72
-    (which is not tile-aligned). The op handles padding internally.
-    Uses SDPA for efficient attention computation.
+    head_dim=72 is not tile-aligned. QKV projection runs on device,
+    attention computation on CPU (PyTorch) for correctness baseline,
+    output projection on device.
     """
     batch_size, seq_len, hidden_size = hidden_states.shape
+    head_dim = hidden_size // num_heads  # 72
 
-    # Reshape to 4D for nlp_create_qkv_heads: [B, 1, seq, hidden]
-    hidden_4d = ttnn.reshape(hidden_states, (batch_size, 1, seq_len, hidden_size))
-
-    # Fused QKV projection
+    # QKV projection on device
     qkv = ttnn.linear(
-        hidden_4d, qkv_weight, bias=qkv_bias,
+        hidden_states, qkv_weight, bias=qkv_bias,
         memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16,
         core_grid=CORE_GRID_BH,
     )
 
-    # Split into Q, K, V heads with padding handled internally
-    q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads(
-        qkv,
-        num_heads=num_heads,
-        num_kv_heads=num_heads,
-        transpose_k_heads=False,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
+    # Attention on CPU (head_dim=72 not tile-aligned)
+    qkv_cpu = ttnn.to_torch(qkv).float()
     ttnn.deallocate(qkv)
 
-    # Use scaled_dot_product_attention
-    attn_output = ttnn.transformer.scaled_dot_product_attention(
-        q_heads, k_heads, v_heads,
-        is_causal=False,
-    )
-    ttnn.deallocate(q_heads)
-    ttnn.deallocate(k_heads)
-    ttnn.deallocate(v_heads)
+    q = qkv_cpu[:, :, :hidden_size].reshape(batch_size, seq_len, num_heads, head_dim).permute(0, 2, 1, 3)
+    k = qkv_cpu[:, :, hidden_size:2*hidden_size].reshape(batch_size, seq_len, num_heads, head_dim).permute(0, 2, 1, 3)
+    v = qkv_cpu[:, :, 2*hidden_size:].reshape(batch_size, seq_len, num_heads, head_dim).permute(0, 2, 1, 3)
 
-    # Concatenate heads back
-    attn_concat = ttnn.experimental.nlp_concat_heads(
-        attn_output,
+    scale = 1.0 / math.sqrt(head_dim)
+    attn = torch.softmax(torch.matmul(q * scale, k.transpose(-2, -1)), dim=-1)
+    context = torch.matmul(attn, v).permute(0, 2, 1, 3).contiguous().reshape(batch_size, seq_len, hidden_size)
+
+    # Transfer back to device for output projection
+    context_tt = ttnn.from_torch(
+        context.to(torch.bfloat16), dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT, device=hidden_states.device(),
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    ttnn.deallocate(attn_output)
 
-    # Reshape back to 3D: [B, 1, seq, padded_hidden] -> [B, seq, hidden]
-    # Slice to remove padding from head_dim (padded 72->96 = 96*16=1536 vs 72*16=1152)
-    attn_3d = ttnn.reshape(attn_concat, (batch_size, seq_len, -1))
-    ttnn.deallocate(attn_concat)
-
-    # If padded, slice back to hidden_size
-    if attn_3d.shape[-1] > hidden_size:
-        attn_3d = ttnn.slice(attn_3d, [0, 0, 0], [batch_size, seq_len, hidden_size])
-
-    # Output projection
     output = ttnn.linear(
-        attn_3d, proj_weight, bias=proj_bias,
-        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b,
+        context_tt, proj_weight, bias=proj_bias,
+        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16,
         core_grid=CORE_GRID_BH,
     )
-    ttnn.deallocate(attn_3d)
+    ttnn.deallocate(context_tt)
 
     return output
 
@@ -141,7 +126,7 @@ def siglip2_mlp(
     intermediate = ttnn.linear(
         hidden_states, fc1_weight, bias=fc1_bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
         core_grid=CORE_GRID_BH,
         activation="gelu",
     )
@@ -149,7 +134,7 @@ def siglip2_mlp(
     output = ttnn.linear(
         intermediate, fc2_weight, bias=fc2_bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
         core_grid=CORE_GRID_BH,
     )
     ttnn.deallocate(intermediate)
@@ -183,7 +168,7 @@ def siglip2_encoder_layer(
     hidden_states = ttnn.add(
         attn_out, hidden_states,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
     )
     ttnn.deallocate(attn_out)
 
@@ -207,7 +192,7 @@ def siglip2_encoder_layer(
     hidden_states = ttnn.add(
         mlp_out, hidden_states,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
     )
     ttnn.deallocate(mlp_out)
 
@@ -253,7 +238,7 @@ class SigLIP2VisionEncoderTTNN:
         if pos_embed is not None:
             self.position_embeddings = ttnn.from_torch(
                 pos_embed.unsqueeze(0).to(torch.bfloat16),
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
@@ -346,7 +331,7 @@ class SigLIP2VisionEncoderTTNN:
         embeddings = ttnn.linear(
             patches_tt, self.patch_proj_weight, bias=self.patch_proj_bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             core_grid=CORE_GRID_BH,
         )
         ttnn.deallocate(patches_tt)
@@ -355,7 +340,7 @@ class SigLIP2VisionEncoderTTNN:
         embeddings = ttnn.add(
             embeddings, self.position_embeddings,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
         )
 
         # Encoder layers
