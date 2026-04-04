@@ -257,7 +257,6 @@ class DeepSeekV3MTPWeights:
     h_gamma: ttnn.Tensor  # model.layers.61.hnorm.weight
     e_gamma: ttnn.Tensor  # model.layers.61.enorm.weight
     eh_projection: ttnn.Tensor  # model.layers.61.eh_proj.weight
-    shared_head_norm: ttnn.Tensor  # model.layers.61.shared_head.norm.weight
 
 
 # Constants for kv_b_proj split (HF stores one matrix; we split into kv_b1 and kv_b2).
@@ -860,6 +859,18 @@ def _to_tt_lm_head_matrix(
     )
 
 
+def prepare_shared_head_norm(
+    state_dict: dict[str, torch.Tensor],
+    device,
+    *,
+    mtp_layer_idx: int = _MTP_LAYER_IDX,
+    move_to_device: bool = False,
+) -> ttnn.Tensor:
+    """Prepare only the shared_head.norm weight (no h_gamma / e_gamma / eh_proj)."""
+    w = state_dict[_key(mtp_layer_idx, "shared_head.norm.weight")].unsqueeze(0)
+    return _to_tt_lm_head_final_norm(w, device, move_to_device=move_to_device)
+
+
 def _to_tt_lm_head_final_norm(norm_torch: torch.Tensor, device, *, move_to_device: bool = False) -> ttnn.Tensor:
     """Convert (1, K) final norm torch tensor to TT (HEIGHT_SHARDED on mcast core). Shared by prepare and synthetic."""
     norm_mem_config = ttnn.MemoryConfig(
@@ -1000,9 +1011,10 @@ def prepare_mtp_weights(
 ) -> DeepSeekV3MTPWeights:
     """Prepare lightweight MTP projection/norm weights from state dict.
 
-    Only the MTP-specific tensors (h_gamma, e_gamma, eh_projection, shared_head_norm)
-    are prepared here. The MTP decoder block (layer 61) is a regular MoE layer handled
-    through the standard prepare_moe_layer_weights / load_moe_decoder_layer path.
+    Only the MTP-specific tensors (h_gamma, e_gamma, eh_projection) are prepared here.
+    The MTP decoder block (layer 61) is a regular MoE layer handled through the
+    standard prepare_moe_layer_weights / load_moe_decoder_layer path.
+    shared_head_norm is loaded separately via prepare_shared_head_norm().
     """
     logger.info("Preparing MTP weights (layer {})...", mtp_layer_idx)
     t0 = time.perf_counter()
@@ -1016,15 +1028,11 @@ def prepare_mtp_weights(
     eh_proj_w = state_dict[_key(mtp_layer_idx, "eh_proj.weight")].T.contiguous()
     eh_proj_tt = _to_tt_mtp_eh_proj(eh_proj_w, device, move_to_device=move_to_device)
 
-    shared_head_norm_w = state_dict[_key(mtp_layer_idx, "shared_head.norm.weight")].unsqueeze(0)
-    shared_head_norm_tt = _to_tt_lm_head_final_norm(shared_head_norm_w, device, move_to_device=move_to_device)
-
     logger.info("MTP weights prepared in {:.3f}s", time.perf_counter() - t0)
     return DeepSeekV3MTPWeights(
         h_gamma=h_gamma_tt,
         e_gamma=e_gamma_tt,
         eh_projection=eh_proj_tt,
-        shared_head_norm=shared_head_norm_tt,
     )
 
 
@@ -1038,9 +1046,9 @@ def save_mtp_weights(
 ) -> None:
     """Save MTP projection/norm weights to <path>/mtp/.
 
-    Only the lightweight MTP tensors (h_gamma, e_gamma, eh_projection, shared_head_norm)
-    are saved here. The MTP decoder block (layer 61) is saved separately as a standard
-    MoE layer via save_decoder_layer.
+    Only the lightweight MTP tensors (h_gamma, e_gamma, eh_projection) are saved here.
+    The MTP decoder block (layer 61) is saved separately as a standard MoE layer via
+    save_decoder_layer.
     """
     path = Path(path)
     mtp_dir = path / "mtp"
@@ -1050,7 +1058,6 @@ def save_mtp_weights(
     ttnn.dump_tensor(mtp_dir / "mtp_h_gamma.tensorbin", weights.h_gamma)
     ttnn.dump_tensor(mtp_dir / "mtp_e_gamma.tensorbin", weights.e_gamma)
     ttnn.dump_tensor(mtp_dir / "mtp_eh_projection.tensorbin", weights.eh_projection)
-    ttnn.dump_tensor(mtp_dir / "mtp_shared_head_norm.tensorbin", weights.shared_head_norm)
     manifest = {
         "version": _MANIFEST_VERSION,
         "hf_model_name": hf_model_name,
@@ -1080,14 +1087,18 @@ def load_mtp_weights(
     h_gamma = ttnn.load_tensor(mtp_dir / "mtp_h_gamma.tensorbin", device=device)
     e_gamma = ttnn.load_tensor(mtp_dir / "mtp_e_gamma.tensorbin", device=device)
     eh_projection = ttnn.load_tensor(mtp_dir / "mtp_eh_projection.tensorbin", device=device)
-    shared_head_norm = ttnn.load_tensor(mtp_dir / "mtp_shared_head_norm.tensorbin", device=device)
     logger.info("MTP weights loaded in {:.3f}s", time.perf_counter() - t0)
     return DeepSeekV3MTPWeights(
         h_gamma=h_gamma,
         e_gamma=e_gamma,
         eh_projection=eh_projection,
-        shared_head_norm=shared_head_norm,
     )
+
+
+def load_shared_head_norm_weights(path: str | Path, device) -> ttnn.Tensor:
+    """Load only the shared_head_norm tensor from the MTP cache directory."""
+    mtp_dir = Path(path) / "mtp"
+    return ttnn.load_tensor(mtp_dir / "mtp_shared_head_norm.tensorbin", device=device)
 
 
 def _core_range_set_to_list(crs: ttnn.CoreRangeSet) -> list[list[list[int]]]:

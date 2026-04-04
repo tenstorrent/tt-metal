@@ -56,6 +56,7 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     prepare_lm_head_weights,
     prepare_moe_layer_weights,
     prepare_mtp_weights,
+    prepare_shared_head_norm,
     save_decoder_layer,
     save_embedding_weights,
     save_lm_head_weights,
@@ -751,6 +752,9 @@ def main() -> int:
                 logger.info("Saving MTP weights...")
                 t0 = time.perf_counter()
                 save_mtp_weights(weights, output_path, **manifest_kw)
+                shared_norm = prepare_shared_head_norm(state_dict, submesh)
+                mtp_dir = Path(output_path) / "mtp"
+                ttnn.dump_tensor(mtp_dir / "mtp_shared_head_norm.tensorbin", shared_norm)
                 logger.info("save_mtp_weights took {:.3f}s", time.perf_counter() - t0)
 
     elapsed = time.perf_counter() - total_t0

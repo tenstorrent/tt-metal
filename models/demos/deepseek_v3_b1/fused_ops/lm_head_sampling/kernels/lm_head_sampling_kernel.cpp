@@ -722,6 +722,8 @@ void kernel_main() {
         // ====================================================================
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_input_core) {
+            DPRINT << ">el" << ENDL();
+
             constexpr uint32_t embedding_size_bytes = get_named_compile_time_arg_val("embedding_size_bytes");
             constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
             constexpr uint32_t emb_cb = get_named_compile_time_arg_val("embedding_cb");
@@ -730,10 +732,10 @@ void kernel_main() {
                 .bank_base_address = mtp_embedding_base,
                 .page_size = embedding_size_bytes,
             };
+            invalidate_l1_cache();
             uint32_t metadata_src_addr = get_read_ptr(rmsnorm_input_cb) + embedding_size_bytes;
             auto* metadata_ptr =
                 reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_src_addr);
-            invalidate_l1_cache();
             uint32_t token_id = (metadata_ptr->prefill_token_id != static_cast<uint32_t>(-1))
                                     ? metadata_ptr->prefill_token_id
                                     : *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mtp_token_addr);
@@ -742,6 +744,7 @@ void kernel_main() {
             noc_async_read(embedding_addr_gen.get_noc_addr(token_id), get_write_ptr(emb_cb), embedding_size_bytes);
             noc_async_read_barrier();
             cb_push_back(emb_cb, e_num_tiles);
+            DPRINT << "<el" << ENDL();
         }
 #endif
 

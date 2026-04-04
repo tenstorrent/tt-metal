@@ -31,11 +31,13 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     load_moe_decoder_layer,
     load_moe_routed_experts,
     load_mtp_weights,
+    load_shared_head_norm_weights,
     prepare_dense_layer_weights,
     prepare_embedding_weights,
     prepare_lm_head_weights,
     prepare_moe_layer_weights,
     prepare_mtp_weights,
+    prepare_shared_head_norm,
 )
 
 
@@ -55,6 +57,9 @@ class WeightProvider(Protocol):
         ...
 
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
+        ...
+
+    def load_shared_head_norm(self, device: ttnn.MeshDevice) -> ttnn.Tensor:
         ...
 
 
@@ -242,6 +247,9 @@ class CacheWeightProvider:
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
         return load_mtp_weights(self._path, device)
 
+    def load_shared_head_norm(self, device: ttnn.MeshDevice) -> ttnn.Tensor:
+        return load_shared_head_norm_weights(self._path, device)
+
 
 class SyntheticWeightProvider:
     """Create deterministic synthetic embedding and LM head weights in place (no cache)."""
@@ -293,6 +301,10 @@ class SyntheticWeightProvider:
         sd = _build_synthetic_mtp_state_dict()
         return prepare_mtp_weights(sd, device, move_to_device=True)
 
+    def load_shared_head_norm(self, device: ttnn.MeshDevice) -> ttnn.Tensor:
+        sd = _build_synthetic_mtp_state_dict()
+        return prepare_shared_head_norm(sd, device, move_to_device=True)
+
 
 class StateDictWeightProvider:
     """Load real HF safetensors via LazyStateDict and prepare weights at runtime (no tensorbin cache)."""
@@ -329,3 +341,6 @@ class StateDictWeightProvider:
 
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
         return prepare_mtp_weights(self._state_dict, device, move_to_device=True)
+
+    def load_shared_head_norm(self, device: ttnn.MeshDevice) -> ttnn.Tensor:
+        return prepare_shared_head_norm(self._state_dict, device, move_to_device=True)

@@ -134,12 +134,11 @@ def create_single_galaxy_spec_decode_pipeline_configuration(
         return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
 
     def stage_3(device: ttnn.MeshDevice) -> StageKind:
-        mtp_weights = weight_provider.load_mtp(device)
         return SpecLMHeadStage(
             weights=weight_provider.load_lm_head(device),
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
-            shared_head_norm=mtp_weights.shared_head_norm,
+            shared_head_norm=weight_provider.load_shared_head_norm(device),
         )
 
     return PipelineConfiguration(
@@ -162,13 +161,12 @@ def create_single_galaxy_combined_spec_decode_pipeline_configuration(
     P0(SpecLMHead+Embed) -> P1(BaseLMHead+MTP) -> P2(Passthrough) -> P3(Passthrough) -> back to P0."""
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
-        mtp_weights = weight_provider.load_mtp(device)
         return SpecLMHeadWithEmbeddingStage(
             weights=weight_provider.load_lm_head(device),
             embedding_weights=weight_provider.load_embedding(device),
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
-            shared_head_norm=mtp_weights.shared_head_norm,
+            shared_head_norm=weight_provider.load_shared_head_norm(device),
         )
 
     def stage_1(device: ttnn.MeshDevice) -> StageKind:
@@ -272,7 +270,7 @@ def create_sp4_pipeline_configuration(
     fwd_payload = PassthroughPayload.ACTIVATION_W_TOKEN_META if enable_mtp else PassthroughPayload.TOKEN
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
-        shared_head_norm = weight_provider.load_mtp(device).shared_head_norm if enable_mtp else None
+        shared_head_norm = weight_provider.load_shared_head_norm(device) if enable_mtp else None
         return SpecLMHeadWithEmbeddingStage(
             weights=weight_provider.load_lm_head(device),
             embedding_weights=weight_provider.load_embedding(device),
@@ -497,7 +495,7 @@ def create_single_pod_spec_decode_pipeline_configuration(
     fwd_payload = PassthroughPayload.ACTIVATION_W_TOKEN_META if enable_mtp else PassthroughPayload.TOKEN
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
-        shared_head_norm = weight_provider.load_mtp(device).shared_head_norm if enable_mtp else None
+        shared_head_norm = weight_provider.load_shared_head_norm(device) if enable_mtp else None
         return SpecLMHeadWithEmbeddingStage(
             weights=weight_provider.load_lm_head(device),
             embedding_weights=weight_provider.load_embedding(device),
