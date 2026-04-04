@@ -23,6 +23,20 @@ Usage:
 
     # Run with tracing enabled
     python -m models.demos.molmo2.demo.demo --use-trace
+
+    # Video (recommended flags — matches eval harness; paged KV + traces):
+    python -m models.demos.molmo2.demo.demo \\
+        --video 'https://.../clip.mp4' \\
+        --prompt $'<|video|>\\nYour question...' \\
+        --max-tokens 16 \\
+        --paged-attention --use-decode-trace
+
+    # Video defaults: decode trace ON, vision trace ON, prefill trace ON (prefill trace is
+    # auto-disabled when HF multimodal token_type_ids are used — see run_prefill warning).
+    # Opt out: --no-use-vision-trace, --no-use-trace, --no-use-decode-trace
+
+    # Video: decode trace is ON by default (~30+ tok/s). Debug without trace:
+    python -m models.demos.molmo2.demo.demo --video URL --prompt "..." --no-use-decode-trace
 """
 
 import argparse
@@ -36,6 +50,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.molmo2.tt.model_loader import create_model, load_model_weights, load_processor
+from models.demos.molmo2.tt.trace_capture_utils import trace_capture_run_begin, trace_capture_run_end
 
 
 @dataclass
@@ -49,9 +64,10 @@ class PenaltyArgs:
 
 # Import HF processor wrapper (uses correct configs from HuggingFace)
 from models.demos.molmo2.tt.hf_processor import preprocess_image, preprocess_video
+from models.demos.molmo2.tt.prefill_attention_mask import build_molmo2_prefill_attention_bias
 
 # Import shared utilities from tt module
-from models.demos.molmo2.tt.utils import IMAGE_PROMPT, VIDEO_PROMPT, get_image_tokens, pad_input_ids
+from models.demos.molmo2.tt.utils import IMAGE_PROMPT, VIDEO_PROMPT, get_image_tokens, pad_input_ids, pad_seq_2d_right
 
 # Default paths
 DEMO_DIR = Path(__file__).parent
@@ -466,77 +482,42 @@ class Molmo2Generator:
 
     def _allocate_vision_trace_tensors(
         self,
-        num_patches: int = 729,
-        hidden_dim: int = 1152,
-        n_out: int = 169,
-        k_pool: int = 4,
-        pool_dim: int = 2304,
-        batch_size: int = 1,
+        batch_size: int,
+        n_out: int,
+        k_pool: int,
+        num_patches: int,
     ) -> dict:
-        """Allocate tensors for vision trace."""
-        # Input: embedded patches
-        trace_embedded = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, batch_size * num_patches, hidden_dim]),
-            ttnn.bfloat16,
-            ttnn.TILE_LAYOUT,
-            self.mesh_device,
-            ttnn.DRAM_MEMORY_CONFIG,
+        """Return slices into vision trace buffers pre-allocated on VisionBackbone at model init."""
+        return self.model.vision_backbone.get_vision_trace_tensors(
+            batch_size=batch_size,
+            n_out=n_out,
+            k_pool=k_pool,
+            num_patches=num_patches,
         )
-
-        # Indices for gathering
-        trace_idx = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, batch_size * n_out * k_pool]),
-            ttnn.uint32,
-            ttnn.ROW_MAJOR_LAYOUT,
-            self.mesh_device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # Valid mask
-        trace_valid_mask = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, batch_size * n_out * k_pool, 1]),
-            ttnn.bfloat16,
-            ttnn.TILE_LAYOUT,
-            self.mesh_device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # Valid token mask
-        trace_valid_token = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([batch_size * n_out]),
-            ttnn.bfloat16,
-            ttnn.ROW_MAJOR_LAYOUT,
-            self.mesh_device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        return {
-            "embedded": trace_embedded,
-            "idx": trace_idx,
-            "valid_mask": trace_valid_mask,
-            "valid_token": trace_valid_token,
-            "n_out": n_out,
-            "k_pool": k_pool,
-            "batch_size": batch_size,
-        }
 
     def _capture_vision_trace(self, trace_tensors: dict) -> Tuple[int, ttnn.Tensor]:
         """Capture vision trace for ViT + pooling + projection."""
         logger.info("Capturing vision trace...")
 
-        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        tok = trace_capture_run_begin()
+        try:
+            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
 
-        visual_embeddings = self.model.vision_backbone.forward_ttnn(
-            images_embedded=trace_tensors["embedded"],
-            pooled_patches_idx_ttnn=trace_tensors["idx"],
-            valid_mask_ttnn=trace_tensors["valid_mask"],
-            valid_token_ttnn=trace_tensors["valid_token"],
-            n_out=trace_tensors["n_out"],
-            k_pool=trace_tensors["k_pool"],
-            batch_size=trace_tensors["batch_size"],
-        )
+            visual_embeddings = self.model.vision_backbone.forward_ttnn(
+                images_embedded=trace_tensors["embedded"],
+                pooled_patches_idx_ttnn=trace_tensors["idx"],
+                valid_mask_ttnn=trace_tensors["valid_mask"],
+                valid_token_ttnn=trace_tensors["valid_token"],
+                n_out=trace_tensors["n_out"],
+                k_pool=trace_tensors["k_pool"],
+                batch_size=trace_tensors["batch_size"],
+                trace_capture=True,
+            )
 
-        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        finally:
+            trace_capture_run_end(tok)
+
         logger.info("Vision trace captured")
 
         return trace_id, visual_embeddings
@@ -736,18 +717,23 @@ class Molmo2Generator:
         # Only pass page_table if paged attention is enabled
         page_table_for_trace = trace_tensors.get("page_table") if self.use_paged_attention else None
 
-        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        tok = trace_capture_run_begin()
+        try:
+            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
 
-        logits_trace, _ = self.model.text_model.forward(
-            hidden_states=trace_tensors["hidden_states"],
-            start_pos=0,
-            attn_mask=None,
-            kv_caches=self.kv_caches,  # Pass KV cache to fill during prefill
-            rot_mats=rot_mats,
-            page_table=page_table_for_trace,
-        )
+            logits_trace, _ = self.model.text_model.forward(
+                hidden_states=trace_tensors["hidden_states"],
+                start_pos=0,
+                attn_mask=None,
+                kv_caches=self.kv_caches,  # Pass KV cache to fill during prefill
+                rot_mats=rot_mats,
+                page_table=page_table_for_trace,
+            )
 
-        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        finally:
+            trace_capture_run_end(tok)
+
         if self.use_paged_attention:
             logger.info("Text model prefill trace captured with paged attention")
         else:
@@ -932,58 +918,64 @@ class Molmo2Generator:
         """
         logger.info("Capturing unified vision + prefill trace...")
 
-        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        tok = trace_capture_run_begin()
+        try:
+            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
 
-        # Step 1: Vision backbone (ViT + pooling + projection)
-        visual_embeddings = self.model.vision_backbone.forward_ttnn(
-            images_embedded=trace_tensors["embedded"],
-            pooled_patches_idx_ttnn=trace_tensors["idx"],
-            valid_mask_ttnn=trace_tensors["valid_mask"],
-            valid_token_ttnn=trace_tensors["valid_token"],
-            n_out=trace_tensors["n_out"],
-            k_pool=trace_tensors["k_pool"],
-            batch_size=trace_tensors["batch_size"],
-        )
-        # visual_embeddings shape: [1, 1, num_visual_tokens, 4096]
+            # Step 1: Vision backbone (ViT + pooling + projection)
+            visual_embeddings = self.model.vision_backbone.forward_ttnn(
+                images_embedded=trace_tensors["embedded"],
+                pooled_patches_idx_ttnn=trace_tensors["idx"],
+                valid_mask_ttnn=trace_tensors["valid_mask"],
+                valid_token_ttnn=trace_tensors["valid_token"],
+                n_out=trace_tensors["n_out"],
+                k_pool=trace_tensors["k_pool"],
+                batch_size=trace_tensors["batch_size"],
+                trace_capture=True,
+            )
+            # visual_embeddings shape: [1, 1, num_visual_tokens, 4096]
 
-        # Step 2: Text embeddings (INSIDE trace - this is key for performance)
-        text_embeddings = self.model.text_model.embed_tokens(trace_tensors["input_ids"])
-        # text_embeddings shape: [1, 1, seq_len, 4096]
+            # Step 2: Text embeddings (INSIDE trace - this is key for performance)
+            text_embeddings = self.model.text_model.embed_tokens(trace_tensors["input_ids"])
+            # text_embeddings shape: [1, 1, seq_len, 4096]
 
-        # Step 3: On-device fusion using matmul with selector matrix
-        # selector_matrix: [1, 1, seq_len, num_visual_tokens] - one-hot rows indicating placement
-        # visual_part = selector_matrix @ visual_embeddings => [1, 1, seq_len, 4096]
-        # fused = text_embeddings + visual_part
-        visual_part = ttnn.matmul(
-            trace_tensors["selector_matrix"],
-            visual_embeddings,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        # visual_part: [1, 1, seq_len, 4096]
+            # Step 3: On-device fusion using matmul with selector matrix
+            # selector_matrix: [1, 1, seq_len, num_visual_tokens] - one-hot rows indicating placement
+            # visual_part = selector_matrix @ visual_embeddings => [1, 1, seq_len, 4096]
+            # fused = text_embeddings + visual_part
+            visual_part = ttnn.matmul(
+                trace_tensors["selector_matrix"],
+                visual_embeddings,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            # visual_part: [1, 1, seq_len, 4096]
 
-        # Add visual part to text embeddings
-        fused_embed = ttnn.add(
-            text_embeddings,
-            visual_part,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+            # Add visual part to text embeddings
+            fused_embed = ttnn.add(
+                text_embeddings,
+                visual_part,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
-        # Step 4: Text model prefill
-        rot_mats = [trace_tensors["cos"], trace_tensors["sin"]]
+            # Step 4: Text model prefill
+            rot_mats = [trace_tensors["cos"], trace_tensors["sin"]]
 
-        # Only pass page_table if paged attention is enabled
-        page_table_for_trace = trace_tensors.get("page_table") if self.use_paged_attention else None
+            # Only pass page_table if paged attention is enabled
+            page_table_for_trace = trace_tensors.get("page_table") if self.use_paged_attention else None
 
-        logits, _ = self.model.text_model.forward(
-            hidden_states=fused_embed,
-            start_pos=0,
-            attn_mask=None,
-            kv_caches=self.kv_caches,
-            rot_mats=rot_mats,
-            page_table=page_table_for_trace,
-        )
+            logits, _ = self.model.text_model.forward(
+                hidden_states=fused_embed,
+                start_pos=0,
+                attn_mask=None,
+                kv_caches=self.kv_caches,
+                rot_mats=rot_mats,
+                page_table=page_table_for_trace,
+            )
 
-        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        finally:
+            trace_capture_run_end(tok)
+
         if self.use_paged_attention:
             logger.info("Unified vision + prefill trace captured with paged attention")
         else:
@@ -1330,35 +1322,105 @@ class Molmo2Generator:
             "page_table": trace_page_table,
         }
 
-    def _capture_decode_trace(self, trace_tensors: dict) -> Tuple[int, ttnn.Tensor]:
+    def _copy_decode_trace_inputs(
+        self,
+        trace_tensors: dict,
+        hidden_states: ttnn.Tensor,
+        page_table: Optional[ttnn.Tensor] = None,
+    ) -> None:
+        """Copy runtime decode inputs into persistent trace input buffers."""
+        ttnn.copy(hidden_states, trace_tensors["hidden_states"])
+
+        if page_table is not None and "page_table" in trace_tensors:
+            trace_page_table_shape = list(trace_tensors["page_table"].shape)
+            page_table_shape = list(page_table.shape)
+            if page_table_shape[-1] < trace_page_table_shape[-1]:
+                pad_size = trace_page_table_shape[-1] - page_table_shape[-1]
+                page_table_torch = ttnn.to_torch(
+                    page_table, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+                )[0]
+                page_table_padded = torch.nn.functional.pad(page_table_torch, (0, pad_size), value=0)
+                page_table_tt = ttnn.from_torch(
+                    page_table_padded.unsqueeze(0) if page_table_padded.dim() == 1 else page_table_padded,
+                    device=self.mesh_device,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=self.mesh_mapper,
+                )
+                ttnn.copy(page_table_tt, trace_tensors["page_table"])
+                ttnn.deallocate(page_table_tt)
+            else:
+                ttnn.copy(page_table, trace_tensors["page_table"])
+
+    def _capture_decode_trace(
+        self,
+        trace_tensors: dict,
+        hidden_states: ttnn.Tensor,
+        page_table: Optional[ttnn.Tensor] = None,
+    ) -> Tuple[int, ttnn.Tensor]:
         """Capture trace for decode phase (single token generation).
+
+        Match tt_transformers ``Generator._capture_decode_trace_text``: copy inputs into
+        trace buffers, then record a single ``forward_decode`` (rot_mats path). Do not run
+        an extra eager forward through trace tensors before capture.
 
         The RoPE embedding lookup reads from self.rot_mat_idxs (managed via
         ttnn.plus_one outside the trace). KV cache position reads from
         self.current_pos (also managed via ttnn.plus_one outside the trace).
 
         When paged attention is enabled, the trace includes paged attention operations
-        with page_table as an input. Before each trace execution, the actual page_table
-        values are copied to the trace_tensors["page_table"] tensor.
+        with page_table as an input. Before capture (and each replay), the actual
+        page_table values are copied to the trace_tensors["page_table"] tensor.
         """
         logger.info("Capturing decode trace...")
+        self._copy_decode_trace_inputs(trace_tensors, hidden_states, page_table)
 
-        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-
+        # Materialize rot_mats and compile the rot_mats decode path BEFORE trace capture.
+        # forward_decode deallocates its input hidden_states; never run compile on
+        # trace_tensors["hidden_states"] — use a scratch copy. JIT/allocations during
+        # capture enqueue host writes and hit TT_FATAL (writes not allowed in capture).
         rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode_traced(self.rot_mat_idxs)
-
-        # Only pass page_table if paged attention is enabled
         page_table_for_trace = trace_tensors.get("page_table") if self.use_paged_attention else None
 
-        logits_trace = self.model.text_model.forward_decode(
-            hidden_states=trace_tensors["hidden_states"],
+        logger.info("Compile warmup: decode forward (rot_mats path, scratch buffer)...")
+        compile_hidden = ttnn.allocate_tensor_on_device(
+            ttnn.Shape(list(trace_tensors["hidden_states"].shape)),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.copy(trace_tensors["hidden_states"], compile_hidden)
+        compile_logits = self.model.text_model.forward_decode(
+            hidden_states=compile_hidden,
             kv_caches=self.kv_caches,
             current_pos=self.current_pos,
             rot_mats=rot_mats,
             page_table=page_table_for_trace,
         )
+        ttnn.deallocate(compile_hidden)
+        ttnn.deallocate(compile_logits)
 
-        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        tok = trace_capture_run_begin()
+        try:
+            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+
+            logits_trace = self.model.text_model.forward_decode(
+                hidden_states=trace_tensors["hidden_states"],
+                kv_caches=self.kv_caches,
+                current_pos=self.current_pos,
+                rot_mats=rot_mats,
+                page_table=page_table_for_trace,
+            )
+
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        finally:
+            trace_capture_run_end(tok)
+        # Drain the command queue after capture. The allocator may still emit a one-time
+        # hint: "Allocating device buffers is unsafe due to the existence of an active trace"
+        # when the next step allocates before the first execute_trace — that is expected and OK.
+        ttnn.synchronize_device(self.mesh_device)
         if self.use_paged_attention:
             logger.info("Decode trace captured with paged attention support")
         else:
@@ -1382,35 +1444,13 @@ class Molmo2Generator:
 
         For paged attention, the page_table values are copied to the trace
         tensor before execution so the trace uses the correct block mappings.
+
+        Use blocking=True so mesh trace replay finishes before we read logits
+        (non-blocking + immediate to_torch/argmax can sample stale/corrupt output).
         """
-        ttnn.copy(hidden_states, trace_tensors["hidden_states"])
+        self._copy_decode_trace_inputs(trace_tensors, hidden_states, page_table)
 
-        # Copy page_table to trace tensor if provided (paged attention)
-        if page_table is not None and "page_table" in trace_tensors:
-            # Pad page_table to match trace tensor shape if needed
-            trace_page_table_shape = list(trace_tensors["page_table"].shape)
-            page_table_shape = list(page_table.shape)
-            if page_table_shape[-1] < trace_page_table_shape[-1]:
-                # Need to pad the page_table to match trace tensor size
-                pad_size = trace_page_table_shape[-1] - page_table_shape[-1]
-                page_table_torch = ttnn.to_torch(
-                    page_table, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-                )[0]
-                page_table_padded = torch.nn.functional.pad(page_table_torch, (0, pad_size), value=0)
-                page_table_tt = ttnn.from_torch(
-                    page_table_padded.unsqueeze(0) if page_table_padded.dim() == 1 else page_table_padded,
-                    device=self.mesh_device,
-                    dtype=ttnn.int32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=self.mesh_mapper,
-                )
-                ttnn.copy(page_table_tt, trace_tensors["page_table"])
-                ttnn.deallocate(page_table_tt)
-            else:
-                ttnn.copy(page_table, trace_tensors["page_table"])
-
-        ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=True)
         return trace_output
 
     def warmup_all_buckets(
@@ -1458,8 +1498,8 @@ class Molmo2Generator:
             mesh_mapper=self.mesh_mapper,
         )
 
-        # Phase 1: Allocate all trace tensors BEFORE capturing any traces
-        # This avoids "Allocating device buffers is unsafe due to active trace" warning
+        # Phase 1: Allocate all trace tensors BEFORE capturing any traces so we do not
+        # allocate during trace recording (allocator would complain during capture).
         all_trace_tensors = {}
         valid_buckets = []
         for seq_len in bucket_sizes:
@@ -1493,7 +1533,7 @@ class Molmo2Generator:
             self.reset_kv_cache(0)
 
             # Warmup (compile)
-            self.warmup_prefill(hidden_states_ttnn, trace_tensors, use_trace=use_prefill_trace)
+            self.warmup_prefill(hidden_states_ttnn, trace_tensors, use_trace=use_prefill_trace, attn_mask=None)
 
             if use_prefill_trace:
                 # Capture trace
@@ -1550,11 +1590,22 @@ class Molmo2Generator:
                 mesh_mapper=self.mesh_mapper,
             )
 
-            # Warmup decode
-            self.warmup_decode(decode_hidden, self.decode_trace_tensors, use_trace=True)
+            # Compile decode without trace (matches tt_transformers; avoids eager forward
+            # through trace tensors before capture). Only pass page_table when using paged
+            # KV — non-paged cache + paged_update_cache + wide page_table hits TT_FATAL.
+            pt = warmup_page_table if self.use_paged_attention else None
+            self.warmup_decode(decode_hidden, page_table=pt)
+            ttnn.deallocate(decode_hidden)
+            decode_hidden = ttnn.from_torch(
+                dummy_decode.unsqueeze(0),  # [1, 1, batch_size, hidden_dim]
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=self.mesh_mapper,
+            )
 
-            # Capture decode trace
-            trace_id, trace_output = self._capture_decode_trace(self.decode_trace_tensors)
+            trace_id, trace_output = self._capture_decode_trace(self.decode_trace_tensors, decode_hidden, page_table=pt)
             self.decode_trace_id = trace_id
             self.decode_trace_output = trace_output
 
@@ -1565,12 +1616,38 @@ class Molmo2Generator:
             f"Warmup complete: {len(self.prefill_traces)} prefill buckets, decode={'yes' if use_decode_trace else 'no'}"
         )
 
+    def _build_mm_prefill_attn_mask(
+        self,
+        token_type_ids: Optional[torch.Tensor],
+        hf_attention_mask: Optional[torch.Tensor],
+        seq_len: int,
+    ) -> Optional[ttnn.Tensor]:
+        """HF-style multimodal prefill additive mask; ``None`` if not applicable."""
+        if token_type_ids is None or seq_len <= 1:
+            return None
+        if token_type_ids.shape[1] != seq_len:
+            raise ValueError(f"token_type_ids length {token_type_ids.shape[1]} != hidden seq_len {seq_len}")
+        if hf_attention_mask is not None and hf_attention_mask.shape[1] != seq_len:
+            raise ValueError(f"hf_attention_mask length {hf_attention_mask.shape[1]} != seq_len {seq_len}")
+        bias = build_molmo2_prefill_attention_bias(token_type_ids, attention_mask=hf_attention_mask).to(torch.bfloat16)
+        is_mesh = self.mesh_device.__class__.__name__ == "MeshDevice"
+        mm = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh else None
+        return ttnn.from_torch(
+            bias,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mm,
+        )
+
     def warmup_prefill(
         self,
         hidden_states_ttnn: ttnn.Tensor,
         trace_tensors: dict,
         use_trace: bool,
         page_table: Optional[ttnn.Tensor] = None,
+        attn_mask: Optional[ttnn.Tensor] = None,
     ):
         """Run prefill warm-up (compile) pass."""
         logger.info("Running prefill warm-up (compile)...")
@@ -1587,7 +1664,7 @@ class Molmo2Generator:
             logits, _ = self.model.text_model.forward(
                 hidden_states=trace_tensors["hidden_states"],
                 start_pos=0,
-                attn_mask=None,
+                attn_mask=attn_mask,
                 kv_caches=self.kv_caches,  # Pass KV cache to compile fill_cache
                 rot_mats=rot_mats,
                 page_table=effective_page_table,  # Compile paged attention ops
@@ -1611,7 +1688,7 @@ class Molmo2Generator:
             logits, _ = self.model.text_model.forward(
                 hidden_states=hidden_states_ttnn,
                 start_pos=0,
-                attn_mask=None,
+                attn_mask=attn_mask,
                 kv_caches=self.kv_caches,  # Also pass KV cache for non-traced warmup
                 rot_mats=rot_mats,
                 page_table=effective_page_table,  # Pass page_table for paged attention
@@ -1624,35 +1701,19 @@ class Molmo2Generator:
     def warmup_decode(
         self,
         hidden_states: ttnn.Tensor,
-        trace_tensors: dict,
-        use_trace: bool,
         page_table: Optional[ttnn.Tensor] = None,
     ):
-        """Run decode warm-up (compile) pass."""
+        """Run decode warm-up (compile) pass without trace (rot_mat_idxs path)."""
         logger.info("Running decode warm-up (compile)...")
         start = time.perf_counter()
 
-        if use_trace:
-            ttnn.copy(hidden_states, trace_tensors["hidden_states"])
-
-            rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode_traced(self.rot_mat_idxs)
-            # Only use page_table from trace_tensors if paged attention is enabled
-            effective_page_table = trace_tensors.get("page_table") if self.use_paged_attention else None
-            logits = self.model.text_model.forward_decode(
-                hidden_states=trace_tensors["hidden_states"],
-                kv_caches=self.kv_caches,
-                current_pos=self.current_pos,
-                rot_mats=rot_mats,
-                page_table=effective_page_table,
-            )
-        else:
-            logits = self.model.text_model.forward_decode(
-                hidden_states=hidden_states,
-                kv_caches=self.kv_caches,
-                current_pos=self.current_pos,
-                rot_mat_idxs=self.rot_mat_idxs,
-                page_table=page_table,
-            )
+        self.model.text_model.forward_decode(
+            hidden_states=hidden_states,
+            kv_caches=self.kv_caches,
+            current_pos=self.current_pos,
+            rot_mat_idxs=self.rot_mat_idxs,
+            page_table=page_table,
+        )
 
         compile_time = (time.perf_counter() - start) * 1000
         logger.info(f"Decode compile completed in {compile_time:.2f}ms")
@@ -1670,6 +1731,8 @@ class Molmo2Generator:
         user_id: int = 0,
         use_data_parallel: bool = False,
         frames_per_device: int = 8,
+        token_type_ids: Optional[torch.Tensor] = None,
+        hf_attention_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[ttnn.Tensor, dict]:
         """
         Run prefill phase (process prompt + image).
@@ -1683,6 +1746,8 @@ class Molmo2Generator:
             use_unified_trace: Whether to use unified Vision+Prefill trace (eliminates CPU roundtrip)
             page_table: Optional page table for paged attention (vLLM)
             user_id: Batch index for multi-user batching (determines KV cache slot)
+            token_type_ids: Optional HF ``[B, S]`` multimodal token types (non-zero = image/mm)
+            hf_attention_mask: Optional HF padding mask ``[B, S]`` (1 = valid)
 
         Returns:
             Tuple of (logits, timing_dict)
@@ -1696,6 +1761,28 @@ class Molmo2Generator:
         if seq_len != original_seq_len:
             logger.info(f"Padded input_ids from {original_seq_len} to {seq_len} for trace reuse")
 
+        token_type_ids = pad_seq_2d_right(
+            token_type_ids,
+            original_len=original_seq_len,
+            padded_len=seq_len,
+            pad_value=0,
+        )
+        hf_attention_mask = pad_seq_2d_right(
+            hf_attention_mask,
+            original_len=original_seq_len,
+            padded_len=seq_len,
+            pad_value=0,
+        )
+
+        prefill_attn_mask_ttnn = self._build_mm_prefill_attn_mask(token_type_ids, hf_attention_mask, seq_len)
+
+        if token_type_ids is not None and (use_trace or use_unified_trace):
+            logger.warning(
+                "Disabling prefill/unified trace: multimodal attention mask (token_type_ids) is incompatible with traced SDPA."
+            )
+            use_trace = False
+            use_unified_trace = False
+
         # Initialize page table for paged attention (demo mode)
         # If page_table is provided externally (vLLM), use that instead
         effective_page_table = page_table
@@ -1707,7 +1794,7 @@ class Molmo2Generator:
 
         # Unified trace path: Vision + embed_tokens + Fusion + Prefill in single trace
         # This eliminates CPU roundtrip between vision and text prefill
-        if use_unified_trace and pixel_values is not None:
+        if use_unified_trace and pixel_values is not None and prefill_attn_mask_ttnn is None:
             logits, timing = self._run_unified_prefill(
                 input_ids, pixel_values, pooled_patches_idx, timing, original_seq_len
             )
@@ -1744,12 +1831,14 @@ class Molmo2Generator:
                 logger.info(f"Vision compile completed in {timing['vision_compile_ms']:.2f}ms")
                 ttnn.deallocate(warmup_output)
 
-                # Allocate trace tensors
-                logger.info("Allocating vision trace tensors...")
+                # Vision trace I/O buffers are pre-allocated on VisionBackbone at model init; slice to this run
+                logger.info("Binding vision trace tensor views...")
+                num_patches = vision_inputs["embedded"].shape[2] // vision_inputs["batch_size"]
                 self.vision_trace_tensors = self._allocate_vision_trace_tensors(
+                    batch_size=vision_inputs["batch_size"],
                     n_out=vision_inputs["n_out"],
                     k_pool=vision_inputs["k_pool"],
-                    batch_size=vision_inputs["batch_size"],
+                    num_patches=num_patches,
                 )
 
                 # Copy initial data to trace tensors
@@ -1820,7 +1909,9 @@ class Molmo2Generator:
                 trace_tensors = self._allocate_prefill_trace_tensors(seq_len, hidden_dim=4096)
 
                 # Warm-up (compile)
-                timing["compile_prefill_ms"] = self.warmup_prefill(hidden_states_ttnn, trace_tensors, use_trace=True)
+                timing["compile_prefill_ms"] = self.warmup_prefill(
+                    hidden_states_ttnn, trace_tensors, use_trace=True, attn_mask=None
+                )
 
                 # Capture trace
                 trace_id, trace_output = self._capture_prefill_trace(trace_tensors)
@@ -1840,7 +1931,7 @@ class Molmo2Generator:
         else:
             # Warm-up (compile) - use smaller chunk for warmup if chunked prefill
             compile_seq_len = min(seq_len, self.max_prefill_chunk_size)
-            if compile_seq_len < seq_len:
+            if compile_seq_len < seq_len and prefill_attn_mask_ttnn is None:
                 # Create a smaller hidden_states for compilation
                 warmup_hidden_states = ttnn.slice(
                     hidden_states_ttnn,
@@ -1848,18 +1939,22 @@ class Molmo2Generator:
                     (1, 1, compile_seq_len, 4096),
                 )
                 timing["compile_prefill_ms"] = self.warmup_prefill(
-                    warmup_hidden_states, None, use_trace=False, page_table=effective_page_table
+                    warmup_hidden_states, None, use_trace=False, page_table=effective_page_table, attn_mask=None
                 )
                 ttnn.deallocate(warmup_hidden_states)
             else:
                 timing["compile_prefill_ms"] = self.warmup_prefill(
-                    hidden_states_ttnn, None, use_trace=False, page_table=effective_page_table
+                    hidden_states_ttnn,
+                    None,
+                    use_trace=False,
+                    page_table=effective_page_table,
+                    attn_mask=prefill_attn_mask_ttnn,
                 )
 
             # Actual prefill (TTFT) - use chunked prefill for long sequences
             ttft_start = time.perf_counter()
 
-            if seq_len > self.max_prefill_chunk_size and self.use_paged_attention:
+            if seq_len > self.max_prefill_chunk_size and self.use_paged_attention and prefill_attn_mask_ttnn is None:
                 # Chunked prefill for long sequences
                 logger.info(f"Using chunked prefill: seq_len={seq_len}, chunk_size={self.max_prefill_chunk_size}")
                 logits, last_chunk_size = self._run_chunked_prefill(
@@ -1877,15 +1972,21 @@ class Molmo2Generator:
                 last_chunk_start = ((original_seq_len - 1) // self.max_prefill_chunk_size) * self.max_prefill_chunk_size
                 timing["last_token_idx_in_chunk"] = original_seq_len - 1 - last_chunk_start
             else:
-                # Standard prefill for short sequences
+                # Standard prefill for short sequences (or long with multimodal mask — chunking unsupported)
+                if seq_len > self.max_prefill_chunk_size and prefill_attn_mask_ttnn is not None:
+                    logger.warning(
+                        "Long sequence with multimodal attention mask: using full prefill (chunked path has no mask support)"
+                    )
                 logits, _ = self.model.text_model.forward(
                     hidden_states=hidden_states_ttnn,
                     start_pos=0,
-                    attn_mask=None,
+                    attn_mask=prefill_attn_mask_ttnn,
                     kv_caches=self.kv_caches,  # Pass pre-allocated cache to fill
                     page_table=effective_page_table,
                     user_id=user_id,
                 )
+                if prefill_attn_mask_ttnn is not None:
+                    ttnn.deallocate(prefill_attn_mask_ttnn)
             ttnn.synchronize_device(self.mesh_device)
             timing["ttft_ms"] = (time.perf_counter() - ttft_start) * 1000
 
@@ -2030,8 +2131,11 @@ class Molmo2Generator:
                 self.decode_trace_tensors = self._allocate_decode_trace_tensors(
                     hidden_dim=4096, max_num_blocks=max_num_blocks
                 )
-                compile_time = self.warmup_decode(hidden_states, self.decode_trace_tensors, use_trace=True)
-                trace_id, trace_output = self._capture_decode_trace(self.decode_trace_tensors)
+                compile_time = self.warmup_decode(hidden_states, page_table=effective_page_table)
+                hidden_states = self.model.text_model.embed_tokens(token_id_ttnn)
+                trace_id, trace_output = self._capture_decode_trace(
+                    self.decode_trace_tensors, hidden_states, page_table=effective_page_table
+                )
                 self.decode_trace_id = trace_id
                 self.decode_trace_output = trace_output
 
@@ -2047,7 +2151,7 @@ class Molmo2Generator:
             decode_time = (time.perf_counter() - start_time) * 1000
         else:
             if is_first:
-                compile_time = self.warmup_decode(hidden_states, None, use_trace=False, page_table=effective_page_table)
+                compile_time = self.warmup_decode(hidden_states, page_table=effective_page_table)
 
             start_time = time.perf_counter()
             logits = self.model.text_model.forward_decode(
@@ -2062,66 +2166,47 @@ class Molmo2Generator:
 
         ttnn.deallocate(hidden_states)
 
-        # Apply repetition penalty if enabled (CPU-based for correctness)
-        if self.repetition_penalty != 1.0:
-            # Move logits to CPU, apply penalty, then do argmax on CPU
-            mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-            logits_torch = ttnn.to_torch(logits, mesh_composer=mesh_composer)[0]
+        # Greedy token: always torch.argmax on CPU from concatenated mesh logits (matches HF; ttnn.argmax can disagree).
+        mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+        logits_torch = ttnn.to_torch(logits, mesh_composer=mesh_composer)[0]
+        if logits_torch.dim() == 4:
+            logits_vec = logits_torch[0, 0, 0, :].clone()
+        elif logits_torch.dim() == 3:
+            logits_vec = logits_torch[0, 0, :].clone()
+        else:
+            logits_vec = logits_torch[0].flatten()
 
-            # Apply repetition penalty to previously generated tokens
+        if self.repetition_penalty != 1.0:
             num_penalized = len(self.generated_token_ids)
             for token_id in self.generated_token_ids:
-                if logits_torch.dim() == 4:  # [1, 1, batch, vocab]
-                    for b in range(logits_torch.shape[2]):
-                        if logits_torch[0, 0, b, token_id] > 0:
-                            logits_torch[0, 0, b, token_id] /= self.repetition_penalty
-                        else:
-                            logits_torch[0, 0, b, token_id] *= self.repetition_penalty
-                elif logits_torch.dim() == 3:  # [1, batch, vocab]
-                    for b in range(logits_torch.shape[1]):
-                        if logits_torch[0, b, token_id] > 0:
-                            logits_torch[0, b, token_id] /= self.repetition_penalty
-                        else:
-                            logits_torch[0, b, token_id] *= self.repetition_penalty
+                if logits_vec[token_id] > 0:
+                    logits_vec[token_id] /= self.repetition_penalty
+                else:
+                    logits_vec[token_id] *= self.repetition_penalty
 
-            # CPU argmax
-            if logits_torch.dim() == 4:
-                next_token = logits_torch[0, 0, 0, :].argmax().item()
-            else:
-                next_token = logits_torch[0, 0, :].argmax().item()
+        next_token = logits_vec.argmax().item()
 
-            # Track generated token
+        if self.repetition_penalty != 1.0:
             self.generated_token_ids.add(next_token)
             if len(self.generated_token_ids) <= 5 or len(self.generated_token_ids) % 10 == 0:
                 logger.debug(f"Repetition penalty: penalized {num_penalized} tokens, selected token {next_token}")
 
-            # Create token tensor on device
-            token_batch = torch.tensor([[next_token] * self.batch_size], dtype=torch.long)
-            tt_next_token = ttnn.from_torch(
-                token_batch,
-                device=self.mesh_device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=self.mesh_mapper,
-            )
-        else:
-            # On-device argmax (no CPU logits transfer)
-            tt_next_token = self._argmax_on_device(logits)
+        token_batch = torch.tensor([[next_token] * self.batch_size], dtype=torch.long)
+        tt_next_token = ttnn.from_torch(
+            token_batch,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.mesh_mapper,
+        )
 
         # DEBUG: Log decode position and logits for first few decodes
         if is_first or self.decode_position % 1000 == 0 or self.decode_position < 5:
             logger.info(f"  DECODE: position={self.decode_position}, is_first={is_first}")
-            # Print logits stats for debugging
-            mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-            debug_logits = ttnn.to_torch(logits, mesh_composer=mesh_composer)[0]
-            if debug_logits.dim() == 4:
-                debug_logits = debug_logits[0, 0, 0, :]
-            elif debug_logits.dim() == 3:
-                debug_logits = debug_logits[0, 0, :]
-            top5_vals, top5_ids = debug_logits.topk(5)
+            top5_vals, top5_ids = logits_vec.topk(5)
             logger.info(
-                f"    DECODE logits stats: mean={debug_logits.mean():.2f}, std={debug_logits.std():.2f}, min={debug_logits.min():.2f}, max={debug_logits.max():.2f}"
+                f"    DECODE logits stats: mean={logits_vec.mean():.2f}, std={logits_vec.std():.2f}, min={logits_vec.min():.2f}, max={logits_vec.max():.2f}"
             )
             logger.info(
                 f"    DECODE top 5: {[(int(tid), float(tv)) for tid, tv in zip(top5_ids.tolist(), top5_vals.tolist())]}"
@@ -2133,21 +2218,6 @@ class Molmo2Generator:
         self.decode_position += 1
 
         return tt_next_token, decode_time
-
-    def _argmax_on_device(self, logits: ttnn.Tensor) -> ttnn.Tensor:
-        """
-        Run argmax on device and return token as [1, batch_size] uint32 tensor.
-
-        Note: ttnn.argmax requires TILE_LAYOUT input -- do NOT untilize first.
-        """
-        # Slice to actual batch size (decode mode outputs padded to TILE_SIZE)
-        # Logits shape: [1, 1, padded_batch, vocab_size] -> [1, 1, batch_size, vocab_size]
-        logits = logits[:, :, : self.batch_size, :]
-        tt_token = ttnn.argmax(logits, dim=-1, keepdim=False)
-        tt_token = ttnn.reshape(tt_token, [1, self.batch_size])
-        if tt_token.dtype != ttnn.uint32:
-            tt_token = ttnn.typecast(tt_token, dtype=ttnn.uint32)
-        return tt_token
 
     def _read_token_from_device(self, tt_token: ttnn.Tensor) -> int:
         """Read first token value from device (tiny transfer for EOS check).
@@ -2203,6 +2273,8 @@ class Molmo2Generator:
         """
         # Check if using HF processor format (has input_ids already)
         has_hf_input_ids = image_inputs is not None and "input_ids" in image_inputs
+        hf_token_type_ids = image_inputs.get("token_type_ids") if has_hf_input_ids else None
+        hf_attention_mask_mm = image_inputs.get("attention_mask") if has_hf_input_ids else None
 
         if has_hf_input_ids:
             # HF processor format: input_ids already tokenized
@@ -2244,6 +2316,8 @@ class Molmo2Generator:
             use_trace=use_trace,
             use_vision_trace=use_vision_trace,
             use_unified_trace=use_unified_trace,
+            token_type_ids=hf_token_type_ids,
+            hf_attention_mask=hf_attention_mask_mm,
         )
 
         # Get first prediction from prefill (one-time CPU argmax is acceptable)
@@ -2434,6 +2508,8 @@ class Molmo2Generator:
             use_unified_trace=use_unified_trace,
             use_data_parallel=use_data_parallel,
             frames_per_device=frames_per_device,
+            token_type_ids=video_inputs.get("token_type_ids"),
+            hf_attention_mask=video_inputs.get("attention_mask"),
         )
 
         vision_total_ms = (time.perf_counter() - vision_start) * 1000
@@ -2516,12 +2592,7 @@ class Molmo2Generator:
             )
             decode_times.append(decode_time)
 
-            # Read token - for repetition penalty we already have it from run_decode_step
-            if self.repetition_penalty != 1.0:
-                # Token was tracked in run_decode_step, get it from the device
-                next_token = self._read_token_from_device(tt_next_token)
-            else:
-                next_token = self._read_token_from_device(tt_next_token)
+            next_token = self._read_token_from_device(tt_next_token)
             generated_tokens.append(next_token)
 
             if (i + 1) % 10 == 0:
@@ -2608,6 +2679,8 @@ class Molmo2Generator:
 
             # Check if using HF processor format (has input_ids already)
             has_hf_input_ids = image_inputs is not None and "input_ids" in image_inputs
+            hf_token_type_ids = image_inputs.get("token_type_ids") if has_hf_input_ids else None
+            hf_attention_mask_mm = image_inputs.get("attention_mask") if has_hf_input_ids else None
 
             if has_hf_input_ids:
                 # HF processor format: input_ids already tokenized with visual tokens
@@ -2641,6 +2714,8 @@ class Molmo2Generator:
                 use_vision_trace=use_vision_trace,
                 use_unified_trace=False,  # Batched mode doesn't support unified trace
                 user_id=user_id,
+                token_type_ids=hf_token_type_ids,
+                hf_attention_mask=hf_attention_mask_mm,
             )
 
             # Get first token from prefill logits
@@ -2760,7 +2835,7 @@ def run_video_demo(
     num_devices: int = 8,
     use_data_parallel: bool = False,
     frames_per_device: int = 8,
-    repetition_penalty: float = 1.1,
+    repetition_penalty: float = 1.0,
 ):
     """
     Run the Molmo2 demo with video input.
@@ -2883,7 +2958,7 @@ def run_demo(
     use_paged_attention: bool = False,
     batch_size: int = 1,
     num_devices: int = 8,
-    repetition_penalty: float = 1.1,
+    repetition_penalty: float = 1.0,
 ):
     """
     Run the Molmo2 demo.
@@ -3191,7 +3266,9 @@ def main():
         "--video",
         type=str,
         default=None,
-        help="Path or URL to input video (.mp4, .webm) for video inference",
+        help="Path or URL to input video (.mp4, .webm). Video mode always uses paged "
+        "attention internally; pass --paged-attention to acknowledge / quiet the info log. "
+        "Use with --use-decode-trace for the throughput decode path (also default for video).",
     )
     parser.add_argument(
         "--prompt",
@@ -3237,18 +3314,23 @@ def main():
     )
     parser.add_argument(
         "--use-trace",
-        action="store_true",
-        help="Enable tracing for prefill (improved compilation)",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Prefill (text) trace: video defaults to ON (may be auto-disabled when "
+        "multimodal token_type_ids are present). Image/text/batched default OFF unless set.",
     )
     parser.add_argument(
         "--use-decode-trace",
-        action="store_true",
-        help="Enable tracing for decode (experimental - may cause memory corruption)",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Decode trace: video defaults to ON (~30+ tok/s). Use --no-use-decode-trace for debug / HF-like greedy without trace. Image/text default OFF unless --use-decode-trace.",
     )
     parser.add_argument(
         "--use-vision-trace",
-        action="store_true",
-        help="Enable tracing for vision backbone (ViT + pooling)",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Vision backbone (ViT + pooling) trace: video defaults to ON. "
+        "Image/text/batched default OFF unless set.",
     )
     parser.add_argument(
         "--use-unified-trace",
@@ -3264,7 +3346,8 @@ def main():
     parser.add_argument(
         "--paged-attention",
         action="store_true",
-        help="Enable paged attention (for testing vLLM compatibility)",
+        help="Video: optional — paged attention is always on for video; set this for explicit "
+        "CLI parity with harness / to skip the auto-enable info line.",
     )
     parser.add_argument(
         "--batch-size",
@@ -3292,11 +3375,25 @@ def main():
     parser.add_argument(
         "--repetition-penalty",
         type=float,
-        default=1.1,
-        help="Repetition penalty to prevent degenerate looping (default: 1.1, use 1.0 to disable)",
+        default=1.0,
+        help=">1.0 down-weights repeated tokens (HF greedy uses 1.0). Values like 1.1 can garble short multiple-choice answers.",
     )
 
     args = parser.parse_args()
+
+    # Decode trace: video defaults ON (throughput); image/text/batched default OFF unless --use-decode-trace.
+    # Use --no-use-decode-trace on video for debug when trace logits look wrong.
+    _dt = args.use_decode_trace
+    decode_trace_video = True if _dt is None else _dt
+    decode_trace_image_text = False if _dt is None else _dt
+
+    # Prefill + vision trace: video defaults ON; image/text/batched default OFF unless explicitly set.
+    _ut = args.use_trace
+    _vt = args.use_vision_trace
+    trace_prefill_video = True if _ut is None else _ut
+    trace_vision_video = True if _vt is None else _vt
+    trace_prefill_image_text = False if _ut is None else _ut
+    trace_vision_image_text = False if _vt is None else _vt
 
     if args.input_file is not None:
         # Batched inference with multiple prompts
@@ -3307,9 +3404,9 @@ def main():
             device_id=args.device,
             num_layers=args.num_layers,
             max_seq_len=max_seq_len,
-            use_trace=args.use_trace,
-            use_decode_trace=args.use_decode_trace,
-            use_vision_trace=args.use_vision_trace,
+            use_trace=trace_prefill_image_text,
+            use_decode_trace=decode_trace_image_text,
+            use_vision_trace=trace_vision_image_text,
             batch_size=args.batch_size,
             num_devices=args.num_devices,
         )
@@ -3326,11 +3423,24 @@ def main():
         # - decode_trace: Required for good decode throughput (30+ tok/s)
         # - data_parallel: Always use DP=8 (handled in embed_image routing)
         use_paged_attention_video = True
-        use_decode_trace_video = True
+        use_decode_trace_video = decode_trace_video
         if not args.paged_attention:
             logger.info("Video: Auto-enabling paged attention (required for long sequences)")
-        if not args.use_decode_trace:
-            logger.info("Video: Auto-enabling decode trace (for 30+ tok/s throughput)")
+        if use_decode_trace_video:
+            logger.info("Video: decode trace ON (default; ~30+ tok/s). For debug without trace: --no-use-decode-trace")
+        else:
+            logger.info("Video: decode trace OFF (debug / correct-greedy path; slower decode)")
+        if trace_prefill_video:
+            logger.info(
+                "Video: prefill trace ON by default (auto-disabled if multimodal token_type_ids; see run_prefill). "
+                "Opt out: --no-use-trace"
+            )
+        else:
+            logger.info("Video: prefill trace OFF (--no-use-trace)")
+        if trace_vision_video:
+            logger.info("Video: vision trace ON by default. Opt out: --no-use-vision-trace")
+        else:
+            logger.info("Video: vision trace OFF (--no-use-vision-trace)")
 
         run_video_demo(
             video_path=args.video,
@@ -3341,9 +3451,9 @@ def main():
             max_seq_len=max_seq_len,
             max_frames=args.max_video_frames,
             max_fps=args.max_video_fps,
-            use_trace=args.use_trace,
+            use_trace=trace_prefill_video,
             use_decode_trace=use_decode_trace_video,
-            use_vision_trace=args.use_vision_trace,
+            use_vision_trace=trace_vision_video,
             use_unified_trace=args.use_unified_trace,
             use_paged_attention=use_paged_attention_video,
             batch_size=args.batch_size,
@@ -3375,9 +3485,9 @@ def main():
             device_id=args.device,
             num_layers=args.num_layers,
             max_seq_len=max_seq_len,
-            use_trace=args.use_trace,
-            use_decode_trace=args.use_decode_trace,
-            use_vision_trace=args.use_vision_trace,
+            use_trace=trace_prefill_image_text,
+            use_decode_trace=decode_trace_image_text,
+            use_vision_trace=trace_vision_image_text,
             use_unified_trace=args.use_unified_trace,
             use_paged_attention=args.paged_attention,
             batch_size=args.batch_size,

@@ -145,7 +145,7 @@ class ImageProjector(LightweightModule):
             packer_l1_acc=True,
         )
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, trace_capture: bool = False) -> ttnn.Tensor:
         """
         Forward pass through SwiGLU projector.
 
@@ -159,6 +159,9 @@ class ImageProjector(LightweightModule):
 
         Returns:
             Output tensor of shape [1, 1, num_tokens, output_dim]
+
+        Args:
+            trace_capture: If True, skip host reads for debug stats (required during ttnn trace capture).
         """
         from loguru import logger
 
@@ -167,12 +170,13 @@ class ImageProjector(LightweightModule):
             try:
                 t = ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))[0]
                 return f"{name}: shape={list(t.shape)}, mean={t.mean():.4f}, std={t.std():.4f}, min={t.min():.4f}, max={t.max():.4f}"
-            except:
+            except Exception:
                 return f"{name}: stats unavailable"
 
         seq_len = x.shape[-2]
         logger.debug(f"ImageProjector input: shape={list(x.shape)}")
-        logger.debug(_get_stats(x, "input"))
+        if not trace_capture:
+            logger.debug(_get_stats(x, "input"))
 
         # Reshape for long sequences (only when divisible)
         if seq_len > 1024 and seq_len % 1024 == 0:
@@ -185,9 +189,11 @@ class ImageProjector(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        logger.debug(_get_stats(gate, "gate (w1(x))"))
+        if not trace_capture:
+            logger.debug(_get_stats(gate, "gate (w1(x))"))
         gate = ttnn.silu(gate)
-        logger.debug(_get_stats(gate, "gate (silu(w1(x)))"))
+        if not trace_capture:
+            logger.debug(_get_stats(gate, "gate (silu(w1(x)))"))
 
         # w3 (up projection) - column-parallel
         up = ttnn.linear(
@@ -196,16 +202,19 @@ class ImageProjector(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        logger.debug(_get_stats(up, "up (w3(x))"))
+        if not trace_capture:
+            logger.debug(_get_stats(up, "up (w3(x))"))
 
         # Check weight stats
-        logger.debug(_get_stats(self.w1_weight, "w1_weight"))
-        logger.debug(_get_stats(self.w3_weight, "w3_weight"))
+        if not trace_capture:
+            logger.debug(_get_stats(self.w1_weight, "w1_weight"))
+            logger.debug(_get_stats(self.w3_weight, "w3_weight"))
 
         # Element-wise multiply: silu(w1(x)) * w3(x)
         # Both gate and up are local intermediate dims, so multiply is local
         hidden = ttnn.mul(gate, up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        logger.debug(_get_stats(hidden, "hidden (gate*up)"))
+        if not trace_capture:
+            logger.debug(_get_stats(hidden, "hidden (gate*up)"))
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
 
@@ -216,7 +225,8 @@ class ImageProjector(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        logger.debug(_get_stats(output, "output (w2(hidden)) BEFORE all_reduce"))
+        if not trace_capture:
+            logger.debug(_get_stats(output, "output (w2(hidden)) BEFORE all_reduce"))
         ttnn.deallocate(hidden)
 
         # TP=8: All-reduce to combine partial results from all devices
@@ -227,11 +237,13 @@ class ImageProjector(LightweightModule):
                 num_links=1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            logger.debug(_get_stats(output, "output AFTER all_reduce"))
+            if not trace_capture:
+                logger.debug(_get_stats(output, "output AFTER all_reduce"))
 
         # Reshape back if needed
         if seq_len > 1024 and seq_len % 1024 == 0:
             output = ttnn.reshape(output, [1, 1, seq_len, -1])
 
-        logger.debug(_get_stats(output, "final output"))
+        if not trace_capture:
+            logger.debug(_get_stats(output, "final output"))
         return output

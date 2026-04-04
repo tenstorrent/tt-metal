@@ -22,8 +22,9 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.molmo2.tt.prefill_attention_mask import build_molmo2_prefill_attention_bias
 from models.demos.molmo2.tt.text_model import TextModel
-from models.demos.molmo2.tt.vision_backbone import VisionBackbone
+from models.demos.molmo2.tt.vision_backbone import MAX_FRAMES_FOR_SINGLE_POOL, VisionBackbone
 
 
 class Molmo2Model(LightweightModule):
@@ -63,7 +64,7 @@ class Molmo2Model(LightweightModule):
         max_seq_len: int = 8192,
         max_batch_size: int = 1,
         rope_theta: float = 1000000.0,
-        rms_norm_eps: float = 1e-5,
+        rms_norm_eps: float = 1e-6,
         # Common config
         layer_norm_eps: float = 1e-6,
         weight_cache_path=None,
@@ -386,9 +387,7 @@ class Molmo2Model(LightweightModule):
         valid_token = torch.any(valid, dim=-1)  # [batch_size, N_out]
 
         # Threshold for using chunked pooling (based on memory analysis)
-        max_frames_for_single_pool = 64  # Increased from 32 - chunked pooling has scale bug
-
-        if batch_size <= max_frames_for_single_pool:
+        if batch_size <= MAX_FRAMES_FOR_SINGLE_POOL:
             # Small video: use single pooling pass
             logger.debug(f"  Stage 2: Single-pass pooling on {batch_size} frames")
 
@@ -628,10 +627,9 @@ class Molmo2Model(LightweightModule):
         valid = pooled_patches_idx >= 0
         valid_token = torch.any(valid, dim=-1)
 
-        max_frames_for_single_pool = 32  # Restored
         batch_size = total_frames
 
-        if batch_size <= max_frames_for_single_pool:
+        if batch_size <= MAX_FRAMES_FOR_SINGLE_POOL:
             logger.debug(f"  Stage 2: Single-pass pooling on {batch_size} frames")
 
             clipped_idx = torch.clip(pooled_patches_idx, min=0)
@@ -896,9 +894,10 @@ class Molmo2Model(LightweightModule):
         pixel_values: Optional[torch.Tensor] = None,
         pooled_patches_idx: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
+        token_type_ids: Optional[torch.Tensor] = None,
         kv_caches: Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]] = None,
         start_pos: int = 0,
-        page_table: Optional[ttnn.Tensor] = None,
+        page_table: Optional[torch.Tensor] = None,
     ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]]]:
         """
         Forward pass through the full Molmo2 model.
@@ -907,7 +906,8 @@ class Molmo2Model(LightweightModule):
             input_ids: Token IDs [batch, seq_len]
             pixel_values: Optional image tensor for visual input
             pooled_patches_idx: Optional patch indices for pooling
-            attention_mask: Optional attention mask
+            attention_mask: Optional HF padding mask ``[batch, seq_len]`` (1 = valid)
+            token_type_ids: Optional HF multimodal token types ``[batch, seq_len]`` (non-zero = image/mm)
             kv_caches: Optional KV cache for incremental decoding
             start_pos: Starting position for KV cache
             page_table: Optional page table for paged attention (vLLM)
@@ -936,14 +936,32 @@ class Molmo2Model(LightweightModule):
             hidden_states_ttnn = self.text_model.embed_tokens(input_ids_ttnn)
             ttnn.deallocate(input_ids_ttnn)
 
+        seq_len_hs = hidden_states_ttnn.shape[-2]
+        attn_mask_ttnn = None
+        if token_type_ids is not None and seq_len_hs > 1:
+            bias = build_molmo2_prefill_attention_bias(token_type_ids, attention_mask=attention_mask).to(torch.bfloat16)
+            is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
+            mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
+            attn_mask_ttnn = ttnn.from_torch(
+                bias,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
+
         # Forward through text model (handles both prefill and decode via KV cache)
         logits, new_kv_caches = self.text_model(
             hidden_states=hidden_states_ttnn,
             start_pos=start_pos,
-            attn_mask=None,
+            attn_mask=attn_mask_ttnn,
             kv_caches=kv_caches,
             page_table=page_table,
         )
+
+        if attn_mask_ttnn is not None:
+            ttnn.deallocate(attn_mask_ttnn)
 
         return logits, new_kv_caches
 
@@ -957,6 +975,8 @@ class Molmo2Model(LightweightModule):
         top_k: int = 50,
         top_p: float = 0.9,
         do_sample: bool = True,
+        attention_mask: Optional[torch.Tensor] = None,
+        token_type_ids: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Generate text autoregressively.
@@ -965,6 +985,8 @@ class Molmo2Model(LightweightModule):
             input_ids: Initial token IDs [batch, seq_len]
             pixel_values: Optional image input
             pooled_patches_idx: Optional patch indices
+            attention_mask: Optional HF padding mask for prefill
+            token_type_ids: Optional HF multimodal token types for prefill (bidirectional image blocks)
             max_new_tokens: Maximum tokens to generate
             temperature: Sampling temperature
             top_k: Top-k sampling parameter
@@ -982,6 +1004,8 @@ class Molmo2Model(LightweightModule):
             input_ids=input_ids,
             pixel_values=pixel_values,
             pooled_patches_idx=pooled_patches_idx,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
         )
 
         # Get next token

@@ -9,13 +9,35 @@
 - **Batched Demo (parallel):** `python models/demos/molmo2/demo/demo.py --input-file models/demos/molmo2/demo/sample_prompts/multi_prompts.json --batch-size 4 --use-decode-trace`
 - **Server:** `cd tt-inference-server && python run.py --model Molmo2-8B --workflow server --tt-device t3k --local-server`
 
-## Current Status (2026-04-03)
+## Current Status (2026-04-04)
 
-**Projector Scale Fix:** FIXED via `_normalize_for_projector()` in vision_backbone.py
-- Root cause: Molmo2 ViT uses large LayerNorm gamma (up to 18x) → pooled features with outliers ±40
-- SwiGLU projector computes gate*up → quadratic explosion (±40 * ±40 = ±1600)
-- Fix: Normalize to unit variance AND clip outliers to ±3 before projection
-- Result: Coherent output for images and videos
+**HF parity workstreams (see `.cursor/plans/molmo2_video_hf_parity_*.plan.md` if present):**
+
+1. **Bidirectional attention for image tokens** — `token_type_ids` from HF processor + additive prefill mask (`tt/prefill_attention_mask.py`); wired through `molmo2_model.forward` and `demo.run_prefill`. Prefill traces are disabled when this mask is used.
+2. **Pooling** — Masked mean query, pooling attention mask, unified `MAX_FRAMES_FOR_SINGLE_POOL`; chunked path no longer applies global norm+clamp before the projector.
+3. **Text RMSNorm** — `rms_norm_eps=1e-6` aligned with HF; Q/K RMSNorm uses block epsilon from `TextAttention`.
+4. **ViT MLP** — `activation="gelu"` in TTNN documented as matching HF `gelu_pytorch_tanh` for this model; re-validate with PCC if logits drift.
+
+**Residual / verification:** Run `pytest models/demos/molmo2/tests/test_prefill_attention_mask.py` and `pytest models/demos/molmo2/tests/test_hf_verification_harness.py` (includes `test_jsonl_rows_align_with_test_results`: each `test_results.jsonl` row matches the same index in `test.jsonl`). HF greedy vs recorded text for test 0: put the eval `.mp4` (hash from URL) under the repo root or `verification/videos/`, then `MOLMO2_VERIFY_HF_JSONL=1 pytest ...`. Full TTNN vs HF parity on device: `MOLMO2_RUN_HW_PARITY=1`. If a recorded result disagrees with a fresh HF run, update artifacts per HF.
+
+## Memory and long-sequence knobs
+
+- **ViT:** `total_patches ≈ frames × 729` per video; data-parallel paths split frames across devices, but pooling may still need the full pooled sequence for global indices.
+- **Pooling:** Large `frames × n_out` increases peak memory; chunked pooling trades extra passes for lower peak — tune `max_frames_per_pool_chunk` in chunked pool paths if OOM.
+- **Text prefill:** Sequence length grows with image/video tokens; the demo uses chunked prefill (`demo.py` `_run_chunked_prefill`) with paged attention when over `max_prefill_chunk_size`. **Chunked prefill does not apply the multimodal `token_type_ids` mask** — long sequences with that mask use full prefill (higher memory).
+- **OOM:** Reduce `VIDEO_MAX_FRAMES`, resolution, or chunk sizes; truncating inputs has no silent correctness guarantee.
+
+## In-repo TTNN references (before inventing new patterns)
+
+| Area | Path |
+|------|------|
+| Multimodal / VLM patterns | `models/demos/qwen3_vl/` |
+| ViT / bidirectional SDPA | `models/demos/vision/classification/vit/` |
+| Cross-attention / pooling | `models/tt_transformers/tt/multimodal/llama_cross_attention.py` |
+
+## TTNN API audit (SDPA and friends)
+
+Canonical parameter docs: `ttnn/cpp/ttnn/operations/transformer/sdpa/sdpa_nanobind.cpp`. Prefill SDPA tests: `tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py`. When changing `scaled_dot_product_attention` or chunked SDPA, re-check docstrings and those tests against `text_attention.py` / `vision_attention.py` call sites.
 
 ## Previous Status (2026-03-30)
 
@@ -93,6 +115,6 @@ tt-smi -r
 
 ## Constraints
 
-- Do NOT use HuggingFace for vision processing (must stay fully in TTNN)
+- **Inference:** ViT, pooling, projector, and text transformer run on TTNN. HuggingFace is used for **preprocessing only** (processor outputs: `input_ids`, pixels, pooling indices, masks, `token_type_ids`).
 - Must work with vLLM's paged attention
 - PCC > 0.99 required for all TTNN blocks

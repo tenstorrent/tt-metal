@@ -1,11 +1,20 @@
 """
 HuggingFace processor wrapper for Molmo2.
 
-Uses the official Molmo2Processor from HuggingFace for correct preprocessing:
-- Image: pooling_size [2,2] -> k_pool=4
-- Video: pooling_size [3,3] -> k_pool=9
+Loads ``AutoProcessor.from_pretrained("allenai/Molmo2-8B", trust_remote_code=True)``.
+Image and video preprocessing use the HF remote implementations and **their defaults**:
 
-Converts HF outputs to format expected by our TTNN model.
+- Video: `video_processing_molmo2.Molmo2VideoProcessor`
+  (see https://huggingface.co/allenai/Molmo2-8B/blob/main/video_processing_molmo2.py )
+- Image: `image_processing_molmo2.Molmo2ImageProcessor`
+  (see https://huggingface.co/allenai/Molmo2-8B/blob/main/image_processing_molmo2.py )
+
+Calls use only ``return_tensors`` plus ``text`` and ``images`` or ``videos``. No extra
+flags (e.g. ``return_metadata``, ``return_mm_token_type_ids``): HF defaults apply.
+The only video override from this module is optional ``num_frames`` (caps sampled frames
+for tests / memory); all other video/image kwargs stay at HF defaults.
+
+Converts HF outputs to tensors expected by our TTNN model.
 """
 
 from typing import Optional
@@ -115,10 +124,13 @@ def preprocess_text(text: str, apply_template: bool = True) -> dict:
 
     result = processor(text=prompt, return_tensors="pt")
 
-    return {
+    out = {
         "input_ids": result["input_ids"],
         "attention_mask": result["attention_mask"],
     }
+    if "token_type_ids" in result:
+        out["token_type_ids"] = result["token_type_ids"].long()
+    return out
 
 
 def preprocess_image(image_path: str, prompt: str, apply_template: bool = True) -> dict:
@@ -169,7 +181,7 @@ def preprocess_image(image_path: str, prompt: str, apply_template: bool = True) 
     valid_mask = (result["image_token_pooling"] >= 0).astype(np.float32)
     valid_mask_flat = valid_mask.flatten()
 
-    return {
+    out = {
         "input_ids": torch.from_numpy(result["input_ids"]),
         "attention_mask": torch.from_numpy(result["attention_mask"]),
         "pixel_values": pixel_values,
@@ -181,6 +193,9 @@ def preprocess_image(image_path: str, prompt: str, apply_template: bool = True) 
         "n_tokens": n_tokens,
         "k_pool": k_pool,
     }
+    if "token_type_ids" in result:
+        out["token_type_ids"] = torch.from_numpy(np.array(result["token_type_ids"])).long()
+    return out
 
 
 def preprocess_video(
@@ -195,7 +210,7 @@ def preprocess_video(
     Args:
         video_path: Path to video file
         prompt: Text prompt (should contain <|video|>)
-        num_frames: Maximum frames to extract (default: HF default 384)
+        num_frames: Passed to HF as ``num_frames`` when set; otherwise HF default.
         apply_template: Whether to apply chat template (default True)
 
     Returns:
@@ -219,12 +234,11 @@ def preprocess_video(
     # Apply chat template if requested
     text = apply_chat_template(prompt) if apply_template else prompt
 
-    # Build kwargs
-    kwargs = {"return_tensors": "np", "return_metadata": True}
+    call_kwargs = dict(text=text, videos=video_path, return_tensors="np")
     if num_frames is not None:
-        kwargs["num_frames"] = num_frames
+        call_kwargs["num_frames"] = num_frames
 
-    result = processor(text=text, videos=video_path, **kwargs)
+    result = processor(**call_kwargs)
 
     # Convert pixel_values from HF patch format to image format
     pixel_values = hf_patches_to_images(result["pixel_values_videos"])
@@ -254,7 +268,7 @@ def preprocess_video(
     else:
         timestamps = np.arange(n_frames) / 2.0  # Default 2 fps
 
-    return {
+    out = {
         "input_ids": torch.from_numpy(result["input_ids"]),
         "attention_mask": torch.from_numpy(result["attention_mask"]),
         "pixel_values": pixel_values,
@@ -269,3 +283,6 @@ def preprocess_video(
         "k_pool": k_pool,
         "timestamps": timestamps,
     }
+    if "token_type_ids" in result:
+        out["token_type_ids"] = torch.from_numpy(np.array(result["token_type_ids"])).long()
+    return out

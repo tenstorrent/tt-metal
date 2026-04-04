@@ -16,6 +16,10 @@ from typing import Optional
 
 from loguru import logger
 
+from models.demos.molmo2.tests.verification_jsonl import extract_prompt_video_max, find_local_video_for_url
+from models.demos.molmo2.tt.hf_processor import preprocess_video
+from models.demos.molmo2.tt.utils import VIDEO_PROMPT
+
 # Default paths
 SCRIPT_DIR = Path(__file__).parent
 MOLMO_DIR = SCRIPT_DIR.parent
@@ -48,6 +52,23 @@ def download_video(url: str, cache_dir: Path) -> str:
     except Exception as e:
         raise RuntimeError(f"Failed to download {url}: {e}")
     return str(local_path)
+
+
+def resolve_video_local_path(url: str, cache_path: Path, skip_download: bool) -> Optional[str]:
+    """Prefer repo-local copy (hash name), else cache path, else download."""
+    local = find_local_video_for_url(url)
+    if local is not None and local.is_file():
+        return str(local)
+    if skip_download:
+        url_path = url.split("?")[0]
+        filename = url_path.rstrip("/").split("/")[-1] or "video.mp4"
+        p = cache_path / filename
+        return str(p) if p.is_file() else None
+    try:
+        return download_video(url, cache_path)
+    except Exception as e:
+        logger.warning(f"Could not resolve video for {url}: {e}")
+        return None
 
 
 def extract_question_and_choices(text: str) -> tuple[str, list[str]]:
@@ -89,13 +110,14 @@ def run_eval(
     max_new_tokens: int = 16,
     max_seq_len: int = 16384,
     max_frames: int = 8,
-    max_fps: float = 2.0,
     num_layers: Optional[int] = None,
     use_trace: bool = False,
     use_decode_trace: bool = False,
     use_vision_trace: bool = False,
     use_unified_trace: bool = False,
     skip_download: bool = False,
+    exact_jsonl: bool = True,
+    unique_video_urls_only: bool = False,
 ):
     """
     Run batch video evaluation.
@@ -104,33 +126,30 @@ def run_eval(
         test_jsonl: Path to test.jsonl file
         cache_dir: Directory to cache downloaded videos
         num_samples: Number of samples to evaluate (None = all)
-        max_new_tokens: Max tokens to generate per sample
+        max_new_tokens: Max tokens per sample when ``unique_video_urls_only`` is True;
+            ignored in exact JSONL mode (each row's ``max_tokens`` is used).
         max_seq_len: KV cache sequence length (16384 for video)
-        max_frames: Max frames to extract per video
-        max_fps: Max FPS for frame sampling
+        max_frames: Max frames passed to HF ``preprocess_video`` (``num_frames``).
+            Other sampling options use HF ``Molmo2VideoProcessor`` defaults.
         num_layers: Number of model layers (None = 36)
         use_trace: Enable prefill tracing
         use_decode_trace: Enable decode tracing
         use_vision_trace: Enable vision backbone tracing
         use_unified_trace: Enable unified Vision+Prefill trace
         skip_download: Skip downloading videos (assume they are already cached)
+        exact_jsonl: If True (default), one run per JSONL line with that row's
+            prompt and ``max_tokens`` (matches ``verification/test.jsonl`` harness).
+        unique_video_urls_only: If True, one run per unique video URL and global
+            ``max_new_tokens`` (legacy / faster smoke path).
     """
     import ttnn
 
     # Import demo functions here to avoid circular imports
-    from models.demos.molmo2.demo.demo import (
-        VIDEO_PROMPT,
-        Molmo2Generator,
-        create_model,
-        load_model_weights,
-        load_processor,
-        preprocess_video_molmo2,
-    )
+    from models.demos.molmo2.demo.demo import Molmo2Generator, create_model, load_model_weights, load_processor
 
     cache_path = Path(cache_dir)
     test_path = Path(test_jsonl)
 
-    # Load test entries
     with open(test_path) as f:
         entries = [json.loads(line) for line in f if line.strip()]
 
@@ -139,42 +158,74 @@ def run_eval(
 
     logger.info(f"Loaded {len(entries)} test entries from {test_path}")
 
-    # Extract unique video URLs (entries may repeat the same video)
-    seen_urls = set()
-    unique_entries = []
-    for entry in entries:
-        msg = entry["messages"][0]
-        url = None
-        text = None
-        for part in msg["content"]:
-            if part["type"] == "text":
-                text = part["text"]
-            elif part["type"] == "video_url":
-                url = part["video_url"]["url"]
-        if url and url not in seen_urls:
-            seen_urls.add(url)
-            unique_entries.append({"url": url, "text": text, "entry": entry})
+    if unique_video_urls_only:
+        exact_jsonl = False
 
-    logger.info(f"Unique videos: {len(unique_entries)}")
+    url_to_local: dict[str, str] = {}
 
-    # Download all videos first (unless skip_download)
-    if not skip_download:
-        logger.info("Downloading videos...")
-        for item in unique_entries:
+    def get_or_resolve_local(video_url: str) -> Optional[str]:
+        if video_url in url_to_local:
+            return url_to_local[video_url]
+        lp = resolve_video_local_path(video_url, cache_path, skip_download)
+        if lp and Path(lp).exists():
+            url_to_local[video_url] = lp
+            return lp
+        return None
+
+    runnable = []
+
+    if exact_jsonl:
+        logger.info("Mode: exact test.jsonl (one run per line, per-row max_tokens)")
+        for line_idx, entry in enumerate(entries):
             try:
-                item["local_path"] = download_video(item["url"], cache_path)
-            except Exception as e:
-                logger.warning(f"Skipping {item['url']}: {e}")
-                item["local_path"] = None
+                prompt_text, video_url, row_max_tokens = extract_prompt_video_max(entry)
+            except (ValueError, KeyError) as e:
+                logger.warning(f"Skipping line {line_idx}: {e}")
+                continue
+            local_path = get_or_resolve_local(video_url)
+            if not local_path:
+                logger.warning(f"Skipping line {line_idx}: no local file for {video_url}")
+                continue
+            runnable.append(
+                {
+                    "line_idx": line_idx,
+                    "prompt_text": prompt_text,
+                    "url": video_url,
+                    "max_new_tokens": row_max_tokens,
+                    "local_path": local_path,
+                }
+            )
     else:
-        for item in unique_entries:
-            url_path = item["url"].split("?")[0]
-            filename = url_path.rstrip("/").split("/")[-1]
-            item["local_path"] = str(cache_path / filename)
+        logger.info("Mode: unique video URLs only (global --max-tokens)")
+        seen_urls = set()
+        for line_idx, entry in enumerate(entries):
+            msg = entry["messages"][0]
+            url = None
+            text = None
+            for part in msg["content"]:
+                if part["type"] == "text":
+                    text = part["text"]
+                elif part["type"] == "video_url":
+                    url = part["video_url"]["url"]
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                local_path = get_or_resolve_local(url)
+                if not local_path:
+                    logger.warning(f"Skipping first row for {url}: no local file")
+                    continue
+                runnable.append(
+                    {
+                        "line_idx": line_idx,
+                        "prompt_text": text,
+                        "url": url,
+                        "max_new_tokens": max_new_tokens,
+                        "local_path": local_path,
+                    }
+                )
 
-    # Filter entries that have local paths
-    runnable = [e for e in unique_entries if e.get("local_path") and Path(e["local_path"]).exists()]
-    logger.info(f"Videos available for inference: {len(runnable)}")
+        logger.info(f"Unique videos with local files: {len(runnable)}")
+
+    logger.info(f"Runs scheduled: {len(runnable)}")
 
     if not runnable:
         logger.error("No videos available. Check cache dir or download them first.")
@@ -217,35 +268,33 @@ def run_eval(
 
         for idx, item in enumerate(runnable):
             video_path = item["local_path"]
-            question_text = item["text"]
+            question_text = item["prompt_text"]
             url = item["url"]
+            row_max_tokens = item["max_new_tokens"]
+            line_idx = item["line_idx"]
 
-            logger.info(f"\n[{idx+1}/{len(runnable)}] {Path(video_path).name}")
+            logger.info(f"\n[{idx+1}/{len(runnable)}] line={line_idx} {Path(video_path).name}")
             logger.info(f"  Question: {question_text[:100]}...")
+            logger.info(f"  max_new_tokens: {row_max_tokens}")
 
             try:
-                # Preprocess video
+                # HF processor: same as demo / verification_jsonl (newline after <|video|>)
+                hf_prompt = f"{VIDEO_PROMPT}\n{question_text}"
                 t0 = time.perf_counter()
-                video_inputs = preprocess_video_molmo2(
+                video_inputs = preprocess_video(
                     video_path,
-                    max_frames=max_frames,
-                    max_fps=max_fps,
+                    hf_prompt,
+                    num_frames=max_frames,
                 )
                 extract_ms = (time.perf_counter() - t0) * 1000
                 n_frames = video_inputs["n_frames"]
 
-                # Build prompt with video token + question
-                prompt = f"{VIDEO_PROMPT} {question_text}"
-
-                # Reset KV cache for new video
                 generator.init_kv_cache()
                 generator.reset_kv_cache(start_pos=0)
 
-                # Run inference
                 response, perf = generator.run_video_inference(
                     video_inputs=video_inputs,
-                    prompt=prompt,
-                    max_new_tokens=max_new_tokens,
+                    max_new_tokens=row_max_tokens,
                     use_trace=use_trace,
                     use_decode_trace=use_decode_trace,
                     use_vision_trace=use_vision_trace,
@@ -255,7 +304,6 @@ def run_eval(
                 predicted = extract_answer_letter(response)
                 _, choices = extract_question_and_choices(question_text)
 
-                # Accumulate metrics
                 total_frames += n_frames
                 total_vision_ms += perf["vision_ms"]
                 total_ttft_ms += perf["ttft_ms"]
@@ -265,7 +313,9 @@ def run_eval(
 
                 result = {
                     "idx": idx,
+                    "jsonl_line": line_idx,
                     "url": url,
+                    "max_new_tokens": row_max_tokens,
                     "n_frames": n_frames,
                     "extract_ms": extract_ms,
                     "vision_ms": perf["vision_ms"],
@@ -290,7 +340,14 @@ def run_eval(
 
             except Exception as e:
                 logger.error(f"  ERROR: {e}")
-                results.append({"idx": idx, "url": url, "error": str(e)})
+                results.append(
+                    {
+                        "idx": idx,
+                        "jsonl_line": line_idx,
+                        "url": url,
+                        "error": str(e),
+                    }
+                )
 
         # Aggregate report
         logger.info("\n" + "=" * 70)
@@ -335,13 +392,18 @@ def main():
         "--num-samples",
         type=int,
         default=None,
-        help="Number of samples to evaluate (default: all unique videos)",
+        help="First N JSONL rows to load (default: all rows)",
+    )
+    parser.add_argument(
+        "--unique-video-urls-only",
+        action="store_true",
+        help="One run per unique video URL with global --max-tokens (default: one run per JSONL line, per-row max_tokens).",
     )
     parser.add_argument(
         "--max-tokens",
         type=int,
         default=16,
-        help="Maximum tokens to generate per sample",
+        help="Max tokens when --unique-video-urls-only; ignored in exact per-line mode (uses each row's max_tokens).",
     )
     parser.add_argument(
         "--max-seq-len",
@@ -354,12 +416,6 @@ def main():
         type=int,
         default=8,
         help="Maximum frames to extract per video",
-    )
-    parser.add_argument(
-        "--max-video-fps",
-        type=float,
-        default=2.0,
-        help="Maximum FPS for frame sampling",
     )
     parser.add_argument(
         "--num-layers",
@@ -408,13 +464,14 @@ def main():
         max_new_tokens=args.max_tokens,
         max_seq_len=args.max_seq_len,
         max_frames=args.max_video_frames,
-        max_fps=args.max_video_fps,
         num_layers=args.num_layers,
         use_trace=args.use_trace,
         use_decode_trace=args.use_decode_trace,
         use_vision_trace=args.use_vision_trace,
         use_unified_trace=args.use_unified_trace,
         skip_download=args.skip_download,
+        exact_jsonl=not args.unique_video_urls_only,
+        unique_video_urls_only=args.unique_video_urls_only,
     )
 
     if results and args.output_json:

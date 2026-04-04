@@ -19,6 +19,7 @@ from tqdm import tqdm
 from transformers import BatchFeature
 
 import ttnn
+from models.demos.molmo2.tt.trace_capture_utils import trace_capture_run_begin, trace_capture_run_end
 from vllm.model_executor.models.interfaces import SupportsMultiModal
 from vllm.model_executor.models.molmo import MolmoProcessingInfo, get_patches_grid_size, select_tiling
 from vllm.multimodal import MULTIMODAL_REGISTRY
@@ -2098,8 +2099,8 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             ttnn.deallocate(current_pos_tt)
             ttnn.deallocate(rot_mat_idxs_tt)
 
-            # Execute the captured trace
-            ttnn.execute_trace(self.mesh_device, self.decode_trace_id, cq_id=0, blocking=False)
+            # Execute the captured trace (blocking so logits are complete before read)
+            ttnn.execute_trace(self.mesh_device, self.decode_trace_id, cq_id=0, blocking=True)
 
             # Get output from trace output tensor
             logits_ttnn = self.decode_trace_output
@@ -2792,18 +2793,23 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         ttnn.deallocate(warmup_logits)
         logger.info("Warmup forward pass complete")
 
-        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        tok = trace_capture_run_begin()
+        try:
+            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
 
-        logits_trace, _ = self.model.text_model.forward(
-            hidden_states=trace_tensors["hidden_states"],
-            start_pos=0,
-            attn_mask=None,
-            kv_caches=kv_cache,
-            rot_mats=rot_mats,
-            page_table=page_table,  # Capture with paged attention ops
-        )
+            logits_trace, _ = self.model.text_model.forward(
+                hidden_states=trace_tensors["hidden_states"],
+                start_pos=0,
+                attn_mask=None,
+                kv_caches=kv_cache,
+                rot_mats=rot_mats,
+                page_table=page_table,  # Capture with paged attention ops
+            )
 
-        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        finally:
+            trace_capture_run_end(tok)
+
         logger.info("Text model prefill trace captured with paged attention")
 
         return trace_id, logits_trace
@@ -2868,36 +2874,48 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         if kv_cache is None:
             kv_cache = self.kv_caches
 
-        # CRITICAL: Run a warmup forward pass BEFORE trace capture
-        # This ensures all lazy tensor allocations and weight transfers happen
-        # before we start tracing (writes are not allowed during trace capture)
-        logger.info("Running warmup decode forward pass before trace capture...")
-        warmup_rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode_traced(self.rot_mat_idxs)
-
-        warmup_logits = self.model.text_model.forward_decode(
-            hidden_states=trace_tensors["hidden_states"],
-            kv_caches=kv_cache,
-            current_pos=self.current_pos,
-            rot_mats=warmup_rot_mats,
-            page_table=page_table,  # Compile paged attention ops
-        )
-        ttnn.deallocate(warmup_logits)
-        logger.info("Warmup decode forward pass complete")
-
-        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-
+        # Compile the same graph as capture (rot_mats path) on a scratch buffer. rot_mat_idxs
+        # path is a different graph and does not JIT the traced path. forward_decode deallocates
+        # inputs — never run compile on trace_tensors["hidden_states"]. Avoid allocations/writes
+        # inside begin/end_trace_capture (TT_FATAL: writes not supported during trace capture).
         rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode_traced(self.rot_mat_idxs)
-
-        # Capture trace WITH paged attention - page_table is a trace input tensor
-        logits_trace = self.model.text_model.forward_decode(
-            hidden_states=trace_tensors["hidden_states"],
+        logger.info("Compile warmup: decode forward (rot_mats path, scratch buffer)...")
+        compile_hidden = ttnn.allocate_tensor_on_device(
+            ttnn.Shape(list(trace_tensors["hidden_states"].shape)),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.copy(trace_tensors["hidden_states"], compile_hidden)
+        compile_logits = self.model.text_model.forward_decode(
+            hidden_states=compile_hidden,
             kv_caches=kv_cache,
             current_pos=self.current_pos,
             rot_mats=rot_mats,
-            page_table=page_table,  # Capture with paged attention ops
+            page_table=page_table,
         )
+        ttnn.deallocate(compile_hidden)
+        ttnn.deallocate(compile_logits)
+        logger.info("Decode compile warmup complete")
 
-        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        tok = trace_capture_run_begin()
+        try:
+            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+
+            logits_trace = self.model.text_model.forward_decode(
+                hidden_states=trace_tensors["hidden_states"],
+                kv_caches=kv_cache,
+                current_pos=self.current_pos,
+                rot_mats=rot_mats,
+                page_table=page_table,
+            )
+
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        finally:
+            trace_capture_run_end(tok)
+        # See Molmo2Generator._capture_decode_trace: post-capture allocator hint is OK.
+        ttnn.synchronize_device(self.mesh_device)
         logger.info("Decode trace captured with paged attention support")
 
         return trace_id, logits_trace
@@ -2913,18 +2931,16 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
 
         # Vision trace parameters for standard 378x378 image with 9 crops
         num_patches = 729  # 27x27 patches per crop
-        hidden_dim = 1152  # ViT hidden dimension
         n_out = 169  # 13x13 pooled output per crop
         k_pool = 4  # Pooling factor
         batch_size = 1
 
-        # Allocate vision trace tensors
+        # Vision trace I/O buffers are pre-allocated on VisionBackbone at model init
         vision_trace_tensors = self._allocate_vision_trace_tensors(
-            num_patches=num_patches,
-            hidden_dim=hidden_dim,
+            batch_size=batch_size,
             n_out=n_out,
             k_pool=k_pool,
-            batch_size=batch_size,
+            num_patches=num_patches,
         )
 
         # Capture vision trace
@@ -2939,70 +2955,18 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
 
     def _allocate_vision_trace_tensors(
         self,
-        num_patches: int = 729,
-        hidden_dim: int = 1152,
-        n_out: int = 169,
-        k_pool: int = 4,
-        batch_size: int = 1,
+        batch_size: int,
+        n_out: int,
+        k_pool: int,
+        num_patches: int,
     ) -> dict:
-        """
-        Allocate tensors for vision trace.
-
-        Args:
-            num_patches: Number of patches per crop (default 729 = 27x27)
-            hidden_dim: ViT hidden dimension (default 1152)
-            n_out: Pooled output size per crop (default 169 = 13x13)
-            k_pool: Pooling factor (default 4)
-            batch_size: Batch size (default 1)
-
-        Returns:
-            Dict with allocated trace tensors
-        """
-        # Input: embedded patches
-        trace_embedded = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, batch_size * num_patches, hidden_dim]),
-            ttnn.bfloat16,
-            ttnn.TILE_LAYOUT,
-            self.mesh_device,
-            ttnn.DRAM_MEMORY_CONFIG,
+        """Return slices into vision trace buffers pre-allocated on VisionBackbone at model init."""
+        return self.model.vision_backbone.get_vision_trace_tensors(
+            batch_size=batch_size,
+            n_out=n_out,
+            k_pool=k_pool,
+            num_patches=num_patches,
         )
-
-        # Indices for gathering
-        trace_idx = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, batch_size * n_out * k_pool]),
-            ttnn.uint32,
-            ttnn.ROW_MAJOR_LAYOUT,
-            self.mesh_device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # Valid mask
-        trace_valid_mask = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, batch_size * n_out * k_pool, 1]),
-            ttnn.bfloat16,
-            ttnn.TILE_LAYOUT,
-            self.mesh_device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # Valid token mask
-        trace_valid_token = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([batch_size * n_out]),
-            ttnn.bfloat16,
-            ttnn.ROW_MAJOR_LAYOUT,
-            self.mesh_device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        return {
-            "embedded": trace_embedded,
-            "idx": trace_idx,
-            "valid_mask": trace_valid_mask,
-            "valid_token": trace_valid_token,
-            "n_out": n_out,
-            "k_pool": k_pool,
-            "batch_size": batch_size,
-        }
 
     def _capture_vision_trace(self, trace_tensors: dict) -> Tuple[int, ttnn.Tensor]:
         """
@@ -3032,19 +2996,25 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         ttnn.deallocate(warmup_embeddings)
         logger.info("Warmup vision forward pass complete")
 
-        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        tok = trace_capture_run_begin()
+        try:
+            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
 
-        visual_embeddings = self.model.vision_backbone.forward_ttnn(
-            images_embedded=trace_tensors["embedded"],
-            pooled_patches_idx_ttnn=trace_tensors["idx"],
-            valid_mask_ttnn=trace_tensors["valid_mask"],
-            valid_token_ttnn=trace_tensors["valid_token"],
-            n_out=trace_tensors["n_out"],
-            k_pool=trace_tensors["k_pool"],
-            batch_size=trace_tensors["batch_size"],
-        )
+            visual_embeddings = self.model.vision_backbone.forward_ttnn(
+                images_embedded=trace_tensors["embedded"],
+                pooled_patches_idx_ttnn=trace_tensors["idx"],
+                valid_mask_ttnn=trace_tensors["valid_mask"],
+                valid_token_ttnn=trace_tensors["valid_token"],
+                n_out=trace_tensors["n_out"],
+                k_pool=trace_tensors["k_pool"],
+                batch_size=trace_tensors["batch_size"],
+                trace_capture=True,
+            )
 
-        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        finally:
+            trace_capture_run_end(tok)
+
         logger.info("Vision trace captured")
 
         return trace_id, visual_embeddings

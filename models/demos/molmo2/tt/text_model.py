@@ -47,7 +47,7 @@ class TextModel(LightweightModule):
         max_seq_len: int = 8192,
         max_batch_size: int = 1,
         rope_theta: float = 1000000.0,
-        rms_norm_eps: float = 1e-5,
+        rms_norm_eps: float = 1e-6,
         weight_cache_path=None,
         state_dict_prefix: str = "model.transformer",
         dtype=ttnn.bfloat8_b,

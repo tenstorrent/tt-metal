@@ -10,6 +10,7 @@ The Molmo2 ViT uses standard LayerNorm (not RMSNorm) with both weight and bias.
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.molmo2.tt.trace_capture_utils import safe_tensor_deallocate
 
 TILE = 32
 SHARD_HEIGHT = TILE
@@ -144,7 +145,7 @@ class VisionLayerNorm(LightweightModule):
             if out_sharded:
                 return x
             x_interleaved = ttnn.sharded_to_interleaved(x)
-            x.deallocate(True)
+            safe_tensor_deallocate(x, True)
             return x_interleaved
         else:
             assert not out_sharded, "Non-sharded version of LayerNorm cannot output a sharded tensor"
