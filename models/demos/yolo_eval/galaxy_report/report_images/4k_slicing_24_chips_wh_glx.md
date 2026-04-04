@@ -16,7 +16,7 @@ Sliced Image
 ![Alt text describing the image](tt-metal/models/demos/yolo_eval/Galaxy Report/report images/crowded_freeway_3840x2160_3840x2160_sliced.png)
 
 Full vs Sliced
-![Alt text describing the image](tt-metal/models/demos/yolo_eval/galaxy_report/report_images/4k_full_sliced.png)
+![Alt text describing the image](4k_full_sliced.png)
 
 Batch Size = 32, Data Parallel on WH Galaxy
-![Alt text describing the image](tt-metal/models/demos/yolo_eval/galaxy_report/report_images/4k_table.png)
+![Alt text describing the image](4k_table.png)
