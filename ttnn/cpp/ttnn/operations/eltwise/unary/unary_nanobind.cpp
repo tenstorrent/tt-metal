@@ -1806,6 +1806,8 @@ void py_module(nb::module_& mod) {
         "[supported range -1 to 1]",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
+    bind_unary_operation<"softsign", &ttnn::softsign>(
+        mod, R"doc(\text{softsign}(x) = \frac{x}{1 + |x|})doc", "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     {
         auto doc = fmt::format(
             R"doc(

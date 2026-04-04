@@ -48,6 +48,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/activations.h
     inc/api/compute/eltwise_unary/hardsigmoid.h
     inc/api/compute/eltwise_unary/selu.h
+    inc/api/compute/eltwise_unary/softsign.h
     inc/api/compute/eltwise_unary/sfpu_split_includes.h
     inc/api/compute/ema.h
     inc/api/compute/experimental/mul_reduce_scalar.h

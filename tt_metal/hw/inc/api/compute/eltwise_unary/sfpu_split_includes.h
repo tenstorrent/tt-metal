@@ -27,3 +27,7 @@
 #if SFPU_OP_ATANH_INCLUDE
 #include "api/compute/eltwise_unary/atanh.h"
 #endif
+
+#if SFPU_OP_SOFTSIGN_INCLUDE
+#include "api/compute/eltwise_unary/softsign.h"
+#endif
