@@ -222,6 +222,7 @@ def test_ttnn_dispatch_combine(
     use_predictable_data,
 ):
     """Test end-to-end TTNN dispatch→combine round-trip with host reduction."""
+    torch.manual_seed(42)
 
     num_devices = mesh_device.get_num_devices()
 
@@ -267,7 +268,6 @@ def test_ttnn_dispatch_combine(
             num_routed_experts=num_routed_experts,
             num_experts_per_tok=num_experts_per_tok,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
-            seed=42,
             num_dispatch_groups=num_dispatch_groups,
         )
         logger.debug("Using RANDOM test data")
