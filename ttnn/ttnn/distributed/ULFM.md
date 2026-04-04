@@ -145,6 +145,10 @@ there.
 Limitation: exceptions that are caught by pytest, pybind11, or other language
 bindings are not "uncaught C++ exceptions", so they will not hit this layer.
 
+The same applies to **GoogleTest**: by default it catches test-body exceptions, so
+`TT_FATAL` and other throws from test code never reach `std::terminate` and will
+not trigger `mpi_terminate_handler`.
+
 ### Layer 3 - `MPI_Finalize` Watchdog
 
 File: `tt_metal/distributed/multihost/mpi_distributed_context.cpp`
@@ -455,6 +459,12 @@ Current gaps:
 
 ## Known Limitations
 
+- Multihost jobs that use GoogleTest with MPI must pass **`--gtest_catch_exceptions=0`**
+  (or set the equivalent environment variable) so one rank cannot continue after a
+  C++ exception while others block in collectives. The shared launch flags live in
+  `tests/scripts/multihost/multihost_gtest_env.sh`, sourced by
+  `run_dual_galaxy_tests.sh`, `run_dual_t3k_tests.sh`, `run_quad_bh_lb_tests.sh`,
+  `run_dual_bh_lb_tests.sh`, and `run_quad_galaxy_tests.sh`.
 - `MPIRequest::wait()`, `test()`, and `cancel()` use the ULFM-aware dispatch
   path only while their owning `MPIContext` is still alive. If `owner_.lock()`
   fails, they fall back to plain `mpi_check(...)`.
