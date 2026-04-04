@@ -53,21 +53,27 @@ class AdaLayerNormTTNN:
             self.proj_bias = preprocess_linear_bias(proj_b, device) if proj_b is not None else None
 
     def __call__(self, hidden_states: ttnn.Tensor, timestep_emb: ttnn.Tensor) -> ttnn.Tensor:
-        """Apply AdaLN: (1 + scale) * LN(x) + shift."""
-        # Project timestep -> scale, shift [batch, 1, 2*hidden]
+        """Apply AdaLN: (1 + scale) * LN(x) + shift.
+
+        Upstream: temb = self.linear(self.silu(temb))
+        temb is [B, inner_dim] (2D), we handle [B, 1, inner_dim] (3D) too.
+        """
+        # Apply SiLU THEN linear (matches upstream AdaLayerNorm.forward)
+        temb_activated = ttnn.silu(timestep_emb)
         scale_shift = ttnn.linear(
-            timestep_emb, self.proj_weight, bias=self.proj_bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH,
+            temb_activated, self.proj_weight, bias=self.proj_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH,
         )
+        ttnn.deallocate(temb_activated)
 
         scale = ttnn.slice(scale_shift, [0, 0, 0], [scale_shift.shape[0], 1, self.hidden_size])
         shift = ttnn.slice(scale_shift, [0, 0, self.hidden_size],
                            [scale_shift.shape[0], 1, 2 * self.hidden_size])
         ttnn.deallocate(scale_shift)
 
-        # LayerNorm (without learned weight/bias)
+        # LayerNorm (no learned weight/bias, eps=1e-5 matching upstream)
         normed = ttnn.layer_norm(
-            hidden_states, epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG,
+            hidden_states, epsilon=1e-5, memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         # (1 + scale) * normed + shift
@@ -177,7 +183,7 @@ class DiTAttentionTTNN:
 
         # Output projection
         output = ttnn.linear(context, self.to_out_0_weight, bias=self.to_out_0_bias,
-                             memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH)
+                             memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
         ttnn.deallocate(context)
         return output
 
@@ -210,12 +216,12 @@ class DiTFFNTTNN:
     def __call__(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         # Up projection with GELU: 1536 -> 6144
         h = ttnn.linear(hidden_states, self.up_weight, bias=self.up_bias,
-                        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b,
+                        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16,
                         core_grid=CORE_GRID_BH, activation="gelu")
 
         # Down projection: 6144 -> 1536
         output = ttnn.linear(h, self.down_weight, bias=self.down_bias,
-                             memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b,
+                             memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16,
                              core_grid=CORE_GRID_BH)
         ttnn.deallocate(h)
         return output
@@ -235,27 +241,33 @@ class DiTBlockTTNN:
         self.block_idx = block_idx
         inner_dim = config.inner_dim
 
+        # AdaLN for self-attention (norm1)
         self.adaln = AdaLayerNormTTNN(weights, f"{prefix}norm1.", inner_dim, device)
+
+        # Self-attention (attn1)
         self.attn = DiTAttentionTTNN(
             weights, f"{prefix}attn1.",
             config.num_attention_heads, config.attention_head_dim, device,
         )
+
+        # norm3: parameter-free LayerNorm for FFN (elementwise_affine=False in upstream)
+
+        # FFN
         self.ffn = DiTFFNTTNN(weights, f"{prefix}ff.", device)
 
     def __call__(self, hidden_states: ttnn.Tensor, timestep_emb: ttnn.Tensor,
                  backbone_features: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
-        # AdaLN
+        # AdaLN -> Attention -> Residual
         normed = self.adaln(hidden_states, timestep_emb)
-
-        # Attention (cross or self based on weight shapes)
         attn_out = self.attn(normed, encoder_hidden_states=backbone_features)
-
-        # Residual
         hidden_states = ttnn.add(hidden_states, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
 
-        # FFN + Residual
-        ffn_out = self.ffn(hidden_states)
+        # norm3 (parameter-free LayerNorm) -> FFN -> Residual
+        normed_ff = ttnn.layer_norm(
+            hidden_states, epsilon=1e-5, memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ffn_out = self.ffn(normed_ff)
         hidden_states = ttnn.add(hidden_states, ffn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(ffn_out)
 
@@ -309,29 +321,47 @@ class AlternateVLDiTTTNN:
         for block in self.blocks:
             hidden_states = block(hidden_states, timestep_emb, backbone_features)
 
-        # SiLU-gated output projection
-        # proj_out_1: 1536 -> 3072
-        h = ttnn.linear(
-            hidden_states, self.proj_out_1_weight, bias=self.proj_out_1_bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH,
+        # Output processing (AdaLN-style, NOT a gated FFN):
+        # conditioning = temb
+        # shift, scale = proj_out_1(silu(conditioning)).chunk(2, dim=1)
+        # hidden_states = norm_out(hidden_states) * (1 + scale[:, None]) + shift[:, None]
+        # output = proj_out_2(hidden_states)
+
+        # proj_out_1 projects temb (NOT hidden_states) to shift+scale
+        conditioning = ttnn.silu(timestep_emb)
+        scale_shift = ttnn.linear(
+            conditioning, self.proj_out_1_weight, bias=self.proj_out_1_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH,
+        )
+        ttnn.deallocate(conditioning)
+
+        half = self.proj_out_1_dim // 2
+        shift = ttnn.slice(scale_shift, [0, 0, 0], [scale_shift.shape[0], 1, half])
+        scale = ttnn.slice(scale_shift, [0, 0, half], [scale_shift.shape[0], 1, self.proj_out_1_dim])
+        ttnn.deallocate(scale_shift)
+
+        # norm_out: parameter-free LayerNorm
+        normed = ttnn.layer_norm(
+            hidden_states, epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-        # Split 3072 -> 2x1536, SiLU gate
-        half = self.proj_out_1_dim // 2
-        gate = ttnn.slice(h, [0, 0, 0], [h.shape[0], h.shape[1], half])
-        value = ttnn.slice(h, [0, 0, half], [h.shape[0], h.shape[1], self.proj_out_1_dim])
-        ttnn.deallocate(h)
+        # AdaLN: (1 + scale) * normed + shift
+        ones = ttnn.ones_like(scale)
+        scale_p1 = ttnn.add(ones, scale)
+        ttnn.deallocate(ones)
+        ttnn.deallocate(scale)
 
-        gate = ttnn.silu(gate)
-        gated = ttnn.mul(gate, value)
-        ttnn.deallocate(gate)
-        ttnn.deallocate(value)
+        hidden_states = ttnn.mul(normed, scale_p1)
+        ttnn.deallocate(normed)
+        ttnn.deallocate(scale_p1)
+
+        hidden_states = ttnn.add(hidden_states, shift)
+        ttnn.deallocate(shift)
 
         # proj_out_2: 1536 -> 1024
         output = ttnn.linear(
-            gated, self.proj_out_2_weight, bias=self.proj_out_2_bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH,
+            hidden_states, self.proj_out_2_weight, bias=self.proj_out_2_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH,
         )
-        ttnn.deallocate(gated)
 
         return output

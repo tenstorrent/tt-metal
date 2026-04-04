@@ -29,7 +29,7 @@ from models.experimental.groot_n16.tt.ttnn_common import (
 )
 
 
-def _to_tt_linear_weight(weight: torch.Tensor, device, dtype=ttnn.bfloat8_b) -> ttnn.Tensor:
+def _to_tt_linear_weight(weight: torch.Tensor, device, dtype=ttnn.bfloat16) -> ttnn.Tensor:
     """Convert weight stored as [in_features, out_features] to TTNN tensor.
 
     Unlike preprocess_linear_weight which transposes [out, in] -> [in, out],
@@ -82,18 +82,21 @@ class CategorySpecificMLPTTNN:
         w2, b2 = self.layer2_weights[embodiment_id]
 
         h = ttnn.linear(x, w1, bias=b1, memory_config=ttnn.L1_MEMORY_CONFIG,
-                        dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH)
+                        dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
         h = ttnn.silu(h)
 
         out = ttnn.linear(h, w2, bias=b2, memory_config=ttnn.L1_MEMORY_CONFIG,
-                          dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH)
+                          dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
         ttnn.deallocate(h)
         return out
 
 
 class TimestepEncoderTTNN:
     """
-    Sinusoidal timestep encoding + MLP.
+    Timestep encoder matching upstream: Timesteps(256) -> TimestepEmbedding MLP.
+
+    Uses diffusers' Timesteps for sinusoidal encoding on CPU (flip_sin_to_cos=True,
+    downscale_freq_shift=1), then runs the MLP on device.
 
     Weight keys: timestep_embedder.linear_1.{weight,bias},
                  timestep_embedder.linear_2.{weight,bias}
@@ -103,6 +106,10 @@ class TimestepEncoderTTNN:
                  embedding_dim: int = 256, output_dim: int = 1536):
         self.device = device
         self.embedding_dim = embedding_dim
+
+        # Use diffusers Timesteps for correct sinusoidal encoding
+        from diffusers.models.embeddings import Timesteps
+        self.time_proj = Timesteps(num_channels=256, flip_sin_to_cos=True, downscale_freq_shift=1)
 
         w1 = weights.get("timestep_embedder.linear_1.weight")
         b1 = weights.get("timestep_embedder.linear_1.bias")
@@ -115,25 +122,25 @@ class TimestepEncoderTTNN:
             self.fc2_weight = preprocess_linear_weight(w2, device)
             self.fc2_bias = preprocess_linear_bias(b2, device) if b2 is not None else None
 
-    def _sinusoidal_embedding(self, timesteps: torch.Tensor) -> torch.Tensor:
-        half_dim = self.embedding_dim // 2
-        emb = math.log(10000) / (half_dim - 1)
-        emb = torch.exp(torch.arange(half_dim, dtype=torch.float32) * -emb)
-        emb = timesteps.float().unsqueeze(-1) * emb.unsqueeze(0)
-        return torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
-
     def __call__(self, timesteps: torch.Tensor) -> ttnn.Tensor:
-        """Encode timesteps -> [batch, 1, output_dim]."""
-        sin_emb = self._sinusoidal_embedding(timesteps).unsqueeze(1)
+        """Encode integer timesteps -> [batch, 1, output_dim].
+
+        Args:
+            timesteps: [batch] integer discretized timesteps (e.g., 0, 250, 500, 750)
+        """
+        # Sinusoidal projection on CPU using diffusers (matches upstream exactly)
+        sin_emb = self.time_proj(timesteps.long()).to(torch.bfloat16)  # [B, 256]
+        sin_emb = sin_emb.unsqueeze(1)  # [B, 1, 256]
         t_tt = to_tt_tensor(sin_emb, self.device)
 
+        # MLP: Linear -> SiLU -> Linear
         h = ttnn.linear(t_tt, self.fc1_weight, bias=self.fc1_bias,
-                        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH)
+                        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
         ttnn.deallocate(t_tt)
         h = ttnn.silu(h)
 
         out = ttnn.linear(h, self.fc2_weight, bias=self.fc2_bias,
-                          memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH)
+                          memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
         ttnn.deallocate(h)
         return out
 
@@ -191,7 +198,7 @@ class MultiEmbodimentActionEncoderTTNN:
         # Action projection via W1
         w1, b1 = self.w1[embodiment_id]
         action_emb = ttnn.linear(noisy_actions, w1, bias=b1,
-                                 memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH)
+                                 memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
 
         # Timestep encoding: [B, 1, dim]
         time_emb = self.timestep_encoder(timesteps)
@@ -208,13 +215,13 @@ class MultiEmbodimentActionEncoderTTNN:
         # W2 with SiLU
         w2, b2 = self.w2[embodiment_id]
         h = ttnn.linear(fused, w2, bias=b2, memory_config=ttnn.L1_MEMORY_CONFIG,
-                        dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH)
+                        dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
         ttnn.deallocate(fused)
         h = ttnn.silu(h)
 
         # W3
         w3, b3 = self.w3[embodiment_id]
         out = ttnn.linear(h, w3, bias=b3, memory_config=ttnn.L1_MEMORY_CONFIG,
-                          dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH)
+                          dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
         ttnn.deallocate(h)
         return out
