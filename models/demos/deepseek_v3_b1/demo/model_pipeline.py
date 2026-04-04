@@ -182,7 +182,6 @@ class ModelPipeline:
                 on_token(token_id)
             generated_tokens[slot_id].append(token_id)
 
-        # --- Prefill --------------------------------------------------------
         for slot_id in range(2):
             prefill_results = self.prefill_forward(prompt_token_ids[slot_id], slot_id)
             pending: deque[DecodeResult] = deque(prefill_results)
@@ -197,13 +196,12 @@ class ModelPipeline:
                 print(f"Token 0: {result.token_0}, Token 1: {result.token_1}")
                 print(f"Slot ID: {result.slot_id}")
 
-                if result.token_0_type == TokenType.BASE:
-                    emit(result.token_0, slot_id)
+                emit(result.token_1, slot_id)
 
-                    if is_eos(result.token_0) or len(generated_tokens[slot_id]) >= max_new_tokens:
-                        break
-                    self.model.write_input(result.token_0, result.slot_id, self.position_id, token_type=TokenType.BASE)
-                    self.position_id += 1
+                if is_eos(result.token_1) or len(generated_tokens[slot_id]) >= max_new_tokens:
+                    break
+                self.model.write_input(result.token_1, result.slot_id, self.position_id, token_type=TokenType.BASE)
+                self.position_id += 1
 
                 logger.debug("Generation complete ({} tokens generated)", len(generated_tokens[slot_id]))
 
