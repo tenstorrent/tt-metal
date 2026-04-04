@@ -13,6 +13,7 @@ but targeting the TT prefill path with SP+TP parallelism.
 No LM head — returns hidden states after final norm.
 """
 
+import torch
 from loguru import logger
 from tracy import signpost
 from transformers.configuration_utils import PretrainedConfig
@@ -111,24 +112,56 @@ class TtPrefillTransformer(LightweightModule):
 
         logger.info(f"TtPrefillTransformer construction complete ({num_layers} layers)")
 
-    def forward(self, token_ids: ttnn.Tensor) -> ttnn.Tensor:
+    def _to_host(self, tt_tensor):
+        """Bring SP+TP sharded tensor to host as [1, seq, emb] bfloat16."""
+        ndim = len(tt_tensor.shape)
+        dims = (2, 3) if ndim == 4 else (1, 2)
+        host = ttnn.to_torch(
+            tt_tensor,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=dims, mesh_shape=self.mesh_device.shape),
+        ).to(torch.bfloat16)
+        if ndim == 4:
+            host = host.squeeze(0)
+        return host
+
+    def forward(self, token_ids: ttnn.Tensor, return_intermediates: bool = False):
         """
         Forward pass: embed -> [block x N] -> norm.
 
         Args:
             token_ids: [1, 1, seq_len_per_chip] uint32, SP-sharded
+            return_intermediates: if True, sync + snapshot to host after each stage
 
         Returns:
-            [1, 1, seq_len_per_chip, emb_dim_per_tp] TILE_LAYOUT
+            If return_intermediates=False:
+                tt_output: [1, 1, seq_per_chip, emb_dim/tp] TILE_LAYOUT
+            If return_intermediates=True:
+                (tt_output, intermediates) where intermediates is list of
+                (label, host_tensor) tuples with host_tensor [1, seq, emb] bfloat16
         """
         rope_tensors = self.rope_setup.get_rope_tensors(self.seq_len)
+        intermediates = [] if return_intermediates else None
 
         h = self.embed(token_ids)  # [1, seq_per_chip, emb_dim/tp]
         h = ttnn.unsqueeze_to_4D(h)  # [1, 1, seq_per_chip, emb_dim/tp]
+
+        if return_intermediates:
+            ttnn.synchronize_device(self.mesh_device)
+            intermediates.append(("embed", self._to_host(h)))
 
         for i, layer in enumerate(self.layers):
             signpost(f"forward_layer_{i}_start")
             h = layer(h, rope_tensors)
             signpost(f"forward_layer_{i}_end")
+            if return_intermediates:
+                ttnn.synchronize_device(self.mesh_device)
+                intermediates.append((f"layer_{i}", self._to_host(h)))
+
         h = self.norm(h)
+
+        if return_intermediates:
+            ttnn.synchronize_device(self.mesh_device)
+            intermediates.append(("norm", self._to_host(h)))
+            return h, intermediates
+
         return h
