@@ -50,7 +50,6 @@ struct StridedAllGatherAsyncProgramFactory {
         const std::vector<GlobalSemaphore>& semaphore,
         std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler>& fused_op_signaler,
         bool read_local_slice_from_input,
-        std::optional<uint32_t> tiles_per_chunk,
         std::optional<uint32_t> num_workers_per_direction_opt,
         std::optional<uint32_t> num_buffers_per_channel,
         std::optional<uint32_t> mm_cores_y,
