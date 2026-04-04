@@ -27,6 +27,10 @@ InheritParentConfig: true
 #   will be fixed in a follow-up PR.
 # bugprone-branch-clone: repeated branch body in serialization test;
 #   will be deduplicated in a follow-up PR.
+# performance-move-const-arg: fires on std::move() of lazy xtensor expressions
+#   (xt::xfunction<>) which are not movable in the traditional sense — the move
+#   is technically a no-op but is semantically correct intent. False positive for
+#   xtensor's expression-template design; not a real performance issue.
 Checks: >
   -modernize-use-using,
   -modernize-type-traits,
@@ -77,4 +81,5 @@ Checks: >
   -readability-inconsistent-declaration-parameter-name,
   -performance-inefficient-vector-operation,
   -bugprone-argument-comment,
-  -modernize-use-equals-default
+  -modernize-use-equals-default,
+  -performance-move-const-arg
