@@ -105,12 +105,7 @@ class ModelPipeline:
             )
 
             if io_socket_descriptor_prefix is not None:
-                pipeline_block = self.pipeline._pipeline_block
-                if pipeline_block is None:
-                    raise RuntimeError(
-                        "Pipeline.setup_and_run() must complete before exporting host socket descriptors"
-                    )
-                pipeline_block.export_host_socket_descriptors(io_socket_descriptor_prefix)
+                self.pipeline.export_host_socket_descriptors(io_socket_descriptor_prefix)
 
         logger.info(f"Created ModelPipeline for mesh id {self.pipeline.my_mesh_id}.")
 
