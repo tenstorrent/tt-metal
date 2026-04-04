@@ -46,6 +46,10 @@ from models.experimental.gr00t_n1_6.tt.ttnn_embodiment import (
     CategorySpecificMLPTTNN,
     MultiEmbodimentActionEncoderTTNN,
 )
+from models.experimental.gr00t_n1_6.tt.ttnn_qwen3 import Qwen3ModelTTNN
+
+# Image placeholder token ID used by Eagle-Block2A backbone
+IMAGE_TOKEN_ID = 151669
 
 logger = logging.getLogger(__name__)
 
@@ -250,9 +254,13 @@ class Gr00tN16ModelTTNN:
         else:
             self.pos_embed = None
 
-        # Note: Qwen3 backbone is handled separately via tt_transformers
-        # For now, we compute backbone features on CPU/GPU and transfer
-        self._backbone_model = None
+        # 7. Qwen3-1.7B language backbone (first 16 of 28 layers)
+        logger.info("  Loading Qwen3-1.7B backbone (16 layers)...")
+        self.qwen3 = Qwen3ModelTTNN(
+            config.backbone.language,
+            weight_loader.get_language_weights(),
+            device,
+        )
 
         elapsed = time.time() - t0
         logger.info(f"  GR00T N1.6 initialized in {elapsed:.1f}s")
@@ -283,37 +291,84 @@ class Gr00tN16ModelTTNN:
 
         return image_tokens
 
+    @staticmethod
+    def build_backbone_input_ids(
+        text_tokens: torch.Tensor,
+        num_image_tokens: int = 64,
+    ) -> Tuple[torch.Tensor, List[int]]:
+        """
+        Build input_ids for the Eagle backbone by appending image placeholders.
+
+        Constructs: [text_tokens..., <IMG_CONTEXT> * num_image_tokens]
+
+        Args:
+            text_tokens: [batch, text_seq_len] language instruction token IDs.
+            num_image_tokens: Number of image placeholder tokens (64 after pixel shuffle).
+
+        Returns:
+            input_ids: [batch, text_seq_len + num_image_tokens] with image placeholders.
+            image_token_positions: List of sequence indices where image tokens are placed.
+        """
+        batch_size, text_len = text_tokens.shape
+        img_placeholder = torch.full(
+            (batch_size, num_image_tokens), IMAGE_TOKEN_ID, dtype=torch.long,
+        )
+        input_ids = torch.cat([text_tokens, img_placeholder], dim=1)
+        image_token_positions = list(range(text_len, text_len + num_image_tokens))
+        return input_ids, image_token_positions
+
     def encode_backbone(
         self,
         image_tokens: ttnn.Tensor,
         text_tokens: torch.Tensor,
     ) -> ttnn.Tensor:
         """
-        Run backbone (Qwen3) to get VL features.
+        Run Qwen3 backbone to get vision-language features.
 
-        For the initial implementation, this uses the HuggingFace model on CPU/GPU
-        and transfers features to device. The Qwen3 backbone will be ported to
-        TTNN in a subsequent optimization pass.
+        Assembles input_ids with image placeholders, splices vision features in,
+        runs 16 Qwen3 layers, and returns hidden states at image token positions
+        as the backbone features for the DiT action head.
 
         Args:
             image_tokens: [batch, num_image_tokens, language_dim] on device
-            text_tokens: [batch, text_seq_len] token IDs
+                          (output of SigLIP2 + pixel shuffle + connector).
+            text_tokens:  [batch, text_seq_len] language instruction token IDs on CPU.
 
         Returns:
-            [batch, total_seq_len, backbone_dim] backbone features on device
+            [batch, num_image_tokens, backbone_dim] backbone features on device.
         """
-        if self._backbone_model is not None:
-            # Use HuggingFace model for backbone features
-            # This is a temporary path until Qwen3 is ported to TTNN
-            raise NotImplementedError(
-                "Full Qwen3 backbone on TTNN not yet implemented. "
-                "Use compute_backbone_features_cpu() instead."
-            )
+        num_image_tokens = self.config.backbone.num_image_tokens_per_frame  # 64
 
-        raise NotImplementedError(
-            "Backbone encoding requires either a CPU reference model or "
-            "the Qwen3 TTNN implementation."
+        # Build input_ids with image placeholders
+        input_ids, image_positions = self.build_backbone_input_ids(
+            text_tokens, num_image_tokens,
         )
+
+        # Run Qwen3 forward (embedding + 16 layers + final norm)
+        # Image features are spliced in at image_positions inside the model
+        backbone_output = self.qwen3(
+            input_ids,
+            image_features=image_tokens,
+            image_token_positions=image_positions,
+        )
+        # backbone_output: [batch, total_seq_len, hidden_size] on device
+
+        # Extract features at image token positions only
+        # These are the backbone features the DiT cross-attends to
+        total_seq_len = input_ids.shape[1]
+        start_pos = image_positions[0]
+        end_pos = image_positions[-1] + 1
+        batch_size = input_ids.shape[0]
+        hidden_size = backbone_output.shape[2]
+
+        backbone_features = ttnn.slice(
+            backbone_output,
+            [0, start_pos, 0],
+            [batch_size, end_pos, hidden_size],
+        )
+        ttnn.deallocate(backbone_output)
+
+        return backbone_features
 
     def run_flow_matching(
         self,
@@ -438,14 +493,14 @@ class Gr00tN16ModelTTNN:
         Returns:
             [batch, action_horizon, action_dim] predicted actions
         """
-        # Step 1: Vision encoding
+        # Step 1: Vision encoding (SigLIP2 + pixel shuffle + connector)
         image_tokens = self.encode_vision(pixel_values)
 
-        # Step 2: Backbone encoding (currently requires CPU reference)
-        # TODO: implement Qwen3 on TTNN
+        # Step 2: Backbone encoding (Qwen3 layer 16)
         backbone_features = self.encode_backbone(image_tokens, text_tokens)
+        ttnn.deallocate(image_tokens)
 
-        # Step 3: Flow matching
+        # Step 3: Flow matching (4 Euler steps with DiT)
         actions = self.run_flow_matching(
             backbone_features, state, embodiment_id,
         )

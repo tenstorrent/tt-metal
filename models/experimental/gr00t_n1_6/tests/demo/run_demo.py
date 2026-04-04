@@ -50,6 +50,8 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--num-runs", type=int, default=3, help="Number of inference runs for timing")
     parser.add_argument("--embodiment-id", type=int, default=0, help="Embodiment ID (0-31)")
+    parser.add_argument("--prompt", type=str, default="pick up the object", help="Language instruction")
+    parser.add_argument("--no-backbone", action="store_true", help="Skip Qwen3 backbone (use dummy features)")
     args = parser.parse_args()
 
     print("=" * 60)
@@ -94,9 +96,17 @@ def main():
                 pixel_values = torch.randn(1, 3, 224, 224)
 
         state = torch.randn(1, config.embodiment.max_state_dim)
+
+        # Simple tokenization: encode prompt as byte-level token IDs
+        text_tokens = torch.tensor(
+            [[ord(c) % 151936 for c in args.prompt]], dtype=torch.long,
+        )
+
         print(f"  Image shape: {pixel_values.shape}")
         print(f"  State shape: {state.shape}")
+        print(f"  Prompt: \"{args.prompt}\" ({text_tokens.shape[1]} tokens)")
         print(f"  Embodiment ID: {args.embodiment_id}")
+        print(f"  Mode: {'Full E2E (with Qwen3)' if not args.no_backbone else 'Vision + Action Head only'}")
         print()
 
         # Step 1: Vision encoding
@@ -110,9 +120,26 @@ def main():
         print(f"  Latency: {vision_ms:.1f}ms")
         print()
 
-        # Step 2: Flow matching
-        print("Step 2: Flow matching (4 Euler steps, 32-layer DiT)...")
-        backbone_features = to_tt_tensor(image_tokens_cpu, device)
+        if args.no_backbone:
+            # Legacy mode: skip Qwen3, use vision features directly
+            print("Step 2: Skipping Qwen3 backbone (--no-backbone)")
+            backbone_features = to_tt_tensor(image_tokens_cpu, device)
+            backbone_ms = 0.0
+        else:
+            # Full E2E: run Qwen3 backbone
+            print("Step 2: Qwen3 backbone (16 layers, 2048 dim)...")
+            t0 = time.time()
+            backbone_features = model.encode_backbone(image_tokens, text_tokens)
+            backbone_ms = (time.time() - t0) * 1000
+            bb_cpu = ttnn.to_torch(backbone_features)
+            print(f"  Output: {bb_cpu.shape}")
+            print(f"  Range: [{bb_cpu.min():.4f}, {bb_cpu.max():.4f}]")
+            print(f"  Latency: {backbone_ms:.1f}ms")
+        ttnn.deallocate(image_tokens)
+        print()
+
+        # Step 3: Flow matching
+        print("Step 3: Flow matching (4 Euler steps, 32-layer DiT)...")
         t0 = time.time()
         actions = model.run_flow_matching(backbone_features, state, embodiment_id=args.embodiment_id)
         flow_ms = (time.time() - t0) * 1000
@@ -127,7 +154,11 @@ def main():
         for i in range(args.num_runs):
             t0 = time.time()
             img = model.encode_vision(pixel_values)
-            bb = to_tt_tensor(ttnn.to_torch(img), device)
+            if args.no_backbone:
+                bb = to_tt_tensor(ttnn.to_torch(img), device)
+            else:
+                bb = model.encode_backbone(img, text_tokens)
+            ttnn.deallocate(img)
             actions = model.run_flow_matching(bb, state, embodiment_id=args.embodiment_id)
             elapsed = (time.time() - t0) * 1000
             times.append(elapsed)
@@ -142,16 +173,18 @@ def main():
         print("=" * 60)
         print("  RESULTS")
         print("=" * 60)
-        print(f"  Vision encoding:  {vision_ms:.1f}ms")
-        print(f"  Flow matching:    {flow_ms:.1f}ms")
-        print(f"  Total (avg):      {avg_ms:.1f}ms")
-        print(f"  Total (best):     {min_ms:.1f}ms")
-        print(f"  Throughput:       {hz:.1f} Hz")
+        print(f"  Vision encoding:    {vision_ms:.1f}ms")
+        if not args.no_backbone:
+            print(f"  Qwen3 backbone:     {backbone_ms:.1f}ms")
+        print(f"  Flow matching:      {flow_ms:.1f}ms")
+        print(f"  Total (avg):        {avg_ms:.1f}ms")
+        print(f"  Total (best):       {min_ms:.1f}ms")
+        print(f"  Throughput:         {hz:.1f} Hz")
         print()
-        print(f"  Action output:    {actions.shape}")
-        print(f"    Horizon:        {actions.shape[1]} steps")
-        print(f"    Dimensions:     {actions.shape[2]}")
-        print(f"    Finite:         {not (actions.isnan().any() or actions.isinf().any())}")
+        print(f"  Action output:      {actions.shape}")
+        print(f"    Horizon:          {actions.shape[1]} steps")
+        print(f"    Dimensions:       {actions.shape[2]}")
+        print(f"    Finite:           {not (actions.isnan().any() or actions.isinf().any())}")
         print("=" * 60)
 
     finally:

@@ -87,6 +87,7 @@ gr00t_n1_6/
 │   ├── ttnn_dit.py                        # AlternateVLDiT action head (32L)
 │   ├── ttnn_dit_optimized.py              # Optimized on-device DiT attention
 │   ├── ttnn_embodiment.py                 # Per-embodiment MLPs
+│   ├── ttnn_qwen3.py                      # Qwen3-1.7B backbone (16L)
 │   └── ttnn_groot_n16_model.py            # Main model assembly
 └── tests/
     ├── download_weights.py                # Download weights from HuggingFace
@@ -171,7 +172,7 @@ Tested on Tenstorrent Blackhole p150a (single chip):
 | Jetson Thor | 105ms | 9.5 |
 | DGX Spark | 89ms | 11.2 |
 
-Note: Blackhole numbers exclude the Qwen3 backbone (not yet ported to TTNN).
+Note: Blackhole numbers above exclude the Qwen3 backbone. With Qwen3 (16 layers, CPU-assist for QK-norm/RoPE), expect additional latency for the backbone pass.
 
 ## PCC Verification Results
 
