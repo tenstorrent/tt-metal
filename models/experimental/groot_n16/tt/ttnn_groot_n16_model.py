@@ -71,16 +71,15 @@ class PixelShuffleConnectorTTNN:
         # 2-layer MLP connector
         # Layer 0: 4*vision_dim -> language_dim (with GELU)
         # Layer 1: language_dim -> language_dim
-        w0 = connector_weights.get("modality_projection.proj.0.weight")
-        b0 = connector_weights.get("modality_projection.proj.0.bias")
-        w1 = connector_weights.get("modality_projection.proj.2.weight")
-        b1 = connector_weights.get("modality_projection.proj.2.bias")
-
-        if w0 is not None:
-            self.proj0_weight = preprocess_linear_weight(w0, device)
-            self.proj0_bias = preprocess_linear_bias(b0, device) if b0 is not None else None
-            self.proj1_weight = preprocess_linear_weight(w1, device)
-            self.proj1_bias = preprocess_linear_bias(b1, device) if b1 is not None else None
+        # Connector keys after stripping "backbone.model.mlp1." prefix:
+        # 0.weight/bias, 1.weight/bias, 3.weight/bias (3-layer MLP, index 2 is GELU)
+        for idx in ["0", "1", "3"]:
+            w = connector_weights.get(f"{idx}.weight")
+            b = connector_weights.get(f"{idx}.bias")
+            if w is not None:
+                setattr(self, f"proj{idx}_weight", preprocess_linear_weight(w, device))
+                setattr(self, f"proj{idx}_bias",
+                        preprocess_linear_bias(b, device) if b is not None else None)
 
     def pixel_shuffle_downsample(self, vision_features: torch.Tensor, h: int, w: int) -> torch.Tensor:
         """
@@ -115,24 +114,28 @@ class PixelShuffleConnectorTTNN:
         # Transfer to device
         shuffled_tt = to_tt_tensor(shuffled, self.device)
 
-        # MLP layer 0 with GELU
-        h0 = ttnn.linear(
+        # MLP layer 0
+        h = ttnn.linear(
             shuffled_tt, self.proj0_weight, bias=self.proj0_bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat8_b,
-            core_grid=CORE_GRID_BH,
-            activation="gelu",
+            memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH,
         )
         ttnn.deallocate(shuffled_tt)
 
         # MLP layer 1
-        output = ttnn.linear(
-            h0, self.proj1_weight, bias=self.proj1_bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat8_b,
-            core_grid=CORE_GRID_BH,
+        h = ttnn.linear(
+            h, self.proj1_weight, bias=self.proj1_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH,
         )
-        ttnn.deallocate(h0)
+
+        # GELU activation (index 2 in the Sequential)
+        h = ttnn.gelu(h)
+
+        # MLP layer 3
+        output = ttnn.linear(
+            h, self.proj3_weight, bias=self.proj3_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH,
+        )
+        ttnn.deallocate(h)
 
         return output
 

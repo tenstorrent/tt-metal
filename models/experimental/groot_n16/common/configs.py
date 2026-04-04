@@ -103,8 +103,8 @@ class DiTConfig:
 class EmbodimentConfig:
     """Per-embodiment MLP configuration."""
     max_num_embodiments: int = 32
-    max_state_dim: int = 29
-    max_action_dim: int = 29
+    max_state_dim: int = 128
+    max_action_dim: int = 128
     state_hidden_dim: int = 1024
     state_output_dim: int = 1536  # matches DiT inner_dim
     action_hidden_dim: int = 1536
@@ -121,7 +121,7 @@ class Gr00tN16Config:
     # Flow matching inference
     num_inference_timesteps: int = 4
     num_timestep_buckets: int = 1000
-    action_horizon: int = 16
+    action_horizon: int = 50
 
     # Embedding dimensions
     hidden_size: int = 1024  # DiT output dim
