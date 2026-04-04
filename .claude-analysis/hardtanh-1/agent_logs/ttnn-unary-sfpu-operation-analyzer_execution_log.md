@@ -124,3 +124,43 @@
 - The SFPU operations themselves (ltz/gtz) are simple: `v_if (v >= 0) { v = 0 } v_else { v = 1 }` and similar
 - No approximation mode effects; `APPROXIMATION_MODE` is unused in comparison paths
 - Address mode: ADDR_MOD_7 (dest.incr=0) on both WH and BH
+
+---
+
+## Operation: logit
+## Output: `.claude-analysis/hardtanh-1/logit_analysis.md`
+
+---
+
+### Phase 1: Dispatch Resolution
+- Searched `unary_op_utils.cpp` — LOGIT uses dedicated `logit_kernel.cpp` (not `eltwise_sfpu.cpp`)
+- `get_op_init_and_func_parameterized()` returns `{}` for LOGIT — no SFPU_OP_CHAIN_0 dispatch
+- LOGIT is parameterized with eps value; factory packs eps and (1-eps) as runtime args
+- CLAMP define set when eps >= 0; WHERE define set when eps > 0.5
+- Approx mode: `false` (default)
+
+### Phase 2: Kernel Analysis
+- Read `logit_kernel.cpp` — composite kernel chaining: clamp → rsub → div → log (± where)
+- Uses cb_tmp0 (CB c_1) as intermediate buffer for the clamped tile
+- Duplicates clamped tile into DEST[0] and DEST[1] for division
+- When WHERE active: copies result to DEST[2], computes mask in DEST[1], negates in DEST[0], then selects
+
+### Phase 3: Core SFPU Analysis
+- **clamp**: SFPI-based v_if/v_elseif for min/max comparison + offset
+- **log**: 3rd-order Chebyshev polynomial on [1,2) + exponent correction via ln(2)
+- **div**: Implemented as multiply-by-reciprocal; reciprocal has 3 precision tiers
+- **reciprocal**: Uses SFPARECIP + Newton-Raphson refinement; SFPLOADMACRO for fast paths
+- **where**: SFPLOADMACRO superscalar with SFPSETCC(EQ0) + SFPENCC for CC-guarded select
+- **comp (unary_lt)**: SFPI v_if comparison producing 0.0/1.0 mask
+- WH and BH implementations differ only in namespace qualification
+
+### Phase 4: Verification
+- All _calculate_* functions verified via grep ✓
+- All 14 referenced file paths verified to exist ✓
+- Several API headers (clamp.h, rsub.h, where.h, comp.h) are generated at build time, not in source tree
+
+### Key Findings
+- LOGIT is the **most complex unary SFPU kernel** — chains 5+ SFPU operations
+- vConstFloatPrgm0 shared between reciprocal (2.0) and log (ln2) — init order critical
+- WHERE uses SFPLOADMACRO for 3-4 cycles/row superscalar execution
+- The reciprocal path selection depends on APPROX and fp32_dest_acc_en flags
