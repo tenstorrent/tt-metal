@@ -150,7 +150,10 @@ class GatedDeltaNet(LightweightModule):
 
         # Fused weight: [QK | V | ZBA] = (5120, 16640), TP-sharded → (5120, 4160) per device
         w_fused = torch.cat([w_qk, w_v, w_zba], dim=-1)  # (5120, 16640)
-        fused_mem = args.create_dram_sharded_mem_config(self.hidden_size, self._fused_n_per_dev)
+        if getattr(args, "is_qwen3_next", False):
+            fused_mem = ttnn.DRAM_MEMORY_CONFIG
+        else:
+            fused_mem = args.create_dram_sharded_mem_config(self.hidden_size, self._fused_n_per_dev)
         self.in_proj_fused = ttnn.as_tensor(
             w_fused.unsqueeze(0).unsqueeze(0),
             dtype=proj_dtype,
@@ -355,6 +358,9 @@ class GatedDeltaNet(LightweightModule):
         matmul_cfg = self.args.dram_matmul_config(
             m=32, k=self.hidden_size, n=self._fused_n_per_dev, num_cores=num_cores
         )
+        # Force fallback for small models where L1_WIDTH_SHARDED output doesn't fit
+        if getattr(self.args, "is_qwen3_next", False):
+            matmul_cfg = None
         if matmul_cfg is not None:
             fused_proj = ttnn.linear(
                 x,
@@ -366,13 +372,17 @@ class GatedDeltaNet(LightweightModule):
             fused_proj = ttnn.to_memory_config(fused_proj, ttnn.L1_MEMORY_CONFIG)
         else:
             # Fallback: auto-select config with DRAM output (initial bringup path)
-            fused_proj = ttnn.linear(
-                x,
-                self.in_proj_fused,
-                compute_kernel_config=self.proj_compute_config,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            fused_proj = ttnn.to_memory_config(fused_proj, ttnn.L1_MEMORY_CONFIG)
+            if getattr(self.args, "is_qwen3_next", False):
+                x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+                fused_proj = ttnn.linear(x, self.in_proj_fused)
+            else:
+                fused_proj = ttnn.linear(
+                    x,
+                    self.in_proj_fused,
+                    compute_kernel_config=self.proj_compute_config,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                fused_proj = ttnn.to_memory_config(fused_proj, ttnn.L1_MEMORY_CONFIG)
 
         # =================================================================
         # 2. Head-parallel: NO all-gather needed!

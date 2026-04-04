@@ -66,7 +66,14 @@ class MoEGate(LightweightModule):
         router_logits = ttnn.linear(x, self.gate_weight)
 
         # Transfer to host for top-k (small tensor: B*S x 512 floats)
-        router_logits_torch = ttnn.to_torch(router_logits)  # (1, 1, B*S, num_experts)
+        if hasattr(self.mesh_device, "get_num_devices") and self.mesh_device.get_num_devices() > 1:
+            router_logits_torch = ttnn.to_torch(
+                router_logits, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+            )[
+                0:1
+            ]  # Take first device (replicated)
+        else:
+            router_logits_torch = ttnn.to_torch(router_logits)  # (1, 1, B*S, num_experts)
         router_logits_torch = router_logits_torch.squeeze(0).squeeze(0)  # (B*S, num_experts)
         ttnn.deallocate(router_logits)
 

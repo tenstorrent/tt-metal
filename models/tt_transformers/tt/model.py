@@ -123,8 +123,18 @@ class Transformer(LightweightModule):
                 )
                 for i in tqdm(range(self.n_layers))
             ]
-        self.norm = DistributedNorm(
-            RMSNorm(
+        if getattr(args, "is_qwen3_next", False):
+            # Simple replicated LM head weight for qwen3_next
+            lm_w = state_dict["output.weight"].transpose(-2, -1).contiguous().unsqueeze(0).unsqueeze(0)
+            self.qwen3_lm_head_weight = ttnn.as_tensor(
+                lm_w,
+                dtype=ttnn.bfloat8_b,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            self.norm = RMSNorm(
                 device=mesh_device,
                 dim=args.dim,
                 eps=args.norm_eps,
@@ -134,15 +144,29 @@ class Transformer(LightweightModule):
                 weight_dtype=ttnn.bfloat16,
                 weight_key="norm",
                 add_unit_offset=self.args.rms_norm_add_unit_offset,
-                is_distributed=self.args.is_distributed_norm,
-                ccl_topology=self.args.ccl_topology(),
+                is_distributed=False,
+            )
+        else:
+            self.norm = DistributedNorm(
+                RMSNorm(
+                    device=mesh_device,
+                    dim=args.dim,
+                    eps=args.norm_eps,
+                    state_dict=state_dict,
+                    state_dict_prefix=args.get_state_dict_prefix("", None),
+                    weight_cache_path=None if args.dummy_weights else weight_cache_path,
+                    weight_dtype=ttnn.bfloat16,
+                    weight_key="norm",
+                    add_unit_offset=self.args.rms_norm_add_unit_offset,
+                    is_distributed=self.args.is_distributed_norm,
+                    ccl_topology=self.args.ccl_topology(),
+                    tt_ccl=self.tt_ccl,
+                ),
+                args,
                 tt_ccl=self.tt_ccl,
-            ),
-            args,
-            tt_ccl=self.tt_ccl,
-            prefetcher=prefetcher,
-            TG=args.is_galaxy,
-        )
+                prefetcher=prefetcher,
+                TG=args.is_galaxy,
+            )
 
         self.lm_head = LMHead(
             args=args,
@@ -706,7 +730,7 @@ class Transformer(LightweightModule):
                 decoder_id=i, tensor=TensorGroup.ACTIVATION
             )
 
-            if mode == Mode.DECODE and not self.args.is_galaxy:
+            if mode == Mode.DECODE and not self.args.is_galaxy and not getattr(self.args, "is_qwen3_next", False):
                 x = ttnn.to_memory_config(
                     x,
                     self.args.get_residual_mem_config(mode, self.prefetcher),
@@ -741,7 +765,10 @@ class Transformer(LightweightModule):
             x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
 
         # Output norm
-        x = self.norm(x, mode=mode, norm_config=self.args.get_norm_config("lm_head", mode, self.prefetcher))
+        if getattr(self.args, "is_qwen3_next", False):
+            x = self.norm(x, mode=mode)
+        else:
+            x = self.norm(x, mode=mode, norm_config=self.args.get_norm_config("lm_head", mode, self.prefetcher))
 
         lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config(
             mode, None if mode == Mode.PREFILL else self.prefetcher
@@ -751,8 +778,11 @@ class Transformer(LightweightModule):
         if mode == Mode.DECODE and self.prefetcher is not None:
             x = ttnn.to_memory_config(x, self.args.get_lm_head_input_mem_config(mode, self.prefetcher))
 
-        x = self.lm_head(x)
-        if mode == Mode.PREFILL:
-            x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if getattr(self.args, "is_qwen3_next", False):
+            x = ttnn.linear(x, self.qwen3_lm_head_weight)
+        else:
+            x = self.lm_head(x)
+            if mode == Mode.PREFILL:
+                x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         return x

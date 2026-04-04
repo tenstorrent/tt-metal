@@ -111,7 +111,14 @@ class ExpertMLPBank(LightweightModule):
         num_tokens = routing_weights.shape[0]
 
         # Transfer input to host for token selection (needed for scatter/gather routing)
-        x_torch = ttnn.to_torch(x).squeeze(0).squeeze(0)  # (B*S, hidden_size)
+        if hasattr(self, "mesh_device") and self.mesh_device.get_num_devices() > 1:
+            x_torch = (
+                ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))[0:1]
+                .squeeze(0)
+                .squeeze(0)
+            )
+        else:
+            x_torch = ttnn.to_torch(x).squeeze(0).squeeze(0)  # (B*S, hidden_size)
 
         # Accumulate output on host then transfer back
         output = torch.zeros(num_tokens, self.hidden_size, dtype=x_torch.dtype)
@@ -155,7 +162,14 @@ class ExpertMLPBank(LightweightModule):
             ttnn.deallocate(hidden)
 
             # Transfer back to host and accumulate with routing weights
-            expert_out = ttnn.to_torch(expert_out_tt).squeeze(0).squeeze(0)  # (num_routed, hidden_size)
+            if hasattr(self, "mesh_device") and self.mesh_device.get_num_devices() > 1:
+                expert_out = (
+                    ttnn.to_torch(expert_out_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))[0:1]
+                    .squeeze(0)
+                    .squeeze(0)
+                )
+            else:
+                expert_out = ttnn.to_torch(expert_out_tt).squeeze(0).squeeze(0)  # (num_routed, hidden_size)
             ttnn.deallocate(expert_out_tt)
 
             weighted_out = expert_out * weights.unsqueeze(-1)
