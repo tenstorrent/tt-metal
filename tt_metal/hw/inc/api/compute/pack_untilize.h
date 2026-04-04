@@ -74,7 +74,6 @@ ALWI void pack_untilize_dest_init(
     // TODO NC: A workaround for tt-metal#17132. Should be addressed more systematically in tt-llk#989
 
 #ifdef ARCH_QUASAR
-    PACK((llk_pack_untilize_hw_configure_disaggregated(ocb)));
     PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim>(ocb)));
     PACK((llk_init_packer_dest_offset_registers()));
 #else
@@ -234,7 +233,7 @@ ALWI void pack_untilize_dest(
     uint32_t num_faces = 4,
     uint32_t tile_dst_rt_offset = 0) {
 #ifdef ARCH_QUASAR
-    PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(block_rt_dim, ocb, block_c_index)));
+    PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(block_rt_dim, ocb, block_c_index, tile_dst_rt_offset)));
 #else
     PACK((llk_pack_untilize<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset, dense>(
         block_rt_dim, ocb, face_r_dim, num_faces, block_c_index, tile_dst_rt_offset)));
@@ -258,19 +257,19 @@ ALWI void pack_untilize_dest(
  */
 // clang-format on
 ALWI void pack_untilize_uninit(uint32_t ocb) {
+#ifdef ARCH_QUASAR
+    // No-op: Quasar uses dedicated instructions (PACR_UNTILIZE, PACR_STRIDE) that
+    // don't conflict with standard PACR paths, so no reconfiguration is needed.
+#else
     // Reconfigure data format to match the initial configuration, before calling init.
     // Init is called to ensure special untilize init overrides are cleaned up.
-#ifdef ARCH_QUASAR
-    PACK((llk_init_packer_dest_offset_registers()));
-    PACK((llk_pack_reconfig_data_format(ocb)));
-#else
     PACK((llk_init_packer_dest_offset_registers<false>()));
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(ocb)));
-#endif
     PACK((llk_pack_init(ocb)));
 
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_untilize_uninit(ocb)));
+#endif
 #endif
 }
 

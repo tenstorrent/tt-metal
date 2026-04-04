@@ -33,7 +33,7 @@
 inline void llk_pack_init(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
 
-    _llk_pack_init_<p_pacr::PACK0>(output_id);
+    _llk_pack_init_(output_id);
 }
 
 /**
@@ -88,7 +88,7 @@ inline void llk_pack(
     const std::uint8_t output_id = get_output_id(pack_output);
     const std::uint32_t l1_tile_index = get_output_tile_index<out_of_order_output, false>(output_id, output_tile_index);
 
-    _llk_pack_<p_pacr::PACK0>(tile_index, l1_tile_index);
+    _llk_pack_(tile_index, l1_tile_index);
 }
 
 /**
@@ -109,7 +109,7 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t pack_ou
         std::uint32_t l1_tile_index = get_output_tile_index<false /* out_of_order_output */, false /* untilize */>(
             output_id, 0 /* output_tile_index */);
 
-        _llk_pack_<p_pacr::PACK0>(tile_index, l1_tile_index);
+        _llk_pack_(tile_index, l1_tile_index);
     }
 }
 
@@ -197,25 +197,6 @@ TT_ALWAYS_INLINE void llk_pack_relu_config(const std::uint32_t config) {
 
 TT_ALWAYS_INLINE void llk_pack_relu_config(const ckernel::ReluConfig& relu_config) {
     _llk_pack_relu_config_<p_pacr::PACK0, false>(relu_config);
-}
-
-/**
- * @brief Restores the packer buffer descriptor to the default tile dimensions from the CB configuration.
- * Should be called after pack untilize to restore the packer state before calling pack_untilize_init again.
- *
- * @param new_output The output circular buffer to restore.
- */
-inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
-    const std::uint32_t output_id = get_output_id(new_output);
-
-    // Restore buffer descriptor to default tile dimensions from the CB configuration
-    buffer_descriptor_u bd_val = {0};
-    bd_val.f.l1_addr_16B = g_dfb_interface[output_id].tc_slots[0].base_addr;
-    bd_val.f.format = static_cast<std::uint8_t>(pack_dst_format[output_id]);
-    bd_val.f.x_dim = pack_tile_face_r_dim[output_id];
-    bd_val.f.y_dim = ckernel::trisc::FACE_C_DIM;
-    bd_val.f.z_dim = pack_tile_num_faces[output_id];
-    ckernel::trisc::_configure_buf_desc_table_(output_id, bd_val);
 }
 
 /**
