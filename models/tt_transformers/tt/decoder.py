@@ -462,8 +462,9 @@ class TransformerBlock(LightweightModule):
         if self.post_ff_norm is not None:
             post_ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
             ffn_out = self.post_ff_norm(ffn_out, mode, norm_config=post_ff_norm_config)
-            # Always partition in post-norm path (norm all-gathers, need fractured for residual add)
-            if self.num_devices > 1:
+            # post_ff_norm has enable_all_gather=False, so distributed norm (prefill) output
+            # is already fractured. Only partition when non-distributed (decode) where output is replicated.
+            if self.num_devices > 1 and not self.args.is_distributed_norm(mode):
                 ffn_out = ttnn.mesh_partition(
                     ffn_out,
                     memory_config=ffn_out.memory_config(),
