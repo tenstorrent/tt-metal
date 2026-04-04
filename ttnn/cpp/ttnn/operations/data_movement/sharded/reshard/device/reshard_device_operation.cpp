@@ -162,6 +162,15 @@ std::pair<bool, std::string> ReshardDeviceOperation::validate_inputs(
 
     auto output_tensor_spec = compute_output_specs(args, tensor_args);
     if (!CMAKE_UNIQUE_NAMESPACE::is_valid_for_legacy_reshard(input_tensor, output_tensor_spec.memory_config())) {
+        auto input_buffer_type = input_tensor.memory_config().buffer_type();
+        auto output_buffer_type = output_tensor_spec.memory_config().buffer_type();
+        if (input_buffer_type != BufferType::DRAM && input_buffer_type != BufferType::L1) {
+            return {false, "Input buffer type must be DRAM or L1 for ND sharded specialized reshard path"};
+        }
+        if (output_buffer_type != BufferType::DRAM && output_buffer_type != BufferType::L1) {
+            return {false, "Output buffer type must be DRAM or L1 for ND sharded specialized reshard path"};
+        }
+
         auto out_distribution_spec = output_tensor_spec.compute_buffer_sharding_args().buffer_distribution_spec();
         auto input_distribution_spec = input_tensor.buffer()->buffer_distribution_spec();
 

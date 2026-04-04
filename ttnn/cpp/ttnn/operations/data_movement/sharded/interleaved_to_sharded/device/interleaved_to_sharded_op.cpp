@@ -47,7 +47,7 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
         }
     }
     if (input_tensor.memory_config().memory_layout() != tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
-        return {false, "Input tensor memory layout must be INTERLEAVED"};
+        return {false, fmt::format("Input tensor memory layout must be INTERLEAVED, but got {}", input_tensor.memory_config().memory_layout())};
     }
     if (!output_mem_config.is_sharded()) {
         return {false, "Output memory config must be sharded"};

@@ -140,14 +140,17 @@ bool can_use_reshard(
     std::optional<DataType> output_dtype,
     const std::optional<Tensor>& output_tensor) {
     const auto input_memory_config = ttnn::get_memory_config(input_tensor);
-    const auto input_shard_spec = input_memory_config.value().shard_spec().value();
-    const auto output_shard_spec = output_mem_config.shard_spec().value();
-    // Check if we can use ttnn::reshard directly
-    bool use_reshard_workaround = (input_shard_spec.shape[1] != output_shard_spec.shape[1]) &&
-                                  (input_memory_config.value().memory_layout() != output_mem_config.memory_layout() &&
-                                   input_tensor.layout() == Layout::ROW_MAJOR);
-    if (use_reshard_workaround) {
-        return false;
+    if (input_memory_config.value().shard_spec().has_value() && output_mem_config.shard_spec().has_value()) {
+        const auto input_shard_spec = input_memory_config.value().shard_spec().value();
+        const auto output_shard_spec = output_mem_config.shard_spec().value();
+        // Check if we can use ttnn::reshard directly
+        bool use_reshard_workaround =
+            (input_shard_spec.shape[1] != output_shard_spec.shape[1]) &&
+            (input_memory_config.value().memory_layout() != output_mem_config.memory_layout() &&
+             input_tensor.layout() == Layout::ROW_MAJOR);
+        if (use_reshard_workaround) {
+            return false;
+        }
     }
 
     if (output_dtype.has_value()) {
