@@ -31,7 +31,7 @@ class TextRMSNorm(LightweightModule):
         mesh_device,
         state_dict,
         hidden_dim: int = 4096,
-        eps: float = 1e-5,
+        eps: float = 1e-6,
         weight_cache_path=None,
         state_dict_prefix: str = "",
         weight_key: str = "weight",

@@ -29,6 +29,8 @@ from pathlib import Path
 
 import requests
 
+from models.demos.molmo2.tests.verification_jsonl import row0_test_jsonl_prompt_text, row0_video_preprocess_prompt
+
 SCRIPT_DIR = Path(__file__).parent
 DEMO_DIR = SCRIPT_DIR / "demo"
 RESULTS_DIR = SCRIPT_DIR / "verification"
@@ -50,12 +52,10 @@ IMAGE_PROMPTS = [
     {"image": str(DEMO_DIR / "dog.jpg"), "prompt": "<|image|> What colors do you see?"},
 ]
 
-# Use a short video for testing
-VIDEO_URL = "https://storage.googleapis.com/oe-training-public/molmo2-eval-media/85682eb97ff9a6111ac0be7c1fdd087a37d496d53f5771b5922a22265a8ee25f.mp4"
-VIDEO_PROMPTS = [
-    "<|video|> What is happening in this video?",
-    "<|video|> Describe the main action in this video.",
-]
+# Use eval clip from test.jsonl row 0 (~30 sampled frames); demo prompt includes <|video|>, server uses plain text
+VIDEO_URL = "https://storage.googleapis.com/oe-training-public/molmo2-eval-media/d02d399003cca14e2a5c822d389821e553e6b7942c5640d48c075703e533d1dc.mp4"
+VIDEO_DEMO_PROMPT = row0_video_preprocess_prompt(SCRIPT_DIR)
+VIDEO_SERVER_TEXT = row0_test_jsonl_prompt_text(SCRIPT_DIR)
 
 
 def run_demo_test(batch_size: int, modality: str, use_trace: bool = True) -> dict:
@@ -103,8 +103,7 @@ def run_demo_test(batch_size: int, modality: str, use_trace: bool = True) -> dic
             cmd.extend(["--input-file", str(prompts_file)])
 
         elif modality == "video":
-            # Video test - use single video with decode trace
-            cmd.extend(["--video", VIDEO_URL, "--prompt", VIDEO_PROMPTS[0]])
+            cmd.extend(["--video", VIDEO_URL, "--prompt", VIDEO_DEMO_PROMPT])
             cmd.append("--max-tokens")
             cmd.append("50")
 
@@ -261,7 +260,7 @@ def run_server_test(batch_size: int, modality: str, server_url: str = "http://lo
                         {
                             "role": "user",
                             "content": [
-                                {"type": "text", "text": VIDEO_PROMPTS[i % len(VIDEO_PROMPTS)]},
+                                {"type": "text", "text": VIDEO_SERVER_TEXT},
                                 {"type": "video_url", "video_url": {"url": VIDEO_URL}},
                             ],
                         }
