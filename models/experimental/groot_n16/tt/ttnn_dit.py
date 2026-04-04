@@ -22,6 +22,7 @@ import math
 from typing import Any, Dict, List, Optional
 
 import torch
+import torch.nn.functional
 
 import ttnn
 from models.experimental.groot_n16.common.configs import DiTConfig
@@ -118,49 +119,63 @@ class DiTAttentionTTNN:
         Args:
             hidden_states: [B, q_seq, inner_dim] action tokens (Q source)
             encoder_hidden_states: [B, kv_seq, backbone_dim] backbone features (K/V source for cross-attn)
+
+        head_dim=48 is not tile-aligned, so we pad to 64, use SDPA, then unpad.
+        Q/K/V projections and head reshape done with CPU assist for correctness.
         """
-        scale = 1.0 / math.sqrt(self.head_dim)
-
-        # Q always from action tokens
-        q = ttnn.linear(hidden_states, self.to_q_weight, bias=self.to_q_bias,
-                        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH)
-
-        # K/V from backbone (cross-attn) or action tokens (self-attn)
-        kv_source = encoder_hidden_states if (self.is_cross_attention and encoder_hidden_states is not None) else hidden_states
-        k = ttnn.linear(kv_source, self.to_k_weight, bias=self.to_k_bias,
-                        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH)
-        v = ttnn.linear(kv_source, self.to_v_weight, bias=self.to_v_bias,
-                        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH)
-
         batch_size = hidden_states.shape[0]
         q_seq = hidden_states.shape[1]
+        padded_head_dim = ((self.head_dim + 31) // 32) * 32  # 48 -> 64
+
+        # Q projection: [B, q_seq, inner_dim] -> [B, q_seq, inner_dim]
+        q = ttnn.linear(hidden_states, self.to_q_weight, bias=self.to_q_bias,
+                        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+
+        # K/V source
+        kv_source = encoder_hidden_states if (self.is_cross_attention and encoder_hidden_states is not None) else hidden_states
         kv_seq = kv_source.shape[1]
 
-        # Reshape for multi-head: [B, seq, dim] -> [B, heads, seq, head_dim]
-        q = ttnn.reshape(q, (batch_size, q_seq, self.num_heads, self.head_dim))
-        q = ttnn.permute(q, (0, 2, 1, 3))
-        k = ttnn.reshape(k, (batch_size, kv_seq, self.num_heads, self.head_dim))
-        k = ttnn.permute(k, (0, 2, 1, 3))
-        v = ttnn.reshape(v, (batch_size, kv_seq, self.num_heads, self.head_dim))
-        v = ttnn.permute(v, (0, 2, 1, 3))
+        k = ttnn.linear(kv_source, self.to_k_weight, bias=self.to_k_bias,
+                        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+        v = ttnn.linear(kv_source, self.to_v_weight, bias=self.to_v_bias,
+                        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
 
-        q = ttnn.mul(q, scale)
-        attn = ttnn.matmul(q, k, memory_config=ttnn.L1_MEMORY_CONFIG,
-                           dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH)
+        # Reshape + pad on CPU for SDPA compatibility
+        def to_heads_padded(tensor, seq_len):
+            t = ttnn.to_torch(tensor).reshape(batch_size, seq_len, self.num_heads, self.head_dim)
+            t = torch.nn.functional.pad(t, (0, padded_head_dim - self.head_dim))
+            return ttnn.from_torch(
+                t.permute(0, 2, 1, 3).contiguous().to(torch.bfloat16),
+                dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                device=hidden_states.device(), memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+
+        q_heads = to_heads_padded(q, q_seq)
+        k_heads = to_heads_padded(k, kv_seq)
+        v_heads = to_heads_padded(v, kv_seq)
         ttnn.deallocate(q)
         ttnn.deallocate(k)
-
-        attn = ttnn.softmax_in_place(attn, numeric_stable=True)
-
-        context = ttnn.matmul(attn, v, memory_config=ttnn.L1_MEMORY_CONFIG,
-                              dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH)
-        ttnn.deallocate(attn)
         ttnn.deallocate(v)
 
-        # [B, heads, q_seq, head_dim] -> [B, q_seq, dim]
-        context = ttnn.permute(context, (0, 2, 1, 3))
-        context = ttnn.reshape(context, (batch_size, q_seq, self.inner_dim))
+        # SDPA
+        attn_output = ttnn.transformer.scaled_dot_product_attention(
+            q_heads, k_heads, v_heads, is_causal=False,
+        )
+        ttnn.deallocate(q_heads)
+        ttnn.deallocate(k_heads)
+        ttnn.deallocate(v_heads)
 
+        # Unpad + reshape back: [B, heads, q_seq, padded_hd] -> [B, q_seq, inner_dim]
+        out_cpu = ttnn.to_torch(attn_output)[:, :, :, :self.head_dim]
+        ttnn.deallocate(attn_output)
+        out_cpu = out_cpu.permute(0, 2, 1, 3).contiguous().reshape(batch_size, q_seq, self.inner_dim)
+
+        context = ttnn.from_torch(
+            out_cpu.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+            device=hidden_states.device(), memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        # Output projection
         output = ttnn.linear(context, self.to_out_0_weight, bias=self.to_out_0_bias,
                              memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH)
         ttnn.deallocate(context)
@@ -168,41 +183,41 @@ class DiTAttentionTTNN:
 
 
 class DiTFFNTTNN:
-    """GEGLU FFN: gate projection (split + GELU gate) -> down projection."""
+    """FFN: up projection with GELU -> down projection.
+
+    net.0.proj: Linear(1536, 6144) — up projection
+    GELU activation
+    net.2: Linear(6144, 1536) — down projection
+
+    No GEGLU split — the ff weight shapes confirm this:
+    net.0.proj.weight [6144, 1536] and net.2.weight [1536, 6144]
+    """
 
     def __init__(self, weights: Dict[str, torch.Tensor], prefix: str, device: Any):
         self.device = device
 
-        w_gate = weights.get(f"{prefix}net.0.proj.weight")
-        b_gate = weights.get(f"{prefix}net.0.proj.bias")
+        w_up = weights.get(f"{prefix}net.0.proj.weight")
+        b_up = weights.get(f"{prefix}net.0.proj.bias")
         w_down = weights.get(f"{prefix}net.2.weight")
         b_down = weights.get(f"{prefix}net.2.bias")
 
-        if w_gate is not None:
-            self.gate_weight = preprocess_linear_weight(w_gate, device)
-            self.gate_bias = preprocess_linear_bias(b_gate, device) if b_gate is not None else None
+        if w_up is not None:
+            self.up_weight = preprocess_linear_weight(w_up, device)
+            self.up_bias = preprocess_linear_bias(b_up, device) if b_up is not None else None
             self.down_weight = preprocess_linear_weight(w_down, device)
             self.down_bias = preprocess_linear_bias(b_down, device) if b_down is not None else None
-            self.gate_out_dim = w_gate.shape[0]  # 6144 = 2 * 3072
 
     def __call__(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
-        gate_proj = ttnn.linear(hidden_states, self.gate_weight, bias=self.gate_bias,
-                                memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH)
+        # Up projection with GELU: 1536 -> 6144
+        h = ttnn.linear(hidden_states, self.up_weight, bias=self.up_bias,
+                        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b,
+                        core_grid=CORE_GRID_BH, activation="gelu")
 
-        half_dim = self.gate_out_dim // 2
-        gate = ttnn.slice(gate_proj, [0, 0, 0], [gate_proj.shape[0], gate_proj.shape[1], half_dim])
-        value = ttnn.slice(gate_proj, [0, 0, half_dim],
-                           [gate_proj.shape[0], gate_proj.shape[1], self.gate_out_dim])
-        ttnn.deallocate(gate_proj)
-
-        gate = ttnn.gelu(gate)
-        intermediate = ttnn.mul(gate, value)
-        ttnn.deallocate(gate)
-        ttnn.deallocate(value)
-
-        output = ttnn.linear(intermediate, self.down_weight, bias=self.down_bias,
-                             memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH)
-        ttnn.deallocate(intermediate)
+        # Down projection: 6144 -> 1536
+        output = ttnn.linear(h, self.down_weight, bias=self.down_bias,
+                             memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b,
+                             core_grid=CORE_GRID_BH)
+        ttnn.deallocate(h)
         return output
 
 
