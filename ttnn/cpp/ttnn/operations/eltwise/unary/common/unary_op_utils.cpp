@@ -17,23 +17,26 @@ namespace {
 std::string get_macro_definition(UnaryOpType op_type) {
     switch (op_type) {
         case UnaryOpType::COSH: return "SFPU_OP_COSH_INCLUDE";
+        case UnaryOpType::CBRT: return "SFPU_OP_CBRT_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
 
 template <typename T>
 std::pair<std::string, std::string> get_op_init_and_func_parameterized(
-    UnaryOpType op_type, std::span<const T> params, const std::string& idst, std::optional<DataType> input_dtype) {
+    UnaryOpType op_type,
+    std::span<const T> params,
+    const std::string& idst [[maybe_unused]],
+    std::optional<DataType> input_dtype [[maybe_unused]]) {
     TT_FATAL(
         is_parametrized_type(op_type),
         "operator should support at least one parameter but op_type {} does not",
         op_type);
     // TODO don't cast T to float when precision needs to be preserved
-    const T param0_raw = params[0];
-    float param0 = static_cast<float>(params[0]);
+    [[maybe_unused]] const T param0_raw = params[0];
+    [[maybe_unused]] float param0 = static_cast<float>(params[0]);
     switch (op_type) {
-        case UnaryOpType::MISH:
-            return {};// MISH uses dedicated mish_kernel.cpp;
+        case UnaryOpType::MISH: return {};  // MISH uses dedicated mish_kernel.cpp;
         case UnaryOpType::LOGIT: return {};
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };
@@ -47,6 +50,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             return {"dropout_tile_init();", fmt::format("dropout_tile({});", idst)};
         }
         case UnaryOpType::COSH: return {"cosh_tile_init();", fmt::format("cosh_tile({});", idst)};
+        case UnaryOpType::CBRT: return {"cbrt_tile_init();", fmt::format("cbrt_tile({});", idst)};
         default: TT_THROW("unexpected op type {}", op_type);
     };
 }

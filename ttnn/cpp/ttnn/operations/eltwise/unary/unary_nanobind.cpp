@@ -66,6 +66,8 @@ Tensor unary_composite_3param_to_4param_wrapper(
     return Func(input_tensor, parameter_a, parameter_b, memory_config, std::nullopt);
 }
 
+// BEGIN: Disabled binding functions - unused after batch nuke (clamp, clip)
+#if 0
 void bind_unary_clamp(nb::module_& mod) {
     const char* doc = R"doc(
         Applies clamp to :attr:`input_tensor` element-wise.
@@ -181,6 +183,8 @@ void bind_unary_clip(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("memory_config") = nb::none()});
 }
+#endif
+// END: Disabled binding functions (clamp, clip)
 
 template <
     ttnn::unique_string OpName,
@@ -472,6 +476,8 @@ void bind_unary_operation_overload_complex_return_complex(
             nb::kw_only(),
             nb::arg("memory_config")});
 }
+// NOTE: bind_unary_operation_overload_complex_return_complex disabled — references nuked ttnn::reciprocal.
+// Will be restored when reciprocal is regenerated.
 
 #endif  // end first #if 0 block (reciprocal-related templates)
 
@@ -890,6 +896,9 @@ void bind_unary_operation_with_dim_parameter(
             Func, nb::arg("input_tensor"), nb::arg("dim") = -1, nb::kw_only(), nb::arg("memory_config") = nb::none()});
 }
 
+// BEGIN: Disabled binding functions - reference nuked operations (softplus, xielu, sigmoid_accurate, sigmoid)
+// These will be restored as the corresponding operations are regenerated.
+#if 0
 void bind_softplus(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
@@ -1196,6 +1205,8 @@ void bind_sigmoid(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("output_tensor") = nb::none());
 }
+#endif
+// END: Disabled binding functions
 
 #endif
 // END: Binding functions disabled during SFPU nuke.
@@ -1797,6 +1808,13 @@ void py_module(nb::module_& mod) {
     bind_identity(mod);
     bind_unary_logit(mod);
     bind_unary_chain(mod);
+
+    bind_unary_operation_subcoregrids<"cbrt">(
+        mod,
+        &ttnn::cbrt,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|cbrt|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     bind_unary_operation_with_fast_and_approximate_mode<"mish", &ttnn::mish>(
         mod, "[Supported range -20 to inf]", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");

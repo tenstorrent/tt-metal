@@ -7,4 +7,5 @@
 enum class SfpuType {
     unused = 0,
     cosh,
+    cbrt,
 };

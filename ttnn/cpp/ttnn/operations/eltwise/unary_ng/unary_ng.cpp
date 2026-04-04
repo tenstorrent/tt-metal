@@ -81,6 +81,7 @@ namespace ttnn {
     }
 
 DEFINE_UNARY_NG_OP(cosh, COSH)
+DEFINE_UNARY_NG_OP(cbrt, CBRT)
 
 #undef DEFINE_UNARY_NG_OP
 

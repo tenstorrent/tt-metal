@@ -28,6 +28,7 @@ namespace ttnn {
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 DECLARE_UNARY_NG_OP(cosh)
+DECLARE_UNARY_NG_OP(cbrt)
 
 #undef DECLARE_UNARY_NG_OP
 

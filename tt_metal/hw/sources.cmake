@@ -43,6 +43,8 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_binary_sfpu.h
     inc/api/compute/eltwise_unary/README.md
     inc/api/compute/eltwise_unary/cosh.h
+    inc/api/compute/eltwise_unary/cbrt.h
+    inc/api/compute/eltwise_unary/eltwise_unary.h
     inc/api/compute/eltwise_unary/sfpu_split_includes.h
     inc/api/compute/ema.h
     inc/api/compute/experimental/mul_reduce_scalar.h

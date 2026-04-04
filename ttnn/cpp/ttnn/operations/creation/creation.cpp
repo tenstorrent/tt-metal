@@ -224,7 +224,14 @@ Tensor full_like_impl(
         // requires reference tensor to be in TILE for device operation fill - this will be changed later
         // ttnn::fill not yet reimplemented after SFPU nuke; fall through to full_impl
         if (false) {
-        }
+            if (is_tile_layout &&
+                (dtype_value == DataType::BFLOAT8_B || dtype_value == DataType::BFLOAT16 ||
+                 dtype_value == DataType::FLOAT32) &&
+                tensor.storage_type() == StorageType::DEVICE) {
+                // TODO: Restore when ttnn::fill is regenerated after batch nuke
+                TT_THROW("ttnn::fill not available - was nuked; falling through to CPU path");
+                // return ttnn::fill(tensor, fill_value, memory_config, optional_output_tensor);
+            }
         return full_impl(
             tensor.logical_shape(),
             fill_value,

@@ -6,4 +6,6 @@
 
 #if SFPU_OP_COSH_INCLUDE
 #include "api/compute/eltwise_unary/cosh.h"
+#if SFPU_OP_CBRT_INCLUDE
+#include "api/compute/eltwise_unary/cbrt.h"
 #endif
