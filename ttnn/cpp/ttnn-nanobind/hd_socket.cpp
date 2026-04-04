@@ -10,8 +10,8 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
-#include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/vector.h>
+#include <nanobind/stl/string.h>
 
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
@@ -171,6 +171,10 @@ void py_module_types(nb::module_& mod) {
 
                 Args:
                     socket_id (str): A user-provided identifier used in the descriptor filename.
+
+                Returns:
+                    str: Full filesystem path to the exported descriptor file, typically
+                    ``/dev/shm/tt_h2d_<socket_id>.bin``.
             )doc")
         .def_static(
             "connect",
@@ -307,6 +311,13 @@ void py_module_types(nb::module_& mod) {
             nb::arg("socket_id"),
             R"doc(
                 Exports a descriptor file for cross-process socket attachment.
+
+                Args:
+                    socket_id (str): Identifier used to name the exported descriptor.
+
+                Returns:
+                    str: Full filesystem path to the exported descriptor file, typically
+                    ``/dev/shm/tt_d2h_<socket_id>.bin``.
             )doc")
         .def_static(
             "connect",
