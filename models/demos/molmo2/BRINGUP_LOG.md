@@ -1,5 +1,7 @@
 # Molmo2-8B Bringup Log
 
+**Session note (2026-04-04):** HF parity plan — pooling mask/mean, RMS eps 1e-6, multimodal prefill mask + `token_type_ids`, pytest `test_prefill_attention_mask.py`; see `CLAUDE.md` for memory/API reference notes.
+
 ## Current Status: vLLM Multimodal Inference Working
 
 ### Summary

@@ -181,13 +181,13 @@ class VisionMLP(LightweightModule):
         if seq_len > 1024 and seq_len % 1024 == 0:
             x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
 
-        # w1 with QuickGELU activation (column-parallel: each device has local intermediate)
-        # TTNN uses "gelu" which is the fast approximation
+        # w1: HF ViT uses F.gelu(..., approximate="tanh") (gelu_pytorch_tanh). TTNN linear
+        # activation="gelu" matches that tanh-approx GELU for Molmo2 PCC vs HF.
         hidden = ttnn.linear(
             x,
             self.w1_weight,
             bias=self.w1_bias,
-            activation="gelu",  # TTNN's gelu is the fast approximation matching pytorch_tanh
+            activation="gelu",
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

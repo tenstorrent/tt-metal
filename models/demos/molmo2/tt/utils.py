@@ -9,7 +9,7 @@ Contains image/video preprocessing, constants, and helper functions
 used by both the standalone demo and vLLM integration.
 """
 
-from typing import Tuple
+from typing import Optional, Tuple
 
 import einops
 import numpy as np
@@ -86,6 +86,26 @@ def pad_input_ids(input_ids: torch.Tensor, pad_token_id: int = VISION_PAD_TOKEN_
         pad_amount = padded_len - original_len
         input_ids = torch.nn.functional.pad(input_ids, (0, pad_amount), value=pad_token_id)
     return input_ids, padded_len, original_len
+
+
+def pad_seq_2d_right(
+    tensor: Optional[torch.Tensor],
+    *,
+    original_len: int,
+    padded_len: int,
+    pad_value: float,
+) -> Optional[torch.Tensor]:
+    """
+    Right-pad a ``[B, S]`` tensor to ``padded_len`` (e.g. match ``pad_input_ids`` output).
+    """
+    if tensor is None:
+        return None
+    if tensor.shape[1] != original_len:
+        raise ValueError(f"Expected seq len {original_len}, got {tensor.shape[1]}")
+    if padded_len <= original_len:
+        return tensor[:, :padded_len]
+    pad_amt = padded_len - original_len
+    return torch.nn.functional.pad(tensor, (0, pad_amt), value=pad_value)
 
 
 # =============================================================================
