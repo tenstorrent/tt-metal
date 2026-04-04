@@ -435,8 +435,8 @@ class TransformerBlock(LightweightModule):
         if self.args.is_multichip and not TG:
             if not self.args.is_distributed_norm(mode):
                 # Decode: use ff_norm's sharded config (produces correct format for MLP DRAM-sharded matmul)
-                ffn_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
-                ffn_in = self.ff_norm(hidden_states, mode, norm_config=ffn_norm_config, gather_only=True)
+                ffn_norm_config2 = self.args.get_norm_config("ff", mode, self.prefetcher)
+                ffn_in = self.ff_norm(hidden_states, mode, norm_config=ffn_norm_config2, gather_only=True)
             else:
                 # Prefill: explicit all-gather to DRAM interleaved
                 ffn_in = ttnn.experimental.all_gather_async(
