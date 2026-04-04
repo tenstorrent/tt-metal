@@ -102,8 +102,8 @@ class ModelPipeline:
                 batch_size=1,
             )
 
-            if io_socket_descriptor_prefix is not None:
-                self.pipeline.export_host_socket_descriptors(io_socket_descriptor_prefix)
+            # if io_socket_descriptor_prefix is not None:
+            #     self.pipeline.export_host_socket_descriptors(io_socket_descriptor_prefix)
 
         logger.info(f"Created ModelPipeline for mesh id {self.pipeline.my_mesh_id}.")
 

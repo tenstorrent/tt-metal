@@ -1122,6 +1122,8 @@ class _CombinedPipelineBlock:
             d2h_upstream_core=ttnn.MeshCoreCoord(spec_exit_device_coord, argmax_final_core),
             metadata_size_bytes=TOKEN_META_PAGE_SIZE_BYTES,
         )
+        self.h2d_socket.export_descriptor(f"deepseek_h2d")
+        self.d2h_socket.export_descriptor(f"deepseek_d2h")
 
         print(
             f"[COMBINED P{my_mesh_id}] _CombinedPipelineBlock created: "
