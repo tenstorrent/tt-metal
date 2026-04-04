@@ -569,8 +569,8 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
         reader_kernel_args[9] = mask_id;
 
         if (attributes.is_causal_mask) {
-            reader_kernel_args[10] = mask_curr_ht;
-            reader_kernel_args[11] = mask_offset;
+            reader_kernel_args[11] = mask_curr_ht;
+            reader_kernel_args[12] = mask_offset;
         }
 
         softmax_kernel_args[0] = num_tile_rows_per_core;

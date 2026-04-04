@@ -319,7 +319,7 @@ void kernel_main() {
                             uint32_t index = w + index_subblock_w_offset + index_h_offset;
                             uint32_t index_mask = w + index_subblock_w_offset;
 #ifdef TILIZE_IN
-                            mul_tiles(cb_in, cb_input_mask, index, index_mask, w);
+                            mul_tiles(cb_in_id, cb_input_mask_id, index, index_mask, w);
 #else
                             mul_tiles(cb_in0_id, cb_input_mask_id, index, index_mask, w);
 #endif

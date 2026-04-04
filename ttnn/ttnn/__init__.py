@@ -478,7 +478,9 @@ from ttnn.operations.losses import (
     LossReductionMode,
 )
 
-from ttnn.operations.reduction import ReduceType
+from ttnn.operations.reduction import (
+    ReduceType,
+)
 
 from ttnn.operations.ccl import Topology, DispatchAlgorithm, WorkerMode
 
