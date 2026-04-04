@@ -44,7 +44,8 @@ template <typename T>
 bool is_parametrized_type(T val) {
     switch (val) {
         case UnaryOpType::MISH:
-        case UnaryOpType::LOGIT: return true;
+        case UnaryOpType::LOGIT:
+        case UnaryOpType::HARDTANH: return true;
         default: return false;
     }
     return false;

@@ -4,6 +4,7 @@
 
 #include "unary_op_utils.hpp"
 
+#include <bit>
 #include <optional>
 #include <tt_stl/assert.hpp>
 #include "ttnn/tensor/types.hpp"
@@ -19,6 +20,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::COSH: return "SFPU_OP_COSH_INCLUDE";
         case UnaryOpType::CBRT: return "SFPU_OP_CBRT_INCLUDE";
         case UnaryOpType::SELU: return "SFPU_OP_SELU_INCLUDE";
+        case UnaryOpType::HARDTANH: return "SFPU_OP_HARDTANH_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -41,6 +43,17 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     switch (op_type) {
         case UnaryOpType::MISH: return {};  // MISH uses dedicated mish_kernel.cpp;
         case UnaryOpType::LOGIT: return {};
+        case UnaryOpType::HARDTANH: {
+            float min_val = params.size() > 0 ? param0 : -1.0f;
+            float max_val = params.size() > 1 ? static_cast<float>(params[1]) : 1.0f;
+            return {
+                "hardtanh_tile_init();",
+                fmt::format(
+                    "hardtanh_tile({}, {:#010x}u, {:#010x}u);",
+                    idst,
+                    std::bit_cast<uint32_t>(min_val),
+                    std::bit_cast<uint32_t>(max_val))};
+        }
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };
     }

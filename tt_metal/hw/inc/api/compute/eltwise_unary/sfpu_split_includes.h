@@ -10,4 +10,6 @@
 #include "api/compute/eltwise_unary/cbrt.h"
 #if SFPU_OP_SELU_INCLUDE
 #include "api/compute/eltwise_unary/selu.h"
+#if SFPU_OP_HARDTANH_INCLUDE
+#include "api/compute/eltwise_unary/hardtanh.h"
 #endif

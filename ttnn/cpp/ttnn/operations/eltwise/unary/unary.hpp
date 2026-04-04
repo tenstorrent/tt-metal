@@ -293,6 +293,22 @@ operations::complex::ComplexTensor reciprocal(
 // abs overload for ComplexTensor
 Tensor abs(const operations::complex::ComplexTensor& input_tensor, const tt::tt_metal::MemoryConfig& output_mem_config);
 
+// hardtanh: two float parameters with defaults
+inline Tensor hardtanh(
+    const Tensor& input_tensor,
+    float min_val = -1.0f,
+    float max_val = 1.0f,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
+    return ttnn::detail::unary_impl(
+        input_tensor,
+        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::HARDTANH, min_val, max_val}},
+        memory_config,
+        optional_output_tensor,
+        sub_core_grids);
+}
+
 // -----------------------------------------------------------------------------
 // Functions defined without macros (non-SFPU operations kept)
 // -----------------------------------------------------------------------------
