@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "dataflow_common.hpp"
@@ -208,6 +209,21 @@ void save_accumulators_with_trid(
     cb_wait_front(cb_max_out, Sq_chunk_t);
     cb_wait_front(cb_sum_out, Sq_chunk_t);
 
+    // static bool dbg_printed = false;
+    // if (!dbg_printed) {
+    //     dbg_printed = true;
+    //     DPRINT << "=== sum tile 0 ===" << ENDL();
+    //     for (uint32_t row = 0; row < 32; row++) {
+    //         SliceRange sr = { .h0 = (uint8_t)row, .h1 = (uint8_t)(row+1), .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
+    //         DPRINT << row << ":" << TileSlice((uint8_t)cb_sum_out, 0, sr, TSLICE_OUTPUT_CB, TSLICE_RD_PTR) << ENDL();
+    //     }
+    //     DPRINT << "=== max tile 0 ===" << ENDL();
+    //     for (uint32_t row = 0; row < 32; row++) {
+    //         SliceRange sr = { .h0 = (uint8_t)row, .h1 = (uint8_t)(row+1), .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
+    //         DPRINT << row << ":" << TileSlice((uint8_t)cb_max_out, 0, sr, TSLICE_OUTPUT_CB, TSLICE_RD_PTR) << ENDL();
+    //     }
+    // }
+
     uint32_t max_write_addr = get_read_ptr(cb_max_out);
     for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
         noc_async_write_tile(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, max_write_addr);
@@ -411,8 +427,8 @@ void kernel_main() {
         generate_lightweight_mask_tiles<global_n_partial_col, joint_l_partial_col, cb_mask_in, is_causal>();
     }
 
-    const uint32_t last_active_ring_iter =
-        find_last_active_ring_iter(fused_op_receiver.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
+    const uint32_t last_active_ring_iter = find_last_active_ring_iter(
+        fused_op_receiver.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L, is_causal, is_balanced);
 
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
@@ -497,11 +513,15 @@ void kernel_main() {
                 const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
                 const uint32_t q_chunk = global_q_chunk % num_q_chunks;
 
+                const bool balanced_skip_q = q_chunk < half_sequence && is_balanced && ring_index < ring_id;
+
                 const auto qi =
                     get_q_chunk_info(q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, local_padded_Nt);
                 const uint32_t end_seq_tile = get_end_seq_tile(qi, ring_id, Lt, local_padded_Nt);
 
-                // 1. Complete restore + intra-ring prefetch (ring_iter > 0 only)
+                // 1. Complete restore + intra-ring prefetch (ring_iter > 0 only).
+                // Runs for ALL Q chunks (including balanced-skipped) to keep the
+                // prefetch pipeline in sync.
                 if (!single_q_chunk && ring_iter > 0) {
                     complete_restore(cb_prev_out, out_num_tiles, cb_max_in, cb_sum_in, Sq_chunk_t);
 
@@ -520,7 +540,8 @@ void kernel_main() {
                         if (next_trid != TRID_INNER || next_q_index == 1) {
                             noc_async_write_barrier_with_trid(next_trid);
                         }
-                        const uint32_t next_q_global = global_q_chunk + 1;
+                        const uint32_t next_q_global =
+                            remap_q_index(global_q_start + next_q_index, num_q_chunks, use_zigzag_balancing);
                         const uint32_t nb_next = next_q_global / (NH * num_q_chunks);
                         const uint32_t nq_next = (next_q_global % (NH * num_q_chunks)) / num_q_chunks;
                         const uint32_t qc_next = next_q_global % num_q_chunks;
@@ -547,9 +568,9 @@ void kernel_main() {
 
                 // 2. Cross-ring prefetch: Q[N-1] → Q[0] of next ring iter.
                 // Reads fly during Q[N-1]'s K-loop + save drain.
-                if (!single_q_chunk && !is_last_ring_iter && (global_q_chunk + 1 >= global_q_end)) {
+                if (!single_q_chunk && !is_last_ring_iter && (q_index == last_q_index)) {
                     noc_async_write_barrier_with_trid(TRID_FIRST);
-                    const uint32_t gq0 = global_q_start;
+                    const uint32_t gq0 = remap_q_index(global_q_start, num_q_chunks, use_zigzag_balancing);
                     const uint32_t nb0 = gq0 / (NH * num_q_chunks);
                     const uint32_t nq0 = (gq0 % (NH * num_q_chunks)) / num_q_chunks;
                     const uint32_t qc0 = gq0 % num_q_chunks;
@@ -573,9 +594,17 @@ void kernel_main() {
                         stats_tile_bytes);
                 }
 
-                // === Compute runs K-loop for this Q chunk ===
+                // 3. Balanced causal skip: on non-last ring iters, compute pops staging
+                // (it's the designated consumer). Writer just skips — no save/write needed.
+                // On the last ring iter, fall through to signal + write (normalize-only).
+                if (balanced_skip_q && !is_last_ring_iter) {
+                    continue;
+                }
+
+                // === Compute runs K-loop (or normalize-only on last iter) ===
 
                 // Wait for compute to signal last K-chunk start (multi-Q only).
+                // Normalize-only path also pushes this signal.
                 if (!single_q_chunk) {
                     cb_wait_front(cb_signal, 1);
                     cb_pop_front(cb_signal, 1);

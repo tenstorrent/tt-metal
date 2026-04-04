@@ -139,8 +139,8 @@ void kernel_main() {
         {cb_sum_B, cb_max_B, cb_out_im_B},  // cur
     };
 
-    const uint32_t last_active_ring_iter =
-        find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
+    const uint32_t last_active_ring_iter = find_last_active_ring_iter(
+        fused_op_indexer.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L, is_causal, is_balanced);
 
     uint32_t ring_index = fused_op_indexer.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
@@ -200,6 +200,12 @@ void kernel_main() {
         const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
 
         if constexpr (use_streaming_compute) {
+            uint32_t iter_num_kv_chunks_v2 = num_kv_chunks;
+            if (is_causal && is_balanced && ring_index > ring_id) {
+                iter_num_kv_chunks_v2 /= 2;
+            }
+            bool skip_first_half_q_v2 = (ring_index >= ring_id ? false : is_balanced);
+
             sdpa_ring_v2<
                 Sq_chunk_t,
                 Sk_chunk_t,
@@ -231,7 +237,7 @@ void kernel_main() {
                 cb_sum_in>(
                 global_q_start,
                 global_q_end,
-                num_kv_chunks,
+                iter_num_kv_chunks_v2,
                 ring_iter,
                 ring_id,
                 num_local_k_chunks,
@@ -246,7 +252,9 @@ void kernel_main() {
                 acc_state,
                 is_last_ring_iter,
                 q_per_core,
-                lw_mask);
+                lw_mask,
+                skip_first_half_q_v2,
+                use_zigzag_balancing);
         } else {
             bool is_causal_ring_iter = (ring_iter == 0 ? is_causal : false);
 

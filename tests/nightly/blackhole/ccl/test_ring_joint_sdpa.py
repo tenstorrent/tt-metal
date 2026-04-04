@@ -250,6 +250,27 @@ def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
         )
     )
 
+    # Causal MLA v2 config: Sq=5/Sk=8 is v2-eligible with unconstrained solver.
+    # Seq 2560 = LCM(160, 256) * 2, divisible by both chunk sizes.
+    configs.append(
+        ModelConfig(
+            name="mla_causal_v2",
+            nhq=mla_nhq,
+            nhk=1,
+            nhv=mla_nhq,
+            d_q=576,
+            d_k=576,
+            d_v=128,
+            is_causal=True,
+            is_balanced=True,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat8_b,
+            q_chunk_sizes=[160],  # Sq_chunk_t=5
+            k_chunk_sizes=[256],  # Sk_chunk_t=8
+            seq_len=3200,
+        )
+    )
+
     return {config.name: config for config in configs}
 
 
@@ -761,6 +782,28 @@ def run_ring_joint_sdpa(
         out_pass_main, out_pcc_main = comp_pcc(gt_main, tt_out_torch, pcc_threshold)
         rmse_main = torch.sqrt(((gt_main - tt_out_torch) ** 2).mean()).item()
         logger.info(f"Main output - PCC: {out_pcc_main}, RMSE: {rmse_main:.6f}")
+
+        # DEBUG: per-token error detail with L/H classification
+        seq_per_dev = sq // mesh_config.sp_size
+        q_cs = q_chunk_size  # local alias to avoid shadowing
+        num_q_chunks = seq_per_dev // q_cs
+        half_q = num_q_chunks // 2
+        bad_details = []
+        for tok in range(gt_main.shape[2]):
+            gt_tok = gt_main[0, 0, tok, :]
+            tt_tok = tt_out_torch[0, 0, tok, :]
+            atol = (gt_tok - tt_tok).abs().max().item()
+            if atol > 0.5:
+                dev = tok // seq_per_dev
+                local_tok = tok % seq_per_dev
+                qc = local_tok // q_cs
+                pos_in_qc = local_tok % q_cs
+                lh = "L" if qc < half_q else "H"
+                bad_details.append((dev, qc, lh, pos_in_qc, atol))
+        for dev, qc, lh, pos, atol in bad_details:
+            print(f"  BAD D{dev} qc={qc}({lh}) pos={pos}/{q_cs} atol={atol:.3f}", flush=True)
+        total_bad = len(bad_details)
+        print(f"  Total bad: {total_bad} / {gt_main.shape[2]}", flush=True)
 
         if rmse_threshold is not None:
             assert rmse_main < rmse_threshold, f"Main RMSE {rmse_main:.6f} exceeds threshold {rmse_threshold}"

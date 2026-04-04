@@ -378,7 +378,7 @@ SDPA_NOINLINE void sub_exp_first_col_blocks(
  * sum_q_subblock controls read offset for sum_in_cb (cumulative when not popped per-row).
  */
 template <uint32_t sbh_t, uint32_t sbw_t, uint32_t dst_size>
-void salad_correct_fused(
+__attribute__((noinline, noclone)) void salad_correct_fused(
     uint32_t out_in_cb,
     uint32_t sum_in_cb,
     uint32_t bcast_cb,
@@ -480,7 +480,7 @@ void salad_correct_fused(
  * scratch_cb is a 1-tile CB reused for the reciprocal intermediate.
  */
 template <bool profiling_enabled, uint32_t head_dim_t_, uint32_t dst_size>
-void normalize_row_streaming(
+static __attribute__((noinline, noclone)) void normalize_row_streaming(
     uint32_t cur_sum_cb,
     uint32_t cur_out_cb,
     uint32_t col_identity_cb,
@@ -607,18 +607,41 @@ static SDPA_NOINLINE void apply_lightweight_mask_streaming(
     uint32_t num_padded,
     bool has_partial,
     uint32_t partial_tile_idx,
-    uint32_t sbh) {
+    uint32_t sbh,
+    bool causal = false,
+    uint32_t causal_neginf_idx = 0,
+    uint32_t causal_diag_idx = 0,
+    uint32_t q_start_tile = 0,
+    uint32_t k_start_tile = 0,
+    uint32_t active_Sk = num_cols) {
     uint32_t boundary_col = num_cols - num_padded - (has_partial ? 1 : 0);
+    copy_tile_to_dst_init_short(mask_cb);
     for (uint32_t row = 0; row < sbh; row++) {
         uint32_t row_offset = (q_subblock * sbh + row) * num_cols;
 
+        // Causal mask: per-row diagonal + trailing neginf
+        if (causal) {
+            int32_t diag_col = (int32_t)(q_start_tile + q_subblock * sbh + row) - (int32_t)k_start_tile;
+            if (diag_col < 0) {
+                for (uint32_t col = 0; col < active_Sk; col++) {
+                    l1_acc_single_tile(mask_cb, causal_neginf_idx, out_cb, row_offset + col);
+                }
+            } else if ((uint32_t)diag_col < active_Sk) {
+                l1_acc_single_tile(mask_cb, causal_diag_idx, out_cb, row_offset + (uint32_t)diag_col);
+                for (uint32_t col = (uint32_t)diag_col + 1; col < active_Sk; col++) {
+                    l1_acc_single_tile(mask_cb, causal_neginf_idx, out_cb, row_offset + col);
+                }
+            }
+        }
+
+        // Padding mask: partial tile + fully-padded columns (unchanged)
         if (has_partial) {
             l1_acc_single_tile(mask_cb, partial_tile_idx, out_cb, row_offset + boundary_col);
         }
 
         uint32_t start = num_cols - num_padded;
         for (uint32_t col = start; col < num_cols; col++) {
-            l1_acc_single_tile(mask_cb, 0, out_cb, row_offset + col);  // neginf is always tile 0
+            l1_acc_single_tile(mask_cb, 0, out_cb, row_offset + col);
         }
     }
 }
@@ -669,7 +692,7 @@ template <
     uint32_t cb_normalized_out = 0,
     uint32_t cb_mask_in = 0,
     uint32_t KT_stride = Sk_chunk_t>
-static void sdpa_inner_loop_step(
+static __attribute__((noinline, noclone)) void sdpa_inner_loop_step(
     AccumulatorHalf& prev,
     AccumulatorHalf& cur,
     const bool is_last_iter,
@@ -680,7 +703,12 @@ static void sdpa_inner_loop_step(
     const bool reduce_trigger = false,
     const uint32_t actual_sbw = qkt_subblock_w,
     const uint32_t save_out_cb = INVALID_CB,
-    const uint32_t save_max_cb = INVALID_CB) {
+    const uint32_t save_max_cb = INVALID_CB,
+    const bool apply_causal = false,
+    const uint32_t causal_q_start_tile = 0,
+    const uint32_t causal_k_start_tile = 0,
+    const uint32_t causal_neginf_idx = 0,
+    const uint32_t causal_diag_idx = 0) {
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     // TODO: pick up the size of dest from dest_helper once it is merged to main.
@@ -793,23 +821,33 @@ static void sdpa_inner_loop_step(
             reconfig_data_format(cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im);
         }
 
-        // Ring mask: L1-accumulate partial-tile mask onto cb_qkt_im for this row group.
-        // Full-tile padding handled by active_Sk narrowing (reduce/sub_exp/V skip padded tiles),
-        // but num_padded must still reflect the actual count so boundary_col places the partial
-        // mask at active_Sk-1 instead of Sk_chunk_t-1.
+        // Ring mask: L1-accumulate causal + padding masks onto cb_qkt_im for this row group.
         if constexpr (use_ring_mask) {
-            if (apply_mask && lw_partial_tile_idx > 0) {
+            if (apply_causal || (apply_mask && lw_partial_tile_idx > 0)) {
+#ifdef ARCH_BLACKHOLE
+                // MOP is configured for actual_sbw tiles (blocked matmul); mask needs 1 tile per pack.
+                PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, 1)));
+#endif
                 copy_tile_to_dst_init_short(cb_mask_in);
                 PACK((llk_pack_reconfig_l1_acc(1)));
                 apply_lightweight_mask_streaming<KT_stride>(
                     cb_mask_in,
                     cb_qkt_im,
                     q_subblock,
-                    Sk_chunk_t - active_Sk,  // padded tile count for correct boundary_col
-                    true,                    // has_partial — guaranteed by outer guard (lw_partial_tile_idx > 0)
+                    Sk_chunk_t - active_Sk,
+                    (apply_mask && lw_partial_tile_idx > 0),
                     lw_partial_tile_idx,
-                    qkt_subblock_h);
+                    qkt_subblock_h,
+                    apply_causal,
+                    causal_neginf_idx,
+                    causal_diag_idx,
+                    causal_q_start_tile,
+                    causal_k_start_tile,
+                    active_Sk);
                 PACK((llk_pack_reconfig_l1_acc(0)));
+#ifdef ARCH_BLACKHOLE
+                PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, actual_sbw)));
+#endif
             }
         }
 
@@ -863,6 +901,18 @@ static void sdpa_inner_loop_step(
     // ========== PHASE 2: Drain last row + QKT@V + SALAD ==========
     // After Phase 1: all rows are pushed (via hold_wr_ptr) in cb_qkt_im.
     // Rows 0..N-2 are softmax'd in-place; row N-1 has raw matmul output.
+
+    // if (apply_causal && is_first_iter) {
+    //     static bool qkt_printed = false;
+    //     if (!qkt_printed) {
+    //         qkt_printed = true;
+    //         for (uint32_t row = 0; row < 32; row++) {
+    //             SliceRange sr = { .h0 = (uint8_t)row, .h1 = (uint8_t)(row+1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+    //             DPRINT_UNPACK(DPRINT << row << ":" << TileSlice(cb_qkt_im, 0, sr, true, true) << ENDL());
+    //         }
+    //     }
+    // }
+
     {
         // The host subblock solver requires Sq_chunk_t % h == 0, so it falls back to h=1
         // when Sq_chunk_t is odd. The kernel can do better: use h=2 for the V matmul when
@@ -1153,7 +1203,22 @@ static void sdpa_inner_loop_step(
 
         // All rows pushed individually — no bulk push needed.
 
+        // DEBUG: print sum tile 0 full (after all pushes, untilized)
+        // if (apply_causal && is_first_iter) {
+        //     static bool sm_printed = false;
+        //     if (!sm_printed) {
+        //         sm_printed = true;
+        //         DPRINT_UNPACK(DPRINT << "=== sum tile 0 full ===" << ENDL());
+        //         #pragma GCC unroll 1
+        //         for (uint32_t row = 0; row < 32; row++) {
+        //             SliceRange sr = {.h0 = (uint8_t)row, .h1 = (uint8_t)(row+1), .hs = 1, .w0 = 0, .w1 = 32, .ws =
+        //             1}; DPRINT_UNPACK(DPRINT << row << ":" << TileSlice(cur.sum, 0, sr, true, true) << ENDL());
+        //         }
+        //     }
+        // }
+
         cb_pop_front(cb_v_in, KT_stride * vDHt);
+
         cb_pop_front(cb_qkt_im, Sq_chunk_t * KT_stride);
     }
 }
@@ -1393,7 +1458,9 @@ void sdpa_ring_v2(
     RingAccumulatorState& acc_state,
     const bool is_last_ring_iter = false,
     const uint32_t q_per_core = 1,
-    const LightweightMaskContext& lw_mask = {}) {
+    const LightweightMaskContext& lw_mask = {},
+    const bool skip_first_half_q = false,
+    const bool use_zigzag_balancing = false) {
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     constexpr bool uniform_format = uniform_dataformat;
 
@@ -1418,18 +1485,89 @@ void sdpa_ring_v2(
 
     uint32_t KV_chunks_processed_in_iter = 0;
 
-    // Pre-scan to count valid K chunks (needed to find last K chunk for normalization)
-    uint32_t total_valid_kv = 0;
-    for (uint32_t k = 0; k < num_kv_chunks; ++k) {
-        const bool is_joint = k >= num_local_k_chunks;
-        const uint32_t kv_start = local_padded_Nt * ring_id + k * Sk_chunk_t;
-        if (!is_joint && (kv_start >= logical_nt)) {
-            continue;
-        }
-        total_valid_kv++;
-    }
+    // Q chunks per head for causal position and zigzag remapping
+    const uint32_t num_q_chunks_per_head = (local_padded_Nt + Sq_chunk_t - 1) / Sq_chunk_t;
 
     for (uint32_t q = global_q_start; q < global_q_end; q++) {
+        // Compute Q chunk index (with optional zigzag remapping for causal balancing)
+        uint32_t q_chunk = remap_q_index(q, num_q_chunks_per_head, use_zigzag_balancing) % num_q_chunks_per_head;
+
+        // Causal K-chunk limit and Q start tile for this Q chunk
+        uint32_t causal_k_limit = num_kv_chunks;
+        uint32_t q_start_tile = 0;
+        if (lw_mask.is_causal) {
+            q_start_tile = q_chunk * Sq_chunk_t;
+            causal_k_limit = (q_start_tile + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
+        }
+
+        // Per-Q pre-scan: count K chunks that will actually be processed
+        uint32_t per_q_valid_kv = 0;
+        for (uint32_t k = 0; k < num_kv_chunks; ++k) {
+            const bool is_joint = k >= num_local_k_chunks;
+            const uint32_t kv_start = local_padded_Nt * ring_id + k * Sk_chunk_t;
+            if (!is_joint && (kv_start >= logical_nt)) {
+                continue;
+            }
+            if (lw_mask.is_causal && k >= causal_k_limit) {
+                continue;
+            }
+            per_q_valid_kv++;
+        }
+
+        // Balanced causal skip: first-half Q chunks handled by paired device.
+        // On non-last ring iters: full skip (reader/writer also skip).
+        // On last ring iter: normalize-only path — accumulated state from prior iters needs
+        // normalization. Reader sends Q (for pop) but no K/V. Writer restores + drains output.
+        if (skip_first_half_q && (q_chunk < num_q_chunks_per_head / 2)) {
+            if (!is_last_ring_iter) {
+                // Pop staging — compute is the designated consumer of staging CBs.
+                // Writer pushed via complete_restore; writer's issue_restore_reads for the
+                // next Q blocks on cb_reserve_back(staging) until we free it here.
+                if (q_per_core > 1 && ring_iter > 0) {
+                    cb_wait_front(cb_prev_out, out_chunk_tiles);
+                    cb_pop_front(cb_prev_out, out_chunk_tiles);
+                    cb_wait_front(cb_max_in, Sq_chunk_t);
+                    cb_pop_front(cb_max_in, Sq_chunk_t);
+                    cb_wait_front(cb_sum_in, Sq_chunk_t);
+                    cb_pop_front(cb_sum_in, Sq_chunk_t);
+                }
+                continue;
+            }
+
+            // === Normalize-only path (last ring iter) ===
+            AccumulatorHalf q_prev_norm = acc_state.prev;
+            if (q_per_core > 1 && ring_iter > 0) {
+                q_prev_norm = {cb_sum_in, cb_max_in, cb_prev_out};
+            }
+
+            // Normalize accumulated state → cb_normalized_out (= cb_out).
+            // normalize_row_streaming consumes sum and out from staging CBs.
+            constexpr uint32_t norm_dst_size = 8;
+            normalize_row_streaming<false, vDHt, norm_dst_size>(
+                q_prev_norm.sum, q_prev_norm.out, cb_col_identity, cb_recip_scratch, cb_normalized_out, Sq_chunk_t);
+
+            cb_pop_front(q_prev_norm.max, Sq_chunk_t);
+            cb_pop_front(cb_q_in, Sq_chunk_t * DHt);
+
+            // Signal writer AFTER all staging CBs are freed.
+            // Invariant: staging CBs are empty when signal fires, so the writer's
+            // prefetch (cb_reserve_back on staging) before signal wait won't block.
+            constexpr uint32_t cb_signal_norm = tt::CBIndex::c_12;
+            if (q_per_core > 1) {
+                cb_reserve_back(cb_signal_norm, 1);
+                cb_push_back(cb_signal_norm, 1);
+            }
+
+            continue;
+        }
+
+        // DPRINT_UNPACK(DPRINT << "V2 ri=" << ring_iter << " rid=" << ring_id
+        //                      << " q=" << q << " qc=" << q_chunk << " qst=" << q_start_tile
+        //                      << " ckl=" << causal_k_limit << " pvkv=" << per_q_valid_kv
+        //                      << " nkv=" << num_kv_chunks << " nlk=" << num_local_k_chunks
+        //                      << " lpNt=" << local_padded_Nt << " nqph=" << num_q_chunks_per_head
+        //                      << ENDL());
+
         // Use persistent accumulator state from caller (single Q-chunk)
         // or restore from DRAM (multi Q-chunk).
         AccumulatorHalf q_prev = acc_state.prev, q_cur = acc_state.cur;
@@ -1456,11 +1594,21 @@ void sdpa_ring_v2(
                 continue;
             }
 
+            // Causal skip: K chunks fully above the diagonal. Reader sent them, so pop K/V.
+            if (lw_mask.is_causal && k_chunk >= causal_k_limit) {
+                cb_wait_front(cb_kt_in, DHt * Sk_chunk_t);
+                cb_pop_front(cb_kt_in, DHt * Sk_chunk_t);
+                cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
+                cb_pop_front(cb_v_in, Sk_chunk_t * vDHt);
+                KV_chunks_processed_in_iter++;
+                continue;
+            }
+
             KV_chunks_processed++;
             KV_chunks_processed_in_iter++;
 
             const bool is_first = is_first_kv_for_this_q && (KV_chunks_processed == 1);
-            const bool is_last_k = (KV_chunks_processed == total_valid_kv);
+            const bool is_last_k = (KV_chunks_processed == per_q_valid_kv);
 
             // Last K chunk of last ring_iter triggers per-row normalization
             const bool is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k;
@@ -1553,7 +1701,12 @@ void sdpa_ring_v2(
                 can_reduce_trigger && (active_Sk_param == Sk_chunk_t),
                 chunk_sbw,
                 step_save_out_cb,
-                step_save_max_cb);
+                step_save_max_cb,
+                lw_mask.is_causal,
+                q_start_tile,
+                k_chunk * Sk_chunk_t,
+                lw_mask.neginf_tile_idx,
+                lw_mask.causal_diag_tile_idx);
 
             // Post-iteration cleanup: pop previous values and swap aliases
             // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.

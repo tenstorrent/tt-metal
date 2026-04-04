@@ -63,17 +63,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // Validate joint strategy is 'rear'
     TT_FATAL(args.joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", args.joint_strategy);
 
-    // Validate all tensors have the same dtype
-    const auto dtype = input_tensor_q.dtype();
-    if (!args.is_causal) {
-        for (const auto& tensor : sdpa_input_tensors) {
-            TT_FATAL(
-                tensor.dtype() == dtype,
-                "All tensors must have the same dtype. Expected {}, got {}",
-                dtype,
-                tensor.dtype());
-        }
-    }
+    // K dtype may differ from Q (MLA uses bf16 Q + bf8 K/V). The factory handles mixed formats.
 
     // Get shapes
     const auto& q_shape = input_tensor_q.logical_shape();
@@ -126,25 +116,13 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         joint_k_shape[0],
         joint_v_shape[0]);
 
-    // Validate head dimensions match
-    if (!args.is_causal) {
-        TT_FATAL(
-            k_shape[3] == DH && v_shape[3] == DH && joint_q_shape[3] == DH && joint_k_shape[3] == DH &&
-                joint_v_shape[3] == DH,
-            "Head dimensions must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
-            DH,
-            k_shape[3],
-            v_shape[3],
-            joint_q_shape[3],
-            joint_k_shape[3],
-            joint_v_shape[3]);
-    } else {
-        TT_FATAL(
-            k_shape[3] == DH && joint_k_shape[3] == DH,
-            "Q/K head dimensions must match. Got Q: {}, K: {}",
-            DH,
-            k_shape[3]);
-    }
+    // Validate Q/K head dimensions match (needed for Q@K^T). V may differ (MLA: d_v != d_qk).
+    TT_FATAL(
+        k_shape[3] == DH && joint_k_shape[3] == DH,
+        "Q/K head dimensions must match. Got Q: {}, K: {}, joint_K: {}",
+        DH,
+        k_shape[3],
+        joint_k_shape[3]);
 
     TT_FATAL(
         v_shape[2] == N_global,
