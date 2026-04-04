@@ -160,11 +160,22 @@ def compute_parallelism(cin_block, cout_block, t_blk, h_blk, w_blk, kernel_size,
 
 
 def t_needed_to_hide_weight_read(cin_block, cout_block, kernel_size):
+    """Estimate minimum T_out_block for tilize time to exceed weight read time.
+
+    Effective DRAM bandwidth for the conv3d weight read is ~50 GB/s = 50 KB/µs.
+    This is the scatter-gather effective bandwidth (~25% of theoretical peak ~200 GB/s)
+    due to random NOC transactions per kernel position and DRAM row latency.
+
+    Condition: M_t * tilize_per_mrow_us >= weight_kb / BW_effective
+    Back-calculated from optimal blockings: T_blk=4 hides weight for k333 Cin=96, Cout=128
+    (weight=648KB), which requires BW >= 648/4/4 = 40 GB/s -> use 50 GB/s.
+    """
     kT, kH, kW = kernel_size
     matmul_K_t = math.ceil(kT * kH * kW * cin_block / 32)
     matmul_N_t = math.ceil(cout_block / 32)
     weight_kb = matmul_K_t * matmul_N_t * 2
-    weight_us = weight_kb / 20
+    EFFECTIVE_DRAM_BW_KB_PER_US = 50.0  # ~50 GB/s effective scatter-gather BW on BH
+    weight_us = weight_kb / EFFECTIVE_DRAM_BW_KB_PER_US
     tilize_per_mrow_us = 4.0
     return max(1, math.ceil(weight_us / tilize_per_mrow_us))
 
@@ -173,9 +184,11 @@ def _predict_cin_cout(C_in, C_out, kernel_size):
     """Predict optimal (C_in_block, C_out_block) from BH hardware constraints.
 
     Cin_blk — first principles: DRAM weight read must be hidden behind compute.
-        Per-row tilize+matmul ≈ 4µs. Weight read = K_t tiles × N_t × 2KB / 50 GB/s.
-        N_t cancels → constraint on K_t alone:
-            K_t_max = DRAM_bw_GBs × 4µs / 2KB ≈ 97 tiles
+        Per-row tilize+matmul ≈ 4µs. N_t cancels from the hide-condition:
+            K_t_max = BW_eff × 4µs / 2KB ≈ 97 tiles
+        BW_eff ≈ 50 GB/s (effective scatter-gather, ~25% of ~200 GB/s theoretical BH peak).
+        Back-calculated from empirical data: T_blk=4 optimal for k333 Cin=96 Cout=128
+        (weight=648KB) → needs BW ≥ 40 GB/s to hide in 4µs → use 50 GB/s.
         Cin_blk = max value where ceil(kernel_vol × Cin_blk / 32) ≤ K_t_max.
         This correctly predicts: k333→96, k133→192, k311→large (L1-capped).
 
