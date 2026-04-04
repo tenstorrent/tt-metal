@@ -130,6 +130,7 @@ def get_matmul_core_grid(mesh_device):
         )
     return core_grid
 
+
 grid_12_9_configs = {
     (9472, 5120, 1280): (10, 8, 8, (2, 1)),
     (2368, 5120, 1280): (10, 8, 6, (2, 1)),
@@ -139,6 +140,7 @@ grid_12_9_configs = {
     (9472, 5120, 3840): (7, 5, 16, (1, 2)),
     (2368, 5120, 3840): (7, 5, 16, (1, 2)),
 }
+
 
 def get_matmul_config(M, K, N, core_grid, default_block_size=None):
     # Default to 8x8x8 with subblock 2x2 when unknown
@@ -167,6 +169,9 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None):
             config_tuple = config_tuple[:3]
     elif getattr(core_grid, "x", None) == 11 and getattr(core_grid, "y", None) == 10:
         config_tuple = grid_11_10_configs.get((M, K, N))
+        if config_tuple is not None:
+            subblock_h, subblock_w = config_tuple[3]
+            config_tuple = config_tuple[:3]
     elif getattr(core_grid, "x", None) == 12 and getattr(core_grid, "y", None) == 9:
         config_tuple = grid_12_9_configs.get((M, K, N))
         if config_tuple is not None:

@@ -14,7 +14,7 @@ from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
-from ....utils.matmul import get_matmul_config, get_matmul_core_grid
+from ....utils.matmul import get_matmul_config
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 
@@ -317,23 +317,29 @@ class WanAttention(Module):
             assert trans_mat is not None
             assert prompt_1BLP is None
 
+        use_nonfused_agmm = (self.ccl_manager.topology == ttnn.Topology.Linear) and (
+            self.parallel_config.tensor_parallel.factor > 1
+        )
+        if use_nonfused_agmm:
+            spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
+                spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+            )
+
         if self.is_self:
             # Fused QKV matmul with split output for self-attention
             q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
-                spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config, parallel_config=self.parallel_config
+                spatial_1BND,
+                compute_kernel_config=self.mm_compute_kernel_config,
+                parallel_config=None if use_nonfused_agmm else self.parallel_config,
             )
         else:
             # Cross-attention: Q from spatial, fused KV from prompt
-            if prompt_1BLP is not None:
-                kv_input = prompt_1BLP
-            else:
-                if self.parallel_config.tensor_parallel.factor > 1:
-                    spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
-                        spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
-                    )
-                kv_input = spatial_1BND
+            assert prompt_1BLP is not None
+            kv_input = prompt_1BLP
             q_1BNF = self.to_q(
-                spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config, parallel_config=self.parallel_config
+                spatial_1BND,
+                compute_kernel_config=self.mm_compute_kernel_config,
+                parallel_config=None if use_nonfused_agmm else self.parallel_config,
             )
             k_1BNF, v_1BNF = self.to_kv(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
 
@@ -414,6 +420,12 @@ class WanAttention(Module):
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
         spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
 
+        if use_nonfused_agmm:
+            # Gather spatial on TP axis before projection
+            spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
+                spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+            )
+
         if addcmul_residual is not None and addcmul_gate is not None:
             # Fused to_out projection + addcmul (self-attention only)
             spatial_1BND = self._to_out_fused_addcmul(
@@ -421,11 +433,13 @@ class WanAttention(Module):
                 addcmul_residual,
                 addcmul_gate,
                 compute_kernel_config=self.mm_compute_kernel_config,
-                parallel_config=self.parallel_config,
+                parallel_config=None if use_nonfused_agmm else self.parallel_config,
             )
         else:
             spatial_1BND = self.to_out(
-                spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config, parallel_config=self.parallel_config
+                spatial_1BND,
+                compute_kernel_config=self.mm_compute_kernel_config,
+                parallel_config=None if use_nonfused_agmm else self.parallel_config,
             )
 
         return spatial_1BND
