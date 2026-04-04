@@ -601,10 +601,6 @@ class GemmaBlockTTNN:
         )
         hidden_states = ttnn.add(hidden_states, attn_output)
         ttnn.deallocate(attn_output)
-        ttnn.ReadDeviceProfiler(
-            self.device
-        )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
-
         # Pre-MLP norm
         normed = rms_norm_ttnn(
             hidden_states,
@@ -617,10 +613,6 @@ class GemmaBlockTTNN:
         ttnn.deallocate(normed)
         hidden_states = ttnn.add(hidden_states, mlp_output)
         ttnn.deallocate(mlp_output)
-        ttnn.ReadDeviceProfiler(
-            self.device
-        )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
-
         return hidden_states, new_cache
 
 
