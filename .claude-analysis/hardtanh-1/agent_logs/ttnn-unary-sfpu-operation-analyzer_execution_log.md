@@ -84,3 +84,43 @@
 - Two conditional clamp operations per iteration: upper clamp (> 6.0) and lower clamp (< 0)
 - Total SFPU instruction count per iteration: ~4-6 (load, 2x compare+conditional-move, store)
 - `APPROXIMATION_MODE` template parameter is accepted but entirely unused
+
+---
+
+## Operation: hardshrink
+## Output: `.claude-analysis/hardtanh-1/hardshrink_analysis.md`
+
+---
+
+### Phase 1: Dispatch Resolution
+- Searched `unary_op_utils.cpp` — HARDSHRINK not in `get_op_init_and_func` (uses dedicated kernel)
+- Searched `unary_ng_op_utils.cpp` — compute kernel path: `hardshrink_kernel_sfpu.cpp` (FLOAT32) / `hardshrink_kernel.cpp` (other dtypes)
+- HARDSHRINK does NOT use `SFPU_OP_CHAIN_0` — uses dedicated compute kernels
+- Approx mode: `false` (default), no effect on comparison operations
+
+### Phase 2: Kernel Analysis
+- Read both kernel variants (hardshrink_kernel.cpp and hardshrink_kernel_sfpu.cpp)
+- Both implement `hardshrink(a, λ) = a⋅1(a+λ<0) + a⋅1(a−λ>0)` in two phases
+- Non-FP32 variant uses FPU binary ops (`binary_dest_reuse_tiles`)
+- FP32 variant uses SFPU binary ops (`add/sub/mul_binary_tile`)
+- Both use SFPU comparison ops: `ltz_tile(0)` and `gtz_tile(0)`
+
+### Phase 3: Core SFPU Analysis
+- Traced `ltz_tile` → `SFPU_ZERO_KERNEL(less_than_zero, ...)` macro → `_calculate_zero_comp_` → `apply_zero_comp<SfpuType::less_than_zero>`
+- Traced `gtz_tile` → same path with `SfpuType::greater_than_zero`
+- `fill_tile` → `_calculate_fill_` in `ckernel_sfpu_fill.h`
+- All implementations use pure SFPI abstractions (vFloat, dst_reg, v_if/v_else/v_endif)
+- WH and BH implementations are identical for these comparison functions
+
+### Phase 4: Verification
+- All function names verified via grep: `_calculate_zero_comp_`, `apply_zero_comp`, `_calculate_fill_` ✓
+- All file paths verified to exist ✓
+- Generated headers (`comp.h`, `fill.h`) confirmed not in source tree — traced through macro layer
+
+### Key Findings
+- HARDSHRINK is a composite kernel mixing FPU/SFPU binary ops with SFPU comparison ops
+- Requires CB c_1 as temporary buffer (unique among most unary ops)
+- Two-phase execution: Phase 1 computes first term → packs to tmp; Phase 2 computes second term + combines
+- The SFPU operations themselves (ltz/gtz) are simple: `v_if (v >= 0) { v = 0 } v_else { v = 1 }` and similar
+- No approximation mode effects; `APPROXIMATION_MODE` is unused in comparison paths
+- Address mode: ADDR_MOD_7 (dest.incr=0) on both WH and BH
