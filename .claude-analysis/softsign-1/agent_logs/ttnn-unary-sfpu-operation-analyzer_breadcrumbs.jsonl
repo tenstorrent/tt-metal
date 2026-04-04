@@ -1,0 +1,6 @@
+{"ts":"2026-04-04T18:53:24+00:00","event":"start","agent":"ttnn-unary-sfpu-operation-analyzer","operation":"cbrt","input_files":["ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp"]}
+{"event":"start","operation":"cbrt","input_files":["ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp"],"ts":"2026-04-04T18:53:28+00:00"}
+{"ts":"2026-04-04T18:53:30+00:00","event":"start","agent":"ttnn-unary-sfpu-operation-analyzer","operation":"silu","input_files":["ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp"]}
+{"event":"start","operation":"silu","input_files":["ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp"],"ts":"2026-04-04T18:53:34+00:00"}
+{"ts":"2026-04-04T18:53:34+00:00","event":"start","agent":"ttnn-unary-sfpu-operation-analyzer","operation":"sigmoid","input_files":["ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp"]}
+{"event":"start","operation":"sigmoid","input_files":["ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp"],"ts":"2026-04-04T18:53:39+00:00"}
