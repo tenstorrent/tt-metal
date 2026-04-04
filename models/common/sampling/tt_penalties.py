@@ -300,6 +300,8 @@ class TTPenalties(LightweightModule):
                 counts_sliced=self.output_counts,
                 mask=self.output_mask,
             )
+            tokens_tt.deallocate()
+            src_tt.deallocate()
 
     def update_output_tokens(self, new_tokens):
         # Reshape decode token to [batch, 1] for scatter_add.

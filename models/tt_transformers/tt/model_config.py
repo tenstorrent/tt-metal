@@ -462,6 +462,7 @@ class ModelArgs:
         optimizations=None,
         cache_hf=False,  # Set to False to reduce memory usage by not caching HF model
         prefetcher=None,
+        use_hf_rope=False,
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
@@ -490,6 +491,7 @@ class ModelArgs:
         self.trust_remote_code_hf = False
         self.prefill_len_cutoff = 512 if is_blackhole() else 1024
         self.dummy_weights = dummy_weights
+        self.use_hf_rope = use_hf_rope
         self.cache_hf_flag = cache_hf  # Whether to cache HF model to avoid multiple loads (uses extra memory)
         self.cached_hf_model = None  # Save any HF model object to avoid loading it multiple times for reference methods
 
@@ -515,7 +517,7 @@ class ModelArgs:
                 -1
             ]  # HF model names use / even on windows. May be overridden by config.
         else:
-            assert False, "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct"
+            raise ValueError("Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct")
 
         logger.info(f"Checkpoint directory: {self.CKPT_DIR}")
         logger.info(f"Tokenizer file: {self.TOKENIZER_PATH + '/tokenizer.model'}")
@@ -602,7 +604,7 @@ class ModelArgs:
 
         if device is not None:  # Avoid issue with test_torch.py not having a device
             # ============================================================================
-            # Parameter intialization
+            # Parameter initialization
             # ============================================================================
             # nlp_concat_heads_decode will shard the data across this number of cores
             assert (

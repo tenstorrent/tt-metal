@@ -78,13 +78,13 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(k.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for k!");
     TT_FATAL(p.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for p!");
     TT_FATAL(temp.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for temp!");
-    TT_FATAL(k.logical_shape()[0] == num_users, "k must have shape [{}], got [{}]!", num_users, k.logical_shape()[0]);
-    TT_FATAL(p.logical_shape()[0] == num_users, "p must have shape [{}], got [{}]!", num_users, p.logical_shape()[0]);
+    TT_FATAL(k.logical_shape() == Shape({num_users}), "k must have shape [{}], got {}!", num_users, k.logical_shape());
+    TT_FATAL(p.logical_shape() == Shape({num_users}), "p must have shape [{}], got {}!", num_users, p.logical_shape());
     TT_FATAL(
-        temp.logical_shape()[0] == num_users,
-        "temp must have shape [{}], got [{}]!",
+        temp.logical_shape() == Shape({num_users}),
+        "temp must have shape [{}], got {}!",
         num_users,
-        temp.logical_shape()[0]);
+        temp.logical_shape());
 }
 
 TensorSpec SamplingDeviceOperation::compute_output_specs(

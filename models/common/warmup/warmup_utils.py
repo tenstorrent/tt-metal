@@ -22,12 +22,17 @@ class WarmupForwardMixin:
     - self.decode_forward(): method to perform decode forward pass
     """
 
-    def _create_sampling_params(self, can_sample_on_device, non_greedy_decoding_on_device, max_batch_size, mode):
+    def _create_sampling_params(
+        self, can_sample_on_device, non_greedy_decoding_on_device, max_batch_size=None, mode="decode", batch_size=None
+    ):
         """
         non_greedy_decoding_on_device: when True, device supports non-greedy sampling (temperature,
         top_k, top_p, presence/frequency/repetition penalties, log_probs); warmup then includes
         those configs. When False, only greedy decoding is warmed up (temperature=0.0, top_k=1, top_p=1.0).
         """
+        # Support legacy batch_size parameter
+        if max_batch_size is None:
+            max_batch_size = batch_size if batch_size is not None else 1
         if not can_sample_on_device:
             return [None]
 
