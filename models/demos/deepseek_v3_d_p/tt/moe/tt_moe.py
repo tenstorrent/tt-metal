@@ -260,6 +260,13 @@ class TtMoe(LightweightModule):
 
         scores, indices_raw, gate_logits, tt_expert_offsets, tt_expert_token_counts = self.gate(x_for_gate)
 
+        # DEBUG
+        # Print full token counts per expert for monitoring
+        _counts_4d = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
+        _ep_composer = ttnn.create_mesh_composer(self.mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
+        _counts_host = ttnn.to_torch(_counts_4d, mesh_composer=_ep_composer).squeeze(2)
+        logger.info(f"[TtMoe.forward] expert_token_counts: {_counts_host.flatten().tolist()}")
+
         # Gate outputs uint16 indices; dispatch requires int32.
         # this should be aligned in the further PR.
         # Typecast in TILE_LAYOUT to avoid alignment issues, then convert to ROW_MAJOR.
