@@ -42,3 +42,45 @@
 - Relies on two programmable constant registers for slope and offset
 - Clamping reuses `_relu_max_body_` from the relu SFPU kernel
 - Total SFPU instruction count per element: ~6-8 (load, 2x MAD, 2x comparison+conditional-move, store)
+
+---
+
+## Operation: relu6
+## Output: `.claude-analysis/hardtanh-1/relu6_analysis.md`
+
+---
+
+### Phase 1: Dispatch Resolution
+- Searched `unary_ng_op_utils.cpp` — **found** RELU6 at line 81
+- Dispatch: `relu_max_tile_init()` / `relu_max_tile(idst, 0x40c00000u)` where `0x40c00000u` = `6.0f` (IEEE 754)
+- Compute kernel: `eltwise_sfpu.cpp` (default case)
+- Approx mode: `false` (unconditional return in `get_op_approx_mode`)
+
+### Phase 2: API and LLK Layer Tracing
+- API header: `relu.h` at `tt_metal/hw/inc/api/compute/eltwise_unary/relu.h` (exists in main repo, not in worktree)
+- `relu_max_tile()` → `SFPU_UNARY_ONE_PARAM_KERNEL_FN_FLOAT(_relu_max_, RC, APPROX, idst, param0)`
+- Macro expands to: `_llk_math_eltwise_unary_sfpu_params_<APPROX>(ckernel::sfpu::_relu_max_<sfpi::vFloat, APPROX, 8, uint32_t>, 0, (int)VectorMode::RC, 0x40c00000u)`
+- Init: `SFPU_UNARY_KERNEL_INIT(relu_max, APPROX)` → `llk_math_eltwise_unary_sfpu_init<SfpuType::relu_max, APPROX>()`
+
+### Phase 3: Core SFPU Analysis
+- Core implementation: `ckernel_sfpu_relu.h` — `_relu_max_impl_<sfpi::vFloat, false, 8>()`
+- Math: two `v_if` blocks implementing `min(max(x, 0), 6.0)` per SFPU iteration
+- Wrapper `_relu_max_` converts `uint32_t` threshold `0x40c00000u` to `vFloat(6.0f)` via `Converter::as_float()`
+- WH and BH implementations are **identical**
+
+### Phase 4: Params Dispatch and Address Mode
+- Params dispatch: `_llk_math_eltwise_unary_sfpu_params_` — RC mode, 4 faces × 8 iterations
+- Address mode: `ADDR_MOD_7` with all increments = 0 (standard, no special case for relu_max)
+- `dst_reg++` handles intra-face advancement; `SETRWC`/`inc_dst_addr` handles inter-face
+
+### Phase 5: Verification
+- All function names verified via grep: `_relu_max_impl_`, `_relu_max_`, `_relu_max_body_` ✓
+- All file paths verified to exist ✓
+- SfpuType::relu_max confirmed in build output `llk_sfpu_types.h` ✓
+
+### Key Findings
+- RELU6 is implemented as a special case of relu_max with threshold = 6.0
+- Pure SFPI kernel — no raw TTI instructions, no approximation mode branching
+- Two conditional clamp operations per iteration: upper clamp (> 6.0) and lower clamp (< 0)
+- Total SFPU instruction count per iteration: ~4-6 (load, 2x compare+conditional-move, store)
+- `APPROXIMATION_MODE` template parameter is accepted but entirely unused
