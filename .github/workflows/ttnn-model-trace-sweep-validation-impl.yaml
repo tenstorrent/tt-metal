@@ -268,55 +268,11 @@ jobs:
           SCOPE_TARGET: ${{ inputs.scope-targets }}
         run: |
           matrix_json=$(
-            python3 - <<'PY'
-            import json
-            import os
-            import subprocess
-            import sys
-            from pathlib import Path
-
-            manifest_path = os.environ["MANIFEST_PATH"]
-            master_json_path = os.environ["MASTER_JSON_PATH"]
-            vectors_root = Path(os.environ["VECTORS_ROOT"])
-            scope_target = os.environ["SCOPE_TARGET"]
-
-            include = []
-
-            if scope_target == "all":
-                scopes = ["model_traced", "lead_models"]
-            elif scope_target in {"model_traced", "lead_models"}:
-                scopes = [scope_target]
-            else:
-                print(f"Unsupported validation scope target: {scope_target}", file=sys.stderr)
-                sys.exit(1)
-
-            for scope in scopes:
-                vectors_dir = vectors_root / scope
-                if not vectors_dir.exists():
-                    print(f"Missing vectors directory for scope '{scope}': {vectors_dir}", file=sys.stderr)
-                    sys.exit(1)
-
-                result = subprocess.run(
-                    [
-                        sys.executable,
-                        "tests/sweep_framework/framework/compute_validation_sweep_matrix.py",
-                        "--manifest-path",
-                        manifest_path,
-                        "--master-json-path",
-                        master_json_path,
-                        "--vectors-dir",
-                        str(vectors_dir),
-                        "--validation-scope",
-                        scope,
-                    ],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-                include.extend(json.loads(result.stdout).get("include", []))
-
-            print(json.dumps({"include": include}, separators=(",", ":")))
-            PY
+            python3 tests/sweep_framework/framework/compute_validation_sweep_matrix.py \
+              --manifest-path "$MANIFEST_PATH" \
+              --master-json-path "$MASTER_JSON_PATH" \
+              --vectors-root "$VECTORS_ROOT" \
+              --scope-target "$SCOPE_TARGET"
           )
           echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
 

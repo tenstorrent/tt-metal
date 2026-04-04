@@ -170,28 +170,86 @@ def compute_validation_matrix(
     return {"include": include}
 
 
+def compute_combined_validation_matrix(
+    manifest_path: Path,
+    master_json_path: Path,
+    vectors_root: Path,
+    scope_target: str,
+    batch_size: int = 10,
+) -> dict:
+    """Build a combined matrix for one or both validation scopes."""
+    if scope_target == "all":
+        scopes = ["model_traced", "lead_models"]
+    elif scope_target in {"model_traced", "lead_models"}:
+        scopes = [scope_target]
+    else:
+        print(f"Unsupported validation scope target: {scope_target}", file=sys.stderr)
+        sys.exit(1)
+
+    include = []
+    for scope in scopes:
+        vectors_dir = vectors_root / scope
+        if not vectors_dir.exists():
+            print(f"Missing vectors directory for scope '{scope}': {vectors_dir}", file=sys.stderr)
+            sys.exit(1)
+
+        scope_matrix = compute_validation_matrix(
+            manifest_path=manifest_path,
+            master_json_path=master_json_path,
+            vectors_dir=vectors_dir,
+            validation_scope=scope,
+            batch_size=batch_size,
+        )
+        include.extend(scope_matrix.get("include", []))
+
+    return {"include": include}
+
+
 def main():
     """Parse arguments and print the matrix JSON to stdout."""
     parser = argparse.ArgumentParser(description="Compute model trace validation sweep matrix.")
     parser.add_argument("--manifest-path", required=True, help="Path to model_tracer/sweep_manifest.yaml")
     parser.add_argument("--master-json-path", required=True, help="Path to reconstructed ttnn_operations_master.json")
-    parser.add_argument("--vectors-dir", required=True, help="Directory containing generated vector JSON files")
+    parser.add_argument("--vectors-dir", required=False, help="Directory containing generated vector JSON files")
+    parser.add_argument(
+        "--vectors-root",
+        required=False,
+        help="Root directory containing per-scope validation vectors directories",
+    )
     parser.add_argument(
         "--validation-scope",
-        required=True,
+        required=False,
         choices=["model_traced", "lead_models"],
         help="Validation scope represented by the supplied vectors directory",
+    )
+    parser.add_argument(
+        "--scope-target",
+        required=False,
+        choices=["model_traced", "lead_models", "all"],
+        help="Top-level validation scope target used to combine one or both per-scope matrices",
     )
     parser.add_argument("--batch-size", type=int, default=10, help="Maximum number of modules per matrix batch")
     args = parser.parse_args()
 
-    matrix = compute_validation_matrix(
-        manifest_path=Path(args.manifest_path),
-        master_json_path=Path(args.master_json_path),
-        vectors_dir=Path(args.vectors_dir),
-        validation_scope=args.validation_scope,
-        batch_size=args.batch_size,
-    )
+    if args.vectors_root and args.scope_target:
+        matrix = compute_combined_validation_matrix(
+            manifest_path=Path(args.manifest_path),
+            master_json_path=Path(args.master_json_path),
+            vectors_root=Path(args.vectors_root),
+            scope_target=args.scope_target,
+            batch_size=args.batch_size,
+        )
+    elif args.vectors_dir and args.validation_scope:
+        matrix = compute_validation_matrix(
+            manifest_path=Path(args.manifest_path),
+            master_json_path=Path(args.master_json_path),
+            vectors_dir=Path(args.vectors_dir),
+            validation_scope=args.validation_scope,
+            batch_size=args.batch_size,
+        )
+    else:
+        parser.error("Provide either --vectors-dir with --validation-scope, or --vectors-root with --scope-target.")
+
     print(json.dumps(matrix, separators=(",", ":")))
 
 
