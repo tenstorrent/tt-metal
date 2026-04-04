@@ -16,7 +16,7 @@ Adapted from the pi0 SigLIP implementation with adjustments for SigLIP2 dimensio
 """
 
 import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict
 
 import torch
 import torch.nn.functional as F
@@ -25,7 +25,6 @@ import ttnn
 from models.experimental.groot_n16.common.configs import SigLIP2Config
 from models.experimental.groot_n16.tt.ttnn_common import (
     CORE_GRID_BH,
-    nearest_32,
     preprocess_linear_weight,
     preprocess_linear_bias,
     preprocess_layernorm_params,
@@ -76,7 +75,7 @@ def _pad_qkv_weight_siglip2(
     per_section = num_heads * head_dim
     sections = []
     for i in range(3):
-        w = qkv_weight[i*per_section:(i+1)*per_section]  # [num_heads*head_dim, hidden]
+        w = qkv_weight[i * per_section : (i + 1) * per_section]  # [num_heads*head_dim, hidden]
         w = w.reshape(num_heads, head_dim, in_dim)
         w = F.pad(w, (0, 0, 0, padded_head_dim - head_dim))  # pad head_dim
         w = w.reshape(num_heads * padded_head_dim, in_dim)
@@ -94,7 +93,7 @@ def _pad_qkv_bias_siglip2(
     per_section = num_heads * head_dim
     sections = []
     for i in range(3):
-        b = qkv_bias[i*per_section:(i+1)*per_section].reshape(num_heads, head_dim)
+        b = qkv_bias[i * per_section : (i + 1) * per_section].reshape(num_heads, head_dim)
         b = F.pad(b, (0, padded_head_dim - head_dim))
         sections.append(b.reshape(num_heads * padded_head_dim))
     return torch.cat(sections, dim=0)
@@ -133,8 +132,11 @@ def siglip2_attention(
 
     # Fused QKV projection: [B, seq, hidden] -> [B, seq, 3*num_heads*padded_hd]
     qkv = ttnn.linear(
-        hidden_states, qkv_weight, bias=qkv_bias,
-        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16,
+        hidden_states,
+        qkv_weight,
+        bias=qkv_bias,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
         core_grid=CORE_GRID_BH,
     )
 
@@ -158,15 +160,13 @@ def siglip2_attention(
     q = ttnn.mul(q, scale)
     k = ttnn.permute(k, (0, 1, 3, 2))  # Transpose K
 
-    attn = ttnn.matmul(q, k, memory_config=ttnn.L1_MEMORY_CONFIG,
-                       dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+    attn = ttnn.matmul(q, k, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
     ttnn.deallocate(q)
     ttnn.deallocate(k)
 
     attn = ttnn.softmax_in_place(attn, numeric_stable=True)
 
-    context = ttnn.matmul(attn, v, memory_config=ttnn.L1_MEMORY_CONFIG,
-                          dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+    context = ttnn.matmul(attn, v, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
     ttnn.deallocate(attn)
     ttnn.deallocate(v)
 
@@ -176,8 +176,11 @@ def siglip2_attention(
 
     # Output projection (weight already padded for input)
     output = ttnn.linear(
-        context, proj_weight, bias=proj_bias,
-        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16,
+        context,
+        proj_weight,
+        bias=proj_bias,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
         core_grid=CORE_GRID_BH,
     )
     ttnn.deallocate(context)
@@ -194,7 +197,9 @@ def siglip2_mlp(
 ) -> ttnn.Tensor:
     """MLP with GELU activation: hidden -> intermediate -> hidden."""
     intermediate = ttnn.linear(
-        hidden_states, fc1_weight, bias=fc1_bias,
+        hidden_states,
+        fc1_weight,
+        bias=fc1_bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
         core_grid=CORE_GRID_BH,
@@ -202,7 +207,9 @@ def siglip2_mlp(
     )
 
     output = ttnn.linear(
-        intermediate, fc2_weight, bias=fc2_bias,
+        intermediate,
+        fc2_weight,
+        bias=fc2_bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
         core_grid=CORE_GRID_BH,
@@ -236,7 +243,8 @@ def siglip2_encoder_layer(
     )
 
     hidden_states = ttnn.add(
-        attn_out, hidden_states,
+        attn_out,
+        hidden_states,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
     )
@@ -260,7 +268,8 @@ def siglip2_encoder_layer(
     )
 
     hidden_states = ttnn.add(
-        mlp_out, hidden_states,
+        mlp_out,
+        hidden_states,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
     )
@@ -299,9 +308,14 @@ class SigLIP2VisionEncoderTTNN:
             # preprocess_linear_weight transposes to [588, 1152] for ttnn
             # TTNN handles tile padding internally
             self.patch_proj_weight = preprocess_linear_weight(linear_weight, self.device)
-            self.patch_proj_bias = preprocess_linear_bias(
-                linear_bias, self.device,
-            ) if linear_bias is not None else None
+            self.patch_proj_bias = (
+                preprocess_linear_bias(
+                    linear_bias,
+                    self.device,
+                )
+                if linear_bias is not None
+                else None
+            )
 
         # Position embeddings
         pos_embed = weights.get("embeddings.position_embedding.weight")
@@ -323,8 +337,9 @@ class SigLIP2VisionEncoderTTNN:
             ln1_w = weights.get(f"{prefix}layer_norm1.weight")
             ln1_b = weights.get(f"{prefix}layer_norm1.bias")
             if ln1_w is not None:
-                layer_params["norm1_weight"], layer_params["norm1_bias"] = \
-                    preprocess_layernorm_params(ln1_w, ln1_b, self.device)
+                layer_params["norm1_weight"], layer_params["norm1_bias"] = preprocess_layernorm_params(
+                    ln1_w, ln1_b, self.device
+                )
 
             # Fused QKV attention weights
             attn_prefix = f"{prefix}self_attn."
@@ -350,8 +365,7 @@ class SigLIP2VisionEncoderTTNN:
             out_b = weights.get(f"{attn_prefix}out_proj.bias")
             if out_w is not None:
                 # Pad output projection input dim for padded heads
-                out_w_padded = _pad_out_proj_weight_siglip2(
-                    out_w, num_heads, head_dim, SIGLIP2_PADDED_HEAD_DIM)
+                out_w_padded = _pad_out_proj_weight_siglip2(out_w, num_heads, head_dim, SIGLIP2_PADDED_HEAD_DIM)
                 layer_params["proj_weight"] = preprocess_linear_weight(out_w_padded, self.device)
                 layer_params["proj_bias"] = preprocess_linear_bias(out_b, self.device)
 
@@ -359,8 +373,9 @@ class SigLIP2VisionEncoderTTNN:
             ln2_w = weights.get(f"{prefix}layer_norm2.weight")
             ln2_b = weights.get(f"{prefix}layer_norm2.bias")
             if ln2_w is not None:
-                layer_params["norm2_weight"], layer_params["norm2_bias"] = \
-                    preprocess_layernorm_params(ln2_w, ln2_b, self.device)
+                layer_params["norm2_weight"], layer_params["norm2_bias"] = preprocess_layernorm_params(
+                    ln2_w, ln2_b, self.device
+                )
 
             # MLP
             fc1_w = weights.get(f"{prefix}mlp.fc1.weight")
@@ -379,8 +394,7 @@ class SigLIP2VisionEncoderTTNN:
         post_ln_w = weights.get("post_layernorm.weight")
         post_ln_b = weights.get("post_layernorm.bias")
         if post_ln_w is not None:
-            self.post_ln_weight, self.post_ln_bias = \
-                preprocess_layernorm_params(post_ln_w, post_ln_b, self.device)
+            self.post_ln_weight, self.post_ln_bias = preprocess_layernorm_params(post_ln_w, post_ln_b, self.device)
 
     def __call__(self, pixel_values: torch.Tensor) -> ttnn.Tensor:
         """
@@ -394,7 +408,8 @@ class SigLIP2VisionEncoderTTNN:
         """
         # Extract patches on CPU: [B, num_patches, 588]
         patches = siglip2_patch_embeddings_cpu(
-            pixel_values, patch_size=self.config.patch_size,
+            pixel_values,
+            patch_size=self.config.patch_size,
         )
 
         # Transfer to device and project
@@ -407,7 +422,9 @@ class SigLIP2VisionEncoderTTNN:
 
         # Linear projection: [B, num_patches, 588] -> [B, num_patches, 1152]
         embeddings = ttnn.linear(
-            patches_tt, self.patch_proj_weight, bias=self.patch_proj_bias,
+            patches_tt,
+            self.patch_proj_weight,
+            bias=self.patch_proj_bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
             core_grid=CORE_GRID_BH,
@@ -416,7 +433,8 @@ class SigLIP2VisionEncoderTTNN:
 
         # Add position embeddings
         embeddings = ttnn.add(
-            embeddings, self.position_embeddings,
+            embeddings,
+            self.position_embeddings,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
         )
@@ -425,7 +443,9 @@ class SigLIP2VisionEncoderTTNN:
         hidden_states = embeddings
         for layer_params in self.layer_params_list:
             hidden_states = siglip2_encoder_layer(
-                hidden_states, layer_params, self.config.layer_norm_eps,
+                hidden_states,
+                layer_params,
+                self.config.layer_norm_eps,
             )
 
         # Post-LayerNorm

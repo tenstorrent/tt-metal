@@ -14,8 +14,7 @@ For single-embodiment inference, we select the weight slice for the given
 embodiment_id and run a standard MLP.
 """
 
-import math
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import torch
 
@@ -51,9 +50,15 @@ class CategorySpecificMLPTTNN:
                  layer2.W [num_cat, output, hidden], layer2.b [num_cat, output]
     """
 
-    def __init__(self, weights: Dict[str, torch.Tensor],
-                 num_categories: int, input_dim: int, hidden_dim: int,
-                 output_dim: int, device: Any):
+    def __init__(
+        self,
+        weights: Dict[str, torch.Tensor],
+        num_categories: int,
+        input_dim: int,
+        hidden_dim: int,
+        output_dim: int,
+        device: Any,
+    ):
         self.device = device
         self.layer1_weights = {}
         self.layer2_weights = {}
@@ -81,12 +86,14 @@ class CategorySpecificMLPTTNN:
         w1, b1 = self.layer1_weights[embodiment_id]
         w2, b2 = self.layer2_weights[embodiment_id]
 
-        h = ttnn.linear(x, w1, bias=b1, memory_config=ttnn.L1_MEMORY_CONFIG,
-                        dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+        h = ttnn.linear(
+            x, w1, bias=b1, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH
+        )
         h = ttnn.silu(h)
 
-        out = ttnn.linear(h, w2, bias=b2, memory_config=ttnn.L1_MEMORY_CONFIG,
-                          dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+        out = ttnn.linear(
+            h, w2, bias=b2, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH
+        )
         ttnn.deallocate(h)
         return out
 
@@ -102,13 +109,13 @@ class TimestepEncoderTTNN:
                  timestep_embedder.linear_2.{weight,bias}
     """
 
-    def __init__(self, weights: Dict[str, torch.Tensor], device: Any,
-                 embedding_dim: int = 256, output_dim: int = 1536):
+    def __init__(self, weights: Dict[str, torch.Tensor], device: Any, embedding_dim: int = 256, output_dim: int = 1536):
         self.device = device
         self.embedding_dim = embedding_dim
 
         # Use diffusers Timesteps for correct sinusoidal encoding
         from diffusers.models.embeddings import Timesteps
+
         self.time_proj = Timesteps(num_channels=256, flip_sin_to_cos=True, downscale_freq_shift=1)
 
         w1 = weights.get("timestep_embedder.linear_1.weight")
@@ -134,13 +141,25 @@ class TimestepEncoderTTNN:
         t_tt = to_tt_tensor(sin_emb, self.device)
 
         # MLP: Linear -> SiLU -> Linear
-        h = ttnn.linear(t_tt, self.fc1_weight, bias=self.fc1_bias,
-                        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+        h = ttnn.linear(
+            t_tt,
+            self.fc1_weight,
+            bias=self.fc1_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            core_grid=CORE_GRID_BH,
+        )
         ttnn.deallocate(t_tt)
         h = ttnn.silu(h)
 
-        out = ttnn.linear(h, self.fc2_weight, bias=self.fc2_bias,
-                          memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+        out = ttnn.linear(
+            h,
+            self.fc2_weight,
+            bias=self.fc2_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            core_grid=CORE_GRID_BH,
+        )
         ttnn.deallocate(h)
         return out
 
@@ -159,8 +178,13 @@ class MultiEmbodimentActionEncoderTTNN:
         cat(action_emb, time_emb) -> W2[emb] (SiLU) -> W3[emb] -> output
     """
 
-    def __init__(self, weights: Dict[str, torch.Tensor], config: EmbodimentConfig,
-                 timestep_weights: Dict[str, torch.Tensor], device: Any):
+    def __init__(
+        self,
+        weights: Dict[str, torch.Tensor],
+        config: EmbodimentConfig,
+        timestep_weights: Dict[str, torch.Tensor],
+        device: Any,
+    ):
         self.device = device
         self.config = config
 
@@ -180,11 +204,12 @@ class MultiEmbodimentActionEncoderTTNN:
                     )
 
         self.timestep_encoder = TimestepEncoderTTNN(
-            timestep_weights, device, output_dim=config.action_output_dim,
+            timestep_weights,
+            device,
+            output_dim=config.action_output_dim,
         )
 
-    def __call__(self, noisy_actions: ttnn.Tensor, timesteps: torch.Tensor,
-                 embodiment_id: int = 0) -> ttnn.Tensor:
+    def __call__(self, noisy_actions: ttnn.Tensor, timesteps: torch.Tensor, embodiment_id: int = 0) -> ttnn.Tensor:
         """
         Encode noisy actions with timestep conditioning.
 
@@ -197,8 +222,9 @@ class MultiEmbodimentActionEncoderTTNN:
         """
         # Action projection via W1
         w1, b1 = self.w1[embodiment_id]
-        action_emb = ttnn.linear(noisy_actions, w1, bias=b1,
-                                 memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+        action_emb = ttnn.linear(
+            noisy_actions, w1, bias=b1, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH
+        )
 
         # Timestep encoding: [B, 1, dim]
         time_emb = self.timestep_encoder(timesteps)
@@ -214,14 +240,16 @@ class MultiEmbodimentActionEncoderTTNN:
 
         # W2 with SiLU
         w2, b2 = self.w2[embodiment_id]
-        h = ttnn.linear(fused, w2, bias=b2, memory_config=ttnn.L1_MEMORY_CONFIG,
-                        dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+        h = ttnn.linear(
+            fused, w2, bias=b2, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH
+        )
         ttnn.deallocate(fused)
         h = ttnn.silu(h)
 
         # W3
         w3, b3 = self.w3[embodiment_id]
-        out = ttnn.linear(h, w3, bias=b3, memory_config=ttnn.L1_MEMORY_CONFIG,
-                          dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+        out = ttnn.linear(
+            h, w3, bias=b3, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH
+        )
         ttnn.deallocate(h)
         return out

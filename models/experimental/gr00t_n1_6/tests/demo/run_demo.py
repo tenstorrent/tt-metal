@@ -99,12 +99,13 @@ def main():
 
         # Simple tokenization: encode prompt as byte-level token IDs
         text_tokens = torch.tensor(
-            [[ord(c) % 151936 for c in args.prompt]], dtype=torch.long,
+            [[ord(c) % 151936 for c in args.prompt]],
+            dtype=torch.long,
         )
 
         print(f"  Image shape: {pixel_values.shape}")
         print(f"  State shape: {state.shape}")
-        print(f"  Prompt: \"{args.prompt}\" ({text_tokens.shape[1]} tokens)")
+        print(f'  Prompt: "{args.prompt}" ({text_tokens.shape[1]} tokens)')
         print(f"  Embodiment ID: {args.embodiment_id}")
         print(f"  Mode: {'Full E2E (with Qwen3)' if not args.no_backbone else 'Vision + Action Head only'}")
         print()

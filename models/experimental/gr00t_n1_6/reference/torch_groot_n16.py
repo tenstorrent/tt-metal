@@ -18,7 +18,6 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 import torch
-import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +51,9 @@ def load_groot_reference_model(
         logger.info(f"Loading GR00T N1.6 from HuggingFace: {model_id}")
         config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
         model = AutoModel.from_pretrained(
-            model_id, trust_remote_code=True, torch_dtype=dtype,
+            model_id,
+            trust_remote_code=True,
+            torch_dtype=dtype,
         )
         model = model.to(device)
         model.eval()
@@ -88,6 +89,7 @@ class Gr00tN16ReferenceRunner:
                     self._activations[name] = output.detach().cpu()
                 elif isinstance(output, tuple):
                     self._activations[name] = output[0].detach().cpu()
+
             return hook
 
         for name, module in self.model.named_modules():
@@ -104,9 +106,9 @@ class Gr00tN16ReferenceRunner:
         """Run just the vision encoder and return features."""
         with torch.no_grad():
             # Access the vision encoder
-            if hasattr(self.model, 'backbone'):
+            if hasattr(self.model, "backbone"):
                 vision = self.model.backbone.vision_encoder
-            elif hasattr(self.model, 'vision_model'):
+            elif hasattr(self.model, "vision_model"):
                 vision = self.model.vision_model
             else:
                 raise AttributeError("Cannot find vision encoder in model")
@@ -149,9 +151,9 @@ class Gr00tN16ReferenceRunner:
                     embodiment_id=embodiment_id,
                 )
                 if isinstance(output, dict):
-                    results['actions'] = output.get('actions', output.get('predicted_actions')).cpu()
+                    results["actions"] = output.get("actions", output.get("predicted_actions")).cpu()
                 elif isinstance(output, torch.Tensor):
-                    results['actions'] = output.cpu()
+                    results["actions"] = output.cpu()
             except Exception as e:
                 logger.error(f"Reference inference failed: {e}")
                 raise
@@ -196,8 +198,8 @@ def compute_pcc(ref: torch.Tensor, test: torch.Tensor) -> float:
     test_centered = test_flat - test_mean
 
     cov = (ref_centered * test_centered).sum()
-    ref_std = (ref_centered ** 2).sum().sqrt()
-    test_std = (test_centered ** 2).sum().sqrt()
+    ref_std = (ref_centered**2).sum().sqrt()
+    test_std = (test_centered**2).sum().sqrt()
 
     if ref_std == 0 or test_std == 0:
         return 1.0 if torch.allclose(ref_flat, test_flat) else 0.0

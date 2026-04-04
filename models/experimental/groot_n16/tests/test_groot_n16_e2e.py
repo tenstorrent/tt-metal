@@ -75,8 +75,11 @@ class TestVisionEncoding:
 
         expected_tokens = config.backbone.num_image_tokens_per_frame  # 64
         expected_dim = config.backbone.language.hidden_size  # 2048
-        assert output.shape == (1, expected_tokens, expected_dim), \
-            f"Expected (1, {expected_tokens}, {expected_dim}), got {output.shape}"
+        assert output.shape == (
+            1,
+            expected_tokens,
+            expected_dim,
+        ), f"Expected (1, {expected_tokens}, {expected_dim}), got {output.shape}"
 
     def test_determinism(self, model):
         """Verify vision encoding is deterministic."""
@@ -88,8 +91,7 @@ class TestVisionEncoding:
         out1 = ttnn.to_torch(model.encode_vision(pv))
         out2 = ttnn.to_torch(model.encode_vision(pv))
 
-        assert torch.allclose(out1, out2, atol=1e-3), \
-            f"Non-deterministic: max diff = {(out1 - out2).abs().max()}"
+        assert torch.allclose(out1, out2, atol=1e-3), f"Non-deterministic: max diff = {(out1 - out2).abs().max()}"
 
     def test_latency(self, model):
         """Measure vision encoding latency."""
@@ -119,8 +121,11 @@ class TestFlowMatching:
 
         actions = model.run_flow_matching(backbone, state, embodiment_id=0)
 
-        assert actions.shape == (1, config.action_horizon, config.embodiment.max_action_dim), \
-            f"Expected (1, {config.action_horizon}, {config.embodiment.max_action_dim}), got {actions.shape}"
+        assert actions.shape == (
+            1,
+            config.action_horizon,
+            config.embodiment.max_action_dim,
+        ), f"Expected (1, {config.action_horizon}, {config.embodiment.max_action_dim}), got {actions.shape}"
 
     def test_finite_output(self, model, config, tt_device):
         """Verify flow matching produces finite (no NaN/Inf) outputs."""
@@ -147,8 +152,7 @@ class TestFlowMatching:
         actions2 = model.run_flow_matching(backbone, state, embodiment_id=0)
 
         # Different seeds should produce different actions
-        assert not torch.allclose(actions1, actions2, atol=1e-2), \
-            "Different seeds produced identical actions"
+        assert not torch.allclose(actions1, actions2, atol=1e-2), "Different seeds produced identical actions"
 
     def test_latency(self, model, config, tt_device):
         """Measure flow matching latency."""
@@ -292,12 +296,19 @@ class TestPCCValidation:
         spec.loader.exec_module(dit_mod)
 
         ref_dit = dit_mod.AlternateVLDiT(
-            num_layers=32, num_attention_heads=32, attention_head_dim=48,
-            norm_type="ada_norm", dropout=0.0, final_dropout=True, output_dim=1024,
-            interleave_self_attention=True, cross_attention_dim=2048, attend_text_every_n_blocks=2,
+            num_layers=32,
+            num_attention_heads=32,
+            attention_head_dim=48,
+            norm_type="ada_norm",
+            dropout=0.0,
+            final_dropout=True,
+            output_dim=1024,
+            interleave_self_attention=True,
+            cross_attention_dim=2048,
+            attend_text_every_n_blocks=2,
         )
         dit_sd = {
-            k[len("action_head.model."):]: v
+            k[len("action_head.model.") :]: v
             for k, v in weight_loader.state_dict.items()
             if k.startswith("action_head.model.")
         }
@@ -306,7 +317,8 @@ class TestPCCValidation:
 
         with torch.no_grad():
             ref_out = ref_dit(
-                hidden_states=hidden, encoder_hidden_states=backbone,
+                hidden_states=hidden,
+                encoder_hidden_states=backbone,
                 timestep=torch.tensor([0]),
                 image_mask=torch.ones(1, 64, dtype=torch.bool),
                 backbone_attention_mask=torch.ones(1, 64, dtype=torch.bool),
@@ -340,9 +352,12 @@ class TestPCCValidation:
 
         # TTNN
         state_enc = CategorySpecificMLPTTNN(
-            state_weights, emb_cfg.max_num_embodiments,
-            emb_cfg.max_state_dim, emb_cfg.state_hidden_dim,
-            emb_cfg.state_output_dim, tt_device,
+            state_weights,
+            emb_cfg.max_num_embodiments,
+            emb_cfg.max_state_dim,
+            emb_cfg.state_hidden_dim,
+            emb_cfg.state_output_dim,
+            tt_device,
         )
         tt_out = ttnn.to_torch(state_enc(to_tt_tensor(state_input, tt_device), 0))
 

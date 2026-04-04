@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 @dataclass
 class SigLIP2Config:
     """SigLIP2 vision encoder configuration."""
+
     hidden_size: int = 1152
     intermediate_size: int = 4304
     num_hidden_layers: int = 27
@@ -38,6 +39,7 @@ class SigLIP2Config:
 @dataclass
 class Qwen3Config:
     """Qwen3-1.7B language model configuration (within Eagle backbone)."""
+
     hidden_size: int = 2048
     intermediate_size: int = 6144
     num_hidden_layers: int = 28
@@ -58,6 +60,7 @@ class Qwen3Config:
 @dataclass
 class EagleBackboneConfig:
     """Eagle-Block2A-2B-v2 VLM backbone configuration."""
+
     vision: SigLIP2Config = field(default_factory=SigLIP2Config)
     language: Qwen3Config = field(default_factory=Qwen3Config)
 
@@ -73,13 +76,14 @@ class EagleBackboneConfig:
     @property
     def num_image_tokens_per_frame(self) -> int:
         """After pixel shuffle: num_patches * ratio^2"""
-        ratio_sq = self.pixel_shuffle_ratio ** 2  # 0.25
+        ratio_sq = self.pixel_shuffle_ratio**2  # 0.25
         return int(self.vision.num_patches * ratio_sq)  # 256 * 0.25 = 64
 
 
 @dataclass
 class DiTConfig:
     """AlternateVLDiT (Diffusion Transformer) action head configuration."""
+
     num_layers: int = 32
     num_attention_heads: int = 32
     attention_head_dim: int = 48
@@ -101,6 +105,7 @@ class DiTConfig:
 @dataclass
 class EmbodimentConfig:
     """Per-embodiment MLP configuration."""
+
     max_num_embodiments: int = 32
     max_state_dim: int = 128
     max_action_dim: int = 128
@@ -113,6 +118,7 @@ class EmbodimentConfig:
 @dataclass
 class Gr00tN16Config:
     """Top-level GR00T N1.6-3B model configuration."""
+
     backbone: EagleBackboneConfig = field(default_factory=EagleBackboneConfig)
     dit: DiTConfig = field(default_factory=DiTConfig)
     embodiment: EmbodimentConfig = field(default_factory=EmbodimentConfig)

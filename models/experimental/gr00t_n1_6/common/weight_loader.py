@@ -101,11 +101,7 @@ class Gr00tN16WeightLoader:
 
     def _extract(self, prefix: str) -> Dict[str, torch.Tensor]:
         """Extract weights with given prefix, stripping the prefix from keys."""
-        return {
-            k[len(prefix):]: v
-            for k, v in self.state_dict.items()
-            if k.startswith(prefix)
-        }
+        return {k[len(prefix) :]: v for k, v in self.state_dict.items() if k.startswith(prefix)}
 
     def get_vision_weights(self) -> Dict[str, torch.Tensor]:
         """Extract SigLIP2 vision encoder weights.
@@ -177,11 +173,7 @@ class Gr00tN16WeightLoader:
         Keys: timestep_embedder.linear_1.weight, timestep_embedder.linear_1.bias, etc.
         """
         prefix = self.DIT_PREFIX + "timestep_encoder."
-        return {
-            k[len(prefix):]: v
-            for k, v in self.state_dict.items()
-            if k.startswith(prefix)
-        }
+        return {k[len(prefix) :]: v for k, v in self.state_dict.items() if k.startswith(prefix)}
 
     def print_weight_summary(self):
         """Print summary of weight categories."""

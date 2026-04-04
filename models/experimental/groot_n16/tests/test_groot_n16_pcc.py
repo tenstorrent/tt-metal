@@ -34,8 +34,8 @@ def compute_pcc(ref: torch.Tensor, test: torch.Tensor) -> float:
     ref_c = ref_flat - ref_flat.mean()
     test_c = test_flat - test_flat.mean()
     cov = (ref_c * test_c).sum()
-    ref_std = (ref_c ** 2).sum().sqrt()
-    test_std = (test_c ** 2).sum().sqrt()
+    ref_std = (ref_c**2).sum().sqrt()
+    test_std = (test_c**2).sum().sqrt()
 
     if ref_std == 0 or test_std == 0:
         return 1.0 if torch.allclose(ref_flat, test_flat, atol=1e-5) else 0.0
@@ -69,16 +69,18 @@ def _build_siglip2_ref_model(vision_weights):
             self.layers = nn.ModuleList()
             for i in range(self.num_layers):
                 p = f"encoder.layers.{i}."
-                layer = nn.ModuleDict({
-                    "ln1": nn.LayerNorm(self.hidden_size, eps=self.eps),
-                    "ln2": nn.LayerNorm(self.hidden_size, eps=self.eps),
-                    "q": nn.Linear(self.hidden_size, self.hidden_size),
-                    "k": nn.Linear(self.hidden_size, self.hidden_size),
-                    "v": nn.Linear(self.hidden_size, self.hidden_size),
-                    "out": nn.Linear(self.hidden_size, self.hidden_size),
-                    "fc1": nn.Linear(self.hidden_size, 4304),
-                    "fc2": nn.Linear(4304, self.hidden_size),
-                })
+                layer = nn.ModuleDict(
+                    {
+                        "ln1": nn.LayerNorm(self.hidden_size, eps=self.eps),
+                        "ln2": nn.LayerNorm(self.hidden_size, eps=self.eps),
+                        "q": nn.Linear(self.hidden_size, self.hidden_size),
+                        "k": nn.Linear(self.hidden_size, self.hidden_size),
+                        "v": nn.Linear(self.hidden_size, self.hidden_size),
+                        "out": nn.Linear(self.hidden_size, self.hidden_size),
+                        "fc1": nn.Linear(self.hidden_size, 4304),
+                        "fc2": nn.Linear(4304, self.hidden_size),
+                    }
+                )
                 layer["ln1"].weight.data = weights[f"{p}layer_norm1.weight"].float()
                 layer["ln1"].bias.data = weights[f"{p}layer_norm1.bias"].float()
                 layer["ln2"].weight.data = weights[f"{p}layer_norm2.weight"].float()
@@ -109,6 +111,7 @@ def _build_siglip2_ref_model(vision_weights):
 
             # Encoder
             import math
+
             scale = 1.0 / math.sqrt(self.head_dim)
             B, S, D = x.shape
 
@@ -238,7 +241,8 @@ def test_connector_pcc():
         connector = PixelShuffleConnectorTTNN(
             cfg.backbone.vision.hidden_size,
             cfg.backbone.language.hidden_size,
-            conn_weights, device,
+            conn_weights,
+            device,
         )
         tt_output = connector(vision_features, h, w)
         tt_features = ttnn.to_torch(tt_output)
@@ -272,9 +276,9 @@ def test_embodiment_pcc():
 
     # --- PyTorch reference state encoder ---
     w1 = state_weights["layer1.W"][embodiment_id]  # [128, 1024]
-    b1 = state_weights["layer1.b"][embodiment_id]   # [1024]
+    b1 = state_weights["layer1.b"][embodiment_id]  # [1024]
     w2 = state_weights["layer2.W"][embodiment_id]  # [1024, 1536]
-    b2 = state_weights["layer2.b"][embodiment_id]   # [1536]
+    b2 = state_weights["layer2.b"][embodiment_id]  # [1536]
 
     torch.manual_seed(42)
     state_input = torch.randn(1, 1, 128)
@@ -290,9 +294,12 @@ def test_embodiment_pcc():
     device = ttnn.open_device(device_id=0)
     try:
         state_enc = CategorySpecificMLPTTNN(
-            state_weights, emb_cfg.max_num_embodiments,
-            emb_cfg.max_state_dim, emb_cfg.state_hidden_dim,
-            emb_cfg.state_output_dim, device,
+            state_weights,
+            emb_cfg.max_num_embodiments,
+            emb_cfg.max_state_dim,
+            emb_cfg.state_hidden_dim,
+            emb_cfg.state_output_dim,
+            device,
         )
         state_tt = to_tt_tensor(state_input, device)
         tt_output = state_enc(state_tt, embodiment_id=0)
@@ -332,6 +339,7 @@ if __name__ == "__main__":
         except Exception as e:
             results[name] = f"FAIL: {e}"
             import traceback
+
             traceback.print_exc()
 
     print(f"\n{'='*60}")

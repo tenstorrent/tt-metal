@@ -18,8 +18,7 @@ Inner dim: 32 heads * 48 head_dim = 1536
 Output dim: 1024 (via proj_out_1 [1536→3072, SiLU gate] -> proj_out_2 [1536→1024])
 """
 
-import math
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import torch
 import torch.nn.functional
@@ -62,19 +61,24 @@ class AdaLayerNormTTNN:
         # Apply SiLU THEN linear (matches upstream AdaLayerNorm.forward)
         temb_activated = ttnn.silu(timestep_emb)
         scale_shift = ttnn.linear(
-            temb_activated, self.proj_weight, bias=self.proj_bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH,
+            temb_activated,
+            self.proj_weight,
+            bias=self.proj_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            core_grid=CORE_GRID_BH,
         )
         ttnn.deallocate(temb_activated)
 
         scale = ttnn.slice(scale_shift, [0, 0, 0], [scale_shift.shape[0], 1, self.hidden_size])
-        shift = ttnn.slice(scale_shift, [0, 0, self.hidden_size],
-                           [scale_shift.shape[0], 1, 2 * self.hidden_size])
+        shift = ttnn.slice(scale_shift, [0, 0, self.hidden_size], [scale_shift.shape[0], 1, 2 * self.hidden_size])
         ttnn.deallocate(scale_shift)
 
         # LayerNorm (no learned weight/bias, eps=1e-5 matching upstream)
         normed = ttnn.layer_norm(
-            hidden_states, epsilon=1e-5, memory_config=ttnn.L1_MEMORY_CONFIG,
+            hidden_states,
+            epsilon=1e-5,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         # (1 + scale) * normed + shift
@@ -100,8 +104,7 @@ class DiTAttentionTTNN:
         - Odd blocks: Q/K/V all [1536,1536] (self-attention)
     """
 
-    def __init__(self, weights: Dict[str, torch.Tensor], prefix: str,
-                 num_heads: int, head_dim: int, device: Any):
+    def __init__(self, weights: Dict[str, torch.Tensor], prefix: str, num_heads: int, head_dim: int, device: Any):
         self.device = device
         self.num_heads = num_heads
         self.head_dim = head_dim
@@ -113,15 +116,13 @@ class DiTAttentionTTNN:
             attr = proj.replace(".", "_")
             if w is not None:
                 setattr(self, f"{attr}_weight", preprocess_linear_weight(w, device))
-                setattr(self, f"{attr}_bias",
-                        preprocess_linear_bias(b, device) if b is not None else None)
+                setattr(self, f"{attr}_bias", preprocess_linear_bias(b, device) if b is not None else None)
 
         # Detect if this is cross-attention based on K weight input dim
         k_w = weights.get(f"{prefix}to_k.weight")
-        self.is_cross_attention = (k_w is not None and k_w.shape[1] != k_w.shape[0])
+        self.is_cross_attention = k_w is not None and k_w.shape[1] != k_w.shape[0]
 
-    def __call__(self, hidden_states: ttnn.Tensor,
-                 encoder_hidden_states: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
+    def __call__(self, hidden_states: ttnn.Tensor, encoder_hidden_states: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
         """
         Args:
             hidden_states: [B, q_seq, inner_dim] action tokens (Q source)
@@ -135,17 +136,37 @@ class DiTAttentionTTNN:
         padded_head_dim = ((self.head_dim + 31) // 32) * 32  # 48 -> 64
 
         # Q projection: [B, q_seq, inner_dim] -> [B, q_seq, inner_dim]
-        q = ttnn.linear(hidden_states, self.to_q_weight, bias=self.to_q_bias,
-                        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+        q = ttnn.linear(
+            hidden_states,
+            self.to_q_weight,
+            bias=self.to_q_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            core_grid=CORE_GRID_BH,
+        )
 
         # K/V source
-        kv_source = encoder_hidden_states if (self.is_cross_attention and encoder_hidden_states is not None) else hidden_states
+        kv_source = (
+            encoder_hidden_states if (self.is_cross_attention and encoder_hidden_states is not None) else hidden_states
+        )
         kv_seq = kv_source.shape[1]
 
-        k = ttnn.linear(kv_source, self.to_k_weight, bias=self.to_k_bias,
-                        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
-        v = ttnn.linear(kv_source, self.to_v_weight, bias=self.to_v_bias,
-                        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+        k = ttnn.linear(
+            kv_source,
+            self.to_k_weight,
+            bias=self.to_k_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            core_grid=CORE_GRID_BH,
+        )
+        v = ttnn.linear(
+            kv_source,
+            self.to_v_weight,
+            bias=self.to_v_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            core_grid=CORE_GRID_BH,
+        )
 
         # Reshape + pad on CPU for SDPA compatibility
         def to_heads_padded(tensor, seq_len):
@@ -153,8 +174,10 @@ class DiTAttentionTTNN:
             t = torch.nn.functional.pad(t, (0, padded_head_dim - self.head_dim))
             return ttnn.from_torch(
                 t.permute(0, 2, 1, 3).contiguous().to(torch.bfloat16),
-                dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-                device=hidden_states.device(), memory_config=ttnn.L1_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=hidden_states.device(),
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
 
         q_heads = to_heads_padded(q, q_seq)
@@ -166,25 +189,37 @@ class DiTAttentionTTNN:
 
         # SDPA
         attn_output = ttnn.transformer.scaled_dot_product_attention(
-            q_heads, k_heads, v_heads, is_causal=False,
+            q_heads,
+            k_heads,
+            v_heads,
+            is_causal=False,
         )
         ttnn.deallocate(q_heads)
         ttnn.deallocate(k_heads)
         ttnn.deallocate(v_heads)
 
         # Unpad + reshape back: [B, heads, q_seq, padded_hd] -> [B, q_seq, inner_dim]
-        out_cpu = ttnn.to_torch(attn_output)[:, :, :, :self.head_dim]
+        out_cpu = ttnn.to_torch(attn_output)[:, :, :, : self.head_dim]
         ttnn.deallocate(attn_output)
         out_cpu = out_cpu.permute(0, 2, 1, 3).contiguous().reshape(batch_size, q_seq, self.inner_dim)
 
         context = ttnn.from_torch(
-            out_cpu.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-            device=hidden_states.device(), memory_config=ttnn.L1_MEMORY_CONFIG,
+            out_cpu.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=hidden_states.device(),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         # Output projection
-        output = ttnn.linear(context, self.to_out_0_weight, bias=self.to_out_0_bias,
-                             memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+        output = ttnn.linear(
+            context,
+            self.to_out_0_weight,
+            bias=self.to_out_0_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            core_grid=CORE_GRID_BH,
+        )
         ttnn.deallocate(context)
         return output
 
@@ -216,14 +251,25 @@ class DiTFFNTTNN:
 
     def __call__(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         # Up projection with GELU: 1536 -> 6144
-        h = ttnn.linear(hidden_states, self.up_weight, bias=self.up_bias,
-                        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16,
-                        core_grid=CORE_GRID_BH, activation="gelu")
+        h = ttnn.linear(
+            hidden_states,
+            self.up_weight,
+            bias=self.up_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            core_grid=CORE_GRID_BH,
+            activation="gelu",
+        )
 
         # Down projection: 6144 -> 1536
-        output = ttnn.linear(h, self.down_weight, bias=self.down_bias,
-                             memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16,
-                             core_grid=CORE_GRID_BH)
+        output = ttnn.linear(
+            h,
+            self.down_weight,
+            bias=self.down_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            core_grid=CORE_GRID_BH,
+        )
         ttnn.deallocate(h)
         return output
 
@@ -236,8 +282,7 @@ class DiTBlockTTNN:
     Odd blocks: AdaLN -> SelfAttn(Q/K/V=actions) -> Residual -> FFN -> Residual
     """
 
-    def __init__(self, weights: Dict[str, torch.Tensor], prefix: str,
-                 config: DiTConfig, block_idx: int, device: Any):
+    def __init__(self, weights: Dict[str, torch.Tensor], prefix: str, config: DiTConfig, block_idx: int, device: Any):
         self.device = device
         self.block_idx = block_idx
         inner_dim = config.inner_dim
@@ -247,8 +292,11 @@ class DiTBlockTTNN:
 
         # Self-attention (attn1) — optimized with padded head_dim for on-device compute
         self.attn = DiTAttentionOptimizedTTNN(
-            weights, f"{prefix}attn1.",
-            config.num_attention_heads, config.attention_head_dim, device,
+            weights,
+            f"{prefix}attn1.",
+            config.num_attention_heads,
+            config.attention_head_dim,
+            device,
         )
 
         # norm3: parameter-free LayerNorm for FFN (elementwise_affine=False in upstream)
@@ -256,8 +304,9 @@ class DiTBlockTTNN:
         # FFN
         self.ffn = DiTFFNTTNN(weights, f"{prefix}ff.", device)
 
-    def __call__(self, hidden_states: ttnn.Tensor, timestep_emb: ttnn.Tensor,
-                 backbone_features: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
+    def __call__(
+        self, hidden_states: ttnn.Tensor, timestep_emb: ttnn.Tensor, backbone_features: Optional[ttnn.Tensor] = None
+    ) -> ttnn.Tensor:
         # AdaLN -> Attention -> Residual
         normed = self.adaln(hidden_states, timestep_emb)
         attn_out = self.attn(normed, encoder_hidden_states=backbone_features)
@@ -266,7 +315,9 @@ class DiTBlockTTNN:
 
         # norm3 (parameter-free LayerNorm) -> FFN -> Residual
         normed_ff = ttnn.layer_norm(
-            hidden_states, epsilon=1e-5, memory_config=ttnn.L1_MEMORY_CONFIG,
+            hidden_states,
+            epsilon=1e-5,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ffn_out = self.ffn(normed_ff)
         hidden_states = ttnn.add(hidden_states, ffn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -299,15 +350,15 @@ class AlternateVLDiTTTNN:
             b = weights.get(f"{proj_name}.bias")
             if w is not None:
                 setattr(self, f"{proj_name}_weight", preprocess_linear_weight(w, device))
-                setattr(self, f"{proj_name}_bias",
-                        preprocess_linear_bias(b, device) if b is not None else None)
+                setattr(self, f"{proj_name}_bias", preprocess_linear_bias(b, device) if b is not None else None)
 
         # proj_out_1 output dim for gating (3072 = 2 * 1536)
         w1 = weights.get("proj_out_1.weight")
         self.proj_out_1_dim = w1.shape[0] if w1 is not None else 3072
 
-    def __call__(self, hidden_states: ttnn.Tensor, timestep_emb: ttnn.Tensor,
-                 backbone_features: ttnn.Tensor) -> ttnn.Tensor:
+    def __call__(
+        self, hidden_states: ttnn.Tensor, timestep_emb: ttnn.Tensor, backbone_features: ttnn.Tensor
+    ) -> ttnn.Tensor:
         """
         Forward through 32 DiT blocks + output projection.
 
@@ -331,8 +382,12 @@ class AlternateVLDiTTTNN:
         # proj_out_1 projects temb (NOT hidden_states) to shift+scale
         conditioning = ttnn.silu(timestep_emb)
         scale_shift = ttnn.linear(
-            conditioning, self.proj_out_1_weight, bias=self.proj_out_1_bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH,
+            conditioning,
+            self.proj_out_1_weight,
+            bias=self.proj_out_1_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            core_grid=CORE_GRID_BH,
         )
         ttnn.deallocate(conditioning)
 
@@ -343,7 +398,9 @@ class AlternateVLDiTTTNN:
 
         # norm_out: parameter-free LayerNorm
         normed = ttnn.layer_norm(
-            hidden_states, epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG,
+            hidden_states,
+            epsilon=1e-6,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         # AdaLN: (1 + scale) * normed + shift
@@ -361,8 +418,12 @@ class AlternateVLDiTTTNN:
 
         # proj_out_2: 1536 -> 1024
         output = ttnn.linear(
-            hidden_states, self.proj_out_2_weight, bias=self.proj_out_2_bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH,
+            hidden_states,
+            self.proj_out_2_weight,
+            bias=self.proj_out_2_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            core_grid=CORE_GRID_BH,
         )
 
         return output

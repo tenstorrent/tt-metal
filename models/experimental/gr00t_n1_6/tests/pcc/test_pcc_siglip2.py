@@ -45,7 +45,6 @@ def compute_pcc(ref: torch.Tensor, test: torch.Tensor) -> float:
 
 def _build_siglip2_ref_model(vision_weights):
     """Build a PyTorch reference SigLIP2 from raw weights."""
-    import math
 
     from models.experimental.gr00t_n1_6.tt.ttnn_siglip2 import siglip2_patch_embeddings_cpu
 

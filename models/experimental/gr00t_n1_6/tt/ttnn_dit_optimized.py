@@ -23,7 +23,6 @@ from models.experimental.gr00t_n1_6.tt.ttnn_common import (
     preprocess_linear_bias,
 )
 
-
 PADDED_HEAD_DIM = 64  # 48 padded to nearest multiple of 32
 
 
@@ -53,7 +52,9 @@ def _pad_attention_weight_for_heads(
         # Transpose for ttnn: [in, out]
         return ttnn.from_torch(
             w.t().contiguous().to(torch.bfloat16),
-            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
         )
     else:
         # Q/K/V proj: [num_heads * head_dim, in_dim] -> [num_heads * padded_head_dim, in_dim]
@@ -64,7 +65,9 @@ def _pad_attention_weight_for_heads(
         # Transpose for ttnn: [in, out]
         return ttnn.from_torch(
             w.t().contiguous().to(torch.bfloat16),
-            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
         )
 
 
@@ -81,7 +84,9 @@ def _pad_attention_bias(
     b = b.reshape(num_heads * padded_head_dim)
     return ttnn.from_torch(
         b.unsqueeze(0).to(torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
     )
 
 
@@ -93,8 +98,7 @@ class DiTAttentionOptimizedTTNN:
     Uses nlp_create_qkv_heads and SDPA for efficient on-device attention.
     """
 
-    def __init__(self, weights: Dict[str, torch.Tensor], prefix: str,
-                 num_heads: int, head_dim: int, device: Any):
+    def __init__(self, weights: Dict[str, torch.Tensor], prefix: str, num_heads: int, head_dim: int, device: Any):
         self.device = device
         self.num_heads = num_heads
         self.head_dim = head_dim
@@ -103,18 +107,24 @@ class DiTAttentionOptimizedTTNN:
 
         # Detect cross-attention from K weight input dim
         k_w = weights.get(f"{prefix}to_k.weight")
-        self.is_cross_attention = (k_w is not None and k_w.shape[1] != k_w.shape[0])
+        self.is_cross_attention = k_w is not None and k_w.shape[1] != k_w.shape[0]
 
         # Preprocess weights with padded head dimensions
         for proj in ["to_q", "to_k", "to_v"]:
             w = weights.get(f"{prefix}{proj}.weight")
             b = weights.get(f"{prefix}{proj}.bias")
             if w is not None:
-                setattr(self, f"{proj.replace('.', '_')}_weight",
-                        _pad_attention_weight_for_heads(w, num_heads, head_dim, PADDED_HEAD_DIM, device))
+                setattr(
+                    self,
+                    f"{proj.replace('.', '_')}_weight",
+                    _pad_attention_weight_for_heads(w, num_heads, head_dim, PADDED_HEAD_DIM, device),
+                )
                 if b is not None:
-                    setattr(self, f"{proj.replace('.', '_')}_bias",
-                            _pad_attention_bias(b, num_heads, head_dim, PADDED_HEAD_DIM, device))
+                    setattr(
+                        self,
+                        f"{proj.replace('.', '_')}_bias",
+                        _pad_attention_bias(b, num_heads, head_dim, PADDED_HEAD_DIM, device),
+                    )
                 else:
                     setattr(self, f"{proj.replace('.', '_')}_bias", None)
 
@@ -123,27 +133,47 @@ class DiTAttentionOptimizedTTNN:
         out_b = weights.get(f"{prefix}to_out.0.bias")
         if out_w is not None:
             self.to_out_0_weight = _pad_attention_weight_for_heads(
-                out_w, num_heads, head_dim, PADDED_HEAD_DIM, device, is_output=True)
+                out_w, num_heads, head_dim, PADDED_HEAD_DIM, device, is_output=True
+            )
             self.to_out_0_bias = preprocess_linear_bias(out_b, device) if out_b is not None else None
 
-    def __call__(self, hidden_states: ttnn.Tensor,
-                 encoder_hidden_states: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
+    def __call__(self, hidden_states: ttnn.Tensor, encoder_hidden_states: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
         """Fully on-device attention with padded heads."""
         batch_size = hidden_states.shape[0]
         q_seq = hidden_states.shape[1]
 
         # Q projection: [B, q_seq, inner_dim] -> [B, q_seq, num_heads * padded_head_dim]
-        q = ttnn.linear(hidden_states, self.to_q_weight, bias=self.to_q_bias,
-                        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+        q = ttnn.linear(
+            hidden_states,
+            self.to_q_weight,
+            bias=self.to_q_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            core_grid=CORE_GRID_BH,
+        )
 
         # K/V source
-        kv_source = encoder_hidden_states if (self.is_cross_attention and encoder_hidden_states is not None) else hidden_states
+        kv_source = (
+            encoder_hidden_states if (self.is_cross_attention and encoder_hidden_states is not None) else hidden_states
+        )
         kv_seq = kv_source.shape[1]
 
-        k = ttnn.linear(kv_source, self.to_k_weight, bias=self.to_k_bias,
-                        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
-        v = ttnn.linear(kv_source, self.to_v_weight, bias=self.to_v_bias,
-                        memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+        k = ttnn.linear(
+            kv_source,
+            self.to_k_weight,
+            bias=self.to_k_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            core_grid=CORE_GRID_BH,
+        )
+        v = ttnn.linear(
+            kv_source,
+            self.to_v_weight,
+            bias=self.to_v_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            core_grid=CORE_GRID_BH,
+        )
 
         # Reshape to multi-head: [B, seq, num_heads*padded_hd] -> [B, num_heads, seq, padded_hd]
         # padded_head_dim=64 is tile-aligned, so reshape+permute+matmul all work
@@ -161,15 +191,13 @@ class DiTAttentionOptimizedTTNN:
         # Transpose K: [B, heads, kv_seq, padded_hd] -> [B, heads, padded_hd, kv_seq]
         k = ttnn.permute(k, (0, 1, 3, 2))
 
-        attn = ttnn.matmul(q, k, memory_config=ttnn.L1_MEMORY_CONFIG,
-                           dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+        attn = ttnn.matmul(q, k, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
         ttnn.deallocate(q)
         ttnn.deallocate(k)
 
         attn = ttnn.softmax_in_place(attn, numeric_stable=True)
 
-        context = ttnn.matmul(attn, v, memory_config=ttnn.L1_MEMORY_CONFIG,
-                              dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+        context = ttnn.matmul(attn, v, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
         ttnn.deallocate(attn)
         ttnn.deallocate(v)
 
@@ -179,7 +207,13 @@ class DiTAttentionOptimizedTTNN:
         ttnn.deallocate(context)
 
         # Output projection (weight already padded for input)
-        output = ttnn.linear(attn_3d, self.to_out_0_weight, bias=self.to_out_0_bias,
-                             memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+        output = ttnn.linear(
+            attn_3d,
+            self.to_out_0_weight,
+            bias=self.to_out_0_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            core_grid=CORE_GRID_BH,
+        )
         ttnn.deallocate(attn_3d)
         return output

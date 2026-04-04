@@ -24,7 +24,7 @@ Inference pipeline:
 
 import logging
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import torch
 import torch.nn.functional as F
@@ -37,7 +37,6 @@ from models.experimental.groot_n16.tt.ttnn_common import (
     preprocess_linear_weight,
     preprocess_linear_bias,
     preprocess_layernorm_params,
-    preprocess_rmsnorm_params,
     to_tt_tensor,
 )
 from models.experimental.groot_n16.tt.ttnn_siglip2 import SigLIP2VisionEncoderTTNN
@@ -133,15 +132,22 @@ class PixelShuffleConnectorTTNN:
 
         # Layer 0: LayerNorm over pixel-shuffled features
         h = ttnn.layer_norm(
-            shuffled_tt, weight=self.ln_weight, bias=self.ln_bias,
-            epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG,
+            shuffled_tt,
+            weight=self.ln_weight,
+            bias=self.ln_bias,
+            epsilon=1e-6,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(shuffled_tt)
 
         # Layer 1: Linear 4608 -> 2048
         h = ttnn.linear(
-            h, self.proj1_weight, bias=self.proj1_bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH,
+            h,
+            self.proj1_weight,
+            bias=self.proj1_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
+            core_grid=CORE_GRID_BH,
         )
 
         # Layer 2: GELU activation
@@ -149,8 +155,12 @@ class PixelShuffleConnectorTTNN:
 
         # Layer 3: Linear 2048 -> 2048
         output = ttnn.linear(
-            h, self.proj3_weight, bias=self.proj3_bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=CORE_GRID_BH,
+            h,
+            self.proj3_weight,
+            bias=self.proj3_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
+            core_grid=CORE_GRID_BH,
         )
         ttnn.deallocate(h)
 
@@ -203,7 +213,9 @@ class Gr00tN16ModelTTNN:
         vl_ln_b = vl_ln_weights.get("bias")
         if vl_ln_w is not None:
             self.vl_ln_weight, self.vl_ln_bias = preprocess_layernorm_params(
-                vl_ln_w, vl_ln_b, device,
+                vl_ln_w,
+                vl_ln_b,
+                device,
             )
 
         # 4. AlternateVLDiT action head
@@ -276,7 +288,7 @@ class Gr00tN16ModelTTNN:
 
         # Compute spatial dims
         num_patches = self.config.backbone.vision.num_patches
-        h = w = int(num_patches ** 0.5)
+        h = w = int(num_patches**0.5)
 
         # Pixel shuffle + MLP connector
         image_tokens = self.connector(vision_features_cpu, h, w)
@@ -306,13 +318,11 @@ class Gr00tN16ModelTTNN:
             # Use HuggingFace model for backbone features
             # This is a temporary path until Qwen3 is ported to TTNN
             raise NotImplementedError(
-                "Full Qwen3 backbone on TTNN not yet implemented. "
-                "Use compute_backbone_features_cpu() instead."
+                "Full Qwen3 backbone on TTNN not yet implemented. " "Use compute_backbone_features_cpu() instead."
             )
 
         raise NotImplementedError(
-            "Backbone encoding requires either a CPU reference model or "
-            "the Qwen3 TTNN implementation."
+            "Backbone encoding requires either a CPU reference model or " "the Qwen3 TTNN implementation."
         )
 
     def run_flow_matching(
@@ -341,7 +351,7 @@ class Gr00tN16ModelTTNN:
         dt = 1.0 / K
 
         # Apply VL LayerNorm to backbone features
-        if hasattr(self, 'vl_ln_weight'):
+        if hasattr(self, "vl_ln_weight"):
             backbone_features = ttnn.layer_norm(
                 backbone_features,
                 weight=self.vl_ln_weight,
@@ -368,7 +378,9 @@ class Gr00tN16ModelTTNN:
 
             # Encode actions with timestep
             action_features = self.action_encoder(
-                actions_tt, t_cont, embodiment_id,
+                actions_tt,
+                t_cont,
+                embodiment_id,
             )
             ttnn.deallocate(actions_tt)
 
@@ -393,7 +405,9 @@ class Gr00tN16ModelTTNN:
 
             # Run DiT
             dit_output = self.dit(
-                dit_input, timestep_emb, backbone_features,
+                dit_input,
+                timestep_emb,
+                backbone_features,
             )
             ttnn.deallocate(dit_input)
             ttnn.deallocate(timestep_emb)
@@ -447,7 +461,9 @@ class Gr00tN16ModelTTNN:
 
         # Step 3: Flow matching
         actions = self.run_flow_matching(
-            backbone_features, state, embodiment_id,
+            backbone_features,
+            state,
+            embodiment_id,
         )
 
         return actions

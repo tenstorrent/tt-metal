@@ -29,10 +29,10 @@ from models.experimental.gr00t_n1_6.tt.ttnn_common import (
     preprocess_rmsnorm_params,
 )
 
-
 # ---------------------------------------------------------------------------
 # RoPE utilities (CPU) — applied to small Q/K tensors per-layer
 # ---------------------------------------------------------------------------
+
 
 def precompute_freqs_cis(
     head_dim: int,
@@ -47,7 +47,9 @@ def precompute_freqs_cis(
 
 
 def apply_rotary_emb_cpu(
-    x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor,
+    x: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
 ) -> torch.Tensor:
     """Apply RoPE on CPU. x: [B, heads, seq, head_dim], cos/sin: [seq, half]."""
     half = x.shape[-1] // 2
@@ -67,25 +69,33 @@ def qk_norm_cpu(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tens
 # Qwen3 MLP — fully on device
 # ---------------------------------------------------------------------------
 
+
 class Qwen3MLPTTNN:
     """SiLU-gated MLP: down_proj(silu(gate_proj(x)) * up_proj(x)). No bias."""
 
-    def __init__(self, gate_w: torch.Tensor, up_w: torch.Tensor,
-                 down_w: torch.Tensor, device: Any):
+    def __init__(self, gate_w: torch.Tensor, up_w: torch.Tensor, down_w: torch.Tensor, device: Any):
         self.gate_weight = preprocess_linear_weight(gate_w, device, dtype=ttnn.bfloat16)
         self.up_weight = preprocess_linear_weight(up_w, device, dtype=ttnn.bfloat16)
         self.down_weight = preprocess_linear_weight(down_w, device, dtype=ttnn.bfloat16)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        gate = ttnn.linear(x, self.gate_weight, memory_config=ttnn.L1_MEMORY_CONFIG,
-                           dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH, activation="silu")
-        up = ttnn.linear(x, self.up_weight, memory_config=ttnn.L1_MEMORY_CONFIG,
-                         dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+        gate = ttnn.linear(
+            x,
+            self.gate_weight,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            core_grid=CORE_GRID_BH,
+            activation="silu",
+        )
+        up = ttnn.linear(
+            x, self.up_weight, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH
+        )
         hidden = ttnn.mul(gate, up, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
-        out = ttnn.linear(hidden, self.down_weight, memory_config=ttnn.L1_MEMORY_CONFIG,
-                          dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+        out = ttnn.linear(
+            hidden, self.down_weight, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH
+        )
         ttnn.deallocate(hidden)
         return out
 
@@ -93,6 +103,7 @@ class Qwen3MLPTTNN:
 # ---------------------------------------------------------------------------
 # Qwen3 Attention — projections + attention on device, QK-norm + RoPE on CPU
 # ---------------------------------------------------------------------------
+
 
 class Qwen3AttentionTTNN:
     """
@@ -105,16 +116,21 @@ class Qwen3AttentionTTNN:
     """
 
     def __init__(
-        self, q_proj_w: torch.Tensor, k_proj_w: torch.Tensor,
-        v_proj_w: torch.Tensor, o_proj_w: torch.Tensor,
-        q_norm_w: torch.Tensor, k_norm_w: torch.Tensor,
-        config: Qwen3Config, device: Any,
+        self,
+        q_proj_w: torch.Tensor,
+        k_proj_w: torch.Tensor,
+        v_proj_w: torch.Tensor,
+        o_proj_w: torch.Tensor,
+        q_norm_w: torch.Tensor,
+        k_norm_w: torch.Tensor,
+        config: Qwen3Config,
+        device: Any,
     ):
         self.config = config
         self.device = device
-        self.num_heads = config.num_attention_heads      # 16
-        self.num_kv_heads = config.num_key_value_heads   # 8
-        self.head_dim = config.head_dim                  # 128
+        self.num_heads = config.num_attention_heads  # 16
+        self.num_kv_heads = config.num_key_value_heads  # 8
+        self.head_dim = config.head_dim  # 128
         self.scale = 1.0 / math.sqrt(self.head_dim)
         self.kv_repeat = self.num_heads // self.num_kv_heads  # 2
 
@@ -128,8 +144,10 @@ class Qwen3AttentionTTNN:
         self.k_norm_w_cpu = k_norm_w.to(torch.float32)
 
     def __call__(
-        self, x: ttnn.Tensor,
-        cos: torch.Tensor, sin: torch.Tensor,
+        self,
+        x: ttnn.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
         causal_mask: ttnn.Tensor,
     ) -> ttnn.Tensor:
         """
@@ -141,12 +159,15 @@ class Qwen3AttentionTTNN:
         batch, seq_len, _ = x.shape
 
         # --- Q/K/V projections on device ---
-        q = ttnn.linear(x, self.q_weight, memory_config=ttnn.L1_MEMORY_CONFIG,
-                        dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
-        k = ttnn.linear(x, self.k_weight, memory_config=ttnn.L1_MEMORY_CONFIG,
-                        dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
-        v = ttnn.linear(x, self.v_weight, memory_config=ttnn.L1_MEMORY_CONFIG,
-                        dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+        q = ttnn.linear(
+            x, self.q_weight, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH
+        )
+        k = ttnn.linear(
+            x, self.k_weight, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH
+        )
+        v = ttnn.linear(
+            x, self.v_weight, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH
+        )
 
         # --- Bring Q/K to CPU for QK-norm + RoPE (small tensors) ---
         q_cpu = ttnn.to_torch(q).to(torch.bfloat16)
@@ -173,28 +194,39 @@ class Qwen3AttentionTTNN:
         q_cpu = q_cpu * self.scale
 
         # --- Transfer Q/K back to device for attention matmuls ---
-        q = ttnn.from_torch(q_cpu.contiguous(), dtype=ttnn.bfloat16,
-                            layout=ttnn.TILE_LAYOUT, device=self.device,
-                            memory_config=ttnn.L1_MEMORY_CONFIG)
-        k = ttnn.from_torch(k_cpu.contiguous(), dtype=ttnn.bfloat16,
-                            layout=ttnn.TILE_LAYOUT, device=self.device,
-                            memory_config=ttnn.L1_MEMORY_CONFIG)
+        q = ttnn.from_torch(
+            q_cpu.contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        k = ttnn.from_torch(
+            k_cpu.contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
         # V: reshape on device (no QK-norm or RoPE needed)
         v_cpu = ttnn.to_torch(v).to(torch.bfloat16)
         ttnn.deallocate(v)
         v_cpu = v_cpu.reshape(batch, seq_len, self.num_kv_heads, self.head_dim).permute(0, 2, 1, 3)
         v_cpu = v_cpu.repeat_interleave(self.kv_repeat, dim=1)
-        v = ttnn.from_torch(v_cpu.contiguous(), dtype=ttnn.bfloat16,
-                            layout=ttnn.TILE_LAYOUT, device=self.device,
-                            memory_config=ttnn.L1_MEMORY_CONFIG)
+        v = ttnn.from_torch(
+            v_cpu.contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
         # --- Attention on device: Q @ K^T + mask -> softmax -> @ V ---
         k_t = ttnn.permute(k, (0, 1, 3, 2))  # Transpose K
         ttnn.deallocate(k)
 
-        attn = ttnn.matmul(q, k_t, memory_config=ttnn.L1_MEMORY_CONFIG,
-                           dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+        attn = ttnn.matmul(q, k_t, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
         ttnn.deallocate(q)
         ttnn.deallocate(k_t)
 
@@ -205,8 +237,7 @@ class Qwen3AttentionTTNN:
         attn = ttnn.softmax_in_place(attn, numeric_stable=True)
 
         # Context: attn @ V
-        context = ttnn.matmul(attn, v, memory_config=ttnn.L1_MEMORY_CONFIG,
-                              dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+        context = ttnn.matmul(attn, v, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
         ttnn.deallocate(attn)
         ttnn.deallocate(v)
 
@@ -215,8 +246,9 @@ class Qwen3AttentionTTNN:
         context = ttnn.reshape(context, (batch, seq_len, self.num_heads * self.head_dim))
 
         # Output projection on device
-        out = ttnn.linear(context, self.o_weight, memory_config=ttnn.L1_MEMORY_CONFIG,
-                          dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+        out = ttnn.linear(
+            context, self.o_weight, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH
+        )
         ttnn.deallocate(context)
         return out
 
@@ -225,14 +257,13 @@ class Qwen3AttentionTTNN:
 # Qwen3 Decoder Layer
 # ---------------------------------------------------------------------------
 
+
 class Qwen3DecoderLayerTTNN:
     """Single Qwen3 layer: RMSNorm -> Attention -> Residual -> RMSNorm -> MLP -> Residual."""
 
-    def __init__(self, layer_weights: Dict[str, torch.Tensor],
-                 config: Qwen3Config, device: Any):
+    def __init__(self, layer_weights: Dict[str, torch.Tensor], config: Qwen3Config, device: Any):
         self._eps = config.rms_norm_eps
-        self.input_ln_weight = preprocess_rmsnorm_params(
-            layer_weights["input_layernorm.weight"], device)
+        self.input_ln_weight = preprocess_rmsnorm_params(layer_weights["input_layernorm.weight"], device)
         self.attn = Qwen3AttentionTTNN(
             q_proj_w=layer_weights["self_attn.q_proj.weight"],
             k_proj_w=layer_weights["self_attn.k_proj.weight"],
@@ -240,10 +271,10 @@ class Qwen3DecoderLayerTTNN:
             o_proj_w=layer_weights["self_attn.o_proj.weight"],
             q_norm_w=layer_weights["self_attn.q_norm.weight"],
             k_norm_w=layer_weights["self_attn.k_norm.weight"],
-            config=config, device=device,
+            config=config,
+            device=device,
         )
-        self.post_attn_ln_weight = preprocess_rmsnorm_params(
-            layer_weights["post_attention_layernorm.weight"], device)
+        self.post_attn_ln_weight = preprocess_rmsnorm_params(layer_weights["post_attention_layernorm.weight"], device)
         self.mlp = Qwen3MLPTTNN(
             gate_w=layer_weights["mlp.gate_proj.weight"],
             up_w=layer_weights["mlp.up_proj.weight"],
@@ -251,27 +282,28 @@ class Qwen3DecoderLayerTTNN:
             device=device,
         )
 
-    def __call__(self, hidden: ttnn.Tensor, cos: torch.Tensor,
-                 sin: torch.Tensor, causal_mask: ttnn.Tensor) -> ttnn.Tensor:
+    def __call__(
+        self, hidden: ttnn.Tensor, cos: torch.Tensor, sin: torch.Tensor, causal_mask: ttnn.Tensor
+    ) -> ttnn.Tensor:
         residual = hidden
 
-        normed = ttnn.rms_norm(hidden, weight=self.input_ln_weight,
-                               epsilon=self._eps, memory_config=ttnn.L1_MEMORY_CONFIG)
+        normed = ttnn.rms_norm(
+            hidden, weight=self.input_ln_weight, epsilon=self._eps, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         attn_out = self.attn(normed, cos, sin, causal_mask)
         ttnn.deallocate(normed)
 
-        hidden = ttnn.add(residual, attn_out,
-                          memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        hidden = ttnn.add(residual, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
         ttnn.deallocate(attn_out)
         residual = hidden
 
-        normed = ttnn.rms_norm(hidden, weight=self.post_attn_ln_weight,
-                               epsilon=self._eps, memory_config=ttnn.L1_MEMORY_CONFIG)
+        normed = ttnn.rms_norm(
+            hidden, weight=self.post_attn_ln_weight, epsilon=self._eps, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         mlp_out = self.mlp(normed)
         ttnn.deallocate(normed)
 
-        hidden = ttnn.add(residual, mlp_out,
-                          memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        hidden = ttnn.add(residual, mlp_out, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
         ttnn.deallocate(mlp_out)
         return hidden
 
@@ -279,6 +311,7 @@ class Qwen3DecoderLayerTTNN:
 # ---------------------------------------------------------------------------
 # Full Qwen3 Model
 # ---------------------------------------------------------------------------
+
 
 class Qwen3ModelTTNN:
     """
@@ -294,8 +327,7 @@ class Qwen3ModelTTNN:
     for the DiT action head.
     """
 
-    def __init__(self, config: Qwen3Config, weights: Dict[str, torch.Tensor],
-                 device: Any):
+    def __init__(self, config: Qwen3Config, weights: Dict[str, torch.Tensor], device: Any):
         self.config = config
         self.device = device
         self._eps = config.rms_norm_eps
@@ -309,16 +341,25 @@ class Qwen3ModelTTNN:
 
         # RoPE tables (CPU, reused across layers)
         self._rope_cos, self._rope_sin = precompute_freqs_cis(
-            config.head_dim, config.max_position_embeddings, theta=config.rope_theta)
+            config.head_dim, config.max_position_embeddings, theta=config.rope_theta
+        )
 
         # Causal mask on device (precomputed, sliced per forward)
         max_seq = 1024
-        mask_cpu = torch.triu(
-            torch.full((max_seq, max_seq), -1e9, dtype=torch.bfloat16), diagonal=1,
-        ).unsqueeze(0).unsqueeze(0)
+        mask_cpu = (
+            torch.triu(
+                torch.full((max_seq, max_seq), -1e9, dtype=torch.bfloat16),
+                diagonal=1,
+            )
+            .unsqueeze(0)
+            .unsqueeze(0)
+        )
         self._causal_mask_tt = ttnn.from_torch(
-            mask_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-            device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mask_cpu,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         # Decoder layers
@@ -327,17 +368,17 @@ class Qwen3ModelTTNN:
         for i in range(num_layers):
             p = f"model.layers.{i}."
             layer_w = {
-                "input_layernorm.weight":          weights[f"{p}input_layernorm.weight"],
-                "self_attn.q_proj.weight":         weights[f"{p}self_attn.q_proj.weight"],
-                "self_attn.k_proj.weight":         weights[f"{p}self_attn.k_proj.weight"],
-                "self_attn.v_proj.weight":         weights[f"{p}self_attn.v_proj.weight"],
-                "self_attn.o_proj.weight":         weights[f"{p}self_attn.o_proj.weight"],
-                "self_attn.q_norm.weight":         weights[f"{p}self_attn.q_norm.weight"],
-                "self_attn.k_norm.weight":         weights[f"{p}self_attn.k_norm.weight"],
+                "input_layernorm.weight": weights[f"{p}input_layernorm.weight"],
+                "self_attn.q_proj.weight": weights[f"{p}self_attn.q_proj.weight"],
+                "self_attn.k_proj.weight": weights[f"{p}self_attn.k_proj.weight"],
+                "self_attn.v_proj.weight": weights[f"{p}self_attn.v_proj.weight"],
+                "self_attn.o_proj.weight": weights[f"{p}self_attn.o_proj.weight"],
+                "self_attn.q_norm.weight": weights[f"{p}self_attn.q_norm.weight"],
+                "self_attn.k_norm.weight": weights[f"{p}self_attn.k_norm.weight"],
                 "post_attention_layernorm.weight": weights[f"{p}post_attention_layernorm.weight"],
-                "mlp.gate_proj.weight":            weights[f"{p}mlp.gate_proj.weight"],
-                "mlp.up_proj.weight":              weights[f"{p}mlp.up_proj.weight"],
-                "mlp.down_proj.weight":            weights[f"{p}mlp.down_proj.weight"],
+                "mlp.gate_proj.weight": weights[f"{p}mlp.gate_proj.weight"],
+                "mlp.up_proj.weight": weights[f"{p}mlp.up_proj.weight"],
+                "mlp.down_proj.weight": weights[f"{p}mlp.down_proj.weight"],
             }
             self.layers.append(Qwen3DecoderLayerTTNN(layer_w, config, device))
 
@@ -348,7 +389,8 @@ class Qwen3ModelTTNN:
         self.final_norm_weight = preprocess_rmsnorm_params(norm_w, device)
 
     def __call__(
-        self, input_ids: torch.Tensor,
+        self,
+        input_ids: torch.Tensor,
         image_features: Optional[torch.Tensor] = None,
         image_token_positions: Optional[List[int]] = None,
     ) -> ttnn.Tensor:
@@ -381,13 +423,18 @@ class Qwen3ModelTTNN:
 
         # Transfer to device (single CPU->device transfer)
         hidden_tt = ttnn.from_torch(
-            hidden_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-            device=self.device, memory_config=ttnn.L1_MEMORY_CONFIG,
+            hidden_cpu,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         # Slice causal mask to seq_len (on device)
         causal_mask = ttnn.slice(
-            self._causal_mask_tt, [0, 0, 0, 0], [1, 1, seq_len, seq_len],
+            self._causal_mask_tt,
+            [0, 0, 0, 0],
+            [1, 1, seq_len, seq_len],
         )
 
         # RoPE tables sliced to seq_len (CPU)
@@ -402,8 +449,10 @@ class Qwen3ModelTTNN:
 
         # Final RMSNorm on device
         output = ttnn.rms_norm(
-            hidden_tt, weight=self.final_norm_weight,
-            epsilon=self._eps, memory_config=ttnn.L1_MEMORY_CONFIG,
+            hidden_tt,
+            weight=self.final_norm_weight,
+            epsilon=self._eps,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         if output is not hidden_tt:
             ttnn.deallocate(hidden_tt)
