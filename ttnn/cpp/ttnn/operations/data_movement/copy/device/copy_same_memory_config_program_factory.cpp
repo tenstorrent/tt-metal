@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cmath>
 
 #include <tt-metalium/work_split.hpp>
-#include "copy_program_factory.hpp"
+#include "copy_same_memory_config_program_factory.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -15,7 +15,7 @@
 
 namespace ttnn::prim {
 
-CopyProgramFactory::cached_program_t CopyProgramFactory::create(
+CopySameMemoryConfigProgramFactory::cached_program_t CopySameMemoryConfigProgramFactory::create(
     const CopyParams& operation_attributes, const CopyInputs& tensor_args, Tensor& output) {
     using namespace tt::constants;
     using namespace tt::tt_metal;
@@ -27,15 +27,15 @@ CopyProgramFactory::cached_program_t CopyProgramFactory::create(
     const bool tilized = output.layout() == Layout::TILE;
     const bool sharded = input.memory_config().memory_layout() != TensorMemoryLayout::INTERLEAVED;
     const tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    uint32_t input_unit_size = tilized ? tt::tile_size(input_cb_data_format)
-                                       : input.padded_shape()[-1] * input.element_size();
+    uint32_t input_unit_size =
+        tilized ? tt::tile_size(input_cb_data_format) : input.padded_shape()[-1] * input.element_size();
     const uint32_t full_input_row = input_unit_size;
     if (sharded && !tilized) {
         input_unit_size = input.memory_config().shard_spec()->shape[1] * input.element_size();
     }
     const tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_unit_size = tilized ? tt::tile_size(output_cb_data_format)
-                                        : output.padded_shape()[-1] * output.element_size();
+    uint32_t output_unit_size =
+        tilized ? tt::tile_size(output_cb_data_format) : output.padded_shape()[-1] * output.element_size();
     const uint32_t full_output_row = output_unit_size;
     if (sharded && !tilized) {
         output_unit_size = output.memory_config().shard_spec()->shape[1] * output.element_size();
@@ -188,7 +188,7 @@ CopyProgramFactory::cached_program_t CopyProgramFactory::create(
          .cores = cores}};
 }
 
-void CopyProgramFactory::override_runtime_arguments(
+void CopySameMemoryConfigProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const CopyParams& /*operation_attributes*/,
     const CopyInputs& tensor_args,

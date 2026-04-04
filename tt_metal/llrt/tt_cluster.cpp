@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -62,7 +62,7 @@ inline std::string get_soc_description_file(
     switch (arch) {
         case tt::ARCH::WORMHOLE_B0: file = "wormhole_b0_80_arch.yaml"; break;
         case tt::ARCH::BLACKHOLE: file = "blackhole_140_arch.yaml"; break;
-        case tt::ARCH::QUASAR:  // Quasar is currently only supported for simulation
+        case tt::ARCH::QUASAR: file = "quasar_32_arch.yaml"; break;
         default: throw std::runtime_error("Unsupported device arch");
     }
     path += file;

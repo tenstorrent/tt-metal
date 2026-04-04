@@ -1,4 +1,4 @@
-//  SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -43,7 +43,7 @@ void kernel_main() {
             uint32_t stick_index = i * num_shards + k;
             cb_wait_front(cb_id_out0, 1);
             uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
-            uint64_t dst_noc_addr = get_noc_addr(stick_index, s0);
+            uint64_t dst_noc_addr = s0.get_noc_addr(stick_index);
             noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
             noc_async_write_barrier();
             cb_pop_front(cb_id_out0, 1);
