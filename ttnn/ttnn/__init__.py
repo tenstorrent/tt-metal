@@ -545,8 +545,9 @@ def _ttnn_cleanup():
     try:
         from ttnn.decorators import REGISTERED_OPERATIONS
         REGISTERED_OPERATIONS.operations.clear()
-    except Exception:
-        pass
+    except Exception as e:
+        # Best-effort cleanup: ignore errors during interpreter shutdown but log for diagnosis.
+        logger.debug("Failed to clear ttnn REGISTERED_OPERATIONS during atexit cleanup: {}", e)
 
 
 _atexit.register(_ttnn_cleanup)
