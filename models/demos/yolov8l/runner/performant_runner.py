@@ -64,7 +64,13 @@ class YOLOv8lPerformantRunner:
         ttnn.copy_host_to_device_tensor(self.tt_inputs_host, self.tt_image_res, 1)
         self.write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(0, self.write_event)
-        self.runner_infra.input_tensor = ttnn.to_memory_config(self.tt_image_res, self.input_mem_config)
+        # self.runner_infra.input_tensor = ttnn.to_memory_config(self.tt_image_res, self.input_mem_config)
+        if hasattr(self.input_mem_config, "buffer_type") and self.input_mem_config.buffer_type == ttnn.BufferType.L1:
+            # Create a DRAM version of the memory config for trace capture
+            dram_mem_config = ttnn.DRAM_MEMORY_CONFIG
+            self.runner_infra.input_tensor = ttnn.to_memory_config(self.tt_image_res, dram_mem_config)
+        else:
+            self.runner_infra.input_tensor = ttnn.to_memory_config(self.tt_image_res, self.input_mem_config)
         self.op_event = ttnn.record_event(self.device, 0)
         self.runner_infra.run()
         self.runner_infra.validate()
