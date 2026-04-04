@@ -1106,6 +1106,8 @@ void WatcherDeviceReader::Core::DumpSyncRegs() const {
         }
     }
 
+    // Tile counters track DFB synchronization: posted = tiles pushed, acked = tiles consumed.
+    // Mismatch indicates a stalled producer/consumer relationship.
     if (hal.has_tile_counter_registers()) {
         uint32_t overlay_tile_counters_base_addr = hal.get_overlay_tile_counters_base_addr();
         uint32_t overlay_tile_counters_base_size = hal.get_overlay_tile_counters_base_size();
@@ -1126,7 +1128,7 @@ void WatcherDeviceReader::Core::DumpSyncRegs() const {
             uint32_t ackd = data[0];
 
             if (posted != ackd) {
-                fprintf(reader_.f, "\n  TC[%d]: posted=%d acked=%d (stalled) ", i, posted, ackd);
+                fprintf(reader_.f, "\n  TC[%d]: posted=%d acked=%d ", i, posted, ackd);
             }
         }
     }
