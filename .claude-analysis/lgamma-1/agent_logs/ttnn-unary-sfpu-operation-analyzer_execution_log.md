@@ -168,3 +168,64 @@ None.
 - **APPROXIMATION_MODE**: Template parameter exists but is unused in kernel logic (no `if constexpr` branches)
 - **Cross-architecture differences**: None -- WH and BH implementations are identical
 - **Special considerations**: Uses `sfpi::vConst1` (Fixed Const 2 = 1.0f) for upper clamp. Algorithm is `max(0, min(1, x/6 + 0.5))`.
+
+---
+
+# Execution Log: ttnn-unary-sfpu-operation-analyzer (cosh)
+
+## Metadata
+- **Operation**: cosh
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Status**: SUCCESS
+- **Output file**: `.claude-analysis/lgamma-1/cosh_analysis.md`
+
+## Input Interpretation
+- **Operation name**: `cosh` (confidence: HIGH -- explicitly provided)
+- **Output directory**: `.claude-analysis/lgamma-1/` (confidence: HIGH -- explicitly provided)
+- **Output filename**: `cosh_analysis.md` (confidence: HIGH -- explicitly provided)
+
+## Execution Timeline
+
+### Phase 1: Dispatch Tracing
+- Read `unary_op_utils.cpp` to find COSH dispatch configuration
+- Found: `eltwise_sfpu.cpp` compute kernel, `cosh_tile_init()` / `cosh_tile(idst)` SFPU chain
+- Non-parameterized type (no extra params)
+- Include guard: `SFPU_OP_COSH_INCLUDE`
+- Approximation mode: `false` (default case in `get_op_approx_mode`)
+
+### Phase 2: Abstraction Layer Tracing
+- API header: `tt_metal/hw/inc/api/compute/eltwise_unary/cosh.h`
+- LLK dispatch: via `SFPU_THREE_PARAM_KERNEL_FP32_FIRST` macro in `llk_math_eltwise_unary_sfpu_macros.h`
+- Core SFPU: `ckernel_sfpu_cosh.h` (WH and BH identical)
+- Params dispatch: `llk_math_eltwise_unary_sfpu_params.h` in tt_llk
+- Helper dependency: `_sfpu_exp_21f_bf16_` in `ckernel_sfpu_exp.h` (tt_llk submodule)
+
+### Phase 3: Kernel Analysis
+- Kernel style: SFPI-based (Style A)
+- Key pattern: `cosh(x) = (exp(x) + exp(-x)) / 2` using Moroz et al. 2022 exp_21f algorithm
+- Sub-functions: `_sfpu_exp_21f_bf16_<false>`, `_float_to_int32_for_exp_21f_`, `PolynomialEvaluator::eval` (Horner's method, 2nd-degree)
+- SFPU instructions: SFPLOAD, SFPSTORE, SFPMAD, SFPSWAP, SFPEXEXP, SFPEXMAN, SFPSHFT, SFPCAST, SFPSETEXP, SFP_STOCH_RND, SFPLOADI
+- Address mode: ADDR_MOD_7 with all-zero increments
+- No CC manipulation in the compute path
+
+### Phase 4: Verification
+- All function names verified via grep: `calculate_cosh` (WH+BH), `cosh_init` (WH+BH), `_sfpu_exp_21f_bf16_` (tt_llk)
+- All file paths verified to exist
+- All SFPI helper functions verified: `vec_min_max`, `exexp`, `exexp_nodebias`, `exman8`, `exman9`, `shft`, `int32_to_float`, `setexp`, `float_to_fp16b`
+- WH and BH implementations confirmed identical
+
+## Recovery Summary
+No errors or recovery needed.
+
+## Deviations
+None.
+
+## Artifacts
+- `.claude-analysis/lgamma-1/cosh_analysis.md` -- main analysis output
+
+## SFPU-Specific Analysis Summary
+- **Kernel complexity**: Medium (two exp evaluations per element, each involving base-2 conversion + polynomial + exponent reconstruction)
+- **CC usage**: None -- no condition code manipulation in the compute path
+- **APPROXIMATION_MODE**: false -- only affects `cosh_init()` which initializes reciprocal infrastructure not used by compute path
+- **Cross-architecture differences**: None -- WH and BH implementations are identical
+- **Special considerations**: Each iteration calls `_sfpu_exp_21f_bf16_` twice (for exp(x) and exp(-x)), making cosh ~2x the cost of a single exp. The init/compute mismatch means reciprocal init is performed but not utilized.
