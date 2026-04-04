@@ -10,3 +10,21 @@
 {"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"silu","background":true,"ts":"2026-04-04T18:52:28+00:00"}
 {"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"sigmoid","background":true,"ts":"2026-04-04T18:52:28+00:00"}
 {"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"hardtanh","background":true,"ts":"2026-04-04T18:52:28+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"hardsigmoid","status":"ok","commit":"6a32134af52","ts":"2026-04-04T19:00:08+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"hardtanh","status":"ok","commit":"95bca30a1cc","ts":"2026-04-04T19:00:08+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"cbrt","status":"timeout","ts":"2026-04-04T19:00:08+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"silu","status":"timeout","ts":"2026-04-04T19:00:08+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"sigmoid","status":"timeout","ts":"2026-04-04T19:00:08+00:00"}
+{"event":"phase_complete","phase":2,"phase_name":"Reference Analysis","status":"ok","analyzers_completed":2,"analyzers_failed":3,"issues":["cbrt, silu, sigmoid analyzers timed out without producing files after 10+ minutes"],"ts":"2026-04-04T19:00:08+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-implementor","phase":3,"ts":"2026-04-04T19:00:27+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-implementor","status":"ok","commit":"58217e743f5","ts":"2026-04-04T19:20:01+00:00"}
+{"event":"phase_complete","phase":3,"phase_name":"Implementation","status":"ok","ts":"2026-04-04T19:20:01+00:00"}
+{"event":"phase_start","phase":4,"phase_name":"Testing","iteration":1,"ts":"2026-04-04T19:20:07+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-tester","phase":4,"ts":"2026-04-04T19:20:07+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-tester","status":"ok","ts":"2026-04-04T19:22:32+00:00"}
+{"event":"phase_complete","phase":4,"phase_name":"Testing","status":"ok","ts":"2026-04-04T19:22:32+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-implementation-notes","phase":5,"ts":"2026-04-04T19:23:08+00:00"}
+{"event":"phase_start","phase":5,"phase_name":"Documentation","ts":"2026-04-04T19:23:33+00:00"}
+{"event":"phase_complete","phase":5,"phase_name":"Documentation","status":"ok","ts":"2026-04-04T19:24:08+00:00"}
+{"event":"phase_start","phase":6,"phase_name":"Self-Reflection","ts":"2026-04-04T19:24:21+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-self-reflection","phase":6,"ts":"2026-04-04T19:24:21+00:00"}
