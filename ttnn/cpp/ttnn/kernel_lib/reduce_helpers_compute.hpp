@@ -6,7 +6,6 @@
 #include <type_traits>
 
 #include "api/compute/reduce.h"
-#include "ttnn/cpp/ttnn/kernel_lib/common_types.hpp"
 /**
  * @file reduce_helpers_compute.hpp
  * @brief Single unified reduce function with automatic dispatch
@@ -146,8 +145,6 @@ struct ReduceInputBlockShape {
     static constexpr ReduceInputBlockShape col(uint32_t r, uint32_t b = 1) { return {r, 1, b}; }
 };
 
-// NoAccumulation is defined in common_types.hpp
-
 /**
  * @brief Configuration for accumulation-style reductions
  *
@@ -197,7 +194,13 @@ struct Accumulate {
     constexpr bool is_first() const { return iteration == 0; }
 };
 
-// NoOp is defined in common_types.hpp
+/**
+ * @brief Tag type indicating no accumulation (zero overhead)
+ *
+ * When this type is passed to reduce(), all accumulation code is
+ * eliminated at compile-time via `if constexpr`.
+ */
+struct NoAccumulation {};
 
 // =============================================================================
 // Type Traits
@@ -238,6 +241,16 @@ struct is_post_reduce_op<T, std::void_t<decltype(std::declval<T>()(std::declval<
 
 template <typename T>
 inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
+
+/**
+ * @brief Default no-op functor for post operation parameter
+ *
+ * When no custom post operation is needed, this empty functor is used.
+ * It compiles away completely due to inlining.
+ */
+struct NoOp {
+    ALWI void operator()(uint32_t = 0) const {}
+};
 
 // =============================================================================
 // Main Reduce Function
