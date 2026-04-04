@@ -531,3 +531,23 @@ if "TT_METAL_RUNTIME_ROOT" not in os.environ:
         root_dir = this_dir
 
     SetRootDir(str(root_dir))
+
+import atexit as _atexit
+
+
+def _ttnn_cleanup():
+    """Release Python-side references to C++ operation wrappers before interpreter shutdown.
+
+    nanobind's leak checker fires before module dicts are fully cleared on some
+    Python versions. Explicitly clearing REGISTERED_OPERATIONS ensures the
+    reference count on C++ wrapper objects reaches zero before the check.
+    """
+    try:
+        from ttnn.decorators import REGISTERED_OPERATIONS
+        REGISTERED_OPERATIONS.operations.clear()
+    except Exception:
+        pass
+
+
+_atexit.register(_ttnn_cleanup)
+del _atexit

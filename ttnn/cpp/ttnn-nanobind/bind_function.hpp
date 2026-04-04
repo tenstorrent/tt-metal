@@ -130,9 +130,10 @@ void bind_function(nb::module_& mod, const char* doc, Overloads&&... overloads) 
     (detail::add_call_overload<wrapper_t>(cls, std::forward<Overloads>(overloads)), ...);
 
     // Create instance and bind to module
-    // Each unique type (per operation name) has its own static instance
-    static wrapper_t instance{std::string(FuncName), python_fully_qualified_name};
-    mod.attr(FuncName) = &instance;
+    // Heap-allocate with take_ownership so nanobind manages the lifetime and
+    // deletes the object when Python's reference count reaches zero at shutdown.
+    auto* instance = new wrapper_t{std::string(FuncName), python_fully_qualified_name};
+    mod.attr(FuncName) = nb::cast(instance, nb::rv_policy::take_ownership);
 }
 
 }  // namespace ttnn
