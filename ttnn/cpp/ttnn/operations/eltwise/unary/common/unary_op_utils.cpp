@@ -21,6 +21,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::CBRT: return "SFPU_OP_CBRT_INCLUDE";
         case UnaryOpType::SELU: return "SFPU_OP_SELU_INCLUDE";
         case UnaryOpType::HARDTANH: return "SFPU_OP_HARDTANH_INCLUDE";
+        case UnaryOpType::RPOW: return "SFPU_OP_RPOW_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -50,6 +51,9 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::bit_cast<uint32_t>(min_val),
                     std::bit_cast<uint32_t>(max_val))};
         }
+        case UnaryOpType::RPOW:
+            return {
+                "rpow_tile_init();", fmt::format("rpow_tile({}, {:#010x}u);", idst, std::bit_cast<uint32_t>(param0))};
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };
 }

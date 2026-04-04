@@ -84,6 +84,15 @@ def _golden_function_hardtanh(input_tensor_a, *args, min_val=-1.0, max_val=1.0, 
 ttnn.attach_golden_function(ttnn.hardtanh, golden_function=_golden_function_hardtanh)
 
 
+def _golden_function_rpow(input_tensor_a, base, *args, **kwargs):
+    import torch
+
+    return torch.pow(torch.tensor(base, dtype=input_tensor_a.dtype), input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn.rpow, golden_function=_golden_function_rpow)
+
+
 try:
     SigmoidMode = ttnn._ttnn.operations.unary.SigmoidMode
 except AttributeError:

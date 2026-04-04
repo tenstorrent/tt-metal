@@ -23,3 +23,7 @@
 #if SFPU_OP_HARDTANH_INCLUDE
 #include "api/compute/eltwise_unary/hardtanh.h"
 #endif
+
+#if SFPU_OP_RPOW_INCLUDE
+#include "api/compute/eltwise_unary/rpow.h"
+#endif
