@@ -24,6 +24,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::ATANH: return "SFPU_OP_ATANH_INCLUDE";
         case UnaryOpType::SOFTSIGN: return "SFPU_OP_SOFTSIGN_INCLUDE";
         case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
+        case UnaryOpType::RPOW: return "SFPU_OP_RPOW_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -53,6 +54,9 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::bit_cast<uint32_t>(min_val),
                     std::bit_cast<uint32_t>(max_val))};
         }
+        case UnaryOpType::RPOW:
+            return {
+                "rpow_tile_init();", fmt::format("rpow_tile({}, {:#010x}u);", idst, std::bit_cast<uint32_t>(param0))};
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };
 }
