@@ -66,6 +66,7 @@ class InputField:
     USER_ID = 6
     TOKEN_ID = 7
     POSITION_ID = 8
+    PREFILL_TOKEN_ID = 9
 
 
 class TokenType:
@@ -101,11 +102,12 @@ def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
 
 
 def to_spec_input(
-    token_id: int, user_id: int, position_id: int, page_size_datums: int, token_type: TokenType
+    token_id: int, prefill_token_id: int, user_id: int, position_id: int, page_size_datums: int, token_type: TokenType
 ) -> ttnn.Tensor:
     """Build a PCIe-aligned input page carrying (token_id, user_id, position_id)."""
     torch_padded = torch.zeros(1, page_size_datums, dtype=torch.int32)
     torch_padded[0, InputField.TOKEN_ID] = token_id
+    torch_padded[0, InputField.PREFILL_TOKEN_ID] = prefill_token_id
     torch_padded[0, InputField.TOKEN_TYPE] = token_type
     torch_padded[0, InputField.USER_ID] = user_id
     torch_padded[0, InputField.POSITION_ID] = position_id
@@ -253,9 +255,13 @@ class DeepSeekV3:
         self._position += 1
         return self._output_buffer
 
-    def write_input(self, token_id: int, user_id: int, position_id: int, token_type: TokenType) -> None:
+    def write_input(
+        self, token_id: int, prefill_token_id: int, user_id: int, position_id: int, token_type: TokenType
+    ) -> None:
         """Write a single spec-decode input page (token_id, user_id, position_id) to the pipeline."""
-        input_tensor = to_spec_input(token_id, user_id, position_id, self._page_size_datums, token_type)
+        input_tensor = to_spec_input(
+            token_id, prefill_token_id, user_id, position_id, self._page_size_datums, token_type
+        )
         self._write_fn(input_tensor)
 
     def read_result(self) -> DecodeResult:

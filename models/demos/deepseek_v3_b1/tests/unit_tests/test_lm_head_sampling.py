@@ -44,15 +44,19 @@ from models.demos.deepseek_v3_b1.demo.stage import (
     PassthroughStage,
     SpecLMHeadStage,
 )
-from models.demos.deepseek_v3_b1.demo.weight_provider import StateDictWeightProvider
+from models.demos.deepseek_v3_b1.demo.weight_provider import (
+    StateDictWeightProvider,
+    SyntheticWeightProvider,
+    _build_synthetic_mtp_state_dict,
+)
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.prepare_weights import (
+    _MTP_LAYER_IDX,
     DeepSeekV3EmbeddingLayerWeights,
     DeepSeekV3LMHeadWeights,
     DeepSeekV3MTPWeights,
-    prepare_embedding_weights,
     prepare_lm_head_weights,
 )
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
@@ -738,145 +742,10 @@ def _create_mcast_working_bufs(
     return mcast_dst_buf, mcast_eh_dst_buf
 
 
-# Synthetic weight provider: same layout as prepare_* (state dict + move_to_device); used for pipeline tests.
 _VOCAB_SIZE = 129280
 _EMBED_HIDDEN = 7168
 _LM_HEAD_N_SYNTHETIC = 101 * 160  # 16160
 _REAL_WEIGHTS_PERSISTENT_INPUT_TOKEN_SEED = 42
-
-
-class _SyntheticWeightProvider:
-    """Provider that creates deterministic synthetic embedding and LM head weights (one-hot / winner_per_row)."""
-
-    @staticmethod
-    def make_embedding_torch():
-        """Raw one-hot embedding table in HF format (vocab_size, hidden)."""
-        w = torch.zeros((_VOCAB_SIZE, _EMBED_HIDDEN), dtype=torch.bfloat16)
-        w[torch.arange(_VOCAB_SIZE), torch.arange(_VOCAB_SIZE, dtype=torch.int64) % _EMBED_HIDDEN] = 1
-        return w
-
-    @staticmethod
-    def make_lm_head_torch():
-        """Raw LM head + norm weights. Returns (lm_w, norm_w) in HF format (vocab_size, hidden)."""
-        lm_w = torch.full((_VOCAB_SIZE, _EMBED_HIDDEN), -1.0, dtype=torch.bfloat16)
-        lm_w[torch.arange(_EMBED_HIDDEN, dtype=torch.int64) % _LM_HEAD_N_SYNTHETIC, torch.arange(_EMBED_HIDDEN)] = 1
-        norm_w = torch.ones(_EMBED_HIDDEN, dtype=torch.bfloat16)
-        return lm_w, norm_w
-
-    @staticmethod
-    def make_mtp_torch(num_devices):
-        """Raw MTP torch tensors (embedding, h_gamma, e_gamma, eh_proj) with seed=42."""
-        K = _EMBED_HIDDEN
-        embedding_dim = _EMBED_HIDDEN
-        mtp_output_dim = _EMBED_HIDDEN
-        n_total = 101 * 160
-        torch.manual_seed(42)
-        embedding = torch.randn((num_devices * n_total, embedding_dim), dtype=torch.bfloat16)
-        h_gamma = torch.randn((1, K), dtype=torch.bfloat16)
-        e_gamma = torch.randn((1, embedding_dim), dtype=torch.bfloat16)
-        eh_proj = torch.randn((K + embedding_dim, mtp_output_dim), dtype=torch.bfloat16)
-        return embedding, h_gamma, e_gamma, eh_proj
-
-    def load_embedding(self, device):
-        w = self.make_embedding_torch()
-        return prepare_embedding_weights({"model.embed_tokens.weight": w}, device, move_to_device=True)
-
-    def load_lm_head(self, device):
-        lm_w, norm_w = self.make_lm_head_torch()
-        return prepare_lm_head_weights(
-            {"lm_head.weight": lm_w, "model.norm.weight": norm_w},
-            device,
-            move_to_device=True,
-        )
-
-    def load_mtp(self, device):
-        M = 1
-        K = _EMBED_HIDDEN
-        embedding_dim = _EMBED_HIDDEN
-        mtp_output_dim = _EMBED_HIDDEN
-        tile_width = 32
-        num_dram_banks = 8
-        mtp_n_per_core = mtp_output_dim // num_dram_banks
-        mtp_padded_dim = num_dram_banks * mtp_n_per_core
-        n_total = 101 * 160
-        num_devices = device.shape[0] * device.shape[1]
-
-        a_tile = ttnn.Tile([1, 32])
-        b_tile = ttnn.Tile([32, 32])
-
-        mcast_core = ttnn.CoreCoord(10, 9)
-        mcast_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(mcast_core, mcast_core)])
-        input_a_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(mcast_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR),
-        )
-
-        torch_embedding, torch_h_gamma, torch_e_gamma, torch_eh_proj = self.make_mtp_torch(num_devices)
-
-        torch_eh_proj_padded = torch.zeros((K + embedding_dim, mtp_padded_dim), dtype=torch.bfloat16)
-        torch_eh_proj_padded[:, :mtp_output_dim] = torch_eh_proj
-
-        ttnn_h_gamma = ttnn.from_torch(
-            torch_h_gamma,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=input_a_mem_config,
-            tile=a_tile,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-        )
-        ttnn_e_gamma = ttnn.from_torch(
-            torch_e_gamma,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=input_a_mem_config,
-            tile=a_tile,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-        )
-
-        eh_shard_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
-                )
-            }
-        )
-        eh_proj_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.BufferType.DRAM,
-            ttnn.ShardSpec(eh_shard_grid, (K + embedding_dim, mtp_n_per_core), ttnn.ShardOrientation.ROW_MAJOR),
-        )
-        torch_eh_proj_shuffled = shuffle_tensor_tiles(torch_eh_proj_padded, tile_width, num_dram_banks)
-        ttnn_eh_proj = ttnn.from_torch(
-            torch_eh_proj_shuffled,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=eh_proj_mem_config,
-            tile=b_tile,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-        )
-
-        return DeepSeekV3MTPWeights(
-            h_gamma=ttnn_h_gamma,
-            e_gamma=ttnn_e_gamma,
-            eh_projection=ttnn_eh_proj,
-        )
-
-def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
-    torch_embedding, torch_h_gamma, torch_e_gamma, torch_eh_proj = self.make_mtp_torch(num_devices)
-    ttnn_embedding = ttnn.from_torch(
-        torch_embedding,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-    )
-    return DeepSeekV3EmbeddingLayerWeights(embedding=ttnn_embedding)
 
 
 def create_single_pod_passthrough_pipeline_configuration(
@@ -907,9 +776,9 @@ def create_single_pod_passthrough_pipeline_configuration(
     )
 
 
-# Golden helper: same deterministic formula as _SyntheticWeightProvider (one-hot embedding, winner_per_row).
+# Golden helper: same deterministic formula as SyntheticWeightProvider (one-hot embedding, winner_per_row).
 def _compute_expected_lm_head_indices_synthetic(iterations: int) -> torch.Tensor:
-    """Compute expected output indices for synthetic weights. Same math as _SyntheticWeightProvider."""
+    """Compute expected output indices for synthetic weights. Same math as SyntheticWeightProvider."""
     K = 7168
     n_total = 101 * 160
     torch_gamma = torch.ones((1, K), dtype=torch.bfloat16)
@@ -1105,15 +974,34 @@ def _compute_expected_spec_decode_tokens_synthetic(iterations: int):
       2. LM head sampling (base stage) → base_token + MTP logits
       3. LM head sampling (verify stage on MTP logits) → spec_token
     Returns list of (base_token, spec_token) tuples.
+
+    Weights match SyntheticWeightProvider from weight_provider.py:
+      - Embedding: one-hot pattern (vocab_size × hidden)
+      - LM head: winner_per_row pattern
+      - MTP norms: ones;  MTP eh_proj: randn (from _build_synthetic_mtp_state_dict)
     """
     K = _EMBED_HIDDEN
-    num_devices = 8
-    base_embed_w = _SyntheticWeightProvider.make_embedding_torch()
-    lm_w, norm_w = _SyntheticWeightProvider.make_lm_head_torch()
+
+    # One-hot embedding (same as SyntheticWeightProvider.load_embedding)
+    base_embed_w = torch.zeros((_VOCAB_SIZE, K), dtype=torch.bfloat16)
+    base_embed_w[torch.arange(_VOCAB_SIZE), torch.arange(_VOCAB_SIZE, dtype=torch.int64) % K] = 1
+
+    # Winner-per-row LM head (same as SyntheticWeightProvider.load_lm_head)
+    lm_w = torch.full((_VOCAB_SIZE, K), -1.0, dtype=torch.bfloat16)
+    lm_w[torch.arange(K, dtype=torch.int64) % _LM_HEAD_N_SYNTHETIC, torch.arange(K)] = 1
+    norm_w = torch.ones(K, dtype=torch.bfloat16)
+
     torch_gamma = norm_w.unsqueeze(0)
     torch_b = lm_w[:, :].T
     torch_indices_flat = torch.arange(_VOCAB_SIZE, dtype=torch.int32).reshape(1, _VOCAB_SIZE)
-    torch_embedding, torch_h_gamma, torch_e_gamma, torch_eh_proj = _SyntheticWeightProvider.make_mtp_torch(num_devices)
+
+    # MTP weights (same as SyntheticWeightProvider.load_mtp via _build_synthetic_mtp_state_dict)
+    mtp_sd = _build_synthetic_mtp_state_dict()
+    torch_h_gamma = mtp_sd[f"model.layers.{_MTP_LAYER_IDX}.hnorm.weight"].unsqueeze(0)
+    torch_e_gamma = mtp_sd[f"model.layers.{_MTP_LAYER_IDX}.enorm.weight"].unsqueeze(0)
+    torch_eh_proj = mtp_sd[f"model.layers.{_MTP_LAYER_IDX}.eh_proj.weight"].T.contiguous()
+    # MTP embedding reuses the main one-hot embedding table
+    torch_embedding = base_embed_w
 
     torch_eh_proj_bf8 = ttnn.from_torch(torch_eh_proj, dtype=ttnn.bfloat8_b)
     torch_eh_proj = ttnn.to_torch(torch_eh_proj_bf8).to(torch.bfloat16)
@@ -4448,7 +4336,7 @@ def test_pipline_block_4stage_galaxy_1_iteration(mesh_device, use_fp32, device_p
     torch_expected_idx = torch_expected_indices[0]
 
     config = create_single_galaxy_pipeline_configuration(
-        _SyntheticWeightProvider(),
+        SyntheticWeightProvider(),
         fp32_dest_acc_en=use_fp32,
         persistent_mode=False,
     )
@@ -4513,7 +4401,7 @@ def test_persistent_mode(mesh_device, use_fp32, device_params):
     iterations = 100
     torch_expected_indices = _compute_expected_lm_head_indices_synthetic(iterations)
     config = create_single_galaxy_pipeline_configuration(
-        _SyntheticWeightProvider(),
+        SyntheticWeightProvider(),
         fp32_dest_acc_en=use_fp32,
     )
     pipeline = config.build_pipeline(mesh_device)
@@ -4587,7 +4475,7 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
     run_golden = False
 
     config = create_single_galaxy_spec_decode_pipeline_configuration(
-        _SyntheticWeightProvider(),
+        SyntheticWeightProvider(),
         fp32_dest_acc_en=use_fp32,
     )
     print(f"[TEST] config created, building pipeline", flush=True)
@@ -4905,7 +4793,7 @@ def test_persistent_mode_pod(mesh_device, use_fp32, device_params):
     iterations = 100
     torch_expected_indices = _compute_expected_lm_head_indices_synthetic(iterations)
     config = create_single_pod_passthrough_pipeline_configuration(
-        _SyntheticWeightProvider(),
+        SyntheticWeightProvider(),
         lm_head_fp32_dest_acc_en=use_fp32,
     )
     pipeline = config.build_pipeline(mesh_device)
@@ -4978,7 +4866,7 @@ def test_persistent_mode_mtp_combined_embedding_spec(mesh_device, use_fp32):
     run_golden = False
 
     config = create_single_galaxy_combined_spec_decode_pipeline_configuration(
-        _SyntheticWeightProvider(),
+        SyntheticWeightProvider(),
         fp32_dest_acc_en=use_fp32,
     )
     print(f"[TEST] config created, building pipeline", flush=True)

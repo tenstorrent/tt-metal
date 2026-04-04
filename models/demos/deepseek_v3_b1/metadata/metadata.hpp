@@ -21,6 +21,7 @@ struct DeepseekMetadata {
     uint32_t slot_id;
     uint32_t token_id;
     uint32_t position_id;
+    uint32_t prefill_token_id;
 };
 
 }  // namespace deepseek_b1_ops

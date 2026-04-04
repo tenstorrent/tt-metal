@@ -22,6 +22,7 @@ class DeepseekMetadata:
     slot_id: int = 0
     token_id: int = 0
     position_id: int = 0
+    prefill_token_id: int = 0
 
     @classmethod
     def aligned_size_bytes(cls) -> int:

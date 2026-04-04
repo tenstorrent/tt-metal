@@ -722,23 +722,26 @@ void kernel_main() {
         // ====================================================================
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_input_core) {
-            DPRINT << ">el" << ENDL();
             constexpr uint32_t embedding_size_bytes = get_named_compile_time_arg_val("embedding_size_bytes");
+            constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
             constexpr uint32_t emb_cb = get_named_compile_time_arg_val("embedding_cb");
             constexpr uint32_t e_num_tiles = get_named_compile_time_arg_val("rmsnorm_e_num_tiles");
             const InterleavedAddrGen<true> embedding_addr_gen = {
                 .bank_base_address = mtp_embedding_base,
                 .page_size = embedding_size_bytes,
             };
+            uint32_t metadata_src_addr = get_read_ptr(rmsnorm_input_cb) + embedding_size_bytes;
+            auto* metadata_ptr =
+                reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_src_addr);
             invalidate_l1_cache();
-            uint32_t token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mtp_token_addr);
-            DPRINT << "eT=" << token_id << ENDL();
+            uint32_t token_id = (metadata_ptr->prefill_token_id != static_cast<uint32_t>(-1))
+                                    ? metadata_ptr->prefill_token_id
+                                    : *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mtp_token_addr);
+
             cb_reserve_back(emb_cb, e_num_tiles);
-            uint64_t dram_addr = embedding_addr_gen.get_noc_addr(token_id);
-            noc_async_read(dram_addr, get_write_ptr(emb_cb), embedding_size_bytes);
+            noc_async_read(embedding_addr_gen.get_noc_addr(token_id), get_write_ptr(emb_cb), embedding_size_bytes);
             noc_async_read_barrier();
             cb_push_back(emb_cb, e_num_tiles);
-            DPRINT << "el<" << ENDL();
         }
 #endif
 
@@ -836,7 +839,7 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_output_l1_addr);
             invalidate_l1_cache();
             uint32_t base_token_type = metadata_ptr->tok0_type;
-            uint32_t base_token_pos = metadata_ptr->position_id;            
+            uint32_t base_token_pos = metadata_ptr->position_id;
             uint32_t input_pos_id = metadata_ptr->tok0_pos;
             uint32_t slot_id = metadata_ptr->slot_id;
 
