@@ -239,7 +239,7 @@ SwigluBackwardReference build_swiglu_backward_reference(
 
     auto dL_dx_from_w1 = xt::xarray<float>(xt::linalg::tensordot(dL_dlinear1, w1, {3}, {0}));
     auto dL_dx_from_w3 = xt::xarray<float>(xt::linalg::tensordot(dL_dgate, w3, {3}, {0}));
-    auto dL_dx = dL_dx_from_w1 + dL_dx_from_w3;
+    auto dL_dx = xt::xarray<float>(dL_dx_from_w1 + dL_dx_from_w3);
 
     auto dL_dw1 =
         xt::xarray<float>(xt::linalg::dot(xt::transpose(flatten_to_2d(dL_dlinear1)), flatten_to_2d(input)));  // [H, D]
