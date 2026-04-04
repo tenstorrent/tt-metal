@@ -6,10 +6,20 @@
 
 #if SFPU_OP_COSH_INCLUDE
 #include "api/compute/eltwise_unary/cosh.h"
+#endif
+
 #if SFPU_OP_CBRT_INCLUDE
 #include "api/compute/eltwise_unary/cbrt.h"
+#endif
+
+#if SFPU_OP_HARDSIGMOID_INCLUDE
+#include "api/compute/eltwise_unary/hardsigmoid.h"
+#endif
+
 #if SFPU_OP_SELU_INCLUDE
 #include "api/compute/eltwise_unary/selu.h"
+#endif
+
 #if SFPU_OP_HARDTANH_INCLUDE
 #include "api/compute/eltwise_unary/hardtanh.h"
 #endif

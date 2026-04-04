@@ -19,6 +19,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
     switch (op_type) {
         case UnaryOpType::COSH: return "SFPU_OP_COSH_INCLUDE";
         case UnaryOpType::CBRT: return "SFPU_OP_CBRT_INCLUDE";
+        case UnaryOpType::HARDSIGMOID: return "SFPU_OP_HARDSIGMOID_INCLUDE";
         case UnaryOpType::SELU: return "SFPU_OP_SELU_INCLUDE";
         case UnaryOpType::HARDTANH: return "SFPU_OP_HARDTANH_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
