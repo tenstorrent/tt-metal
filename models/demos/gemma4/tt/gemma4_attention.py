@@ -78,6 +78,23 @@ class Gemma4Attention(LightweightModule):
         self.compute_kernel_config_hifi2 = configuration.compute_kernel_config_hifi2
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
 
+        # Per-layer optimizer-configured compute kernels (respects accuracy/performance settings)
+        from models.tt_transformers.tt.model_config import OpGroup
+
+        decoders_optimizations = configuration.decoders_optimizations
+        self.li_qkv_prefill_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
+            decoder_id=layer_num, op=OpGroup.LI_QKV_PREFILL, configuration=configuration
+        )
+        self.li_o_prefill_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
+            decoder_id=layer_num, op=OpGroup.LI_O_PREFILL, configuration=configuration
+        )
+        self.li_qkv_decode_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
+            decoder_id=layer_num, op=OpGroup.LI_QKV_DECODE, configuration=configuration
+        )
+        self.li_o_decode_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
+            decoder_id=layer_num, op=OpGroup.LI_O_DECODE, configuration=configuration
+        )
+
         self.model_config = configuration.get_model_config()
         self.MAX_QKV_MM_SEQ_LEN = configuration.MAX_QKV_MM_SEQ_LEN
 
