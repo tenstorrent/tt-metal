@@ -39,6 +39,7 @@ from transformers.generation.logits_process import (
 
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
+import models.experimental.tt_symbiote.core.run_config as _run_config
 from models.experimental.tt_symbiote.core.run_config import DispatchManager, TracedRun
 from models.experimental.tt_symbiote.modules.activation import TTNNSilu
 from models.experimental.tt_symbiote.modules.linear import (
@@ -55,6 +56,11 @@ from models.experimental.tt_symbiote.modules.decoder_layer import TTNNBailingMoE
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 from models.experimental.tt_symbiote.modules.embedding import TTNNBailingPaddedEmbedding, TTNNBailingRotaryEmbedding
 from models.experimental.tt_symbiote.models.bailing_moe_v2 import TTNNBailingMoeV2Model
+
+# Stop decode on degenerate output (common in traced greedy if logits stall).
+_DECODE_MAX_SAME_TOKEN_STREAK = 8
+# If the last N generated ids repeat once (e.g. "tokA tokB tokA tokB…"), stop; streak counter misses alternation.
+_DECODE_CYCLE_WINDOW = 8
 
 MESH_DEVICE_MAP = {
     "N150": (1, 1),
@@ -210,6 +216,18 @@ def _clamp_vocab_id(token_id: int, vocab_size: int) -> int:
     return max(0, min(int(token_id), vocab_size - 1))
 
 
+def _trim_logits_to_vocab(logits_2d: torch.Tensor, vocab_size: int) -> torch.Tensor:
+    """Slice padded lm_head output (V_padded ≥ V_real) to the true vocab size.
+
+    TTNNLinearIColShardedWAllReduced pads columns to a tile multiple.  Positions
+    [V_real, V_padded) contain uninitialised values that win argmax and
+    corrupt the generated sequence.  Slice them away before any pick.
+    """
+    if vocab_size <= 0 or logits_2d.shape[-1] <= vocab_size:
+        return logits_2d
+    return logits_2d[..., :vocab_size]
+
+
 def _upload_logits_row_to_mesh(mesh_device, scores_2d: torch.Tensor, mesh_mapper):
     """ROW_MAJOR bf16 logits on mesh; vocab padded to 32 with ``-inf`` on device."""
     orig_v = int(scores_2d.shape[-1])
@@ -335,12 +353,13 @@ def _ttnn_sampling_from_row_bf16(mesh_device, tt_2d, orig_v: int, params: Decode
     return _clamp_vocab_id(tok, orig_v)
 
 
-def _sample_next_id_from_tt_logits(mesh_device, tt_logits, params: DecodeParams) -> int:
-    """``lm_head`` logits on device (e.g. ``[1,1,V]`` TILE after AllReduced); sampling without uploading the vocab row."""
-    orig_v = int(tt_logits.shape[-1])
-    tt_rm = ttnn.to_layout(tt_logits, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    tt_2d = ttnn.reshape(tt_rm, (1, orig_v))
-    return _ttnn_sampling_from_row_bf16(mesh_device, tt_2d, orig_v, params)
+def _sample_next_id_from_tt_logits(mesh_device, tt_logits, params: DecodeParams, vocab_size: int = 0) -> int:
+    """``lm_head`` logits on device (e.g. ``[1,1,V_padded]`` after AllReduced); trim padding then sample."""
+    logits_cpu = _ttnn_to_torch_mesh(tt_logits, mesh_device).float()
+    row = logits_cpu.reshape(-1, logits_cpu.shape[-1])[-1:, :]
+    row = _trim_logits_to_vocab(row, vocab_size)
+    orig_v = int(row.shape[-1])
+    return _sample_next_id_ttnn_sampling(mesh_device, row, params, _mesh_replicate_mapper(mesh_device))
 
 
 def _sample_next_id_ttnn_sampling(mesh_device, scores_1xV: torch.Tensor, params: DecodeParams, mesh_mapper) -> int:
@@ -385,21 +404,26 @@ def _greedy_id_torch(scores: torch.Tensor) -> int:
     return _clamp_vocab_id(idx, orig_v)
 
 
-def _pick_next_token_device_logits(tt_logits, logits_processor, input_ids, mesh_device):
-    """Greedy from on-device full-vocab logits (AllReduced lm_head); processors optional (CPU path if set)."""
+def _pick_next_token_device_logits(tt_logits, logits_processor, input_ids, mesh_device, vocab_size: int = 0):
+    """Greedy from on-device full-vocab logits (AllReduced lm_head).
+
+    ``vocab_size`` must be the *real* vocab size so that padded positions produced by the
+    column-sharded linear are trimmed before argmax/sampling.
+    """
     out_mapper = _mesh_replicate_mapper(mesh_device)
 
-    if not logits_processor:
-        tt_idx = ttnn.argmax(tt_logits, dim=-1, keepdim=False)
-        tt_next = ttnn.typecast(tt_idx, ttnn.int32)
-        ttnn.deallocate(tt_idx)
-        next_id = int(_ttnn_to_torch_mesh(tt_next, mesh_device).reshape(-1)[0].item())
-        return tt_next, next_id
-
+    # Always pull to CPU so we can trim padding and apply processors uniformly.
     logits_cpu = _ttnn_to_torch_mesh(tt_logits, mesh_device).float()
-    row = logits_cpu[:, -1, :]
-    scores = logits_processor(input_ids, row)
-    next_id = _greedy_id_torch(scores)
+    # Shape may be [1, 1, V] or [1, V]; normalise to [batch, V].
+    row = logits_cpu.reshape(-1, logits_cpu.shape[-1])[-1:, :]
+    row = _trim_logits_to_vocab(row, vocab_size)
+
+    if not logits_processor:
+        next_id = _greedy_id_torch(row)
+    else:
+        scores = logits_processor(input_ids, row)
+        next_id = _greedy_id_torch(scores)
+
     tt_next = ttnn.from_torch(
         torch.tensor([[next_id]], dtype=torch.int32),
         device=mesh_device,
@@ -447,7 +471,6 @@ def _pick_next_token_ttnn_after_torch_processors(
             print(f"Warning: ttnn.argmax failed ({type(exc).__name__}: {exc}); using torch.argmax.")
             next_id = _greedy_id_torch(scores)
     else:
-        next_id = None
         try:
             next_id = _sample_next_id_ttnn_sampling(mesh_device, scores, decode_params, out_mapper)
         except Exception as exc:
@@ -456,22 +479,11 @@ def _pick_next_token_ttnn_after_torch_processors(
                 "using HF warpers + Gumbel–max on mesh."
             )
             scores_w = logits_warper(input_ids, scores)
+            tt_scores, orig_v = _upload_logits_row_to_mesh(mesh_device, scores_w, out_mapper)
             try:
-                tt_scores, orig_v = _upload_logits_row_to_mesh(mesh_device, scores_w, out_mapper)
-                try:
-                    next_id = _sample_next_id_gumbel_argmax_uploaded(mesh_device, tt_scores, orig_v)
-                finally:
-                    ttnn.deallocate(tt_scores)
-            except Exception as exc2:
-                print(
-                    f"Warning: device Gumbel sampling failed ({type(exc2).__name__}: {exc2}); "
-                    "using torch.softmax + multinomial."
-                )
-                probs = torch.softmax(scores_w.float(), dim=-1).clamp(min=1e-12)
-                probs = probs / probs.sum(dim=-1, keepdim=True)
-                next_id = int(torch.multinomial(probs[0], num_samples=1).item())
-        if next_id is None:
-            raise RuntimeError("sampling failed without setting next_id")
+                next_id = _sample_next_id_gumbel_argmax_uploaded(mesh_device, tt_scores, orig_v)
+            finally:
+                ttnn.deallocate(tt_scores)
 
     return ttnn.from_torch(
         torch.tensor([[next_id]], dtype=torch.int32),
@@ -514,6 +526,7 @@ def decode_with_logit_postprocess(
         )
 
     if max_new_tokens <= 0:
+        ttnn.synchronize_device(mesh_device)
         return input_ids_tt
 
     logits_processor = build_logits_postprocess_processors(decode_params)
@@ -528,7 +541,31 @@ def decode_with_logit_postprocess(
     cur_len = input_ids.shape[-1]
     model_kwargs = model._get_initial_cache_position(cur_len, torch_device, model_kwargs)
 
-    eos_token_id = model.config.eos_token_id
+    # model.config.eos_token_id may only list <|endoftext|>; generation_config typically
+    # also contains <|im_end|> which is the real chat-turn terminator for Qwen2/Ling models.
+    _eos_cfg = model.config.eos_token_id
+    _eos_gen = getattr(getattr(model, "generation_config", None), "eos_token_id", None)
+    _eos_set: set[int] = set()
+    for _src in (_eos_cfg, _eos_gen):
+        if _src is None:
+            continue
+        if isinstance(_src, (list, tuple)):
+            _eos_set.update(int(x) for x in _src)
+        else:
+            _eos_set.add(int(_src))
+    eos_token_id = sorted(_eos_set) if _eos_set else None
+    same_tok_run = 0
+    prev_tok: int | None = None
+    gen_hist: list[int] = []
+
+    vocab_sz = int(getattr(model.config, "vocab_size", None) or 0)
+
+    # Traces bake `cache_position` (a torch.Tensor) as a fixed value at capture time.
+    # Replaying with a stale cache_position makes every decode step write to the same
+    # KV slot, producing identical logits → repeating tokens. Force normal (non-traced)
+    # execution for the decode loop so each step gets fresh KV cache writes.
+    _prev_trace_running = _run_config._TRACE_RUNNING
+    _run_config._TRACE_RUNNING = True
 
     for _ in range(max_new_tokens):
         ids_torch = _ttnn_to_torch_mesh(input_ids_tt, mesh_device).long().to(torch_device)
@@ -537,12 +574,15 @@ def decode_with_logit_postprocess(
 
         tt_logits_raw = getattr(outputs.logits, "ttnn_tensor", None)
         if tt_logits_raw is not None and not do_sample:
-            tt_next, next_id = _pick_next_token_device_logits(tt_logits_raw, logits_processor, ids_torch, mesh_device)
+            tt_next, next_id = _pick_next_token_device_logits(
+                tt_logits_raw, logits_processor, ids_torch, mesh_device, vocab_sz
+            )
         elif tt_logits_raw is not None and do_sample and not logits_processor:
-            next_id = _sample_next_id_from_tt_logits(mesh_device, tt_logits_raw, decode_params)
+            next_id = _sample_next_id_from_tt_logits(mesh_device, tt_logits_raw, decode_params, vocab_sz)
             tt_next = _tt_tensor_replicated_token_id(mesh_device, next_id)
         else:
             next_token_logits = outputs.logits[:, -1, :].to(copy=True, dtype=torch.float32, device=torch_device)
+            next_token_logits = _trim_logits_to_vocab(next_token_logits, vocab_sz)
             tt_next = _pick_next_token_ttnn_after_torch_processors(
                 mesh_device,
                 ids_torch,
@@ -569,6 +609,21 @@ def decode_with_logit_postprocess(
         if _token_is_eos(next_id, eos_token_id):
             break
 
+        gen_hist.append(next_id)
+        w = _DECODE_CYCLE_WINDOW
+        if len(gen_hist) >= 2 * w and gen_hist[-w:] == gen_hist[-2 * w : -w]:
+            break
+
+        if prev_tok is not None and next_id == prev_tok:
+            same_tok_run += 1
+        else:
+            same_tok_run = 1
+            prev_tok = next_id
+        if same_tok_run >= _DECODE_MAX_SAME_TOKEN_STREAK:
+            break
+
+    _run_config._TRACE_RUNNING = _prev_trace_running
+    ttnn.synchronize_device(mesh_device)
     return input_ids_tt
 
 
@@ -724,7 +779,8 @@ def chat_loop(
         )
         try:
             outputs = _ttnn_to_torch_mesh(outputs_tt, mesh_device).long().to(torch_dev)
-            response = tokenizer.decode(outputs[0][prompt_len:], skip_special_tokens=True)
+            gen_ids = outputs[0, prompt_len:].tolist()
+            response = tokenizer.decode(gen_ids, skip_special_tokens=True)
         finally:
             ttnn.deallocate(outputs_tt)
         print(f"\nAssistant: {response}\n")
