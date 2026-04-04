@@ -367,14 +367,14 @@ inline volatile std::uint32_t *tt_reg_ptr get_cfg_pointer()
     return reinterpret_cast<volatile std::uint32_t tt_reg_ptr *>(TENSIX_CFG_BASE + CFG_STATE_SIZE * 16);
 }
 
-inline volatile std::uint32_t short *tt_reg_ptr get_cfg16_pointer()
+inline volatile std::uint16_t *tt_reg_ptr get_cfg16_pointer()
 {
     if (cfg_state_id == 0)
     {
-        return reinterpret_cast<volatile std::uint32_t short tt_reg_ptr *>(TENSIX_CFG_BASE);
+        return reinterpret_cast<volatile std::uint16_t tt_reg_ptr *>(TENSIX_CFG_BASE);
     }
 
-    return reinterpret_cast<volatile std::uint32_t short tt_reg_ptr *>(TENSIX_CFG_BASE + CFG_STATE_SIZE * 16);
+    return reinterpret_cast<volatile std::uint16_t tt_reg_ptr *>(TENSIX_CFG_BASE + CFG_STATE_SIZE * 16);
 }
 
 inline void flip_cfg_state_id()

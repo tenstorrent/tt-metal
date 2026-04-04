@@ -267,7 +267,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Apply SFPU operation to all tiles using compile-time dispatch
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        call_sfpu_operation_quasar(i, num_sfpu_iterations);
+        call_sfpu_operation_quasar(static_cast<int>(i), static_cast<int>(num_sfpu_iterations));
     }
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU>();
