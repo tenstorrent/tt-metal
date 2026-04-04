@@ -78,10 +78,11 @@ class Gemma4Attention(LightweightModule):
         self.compute_kernel_config_hifi2 = configuration.compute_kernel_config_hifi2
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
 
-        # Per-layer optimizer-configured compute kernels (respects accuracy/performance settings)
-        from models.tt_transformers.tt.model_config import OpGroup
+        # Per-layer optimizer-configured compute kernels and dtypes
+        from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
         decoders_optimizations = configuration.decoders_optimizations
+        self.kv_cache_dtype = decoders_optimizations.get_tensor_dtype(decoder_id=layer_num, tensor=TensorGroup.KV_CACHE)
         self.li_qkv_prefill_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_QKV_PREFILL, configuration=configuration
         )
@@ -239,7 +240,8 @@ class Gemma4Attention(LightweightModule):
 
         cache_k = torch.zeros(cache_shape)
         cache_v = torch.zeros(cache_shape)
-        kv_cache_dtype = ttnn.bfloat8_b
+        # Use optimizer-configured KV cache dtype (BF16 for accuracy, BFP8 for performance)
+        kv_cache_dtype = self.kv_cache_dtype or ttnn.bfloat8_b
 
         self.layer_past = [
             ttnn.as_tensor(
