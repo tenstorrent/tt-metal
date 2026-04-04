@@ -3,7 +3,7 @@
 ## Overview
 
 TTNN bring-up for [`ibm-granite/granite-timeseries-ttm-r1`](https://huggingface.co/ibm-granite/granite-timeseries-ttm-r1),
-a compact (805K-parameter) univariate time-series forecasting model from IBM.
+a compact (805K-parameter) multivariate time-series forecasting model from IBM.
 
 **Hardware:** Tenstorrent Wormhole (N150/N300)
 **GitHub issue:** https://github.com/tenstorrent/tt-metal/issues/32142

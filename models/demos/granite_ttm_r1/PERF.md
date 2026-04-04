@@ -69,8 +69,11 @@ python -m pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_model
 # Stage 3 traced latency / throughput (batch=1)
 python -m pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_throughput_and_latency_traced -v -s
 
-# Batch size sweep (throughput vs batch)
+# Batch size sweep (throughput vs batch, batch=1–64)
 python -m pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_throughput_batch -v -s
+
+# Double-buffered pipelined inference (2 command queues, batch=1; xfail)
+python -m pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_throughput_pipelined -v -s
 
 # Multi-model serving (100 shared-weight instances)
 python -m pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_multi_model_serving -v
