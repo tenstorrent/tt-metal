@@ -234,10 +234,17 @@ class TtGemma4TextModel(Transformer):
                 return {}
 
             def get_rot_mats(self, rot_mat_idxs):
-                """Get rotation matrices for decode mode."""
-                cos_gathered = ttnn.embedding(rot_mat_idxs, self.cos_matrix_prefill[0, 0], layout=ttnn.TILE_LAYOUT)
-                sin_gathered = ttnn.embedding(rot_mat_idxs, self.sin_matrix_prefill[0, 0], layout=ttnn.TILE_LAYOUT)
-                return [cos_gathered, sin_gathered]
+                """Get rotation matrices for decode mode.
+
+                Returns the FULL cos/sin cache (matching HfRotarySetup behavior).
+                Position indexing is done inside ttnn.experimental.rotary_embedding
+                using the int_current_pos argument in _apply_rotary_decode.
+                """
+                return [self.cos_matrix, self.sin_matrix]
+
+            def get_rot_idxs(self, position_idxs, on_host=False):
+                """API compatibility with HfRotarySetup."""
+                return position_idxs
 
         return ProportionalRopeSetup(cos_matrix, sin_matrix)
 
