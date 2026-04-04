@@ -11,12 +11,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.utils.common_demo_utils import get_mesh_mappers
-from models.demos.yolov8l.common import (
-    YOLOV8L_INPUT_H,
-    YOLOV8L_INPUT_W,
-    YOLOV8L_L1_SMALL_SIZE,
-    YOLOV8L_TRACE_REGION_SIZE_E2E,
-)
+from models.demos.yolov8l.common import YOLOV8L_INPUT_H, YOLOV8L_INPUT_W, YOLOV8L_L1_SMALL_SIZE
 from models.demos.yolov8l.runner.performant_runner import YOLOv8lPerformantRunner
 
 try:
@@ -73,7 +68,8 @@ def run_yolov8l(
     [
         {
             "l1_small_size": YOLOV8L_L1_SMALL_SIZE,
-            "trace_region_size": YOLOV8L_TRACE_REGION_SIZE_E2E,
+            # "trace_region_size": YOLOV8L_TRACE_REGION_SIZE_E2E,
+            "trace_region_size": 35000000,
             "num_command_queues": 2,
         }
     ],
@@ -103,7 +99,7 @@ def test_run_yolov8l_trace_2cqs_inference(
     [
         {
             "l1_small_size": YOLOV8L_L1_SMALL_SIZE,
-            "trace_region_size": YOLOV8L_TRACE_REGION_SIZE_E2E,
+            "trace_region_size": 35000000,
             "num_command_queues": 2,
         }
     ],
@@ -116,7 +112,8 @@ def test_run_yolov8l_trace_2cqs_inference(
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        (2, 2),
+        # (2, 2),
+        (1, 8),
     ],
     indirect=True,
     ids=["t3k_2x2"],
