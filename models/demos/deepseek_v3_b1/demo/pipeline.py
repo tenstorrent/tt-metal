@@ -462,6 +462,11 @@ class Pipeline:
             raise RuntimeError("Pipeline.setup_and_run() or configure_block() must be called first")
         self._pipeline_block.read_output(output_tensor)
 
+    def export_host_socket_descriptors(self, prefix: str) -> None:
+        if self._pipeline_block is None:
+            raise RuntimeError("Pipeline.setup_and_run() must complete before exporting host socket descriptors")
+        self._pipeline_block.export_host_socket_descriptors(prefix)
+
     def barrier(self) -> None:
         ttnn.distributed_context_barrier()
 

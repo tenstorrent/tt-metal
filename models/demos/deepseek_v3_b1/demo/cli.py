@@ -8,6 +8,7 @@ import argparse
 import contextlib
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Literal
 
@@ -133,8 +134,12 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--io-socket-descriptor-prefix",
         type=str,
-        default="deepseek_v3_b1",
-        help="Prefix used when exporting H2D/D2H socket descriptors; sockets will be named <prefix>_h2d and <prefix>_d2h.",
+        default=None,
+        help=(
+            "If set, export H2D/D2H socket descriptors on mesh 0 after pipeline setup "
+            "(files named <prefix>_h2d / <prefix>_d2h). When --launch-only is used and "
+            "this is omitted, defaults to deepseek_v3_b1."
+        ),
     )
     return parser
 
@@ -218,8 +223,8 @@ def run_demo(
             except KeyboardInterrupt:
                 logger.info("Shutting down launch-only pipeline after interrupt.")
 
-    model_pipeline.barrier()
-    logger.info("Pod pipeline complete")
+        model_pipeline.barrier()
+        logger.info("Pod pipeline complete")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -236,6 +241,10 @@ def main(argv: list[str] | None = None) -> int:
         if not index_path.is_file():
             parser.error(f"--model-path must contain model.safetensors.index.json (missing {index_path})")
 
+    io_socket_descriptor_prefix = args.io_socket_descriptor_prefix
+    if args.launch_only and io_socket_descriptor_prefix is None:
+        io_socket_descriptor_prefix = "deepseek_v3_b1"
+
     run_demo(
         prompts=[args.prompt_1, args.prompt_2],
         max_new_tokens=args.max_new_tokens,
@@ -248,7 +257,7 @@ def main(argv: list[str] | None = None) -> int:
         dense_layer_id_override=args.dense_layer_id_override,
         moe_layer_id_override=args.moe_layer_id_override,
         launch_only=args.launch_only,
-        io_socket_descriptor_prefix=args.io_socket_descriptor_prefix,
+        io_socket_descriptor_prefix=io_socket_descriptor_prefix,
     )
     print(file=sys.stdout, flush=True)
     return 0
