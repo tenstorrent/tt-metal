@@ -581,7 +581,7 @@ class ModelArgs:
 
         if (
             self.base_model_name
-            in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-27b", "gemma-3-4b", "Phi-4"]
+            in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-27b", "gemma-3-4b", "gemma-4-E4B", "Phi-4"]
             and self.device_name == "N150"
         ) or (self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B", "Phi-4"] and self.device_name == "N300"):
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
@@ -2336,6 +2336,7 @@ class ModelArgs:
                 "medgemma-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "gemma-3-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "medgemma-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "gemma-4-E4B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
