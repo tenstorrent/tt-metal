@@ -116,6 +116,15 @@ def _golden_function_rpow(input_tensor_a, base, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.rpow, golden_function=_golden_function_rpow)
 
 
+def _golden_function_hardswish(input_tensor_a, *args, **kwargs):
+    import torch
+
+    return torch.nn.functional.hardswish(input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn.hardswish, golden_function=_golden_function_hardswish)
+
+
 try:
     SigmoidMode = ttnn._ttnn.operations.unary.SigmoidMode
 except AttributeError:
