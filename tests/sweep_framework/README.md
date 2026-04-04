@@ -51,14 +51,18 @@ python tests/sweep_framework/sweeps_parameter_generator.py --model-traced lead -
 
 ### Multi-Chip Runner Assignment
 
-CI routing policy lives in `framework/matrix_runner_config.py`. For lead model runs, vectors are routed to two CI lanes based on mesh shape:
+CI routing policy lives in `framework/matrix_runner_config.py`. In CI, both lead model and model-traced runs use `--group-by hw`, so vector files carry a hardware suffix (e.g., `module.hw_wormhole_n300_1c.json`) and routing is by hardware group.
 
-| Mesh Shape              | CI Lane                      |
-| ----------------------- | ---------------------------- |
-| `1x1`                   | `lead-models-single-chip` (N150) |
-| All multi-chip shapes   | `lead-models-galaxy` (Galaxy)    |
+For **lead model** runs, the hardware group collapses to two CI lanes:
 
-For model-traced runs, mesh-grouped vector files are routed across standard hardware lanes (`wormhole-n150-sweeps`, `wormhole-n300-sweeps`, `wormhole-t3k-sweeps`, `wormhole-galaxy-sweeps`, etc.) defined in `MODEL_TRACED_MESH_TEST_GROUPS` in `matrix_runner_config.py`.
+| Hardware group           | CI Lane                          |
+| ------------------------ | -------------------------------- |
+| Single-chip              | `lead-models-single-chip` (N150) |
+| Multi-chip / Galaxy      | `lead-models-galaxy` (Galaxy)    |
+
+For **model-traced** runs, hardware groups route across the standard lanes (`wormhole-n150-sweeps`, `wormhole-n300-sweeps`, `wormhole-t3k-sweeps`, `wormhole-galaxy-sweeps`, etc.) via `get_test_group_name_for_hardware_group()` in `matrix_runner_config.py`.
+
+If you generate locally with `--group-by mesh` (the generator default), routing instead uses `LEAD_MODELS_MESH_TEST_GROUPS` / `MODEL_TRACED_MESH_TEST_GROUPS` from `matrix_runner_config.py`.
 
 ## Writing a Sweep Test
 

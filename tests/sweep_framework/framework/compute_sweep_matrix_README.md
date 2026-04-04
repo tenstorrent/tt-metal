@@ -21,8 +21,8 @@ Run type is determined by `SWEEP_NAME` (authoritative in CI) or, when absent, by
 
 ### Run Type Strategies
 
-- **Lead Models**: Routes mesh-grouped files through `LEAD_MODELS_MESH_TEST_GROUPS` and hardware-grouped files through `get_lead_models_test_group_name_for_hardware_group()`, both in `matrix_runner_config.py`. Collapses to two CI lanes: `lead-models-single-chip` and `lead-models-galaxy`.
-- **Model Traced**: Routes mesh-grouped files through `MODEL_TRACED_MESH_TEST_GROUPS` in `matrix_runner_config.py`. `vector_grouping_mode` from the manifest selects the grouping path.
+- **Lead Models**: In CI (`--group-by hw`), hardware-grouped files are routed via `get_lead_models_test_group_name_for_hardware_group()` into two lanes: `lead-models-single-chip` and `lead-models-galaxy`. With `--group-by mesh` (local default), routing uses `LEAD_MODELS_MESH_TEST_GROUPS` instead.
+- **Model Traced**: In CI (`--group-by hw`), hardware-grouped files are routed via `get_test_group_name_for_hardware_group()` across standard hardware lanes. `vector_grouping_mode` from the manifest tells `compute_sweep_matrix.py` which path to take.
 - **Nightly / Comprehensive**: All modules on `wormhole-n150-sweeps`. CCL modules are split to `n300-llmbox-ccl` with suite `generality_suite_fabric_1d`.
 
 ## Routing Policy
