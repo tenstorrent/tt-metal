@@ -1389,15 +1389,11 @@ class WanDecoder(Module):
             out_BTHWC, new_logical_h = self.decoder(x_BTHWC, logical_h, feat_cache=None, feat_idx=None)
             output_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
         else:
-            # Frame 0 is processed alone so that upsample3d layers initialize
-            # their caches via the cheap T=1 "Rep" path (no time_conv).
-            # Remaining frames are then chunked normally starting from frame 1.
             output_BCTHW = None
-            for t_start in [0] + list(range(1, T, t_chunk_size)):
-                t_end = 1 if t_start == 0 else min(t_start + t_chunk_size, T)
+            for t_start in range(0, T, t_chunk_size):
                 self._conv_idx = [0]
                 out_BTHWC, new_logical_h = self.decoder(
-                    x_BTHWC[:, t_start:t_end, :, :, :],
+                    x_BTHWC[:, t_start : min(t_start + t_chunk_size, T), :, :, :],
                     logical_h,
                     feat_cache=self._feat_cache,
                     feat_idx=self._conv_idx,
