@@ -169,6 +169,63 @@ def t_needed_to_hide_weight_read(cin_block, cout_block, kernel_size):
     return max(1, math.ceil(weight_us / tilize_per_mrow_us))
 
 
+def _predict_cin_cout(C_in, C_out, kernel_size):
+    """Predict optimal (C_in_block, C_out_block) from channel counts and kernel.
+
+    Rule: target K_t * N_t ≈ 300 so the weight CB stays ≈ 600 KB (bf16).
+    K_t = ceil(kernel_vol * Cin_blk / 32).
+
+    Empirical targets per kernel type (from all committed blockings):
+        k333 (vol=27): K_t ≈ 81  → Cin_blk = 96,  N_t ≈ 4  → Cout_blk = 128
+        k133 (vol= 9): K_t ≈ 54  → Cin_blk = 192, N_t ≈ 3  → Cout_blk = 96
+        k311 (vol= 3): K_t ≈ 12  → Cin_blk = 128, N_t ≈ 8  → Cout_blk = 256
+
+    Returns list of (cin_blk, cout_blk) candidates, best first.
+    """
+    from math import ceil
+
+    padded_cin = aligned_channels(C_in)
+    padded_cout = aligned_channels(C_out)
+    kT, kH, kW = kernel_size
+    kernel_vol = kT * kH * kW
+
+    # Per-kernel empirical targets for K_t (controls Cin_blk) and K_t×N_t (controls Cout_blk).
+    # Derived from all committed blockings — see blocking table analysis:
+    #   k333 (vol=27): K_t≈81 (Cin≈96),   K_t×N_t≈243-324 (Cout≈96-128)
+    #   k133 (vol= 9): K_t≈54 (Cin≈192),  K_t×N_t≈162      (Cout≈96)
+    #   k311 (vol= 3): K_t≈12 (Cin≈128),  K_t×N_t≈96-144   (Cout≈256-384)
+    target_Kt_KtNt = {27: (81, 300), 9: (54, 162), 3: (12, 144)}.get(kernel_vol, (81, 300))
+    target_Kt, target_KtNt = target_Kt_KtNt
+
+    # Cin_blk: choose so K_t ≈ target_Kt
+    raw_cin = ceil(target_Kt * 32 / kernel_vol / 32) * 32
+    cin_blk = max(32, min(padded_cin, raw_cin))
+    while padded_cin % cin_blk != 0 and cin_blk > 32:
+        cin_blk -= 32
+
+    # Cout_blk: choose so K_t × N_t ≈ target_KtNt
+    K_t = ceil(kernel_vol * cin_blk / 32)
+    target_Nt = max(1, min(12, round(target_KtNt / max(K_t, 1))))
+    raw_cout = target_Nt * 32
+    cout_blk = max(32, min(padded_cout, raw_cout))
+    while padded_cout % cout_blk != 0 and cout_blk > 32:
+        cout_blk -= 32
+
+    # conv_out (C_out=3): padded_cout=32, always Cout_blk=32
+    if padded_cout == 32:
+        cout_blk = 32
+
+    # Also offer cin_blk/2 as an alternative (more C_in blocks = more parallelism)
+    alt_cin = max(32, cin_blk // 2)
+    while padded_cin % alt_cin != 0 and alt_cin > 32:
+        alt_cin -= 32
+
+    candidates = [(cin_blk, cout_blk)]
+    if alt_cin != cin_blk:
+        candidates.append((alt_cin, cout_blk))
+    return candidates
+
+
 def _predict_spatial_candidates(H_out, W_out, C_out):
     """Return 2-3 (H_out_block, W_out_block) candidates ranked by predicted performance.
 
@@ -264,26 +321,37 @@ def build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=120, fast=F
         # blocking table. Avoids testing ~25 spatial pairs blindly.
         hw_fast = _predict_spatial_candidates(H, W, C_out)
 
-        # Find the (cin, cout) combination that maximises cin×cout (proxy for DRAM
-        # efficiency — fewer total passes), subject to having at least one valid (T,H,W).
-        # This avoids greedy "largest cin first" picking e.g. (Cin=192, Cout=32) over
-        # the better (Cin=96, Cout=96) for 192→192 k333 layers.
-        best_score = -1
-        combos = []
-        for cin in all_cins:
-            for cout in all_couts:
-                score = cin * cout
-                if score <= best_score:
-                    continue  # can't beat current best
-                candidates = [
-                    (cin, cout, t, h, w)
-                    for t in t_blocks
-                    for h, w in hw_fast
-                    if estimate_l1_bytes(cin, cout, t, h, w, kernel_size, C_in) <= L1_BUDGET
-                ]
-                if candidates:
-                    best_score = score
-                    combos = sorted(candidates, key=lambda c: (0 if c[2] == 1 else 1, c[2], c[3], c[4]))
+        # Cin/Cout: use physics-derived heuristic (K_t × N_t ≈ 300 → weight CB ≈ 600 KB).
+        # Predicts the optimal (cin, cout) directly instead of searching all combinations.
+        cin_cout_pairs = [
+            (cin, cout)
+            for cin, cout in _predict_cin_cout(C_in, C_out, kernel_size)
+            if valid_cin(cin, padded_cin, kernel_size) and valid_cout(cout, C_out) and valid_matmul_subblock(cout)
+        ]
+        # Fallback: max cin×cout search if heuristic gives nothing L1-feasible
+        if not any(
+            estimate_l1_bytes(cin, cout, 1, hw_fast[0][0], hw_fast[0][1], kernel_size, C_in) <= L1_BUDGET
+            for cin, cout in cin_cout_pairs
+        ):
+            best_score, cin_cout_pairs = -1, []
+            for cin in sorted(all_cins, reverse=True):
+                for cout in sorted(all_couts, reverse=True):
+                    score = cin * cout
+                    if score <= best_score:
+                        continue
+                    if estimate_l1_bytes(cin, cout, 1, hw_fast[0][0], hw_fast[0][1], kernel_size, C_in) <= L1_BUDGET:
+                        best_score, cin_cout_pairs = score, [(cin, cout)]
+
+        combos = sorted(
+            [
+                (cin, cout, t, h, w)
+                for cin, cout in cin_cout_pairs
+                for t in t_blocks
+                for h, w in hw_fast
+                if estimate_l1_bytes(cin, cout, t, h, w, kernel_size, C_in) <= L1_BUDGET
+            ],
+            key=lambda c: (0 if c[2] == 1 else 1, c[2], c[3], c[4]),
+        )
         return combos
     else:
         cins = [c for c in range(32, padded_cin + 1, 32) if valid_cin(c, padded_cin, kernel_size)]
