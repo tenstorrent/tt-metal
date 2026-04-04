@@ -31,6 +31,7 @@ from models.experimental.groot_n16.tt.ttnn_common import (
     preprocess_linear_weight,
     preprocess_linear_bias,
 )
+from models.experimental.groot_n16.tt.ttnn_dit_optimized import DiTAttentionOptimizedTTNN
 
 
 class AdaLayerNormTTNN:
@@ -244,8 +245,8 @@ class DiTBlockTTNN:
         # AdaLN for self-attention (norm1)
         self.adaln = AdaLayerNormTTNN(weights, f"{prefix}norm1.", inner_dim, device)
 
-        # Self-attention (attn1)
-        self.attn = DiTAttentionTTNN(
+        # Self-attention (attn1) — optimized with padded head_dim for on-device compute
+        self.attn = DiTAttentionOptimizedTTNN(
             weights, f"{prefix}attn1.",
             config.num_attention_heads, config.attention_head_dim, device,
         )
