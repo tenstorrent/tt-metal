@@ -165,8 +165,9 @@ class TtGemma4TextModel(Transformer):
             max_columns_per_device=self.args.max_columns_per_device_lm_head,
             prefetcher=prefetcher,
         )
-        # Override LM head compute kernel for higher accuracy during bring-up
-        # Default is HiFi2/no-fp32-acc; use HiFi4 for better precision on logits
+        # Override LM head compute kernel for higher accuracy during bring-up.
+        # HiFi4 without fp32: fp32 accumulation causes L1 overflow for the large LM head matmul.
+        # HiFi4 without fp32 is a reasonable compromise (avoids WH HiFi4+fp32 bug too).
         self.lm_head.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
@@ -315,11 +316,15 @@ class TtGemma4TextModel(Transformer):
                 src_idx = self.args.kv_sharing_map[i]
                 if mode == Mode.PREFILL and src_idx in shared_kv_store:
                     layer.attention.shared_kv = shared_kv_store[src_idx]
-                elif mode == Mode.DECODE and kv_cache is not None:
+                elif mode == Mode.DECODE:
                     # In decode mode, shared layers use source layer's KV cache directly.
                     # The attention layer's shared_kv flag tells it to skip K/V projection
                     # and just read from the KV cache passed via layer_kv.
-                    layer_kv = kv_cache[src_idx]
+                    if kv_cache is not None:
+                        layer_kv = kv_cache[src_idx]
+                    else:
+                        # When no explicit kv_cache is provided, use source layer's internal cache
+                        layer_kv = self.layers[src_idx].attention.layer_past
                     layer.attention.shared_kv = True  # Signal to skip K/V computation
 
             x = layer(

@@ -16,12 +16,15 @@ Custom attention implementation for Gemma 4 E4B that handles:
   - Source layer's processed K/V (with rotary) is reused for SDPA
 """
 
+import math
+
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.model_config import num_to_corerange
 
 
 class Gemma4Attention(LightweightModule):
@@ -94,6 +97,9 @@ class Gemma4Attention(LightweightModule):
         )
         self.li_o_decode_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_O_DECODE, configuration=configuration
+        )
+        self.sdpa_decode_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
+            decoder_id=layer_num, op=OpGroup.SDPA_DECODE, configuration=configuration
         )
 
         self.model_config = configuration.get_model_config()
@@ -436,7 +442,7 @@ class Gemma4Attention(LightweightModule):
             ttnn.deallocate(k_fill)
             ttnn.deallocate(v_fill)
 
-        # Use bfloat16 for SDPA during bring-up for maximum accuracy
+        # Use HiFi3+fp32 for SDPA (HiFi4+fp32 has known Wormhole accuracy bug)
         attn_output = ttnn.transformer.scaled_dot_product_attention(
             q_heads,
             k_heads,
@@ -540,6 +546,7 @@ class Gemma4Attention(LightweightModule):
             ttnn.deallocate(v_heads)
 
         # SDPA decode
+        sdpa_decode_prog_cfg = self.args.get_attn_sdpa_decode_program_config(None)
         attn_output = ttnn.transformer.scaled_dot_product_attention_decode(
             q_heads,
             keys,
@@ -547,11 +554,21 @@ class Gemma4Attention(LightweightModule):
             cur_pos_tensor=current_pos,
             scale=self.scale,
             sliding_window_size=self.sliding_window,
+            program_config=sdpa_decode_prog_cfg,
+            compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(q_heads)
 
-        attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
+        # SDPA output must be sharded for nlp_concat_heads_decode
+        sdpa_output_sharded_config = ttnn.create_sharded_memory_config(
+            shape=(math.ceil(self.n_local_heads / ttnn.TILE_SIZE) * ttnn.TILE_SIZE, self.head_dim),
+            core_grid=ttnn.CoreRangeSet({num_to_corerange(self.max_batch_size)}),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        attn_output = ttnn.to_memory_config(attn_output, sdpa_output_sharded_config)
         attn_output = ttnn.experimental.nlp_concat_heads_decode(attn_output, num_heads=self.n_local_heads)
 
         dense_out = ttnn.linear(

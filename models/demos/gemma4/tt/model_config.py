@@ -116,7 +116,7 @@ class ModelArgs(TTModelArgs):
 
         # Override compute_kernel_config_hifi4 for Wormhole: use HiFi3 with fp32 accumulation.
         # Wormhole has a known bug where HiFi4 + fp32_dest_acc_en=True produces WORSE accuracy
-        # than HiFi3 + fp32_dest_acc_en=True. This config is used for SDPA.
+        # than HiFi3 + fp32_dest_acc_en=True. This config is used for MLP matmuls (via HIFI4 optimizer).
         self.compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi3,
             math_approx_mode=False,
