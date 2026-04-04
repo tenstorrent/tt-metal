@@ -38,7 +38,7 @@ def open_mesh_device():
     my_rank = int(ttnn.distributed_context_get_rank())
 
     worker_l1_size = 1431568
-    if my_rank == 14:
+    if my_rank == 62:
         worker_l1_size = 1499000
     """Open mesh device using bh_2d_mesh_device_context (pod pipeline settings)."""
     if not os.environ.get("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"):
@@ -61,7 +61,12 @@ def open_mesh_device():
 
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser("DeepSeek-V3-B1 Demo on TT-NN (pod pipeline)")
-    parser.add_argument("--prompt", type=str, default="Hello, world!", help="Prompt text (for future real decode loop)")
+    parser.add_argument(
+        "--prompt-1", type=str, default="Hello, world!", help="Prompt text (for future real decode loop)"
+    )
+    parser.add_argument(
+        "--prompt-2", type=str, default="Hello, world!", help="Prompt text (for future real decode loop)"
+    )
     parser.add_argument(
         "--max-new-tokens",
         type=int,
@@ -207,7 +212,7 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"--model-path must contain model.safetensors.index.json (missing {index_path})")
 
     run_demo(
-        prompts=[args.prompt, args.prompt],
+        prompts=[args.prompt_1, args.prompt_2],
         max_new_tokens=args.max_new_tokens,
         tokenizer_name_or_path=args.tokenizer,
         weights_mode=args.weights,

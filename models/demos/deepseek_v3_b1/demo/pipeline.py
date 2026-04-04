@@ -276,26 +276,27 @@ def create_sp4_pipeline_configuration(
         )
 
     def stage_62(device: ttnn.MeshDevice) -> StageKind:
-        mtp_weights = weight_provider.load_mtp(device) if enable_mtp else None
-        return BaseLMHeadStage(
-            weights=weight_provider.load_lm_head(device),
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            persistent_mode=persistent_mode,
-            mtp_weights=mtp_weights,
-            send_mtp_output_downstream=enable_mtp,
-            embedding_weights=weight_provider.load_embedding(device),
-        )
+        # mtp_weights = weight_provider.load_mtp(device) if enable_mtp else None
+        # return BaseLMHeadStage(
+        #     weights=weight_provider.load_lm_head(device),
+        #     fp32_dest_acc_en=fp32_dest_acc_en,
+        #     persistent_mode=persistent_mode,
+        #     mtp_weights=mtp_weights,
+        #     send_mtp_output_downstream=enable_mtp,
+        #     embedding_weights=weight_provider.load_embedding(device),
+        # )
+        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
 
     def _dense_stage(layer_id: int):
         return lambda d: DenseDecoderStage(
-            weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d, forward_metadata=True),
+            weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
             forward_metadata=True,
         )
 
     def _decoder_stage(layer_id: int):
         return lambda d: MoEDecoderStage(
-            weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d, forward_metadata=True),
+            weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
             forward_metadata=True,
         )
@@ -310,7 +311,7 @@ def create_sp4_pipeline_configuration(
         3: _dense_stage(dense_ids[2]),
         **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 62)},
         62: stage_62,
-        63: _decoder_stage(61),
+        63: stage_62,
     }
     return PipelineConfiguration(stage_factories)
 
