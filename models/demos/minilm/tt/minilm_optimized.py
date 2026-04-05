@@ -38,9 +38,11 @@ import ttnn
 GRID = (6, 8)
 
 # QKV fused linear: [M, 12] x [12, 36] -> [M, 36]
+# Input shard width = hidden_tiles / grid_x = 12 / 6 = 2 tiles
+# in0_block_w must divide shard width (2)
 qkv_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
     compute_with_storage_grid_size=GRID,
-    in0_block_w=4,
+    in0_block_w=2,
     out_subblock_h=1,
     out_subblock_w=6,
     per_core_M=4,
@@ -50,9 +52,10 @@ qkv_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
 )
 
 # Self-output projection: [M, 12] x [12, 12] -> [M, 12]
+# Input shard width = hidden_tiles / grid_x = 12 / 6 = 2 tiles
 self_out_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
     compute_with_storage_grid_size=GRID,
-    in0_block_w=4,
+    in0_block_w=2,
     out_subblock_h=2,
     out_subblock_w=2,
     per_core_M=4,
@@ -62,9 +65,10 @@ self_out_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
 )
 
 # FF1 (intermediate up-projection): [M, 12] x [12, 48] -> [M, 48]
+# Input shard width = hidden_tiles / grid_x = 12 / 6 = 2 tiles
 ff1_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
     compute_with_storage_grid_size=GRID,
-    in0_block_w=4,
+    in0_block_w=2,
     out_subblock_h=1,
     out_subblock_w=8,
     per_core_M=4,
@@ -74,9 +78,10 @@ ff1_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
 )
 
 # FF2 (output down-projection): [M, 48] x [48, 12] -> [M, 12]
+# Input shard width = intermediate_tiles / grid_x = 48 / 6 = 8 tiles
 ff2_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
     compute_with_storage_grid_size=GRID,
-    in0_block_w=4,
+    in0_block_w=2,
     out_subblock_h=2,
     out_subblock_w=2,
     per_core_M=4,
@@ -178,39 +183,48 @@ class MiniLMOptimized:
         self.head_dim = config.hidden_size // config.num_attention_heads
 
     def embeddings(self, input_ids, token_type_ids, position_ids, device):
-        """Word + position + token_type embeddings -> LayerNorm."""
-        MEM = ttnn.DRAM_MEMORY_CONFIG
+        """Word + position + token_type embeddings -> LayerNorm -> block-sharded."""
+        L1 = ttnn.L1_MEMORY_CONFIG
 
         word_emb = ttnn.embedding(
             input_ids,
             self.parameters.embeddings.word_embeddings.weight,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=MEM,
+            memory_config=L1,
             padding_idx=self.config.pad_token_id,
         )
         token_type_emb = ttnn.embedding(
             token_type_ids,
             self.parameters.embeddings.token_type_embeddings.weight,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=MEM,
+            memory_config=L1,
         )
         position_emb = ttnn.embedding(
             position_ids,
             self.parameters.embeddings.position_embeddings.weight,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=MEM,
+            memory_config=L1,
         )
 
-        # 4D for add
-        word_emb = ttnn.unsqueeze(word_emb, dim=1)
-        token_type_emb = ttnn.unsqueeze(token_type_emb, dim=1)
-        position_emb = ttnn.unsqueeze(position_emb, dim=1)
-
-        embeddings = ttnn.add(word_emb, token_type_emb, memory_config=MEM)
-        embeddings = ttnn.add(embeddings, position_emb, memory_config=MEM)
+        # Add in 3D (L1 interleaved), then unsqueeze to 4D, then shard
+        embeddings = word_emb + token_type_emb + position_emb
         ttnn.deallocate(word_emb)
         ttnn.deallocate(token_type_emb)
         ttnn.deallocate(position_emb)
+
+        embeddings = ttnn.unsqueeze(embeddings, dim=1)
+
+        # Convert from L1 interleaved to L1 block-sharded
+        embeddings = ttnn.to_memory_config(
+            embeddings,
+            memory_config=ttnn.create_sharded_memory_config(
+                embeddings.shape,
+                core_grid=ttnn.CoreGrid(y=8, x=6),
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+            dtype=ttnn.bfloat8_b,
+        )
 
         embeddings = ttnn.layer_norm(
             embeddings,
