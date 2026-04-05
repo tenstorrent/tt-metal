@@ -73,10 +73,9 @@ NpFabricOnlyArtifacts build_np_fabric_only_program_artifacts(
     const std::optional<MeshCoordinate>& w_forward_coord_in,
     const std::optional<MeshCoordinate>& w_backward_coord_in,
     uint32_t w_device_index_in,
-    // Progress semaphore for T-batch pipelining: H-writer signals per T-batch, W-reader signals once at end.
+    // Progress semaphore for fused op pipelining (W-writer signals conv3d readers once at end)
     uint32_t progress_sem_addr,
-    const std::vector<std::pair<uint32_t, uint32_t>>& reader_noc_coords,
-    uint32_t progress_t_batch_size) {
+    const std::vector<std::pair<uint32_t, uint32_t>>& reader_noc_coords) {
     // Use the buffer's aligned page size (architecture-specific: 32B on WH, 64B on BH).
     uint32_t page_size = input_buffer->aligned_page_size();
 
@@ -261,27 +260,11 @@ NpFabricOnlyArtifacts build_np_fabric_only_program_artifacts(
         w_outer_dim_size = fabric_only ? outer_dim_size * (input_halo_dim_size + 2 * padding_left)
                                        : outer_dim_size * output_halo_dim_size;
 
-        // CB on W fabric cores (sender CB)
+        // CB on W fabric cores
         CreateCircularBuffer(program, w_fabric_core_range, cb_sender_config);
 
         w_rows_per_link = w_outer_dim_size / capped_pad2_num_links;
         w_extra_rows = w_outer_dim_size % capped_pad2_num_links;
-
-        // W-halo L1 recv buffer: fabric writes W-halo to L1 instead of DRAM to guarantee
-        // ordering (BH DRAM writes from fabric are not ordered with local NOC reads).
-        // The sender writes to the neighbor's L1 recv_buf; the receiver (phase2_w_reader)
-        // drains from L1 to DRAM locally with noc_async_write_barrier() before signaling
-        // the progress semaphore, guaranteeing DRAM commit before conv3d reads.
-        if (fabric_only) {
-            uint32_t max_w_sticks_per_link = w_rows_per_link + (w_extra_rows > 0 ? 1 : 0);
-            uint32_t max_w_padding = std::max(pad2_left, pad2_right);
-            uint32_t w_recv_buf_size = max_w_sticks_per_link * max_w_padding * page_size;
-            if (w_recv_buf_size > 0) {
-                CircularBufferConfig w_recv_cb_config = CircularBufferConfig(w_recv_buf_size, {{recv_cb_index, df}})
-                                                            .set_page_size(recv_cb_index, page_size);
-                CreateCircularBuffer(program, w_fabric_core_range, w_recv_cb_config);
-            }
-        }
     }
 
     // Compute H fabric unicast route configuration (for compile-time args)
@@ -328,13 +311,7 @@ NpFabricOnlyArtifacts build_np_fabric_only_program_artifacts(
     h_writer_kernel_config.compile_args.push_back(is_2d ? 1 : 0);              // handle_incoming_writes
     h_writer_kernel_config.compile_args.push_back(0);                          // is_w_fabric_writer (false for H)
     h_writer_kernel_config.compile_args.push_back(ring_size);                  // ring_size
-    // H-writer signals conv3d readers per T-batch when progress semaphore is active.
-    // W-reader additionally signals once at end (after W-halo completes). The extra W-reader signal
-    // is harmless since Conv3d uses noc_semaphore_wait_min (>= threshold, not == threshold).
-    if (progress_sem_addr != 0) {
-        h_writer_kernel_config.defines["NP_PROGRESS_SEM"] = "1";
-    }
-    h_writer_kernel_config.compile_args.push_back(progress_t_batch_size);  // progress_t_batch_size (0 if no pipelining)
+    // H-writer does NOT signal conv3d readers — W-reader handles that after w_nbr_sem.
     auto h_writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
@@ -343,20 +320,15 @@ NpFabricOnlyArtifacts build_np_fabric_only_program_artifacts(
         h_writer_kernel_config);
     {
         // Build H writer common runtime args.
-        // H-writer signals conv3d readers per T-batch when pipelining is enabled (NP_PROGRESS_SEM defined).
-        // W-reader handles final W-halo ordering signal; H-writer handles per-T-batch progress.
+        // H-writer does NOT signal conv3d readers (W-reader handles that).
         std::vector<uint32_t> h_writer_crta = {
             input_buffer->address(),
             halo_buffer->address(),
             h_neighbor_semaphore.address(),
             barrier_semaphore.address(),
-            progress_sem_addr,                                // progress_sem (0 if no pipelining)
-            static_cast<uint32_t>(reader_noc_coords.size()),  // num_reader_cores
+            0u,  // progress_sem (unused for H-writer)
+            0u,  // num_reader_cores (H-writer no longer signals conv3d)
         };
-        for (const auto& [x, y] : reader_noc_coords) {
-            h_writer_crta.push_back(x);
-            h_writer_crta.push_back(y);
-        }
         SetCommonRuntimeArgs(program, h_writer_kernel_id, h_writer_crta);
     }
 
@@ -458,13 +430,12 @@ NpFabricOnlyArtifacts build_np_fabric_only_program_artifacts(
                 writer_rt_args.push_back(false);
             }
             // In fabric_only mode: override writer rt_args to index into the compact halo buffer.
-            // In fabric_only mode: only corner sticks (pad2_left + pad2_right per row) go through
-            // L1→CB→local DRAM to guarantee ordering. Non-corner sticks go directly to DRAM via fabric
-            // (BH ordering limitation: tracked as known issue). All-L1 routing would require per-link
-            // semaphores to avoid a race with num_links=2 — deferred to future work.
+            // In fabric_only mode: route ALL H-halo sticks through L1→CB→local DRAM to guarantee
+            // ordering before Phase 2. BH does not provide fabric-DRAM-write vs NOC-read ordering.
             //   stick_start_id=0: no W-offset in compact buffer
             //   num_sticks_per_halo_dim=W: compact buffer row width (not W+pad)
-            //   padding_left kept at pad2_left: gives pad2_left_sticks=1, pad2_right_sticks=1 (corners only)
+            //   padding_left=W/2: makes pad2_left_sticks=W/2, pad2_right_sticks=W/2 (all sticks = corners)
+            //   All W sticks go through L1 → committed before Phase 2 via noc_async_write_barrier()
             if (fabric_only) {
                 // Compact buffer layout: [H-top: outer_dim_size×ph×W | H-bot: same | W-left | W-right]
                 // outer_dim_size (function param) = total T-slices per device.
@@ -541,12 +512,6 @@ NpFabricOnlyArtifacts build_np_fabric_only_program_artifacts(
         w_reader_kernel_config.compile_args = {sender_cb_index, is_padding_zeros, page_size};
         TensorAccessorArgs(*halo_buffer).append_to(w_reader_kernel_config.compile_args);
         TensorAccessorArgs(*input_buffer).append_to(w_reader_kernel_config.compile_args);
-        // NP_W_HALO_L1: W-halo sticks go through L1 on receive side (ordering fix).
-        // recv_cb_id compile arg is added after src TensorAccessorArgs.
-        if (fabric_only) {
-            w_reader_kernel_config.compile_args.push_back(recv_cb_index);  // recv_cb_id
-            w_reader_kernel_config.defines["NP_W_HALO_L1"] = "1";
-        }
         // W-reader signals conv3d readers after w_nbr_sem wait (NP_PROGRESS_SEM).
         // Must define BEFORE CreateKernel so the kernel compiles with it.
         if (progress_sem_addr != 0) {
@@ -578,10 +543,8 @@ NpFabricOnlyArtifacts build_np_fabric_only_program_artifacts(
         auto w_writer_kernel_config = WriterDataMovementConfig{};
         w_writer_kernel_config.compile_args = {sender_cb_index, is_padding_zeros, page_size};
         TensorAccessorArgs(*halo_buffer).append_to(w_writer_kernel_config.compile_args);
-        // use_l1_intermediate=1 in fabric_only: W-halo sticks go to neighbor's L1 (not DRAM)
-        // to guarantee BH DRAM ordering (see W recv_cb comment above).
-        w_writer_kernel_config.compile_args.push_back(fabric_only ? 1 : 0);              // use_l1_intermediate
-        w_writer_kernel_config.compile_args.push_back(fabric_only ? recv_cb_index : 0);  // recv_cb_id
+        w_writer_kernel_config.compile_args.push_back(0);  // use_l1_intermediate (direct-to-DRAM for W)
+        w_writer_kernel_config.compile_args.push_back(0);  // recv_cb_id (unused)
         w_writer_kernel_config.compile_args.push_back(0);  // handle_incoming_writes (data goes direct to DRAM)
         w_writer_kernel_config.compile_args.push_back(1);  // is_w_fabric_writer
         w_writer_kernel_config.compile_args.push_back(w_ring_size);  // ring_size
@@ -635,11 +598,7 @@ NpFabricOnlyArtifacts build_np_fabric_only_program_artifacts(
                 w_reader_rt_args.push_back(input_halo_dim_size);
                 w_reader_rt_args.push_back(fabric_only ? padding_left : 0u);
                 w_reader_rt_args.push_back(fabric_only ? outer_dim_size * padding_left * num_sticks_per_halo_dim : 0u);
-                // [14] recv_dram_offset: base DRAM page for received W-halo sticks (NP_W_HALO_L1).
-                // Equals the SENDER's outer_dim_offset_start_id, which is section_base + link_start.
-                // Computed after w_writer_outer_dim_start (same value for pw_this_dir=1).
-                // Set to 0 for non-fabric_only (NP_W_HALO_L1 not active).
-                // NOTE: pushed AFTER w_writer_outer_dim_start is computed below.
+                SetRuntimeArgs(program, w_reader_kernel_id, {w_core}, w_reader_rt_args);
 
                 // W writer runtime args.
                 // In fabric_only mode (compact halo buffer): the W-halo sections are at
@@ -666,12 +625,6 @@ NpFabricOnlyArtifacts build_np_fabric_only_program_artifacts(
                     w_writer_output_halo_dim_size = output_num_sticks_per_halo_dim;
                     w_writer_num_sticks_per_halo_dim = 1;
                 }
-                // Now that w_writer_outer_dim_start is known, finalize and set W reader RT args.
-                // recv_dram_offset = base DRAM page for received W-halo sticks = w_writer_outer_dim_start
-                // (valid for pad2_left=pad2_right=1; generalized version matches the override below).
-                w_reader_rt_args.push_back(fabric_only ? w_writer_outer_dim_start : 0u);
-                SetRuntimeArgs(program, w_reader_kernel_id, {w_core}, w_reader_rt_args);
-
                 std::vector<uint32_t> w_writer_rt_args = {
                     w_writer_outer_dim_start,
                     0,
@@ -819,11 +772,7 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
         hw[1] = output_addr;
         hw[2] = h_sem_addr;
         hw[3] = barrier_sem_addr;
-        // hw[4] = progress_sem_addr (ping-pong, update each call) — only if NP_PROGRESS_SEM
-        // hw[5] = num_reader_cores, hw[6+] = NOC coords — static, set once in create()
-        if (operation_attributes.progress_semaphore.has_value() && hw.size() > 4) {
-            hw[4] = operation_attributes.progress_semaphore->address();
-        }
+        // hw[4] = 0 (H-writer no longer signals conv3d; W-writer does that)
 
         if (shared_vars.has_local_copy) {
             auto& lr = GetCommonRuntimeArgs(program, shared_vars.local_reader_kernel_id);
@@ -1030,10 +979,9 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         w_forward_coord,
         w_backward_coord,
         w_device_index,
-        // Progress sem: H-writer signals per T-batch, W-reader signals once at end for W-halo ordering.
+        // Progress sem (W-writer signals conv3d readers once at end)
         progress_sem_addr,
-        reader_noc_coords,
-        operation_attributes.progress_t_batch_size);
+        reader_noc_coords);
 
     // Local copy workers on cores not used by fabric: AllCores - FabricCores
     // In fabric_only mode, local_copy is skipped entirely — conv3d reads interior from original tensor.

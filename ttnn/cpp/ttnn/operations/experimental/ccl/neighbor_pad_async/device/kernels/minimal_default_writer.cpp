@@ -251,8 +251,12 @@ void kernel_main() {
     uint32_t pad2_left_sticks = 0;
     uint32_t pad2_right_sticks = 0;
     if constexpr (use_l1_intermediate && !is_w_fabric_writer) {
-        pad2_left_sticks = stick_start_id;
-        pad2_right_sticks = num_sticks_per_halo_dim - num_sticks_to_read - stick_start_id;
+        // Use padding_left for corner count (not stick_start_id) so it works when stick_start_id=0
+        // (fabric_only mode). In fabric_only: stick_start_id=0 but padding_left=W/2=104,
+        // giving pad2_left_sticks=104, pad2_right_sticks=104 → overlap case → all sticks are corners.
+        pad2_left_sticks = (padding_left > 0) ? padding_left : stick_start_id;
+        uint32_t w_overhead = num_sticks_per_halo_dim - num_sticks_to_read;
+        pad2_right_sticks = (w_overhead >= pad2_left_sticks) ? (w_overhead - pad2_left_sticks) : pad2_left_sticks;
     }
 
     uint32_t outer_dim_offset = outer_dim_offset_start_id;

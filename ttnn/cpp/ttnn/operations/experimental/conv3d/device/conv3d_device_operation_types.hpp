@@ -52,6 +52,7 @@ struct Conv3dConfig {
     // Progress semaphore pipelining with NeighborPadAsync.
     uint32_t input_progress_t_batch_size = 0;  // 0 = disabled; must match NeighborPad's t_batch_size
     uint32_t input_progress_sem_addr = 0;      // set each call; not part of program hash
+    uint32_t h_trig_sem_addr = 0;              // GlobalSemaphore addr for H→W-reader per-T-batch trigger
 
     // Halo-buffer mode: conv3d reads H-boundary rows from a compact halo buffer
     // (populated by fabric-only NeighborPad on 4 cores) instead of from the padded tensor.
