@@ -2,6 +2,38 @@
 
 ## Session Log
 
+### 2026-04-05 — Strict upfront warmup (tests-to-demo)
+
+**Status:** `run_prefill` / `run_decode_step` no longer lazy-capture traces when `use_trace=True`; entry points call `warmup_video_traces` before video inference; `test_video_trace.py` adds `test_decode_trace_replay` and `test_full_warmup_then_inference` (prefill bucket `[1024]` for short text-only prompts).
+
+**PCC:** N/A (orchestration / trace replay)
+
+**Block Hash:** N/A
+
+**Verify:** `pytest models/demos/molmo2/tests/test_video_trace.py -v` (hardware; ensure no other process holds the mesh — `CHIP_IN_USE` / `tt-smi -r` if stuck).
+
+### 2026-04-05 — CPU→TTNN: fusion scatter + chunk concat
+
+**Status:**
+- `_prepare_text_inputs_traced`: replaced Python loop + selector matrix upload `[seq_len × num_valid]` + `ttnn.matmul` with vectorized CPU index build `[seq_len]` + `ttnn.embedding` scatter. Upload 4 KB instead of ~1.3 MB; eliminates O(seq_len × num_valid × hidden) matmul.
+- `_embed_image_data_parallel_traced`: replaced per-chunk `to_torch` + `torch.cat` + `from_torch` with `ttnn.slice` (new buffer per chunk) → `ttnn.to_layout(ROW_MAJOR)` → `ttnn.concat(dim=2)` → `ttnn.to_layout(TILE)` → projector. No CPU roundtrip between pool chunks.
+
+**Verified:** `eval_video.py --num-samples 1 --max-video-frames 8 --no-use-dp-vision-trace --use-decode-trace` → **Answer: B, exit_code: 0**. TTFT 318ms, decode 66.1 tok/s (traced).
+
+**PCC:** N/A (orchestration)
+
+**Block Hash:** N/A
+
+### 2026-04-05 — Pool trace CQ ordering + partial readback
+
+**Status:** `_embed_image_data_parallel_traced` (DP pool trace path): `ttnn.synchronize_device` after copying chunk features into `trace_feat_buf` and before idx/mask upload; for **partial** chunks padded to trace shape, `ttnn.slice` on `dp_pool_trace_output` to `chunk_frames * n_out` tokens before `to_torch` (smaller mesh readback; CPU slice skipped when device slice runs); INFO log of full `pooled_chunk.shape` on non-partial trace chunks.
+
+**PCC:** N/A
+
+**Block Hash:** N/A
+
+**Verify:** `pytest models/demos/molmo2/tests/test_video_trace.py::TestPhase1PoolTrace::test_pool_trace_partial_chunk -v` (hardware).
+
 ### 2026-03-10 — Initial Audit
 
 **Status:** All 5 phases complete. Full E2E demo working on T3K.
@@ -1065,5 +1097,18 @@ python models/demos/molmo2/demo/demo.py \
 1. Debug projector scale issue in `image_projector.py` or `vision_backbone.py`
 2. Compare projector output with PyTorch reference
 3. After fixing scale, verify output quality with 72+ frames
+
+---
+
+### 2026-04-05 — Block-level trace tests (`test_video_trace.py`)
+
+**Status:** Bottom-up trace tests implemented (Phases 1–3); demo comment on prefill `trace_output` / `to_torch` host copy.
+
+**PCC / checks:**
+- Phase 1 ViT / pool / partial pool: PCC vs eager where applicable.
+- Phase 1 prefill: two replay runs vs same trace, PCC > 0.99 (host copy via `.detach().cpu().clone().contiguous()` after `to_torch`).
+- Phase 3 full embed: traced-vs-traced reproducibility (not eager vs traced — different ViT path).
+
+**Block / files:** `models/demos/molmo2/tests/test_video_trace.py`, `demo.py` (`_execute_prefill_trace` comment).
 
 ---
