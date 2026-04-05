@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -146,16 +146,7 @@ void set_or_update_runtime_arguments(
     const uint32_t out_num_tiles = rm_interleaved ? output.buffer()->num_pages() : output.physical_volume() / tile_hw;
     uint32_t out_shard_height{}, out_shard_width{}, num_shards_per_width{};
 
-    const auto [oD, oN, oC, oHt, oWt] = [&]() -> std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> {
-        const auto& shape = output.padded_shape();
-        const auto& tile = output.tensor_spec().tile();
-        return {
-            shape.rank() >= 5 ? shape[-5] : 1,
-            shape[-4],
-            shape[-3],
-            shape[-2] / tile.get_height(),
-            shape[-1] / tile.get_width()};
-    }();
+    const uint32_t oWt = output.padded_shape()[-1] / output.tensor_spec().tile().get_width();
 
     if (has_sharding) {
         core_group_1 = grid;
@@ -392,8 +383,7 @@ UnaryNgDeviceOperation::ProgramFactory::cached_program_t UnaryNgDeviceOperation:
         unpack_to_dest_mode[tmp0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
 
-    const bool math_approx_mode =
-        std::all_of(ops_chain.begin(), ops_chain.end(), [](const auto& u) { return get_op_approx_mode(u.type()); });
+    const bool math_approx_mode = false;
     std::map<std::string, std::string> unary_defines = get_block_defines(ops_chain, "0", "0", input.dtype());
     CMAKE_UNIQUE_NAMESPACE::apply_input_dtype_defines(input.dtype(), unary_defines);
     CMAKE_UNIQUE_NAMESPACE::pack_first_op_scalars(

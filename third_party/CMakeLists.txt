@@ -262,6 +262,22 @@ CPMAddPackage(
     CUSTOM_CACHE_KEY "0_22_0_patched"
 )
 
+# Mark xtensor stack headers as SYSTEM so clang-tidy and the compiler suppress
+# warnings from vendored headers when they are included in project TUs.
+foreach(_xtensor_target xtl xtensor xtensor-blas)
+    if(TARGET ${_xtensor_target})
+        get_target_property(_incs ${_xtensor_target} INTERFACE_INCLUDE_DIRECTORIES)
+        if(_incs)
+            set_target_properties(
+                ${_xtensor_target}
+                PROPERTIES
+                    INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+                        "${_incs}"
+            )
+        endif()
+    endif()
+endforeach()
+
 ############################################################################################################################
 # benchmark : https://github.com/google/benchmark
 ############################################################################################################################
@@ -361,6 +377,23 @@ CPMAddPackage(
     OPTIONS
         "TT_LOGGER_INSTALL ON"
         "TT_LOGGER_BUILD_TESTING OFF"
+)
+
+####################################################################################################################
+# libdwarf : https://github.com/davea42/libdwarf-code
+# Portable DWARF debug info parser (no libelf dependency, built-in ELF reader)
+####################################################################################################################
+CPMAddPackage(
+    NAME libdwarf
+    GITHUB_REPOSITORY davea42/libdwarf-code
+    GIT_TAG v0.12.0
+    OPTIONS
+        "BUILD_DWARFDUMP OFF"
+        "BUILD_DWARFEXAMPLE OFF"
+        "BUILD_SHARED_LIBS OFF"
+        "PIC_ALWAYS ON"
+        "BUILD_TESTING OFF"
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
 )
 
 ####################################################################################################################

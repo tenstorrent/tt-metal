@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -25,8 +25,8 @@ from models.demos.deepseek_v3_b1.blitz_decode_weights import (
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
+from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
 from models.demos.deepseek_v3_b1.utils import generate_mm_weights
 
@@ -94,7 +94,8 @@ def test_attention_block(
     num_devices = mesh_rows * mesh_cols
     skip_ccl = False
     # skip_ccl is not supported in this test
-    num_links = 1
+    num_links_bcast = 1
+    num_links_allreduce = 2
 
     # Validate mesh size
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
@@ -106,7 +107,9 @@ def test_attention_block(
     # Configure a single worker sub-device covering the full compute grid
     device_grid_size = submesh.compute_with_storage_grid_size()
 
-    attention_block_semaphores = AttentionBlock.create_semaphores(submesh, num_links=num_links)
+    attention_block_semaphores = AttentionBlock.create_semaphores(
+        submesh, num_links_bcast=num_links_bcast, num_links_allreduce=num_links_allreduce
+    )
 
     # ========================================================================
     # Configuration
@@ -716,8 +719,9 @@ def test_attention_block(
     # logger.info(f"Created input tensor: shard {input_shard_shape} on {num_matmul1_cores} cores per device")
 
     # ========================================================================
-    # Create CCL tensors and semaphores
+    # Create CCL tensors
     # ========================================================================
+    # Final output: receiver core (12,9) — all-reduce output + residual add
     output_shard_spec = ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
     mesh_output_torch = torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0)
@@ -821,6 +825,8 @@ def test_attention_block(
     sdpa_fwd_total_elements = sdpa_fwd_buffer_bytes // 2
     # WIDTH_SHARDED across 2 forwarder cores, each gets half
     num_forwarders = 2
+    # THIS BUFFER SIZE IS NOT CORRECT BECAUSE WE'RE INCORRECTLY DIVIDING BY 2
+    # TODO: Plan to remove this scratch buffer entirely once we reduce cb memory usage currently being overlapped with this buffer.
     sdpa_fwd_per_forwarder = sdpa_fwd_total_elements // num_forwarders
     sdpa_forwarder_shard_shape = (1, sdpa_fwd_per_forwarder)
     sdpa_forwarder_shard_spec = ttnn.ShardSpec(
@@ -881,14 +887,15 @@ def test_attention_block(
             program_config.device_chunk_size,  # sdpa_per_device_chunk_size
             ttnn_attention_block_output,
             # Shared semaphores, and some default values
-            attention_block_semaphores,
-            reduce_cluster_axis,
-            0,  # sdpa_cluster_axis
-            num_links,
-            epsilon,
-            use_fp32,
-            skip_ccl,
-            noc_mode,
+            attention_block_semaphores=attention_block_semaphores,
+            reduce_cluster_axis=reduce_cluster_axis,
+            sdpa_cluster_axis=0,
+            num_links_bcast=num_links_bcast,
+            num_links_allreduce=num_links_allreduce,
+            epsilon=epsilon,
+            fp32_dest_acc_en=use_fp32,
+            skip_ccl=skip_ccl,
+            noc_mode=noc_mode,
             num_iterations=num_internal_iterations,
             fabric_config=device_params["fabric_config"],
         )

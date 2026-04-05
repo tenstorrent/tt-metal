@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -423,7 +423,13 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     out << "#if !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_UNPACK)\n";
     emit_pack_data_formats(out, fmts.pack_src, fmts.pack_dst, max_cbs);
     emit_pack_tile_dims(out, desc, max_cbs);
-    out << "#endif\n\n";
+    // For Blackhole tilize workaround, PACK needs access to unpack_src_format to determine
+    // if the original input format is 8-bit (Int8, UInt8, Fp8_e4m3, Lf8) since those formats
+    // do not require the tilize workaround. This is needed to determine whether to skip the workaround in llk_pack_init.
+    out << "#if defined(UCK_CHLKC_PACK)\n";
+    emit_formats_array(out, "constexpr std::int32_t", "unpack_src_format", max_cbs, fmts.unpack_src);
+    out << "#endif\n";   // if pack
+    out << "#endif\n\n"; // if not math and not unpack
 
     out << "#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || "
            "defined(UCK_CHLKC_ISOLATE_SFPU)\n";

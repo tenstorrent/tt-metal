@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,6 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/shape.hpp>
-#include "ttnn/decorators.hpp"
 #include "ttnn/graph/graph_consts.hpp"
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/levelized_graph.hpp"

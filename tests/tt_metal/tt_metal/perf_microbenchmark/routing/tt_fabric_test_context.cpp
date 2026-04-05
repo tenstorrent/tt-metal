@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -85,6 +85,7 @@ void TestContext::wait_for_programs_with_progress() {
     }
 
     // Create progress monitor (but don't start polling thread yet)
+    progress_config_.show_workers = show_workers_;
     TestProgressMonitor monitor(this, progress_config_);
 
     // Poll and check for completion in this thread
@@ -324,6 +325,22 @@ void TestContext::compile_programs() {
         } else {
             // Normal mode: create standard kernels for all devices
             test_device.create_kernels();
+        }
+    }
+
+    if (show_workers_) {
+        for (const auto& [coord, test_device] : test_devices_) {
+            const auto& node_id = test_device.get_node_id();
+            const auto& senders = test_device.get_senders();
+            const auto& receivers = test_device.get_receivers();
+            if (!senders.empty() || !receivers.empty()) {
+                log_info(
+                    tt::LogTest,
+                    "Device {}: {} sender(s), {} receiver(s)",
+                    tt::tt_fabric::fabric_tests::format_device_label(node_id),
+                    senders.size(),
+                    receivers.size());
+            }
         }
     }
 

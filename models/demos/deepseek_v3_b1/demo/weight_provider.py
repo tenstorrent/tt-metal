@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -17,21 +17,26 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
+from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
 from models.demos.deepseek_v3_b1.prepare_weights import (
+    _MTP_LAYER_IDX,
     NUM_ROUTED_EXPERTS,
     DeepSeekV3DenseLayerWeights,
     DeepSeekV3EmbeddingLayerWeights,
     DeepSeekV3LMHeadWeights,
     DeepSeekV3MoELayerWeights,
+    DeepSeekV3MTPWeights,
     load_dense_decoder_layer,
     load_embedding_weights,
     load_lm_head_weights,
     load_moe_decoder_layer,
     load_moe_routed_experts,
+    load_mtp_weights,
     prepare_dense_layer_weights,
     prepare_embedding_weights,
     prepare_lm_head_weights,
     prepare_moe_layer_weights,
+    prepare_mtp_weights,
 )
 
 
@@ -50,21 +55,8 @@ class WeightProvider(Protocol):
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
         ...
 
-
-class LogicalModelDimensions:
-    """HF / logical tensor dimensions for DeepSeek V3 B1. Must match prepare_weights and stage expectations."""
-
-    HIDDEN_SIZE = 7168
-    VOCAB_SIZE = 129280
-    Q_A_DIM = 1536
-    Q_B_OUT = 24576
-    KV_A_DIM = 576
-    KV_B_LORA_RANK = 512
-    KV_B_PROJ_OUT = 32768
-    O_PROJ_OUT = 16384
-    MOE_INTERMEDIATE_SIZE = 2048
-    INTERMEDIATE_SIZE = 18432
-    GATE_NUM_INDICES = 256
+    def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
+        ...
 
 
 def _layer_key(layer_id: int, suffix: str) -> str:
@@ -196,6 +188,18 @@ def _build_synthetic_dense_state_dict(layer_id: int) -> dict[str, torch.Tensor]:
     return state_dict
 
 
+def _build_synthetic_mtp_state_dict(mtp_layer_idx: int = _MTP_LAYER_IDX) -> dict[str, torch.Tensor]:
+    """Build a synthetic MTP state dict with only the lightweight MTP projection/norm tensors."""
+    dtype = torch.bfloat16
+    H = LogicalModelDimensions.HIDDEN_SIZE
+
+    return {
+        _layer_key(mtp_layer_idx, "hnorm.weight"): torch.ones(H, dtype=dtype),
+        _layer_key(mtp_layer_idx, "enorm.weight"): torch.ones(H, dtype=dtype),
+        _layer_key(mtp_layer_idx, "eh_proj.weight"): torch.randn(H, 2 * H, dtype=dtype),
+    }
+
+
 class CacheWeightProvider:
     """Load embedding and LM head weights from cache; each host loads only what its stage needs."""
 
@@ -218,6 +222,9 @@ class CacheWeightProvider:
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
         return load_dense_decoder_layer(self._path, device, layer_id)
+
+    def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
+        return load_mtp_weights(self._path, device)
 
 
 class SyntheticWeightProvider:
@@ -266,6 +273,10 @@ class SyntheticWeightProvider:
         bdw = BlitzDecodeWeights(device)
         return prepare_dense_layer_weights(bdw, sd, layer_id, move_to_device=True)
 
+    def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
+        sd = _build_synthetic_mtp_state_dict()
+        return prepare_mtp_weights(sd, device, move_to_device=True)
+
 
 class StateDictWeightProvider:
     """Load real HF safetensors via LazyStateDict and prepare weights at runtime (no tensorbin cache)."""
@@ -299,3 +310,6 @@ class StateDictWeightProvider:
 
         bdw = BlitzDecodeWeights(device)
         return prepare_dense_layer_weights(bdw, self._state_dict, layer_id, move_to_device=True)
+
+    def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
+        return prepare_mtp_weights(self._state_dict, device, move_to_device=True)

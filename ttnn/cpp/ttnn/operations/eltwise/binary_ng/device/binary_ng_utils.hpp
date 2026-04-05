@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,6 +25,13 @@ enum class KernelName {
     ReaderColBcastNg,
     ReaderRowBColABcastNg,
     ReaderScalarBcastNg,
+    ReaderRmNoBcastNg,
+    ReaderRmRowBcastNg,
+    ReaderRmColBcastNg,
+    ReaderRmRowBColABcastNg,
+    ReaderRmScalarBcastNg,
+    ReaderRmScalarOpNg,
+    WriterRmNoBcastNg,
     ComputeRowBcastNg,
     ComputeRowColBcastNg,
 };
