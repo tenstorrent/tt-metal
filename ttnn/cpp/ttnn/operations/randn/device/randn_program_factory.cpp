@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-#include <string.h>
+#include <cstring>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -83,8 +83,7 @@ RandnDeviceOperation::ProgramFactory::cached_program_t RandnDeviceOperation::Pro
                                                              : std::mt19937(std::time(nullptr));
 
     uint32_t tile_offset = 0;
-    for (int i = 0; i < cores.size(); ++i) {
-        const auto& core = cores[i];
+    for (auto core : cores) {
         uint32_t units_per_core;
         if (core_group_1.contains(core)) {
             units_per_core = units_per_core_group_1;
@@ -125,13 +124,13 @@ void RandnDeviceOperation::ProgramFactory::override_runtime_arguments(
     std::mt19937 rng = operation_attributes.seed.has_value() ? std::mt19937(*operation_attributes.seed)
                                                              : std::mt19937(std::time(nullptr));
 
-    for (int i = 0; i < cores.size(); ++i) {
+    for (auto core : cores) {
         {
-            auto& runtime_args = GetRuntimeArgs(program, compute_kernel_id, cores[i]);
+            auto& runtime_args = GetRuntimeArgs(program, compute_kernel_id, core);
             runtime_args[0] = get_random_seed(rng);
         }
         {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, cores[i]);
+            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = output_addr;
         }
     }

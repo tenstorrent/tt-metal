@@ -9,7 +9,7 @@
 namespace ttnn {
 
 Tensor randn(
-    const ttnn::Shape& size,
+    const ttnn::Shape& shape,
     MeshDevice& device,
     DataType dtype = DataType::BFLOAT16,
     Layout layout = Layout::TILE,
