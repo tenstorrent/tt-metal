@@ -2,15 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// NCRISC dataflow kernel — reads gate_proj and up_proj tiles, writes gate_out
-// and up_out back to DRAM.
+// NCRISC dataflow kernel — reads gate_proj and up_proj weight tiles from DRAM
+// into CB_IN1_GATE and CB_IN1_UP, then writes the computed gate_out and up_out
+// tiles from L1 back to DRAM.
 //
-// Weight read order mirrors the compute kernel: M_outer → K_outer → N_inner.
+// Weight read order mirrors the compute kernel: M_outer -> K_outer -> N_inner.
 // For each (M_block, K_block, N_block):
 //   1. Push K_block × N_block gate_proj tiles into CB_IN1_GATE.
 //   2. Push K_block × N_block up_proj   tiles into CB_IN1_UP.
 //
-// After all K_blocks for a given M_block, read M_block × N_tiles output tiles
+// After all K_blocks for a given M_block, drain M_block × N_tiles output tiles
 // from CB_GATE_OUT and CB_UP_OUT and write them to DRAM.
 
 #include <stdint.h>
@@ -65,7 +66,7 @@ void kernel_main() {
     for (uint32_t m = 0; m < M_num_blocks; m++) {
         uint32_t m_tile_base = m * M_block_tiles;
 
-        // ── Supply weight tiles: K_outer → N_inner ────────────────────────
+        // ── Supply weight tiles: K_outer -> N_inner ───────────────────────
         for (uint32_t k = 0; k < K_num_blocks; k++) {
             uint32_t k_tile_base = k * K_block_tiles;
 

@@ -14,7 +14,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn {
 
 struct GateUpMatmulSharedVariables {
     tt::tt_metal::KernelHandle reader_x_id = 0;
-    tt::tt_metal::KernelHandle reader_weights_writer_id = 0;
+    tt::tt_metal::KernelHandle reader_weights_id = 0;
     tt::tt_metal::KernelHandle compute_id = 0;
     CoreCoord core;
 };
