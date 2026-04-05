@@ -834,18 +834,7 @@ class VisionBackbone(LightweightModule):
         """
         from loguru import logger
 
-        is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
-        mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0) if is_mesh_device else None
-
-        logger.info(f"pool_and_project_ttnn (SINGLE-PASS): batch_size={batch_size}, n_out={n_out}, k_pool={k_pool}")
-        logger.info(f"  image_features shape: {image_features.shape}")
-
-        # DEBUG: Check ViT feature statistics
-        if is_mesh_device:
-            vit_debug = ttnn.to_torch(image_features, mesh_composer=mesh_composer)[0]
-        else:
-            vit_debug = ttnn.to_torch(image_features)
-        logger.info(f"  ViT features stats: mean={vit_debug.mean().item():.4f}, std={vit_debug.std().item():.4f}")
+        logger.debug(f"pool_and_project_ttnn (SINGLE-PASS): batch_size={batch_size}, n_out={n_out}, k_pool={k_pool}")
 
         # Squeeze to 2D for embedding lookup: [total_patches, pool_dim]
         image_features_2d = ttnn.reshape(image_features, [-1, image_features.shape[-1]])
@@ -875,43 +864,10 @@ class VisionBackbone(LightweightModule):
         to_pool = ttnn.reshape(gathered, [1, batch_size * n_out, k_pool, pool_dim])
 
         query_sum = ttnn.sum(to_pool, dim=2, keepdim=True)  # [1, B*N_out, 1, pool_dim]
-        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
-        query = _masked_mean_query_hf(
-            query_sum,
-            valid_mask_ttnn,
-            batch_size,
-            n_out,
-            k_pool,
-            self.mesh_device,
-            mesh_mapper,
-            is_mesh_device,
-        )
+        query = _masked_mean_query_hf_device(query_sum, valid_mask_ttnn, batch_size, n_out, k_pool)
         ttnn.deallocate(query_sum)
 
-        # DEBUG: Check query and to_pool stats
-        if is_mesh_device:
-            query_debug = ttnn.to_torch(query, mesh_composer=mesh_composer)[0]
-            to_pool_debug = ttnn.to_torch(to_pool, mesh_composer=mesh_composer)[0]
-        else:
-            query_debug = ttnn.to_torch(query)
-            to_pool_debug = ttnn.to_torch(to_pool)
-        logger.info(f"  query stats: mean={query_debug.mean().item():.4f}, std={query_debug.std().item():.4f}")
-        logger.info(f"  to_pool stats: mean={to_pool_debug.mean().item():.4f}, std={to_pool_debug.std().item():.4f}")
-
-        vm_t = (
-            ttnn.to_torch(valid_mask_ttnn, mesh_composer=mesh_composer)[0]
-            if is_mesh_device
-            else ttnn.to_torch(valid_mask_ttnn)
-        )
-        valid_bool = vm_t.reshape(batch_size, n_out, k_pool) > 0.5
-        attn_mask_ttnn = _pooling_attn_mask_ttnn(
-            valid_bool,
-            batch_size,
-            n_out,
-            k_pool,
-            self.mesh_device,
-            mesh_mapper,
-        )
+        attn_mask_ttnn = self._pooling_attn_mask_from_valid_ttnn(valid_mask_ttnn, batch_size, n_out, k_pool)
 
         pooled_features = self.image_pooling_2d(
             query=query,
@@ -919,14 +875,6 @@ class VisionBackbone(LightweightModule):
             attn_mask=attn_mask_ttnn,
         )
         ttnn.deallocate(attn_mask_ttnn)
-
-        # DEBUG: Check pooled stats
-        if is_mesh_device:
-            pooled_debug = ttnn.to_torch(pooled_features, mesh_composer=mesh_composer)[0]
-        else:
-            pooled_debug = ttnn.to_torch(pooled_features)
-        logger.info(f"  pooled stats: mean={pooled_debug.mean().item():.4f}, std={pooled_debug.std().item():.4f}")
-
         ttnn.deallocate(query)
         ttnn.deallocate(to_pool)
         ttnn.deallocate(gathered)
@@ -937,15 +885,6 @@ class VisionBackbone(LightweightModule):
         # Project to language model dimension
         visual_embeddings = self.image_projector(pooled_features)
         ttnn.deallocate(pooled_features)
-
-        # DEBUG: Check final visual embedding stats
-        if is_mesh_device:
-            vis_debug = ttnn.to_torch(visual_embeddings, mesh_composer=mesh_composer)[0]
-        else:
-            vis_debug = ttnn.to_torch(visual_embeddings)
-        logger.info(
-            f"  SINGLE-PASS visual embeddings: mean={vis_debug.mean().item():.4f}, std={vis_debug.std().item():.4f}, min={vis_debug.min().item():.4f}, max={vis_debug.max().item():.4f}"
-        )
 
         return visual_embeddings
 
@@ -1094,24 +1033,13 @@ class VisionBackbone(LightweightModule):
 
         is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
         mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
-        mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0) if is_mesh_device else None
 
-        logger.info(f"pool_and_project_chunked: {batch_size} frames in chunks of {max_frames_per_pool_chunk}")
-        logger.info(f"  pooled_patches_idx shape: {pooled_patches_idx.shape}, valid_mask shape: {valid_mask.shape}")
-        logger.info(f"  n_out={n_out}, k_pool={k_pool}")
-
-        # DEBUG: Log index statistics for the ENTIRE tensor
-        valid_idx_all = pooled_patches_idx[valid_mask]
-        logger.info(
-            f"  GLOBAL index stats: min={valid_idx_all.min().item()}, max={valid_idx_all.max().item()}, count={len(valid_idx_all)}"
-        )
+        logger.debug(f"pool_and_project_chunked: {batch_size} frames in chunks of {max_frames_per_pool_chunk}")
 
         # Convert ViT features to 2D embedding table (stays on device throughout)
         pool_dim = image_features.shape[-1]
-        logger.info(f"  image_features shape before reshape: {image_features.shape}")
         image_features_2d = ttnn.reshape(image_features, [-1, pool_dim])
         image_features_2d = ttnn.to_layout(image_features_2d, ttnn.ROW_MAJOR_LAYOUT)
-        logger.info(f"  image_features_2d shape after reshape: {image_features_2d.shape}")
 
         # Deallocate original 4D tensor now
         ttnn.deallocate(image_features)
@@ -1123,17 +1051,9 @@ class VisionBackbone(LightweightModule):
             chunk_end = min(chunk_start + max_frames_per_pool_chunk, batch_size)
             chunk_frames = chunk_end - chunk_start
 
-            # Extract chunk of indices and masks (these are OUTPUT frames, indices are still GLOBAL)
+            # Extract chunk of indices and masks (indices are still GLOBAL)
             chunk_idx = pooled_patches_idx[chunk_start:chunk_end]  # [chunk_frames, n_out, k_pool]
             chunk_valid = valid_mask[chunk_start:chunk_end]  # [chunk_frames, n_out, k_pool]
-
-            # Debug: check index ranges (indices should be < batch_size * 729 patches per frame)
-            valid_idx = chunk_idx[chunk_valid]
-            expected_total_patches = batch_size * 729  # patches per frame
-            if len(valid_idx) > 0:
-                logger.debug(
-                    f"  Chunk {chunk_start//max_frames_per_pool_chunk} index range: min={valid_idx.min().item()}, max={valid_idx.max().item()}, expected_total_patches={expected_total_patches}"
-                )
 
             # Flatten for gather
             flat_idx = torch.clip(chunk_idx, min=0).reshape(1, -1).to(torch.int32)
@@ -1164,54 +1084,23 @@ class VisionBackbone(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            logger.info(
-                f"  Chunk {chunk_start//max_frames_per_pool_chunk} gathered shape: {gathered.shape}, expected: [1, {chunk_frames * n_out * k_pool}, {pool_dim}]"
-            )
-
             ttnn.deallocate(idx_ttnn)
 
             # Reshape and mask
             gathered = ttnn.reshape(gathered, [1, 1, chunk_frames * n_out * k_pool, pool_dim])
             gathered = ttnn.mul(gathered, valid_ttnn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(valid_ttnn)
 
             # Reshape for pooling
             to_pool = ttnn.reshape(gathered, [1, chunk_frames * n_out, k_pool, pool_dim])
             ttnn.deallocate(gathered)
 
-            valid_mask_chunk = ttnn.from_torch(
-                chunk_valid.reshape(1, 1, chunk_frames * n_out * k_pool, 1).float(),
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mesh_mapper,
-            )
+            # Use device-only ops for masked mean and attention mask (reuse valid_ttnn)
             query_sum = ttnn.sum(to_pool, dim=2, keepdim=True)
-            query = _masked_mean_query_hf(
-                query_sum,
-                valid_mask_chunk,
-                chunk_frames,
-                n_out,
-                k_pool,
-                self.mesh_device,
-                mesh_mapper,
-                is_mesh_device,
-            )
+            query = _masked_mean_query_hf_device(query_sum, valid_ttnn, chunk_frames, n_out, k_pool)
             ttnn.deallocate(query_sum)
-            ttnn.deallocate(valid_mask_chunk)
 
-            attn_mask_ttnn = _pooling_attn_mask_ttnn(
-                chunk_valid,
-                chunk_frames,
-                n_out,
-                k_pool,
-                self.mesh_device,
-                mesh_mapper,
-            )
-            logger.info(
-                f"  Chunk {chunk_start//max_frames_per_pool_chunk} before pooling: query shape={query.shape}, to_pool shape={to_pool.shape}"
-            )
+            attn_mask_ttnn = self._pooling_attn_mask_from_valid_ttnn(valid_ttnn, chunk_frames, n_out, k_pool)
+            ttnn.deallocate(valid_ttnn)
             pooled = self.image_pooling_2d(query=query, key_value=to_pool, attn_mask=attn_mask_ttnn)
             ttnn.deallocate(attn_mask_ttnn)
 
@@ -1238,19 +1127,9 @@ class VisionBackbone(LightweightModule):
             for emb in all_embeddings:
                 ttnn.deallocate(emb)
 
-        logger.info(f"pool_and_project_chunked: Combined pooled shape: {combined_ttnn.shape}")
+        logger.debug(f"pool_and_project_chunked: Combined pooled shape: {combined_ttnn.shape}")
 
         visual_embeddings = self.image_projector(combined_ttnn)
         ttnn.deallocate(combined_ttnn)
-
-        # Get final stats
-        if is_mesh_device:
-            final_debug = ttnn.to_torch(visual_embeddings, mesh_composer=mesh_composer)[0]
-        else:
-            final_debug = ttnn.to_torch(visual_embeddings)
-        logger.info(f"pool_and_project_chunked: Complete, output shape: {visual_embeddings.shape}")
-        logger.info(
-            f"  Final projected stats: mean={final_debug.mean().item():.4f}, std={final_debug.std().item():.4f}, min={final_debug.min().item():.4f}, max={final_debug.max().item():.4f}"
-        )
 
         return visual_embeddings
