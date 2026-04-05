@@ -175,7 +175,7 @@ def run(args, context) -> InspectorData:
             size = MPI.COMM_WORLD.Get_size()
             if size > 1:
                 rank = MPI.COMM_WORLD.Get_rank()
-        except:
+        except Exception:
             pass
 
     # First try to connect to Inspector RPC
