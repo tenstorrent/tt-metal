@@ -11,7 +11,7 @@ Options:
     --inspector-rpc-port=<inspector_rpc_port>  Port for the inspector RPC server. [default: 50051]
     --inspector-rpc-host=<inspector_rpc_host>  Host for the inspector RPC server. [default: localhost]
     --inspector-log-path=<inspector_log_path>  Path to the inspector log directory.
-    --inspector-disable-rank                   If you want manually to connect to the RPC and do not want rank to be automatically added to the RPC host and port.
+    --inspector-disable-rank                   If you want to manually connect to the RPC and do not want rank to be automatically added to the RPC port and log directory.
 
 Description:
     Provides inspector data for other scripts.
