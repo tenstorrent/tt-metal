@@ -106,7 +106,7 @@ jobs:
 
       - name: Upload master JSON artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ttnn-operations-master-json
           path: model_tracer/traced_operations/ttnn_operations_master.json
@@ -114,7 +114,7 @@ jobs:
 
       - name: Upload preflight artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: validation-preflight
           path: validation_artifacts/config_hash_preflight.txt
@@ -204,7 +204,7 @@ jobs:
 
       - name: Upload model traced sweep vectors
         if: ${{ inputs.scope-targets == 'model_traced' || inputs.scope-targets == 'all' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: sweeps-vectors-model_traced
           path: /work/tests/sweep_framework/validation_vectors/model_traced/
@@ -212,7 +212,7 @@ jobs:
 
       - name: Upload lead models sweep vectors
         if: ${{ inputs.scope-targets == 'lead_models' || inputs.scope-targets == 'all' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: sweeps-vectors-lead_models
           path: /work/tests/sweep_framework/validation_vectors/lead_models/
@@ -371,7 +371,7 @@ jobs:
 
       - name: Upload sweep traces
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: sweep-traces-${{ matrix.test_group_name }}-batch-${{ env.BATCH_SUFFIX }}
           path: /work/model_tracer/traced_operations/sweep_trace_*.json
@@ -379,7 +379,7 @@ jobs:
 
       - name: Upload sweep results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: sweeps-results-${{ matrix.test_group_name }}-batch-${{ env.BATCH_SUFFIX }}
           path: /work/tests/sweep_framework/results_export/
@@ -482,7 +482,7 @@ jobs:
 
       - name: Upload validation summary
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: validation-summary
           path: validation_summary.md
