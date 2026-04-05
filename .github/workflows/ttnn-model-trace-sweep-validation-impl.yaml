@@ -254,7 +254,7 @@ jobs:
 
       - name: Download lead models sweep vectors
         if: ${{ inputs.scope-targets == 'lead_models' || inputs.scope-targets == 'all' }}
-        uses: actions/download-artifact@5
+        uses: actions/download-artifact@v5
         with:
           name: sweeps-vectors-lead_models
           path: /tmp/validation-vectors/lead_models
@@ -374,7 +374,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: sweep-traces-${{ matrix.test_group_name }}-batch-${{ env.BATCH_SUFFIX }}
-          path: /work/model_tracer/traced_operations/sweep_trace_*.json
+          path: /work/model_tracer/traced_operations/sweep_trace_${{ matrix.test_group_name }}.json
           retention-days: 7
 
       - name: Upload sweep results
