@@ -27,58 +27,55 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
 
     // a = min(|x|, |y|) / max(|x|, |y|), i.e. a is on [0, 1].
     sfpi::vFloat a = min * sfpu_reciprocal<is_bf16>(max);
-    // Note that due to register pressure on Wormhole, we compute |x| and |y| again.
-    sfpi::vFloat x_abs = sfpi::setsgn(x, 0);
 
     // Next we compute the minimax approximation for atan(a).
-    s = a * a;
 
     if constexpr (is_fp32_dest_acc_en) {
         q = 0x1.01cp-8f;
-        q = q * s - 0x1.4bcp-6f;
-        q = q * s + 0x1.93p-5f;
-        q = q * s - 0x1.48cp-4f;
-        q = q * s + 0x1.bd4p-4f;
-        q = q * s - 0x1.24p-3f;
-        q = q * s + 0x1.99938ap-3f;
-        q = q * s + -0x1.555558p-2f;
+        s = a * a;
+        sfpi::vFloat c6 = -0x1.4bcp-6f;
+        q = __builtin_rvtt_sfpmad(q.get(), s.get(), c6.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat c5 = 0x1.93p-5f;
+        q = __builtin_rvtt_sfpmad(q.get(), s.get(), c5.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat c4 = -0x1.48cp-4f;
+        q = __builtin_rvtt_sfpmad(q.get(), s.get(), c4.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat c3 = 0x1.bd4p-4f;
+        q = __builtin_rvtt_sfpmad(q.get(), s.get(), c3.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat c2 = -0x1.24p-3f;
+        q = __builtin_rvtt_sfpmad(q.get(), s.get(), c2.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat c1 = 0x1.99938ap-3f;
+        q = __builtin_rvtt_sfpmad(q.get(), s.get(), c1.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat c0 = -0x1.555558p-2f;
+        q = __builtin_rvtt_sfpmad(q.get(), s.get(), c0.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
     } else {
         q = -0x1.de8p-5f;
-        q = q * s + 0x1.668p-3f;
-        q = q * s - 0x1.54p-2f;
+        s = a * a;
+        sfpi::vFloat c1 = 0x1.668p-3f;
+        q = __builtin_rvtt_sfpmad(q.get(), s.get(), c1.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat c0 = -0x1.54p-2f;
+        q = __builtin_rvtt_sfpmad(q.get(), s.get(), c0.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
     }
     sfpi::vFloat half_pi = 0x1.921fb6p+0f;
     sfpi::vFloat t = q * s;
-    sfpi::vFloat infinity = std::numeric_limits<float>::infinity();
+    sfpi::vFloat x_abs = sfpi::setsgn(x, 0);
     r = t * a + a;
 
     // Special cases:
 
-    sfpi::vFloat y_abs = sfpi::setsgn(y, 0);
-    sfpi::vInt diff = sfpi::reinterpret<sfpi::vInt>(y_abs) - sfpi::reinterpret<sfpi::vInt>(x_abs);
-    v_if(diff >= 0) {
+    v_if(sfpi::reinterpret<sfpi::vInt>(min) >= sfpi::reinterpret<sfpi::vInt>(x_abs)) {
         // if |y| ≥ |x| then r = π/2 - r
         r = half_pi - r;
-        v_if(y_abs == 0.0f) {
-            // if |y| ≥ |x| and |y| = 0, then y == ±0 and x == ±0, so r = ±0
-            // SFPI note: the later v_if(x < 0.0f) behaves like a signbit check, so r=-0
-            // is handled by that path.
-            r = 0.0f;
+        v_if(sfpi::reinterpret<sfpi::vInt>(min) >= sfpi::reinterpret<sfpi::vInt>(max)) {
+            // if |x| = |y| (including both infinite), then r = π/4
+            r = sfpi::addexp(half_pi, -1);
+            v_if(min == 0.0f) {
+                // if both zero, then r = ±0
+                // SFPI note: the later v_if(x < 0.0f) behaves like a signbit check, so r=-0
+                // is handled by that path.
+                r = 0.0f;
+            }
+            v_endif;
         }
-        v_endif;
-    }
-    v_endif;
-
-    // If |x| = NaN or |y| = NaN, vec_min_max will ensure max=NaN as mentioned above.
-    sfpi::vInt diff_infinity = sfpi::reinterpret<sfpi::vInt>(infinity) - sfpi::reinterpret<sfpi::vInt>(max);
-
-    // if |x| = NaN or |y| = NaN, then r = NaN
-    v_if(diff_infinity < 0) { r = std::numeric_limits<float>::quiet_NaN(); }
-    v_endif;
-
-    // if |x| = |y| and |y| = inf, then r = π/4
-    v_if(diff == 0) {
-        v_if(diff_infinity == 0) { r = sfpi::addexp(half_pi, -1); }
         v_endif;
     }
     v_endif;
@@ -94,7 +91,17 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
         r = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(r, 0));
     }
 
-    return sfpi::setsgn(r, y);
+    r = sfpi::setsgn(r, y);
+
+    // If |x| = NaN or |y| = NaN, vec_min_max will ensure max=NaN as mentioned above.
+    sfpi::vFloat infinity = std::numeric_limits<float>::infinity();
+    v_if(sfpi::reinterpret<sfpi::vInt>(infinity) < sfpi::reinterpret<sfpi::vInt>(max)) {
+        // if |x| = NaN or |y| = NaN, then r = NaN
+        r = std::numeric_limits<float>::quiet_NaN();
+    }
+    v_endif;
+
+    return r;
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
