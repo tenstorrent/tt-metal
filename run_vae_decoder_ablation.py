@@ -1,21 +1,17 @@
 #!/usr/bin/env python3
-"""Run WAN 2.2 VAE decoder on 2x4 BH-LB mesh with 4x32 Galaxy per-device shapes.
+"""Run WAN 2.2 VAE decoder on 2x4 BH-LB mesh, matching the E2E pipeline VAE timer exactly.
 
-Latent input: H=46, W=20 → per-device: 23×5 (lat), 46×10 (up0), 92×20 (up1), 184×40 (up2/up3)
-This matches the 4x32 Galaxy 720p per-device shapes exactly.
+The timer covers the same operations as the E2E pipeline's "vae" profiler region:
+  1. host→device latent upload   (typed_tensor_2dshard)
+  2. VAE decode                   (tt_model forward)
+  3. device→host video readback  (ccl_manager.device_to_host)
+
+This makes the timed number directly comparable to the "VAE:" line from run_vae_e2e_perf.py.
 
 Usage:
-    # Baseline
-    python run_vae_decoder_ablation.py
-
-    # Ablate tilize (tilize infinitely fast)
-    CONV3D_ABLATE=tilize python run_vae_decoder_ablation.py
-
-    # Ablate DM (DRAM gather infinitely fast)
-    CONV3D_ABLATE=dm python run_vae_decoder_ablation.py
-
-    # Ablate both
-    CONV3D_ABLATE=tilize_dm python run_vae_decoder_ablation.py
+    python run_vae_decoder_ablation.py          # baseline
+    CONV3D_ABLATE=tilize python ...             # ablate tilize
+    CONV3D_ABLATE=dm python ...                 # ablate DM reads
 """
 
 import os
@@ -108,44 +104,61 @@ tt_model = WanDecoder(
 )
 tt_model.load_torch_state_dict(torch_model.state_dict())
 
-# --- Input ---
+# --- Input (CPU, not yet on device — matches pipeline where latent comes from denoiser CPU copy) ---
 torch.manual_seed(0)
 torch_input = torch.randn(B, C, T, H, W, dtype=torch.float32)
-tt_input = torch_input.permute(0, 2, 3, 4, 1)  # BCTHW → BTHWC
-tt_input = conv_pad_in_channels(tt_input)
-tt_input, logical_h = conv_pad_height(tt_input, parallel_config.height_parallel.factor)
-tt_input = typed_tensor_2dshard(
-    tt_input,
-    mesh_device,
-    layout=ttnn.ROW_MAJOR_LAYOUT,
-    shard_mapping={H_AXIS: 2, W_AXIS: 3},
-    dtype=ttnn.bfloat16,
-)
+cpu_input = torch_input.permute(0, 2, 3, 4, 1)  # BCTHW → BTHWC
+cpu_input = conv_pad_in_channels(cpu_input)
+cpu_input, logical_h = conv_pad_height(cpu_input, parallel_config.height_parallel.factor)
 
-# --- Warmup run ---
+# Concat dims for device_to_host: output is BCTHW, H is mesh axis H_AXIS (dim 3), W is W_AXIS (dim 4)
+concat_dims = [None, None]
+concat_dims[H_AXIS] = 3
+concat_dims[W_AXIS] = 4
+
+
+def run_one(label_str):
+    """One full VAE pass matching the E2E pipeline VAE timer scope."""
+    t_upload = time.perf_counter()
+    tt_input = typed_tensor_2dshard(
+        cpu_input,
+        mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        shard_mapping={H_AXIS: 2, W_AXIS: 3},
+        dtype=ttnn.bfloat16,
+    )
+    t_decode = time.perf_counter()
+    tt_output, new_logical_h = tt_model(tt_input, logical_h, use_cache=USE_CACHE)
+    t_readback = time.perf_counter()
+    video_torch = ccl_manager.device_to_host(tt_output, concat_dims)
+    t_end = time.perf_counter()
+    _ = video_torch[:, :, :, :new_logical_h, :]  # slice (CPU, ~0s)
+    ttnn.deallocate(tt_input)
+    upload = t_decode - t_upload
+    decode = t_readback - t_decode
+    readback = t_end - t_readback
+    total = t_end - t_upload
+    return total, upload, decode, readback
+
+
+# --- Warmup run (JIT + cache warm) ---
 logger.info("Warmup run...")
-t0 = time.time()
-tt_output, new_logical_h = tt_model(tt_input, logical_h, use_cache=USE_CACHE)
-ttnn.synchronize_device(mesh_device)
-warmup_time = time.time() - t0
+warmup_time, *_ = run_one("warmup")
 logger.info(f"Warmup: {warmup_time:.2f}s")
-
-# Deallocate output
-ttnn.deallocate(tt_output)
 
 # --- Timed run ---
 logger.info("Timed run...")
-t0 = time.time()
-tt_output, new_logical_h = tt_model(tt_input, logical_h, use_cache=USE_CACHE)
-ttnn.synchronize_device(mesh_device)
-timed = time.time() - t0
+timed, upload, decode, readback = run_one("timed")
 
+VIDEO_FRAMES = 81  # T=21 latent → 81 video frames
 print(f"\n{'='*60}")
 print(f"Result: {label}")
 print(f"  Warmup:    {warmup_time:.2f}s")
-print(f"  Timed run: {timed:.2f}s")
-VIDEO_FRAMES = 81  # T=21 latent → 81 video frames after decoder temporal upsample
-print(f"  T_latent={T}, video_frames={VIDEO_FRAMES}, {timed/VIDEO_FRAMES*1000:.1f} ms/video_frame")
+print(f"  Timed run: {timed:.3f}s  ({timed/VIDEO_FRAMES*1000:.1f} ms/video_frame)")
+print(f"    upload:   {upload*1000:.0f}ms  host→device latent")
+print(f"    decode:   {decode*1000:.0f}ms  VAE compute")
+print(f"    readback: {readback*1000:.0f}ms  device→host video")
+print(f"  T_latent={T}, video_frames={VIDEO_FRAMES}")
 print(f"{'='*60}\n")
 
 ttnn.close_mesh_device(mesh_device)
