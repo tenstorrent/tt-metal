@@ -8,13 +8,13 @@
 // while reading x from the circular buffer ONLY ONCE per (M_block, K_block)
 // combination.
 //
-// Loop order: M_outer → K_outer → N_inner
+// Loop order: M_outer -> K_outer -> N_inner
 //
 // For each (M_block, K_block):
 //   1. BRISC has placed the x k-block into CB_IN0.
 //   2. For each N_block:
-//        a. Wait for in1_gate_cb, run gate matmul partial sum → gate_interm.
-//        b. Wait for in1_up_cb,   run up   matmul partial sum → up_interm.
+//        a. Wait for in1_gate_cb, run gate matmul partial sum -> gate_interm.
+//        b. Wait for in1_up_cb,   run up   matmul partial sum -> up_interm.
 //        CB_IN0 is NOT popped between N blocks.
 //   3. Pop CB_IN0.  (BRISC can now supply the next K block.)
 //
@@ -34,25 +34,25 @@ void matmul_blocks_with_offset(
     const uint32_t in0_cb,
     const uint32_t in1_cb,
     const uint32_t out_cb,
-    const uint32_t M_block_tiles,
-    const uint32_t N_block_tiles,
+    const uint32_t Mt_block_size,
+    const uint32_t Nt_block_size,
     const uint32_t full_N_tiles,   // total N columns in out_cb
     const uint32_t n_tile_offset,  // column offset for this N block
-    const uint32_t K_block_tiles,
+    const uint32_t Kt_block_size,
     const uint32_t subblock_h,
     const uint32_t subblock_w) {
     uint32_t in0_index_offset = 0;
 
-    for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
+    for (uint32_t M_start = 0; M_start < Mt_block_size; M_start += subblock_h) {
         uint32_t in1_index_offset = 0;
-        for (uint32_t N_start = 0; N_start < N_block_tiles; N_start += subblock_w) {
+        for (uint32_t N_start = 0; N_start < Nt_block_size; N_start += subblock_w) {
             tile_regs_acquire();
 
             uint32_t dst_index = 0;
             uint32_t in0_index = in0_index_offset;
             uint32_t in1_index = in1_index_offset;
 
-            for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
+            for (uint32_t inner_dim = 0; inner_dim < Kt_block_size; inner_dim++) {
                 matmul_block(
                     in0_cb,
                     in1_cb,
@@ -62,9 +62,9 @@ void matmul_blocks_with_offset(
                     false /*transpose*/,
                     subblock_w,
                     subblock_h,
-                    K_block_tiles);
+                    Kt_block_size);
                 in0_index++;
-                in1_index += N_block_tiles;
+                in1_index += Nt_block_size;
             }
 
             tile_regs_commit();
@@ -84,7 +84,7 @@ void matmul_blocks_with_offset(
             tile_regs_release();
             in1_index_offset += subblock_w;
         }
-        in0_index_offset += subblock_h * K_block_tiles;
+        in0_index_offset += subblock_h * Kt_block_size;
     }
 }
 
@@ -114,10 +114,10 @@ void kernel_main() {
     constexpr uint32_t M_num_blocks = get_compile_time_arg_val(0);
     constexpr uint32_t K_num_blocks = get_compile_time_arg_val(1);
     constexpr uint32_t N_num_blocks = get_compile_time_arg_val(2);
-    constexpr uint32_t M_block_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t K_block_tiles = get_compile_time_arg_val(4);
-    constexpr uint32_t N_block_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t N_tiles = get_compile_time_arg_val(6);
+    constexpr uint32_t Mt_block_size = get_compile_time_arg_val(3);
+    constexpr uint32_t Kt_block_size = get_compile_time_arg_val(4);
+    constexpr uint32_t Nt_block_size = get_compile_time_arg_val(5);
+    constexpr uint32_t Nt = get_compile_time_arg_val(6);
     constexpr uint32_t subblock_h = get_compile_time_arg_val(7);
     constexpr uint32_t subblock_w = get_compile_time_arg_val(8);
 
@@ -129,9 +129,9 @@ void kernel_main() {
     constexpr uint32_t gate_out_cb = tt::CBIndex::c_5;  // gate output
     constexpr uint32_t up_out_cb = tt::CBIndex::c_6;    // up   output
 
-    constexpr uint32_t in0_block_tiles = M_block_tiles * K_block_tiles;
-    constexpr uint32_t in1_block_tiles = K_block_tiles * N_block_tiles;
-    constexpr uint32_t full_out_tiles = M_block_tiles * N_tiles;
+    constexpr uint32_t in0_block_size = Mt_block_size * Kt_block_size;
+    constexpr uint32_t in1_block_size = Kt_block_size * Nt_block_size;
+    constexpr uint32_t full_out_tiles = Mt_block_size * Nt;
 
     // Initialise matmul hardware for the gate-weight data format.
     // Since gate_proj and up_proj share the same dtype the FPU configuration
@@ -147,54 +147,54 @@ void kernel_main() {
         // ── K-outer loop: x is read ONCE per k-block ──────────────────────
         for (uint32_t k = 0; k < K_num_blocks; k++) {
             // Wait for x k-block (filled by BRISC reader_x).
-            cb_wait_front(in0_cb, in0_block_tiles);
+            cb_wait_front(in0_cb, in0_block_size);
 
             // ── N-inner loop: same x tiles used for every n-block ─────────
             for (uint32_t n = 0; n < N_num_blocks; n++) {
-                uint32_t n_tile_offset = n * N_block_tiles;
+                uint32_t n_tile_offset = n * Nt_block_size;
 
                 // ---- gate contribution ----
-                mm_block_init_short(in0_cb, in1_gate_cb, false /*transpose*/, subblock_w, subblock_h, K_block_tiles);
+                mm_block_init_short(in0_cb, in1_gate_cb, false /*transpose*/, subblock_w, subblock_h, Kt_block_size);
                 reconfig_data_format(in1_gate_cb, in0_cb);
                 pack_reconfig_data_format(gate_interm);
 
-                cb_wait_front(in1_gate_cb, in1_block_tiles);
+                cb_wait_front(in1_gate_cb, in1_block_size);
                 matmul_blocks_with_offset(
                     in0_cb,
                     in1_gate_cb,
                     gate_interm,
-                    M_block_tiles,
-                    N_block_tiles,
-                    N_tiles,
+                    Mt_block_size,
+                    Nt_block_size,
+                    Nt,
                     n_tile_offset,
-                    K_block_tiles,
+                    Kt_block_size,
                     subblock_h,
                     subblock_w);
-                cb_pop_front(in1_gate_cb, in1_block_tiles);
+                cb_pop_front(in1_gate_cb, in1_block_size);
 
                 // ---- up contribution (same x, different weight CB) --------
-                mm_block_init_short(in0_cb, in1_up_cb, false /*transpose*/, subblock_w, subblock_h, K_block_tiles);
+                mm_block_init_short(in0_cb, in1_up_cb, false /*transpose*/, subblock_w, subblock_h, Kt_block_size);
                 reconfig_data_format(in1_up_cb, in0_cb);
                 pack_reconfig_data_format(up_interm);
 
-                cb_wait_front(in1_up_cb, in1_block_tiles);
+                cb_wait_front(in1_up_cb, in1_block_size);
                 matmul_blocks_with_offset(
                     in0_cb,
                     in1_up_cb,
                     up_interm,
-                    M_block_tiles,
-                    N_block_tiles,
-                    N_tiles,
+                    Mt_block_size,
+                    Nt_block_size,
+                    Nt,
                     n_tile_offset,
-                    K_block_tiles,
+                    Kt_block_size,
                     subblock_h,
                     subblock_w);
-                cb_pop_front(in1_up_cb, in1_block_tiles);
+                cb_pop_front(in1_up_cb, in1_block_size);
             }
             // ── End N-inner loop ──────────────────────────────────────────
 
             // All N blocks have consumed x[m, k].  Pop so BRISC can load k+1.
-            cb_pop_front(in0_cb, in0_block_tiles);
+            cb_pop_front(in0_cb, in0_block_size);
 
             // Enable L1 accumulation after the first k-block initialises the
             // intermediates.  Subsequent k-blocks ADD to the existing values.

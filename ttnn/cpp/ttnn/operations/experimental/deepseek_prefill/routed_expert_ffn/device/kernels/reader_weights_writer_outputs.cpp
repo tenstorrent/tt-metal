@@ -11,7 +11,7 @@
 //   1. Push K_block × N_block gate_proj tiles into CB_IN1_GATE.
 //   2. Push K_block × N_block up_proj   tiles into CB_IN1_UP.
 //
-// After all K_blocks for a given M_block, drain M_block × N_tiles output tiles
+// After all K_blocks for a given M_block, drain Mt_block_size × Nt output tiles
 // from CB_GATE_OUT and CB_UP_OUT and write them to DRAM.
 
 #include <stdint.h>
@@ -22,12 +22,12 @@ void kernel_main() {
     constexpr uint32_t M_num_blocks = get_compile_time_arg_val(0);
     constexpr uint32_t K_num_blocks = get_compile_time_arg_val(1);
     constexpr uint32_t N_num_blocks = get_compile_time_arg_val(2);
-    constexpr uint32_t M_block_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t K_block_tiles = get_compile_time_arg_val(4);
-    constexpr uint32_t N_block_tiles = get_compile_time_arg_val(5);
+    constexpr uint32_t Mt_block_size = get_compile_time_arg_val(3);
+    constexpr uint32_t Kt_block_size = get_compile_time_arg_val(4);
+    constexpr uint32_t Nt_block_size = get_compile_time_arg_val(5);
     constexpr uint32_t in1_tile_size = get_compile_time_arg_val(6);
     constexpr uint32_t out_tile_size = get_compile_time_arg_val(7);
-    constexpr uint32_t N_tiles = get_compile_time_arg_val(8);
+    constexpr uint32_t Nt = get_compile_time_arg_val(8);
 
     // TensorAccessor offsets in the compile-time arg list.
     constexpr uint32_t gate_ta_offset = 9;
@@ -56,57 +56,57 @@ void kernel_main() {
     constexpr uint32_t cb_gate_out = tt::CBIndex::c_5;
     constexpr uint32_t cb_up_out = tt::CBIndex::c_6;
 
-    constexpr uint32_t in1_block_tiles = K_block_tiles * N_block_tiles;
-    constexpr uint32_t full_out_tiles = M_block_tiles * N_tiles;
+    constexpr uint32_t in1_block_size = Kt_block_size * Nt_block_size;
+    constexpr uint32_t full_out_tiles = Mt_block_size * Nt;
 
     // Weight layout: tile (k_tile, n_tile) has
-    //   tile_id = k_tile * N_tiles + n_tile
-    constexpr uint32_t K_tiles_total = K_num_blocks * K_block_tiles;
+    //   tile_id = k_tile * Nt + n_tile
+    constexpr uint32_t Kt_total = K_num_blocks * Kt_block_size;
 
     for (uint32_t m = 0; m < M_num_blocks; m++) {
-        uint32_t m_tile_base = m * M_block_tiles;
+        uint32_t m_tile_base = m * Mt_block_size;
 
         // ── Supply weight tiles: K_outer -> N_inner ───────────────────────
         for (uint32_t k = 0; k < K_num_blocks; k++) {
-            uint32_t k_tile_base = k * K_block_tiles;
+            uint32_t k_tile_base = k * Kt_block_size;
 
             for (uint32_t n = 0; n < N_num_blocks; n++) {
-                uint32_t n_tile_base = n * N_block_tiles;
+                uint32_t n_tile_base = n * Nt_block_size;
 
                 // ---- gate_proj k-block × n-block ----------------------------
-                cb_reserve_back(cb_in1_gate, in1_block_tiles);
+                cb_reserve_back(cb_in1_gate, in1_block_size);
                 uint32_t gate_write_ptr = get_write_ptr(cb_in1_gate);
-                for (uint32_t kt = 0; kt < K_block_tiles; kt++) {
-                    for (uint32_t nt = 0; nt < N_block_tiles; nt++) {
-                        uint32_t tile_id = (k_tile_base + kt) * N_tiles + (n_tile_base + nt);
+                for (uint32_t kt = 0; kt < Kt_block_size; kt++) {
+                    for (uint32_t nt = 0; nt < Nt_block_size; nt++) {
+                        uint32_t tile_id = (k_tile_base + kt) * Nt + (n_tile_base + nt);
                         noc_async_read_page(tile_id, gate_acc, gate_write_ptr);
                         gate_write_ptr += in1_tile_size;
                     }
                 }
                 noc_async_read_barrier();
-                cb_push_back(cb_in1_gate, in1_block_tiles);
+                cb_push_back(cb_in1_gate, in1_block_size);
 
                 // ---- up_proj k-block × n-block ------------------------------
-                cb_reserve_back(cb_in1_up, in1_block_tiles);
+                cb_reserve_back(cb_in1_up, in1_block_size);
                 uint32_t up_write_ptr = get_write_ptr(cb_in1_up);
-                for (uint32_t kt = 0; kt < K_block_tiles; kt++) {
-                    for (uint32_t nt = 0; nt < N_block_tiles; nt++) {
-                        uint32_t tile_id = (k_tile_base + kt) * N_tiles + (n_tile_base + nt);
+                for (uint32_t kt = 0; kt < Kt_block_size; kt++) {
+                    for (uint32_t nt = 0; nt < Nt_block_size; nt++) {
+                        uint32_t tile_id = (k_tile_base + kt) * Nt + (n_tile_base + nt);
                         noc_async_read_page(tile_id, up_acc, up_write_ptr);
                         up_write_ptr += in1_tile_size;
                     }
                 }
                 noc_async_read_barrier();
-                cb_push_back(cb_in1_up, in1_block_tiles);
+                cb_push_back(cb_in1_up, in1_block_size);
             }
         }
 
         // ── Write gate_out M-block to DRAM ────────────────────────────────
         cb_wait_front(cb_gate_out, full_out_tiles);
         uint32_t gate_read_ptr = get_read_ptr(cb_gate_out);
-        for (uint32_t mt = 0; mt < M_block_tiles; mt++) {
-            for (uint32_t nt = 0; nt < N_tiles; nt++) {
-                uint32_t tile_id = (m_tile_base + mt) * N_tiles + nt;
+        for (uint32_t mt = 0; mt < Mt_block_size; mt++) {
+            for (uint32_t nt = 0; nt < Nt; nt++) {
+                uint32_t tile_id = (m_tile_base + mt) * Nt + nt;
                 noc_async_write_page(tile_id, gate_out_acc, gate_read_ptr);
                 gate_read_ptr += out_tile_size;
             }
@@ -117,9 +117,9 @@ void kernel_main() {
         // ── Write up_out M-block to DRAM ──────────────────────────────────
         cb_wait_front(cb_up_out, full_out_tiles);
         uint32_t up_read_ptr = get_read_ptr(cb_up_out);
-        for (uint32_t mt = 0; mt < M_block_tiles; mt++) {
-            for (uint32_t nt = 0; nt < N_tiles; nt++) {
-                uint32_t tile_id = (m_tile_base + mt) * N_tiles + nt;
+        for (uint32_t mt = 0; mt < Mt_block_size; mt++) {
+            for (uint32_t nt = 0; nt < Nt; nt++) {
+                uint32_t tile_id = (m_tile_base + mt) * Nt + nt;
                 noc_async_write_page(tile_id, up_out_acc, up_read_ptr);
                 up_read_ptr += out_tile_size;
             }
