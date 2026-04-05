@@ -465,7 +465,7 @@ class WanCausalConv3d(Module):
                 pw = pad_left[1] if w_pad_needed and len(pad_left) > 1 else 0
                 self.conv_config.h_halo_buffer_addr = halo_tensor.buffer_address()
                 self.conv_config.h_halo_outer_dim_size = T_dev
-                self.conv_config.h_halo_H = H_dev
+                self.conv_config.h_halo_H = H_dev + 2 * ph  # Extended: includes H-padded rows for corner fix
                 self.conv_config.h_halo_W = W_dev
                 self.conv_config.h_halo_padding_h = ph
                 self.conv_config.h_halo_padding_w = pw

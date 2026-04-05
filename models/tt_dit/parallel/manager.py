@@ -314,8 +314,9 @@ class CCLManager:
         Get or create a ping-pong compact halo buffer for fabric-only NeighborPad.
         Handles H halo and optionally W halo.
 
-        Layout: [H-top | H-bot | W-left | W-right] where each section is
-        outer_dim × padding × num_sticks sticks.
+        Layout: [H-top | H-bot | W-left | W-right] where H sections are
+        outer_dim × padding_h × W_dev sticks, and W sections are
+        outer_dim × padding_w × (H_dev + 2*padding_h) sticks (extended for corner fix).
         """
         import torch
 
@@ -326,8 +327,8 @@ class CCLManager:
         h_sticks = 1
         for d in range(dim + 1, len(input_shape) - 1):
             h_sticks *= input_shape[d]
-        # W sticks per halo col = H_dev (product of dims between dim and dim2, excluding C)
-        w_sticks = input_shape[dim] if dim2 is not None else 0
+        # W sticks per halo col = H_dev + 2*padding_h (extended to include H-padded rows for corner fix)
+        w_sticks = (input_shape[dim] + 2 * padding) if dim2 is not None else 0
 
         h_halo_total = outer_dim_size * 2 * padding * h_sticks
         w_halo_total = outer_dim_size * 2 * padding2 * w_sticks if dim2 is not None else 0

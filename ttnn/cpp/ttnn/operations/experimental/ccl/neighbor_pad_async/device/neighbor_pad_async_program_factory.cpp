@@ -401,8 +401,13 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         w_fabric_core_range =
             CoreRangeSet(CoreRange({num_h_fabric_cores, 0}, {num_h_fabric_cores + num_w_fabric_cores - 1, 0}));
 
-        // Phase 2 processes all rows of the H-padded output tensor
-        w_outer_dim_size = outer_dim_size * output_halo_dim_size;
+        // Phase 2 processes all rows of the H-padded output tensor.
+        // In fabric_only mode the output is the compact halo buffer; the W exchange must cover
+        // all H_dev + 2*padding_h rows per T (interior rows from input + H-halo rows from compact
+        // buffer) so the W section of the compact buffer has the full extended height.
+        w_outer_dim_size = operation_attributes.fabric_only
+                               ? outer_dim_size * (input_halo_dim_size + 2 * operation_attributes.padding_left)
+                               : outer_dim_size * output_halo_dim_size;
 
         // CB and recv buffer on W fabric cores
         CreateCircularBuffer(program, w_fabric_core_range, cb_sender_config);
@@ -786,7 +791,10 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             sender_cb_index,   // cb_output_id
             is_padding_zeros,  // is_padding_zeros
             page_size};        // stick_size
+        // dst_args: TensorAccessor for output/compact-halo buffer (CRTA[0] address)
         TensorAccessorArgs(*output_buffer).append_to(w_reader_kernel_config.compile_args);
+        // src_args: TensorAccessor for input tensor (used in fabric_only mode for interior row reads)
+        TensorAccessorArgs(*input_buffer).append_to(w_reader_kernel_config.compile_args);
         w_reader_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
@@ -853,13 +861,24 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                     w_link_start,  // outer_dim_start (per-link)
                     w_direction ? operation_attributes.pad2_right : operation_attributes.pad2_left,  // padding
                     barrier_count,
-                    output_num_sticks_per_halo_dim,  // output_row_width (W + 2*pW)
+                    output_num_sticks_per_halo_dim,  // output_row_width (W + 2*pW); unused in fabric_only
                     operation_attributes.pad2_left,  // pad2_left
                     num_sticks_per_halo_dim};        // num_interior_sticks (W)
                 // Per-core direction args (moved from compile-time for kernel consolidation)
                 w_reader_rt_args.push_back(w_direction ? is_last_w_device : is_first_w_device);  // is_first_chip
                 w_reader_rt_args.push_back(w_direction ? is_first_w_device : is_last_w_device);  // is_last_chip
                 w_reader_rt_args.push_back(w_direction);                                         // direction
+                // fabric_only mode: W reader needs input buffer + H halo dims to read
+                // interior rows from the input tensor and H-halo rows from the compact buffer.
+                w_reader_rt_args.push_back(operation_attributes.fabric_only ? input_buffer->address() : 0u);
+                w_reader_rt_args.push_back(input_halo_dim_size);  // H_dev (rows in input tensor)
+                w_reader_rt_args.push_back(operation_attributes.fabric_only ? operation_attributes.padding_left : 0u);
+                // h_halo_hbot_base: first page of H-bot section in compact buffer
+                // = outer_dim_size * padding_h * num_sticks_per_halo_dim (W_dev)
+                w_reader_rt_args.push_back(
+                    operation_attributes.fabric_only
+                        ? outer_dim_size * operation_attributes.padding_left * num_sticks_per_halo_dim
+                        : 0u);
                 SetRuntimeArgs(program, w_reader_kernel_id, {w_core}, w_reader_rt_args);
 
                 // W writer runtime args (addresses in CRTAs, not here)
@@ -916,6 +935,26 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                             src_fabric_node_id, dst_fabric_node_id, w_link, program, {w_core}, w_writer_rt_args);
                     }
                     w_writer_rt_args.push_back(false);
+                }
+                // In fabric_only mode: override W writer rt_args to index into the compact halo buffer
+                // W section. The W section has layout [outer_dim_size × pw × H_total] sticks per side
+                // (h_ext major, pad_col minor). Each outer_dim step advances by pw sticks.
+                //   wleft_base  = outer_dim_size × 2 × ph × W_dev  (after H-top + H-bot sections)
+                //   wright_base = wleft_base + outer_dim_size × pad2_left × H_total
+                //   H_total     = input_halo_dim_size + 2 × padding_left (= H_dev + 2*ph)
+                if (operation_attributes.fabric_only) {
+                    const uint32_t h_total = input_halo_dim_size + 2 * operation_attributes.padding_left;
+                    const uint32_t wleft_base =
+                        outer_dim_size * 2u * operation_attributes.padding_left * num_sticks_per_halo_dim;
+                    const uint32_t wright_base = wleft_base + outer_dim_size * operation_attributes.pad2_left * h_total;
+                    const uint32_t pw_this_dir =
+                        w_direction ? operation_attributes.pad2_right : operation_attributes.pad2_left;
+                    const uint32_t section_base = w_direction ? wright_base : wleft_base;
+                    w_writer_rt_args[0] = section_base + w_link_start * pw_this_dir;  // outer_dim_offset_start_id
+                    w_writer_rt_args[3] = pw_this_dir;  // output_halo_dim_size (= padding for this dir)
+                    w_writer_rt_args[6] = 0;            // padding_left = 0 (no W offset in compact buffer)
+                    w_writer_rt_args[7] = 1;            // num_sticks_to_read (1 per outer_dim)
+                    w_writer_rt_args[8] = 1;            // num_sticks_per_halo_dim (1-wide rows)
                 }
                 SetRuntimeArgs(program, w_writer_kernel_id, {w_core}, w_writer_rt_args);
             }

@@ -342,8 +342,9 @@ void gather_rows_halo(
                 if (t_outside) {
                     // T boundary: zero-fill (causal padding, no T halo buffer)
                     zeroPad<C_in_block_bytes>(shard_addr);
-                } else if (h_outside) {
-                    // H boundary: read from H halo buffer (top or bottom half)
+                } else if (h_outside && !(w_outside && h_halo_padding_w > 0)) {
+                    // Pure H boundary (not a corner with W halo): read from H halo buffer.
+                    // w is interior here, so w_clamped == w_in is valid.
                     const uint32_t t_global = batch_idx * T_in + static_cast<uint32_t>(t_clamped);
                     uint32_t halo_page;
                     if (h_in < 0) {
@@ -362,19 +363,24 @@ void gather_rows_halo(
                         shard_addr,
                         C_in_block_bytes);
                 } else if (w_outside && h_halo_padding_w > 0) {
-                    // W boundary: read from W halo buffer (left or right half)
+                    // W boundary OR corner (h_outside && w_outside): use extended W halo buffer.
+                    // Extended W halo has h_halo_H = H_in + 2*padding_h rows per column.
+                    // Index: h_extended = h_in + padding_h maps [-padding_h .. H_in+padding_h-1]
+                    //                                         → [0 .. H_in+2*padding_h-1].
                     const uint32_t t_global = batch_idx * T_in + static_cast<uint32_t>(t_clamped);
+                    // h_in may be negative (corner case) — use signed arithmetic then cast to uint
+                    const uint32_t h_extended = static_cast<uint32_t>(h_in + static_cast<int32_t>(h_halo_padding_h));
                     uint32_t halo_page;
                     if (w_in < 0) {
                         // Left halo: w_in = -1 → pad_col = h_halo_padding_w + w_in
                         const uint32_t pad_col = h_halo_padding_w + static_cast<uint32_t>(w_in);
                         halo_page = h_halo_wleft_base + t_global * h_halo_padding_w * h_halo_H + pad_col * h_halo_H +
-                                    static_cast<uint32_t>(h_clamped);
+                                    h_extended;
                     } else {
                         // Right halo: w_in >= W_in → pad_col = w_in - W_in
                         const uint32_t pad_col = static_cast<uint32_t>(w_in) - W_in;
                         halo_page = h_halo_wright_base + t_global * h_halo_padding_w * h_halo_H + pad_col * h_halo_H +
-                                    static_cast<uint32_t>(h_clamped);
+                                    h_extended;
                     }
                     noc_async_read(
                         get_input_noc_addr(halo_reader, halo_page, c_in_offset_bytes, in_row_size_bytes),
