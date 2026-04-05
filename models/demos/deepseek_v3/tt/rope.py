@@ -213,6 +213,40 @@ class RotarySetup:
             return {"cos_matrix": cos_matrix, "sin_matrix": sin_matrix, "trans_matrix": self.transformation_mat_prefill}
         return {"cos_matrix": cos_matrix, "sin_matrix": sin_matrix}
 
+    def get_rot_mats_slice(self, seq_start: int, slice_len: int) -> dict[str, ttnn.Tensor]:
+        """RoPE cos/sin for positions [seq_start, seq_start + slice_len).
+
+        Used for sequence-chunked prefill so each chunk only uploads ``slice_len`` rows to device.
+        """
+        if slice_len <= 0:
+            raise ValueError(f"slice_len must be positive, got {slice_len}")
+        cos_matrix_torch, sin_matrix_torch = get_cos_sin_matrix(self.hf_config)
+        max_pos = int(cos_matrix_torch.shape[2])
+        end = seq_start + slice_len
+        if end > max_pos:
+            raise ValueError(
+                f"RoPE slice [{seq_start}, {end}) exceeds available positions ({max_pos}); "
+                "increase hf_config.max_seq_len."
+            )
+        cos_matrix_torch = cos_matrix_torch[..., seq_start:end, :]
+        sin_matrix_torch = sin_matrix_torch[..., seq_start:end, :]
+
+        cos_matrix = ttnn.from_torch(
+            cos_matrix_torch,
+            device=self.device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+        )
+        sin_matrix = ttnn.from_torch(
+            sin_matrix_torch,
+            device=self.device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+        )
+        return {"cos_matrix": cos_matrix, "sin_matrix": sin_matrix, "trans_matrix": self.transformation_mat_prefill}
+
     def get_rot_mats(self, position_idxs, return_rot_idxs=False):
         """
         Get the cos and sin matrices for the given position indices.

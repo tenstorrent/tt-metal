@@ -1609,6 +1609,9 @@ class MLA1D(AbstractModule):
         qk_rope_head_dim: int,
         qk_head_dim: int,
         v_head_dim: int,
+        *,
+        sdpa_page_table: ttnn.Tensor | None = None,
+        prefill_chunk_start_idx: int = 0,
     ) -> ttnn.Tensor:
         # Q path: norm + wq_b (interleaved in0 + DRAM WIDTH sharded in1)
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
@@ -1649,11 +1652,27 @@ class MLA1D(AbstractModule):
 
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
 
-        attn_out = ttnn.transformer.flash_mla_prefill(
-            tt_q,
-            tt_kvpe_fp16,
-            **cfg["flash_mla"],
-        )  # [1, num_heads_local, seq_len, kv_lora_rank]
+        flash_kw = cfg["flash_mla"]
+        if prefill_chunk_start_idx > 0:
+            if sdpa_page_table is None:
+                raise ValueError("sdpa_page_table is required when prefill_chunk_start_idx > 0")
+            attn_out = ttnn.transformer.chunked_flash_mla_prefill(
+                tt_q,
+                tt_kvpe_fp16,
+                flash_kw["head_dim_v"],
+                sdpa_page_table,
+                prefill_chunk_start_idx,
+                scale=flash_kw["scale"],
+                memory_config=flash_kw["memory_config"],
+                program_config=flash_kw["program_config"],
+                compute_kernel_config=flash_kw["compute_kernel_config"],
+            )
+        else:
+            attn_out = ttnn.transformer.flash_mla_prefill(
+                tt_q,
+                tt_kvpe_fp16,
+                **flash_kw,
+            )  # [1, num_heads_local, seq_len, kv_lora_rank]
         ttnn.deallocate(tt_q)
         ttnn.deallocate(tt_kvpe_fp16)
 
@@ -1797,6 +1816,9 @@ class MLA1D(AbstractModule):
         cfg: RunPrefillConfig,
         rope_tensors: dict,
         page_table: ttnn.Tensor,
+        *,
+        page_table_for_fill: ttnn.Tensor | None = None,
+        prefill_chunk_start_idx: int = 0,
     ) -> ttnn.Tensor:
         """Forward pass of MLA in prefill mode.
 
@@ -1873,6 +1895,8 @@ class MLA1D(AbstractModule):
         batch_size_per_dp_shard = even_int_div(cfg["batch_size_per_row"], sdpa_dp_factor)
         local_batch_idx = batch_idx % batch_size_per_dp_shard  # Local batch index within the DP shard
         col_idx = batch_idx // batch_size_per_dp_shard  # Which DP shard the batch belongs to
+        fill_page_table = page_table if page_table_for_fill is None else page_table_for_fill
+
         if _deepseek_kvdbg_enabled() and not row_batched_prefill:
             cls._debug_prefill_page_table(
                 page_table=page_table,
@@ -1899,7 +1923,7 @@ class MLA1D(AbstractModule):
                     ttnn.experimental.paged_fill_cache(
                         kvpe_cache,
                         tt_kvpe_user,
-                        page_table=page_table,
+                        page_table=fill_page_table,
                         batch_idx=local_user_idx,
                         mesh_coords=mesh_coords,
                     )
@@ -1908,7 +1932,7 @@ class MLA1D(AbstractModule):
             ttnn.experimental.paged_fill_cache(
                 kvpe_cache,
                 tt_kvpe,
-                page_table=page_table,
+                page_table=fill_page_table,
                 batch_idx=local_batch_idx,
                 mesh_coords=set(get_mesh_coords(mesh_shape, row_idx, col_idx)),
             )
@@ -1942,6 +1966,8 @@ class MLA1D(AbstractModule):
                         qk_rope_head_dim,
                         qk_head_dim,
                         v_head_dim,
+                        sdpa_page_table=page_table,
+                        prefill_chunk_start_idx=prefill_chunk_start_idx,
                     )
                 )
 
@@ -1972,6 +1998,8 @@ class MLA1D(AbstractModule):
             qk_rope_head_dim,
             qk_head_dim,
             v_head_dim,
+            sdpa_page_table=page_table,
+            prefill_chunk_start_idx=prefill_chunk_start_idx,
         )
 
     @classmethod

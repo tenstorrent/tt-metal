@@ -39,6 +39,12 @@ from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
+# Must match MLA1D.prefill_model_config SDPA q_chunk_size; chunked_flash_mla_prefill requires aligned chunk starts.
+_MLA_PREFILL_SDPA_Q_CHUNK = 128
+# Prefill runs in chunks of this many tokens when seq_len exceeds it (reduces peak DRAM during long prompts).
+PREFILL_SEQUENCE_CHUNK_SIZE = 32768
+assert PREFILL_SEQUENCE_CHUNK_SIZE % _MLA_PREFILL_SDPA_Q_CHUNK == 0
+
 
 def _build_verify_alias_page_table_host(
     base_page_table: torch.Tensor,
@@ -2220,6 +2226,9 @@ class DeepseekGenerator(WarmupForwardMixin):
     ) -> ttnn.Tensor | torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Run prefill for the full prompt sequence.
 
+        Prompts longer than ``PREFILL_SEQUENCE_CHUNK_SIZE`` use sequence-chunked prefill to cap peak
+        DRAM. Chunking is skipped when MTP is enabled or when a custom ``page_table`` is provided.
+
         Args:
             tokens: [1, 1, seq_len] padded token sequences
             user_id: user id for the prefill
@@ -2232,48 +2241,132 @@ class DeepseekGenerator(WarmupForwardMixin):
         tokens = tokens.view(1, 1, -1)
         seq_len = tokens.shape[-1]
 
-        # Prepare TT inputs for prefill - reshape to [1, 1, actual_seq_len]
-        tt_tokens = ttnn.from_torch(
-            tokens,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            dtype=ttnn.uint32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
+        chunk_sz = PREFILL_SEQUENCE_CHUNK_SIZE
+        chunked_prefill = seq_len > chunk_sz and not self.enable_mtp and page_table is None
+        if seq_len > chunk_sz and self.enable_mtp:
+            logger.info(
+                "Prefill seq_len={} exceeds chunk size {} but MTP is enabled; using single-shot prefill.",
+                seq_len,
+                chunk_sz,
+            )
+        if seq_len > chunk_sz and page_table is not None:
+            logger.info(
+                "Prefill seq_len={} exceeds chunk size {} but a custom page_table was provided; using single-shot prefill.",
+                seq_len,
+                chunk_sz,
+            )
 
-        rot_mats = self.rope_setup.get_rot_mats_table(seq_len)
-        rope_tensors = {
-            "cos_matrix": rot_mats["cos_matrix"],
-            "sin_matrix": rot_mats["sin_matrix"],
-            "trans_matrix": rot_mats["trans_matrix"],
-        }
+        tt_tokens: ttnn.Tensor | None = None
+        rope_tensors: dict[str, ttnn.Tensor] | None = None
+        logits_tt: ttnn.Tensor | None = None
+        hidden_tt: ttnn.Tensor | None = None
 
-        if page_table is not None:
-            page_tables_to_use = self._convert_vllm_page_table_for_user(page_table, user_id, local_user_id)
-        else:
+        if chunked_prefill:
+            logger.info(
+                "Prefill: sequence-chunked mode (chunk_size={} tokens, seq_len={})",
+                chunk_sz,
+                seq_len,
+            )
+            self._get_page_tables()
+            if self.base_page_table_host is None:
+                raise RuntimeError("base_page_table_host missing after _get_page_tables")
+            block_size = int(self.paged_config.block_size)
+            num_layers = int(self.hf_config.num_hidden_layers)
             page_tables_to_use = self._get_page_tables()
 
-        # RowBatchedModel forward prefill
-        last_hidden = None
-        if self.enable_mtp:
-            logits_tt, hidden_tt = RowBatchedModel.forward_prefill(
-                x=tt_tokens,
-                user_id=user_id,
-                cfg=self.model_run_config_prefill,
-                rope_tensors=rope_tensors,
-                page_tables=page_tables_to_use,
-                return_hidden=True,
-            )
+            q_align = _MLA_PREFILL_SDPA_Q_CHUNK
+            for chunk_start in range(0, seq_len, chunk_sz):
+                chunk_end = min(chunk_start + chunk_sz, seq_len)
+                chunk_len = chunk_end - chunk_start
+                if chunk_start % q_align != 0:
+                    raise RuntimeError(
+                        f"Prefill chunk start {chunk_start} must be a multiple of {q_align} (SDPA q_chunk_size); "
+                        f"check PREFILL_SEQUENCE_CHUNK_SIZE ({chunk_sz}) alignment."
+                    )
+                chunk_tokens_host = tokens[:, :, chunk_start:chunk_end]
+                tt_tokens_chunk = ttnn.from_torch(
+                    chunk_tokens_host,
+                    device=self.mesh_device,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                    dtype=ttnn.uint32,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                rope_tensors_chunk = self.rope_setup.get_rot_mats_slice(chunk_start, chunk_len)
+                b0 = chunk_start // block_size
+                b1 = (chunk_end + block_size - 1) // block_size
+                fill_host = self.base_page_table_host[:, b0:b1]
+                fill_tt = ttnn.from_torch(
+                    fill_host,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+                page_tables_fill = tuple(fill_tt for _ in range(num_layers))
+                try:
+                    if logits_tt is not None:
+                        ttnn.deallocate(logits_tt)
+                    logits_tt = RowBatchedModel.forward_prefill(
+                        x=tt_tokens_chunk,
+                        user_id=user_id,
+                        cfg=self.model_run_config_prefill,
+                        rope_tensors=rope_tensors_chunk,
+                        page_tables=page_tables_to_use,
+                        prefill_chunk_start_idx=chunk_start,
+                        page_tables_for_fill=page_tables_fill,
+                    )
+                finally:
+                    ttnn.deallocate(fill_tt)
+                    self._deallocate_rope_tensors(rope_tensors_chunk)
+                    ttnn.deallocate(tt_tokens_chunk)
         else:
-            logits_tt = RowBatchedModel.forward_prefill(
-                x=tt_tokens,
-                user_id=user_id,
-                cfg=self.model_run_config_prefill,
-                rope_tensors=rope_tensors,
-                page_tables=page_tables_to_use,
+            # Prepare TT inputs for prefill - reshape to [1, 1, actual_seq_len]
+            tt_tokens = ttnn.from_torch(
+                tokens,
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                dtype=ttnn.uint32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
             )
-            hidden_tt = None
+
+            rot_mats = self.rope_setup.get_rot_mats_table(seq_len)
+            rope_tensors = {
+                "cos_matrix": rot_mats["cos_matrix"],
+                "sin_matrix": rot_mats["sin_matrix"],
+                "trans_matrix": rot_mats["trans_matrix"],
+            }
+
+            if page_table is not None:
+                page_tables_to_use = self._convert_vllm_page_table_for_user(page_table, user_id, local_user_id)
+            else:
+                page_tables_to_use = self._get_page_tables()
+
+            if self.enable_mtp:
+                logits_tt, hidden_tt = RowBatchedModel.forward_prefill(
+                    x=tt_tokens,
+                    user_id=user_id,
+                    cfg=self.model_run_config_prefill,
+                    rope_tensors=rope_tensors,
+                    page_tables=page_tables_to_use,
+                    return_hidden=True,
+                )
+            else:
+                logits_tt = RowBatchedModel.forward_prefill(
+                    x=tt_tokens,
+                    user_id=user_id,
+                    cfg=self.model_run_config_prefill,
+                    rope_tensors=rope_tensors,
+                    page_tables=page_tables_to_use,
+                )
+                hidden_tt = None
+
+        if chunked_prefill and logits_tt is None:
+            raise RuntimeError("Chunked prefill produced no logits (empty sequence?)")
+
+        last_hidden = None
 
         if sample_on_device and return_last_hidden:
             raise ValueError("sample_on_device=True and return_last_hidden=True is not supported.")
@@ -2386,7 +2479,8 @@ class DeepseekGenerator(WarmupForwardMixin):
 
             ttnn.deallocate(hidden_tt)
 
-        ttnn.deallocate(tt_tokens)
+        if tt_tokens is not None:
+            ttnn.deallocate(tt_tokens)
         self._deallocate_rope_tensors(rope_tensors)
         if not sample_on_device:
             ttnn.deallocate(logits_tt)

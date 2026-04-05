@@ -166,6 +166,9 @@ class MLA2D(MLA1D):
         cfg: RunPrefillConfig,
         rope_tensors: dict,
         page_table: ttnn.Tensor,
+        *,
+        page_table_for_fill: ttnn.Tensor | None = None,
+        prefill_chunk_start_idx: int = 0,
     ) -> ttnn.Tensor:
         """Forward pass of MLA in prefill mode.
 
@@ -193,6 +196,8 @@ class MLA2D(MLA1D):
             cfg=cfg["mla1d"],
             rope_tensors=rope_tensors,
             page_table=page_table,
+            page_table_for_fill=page_table_for_fill,
+            prefill_chunk_start_idx=prefill_chunk_start_idx,
         )
         ttnn.deallocate(x_next)
 

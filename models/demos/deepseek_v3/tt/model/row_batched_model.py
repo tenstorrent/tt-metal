@@ -365,20 +365,33 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         rope_tensors: dict,
         page_tables: Sequence[ttnn.Tensor],
         return_hidden: bool = False,
+        *,
+        prefill_chunk_start_idx: int = 0,
+        page_tables_for_fill: Sequence[ttnn.Tensor] | None = None,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         """Forward pass for prefill mode."""
 
         x = Embedding2D.forward_prefill(x, cfg["embedding"])
 
-        for (block_cfg, BlockClass), page_table in zip(
+        fill_tables = page_tables if page_tables_for_fill is None else page_tables_for_fill
+        for (block_cfg, BlockClass), page_table, page_fill in zip(
             itertools.chain(
                 zip(cfg["mlp_decoder_block"], itertools.repeat(DecoderBlock2D)),
                 zip(cfg["moe_decoder_block"], itertools.repeat(MoEDecoderBlock2D)),
             ),
             page_tables,
+            fill_tables,
             strict=True,
         ):
-            x = BlockClass.forward_prefill(x, user_id, block_cfg, rope_tensors, page_table)
+            x = BlockClass.forward_prefill(
+                x,
+                user_id,
+                block_cfg,
+                rope_tensors,
+                page_table,
+                page_table_for_fill=page_fill,
+                prefill_chunk_start_idx=prefill_chunk_start_idx,
+            )
 
         # Capture pre-norm hidden states for MTP; MTP applies its own hnorm.
         hidden_for_mtp = x if return_hidden else None
