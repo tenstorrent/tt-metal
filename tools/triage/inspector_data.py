@@ -183,7 +183,7 @@ def run(args, context) -> InspectorData:
         if rank is not None:
             rpc_port = int(rpc_port) + rank
         return InspectorRpcController(rpc_host, rpc_port)
-    except:
+    except Exception:
         pass
 
     # Check for Inspector log directory
