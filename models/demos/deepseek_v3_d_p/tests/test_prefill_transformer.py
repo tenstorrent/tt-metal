@@ -7,10 +7,11 @@ Test for TtPrefillTransformer — verifies composition of embed -> [block x N] -
 
 Validates output shapes and PCC against torch reference.
 
-Uses HF DeepseekV3Model as the reference: creates a small model with random weights,
-extracts those weights into our TT state_dict format, and compares forward passes.
+Uses HF DeepseekV3Model as the reference: creates a model with random or pretrained
+weights, extracts those weights into our TT state_dict format, and compares forward passes.
 
 Parametrized over:
+- use_pretrained: real pretrained weights from DeepSeek-R1-0528 vs random weights
 - tokenizer_enabled: real tokenized input vs random token IDs
 - pcc_validation: per-stage PCC check (via return_intermediates) vs shape-only smoke test
 - n_routed_experts / capacity_factor / gate_fallback_mode: MoE configurations
@@ -22,6 +23,7 @@ from pathlib import Path
 import pytest
 import torch
 from loguru import logger
+from transformers.modeling_utils import no_init_weights
 
 import ttnn
 from models.common.utility_functions import profiler
@@ -116,6 +118,65 @@ def _extract_tt_state_dict(hf_model):
     return result
 
 
+def _tt_state_dict_to_hf_state_dict(tt_sd):
+    """Reverse key mapping from TT format to HF DeepseekV3Model state_dict keys.
+
+    Tensor references are shared (no copy).
+    """
+    hf_sd = {}
+    hf_sd["embed_tokens.weight"] = tt_sd["embed_weight"]
+    hf_sd["norm.weight"] = tt_sd["norm_weight"]
+
+    for i, layer in enumerate(tt_sd["layers"]):
+        prefix = f"layers.{i}."
+        hf_sd[f"{prefix}input_layernorm.weight"] = layer["attn_norm_weight"]
+
+        for key, value in layer["mla_weights"].items():
+            hf_sd[f"{prefix}self_attn.{key}"] = value
+
+        hf_sd[f"{prefix}post_attention_layernorm.weight"] = layer["ffn_norm_weight"]
+
+        if "ffn_weights" in layer:
+            # Dense FFN
+            for key in ("gate_proj", "up_proj", "down_proj"):
+                hf_sd[f"{prefix}mlp.{key}.weight"] = layer["ffn_weights"][key]
+        else:
+            # MoE
+            hf_sd[f"{prefix}mlp.gate.weight"] = layer["gate_weights"]["weight"]
+            hf_sd[f"{prefix}mlp.gate.e_score_correction_bias"] = layer["gate_weights"]["e_score_correction_bias"]
+
+            for j, expert in enumerate(layer["routed_expert_weights"]):
+                for key in ("gate_proj", "up_proj", "down_proj"):
+                    hf_sd[f"{prefix}mlp.experts.{j}.{key}.weight"] = expert[key]
+
+            for key in ("gate_proj", "up_proj", "down_proj"):
+                hf_sd[f"{prefix}mlp.shared_experts.{key}.weight"] = layer["shared_expert_weights"][key]
+
+    return hf_sd
+
+
+def _create_hf_model_with_weights(config, num_layers, hf_sd):
+    """Create HF DeepseekV3Model with pretrained weights (no random init)."""
+    test_config = deepcopy(config)
+    test_config.num_hidden_layers = num_layers
+    test_config._attn_implementation = "eager"
+
+    with no_init_weights():
+        model = DeepseekV3Model(test_config)
+
+    # strict=False: rotary embedding buffers are computed from config, not from weights
+    missing, unexpected = model.load_state_dict(hf_sd, strict=False)
+    if missing:
+        real_missing = [k for k in missing if "rotary_emb" not in k]
+        if real_missing:
+            logger.warning(f"Missing weight keys (not rotary_emb): {real_missing}")
+        logger.info(f"Skipped {len(missing)} model keys not in weights (rotary_emb buffers)")
+    if unexpected:
+        logger.warning(f"Unexpected keys in state dict: {unexpected}")
+
+    return model.eval().to(torch.bfloat16)
+
+
 # --- Tokenization helpers ---
 
 PROMPTS_PATH = Path("models/demos/deepseek_v3/demo/test_prompts_1024.json")
@@ -165,6 +226,7 @@ def _tokenize_prompts_to_isl(tokenizer, prompts_path, isl_total, sp_factor):
 # --- Test ---
 
 
+@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize("tokenizer_enabled", [True, False], ids=["tokenized", "random"])
 @pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
 @pytest.mark.parametrize("isl_total", [1024])
@@ -209,9 +271,14 @@ def test_prefill_transformer(
     topology,
     pcc_validation,
     tokenizer_enabled,
+    use_pretrained,
     request,
 ):
     torch.manual_seed(42)
+
+    # Skip invalid pretrained combinations
+    if use_pretrained and n_routed_experts != 256:
+        pytest.skip("Pretrained weights only available for 256 experts")
 
     profiler.clear()
     profiler.start("total_test_time")
@@ -226,12 +293,14 @@ def test_prefill_transformer(
     emb_dim = config.hidden_size
     isl_per_chip = isl_total // sp_factor
 
+    weight_type = "pretrained" if use_pretrained else "random"
     logger.info(f"mesh_shape={mesh_shape}, sp_factor={sp_factor}, tp_factor={tp_factor}")
     logger.info(
         f"isl_total={isl_total}, isl_per_chip={isl_per_chip}, "
         f"num_layers={num_layers}, n_routed_experts={n_routed_experts}, "
         f"capacity_factor={capacity_factor}, gate_fallback_mode={gate_fallback_mode}, "
-        f"tokenizer_enabled={tokenizer_enabled}, pcc_validation={pcc_validation}"
+        f"tokenizer_enabled={tokenizer_enabled}, pcc_validation={pcc_validation}, "
+        f"weights={weight_type}"
     )
 
     # --- Monkeypatch n_routed_experts ---
@@ -240,8 +309,13 @@ def test_prefill_transformer(
 
     # --- Build HF reference model and extract weights ---
     profiler.start("weights_creation")
-    hf_model = _create_hf_model(config, num_layers, n_routed_experts=n_routed_experts)
-    state_dict = _extract_tt_state_dict(hf_model)
+    if use_pretrained:
+        _, state_dict = request.getfixturevalue("pretrained_transformer_weights")
+        hf_sd = _tt_state_dict_to_hf_state_dict(state_dict)
+        hf_model = _create_hf_model_with_weights(config, num_layers, hf_sd)
+    else:
+        hf_model = _create_hf_model(config, num_layers, n_routed_experts=n_routed_experts)
+        state_dict = _extract_tt_state_dict(hf_model)
     profiler.end("weights_creation")
 
     # --- Create input ---
@@ -309,6 +383,14 @@ def test_prefill_transformer(
     # --- PCC check ---
     if pcc_validation:
         profiler.start("pcc_validation")
+        if use_pretrained and tokenizer_enabled:
+            threshold = 0.97
+        elif use_pretrained:
+            threshold = 0.95
+        elif n_routed_experts < 256:
+            threshold = 0.985
+        else:
+            threshold = PCC_THRESHOLD  # 0.99
 
         # HF step-by-step forward for per-stage comparison
         seq_len = token_ids.shape[1]
@@ -348,26 +430,28 @@ def test_prefill_transformer(
         logger.info(f"{'-'*50}")
         failures = []
         for label, pcc in pcc_results:
-            status = "PASS" if pcc > PCC_THRESHOLD else ("FAIL" if pcc >= 0 else "ERROR")
+            status = "PASS" if pcc > threshold else ("FAIL" if pcc >= 0 else "ERROR")
             logger.info(f"{label:<20s}  {pcc:>10.6f}  {status:>8s}")
-            if pcc <= PCC_THRESHOLD:
+            if pcc <= threshold:
                 failures.append((label, pcc))
         logger.info(f"{'='*50}")
 
         if failures:
             msg = "; ".join(f"{label}: {pcc:.6f}" for label, pcc in failures)
-            pytest.fail(f"PCC below {PCC_THRESHOLD} at: {msg}")
+            pytest.fail(f"PCC below {threshold} at: {msg}")
 
         logger.success(
             f"TtPrefillTransformer PCC test passed "
             f"(num_layers={num_layers}, n_routed_experts={n_routed_experts}, "
-            f"capacity_factor={capacity_factor}, gate_fallback_mode={gate_fallback_mode})"
+            f"capacity_factor={capacity_factor}, gate_fallback_mode={gate_fallback_mode}, "
+            f"weights={weight_type})"
         )
     else:
         logger.success(
             f"TtPrefillTransformer smoke test passed "
             f"(num_layers={num_layers}, n_routed_experts={n_routed_experts}, "
-            f"capacity_factor={capacity_factor}, gate_fallback_mode={gate_fallback_mode})"
+            f"capacity_factor={capacity_factor}, gate_fallback_mode={gate_fallback_mode}, "
+            f"weights={weight_type})"
         )
 
     profiler.end("total_test_time")

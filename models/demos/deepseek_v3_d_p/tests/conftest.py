@@ -134,13 +134,15 @@ def download_model_config_only(cache_dir: Path) -> Path:
         raise
 
 
-def download_model_weights(cache_dir: Path, layer_idx: int = 0) -> Path:
+def download_model_weights(cache_dir: Path, layer_idx: int = 0, num_layers: int = 1) -> Path:
     """
     Download DeepSeek-R1-0528 model weights from HuggingFace.
 
     Args:
         cache_dir: Directory to cache downloaded weights
         layer_idx: Which layer to download weights for (default: 0)
+        num_layers: Number of layers to download weights for (default: 1).
+            When >1, downloads additional shards for layers 0..num_layers-1.
 
     Returns:
         Path to the downloaded model directory
@@ -188,16 +190,22 @@ def download_model_weights(cache_dir: Path, layer_idx: int = 0) -> Path:
 
         logger.info(f"✓ Configuration downloaded to: {index_dir}")
 
-        # Now download the first few weight shards (layer 0 is usually in first 1-3 shards)
-        logger.info("Step 2/2: Downloading weight files for first layer...")
-        logger.info("This will download ~3-5GB (first few shards containing layer 0 weights)")
-
-        # Download first 3 shards which should contain layer 0
-        shard_patterns = [
-            "*-00001-of-*.safetensors",
-            "*-00002-of-*.safetensors",
-            "*-00003-of-*.safetensors",
-        ]
+        # Now download the weight shards needed for the requested layers
+        if num_layers <= 1:
+            logger.info("Step 2/2: Downloading weight files for first layer...")
+            logger.info("This will download ~3-5GB (first few shards containing layer 0 weights)")
+            # Download first 3 shards which should contain layer 0
+            shard_patterns = [
+                "*-00001-of-*.safetensors",
+                "*-00002-of-*.safetensors",
+                "*-00003-of-*.safetensors",
+            ]
+        else:
+            # For 6 layers (0-5): shards 1-9 for layer weights + shard 160 for model.norm
+            logger.info(f"Step 2/2: Downloading weight files for {num_layers} layers...")
+            logger.info("This will download ~45GB (shards 1-9 + shard 160 for model.norm)")
+            shard_patterns = [f"*-{i:05d}-of-*.safetensors" for i in range(1, 10)]
+            shard_patterns.append("*-00160-of-*.safetensors")
 
         model_dir = snapshot_download(
             repo_id=model_id,
@@ -457,3 +465,94 @@ def pretrained_weights(model_path, hf_config, state_dict):
     logger.info(f"Loaded {len(dequantized_weights)} pretrained weight tensors")
 
     return hf_config, dequantized_weights
+
+
+@pytest.fixture
+def pretrained_transformer_weights(model_path, hf_config, state_dict):
+    """
+    Dequantized pretrained weights for 6-layer transformer in TT state_dict format.
+
+    Extracts embed, norm, and per-layer weights (attention, FFN/MoE) using
+    sub_state_dict() + dequantize_state_dict(), matching the format produced
+    by _extract_tt_state_dict() in test_prefill_transformer.py.
+
+    Returns:
+        Tuple of (hf_config, tt_state_dict) or skips if not available
+    """
+    if not _check_pretrained_available(model_path):
+        pytest.skip("Pretrained weights not available. Set DEEPSEEK_V3_HF_MODEL or download model.")
+    if hf_config is None:
+        pytest.skip("Failed to load HF config. Check model path.")
+    if state_dict is None:
+        pytest.skip("Failed to load state dict. Check model path and weights.")
+
+    num_layers = 6
+    first_k_dense = hf_config.first_k_dense_replace  # 3
+    n_routed = hf_config.n_routed_experts  # 256
+
+    logger.info(f"Loading pretrained transformer weights for {num_layers} layers from: {model_path}")
+
+    # Embed tokens
+    embed_sd = sub_state_dict(state_dict, "model.embed_tokens.")
+    embed_dequant = dequantize_state_dict(embed_sd, hf_config)
+    result = {
+        "embed_weight": embed_dequant["weight"].float(),
+    }
+
+    # Final norm
+    norm_sd = sub_state_dict(state_dict, "model.norm.")
+    norm_dequant = dequantize_state_dict(norm_sd, hf_config)
+    result["norm_weight"] = norm_dequant["weight"]
+
+    # Per-layer weights
+    result["layers"] = []
+    for i in range(num_layers):
+        logger.info(f"Loading layer {i} weights...")
+        layer_sd = sub_state_dict(state_dict, f"model.layers.{i}.")
+        layer_dequant = dequantize_state_dict(layer_sd, hf_config)
+
+        layer_dict = {
+            "attn_norm_weight": layer_dequant["input_layernorm.weight"],
+            "mla_weights": {
+                "q_a_proj.weight": layer_dequant["self_attn.q_a_proj.weight"],
+                "q_a_layernorm.weight": layer_dequant["self_attn.q_a_layernorm.weight"],
+                "q_b_proj.weight": layer_dequant["self_attn.q_b_proj.weight"],
+                "kv_a_proj_with_mqa.weight": layer_dequant["self_attn.kv_a_proj_with_mqa.weight"],
+                "kv_a_layernorm.weight": layer_dequant["self_attn.kv_a_layernorm.weight"],
+                "kv_b_proj.weight": layer_dequant["self_attn.kv_b_proj.weight"],
+                "o_proj.weight": layer_dequant["self_attn.o_proj.weight"],
+            },
+            "ffn_norm_weight": layer_dequant["post_attention_layernorm.weight"],
+        }
+
+        is_dense = i < first_k_dense
+        if is_dense:
+            layer_dict["ffn_weights"] = {
+                "gate_proj": layer_dequant["mlp.gate_proj.weight"],
+                "up_proj": layer_dequant["mlp.up_proj.weight"],
+                "down_proj": layer_dequant["mlp.down_proj.weight"],
+            }
+        else:
+            layer_dict["gate_weights"] = {
+                "weight": layer_dequant["mlp.gate.weight"],
+                "e_score_correction_bias": layer_dequant["mlp.gate.e_score_correction_bias"],
+            }
+            layer_dict["routed_expert_weights"] = [
+                {
+                    "gate_proj": layer_dequant[f"mlp.experts.{j}.gate_proj.weight"],
+                    "up_proj": layer_dequant[f"mlp.experts.{j}.up_proj.weight"],
+                    "down_proj": layer_dequant[f"mlp.experts.{j}.down_proj.weight"],
+                }
+                for j in range(n_routed)
+            ]
+            layer_dict["shared_expert_weights"] = {
+                "gate_proj": layer_dequant["mlp.shared_experts.gate_proj.weight"],
+                "up_proj": layer_dequant["mlp.shared_experts.up_proj.weight"],
+                "down_proj": layer_dequant["mlp.shared_experts.down_proj.weight"],
+            }
+
+        result["layers"].append(layer_dict)
+        logger.info(f"Layer {i} loaded ({'dense' if is_dense else 'MoE'})")
+
+    logger.info(f"Loaded pretrained transformer weights for {num_layers} layers")
+    return hf_config, result
