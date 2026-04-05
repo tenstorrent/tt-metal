@@ -42,9 +42,19 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_binary.h
     inc/api/compute/eltwise_binary_sfpu.h
     inc/api/compute/eltwise_unary/README.md
+    inc/api/compute/eltwise_unary/cbrt.h
+    inc/api/compute/eltwise_unary/cosh.h
     inc/api/compute/eltwise_unary/eltwise_unary.h
     inc/api/compute/eltwise_unary/activations.h
+    inc/api/compute/eltwise_unary/hardsigmoid.h
+    inc/api/compute/eltwise_unary/hardswish.h
+    inc/api/compute/eltwise_unary/hardtanh.h
+    inc/api/compute/eltwise_unary/lgamma.h
+    inc/api/compute/eltwise_unary/rpow.h
+    inc/api/compute/eltwise_unary/selu.h
     inc/api/compute/eltwise_unary/sfpu_split_includes.h
+    inc/api/compute/eltwise_unary/softshrink.h
+    inc/api/compute/eltwise_unary/softsign.h
     inc/api/compute/ema.h
     inc/api/compute/experimental/mul_reduce_scalar.h
     inc/api/compute/experimental/semaphore.h

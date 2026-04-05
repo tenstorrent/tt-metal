@@ -6,4 +6,14 @@
 
 enum class SfpuType {
     unused = 0,
+    cosh,
+    cbrt,
+    hardsigmoid,
+    selu,
+    hardtanh,
+    softsign,
+    lgamma,
+    rpow,
+    hardswish,
+    softshrink,
 };

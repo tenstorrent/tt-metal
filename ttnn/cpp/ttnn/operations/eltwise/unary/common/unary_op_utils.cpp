@@ -17,6 +17,15 @@ namespace {
 
 std::string get_macro_definition(UnaryOpType op_type) {
     switch (op_type) {
+        case UnaryOpType::COSH: return "SFPU_OP_COSH_INCLUDE";
+        case UnaryOpType::CBRT: return "SFPU_OP_CBRT_INCLUDE";
+        case UnaryOpType::SELU: return "SFPU_OP_SELU_INCLUDE";
+        case UnaryOpType::HARDTANH: return "SFPU_OP_HARDTANH_INCLUDE";
+        case UnaryOpType::SOFTSIGN: return "SFPU_OP_SOFTSIGN_INCLUDE";
+        case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
+        case UnaryOpType::RPOW: return "SFPU_OP_RPOW_INCLUDE";
+        case UnaryOpType::HARDSWISH: return "SFPU_OP_HARDSWISH_INCLUDE";
+        case UnaryOpType::SOFTSHRINK: return "SFPU_OP_SOFTSHRINK_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -35,13 +44,40 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     [[maybe_unused]] const T param0_raw = params[0];
     [[maybe_unused]] float param0 = static_cast<float>(params[0]);
     switch (op_type) {
+        case UnaryOpType::HARDTANH: {
+            float min_val = params.size() > 0 ? param0 : -1.0f;
+            float max_val = params.size() > 1 ? static_cast<float>(params[1]) : 1.0f;
+            return {
+                "hardtanh_tile_init();",
+                fmt::format(
+                    "hardtanh_tile({}, {:#010x}u, {:#010x}u);",
+                    idst,
+                    std::bit_cast<uint32_t>(min_val),
+                    std::bit_cast<uint32_t>(max_val))};
+        }
+        case UnaryOpType::RPOW:
+            return {
+                "rpow_tile_init();", fmt::format("rpow_tile({}, {:#010x}u);", idst, std::bit_cast<uint32_t>(param0))};
+        case UnaryOpType::SOFTSHRINK: {
+            float lambda_val = params.size() > 0 ? param0 : 0.5f;
+            return {
+                "softshrink_tile_init();",
+                fmt::format("softshrink_tile({}, {:#010x}u);", idst, std::bit_cast<uint32_t>(lambda_val))};
+        }
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };
 }
 
 std::pair<std::string, std::string> get_op_init_and_func_default(
-    UnaryOpType op_type, [[maybe_unused]] std::string idst, [[maybe_unused]] std::optional<DataType> input_dtype) {
+    UnaryOpType op_type, std::string idst, [[maybe_unused]] std::optional<DataType> input_dtype) {
     switch (op_type) {
+        case UnaryOpType::COSH: return {"cosh_tile_init();", fmt::format("cosh_tile({});", idst)};
+        case UnaryOpType::CBRT: return {"cbrt_tile_init();", fmt::format("cbrt_tile({});", idst)};
+        case UnaryOpType::HARDSIGMOID: return {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
+        case UnaryOpType::HARDSWISH: return {"hardswish_tile_init();", fmt::format("hardswish_tile({});", idst)};
+        case UnaryOpType::SELU: return {"selu_tile_init();", fmt::format("selu_tile({});", idst)};
+        case UnaryOpType::SOFTSIGN: return {"softsign_tile_init();", fmt::format("softsign_tile({});", idst)};
+        case UnaryOpType::LGAMMA: return {"lgamma_tile_init();", fmt::format("lgamma_tile({});", idst)};
         default: TT_THROW("unexpected op type {}", op_type);
     };
 }
@@ -68,7 +104,12 @@ bool get_op_approx_mode(UnaryOpType op_type) {
     }
 }
 
-UnaryWithParam string_to_unary_with_param(const std::string& name) { TT_THROW("Unknown unary op: {}", name); }
+UnaryWithParam string_to_unary_with_param(const std::string& name) {
+    if (name == "cosh") {
+        return UnaryWithParam(UnaryOpType::COSH);
+    }
+    TT_THROW("Unknown unary op: {}", name);
+}
 
 template <typename T>
 std::map<std::string, std::string> get_defines(

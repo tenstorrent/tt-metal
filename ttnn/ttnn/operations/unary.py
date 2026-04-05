@@ -10,6 +10,9 @@ def register_ttnn_cpp_unary_function(unary_function):
     def _golden_function(input_tensor: ttnn.Tensor, **_):
         import torch
 
+        def torch_cbrt(x, *args, **kwargs):
+            return torch.sgn(x) * torch.pow(torch.abs(x), 1.0 / 3)
+
         def torch_multigammaln(x, *args, **kwargs):
             result = torch.lgamma(x)
             result += torch.lgamma(x - 0.5)
@@ -34,6 +37,11 @@ def register_ttnn_cpp_unary_function(unary_function):
             return final_result
 
         name_to_golden_function = {
+            "cbrt": torch_cbrt,
+            "hardsigmoid": torch.nn.functional.hardsigmoid,
+            "selu": lambda _x: torch.nn.functional.selu(_x.to(torch.float)),
+            "softsign": torch.nn.functional.softsign,
+            "lgamma": torch.lgamma,
             "floor": torch.floor,
             "ceil": torch.ceil,
             "trunc": torch.trunc,
@@ -53,12 +61,62 @@ def register_ttnn_cpp_unary_function(unary_function):
 
 
 TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
+    ttnn.cbrt,
+    ttnn.hardsigmoid,
+    ttnn.selu,
+    ttnn.softsign,
+    ttnn.lgamma,
     ttnn.floor,
     ttnn.ceil,
     ttnn.trunc,
 ]
 for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
     register_ttnn_cpp_unary_function(unary_function)
+
+
+def _golden_function_cosh(input_tensor_a, *args, **kwargs):
+    import torch
+
+    return torch.cosh(input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn.cosh, golden_function=_golden_function_cosh)
+
+
+def _golden_function_hardtanh(input_tensor_a, *args, min_val=-1.0, max_val=1.0, **kwargs):
+    import torch
+
+    return torch.nn.functional.hardtanh(input_tensor_a, min_val=min_val, max_val=max_val)
+
+
+ttnn.attach_golden_function(ttnn.hardtanh, golden_function=_golden_function_hardtanh)
+
+
+def _golden_function_rpow(input_tensor_a, base, *args, **kwargs):
+    import torch
+
+    return torch.pow(torch.tensor(base, dtype=input_tensor_a.dtype), input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn.rpow, golden_function=_golden_function_rpow)
+
+
+def _golden_function_hardswish(input_tensor_a, *args, **kwargs):
+    import torch
+
+    return torch.nn.functional.hardswish(input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn.hardswish, golden_function=_golden_function_hardswish)
+
+
+def _golden_function_softshrink(input_tensor_a, *args, lambd=0.5, **kwargs):
+    import torch
+
+    return torch.nn.functional.softshrink(input_tensor_a, lambd=lambd)
+
+
+ttnn.attach_golden_function(ttnn.softshrink, golden_function=_golden_function_softshrink)
 
 
 try:
