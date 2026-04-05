@@ -26,6 +26,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::RPOW: return "SFPU_OP_RPOW_INCLUDE";
         case UnaryOpType::HARDSWISH: return "SFPU_OP_HARDSWISH_INCLUDE";
         case UnaryOpType::SOFTSHRINK: return "SFPU_OP_SOFTSHRINK_INCLUDE";
+        case UnaryOpType::SINH: return "SFPU_OP_SINH_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -78,6 +79,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::SELU: return {"selu_tile_init();", fmt::format("selu_tile({});", idst)};
         case UnaryOpType::SOFTSIGN: return {"softsign_tile_init();", fmt::format("softsign_tile({});", idst)};
         case UnaryOpType::LGAMMA: return {"lgamma_tile_init();", fmt::format("lgamma_tile({});", idst)};
+        case UnaryOpType::SINH: return {"sinh_tile_init();", fmt::format("sinh_tile({});", idst)};
         default: TT_THROW("unexpected op type {}", op_type);
     };
 }
@@ -107,6 +109,9 @@ bool get_op_approx_mode(UnaryOpType op_type) {
 UnaryWithParam string_to_unary_with_param(const std::string& name) {
     if (name == "cosh") {
         return UnaryWithParam(UnaryOpType::COSH);
+    }
+    if (name == "sinh") {
+        return UnaryWithParam(UnaryOpType::SINH);
     }
     TT_THROW("Unknown unary op: {}", name);
 }

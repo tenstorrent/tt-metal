@@ -1788,6 +1788,12 @@ void py_module(nb::module_& mod) {
         "[supported range -9 to 9]",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
+    bind_unary_operation<"sinh", &ttnn::sinh>(
+        mod,
+        R"doc(\mathrm{{output\_tensor}}_i = \sinh(\mathrm{{input\_tensor}}_i))doc",
+        "[supported range -9 to 9]",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+
     bind_unary_operation<"hardsigmoid", &ttnn::hardsigmoid>(
         mod,
         R"doc(\text{hardsigmoid}(x) = \max(0, \min(1, x / 6 + 0.5)))doc",
