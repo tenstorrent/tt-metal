@@ -6,18 +6,6 @@ on:
     - cron: "0 2 * * *"
   workflow_dispatch:
     inputs:
-      architecture:
-        required: false
-        type: string
-        default: "amd64"
-      platform:
-        required: false
-        type: choice
-        default: "Ubuntu 24.04"
-        options:
-          - "Ubuntu 22.04"
-          - "Ubuntu 24.04"
-        description: "Platform to analyze"
       debug-file-filter:
         description: >-
           Analyze only specific file(s) for fast debugging
@@ -26,27 +14,19 @@ on:
         type: string
         default: ""
 
-jobs:
-  build-docker-image:
-    uses: ./.github/workflows/build-docker-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
-      architecture: ${{ inputs.architecture || 'amd64' }}
+env:
+  # Always use the latest ci-build image — CSA runs on main HEAD and
+  # is unlikely to be paired with container changes.
+  CSA_IMAGE: harbor.ci.tenstorrent.net/ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-24.04-ci-build-amd64:latest
 
+jobs:
   clang-static-analyzer:
     name: 🔬 Clang Static Analyzer
-    needs: [ build-docker-image ]
     if: ${{ always() && !failure() && !cancelled() }}
     timeout-minutes: 300
     runs-on: tt-ubuntu-2204-xlarge-stable
     container:
-      image: >-
-        harbor.ci.tenstorrent.net/${{
-          needs.build-docker-image.outputs.ci-build-tag ||
-          'docker-image-unresolved!'}}
+      image: ${{ env.CSA_IMAGE }}
       volumes:
         - ${{ github.workspace }}:/work
         # HACK: make actions available inside container
