@@ -154,8 +154,3 @@ Some checks have knobs that change their behavior — review the check's documen
 if the default feels wrong. One check *requires* options to do anything:
 `readability-identifier-naming` silently does nothing without naming conventions
 configured.
-
-### What is the Clang Static Analyzer?
-
-Separate from clang-tidy, the Clang Static Analyzer (CSA) runs via CodeChecker on
-`main` daily. Results are published to GitHub Pages. It is not part of the PR gate.
