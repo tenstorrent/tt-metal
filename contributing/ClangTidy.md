@@ -94,9 +94,6 @@ some_call();  // NOLINT(check-name)    — suppress on this line
 some_call();                           — suppress the following line
 ```
 
-For third-party or generated code, a directory-level `.clang-tidy` file can suppress
-entire check categories. Use sparingly — the goal is to shrink the suppression list,
-not grow it.
 
 ## Enable a check
 
