@@ -21,7 +21,7 @@ void kernel_main() {
     cb_reserve_back(cb_id_in0, stick_size);
     uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
 
-    DEVICE_PRINT("Code ({},{}): ", get_absolute_logical_x(), get_absolute_logical_y());
+    DEVICE_PRINT("Core ({},{}): ", get_absolute_logical_x(), get_absolute_logical_y());
     constexpr uint32_t element_per_stick = 2;  // Each stick contains two bfloat16 values
     const uint32_t n_sticks = stick_size / element_per_stick;
     for (uint32_t i = 0; i < n_sticks; i++) {
