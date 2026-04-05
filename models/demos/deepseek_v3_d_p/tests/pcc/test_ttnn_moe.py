@@ -57,13 +57,18 @@ from tests.ttnn.utils_for_testing import comp_pcc
     [
         # fmt: off
 <<<<<<< HEAD
+<<<<<<< HEAD
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, GateComputeMode.DEVICE, False), # skip PCC validation; gate on device requires 256 experts.
         pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 8, 2, GateComputeMode.HOST_ALL, True),  # run PCC validation; reduced isl per chip to 1600 and experts to 64 for faster execution.
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, GateComputeMode.HOST_ALL, True, marks=pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")),
 =======
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 2, False),
+=======
+        #pytest.param(3200, 1024, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 2, False),
+>>>>>>> dcc5f13595c (Untilize fused with combine E2E PCC works)
         # skip PCC validation
-        # pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 2, True),  # run PCC validation
+         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 2, True),
+        # run PCC validation
         # pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, True, marks=pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")),
 >>>>>>> 702b67d37e1 (Currently works)
         # fmt: on

@@ -357,7 +357,7 @@ class TtMoe(LightweightModule):
         logger.debug(f"[TtMoe.forward] expert_outputs_rm shape: {expert_outputs_rm.shape} {expert_outputs_rm.dtype=}")
 
         combined_output = self.combine_module(
-            expert_outputs_rm,
+            expert_outputs,
             metadata,
             tt_expert_token_counts,
         )

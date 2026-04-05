@@ -15,9 +15,9 @@ namespace ttnn::operations::experimental::deepseek_prefill::combine {
 void CombineDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Validate layouts
-    TT_FATAL(
-        tensor_args.dispatched_buffer.layout() == tt::tt_metal::Layout::ROW_MAJOR,
-        "Dispatched buffer must be ROW_MAJOR layout");
+    // TT_FATAL(
+    //     tensor_args.dispatched_buffer.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+    //     "Dispatched buffer must be ROW_MAJOR layout");
     TT_FATAL(
         tensor_args.dispatched_metadata.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "Dispatched metadata must be ROW_MAJOR layout");
