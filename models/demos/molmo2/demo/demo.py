@@ -2917,17 +2917,36 @@ class Molmo2Generator:
 
         ttnn.deallocate(hidden_states)
 
-        # Greedy token: always torch.argmax on CPU from concatenated mesh logits (matches HF; ttnn.argmax can disagree).
-        mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-        logits_torch = ttnn.to_torch(logits, mesh_composer=mesh_composer)[0]
-        if logits_torch.dim() == 4:
-            logits_vec = logits_torch[0, 0, 0, :].clone()
-        elif logits_torch.dim() == 3:
-            logits_vec = logits_torch[0, 0, :].clone()
-        else:
-            logits_vec = logits_torch[0].flatten()
+        # Greedy token selection
+        if self.repetition_penalty == 1.0:
+            # Device-side argmax when no repetition penalty (faster, no CPU roundtrip)
+            # logits shape: [1, 1, 1, vocab_size] or similar
+            next_token_ttnn = ttnn.argmax(logits, dim=-1, keepdim=False)
+            mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+            next_token_cpu = ttnn.to_torch(next_token_ttnn, mesh_composer=mesh_composer)[0]
+            ttnn.deallocate(next_token_ttnn)
+            next_token = int(next_token_cpu.flatten()[0].item())
 
-        if self.repetition_penalty != 1.0:
+            # For debug logging, we still need logits on CPU
+            if is_first or self.decode_position % 1000 == 0 or self.decode_position < 5:
+                logits_torch = ttnn.to_torch(logits, mesh_composer=mesh_composer)[0]
+                if logits_torch.dim() == 4:
+                    logits_vec = logits_torch[0, 0, 0, :].clone()
+                elif logits_torch.dim() == 3:
+                    logits_vec = logits_torch[0, 0, :].clone()
+                else:
+                    logits_vec = logits_torch[0].flatten()
+        else:
+            # CPU argmax when repetition penalty is used (need to modify logits)
+            mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+            logits_torch = ttnn.to_torch(logits, mesh_composer=mesh_composer)[0]
+            if logits_torch.dim() == 4:
+                logits_vec = logits_torch[0, 0, 0, :].clone()
+            elif logits_torch.dim() == 3:
+                logits_vec = logits_torch[0, 0, :].clone()
+            else:
+                logits_vec = logits_torch[0].flatten()
+
             num_penalized = len(self.generated_token_ids)
             for token_id in self.generated_token_ids:
                 if logits_vec[token_id] > 0:
@@ -2935,9 +2954,7 @@ class Molmo2Generator:
                 else:
                     logits_vec[token_id] *= self.repetition_penalty
 
-        next_token = logits_vec.argmax().item()
-
-        if self.repetition_penalty != 1.0:
+            next_token = logits_vec.argmax().item()
             self.generated_token_ids.add(next_token)
             if len(self.generated_token_ids) <= 5 or len(self.generated_token_ids) % 10 == 0:
                 logger.debug(f"Repetition penalty: penalized {num_penalized} tokens, selected token {next_token}")
