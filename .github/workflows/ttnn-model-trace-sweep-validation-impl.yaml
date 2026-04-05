@@ -334,7 +334,7 @@ jobs:
           mkdir -p /work/model_tracer/traced_operations
           # Keep hardware-batch context in a sidecar file; the actual sweep trace JSON
           # is produced by generic_ops_tracer.py and should remain in tracer format.
-          cat <<EOF > /work/tests/sweep_framework/results_export/${{ matrix.test_group_name }}_metadata.json
+          cat <<EOF > /work/tests/sweep_framework/results_export/${{ matrix.test_group_name }}_batch${{ matrix.batch_index }}_metadata.json
           {
             "validation_scope": "${{ matrix.validation_scope }}",
             "trace_ids": ${{ toJSON(matrix.trace_ids) }},
@@ -348,7 +348,7 @@ jobs:
 
           python3 model_tracer/generic_ops_tracer.py \
             tests/sweep_framework/sweeps_runner.py \
-            -o /work/model_tracer/traced_operations/sweep_trace_${{ matrix.test_group_name }}.json \
+            -o /work/model_tracer/traced_operations/sweep_trace_${{ matrix.test_group_name }}_batch${{ matrix.batch_index }}.json \
             -- \
             --module-name "${{ matrix.module_selector }}" \
             --suite-name "${{ matrix.suite_name }}" \
@@ -374,7 +374,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: sweep-traces-${{ matrix.test_group_name }}-batch-${{ env.BATCH_SUFFIX }}
-          path: /work/model_tracer/traced_operations/sweep_trace_${{ matrix.test_group_name }}.json
+          path: /work/model_tracer/traced_operations/sweep_trace_${{ matrix.test_group_name }}_batch${{ matrix.batch_index }}.json
           retention-days: 7
 
       - name: Upload sweep results
