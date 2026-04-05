@@ -389,7 +389,8 @@ uint32_t finalize_kernel_bins(
                 uint32_t kernel_text_offset = 0;
                 if (hal.get_core_kernel_stored_in_config_buffer(programmable_core_type)) {
                     kernel_text_offset = offset;
-                    offset += binaries[i]->get_packed_size();
+                    uint32_t packed = binaries[i]->get_packed_size();
+                    offset += packed;
                     offset = tt::align(offset, l1_alignment);
                 } else {
                     kernel_text_offset = binaries[i]->get_text_addr();

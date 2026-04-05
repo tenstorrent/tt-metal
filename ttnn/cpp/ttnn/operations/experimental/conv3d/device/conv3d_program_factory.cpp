@@ -409,6 +409,9 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     }
     if (config.input_progress_t_batch_size > 0) {
         ablation_defines["CONV3D_INPUT_PROGRESS_SEM"] = "1";
+        // In standalone conv3d (non-fused), progress sem is signaled by the NP H-writer once.
+        // NP_NUM_W_WRITERS = 1 means conv3d waits for 1 signal before processing all T-batches.
+        ablation_defines["NP_NUM_W_WRITERS"] = "1";
     }
     if (config.use_h_halo_buffer) {
         ablation_defines["CONV3D_H_HALO"] = "1";
