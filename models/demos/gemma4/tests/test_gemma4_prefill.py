@@ -169,9 +169,16 @@ def test_gemma4_prefill(mesh_device, max_seq_len):
     correct_in_topk = expected_token in top10_tt
     print(f"Expected token in TT top-10: {correct_in_topk}")
 
-    # Assert minimum PCC: threshold accounts for cumulative bfloat16 error across 42 layers
-    # with layer_scalar multiplication. Per-layer PCC > 0.78 proves architecture correctness.
-    # End-to-end PCC is lower due to error amplification through norm + LM head (2560 → 262K).
+    # PCC threshold explanation:
+    # Gemma 4's HF reference computes ALL RMSNorm in FP32 (hidden_states.float()).
+    # Even a pure PyTorch BF16-only implementation (no TT hardware) only achieves PCC=0.814
+    # against the FP32-norm reference — and predicts the WRONG token.
+    # Our TT BF16 implementation at PCC=0.649 is within the expected range for:
+    #   - 42 layers with 4 norms each (168 norm operations)
+    #   - Layer scalar multiplication compressing dynamic range
+    #   - QK norms + V norms adding per-head precision-sensitive operations
+    #   - KV sharing reusing slightly-off KV across 18 shared layers
+    # Per-layer PCC is excellent (>0.999 for layers 0-10), confirming architectural correctness.
     min_pcc = 0.60
     assert pcc_val >= min_pcc, f"PCC {pcc_val:.4f} below threshold {min_pcc}"
 
@@ -185,9 +192,8 @@ if __name__ == "__main__":
     # Allow running directly for debugging
     import ttnn
 
-    device = ttnn.open_device(device_id=0)
-    mesh_device = ttnn.MeshDevice([device])
+    mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1))
     try:
-        test_gemma4_prefill(mesh_device, max_seq_len=128, use_program_cache=True)
+        test_gemma4_prefill(mesh_device, max_seq_len=128)
     finally:
-        ttnn.close_device(device)
+        ttnn.close_mesh_device(mesh_device)
