@@ -10,3 +10,6 @@
 {"event":"phase_complete","phase":3,"phase_name":"Implementation","status":"ok","ts":"2026-04-05T20:42:57+00:00"}
 {"event":"phase_start","phase":4,"phase_name":"Testing","iteration":1,"ts":"2026-04-05T20:43:21+00:00"}
 {"event":"phase_complete","phase":4,"phase_name":"Testing","status":"ok","test_result":"PASS","iterations":1,"ts":"2026-04-05T20:44:27+00:00"}
+{"event":"phase_start","phase":5,"phase_name":"Documentation","ts":"2026-04-05T20:45:15+00:00"}
+{"event":"phase_complete","phase":5,"phase_name":"Documentation","status":"ok","ts":"2026-04-05T20:45:56+00:00"}
+{"event":"pipeline_complete","op_name":"swish","final_status":"SUCCESS","total_iterations":1,"phases_completed":[1,2,3,4,5],"ts":"2026-04-05T20:46:15+00:00"}
