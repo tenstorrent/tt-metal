@@ -130,7 +130,7 @@ CreatedProgram create_program(
         core_set,
         tt::tt_metal::ReaderDataMovementConfig(reader_x_ct_args, {}));
 
-    // --- NCRISC: reader_weights_writer ---
+    // --- NCRISC: reader_weights_writer_outputs ---
     // ct args: [M_num_blocks, K_num_blocks, N_num_blocks, M_block_tiles, K_block_tiles, N_block_tiles,
     //           in1_tile_size, out_tile_size, N_tiles,
     //           <TensorAccessor gate_proj>, <TensorAccessor up_proj>,
@@ -150,10 +150,10 @@ CreatedProgram create_program(
     tt::tt_metal::TensorAccessorArgs(outputs[0].buffer()).append_to(rw_ct_args);
     tt::tt_metal::TensorAccessorArgs(outputs[1].buffer()).append_to(rw_ct_args);
 
-    auto reader_weights_writer_id = tt::tt_metal::CreateKernel(
+    auto reader_weights_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/device/kernels/"
-        "reader_weights_writer.cpp",
+        "reader_weights_writer_outputs.cpp",
         core_set,
         tt::tt_metal::WriterDataMovementConfig(rw_ct_args, {}));
 
@@ -190,7 +190,7 @@ CreatedProgram create_program(
 
     tt::tt_metal::SetRuntimeArgs(
         program,
-        reader_weights_writer_id,
+        reader_weights_id,
         core,
         {inputs.gate_proj.buffer()->address(),
          inputs.up_proj.buffer()->address(),
@@ -200,7 +200,7 @@ CreatedProgram create_program(
     // Compute kernel has no runtime args (all info is in compile-time args).
 
     return CreatedProgram{
-        std::move(program), GateUpMatmulSharedVariables{reader_x_id, reader_weights_writer_id, compute_id, core}};
+        std::move(program), GateUpMatmulSharedVariables{reader_x_id, reader_weights_id, compute_id, core}};
 }
 
 }  // namespace
@@ -234,7 +234,7 @@ void GateUpMatmulProgramFactory::override_runtime_arguments(
         auto& x_args = GetRuntimeArgs(program, sv.reader_x_id, sv.core);
         x_args[0] = inputs.x.buffer()->address();
 
-        auto& rw_args = GetRuntimeArgs(program, sv.reader_weights_writer_id, sv.core);
+        auto& rw_args = GetRuntimeArgs(program, sv.reader_weights_id, sv.core);
         rw_args[0] = inputs.gate_proj.buffer()->address();
         rw_args[1] = inputs.up_proj.buffer()->address();
         rw_args[2] = outputs[0].buffer()->address();
