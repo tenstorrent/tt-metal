@@ -116,7 +116,7 @@ def test_perf_lingbot_va_e2e_2cq_trace(
         mesh_device=mesh_device,
         num_inference_steps=1,
         action_num_inference_steps=1,
-        frame_chunk_size=1,
+        frame_chunk_size=2,
     )
 
     # Must match models["mesh_device"] (e.g. (1,1) submesh when LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH=1).
