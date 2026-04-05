@@ -7,8 +7,8 @@ Kernel Debug Print
 Overview
 --------
 
-``DPRINT`` is being deprecated in favor of the new ``DEVICE_PRINT`` system, which has more features and flexibility.
-For users who still want to use ``DPRINT``, it is still supported, but will be deprecated in a future release.
+``DPRINT`` is deprecated in favor of the new ``DEVICE_PRINT`` system, which has more features and flexibility.
+For users who still want to use ``DPRINT``, it remains supported during the deprecation period but will be removed in a future release.
 For more info about ``DEVICE_PRINT``, see the `device_print` tool documentation.
 
 The device can optionally print to the host terminal or a log file.  This feature can be useful for printing variables,
