@@ -154,7 +154,7 @@ jobs:
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
       - name: Download master JSON artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: ${{ needs.prepare-validation-inputs.outputs.master-json-artifact-name }}
           path: /work/model_tracer/traced_operations
@@ -240,21 +240,21 @@ jobs:
           pip install pyyaml
 
       - name: Download master JSON artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: ${{ needs.prepare-validation-inputs.outputs.master-json-artifact-name }}
           path: /tmp/validation-master-json
 
       - name: Download model traced sweep vectors
         if: ${{ inputs.scope-targets == 'model_traced' || inputs.scope-targets == 'all' }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: sweeps-vectors-model_traced
           path: /tmp/validation-vectors/model_traced
 
       - name: Download lead models sweep vectors
         if: ${{ inputs.scope-targets == 'lead_models' || inputs.scope-targets == 'all' }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@5
         with:
           name: sweeps-vectors-lead_models
           path: /tmp/validation-vectors/lead_models
@@ -323,7 +323,7 @@ jobs:
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
       - name: Download sweep vectors
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: ${{ matrix.vectors_artifact_name }}
           path: /work/tests/sweep_framework/vectors_export
@@ -395,26 +395,26 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Download master JSON artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: ${{ needs.prepare-validation-inputs.outputs.master-json-artifact-name }}
           path: model_tracer/traced_operations
 
       - name: Download preflight artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: ${{ needs.prepare-validation-inputs.outputs.preflight-artifact-name }}
           path: validation_artifacts
 
       - name: Download sweep traces
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           pattern: sweep-traces-*
           path: validation_traces
           merge-multiple: true
 
       - name: Download sweep results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           pattern: sweeps-results-*
           path: validation_results
