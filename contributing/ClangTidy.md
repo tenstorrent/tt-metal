@@ -8,6 +8,12 @@ and on `main` daily. This page explains how to run it locally and how to manage 
 The dev container ships clang-tidy 20 and all required tools. No extra installation needed.
 
 ```sh
+docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-24.04-dev-amd64:latest
+docker run -it --rm -v $(pwd):/work -w /work \
+  ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-24.04-dev-amd64:latest bash
+```
+
+```sh
 # Configure
 cmake --preset clang-tidy
 
