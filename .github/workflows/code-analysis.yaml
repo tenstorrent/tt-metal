@@ -218,7 +218,7 @@ jobs:
       do-full-scan: 'false'
       merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
       prereq-targets: 'tt_metal ttnn'
-      scan-targets: 'ttml ttml_tests'
+      scan-targets: 'tt-train'
 
   clang-tidy-incremental-catchall:
     name: 🤖 Clang Tidy (catchall)
