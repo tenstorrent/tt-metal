@@ -576,6 +576,14 @@ on:
         description: "Skip remaining tests in running suite after first timeout?"
         type: boolean
         default: true
+      generate_sweeps_group_by:
+        required: false
+        type: choice
+        default: "hw"
+        options:
+          - hw
+          - mesh
+        description: "How to group exported sweep vector files in ttnn-generate-sweeps"
       upload_results:
         description: "Upload sweep results to Superset?"
         type: boolean
@@ -671,6 +679,7 @@ jobs:
       sweep-name: ${{ steps.resolve.outputs.sweep-name }}
       suite-name: ${{ steps.resolve.outputs.suite-name }}
       skip-on-timeout: ${{ steps.resolve.outputs.skip-on-timeout }}
+      generate-sweeps-group-by: ${{ steps.resolve.outputs.generate-sweeps-group-by }}
       upload-results: ${{ steps.resolve.outputs.upload-results }}
       measure-device-perf: ${{ steps.resolve.outputs.measure-device-perf }}
       measure-e2e-perf: ${{ steps.resolve.outputs.measure-e2e-perf }}
@@ -704,6 +713,7 @@ jobs:
           # For scheduled runs, all measurement/upload flags default to true
           if [[ "$IS_SCHEDULED" == "true" ]]; then
             SKIP_ON_TIMEOUT=true
+            GENERATE_SWEEPS_GROUP_BY="hw"
             UPLOAD_RESULTS=true
             MEASURE_DEVICE_PERF=true
             MEASURE_E2E_PERF=false
@@ -711,6 +721,7 @@ jobs:
             TRACY=true
           else
             SKIP_ON_TIMEOUT=${{ github.event.inputs.skip_on_timeout || 'true' }}
+            GENERATE_SWEEPS_GROUP_BY="${{ github.event.inputs.generate_sweeps_group_by || 'hw' }}"
             UPLOAD_RESULTS=${{ github.event.inputs.upload_results || 'true' }}
             MEASURE_DEVICE_PERF=${{ github.event.inputs.measure_device_perf || 'true' }}
             MEASURE_E2E_PERF=${{ github.event.inputs.measure_e2e_perf || 'false' }}
@@ -721,6 +732,7 @@ jobs:
           echo "sweep-name=$SWEEP_NAME" >> $GITHUB_OUTPUT
           echo "suite-name=${{ github.event.inputs.suite_name || '' }}" >> $GITHUB_OUTPUT
           echo "skip-on-timeout=$SKIP_ON_TIMEOUT" >> $GITHUB_OUTPUT
+          echo "generate-sweeps-group-by=$GENERATE_SWEEPS_GROUP_BY" >> $GITHUB_OUTPUT
           echo "upload-results=$UPLOAD_RESULTS" >> $GITHUB_OUTPUT
           echo "measure-device-perf=$MEASURE_DEVICE_PERF" >> $GITHUB_OUTPUT
           echo "measure-e2e-perf=$MEASURE_E2E_PERF" >> $GITHUB_OUTPUT
@@ -733,6 +745,49 @@ jobs:
           echo "build-type=${{ github.event.inputs['build-type'] || 'Release' }}" >> $GITHUB_OUTPUT
           echo "enable-lto=${{ github.event.inputs['enable-lto'] || 'false' }}" >> $GITHUB_OUTPUT
           echo "tracy=$TRACY" >> $GITHUB_OUTPUT
+
+  display-workflow-options:
+    name: 📋 Display workflow options
+    needs: [resolve-inputs]
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    steps:
+      - name: Display selected workflow options
+        run: |
+          echo "::group::🔧 Workflow Configuration Options"
+          echo "┌─────────────────────────────────────────────────────────────┐"
+          echo "│                    TTNN Run Sweeps Configuration            │"
+          echo "├─────────────────────────────────────────────────────────────┤"
+          echo "│ Trigger:              ${{ github.event_name }}"
+          echo "│ Sweep Name:           ${{ needs.resolve-inputs.outputs.sweep-name }}"
+          echo "│ Suite Name:           ${{ needs.resolve-inputs.outputs.suite-name || 'Not specified' }}"
+          echo "│ Skip on Timeout:      ${{ needs.resolve-inputs.outputs.skip-on-timeout }}"
+          echo "│ Group By:             ${{ needs.resolve-inputs.outputs.generate-sweeps-group-by }}"
+          echo "│ Upload Results:       ${{ needs.resolve-inputs.outputs.upload-results }}"
+          echo "│ Measure Device Perf:  ${{ needs.resolve-inputs.outputs.measure-device-perf }}"
+          echo "│ Measure E2E Perf:     ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}"
+          echo "│ Measure Memory:       ${{ needs.resolve-inputs.outputs.measure-memory }}"
+          echo "│ Tracy:                ${{ needs.resolve-inputs.outputs.tracy }}"
+          echo "│ Architecture:         ${{ needs.resolve-inputs.outputs.arch }}"
+          echo "│ Runner Label:         ${{ needs.resolve-inputs.outputs.runner-label }}"
+          echo "│ Log Level:            ${{ needs.resolve-inputs.outputs.log-level }}"
+          echo "│ Use Database:         ${{ needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Model Traced)' || needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Lead Models)' }}"
+          echo "│ Mesh Shape Filter:    ${{ needs.resolve-inputs.outputs.mesh-shape || 'none' }}"
+          echo "│ Platform:             ${{ needs.resolve-inputs.outputs.platform }}"
+          echo "│ Build Type:           ${{ needs.resolve-inputs.outputs.build-type }}"
+          echo "│ Enable LTO:           ${{ needs.resolve-inputs.outputs.enable-lto }}"
+          echo "│ Cron (if scheduled):  ${{ github.event.schedule || 'N/A' }}"
+          echo "└─────────────────────────────────────────────────────────────┘"
+          echo "::endgroup::"
+
+          echo "::group::📊 Workflow Context Information"
+          echo "Run ID: ${{ github.run_id }}"
+          echo "Run Number: ${{ github.run_number }}"
+          echo "Run Attempt: ${{ github.run_attempt }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Branch/Ref: ${{ github.ref_name }}"
+          echo "::endgroup::"
 
   build-artifact:
     needs: [resolve-inputs]
@@ -848,21 +903,21 @@ jobs:
           needs.resolve-inputs.outputs.sweep-name != 'ALL SWEEPS (Model Traced)' &&
           needs.resolve-inputs.outputs.sweep-name != 'ALL SWEEPS (Lead Models)'
         run: |
-          python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ needs.resolve-inputs.outputs.sweep-name }} --tag ci-main
+          python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ needs.resolve-inputs.outputs.sweep-name }} --group-by ${{ needs.resolve-inputs.outputs.generate-sweeps-group-by }} --tag ci-main
       - name: Run ttnn sweeps generation (all sweeps - model traced)
         if: needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Model Traced)'
         run: |
-          python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced all --suite-name model_traced --group-by hw --tag ci-main
+          python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced all --suite-name model_traced --group-by ${{ needs.resolve-inputs.outputs.generate-sweeps-group-by }} --tag ci-main
       - name: Run ttnn sweeps generation (all sweeps - lead models)
         if: needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Lead Models)'
         run: |
-          python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced lead --suite-name model_traced --group-by hw --tag ci-main
+          python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced lead --suite-name model_traced --group-by ${{ needs.resolve-inputs.outputs.generate-sweeps-group-by }} --tag ci-main
       - name: Run ttnn sweeps generation (nightly/comprehensive)
         if: >-
           needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Nightly)' ||
           needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Comprehensive)'
         run: |
-          python3 tests/sweep_framework/sweeps_parameter_generator.py --tag ci-main
+          python3 tests/sweep_framework/sweeps_parameter_generator.py --group-by ${{ needs.resolve-inputs.outputs.generate-sweeps-group-by }} --tag ci-main
       - name: Upload sweep vectors
         uses: actions/upload-artifact@v4
         with:
@@ -1220,6 +1275,19 @@ jobs:
           fi
           echo "RUN_TYPE=$RUN_TYPE" >> $GITHUB_ENV
           python3 tests/sweep_framework/run_collective_update.py --run-type "$RUN_TYPE"
+      - name: Print sweep run stats
+        continue-on-error: true
+        run: |
+          python3 tests/sweep_framework/print_run_stats.py \
+            --results-dir /work/tests/sweep_framework/results_export \
+            --run-type "$RUN_TYPE"
+      - name: Publish sweep run stats summary
+        continue-on-error: true
+        run: |
+          python3 tests/sweep_framework/print_run_stats.py \
+            --results-dir /work/tests/sweep_framework/results_export \
+            --run-type "$RUN_TYPE" \
+            --format markdown >> "$GITHUB_STEP_SUMMARY"
       - name: Upload runs
         uses: actions/upload-artifact@v4
         with:
