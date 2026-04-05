@@ -1,0 +1,8 @@
+﻿ttnn.model\_preprocessing.preprocess\_model
+===========================================
+
+.. currentmodule:: ttnn.model_preprocessing
+
+.. _ttnn.model_preprocessing.preprocess_model:
+
+.. autofunction:: ttnn.model_preprocessing.preprocess_model
