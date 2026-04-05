@@ -88,9 +88,11 @@ void kernel_main() {
     constexpr uint32_t num_idle_cores = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
     constexpr uint32_t cb_untilize_out_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 2);
     constexpr uint32_t cb_compute_ack_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 3);
+    constexpr uint32_t cb_untilized_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 4);
 #else
     constexpr uint32_t cb_untilize_out_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
     constexpr uint32_t cb_compute_ack_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
+    constexpr uint32_t cb_untilized_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 2);
 #endif
 
     // ===== Runtime Args =====
@@ -107,8 +109,8 @@ void kernel_main() {
     uint32_t zero_init_semaphore_address = get_semaphore(zero_init_semaphore_id);
     uint32_t zero_init_barrier_address = get_semaphore(zero_init_barrier_semaphore_id);
 
-    DPRINT_COMBINE << "Combine Reader: experts=[" << expert_start_idx << "," << expert_end_idx << ")"
-                   << " linearized_mesh_coord=" << linearized_mesh_coord << ENDL();
+    // DPRINT_COMBINE << "Combine Reader: experts=[" << expert_start_idx << "," << expert_end_idx << ")"
+    //                << " linearized_mesh_coord=" << linearized_mesh_coord << ENDL();
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr, aligned_output_page_size);
 
@@ -160,25 +162,33 @@ void kernel_main() {
 
     // Set up scratch buffers for batched reads
     constexpr uint32_t read_batch_size = 32;
-    cb_reserve_back(cb_dispatched_buffer_id, read_batch_size);
+    cb_reserve_back(cb_dispatched_buffer_id, hidden_size / 32);
     uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
+    // DPRINT_COMBINE << "dispatched_buffer scratch addr: " << buffer_base << ENDL();
     cb_reserve_back(cb_dispatched_metadata_id, read_batch_size);
     uint32_t metadata_base = get_write_ptr(cb_dispatched_metadata_id);
-
+    // DPRINT_COMBINE << "dispatched_metadata scratch addr: " << metadata_base << ENDL();
+    cb_reserve_back(cb_untilized_id, read_batch_size);
+    uint32_t untilize_base = get_write_ptr(cb_untilized_id);
+    // DPRINT_COMBINE << "cb_untilized_id scratch addr: " << untilize_base << ENDL();
     const auto dispatched_buffer_addr_gen =
         TensorAccessor(dispatched_buffer_args, dispatched_buffer_addr, aligned_dispatched_buffer_page_size);
     const auto dispatched_metadata_addr_gen =
         TensorAccessor(dispatched_metadata_args, dispatched_metadata_addr, aligned_dispatched_metadata_page_size);
 
     constexpr auto expert_stride = max_dispatched_tokens_per_expert;
+    constexpr auto expert_stride_tile = (max_dispatched_tokens_per_expert / 32) * (hidden_size / 32);
+    // DPRINT_COMBINE << "expert_stride=" << expert_stride << " expert_stride_tile=" << expert_stride_tile << ENDL();
 
     // Process each expert in assigned range
     for (uint32_t local_expert = expert_start_idx; local_expert < expert_end_idx; local_expert++) {
+        uint32_t tile_batch_counter = 0;
         uint32_t start_page = local_expert * expert_stride;
         uint32_t expert_tokens = experts_tok_counter_l1[local_expert];
         uint32_t end_page = start_page + expert_tokens;
+        uint32_t start_page_tiled = local_expert * expert_stride_tile;
 
-        DPRINT_COMBINE << "Expert=" << local_expert << " tokens=" << expert_tokens << ENDL();
+        // DPRINT_COMBINE << "Expert=" << local_expert << " tokens=" << expert_tokens << ENDL();
 
         // Prefetch first batch
         uint32_t first_batch_end = (start_page + read_batch_size < end_page) ? start_page + read_batch_size : end_page;
@@ -186,13 +196,32 @@ void kernel_main() {
         if (first_batch_count > 0) {
             for (uint32_t t = 0; t < first_batch_count; t++) {
                 noc_async_read_page(
-                    start_page + t, dispatched_buffer_addr_gen, buffer_base + t * aligned_dispatched_buffer_page_size);
-                noc_async_read_page(
                     start_page + t,
                     dispatched_metadata_addr_gen,
                     metadata_base + t * aligned_dispatched_metadata_page_size);
             }
+            for (uint32_t t = 0; t < hidden_size / 32; t++) {
+                noc_async_read_page(
+                    start_page_tiled + t,
+                    dispatched_buffer_addr_gen,
+                    buffer_base + t * aligned_dispatched_buffer_page_size);
+            }
             noc_async_read_barrier();
+
+            // Debug: dump all tiles from cb_dispatched_buffer (c_0) — chip 0, first expert only
+            if (linearized_mesh_coord == 0 && local_expert == expert_start_idx) {
+                volatile tt_l1_ptr uint16_t* tile_data = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(buffer_base);
+                constexpr uint32_t num_tiles = hidden_size / 32;            // 224
+                constexpr uint32_t vals_per_tile = 32 * 32;                 // 1024
+                constexpr uint32_t total_vals = num_tiles * vals_per_tile;  // 229376
+                DPRINT_COMBINE << "TILE_DUMP tiles=" << num_tiles << " vals_per_tile=" << vals_per_tile << ENDL();
+                for (uint32_t i = 0; i < total_vals; i += 8) {
+                    for (uint32_t j = 0; j < 8 && (i + j) < total_vals; j++) {
+                        DPRINT_COMBINE << (uint32_t)tile_data[i + j] << " ";
+                    }
+                }
+                DPRINT_COMBINE << ENDL();
+            }
 
             // Push one page to untilize output CB (compute kernel reads value to check for sentinel)
             cb_reserve_back(cb_untilize_out_id, 1);
@@ -204,6 +233,20 @@ void kernel_main() {
             // Wait for compute kernel to ack via CB
             cb_wait_front(cb_compute_ack_id, 1);
             cb_pop_front(cb_compute_ack_id, 1);
+
+            // Debug: dump all read_batch_size rows of cb_untilized_id (c_19) — chip 0, first expert only
+            if (linearized_mesh_coord == 0 && local_expert == expert_start_idx) {
+                volatile tt_l1_ptr uint16_t* rm_data = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(untilize_base);
+                constexpr uint32_t total_rm_vals = read_batch_size * hidden_size;  // 32 * 7168 = 229376
+                DPRINT_COMBINE << "RM_DUMP rows=" << read_batch_size << " cols=" << hidden_size << ENDL();
+                for (uint32_t i = 0; i < total_rm_vals; i += 8) {
+                    for (uint32_t j = 0; j < 8 && (i + j) < total_rm_vals; j++) {
+                        DPRINT_COMBINE << (uint32_t)rm_data[i + j] << " ";
+                    }
+                }
+                DPRINT_COMBINE << ENDL();
+            }
+            tile_batch_counter++;
         }
 
         for (uint32_t batch_start = start_page; batch_start < end_page; batch_start += read_batch_size) {
@@ -212,7 +255,7 @@ void kernel_main() {
             bool batch_did_local_write = false;
 
             for (uint32_t t = 0; t < batch_count; t++) {
-                uint32_t buffer_scratch_addr = buffer_base + t * aligned_dispatched_buffer_page_size;
+                uint32_t buffer_scratch_addr = untilize_base + t * aligned_output_page_size;
                 uint32_t metadata_scratch_addr = metadata_base + t * aligned_dispatched_metadata_page_size;
                 volatile tt_l1_ptr uint32_t* metadata =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_scratch_addr);
@@ -245,8 +288,7 @@ void kernel_main() {
                         // Push output payload to writer
                         cb_reserve_back(cb_output_for_writer_id, 1);
                         uint32_t output_dst = get_write_ptr(cb_output_for_writer_id);
-                        noc_async_read(
-                            get_noc_addr(buffer_scratch_addr), output_dst, aligned_dispatched_buffer_page_size);
+                        noc_async_read(get_noc_addr(buffer_scratch_addr), output_dst, aligned_output_page_size);
                         noc_async_read_barrier();
                         cb_push_back(cb_output_for_writer_id, 1);
                     }
@@ -255,6 +297,7 @@ void kernel_main() {
 
             // Issue next batch reads BEFORE write barrier
             uint32_t next_batch_start = batch_start + read_batch_size;
+            uint32_t next_batch_start_tiled = start_page_tiled + tile_batch_counter * hidden_size / 32;
             bool has_next_batch = (next_batch_start < end_page);
             if (has_next_batch) {
                 uint32_t next_batch_end =
@@ -263,13 +306,16 @@ void kernel_main() {
                 for (uint32_t t = 0; t < next_batch_count; t++) {
                     noc_async_read_page(
                         next_batch_start + t,
-                        dispatched_buffer_addr_gen,
-                        buffer_base + t * aligned_dispatched_buffer_page_size);
-                    noc_async_read_page(
-                        next_batch_start + t,
                         dispatched_metadata_addr_gen,
                         metadata_base + t * aligned_dispatched_metadata_page_size);
                 }
+                for (uint32_t t = 0; t < hidden_size / 32; t++) {
+                    noc_async_read_page(
+                        next_batch_start_tiled + t,
+                        dispatched_buffer_addr_gen,
+                        buffer_base + t * aligned_dispatched_buffer_page_size);
+                }
+                tile_batch_counter++;
             }
 
             if (batch_did_local_write) {
@@ -278,6 +324,16 @@ void kernel_main() {
 
             if (has_next_batch) {
                 noc_async_read_barrier();
+                // Push one page to untilize output CB (compute kernel reads value to check for sentinel)
+                cb_reserve_back(cb_untilize_out_id, 1);
+                volatile tt_l1_ptr uint32_t* untilize_page =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_untilize_out_id));
+                untilize_page[0] = 0;  // not sentinel
+                cb_push_back(cb_untilize_out_id, 1);
+
+                // Wait for compute kernel to ack via CB
+                cb_wait_front(cb_compute_ack_id, 1);
+                cb_pop_front(cb_compute_ack_id, 1);
             }
         }
     }

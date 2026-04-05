@@ -12,21 +12,24 @@
 #include "api/compute/pack_untilize.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "api/debug/dprint.h"
 
 // Compile-time args:
 //   0: cb_untilize_out_id - CB for reader->compute messages (sentinel-terminated)
 //   1: cb_compute_ack_id  - CB for compute->reader ack signal
 //   2: cb_in_id           - CB for untilize input (c_0, data already present)
 //   3: cb_untilized_id    - CB for untilize output (c_19)
+//   4: hidden_size        - hidden dimension (e.g., 7168)
 void kernel_main() {
     constexpr uint32_t cb_untilize_out_id = get_compile_time_arg_val(0);
     constexpr uint32_t cb_compute_ack_id = get_compile_time_arg_val(1);
     constexpr uint32_t cb_in_id = get_compile_time_arg_val(2);
     constexpr uint32_t cb_untilized_id = get_compile_time_arg_val(3);
+    constexpr uint32_t hidden_size = get_compile_time_arg_val(4);
 
     // 7168 / 32 = 224 tiles per tile-row, 8 tiles per DEST section = 28 blocks
     constexpr uint32_t block_ct_dim = 8;
-    constexpr uint32_t full_ct_dim = 224;                        // 7168 / 32
+    constexpr uint32_t full_ct_dim = hidden_size / 32;           // 7168 / 32
     constexpr uint32_t num_blocks = full_ct_dim / block_ct_dim;  // 28
 
     // Initialize pack_untilize with block_ct_dim=8, full_ct_dim=224
@@ -39,9 +42,7 @@ void kernel_main() {
         cb_pop_front(cb_untilize_out_id, 1);
 
         if (val == 0xFFFFFFFF) {
-            // Ack the sentinel and exit
-            cb_reserve_back(cb_compute_ack_id, 1);
-            cb_push_back(cb_compute_ack_id, 1);
+            // exit
             break;
         }
 

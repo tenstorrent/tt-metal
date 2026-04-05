@@ -175,7 +175,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         program,
         sender_core_grid,
         dispatched_buffer,
-        /*buffering_factor=*/read_batch_size,
+        /*buffering_factor=*/hidden_size / 32,
         /*cb_id=*/tt::CBIndex::c_0,
         "dispatched_buffer_scratch");
     // c_17: 1-page CB on sender cores only (for future untilize output)
@@ -198,7 +198,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     detail::create_tensor_cb(
         program,
         sender_core_grid,
-        dispatched_buffer,
+        output_tensor,
         /*buffering_factor=*/read_batch_size,
         /*cb_id=*/tt::CBIndex::c_19,
         "untilized_data");
@@ -234,7 +234,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     detail::create_tensor_cb(
         program,
         sender_core_grid,
-        dispatched_buffer,
+        output_tensor,
         /*buffering_factor=*/16,
         /*cb_id=*/tt::CBIndex::c_4,
         "output_for_writer");
@@ -421,6 +421,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     }
     reader_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_17));  // cb_untilize_out_id
     reader_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_18));  // cb_compute_ack_id
+    reader_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_19));  // cb_untilized_id
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -454,6 +455,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
                 static_cast<uint32_t>(tt::CBIndex::c_18),  // cb_compute_ack_id
                 static_cast<uint32_t>(tt::CBIndex::c_0),   // cb_in_id (untilize input)
                 static_cast<uint32_t>(tt::CBIndex::c_19),  // cb_untilized_id (untilize output)
+                static_cast<uint32_t>(hidden_size),        // hidden_size
             }});
     // Pre-compute NOC coordinates for all sender cores (for inter-core barrier signaling)
     std::vector<std::pair<uint32_t, uint32_t>> sender_noc_coords;
