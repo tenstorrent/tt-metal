@@ -43,7 +43,7 @@ An example with the different features available is shown below:
     #include "api/debug/dprint.h"  // required in all kernels using DPRINT
 
     void kernel_main() {
-        // Supported scalar types: bool (prints 0/1), all fixed-width integer types
+        // Supported scalar types: bool (prints 0/1), char, all fixed-width integer types
         // (uint8_t-uint64_t, int8_t-int64_t), float, and const char*.
         DPRINT << "Test string" << 'a' << 5 << 0.123456f << ENDL();
         // bool prints as 0 or 1
