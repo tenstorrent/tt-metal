@@ -237,7 +237,7 @@ void MetalContext::initialize(
                 tt::LogMetal,
                 "DPRINT is deprecated and will be removed in a future release. "
                 "Please migrate to DEVICE_PRINT by:\n"
-                "  1. Replace #include \"debug/dprint.h\" with #include \"debug/device_print.h\" in your kernels\n"
+                "  1. Replace #include \"api/debug/dprint.h\" with #include \"api/debug/device_print.h\" in your kernels\n"
                 "  2. Replace DPRINT << ... << ENDL() with DEVICE_PRINT(\"...\", args)\n"
                 "  3. Set TT_METAL_DEVICE_PRINT=1 to enable the new DEVICE_PRINT system\n"
                 "For more information, see the DEVICE_PRINT documentation.");
