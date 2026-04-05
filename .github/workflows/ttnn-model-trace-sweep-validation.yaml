@@ -12,7 +12,7 @@ on:
         type: boolean
         description: "Continue if some, but not all, config hashes change during preflight"
         required: false
-        default: false
+        default: true
 
 permissions:
   contents: read
