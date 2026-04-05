@@ -301,129 +301,18 @@ jobs:
         # with the models chart in models/README.md
         python .github/scripts/utils/model-charts-sync.py
 
-  # A lightweight ClangTidy scan.  It does not detect all issues, but is cheap
-  # enough to run during PRs without bringing infra to a grinding halt.
-  # A proper scan is run in Merge Gate to ensure only clean code lands.
-  clang-tidy-light:
+  # Full clang-tidy scan using the same checks enforced at merge gate.
+  # Runs the shim-based incremental analysis (Ninja dep graph, not clang-tidy-diff)
+  # so header changes propagate correctly. Violations here are identical to what
+  # would cause a merge queue eviction — catching them early saves ~24h of turnaround.
+  code-analysis:
     needs: [build-docker-images]
     if: github.event_name == 'pull_request' && !github.event.pull_request.draft
-    timeout-minutes: 140
-    runs-on: ubuntu-latest
-    container: ${{ needs.build-docker-images.outputs.ci-build-tag }}
-    permissions:
-      pull-requests: write
-      contents: write  # to allow auto-closing conversations
-    steps:
-    - name: Change ownership of /github/home
-      run: sudo chown -R $(whoami) /github/home  # Thanks GH...
-    - uses: actions/checkout@v4
-      with:
-        ref: >-
-          ${{ github.event_name == 'pull_request' &&
-              github.event.pull_request.head.sha || '' }}
-        fetch-depth: 0
-        submodules: "recursive"
-    - name: Set safe directory for Git
-      run: git config --global --add safe.directory $GITHUB_WORKSPACE
-    - name: Fetch base branch
-      timeout-minutes: 5
-      run: |
-        BASE_REPO="${{ github.event.pull_request.base.repo.full_name }}"
-        BASE_REF="${{ github.event.pull_request.base.ref }}"
-        git remote add upstream "https://github.com/${BASE_REPO}"
-        git fetch --no-tags upstream "${BASE_REF}"
-    - name: Install clang-tidy
-      timeout-minutes: 10
-      run: |
-        sudo apt-get update
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-          clang-tidy-20 python3.11 python3.11-venv python3.11-dev
-        sudo ln -s $(which clang-tidy-20) /usr/local/bin/clang-tidy
-        uv pip install pyyaml  # Needed for clang-tidy-diff-20.py
-    - name: Prepare .clang-tidy with extra checks
-      run: |
-        if [ -f .clang-tidy-light ]; then
-          grep -v -F -f .clang-tidy-light .clang-tidy > .clang-tidy-new
-          mv .clang-tidy-new .clang-tidy
-        fi
-        cat .clang-tidy
-    - name: CMake configure
-      # CPM downloads third-party packages from the internet; give a generous
-      # timeout to accommodate slow network days.
-      # Note: actions/cache doesn't work with containerized jobs (post-step
-      # runs after the container is removed, hashFiles fails). Dropped for now.
-      timeout-minutes: 25
-      run: |
-        cmake -B build \
-          -DCMAKE_BUILD_TYPE=Debug \
-          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-          -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON \
-          -DBUILD_TT_TRAIN=ON \
-          -DTT_METAL_BUILD_TESTS=ON \
-          -DTTNN_BUILD_TESTS=ON \
-          -DTT_UNITY_BUILDS=OFF \
-          -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
-    - name: Build generated files
-      timeout-minutes: 10
-      run: cmake --build build --target all_generated_files
-    - name: 'Install jq'
-      uses: dcarbone/install-jq-action@v2
-    - name: Create results directory
-      run: |
-        mkdir clang-tidy-result
-    - name: Analyze
-      # Big PRs will have a LOT to scan, but this should be enough for everyone
-      timeout-minutes: 90
-      shell: bash
-      run: |
-        set -euo pipefail
-
-        # Find all touched files present in compile_commands.json
-        # This is not as simple as filtering non-code files, as some code
-        # (eg: Kernels) are C++ code that is not built at this level, and
-        # thus clang-tidy will be unable to process them.
-        PREFIX=$(pwd)
-        jq --arg prefix "$PREFIX/" -r \
-          '.[].file | sub("^" + $prefix; "")' \
-          build/compile_commands.json > relative_files_in_build.txt
-        BASE_REF="${{ github.event.pull_request.base.ref }}"
-        git diff --name-only \
-          "$(git merge-base HEAD "upstream/${BASE_REF}")..." > changed_files.txt
-        grep -F -f relative_files_in_build.txt changed_files.txt > common_files.txt || true
-
-        # Exit if there are no modified files known to CMake
-        [[ -s common_files.txt ]] || {
-          echo "No files to analyze"
-          exit 0
-        }
-
-        # Analyze the relevant diffs of the relevant files
-        BASE_REF="${{ github.event.pull_request.base.ref }}"
-        git diff "$(git merge-base HEAD "upstream/${BASE_REF}")" \
-          -- $(cat common_files.txt) > filtered_changes.diff
-        clang-tidy-diff-20.py -p1 -path build \
-          -export-fixes clang-tidy-result/fixes.yml \
-          -j$(nproc) < filtered_changes.diff
-
-        # TODO: Find a way to fail THIS step if there's some USEFUL issues
-        # detected. For now disable it b/c it fails if it finds things in
-        # non-user code and/or NOLINT's.
-        # # Draw attention to this step (make it an error) if there are fixes
-        # # to be addressed.
-        # [[ -s clang-tidy-result/fixes.yml ]] && exit 42
-    - name: Run clang-tidy-pr-comments action
-      if: ${{ !cancelled() && github.event.pull_request.head.repo.fork == false }}
-      # v1.8.0
-      uses: platisd/clang-tidy-pr-comments@28cfb84edafa771c044bde7e4a2a3fae57463818
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        clang_tidy_fixes: clang-tidy-result/fixes.yml
-        request_changes: false  # TODO: consider enabling this?
-        suggestions_per_comment: 10  # arbitrary limit to avoid GH API timeouts
-        # Pip fails if the action attempts to install its own Python; Sidestep that
-        python_path: python3
-        # NOTE: only resolves when ALL are fixed
-        auto_resolve_conversations: true
+    uses: ./.github/workflows/code-analysis.yaml
+    secrets: inherit
+    with:
+      platform: "Ubuntu 22.04"
+      ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
 
   # LLK Functional Unit Tests on Wormhole (PR gate - runs when LLK engine, tests, or perf code changed)
   llk-test-wormhole:
@@ -501,7 +390,7 @@ jobs:
       - ttnn-smoke-tests
       - build
       - metalium-examples
-      - clang-tidy-light
+      - code-analysis
       - model-charts-sync
       - build-docs
       - llk-test-wormhole
@@ -512,7 +401,7 @@ jobs:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
-          required-jobs: "asan-build, build"
+          required-jobs: "asan-build, build, code-analysis"
           optional-jobs: >-
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
             model-charts-sync, build-docs,
