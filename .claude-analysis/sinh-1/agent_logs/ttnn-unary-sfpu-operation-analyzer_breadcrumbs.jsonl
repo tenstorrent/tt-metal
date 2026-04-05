@@ -1,0 +1,4 @@
+{"ts":"2026-04-05T20:17:35+00:00","event":"start","agent":"ttnn-unary-sfpu-operation-analyzer","operation":"rpow","input_files":["ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp"]}
+{"ts":"2026-04-05T20:17:58+00:00","event":"start","agent":"ttnn-unary-sfpu-operation-analyzer","operation":"lgamma","input_files":["ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp"]}
+{"event":"start","operation":"rpow","input_files":["ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp"],"ts":"2026-04-05T20:18:04+00:00"}
+{"event":"start","operation":"lgamma","input_files":["ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp"],"ts":"2026-04-05T20:18:06+00:00"}
