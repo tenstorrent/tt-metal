@@ -119,6 +119,15 @@ def _golden_function_softshrink(input_tensor_a, *args, lambd=0.5, **kwargs):
 ttnn.attach_golden_function(ttnn.softshrink, golden_function=_golden_function_softshrink)
 
 
+def _golden_function_frac(input_tensor_a, *args, **kwargs):
+    import torch
+
+    return torch.frac(input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn.frac, golden_function=_golden_function_frac)
+
+
 try:
     SigmoidMode = ttnn._ttnn.operations.unary.SigmoidMode
 except AttributeError:
