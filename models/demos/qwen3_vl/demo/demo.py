@@ -518,7 +518,7 @@ def test_demo(
 
         # Start decoding
         iteration = 0
-        argmax_on_device = sampling_params["temperature"] == 0
+        argmax_on_device = False
         if argmax_on_device:
             device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
         else:
