@@ -1,0 +1,16 @@
+operations:
+  - src_a: "input_A"
+    src_b: "input_B"
+    output: "datacopy_out"
+    src_a_dims: [256, 256]
+    src_b_dims: [256, 256]
+    output_dims: [256, 256]
+    input_format: "Float16_b"
+    output_format: "Float16_b"
+    math:
+      - type: "Fpu"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+    packer: "Packer"
+    math_fidelity: "HiFi2"
+    block_size: [64, 128]

@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# --- Configuration ---
+VENV_DIR=".venv"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# --- Functions ---
+
+# Print usage info
+usage() {
+    echo "Usage: $0 [--reuse] [--clean] [--help]"
+    echo "  --reuse      Skip setup steps if a virtual environment already exists."
+    echo "  --clean      Remove existing setup (virtual environment, temporary files)."
+    echo "  --help       Display this help message."
+    exit 1
+}
+
+# Check for required system commands
+check_deps() {
+    for cmd in python3 git wget sudo; do
+        if ! command -v "$cmd" &> /dev/null; then
+            echo "Error: Required command '$cmd' is not installed." >&2
+            exit 1
+        fi
+    done
+}
+
+# Check for supported Python version
+check_python_version() {
+    PYTHON_VERSION=$(python3 --version 2>&1 | cut -d' ' -f2)
+    if [[ "$PYTHON_VERSION" != "3.8"* && "$PYTHON_VERSION" != "3.10"* ]]; then
+        echo "Error: Only Python 3.8 or 3.10 are supported. Detected: $PYTHON_VERSION" >&2
+        exit 1
+    fi
+    echo "Supported Python version detected: $PYTHON_VERSION"
+}
+
+# --- Main Script ---
+
+# Parse arguments
+REUSE=false
+CLEAN=false
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --reuse) REUSE=true ;;
+        --clean) CLEAN=true ;;
+        --help) usage ;;
+        *) echo "Unknown option: $1"; usage ;;
+    esac
+    shift
+done
+
+# Handle --clean flag
+if [[ "$CLEAN" == true ]]; then
+    echo "Cleaning up environment..."
+    rm -rf sfpi "$VENV_DIR" arch.dump sfpi-release.tgz
+    echo "Cleanup complete."
+    exit 0
+fi
+
+# Initial checks
+check_deps
+check_python_version
+
+# Deactivate any active virtual environment
+if [[ -n "${VIRTUAL_ENV:-}" ]]; then
+    echo "Deactivating current Python environment: $VIRTUAL_ENV"
+    deactivate
+fi
+
+# Main setup logic
+if [[ "$REUSE" == false || ! -d "$VENV_DIR" ]]; then
+    echo "Performing full setup..."
+
+    # Install system packages
+    echo "Updating and installing system packages..."
+    sudo apt-get update
+    sudo apt-get install -y curl cmake software-properties-common build-essential libyaml-cpp-dev libhwloc-dev libzmq3-dev git-lfs xxd wget
+
+    # Create virtual environment
+    echo "Creating Python virtual environment..."
+    rm -rf "$VENV_DIR"
+    python3 -m venv "$VENV_DIR"
+    # shellcheck source=/dev/null
+    source "$VENV_DIR/bin/activate"
+
+    # Upgrade pip
+    echo "Upgrading pip..."
+    pip install --upgrade pip
+    pip install uv
+
+    # Install all Python dependencies
+    echo "Installing Python dependencies..."
+    uv pip install -q --index-strategy unsafe-best-match --no-cache-dir -r requirements.txt
+
+    # Download and extract SFPI release
+    ./setup_testing_env.sh
+else
+    echo "Reusing existing virtual environment."
+fi
+
+# Activate the virtual environment for the current shell
+# shellcheck source=/dev/null
+source "$VENV_DIR/bin/activate"
