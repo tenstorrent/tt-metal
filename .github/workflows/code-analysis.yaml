@@ -237,4 +237,3 @@ jobs:
       merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
       prereq-targets: 'tt_metal ttnn'
       scan-targets: ''
-
