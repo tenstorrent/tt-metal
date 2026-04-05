@@ -15,11 +15,6 @@ on:
         required: false
         type: string
         default: "amd64"
-      enable-static-analysis:
-        description: "Enable Clang Static Analyzer (CSA) via CodeChecker"
-        required: false
-        type: boolean
-        default: false
       # Pre-built Docker image tags (optional - if provided, skips docker build)
       ci-build-docker-image:
         required: false
@@ -31,13 +26,6 @@ on:
         type: string
         default: ""
         description: "Pre-built Dev Docker image tag"
-      debug-file-filter:
-        description: >-
-          Analyze only specific file(s) for fast debugging
-          (e.g., 'tests/tt_metal/**/*.hpp' or 'path/to/file.cpp')
-        required: false
-        type: string
-        default: ""
       build-type:
         required: false
         type: string
@@ -54,18 +42,6 @@ on:
         required: false
         type: string
         default: "amd64"
-      enable-static-analysis:
-        description: "Enable Clang Static Analyzer (CSA) via CodeChecker"
-        required: false
-        type: boolean
-        default: false
-      debug-file-filter:
-        description: >-
-          Analyze only specific file(s) for fast debugging
-          (e.g., 'tests/tt_metal/**/*.hpp' or 'path/to/file.cpp')
-        required: false
-        type: string
-        default: ""
       platform:
         required: false
         type: choice
@@ -262,166 +238,3 @@ jobs:
       prereq-targets: 'tt_metal ttnn'
       scan-targets: ''
 
-  clang-static-analyzer:
-    name: 🔬 Clang Static Analyzer
-    needs: [ build-docker-image ]
-    if: >-
-      ${{ always() && !failure() && !cancelled() &&
-          (inputs.enable-static-analysis == true || github.event_name == 'schedule') }}
-    timeout-minutes: 300
-    runs-on: tt-ubuntu-2204-xlarge-stable
-    container:
-      image: >-
-        harbor.ci.tenstorrent.net/${{
-          inputs.ci-build-docker-image ||
-          needs.build-docker-image.outputs.ci-build-tag ||
-          'docker-image-unresolved!'}}
-      volumes:
-        - ${{ github.workspace }}:/work
-        # HACK: make actions available inside container
-        - ${{ github.workspace }}/../../_actions:${{ github.workspace }}/../../_actions
-      options: --tmpfs /tmp
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
-    steps:
-      - name: Check out repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          submodules: recursive
-
-      - name: Configure git safe.directory
-        run: git config --global --add safe.directory /work
-
-      - name: 🔧 CMake configure
-        run: cmake --preset clang-static-analyzer
-
-      - name: 🛠️ Generate files
-        run: cmake --build .build/clang-static-analyzer --target all_generated_files
-
-      - name: Setup clang symlinks for CodeChecker
-        run: |
-          update-alternatives --install /usr/bin/clang clang /usr/bin/clang-20 100
-          update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-20 100
-
-      - name: Install CodeChecker
-        run: |
-          # Pre-install CodeChecker in the container's venv using uv.
-          # Pin to a specific version for reproducibility.
-          uv pip install codechecker==6.27.1
-
-      - name: 🔬 Analyze with CodeChecker
-        id: codechecker
-        run: |
-          set -euo pipefail
-
-          OUTPUT_DIR=/work/.build/codechecker-reports
-          mkdir -p "$OUTPUT_DIR"
-
-          echo "=== Starting CodeChecker analysis ==="
-
-          # Build command with optional file filter
-          ANALYZE_CMD="CodeChecker analyze \
-            /work/.build/clang-static-analyzer/compile_commands.json \
-            --output $OUTPUT_DIR \
-            --jobs $(nproc) \
-            --config /work/.codechecker.json"
-
-          if [ -n "${{ inputs.debug-file-filter }}" ]; then
-            echo "🐛 DEBUG MODE: Analyzing only: ${{ inputs.debug-file-filter }}"
-            ANALYZE_CMD="$ANALYZE_CMD --file '${{ inputs.debug-file-filter }}'"
-          fi
-
-          # Run analysis (don't fail on analyzer crashes - common with static analysis)
-          eval "$ANALYZE_CMD" || echo "⚠️ Analysis completed with warnings"
-
-          # Set output for downstream steps
-          echo "analyze-output=$OUTPUT_DIR" >> "$GITHUB_OUTPUT"
-
-          # Show summary
-          PLIST_COUNT=$(find "$OUTPUT_DIR" -name "*.plist" 2>/dev/null | wc -l)
-          echo "✅ Generated $PLIST_COUNT plist files"
-
-      - name: Generate JSON and HTML reports from analysis results
-        run: |
-          set -euo pipefail
-
-          OUTPUT_DIR="${{ steps.codechecker.outputs.analyze-output }}"
-          JSON_OUTPUT="/work/.build/codechecker_issues.json"
-          HTML_OUTPUT="/work/.build/codechecker_html"
-
-          echo "=== Generating JSON report ==="
-          # CodeChecker parse can fail if no issues found or plist files corrupted - that's OK
-          CodeChecker parse "$OUTPUT_DIR" --export json --output "$JSON_OUTPUT" || true
-
-          if [ -f "$JSON_OUTPUT" ] && [ -s "$JSON_OUTPUT" ]; then
-            ISSUE_COUNT=$(jq '.reports | length' "$JSON_OUTPUT" || echo "0")
-            echo "✅ JSON report contains $ISSUE_COUNT issues"
-          else
-            echo "⚠️ No JSON output, creating empty report"
-            echo '{"version": 1, "reports": []}' > "$JSON_OUTPUT"
-          fi
-
-          echo ""
-          echo "=== Generating HTML report ==="
-          mkdir -p "$HTML_OUTPUT"
-          # Same as above - parse can fail for non-fatal reasons
-          CodeChecker parse "$OUTPUT_DIR" --export html --output "$HTML_OUTPUT" || true
-
-          if [ -d "$HTML_OUTPUT" ] && [ -n "$(ls -A "$HTML_OUTPUT")" ]; then
-            echo "✅ HTML report generated"
-          else
-            echo "⚠️ HTML report is empty or missing"
-          fi
-
-      - name: Upload JSON report
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: CodeChecker-JSON-Report
-          path: /work/.build/codechecker_issues.json
-
-      - name: Upload HTML report
-        uses: actions/upload-artifact@v4
-        if: always()
-        timeout-minutes: 10
-        with:
-          name: CodeChecker-HTML-Report
-          path: /work/.build/codechecker_html
-
-  publish-clangsa-pages:
-    name: 📄 Publish CSA HTML to GitHub Pages
-    needs: [ clang-static-analyzer ]
-    # Only publish on full scans (skip when debug-file-filter is used)
-    if: >-
-      ${{ always() && needs.clang-static-analyzer.result == 'success' &&
-          inputs.debug-file-filter == '' }}
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Download CodeChecker HTML report
-        uses: actions/download-artifact@v4
-        with:
-          name: CodeChecker-HTML-Report
-          path: site
-
-      - name: Download CodeChecker JSON report
-        uses: actions/download-artifact@v4
-        with:
-          name: CodeChecker-JSON-Report
-          path: site
-
-      - name: Add .nojekyll
-        run: touch site/.nojekyll
-
-      - name: Publish to tenstorrent/tt-metal-clangsa-results (gh-pages)
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          personal_token: ${{ secrets.CLANGSA_RESULTS_PAT }}
-          external_repository: tenstorrent/tt-metal-clangsa-results
-          publish_branch: gh-pages
-          publish_dir: site
-          force_orphan: true
-          commit_message: "Update CSA reports from tt-metal @ ${{ github.sha }}"
