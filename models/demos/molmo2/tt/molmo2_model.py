@@ -549,10 +549,9 @@ class Molmo2Model(LightweightModule):
             f"{frames_per_pass} frames/pass, {num_passes} passes"
         )
 
-        # Mesh mappers for sharding and gathering
+        # Mesh mappers for sharding
         shard_mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
         replicate_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
-        mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
 
         # ============================================================
         # STAGE 1: Run ViT encoding with data parallelism
@@ -631,25 +630,37 @@ class Molmo2Model(LightweightModule):
             vit_output = self.vision_backbone.encode_image(embedded)
             ttnn.deallocate(embedded)
 
-            # Gather results from all devices via CPU (mesh_composer concatenates shards)
-            # Output shape per device: [1, 1, frames_per_device * num_patches, pool_dim]
-            # After gather: [num_devices, 1, frames_per_device * num_patches, pool_dim] on CPU
-            vit_features_torch = ttnn.to_torch(vit_output, mesh_composer=mesh_composer)
+            # Gather on device: all_gather concatenates shards along dim 2
+            # Input per device: [1, 1, frames_per_device * num_patches, pool_dim]
+            # Output per device: [1, 1, num_devices * frames_per_device * num_patches, pool_dim]
+            gathered = ttnn.all_gather(
+                vit_output,
+                dim=2,
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
             ttnn.deallocate(vit_output)
 
-            # Reshape on CPU: [num_devices, 1, frames*patches, dim] -> [1, 1, total_patches, dim]
-            vit_features_torch = vit_features_torch.reshape(1, 1, -1, pool_dim)
-
-            # Trim padding if we padded earlier
+            # Trim padding if we padded earlier (device-side slice)
             actual_patches = actual_frames_this_pass * num_patches_per_frame
-            vit_features_torch = vit_features_torch[:, :, :actual_patches, :]
+            total_patches_gathered = frames_per_pass * num_patches_per_frame
+            if actual_patches < total_patches_gathered:
+                gathered = ttnn.slice(
+                    gathered,
+                    [0, 0, 0, 0],  # slice_start
+                    [1, 1, actual_patches, pool_dim],  # slice_end
+                )
 
-            all_vit_features.append(vit_features_torch)
-            ttnn.synchronize_device(self.mesh_device)
+            all_vit_features.append(gathered)
 
-        # Concatenate all passes on CPU
-        combined_vit_features = torch.cat(all_vit_features, dim=2)
-        logger.info(f"  Combined ViT features: {combined_vit_features.shape}")
+        # Concatenate all passes on device (ttnn.concat)
+        if len(all_vit_features) == 1:
+            combined_features_ttnn = all_vit_features[0]
+        else:
+            combined_features_ttnn = ttnn.concat(all_vit_features, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            for t in all_vit_features:
+                ttnn.deallocate(t)
+        logger.info(f"  Combined ViT features (on device): {combined_features_ttnn.shape}")
 
         # ============================================================
         # STAGE 2: Pool + Project (same as chunked version)
@@ -666,15 +677,7 @@ class Molmo2Model(LightweightModule):
             flat_idx = clipped_idx.reshape(1, -1).to(torch.int32)
             valid_mask = valid.reshape(1, 1, -1, 1).float()
 
-            # Transfer combined features to device
-            combined_features_ttnn = ttnn.from_torch(
-                combined_vit_features,
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=replicate_mapper,
-            )
+            # combined_features_ttnn already on device from Stage 1
 
             idx_ttnn = ttnn.from_torch(
                 flat_idx,
@@ -709,15 +712,7 @@ class Molmo2Model(LightweightModule):
         else:
             logger.debug(f"  Stage 2: Chunked pooling on {batch_size} frames")
 
-            # Transfer combined features to device
-            combined_features_ttnn = ttnn.from_torch(
-                combined_vit_features,
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=replicate_mapper,
-            )
+            # combined_features_ttnn already on device from Stage 1
 
             visual_embeddings = self.vision_backbone.pool_and_project_chunked_ttnn(
                 image_features=combined_features_ttnn,
