@@ -114,6 +114,158 @@ def _masked_mean_query_hf_device(
     return out
 
 
+def preprocess_pooling_indices_device(
+    pooled_patches_idx: torch.Tensor,
+    mesh_device,
+    mesh_mapper,
+) -> Tuple[ttnn.Tensor, ttnn.Tensor, torch.Tensor]:
+    """
+    Preprocess pooling indices ON DEVICE - moves clip/compare ops from CPU to ttnn.
+
+    Transfer raw indices once, do comparison and clamp on device.
+    Pads to tile alignment (multiple of 32) for typecast, then slices back.
+
+    Args:
+        pooled_patches_idx: Raw indices [batch, n_out, k_pool] with -1 for invalid
+        mesh_device: TTNN mesh device
+        mesh_mapper: Mesh mapper for replication
+
+    Returns:
+        Tuple of:
+          - idx_ttnn: Clipped indices [1, batch*n_out*k_pool] as uint32 for embedding
+          - valid_mask_ttnn: Valid mask [1, 1, batch*n_out*k_pool, 1] as bfloat16
+          - valid_token: [batch, n_out] bool tensor on CPU for final filtering
+    """
+    batch_size = pooled_patches_idx.shape[0]
+    n_out = pooled_patches_idx.shape[1]
+    k_pool = pooled_patches_idx.shape[2]
+    total_elements = batch_size * n_out * k_pool
+
+    # Pad to multiple of 32 for tile alignment (required by typecast)
+    padded_elements = ((total_elements + 31) // 32) * 32
+    pad_amount = padded_elements - total_elements
+
+    # Transfer raw indices as float (enables device-side comparison/clamp)
+    idx_float = pooled_patches_idx.reshape(-1).float()
+    if pad_amount > 0:
+        idx_float = torch.nn.functional.pad(idx_float, (0, pad_amount), value=0.0)
+    idx_float = idx_float.reshape(1, padded_elements)
+
+    idx_ttnn_float = ttnn.from_torch(
+        idx_float,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # Device-side: valid_mask = idx >= 0 (returns 1.0 for valid, 0.0 for invalid)
+    zeros = ttnn.zeros_like(idx_ttnn_float)
+    valid_mask_padded = ttnn.ge(idx_ttnn_float, zeros, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(zeros)
+
+    # Device-side: clipped_idx = max(idx, 0)
+    clipped_float = ttnn.clamp(idx_ttnn_float, min=0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(idx_ttnn_float)
+
+    # Convert to uint32 for embedding lookup (now tile-aligned)
+    idx_ttnn_padded = ttnn.typecast(clipped_float, ttnn.uint32)
+    ttnn.deallocate(clipped_float)
+
+    # Slice back to original size if we padded
+    if pad_amount > 0:
+        idx_ttnn = ttnn.slice(idx_ttnn_padded, [0, 0], [1, total_elements])
+        ttnn.deallocate(idx_ttnn_padded)
+        valid_mask_2d = ttnn.slice(valid_mask_padded, [0, 0], [1, total_elements])
+        ttnn.deallocate(valid_mask_padded)
+    else:
+        idx_ttnn = idx_ttnn_padded
+        valid_mask_2d = valid_mask_padded
+
+    # Convert valid mask to TILE_LAYOUT and reshape for masking [1, 1, total_elements, 1]
+    valid_mask_2d = ttnn.to_layout(valid_mask_2d, ttnn.TILE_LAYOUT)
+    valid_mask_ttnn = ttnn.reshape(valid_mask_2d, [1, 1, total_elements, 1])
+
+    # CPU: compute valid_token for final filtering (small tensor, fast)
+    valid = pooled_patches_idx >= 0
+    valid_token = torch.any(valid, dim=-1)  # [batch, n_out]
+
+    return idx_ttnn, valid_mask_ttnn, valid_token
+
+
+def preprocess_pooling_indices_chunk_device(
+    chunk_idx: torch.Tensor,
+    mesh_device,
+    mesh_mapper,
+) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+    """
+    Preprocess pooling indices for a single chunk ON DEVICE.
+
+    Same as preprocess_pooling_indices_device but without valid_token computation
+    (used in chunked pooling where valid_token is computed once for entire batch).
+
+    Args:
+        chunk_idx: Raw indices [chunk_frames, n_out, k_pool] with -1 for invalid
+        mesh_device: TTNN mesh device
+        mesh_mapper: Mesh mapper for replication
+
+    Returns:
+        Tuple of:
+          - idx_ttnn: Clipped indices [1, chunk_frames*n_out*k_pool] as uint32
+          - valid_mask_ttnn: Valid mask [1, 1, chunk_frames*n_out*k_pool, 1] as bfloat16
+    """
+    total_elements = chunk_idx.numel()
+
+    # Pad to multiple of 32 for tile alignment (required by typecast)
+    padded_elements = ((total_elements + 31) // 32) * 32
+    pad_amount = padded_elements - total_elements
+
+    # Transfer raw indices as float (enables device-side comparison/clamp)
+    idx_float = chunk_idx.reshape(-1).float()
+    if pad_amount > 0:
+        idx_float = torch.nn.functional.pad(idx_float, (0, pad_amount), value=0.0)
+    idx_float = idx_float.reshape(1, padded_elements)
+
+    idx_ttnn_float = ttnn.from_torch(
+        idx_float,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # Device-side: valid_mask = idx >= 0
+    zeros = ttnn.zeros_like(idx_ttnn_float)
+    valid_mask_padded = ttnn.ge(idx_ttnn_float, zeros, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(zeros)
+
+    # Device-side: clipped_idx = max(idx, 0)
+    clipped_float = ttnn.clamp(idx_ttnn_float, min=0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(idx_ttnn_float)
+
+    # Convert to uint32 for embedding lookup (now tile-aligned)
+    idx_ttnn_padded = ttnn.typecast(clipped_float, ttnn.uint32)
+    ttnn.deallocate(clipped_float)
+
+    # Slice back to original size if we padded
+    if pad_amount > 0:
+        idx_ttnn = ttnn.slice(idx_ttnn_padded, [0, 0], [1, total_elements])
+        ttnn.deallocate(idx_ttnn_padded)
+        valid_mask_2d = ttnn.slice(valid_mask_padded, [0, 0], [1, total_elements])
+        ttnn.deallocate(valid_mask_padded)
+    else:
+        idx_ttnn = idx_ttnn_padded
+        valid_mask_2d = valid_mask_padded
+
+    # Convert valid mask to TILE_LAYOUT and reshape for masking
+    valid_mask_2d = ttnn.to_layout(valid_mask_2d, ttnn.TILE_LAYOUT)
+    valid_mask_ttnn = ttnn.reshape(valid_mask_2d, [1, 1, total_elements, 1])
+
+    return idx_ttnn, valid_mask_ttnn
+
+
 from models.common.lightweightmodule import LightweightModule
 from models.demos.molmo2.tt.image_pooling import ImagePooling
 from models.demos.molmo2.tt.image_projector import ImageProjector
@@ -1051,31 +1203,11 @@ class VisionBackbone(LightweightModule):
             chunk_end = min(chunk_start + max_frames_per_pool_chunk, batch_size)
             chunk_frames = chunk_end - chunk_start
 
-            # Extract chunk of indices and masks (indices are still GLOBAL)
+            # Extract chunk of indices (indices are still GLOBAL)
             chunk_idx = pooled_patches_idx[chunk_start:chunk_end]  # [chunk_frames, n_out, k_pool]
-            chunk_valid = valid_mask[chunk_start:chunk_end]  # [chunk_frames, n_out, k_pool]
 
-            # Flatten for gather
-            flat_idx = torch.clip(chunk_idx, min=0).reshape(1, -1).to(torch.int32)
-            flat_valid = chunk_valid.reshape(1, 1, -1, 1).float()
-
-            # Move to device
-            idx_ttnn = ttnn.from_torch(
-                flat_idx,
-                device=self.mesh_device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mesh_mapper,
-            )
-            valid_ttnn = ttnn.from_torch(
-                flat_valid,
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mesh_mapper,
-            )
+            # Device-side preprocessing: transfer once, clip/compare on device
+            idx_ttnn, valid_ttnn = preprocess_pooling_indices_chunk_device(chunk_idx, self.mesh_device, mesh_mapper)
 
             # Gather using GLOBAL indices from full feature table
             gathered = ttnn.embedding(
