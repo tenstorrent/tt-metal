@@ -130,6 +130,8 @@ def run_one(label_str):
     t_decode = time.perf_counter()
     tt_output, new_logical_h = tt_model(tt_input, logical_h, use_cache=USE_CACHE)
     t_readback = time.perf_counter()
+    # device_to_host implicitly waits for device completion before transfer —
+    # matches test_performance_wan.py which has no explicit synchronize inside the VAE timer.
     video_torch = ccl_manager.device_to_host(tt_output, concat_dims)
     t_end = time.perf_counter()
     _ = video_torch[:, :, :, :new_logical_h, :]  # slice (CPU, ~0s)
