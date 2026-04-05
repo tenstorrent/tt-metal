@@ -1,0 +1,211 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+#pragma once
+
+#include <cstdint>
+
+#include "ckernel_trisc_common.h"
+
+namespace ckernel::math
+{
+
+// Number of rows for MATH functions
+constexpr static std::uint32_t ELTWISE_MATH_ROWS = MATH_ROWS; // 8 for quasar, 4 for trinity
+constexpr static std::uint32_t MOVE_MATH_ROWS[3] = {8, 4, 1};
+constexpr static unsigned int SFP_ROWS           = 2;
+
+// SFPU register-file base addresses: dest region vs SrcS (used by SFPU load/store)
+constexpr static unsigned int SFPU_DEST_BASE_ADDR = 0x0;
+constexpr static unsigned int SFPU_SRCS_BASE_ADDR = 0x400;
+
+#if defined(LLK_TRISC_ISOLATE_SFPU)
+constexpr static std::uint32_t TRISC_ID = 3;
+#else
+constexpr static std::uint32_t TRISC_ID = 1;
+#endif
+
+// Struct for the ALU addresses
+constexpr std::uint32_t NUM_WORDS_ALU_FORMAT = 3;
+
+typedef struct
+{
+    // word 0
+    std::uint32_t ALU_FORMAT_SPEC_REG_SrcA_val        : 8;
+    std::uint32_t ALU_FORMAT_SPEC_REG_SrcA_override   : 1;
+    std::uint32_t ALU_FORMAT_SPEC_REG_SrcB_val        : 8;
+    std::uint32_t ALU_FORMAT_SPEC_REG_SrcB_override   : 1;
+    std::uint32_t ALU_FORMAT_SPEC_REG_Dstacc_val      : 8;
+    std::uint32_t ALU_FORMAT_SPEC_REG_Dstacc_override : 1;
+    std::uint32_t EMPTY0                              : 5;
+    // word 1
+    std::uint32_t ALU_ROUNDING_MODE_Fpu_srnd_en : 1;
+    std::uint32_t UNUSED0                       : 2;
+    std::uint32_t ALU_ROUNDING_MODE_Padding     : 10;
+    std::uint32_t ALU_ROUNDING_MODE_GS_LF       : 1;
+    std::uint32_t ALU_ROUNDING_MODE_Bfp8_HF     : 1;
+    std::uint32_t ALU_FORMAT_SPEC_REG0_SrcA     : 8;
+    std::uint32_t ALU_FORMAT_SPEC_REG1_SrcB     : 8;
+    std::uint32_t EMPTY1                        : 1;
+    // word 2
+    std::uint32_t ALU_FORMAT_SPEC_REG2_Dstacc    : 8;
+    std::uint32_t ALU_ACC_CTRL_Fp32_enabled      : 1;
+    std::uint32_t ALU_ACC_CTRL_SFPU_Fp32_enabled : 1;
+    std::uint32_t ALU_ACC_CTRL_INT8_math_enabled : 1;
+    std::uint32_t UNUSED1                        : 21;
+} alu_config_t;
+
+static_assert(sizeof(alu_config_t) == NUM_WORDS_ALU_FORMAT * sizeof(std::uint32_t));
+
+typedef union
+{
+    std::uint32_t val[NUM_WORDS_ALU_FORMAT];
+    alu_config_t f;
+} alu_config_u;
+
+// /**
+// * @brief Helper function to calculate log2,
+// * only works for 32 bit unsigned inputs
+// * @param val: Input value to log2 operation
+// */
+// inline uint32_t trisc_log2(const uint32_t val) {
+//     return 31 - __builtin_clz(val);
+// }
+
+/**
+ * @brief Helper function to calculate log2 for FPU rows
+ * since FPU rows are <=16, and are power of 2, can use
+ * simplified higher perf method
+ * @param val: Input value to log2 operation
+ */
+inline std::uint32_t math_rows_log2(const std::uint32_t math_rows)
+{
+    switch (math_rows)
+    {
+        case 16:
+            return 4;
+        case 8:
+            return 3;
+        case 4:
+            return 2;
+        case 2:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+/**
+ * @brief Increments given counters
+ * @tparam: SRCA_INCR: SrcA increment values = 0 - 15
+ * @tparam: SRCB_INCR: SrcA increment values = 0 - 15
+ * @tparam: SRCD_INCR: SrcA increment values = 0 - 15
+ * @tparam: CR_INCR: SrcA increment values = 0 - 63
+ */
+template <std::uint32_t SRCA_INCR, std::uint32_t SRCB_INCR, std::uint32_t DEST_INCR, std::uint32_t CR_INCR>
+inline void _incr_counters_()
+{
+    static_assert(SRCA_INCR < 32, "Value exceeds RWC_A width of 5 bits");
+    static_assert(SRCB_INCR < 32, "Value exceeds RWC_B width of 5 bits");
+    static_assert(DEST_INCR < 256, "Value exceeds RWC_D width of 8 bits");
+    static_assert(CR_INCR < 64, "Value exceeds RWC_CR width of 6 bits");
+    TTI_INCRWC(CR_INCR, SRCA_INCR, SRCB_INCR, DEST_INCR);
+}
+
+// TODO (RT): Is there now an alternative to this?
+inline void _sfpu_load_config32_(const std::uint32_t dest, const std::uint32_t upper16, const std::uint32_t lower16)
+{
+    // registers 11 through 14 are programmable "constants" which are shared across all 4 rows
+    // They are updated only through the CONFIG path, which uses LREG[0] first and then copies it to the desired register location
+    TTI_SFPLOADI(p_sfpu::LREG0, 10, lower16); // insmod == A will write the lower bits, and not affect the upper bits;
+    TTI_SFPLOADI(p_sfpu::LREG0, 8, upper16);  // insmod == 8 will write the upper bits, and not affect the lower bits;
+    TTI_SFPCONFIG(0, dest, 0);
+}
+
+/**
+ * @brief Initializes the programmable registers for the SFPU
+ */
+inline void _init_sfpu_config_reg_()
+{
+    TTI_SFPCONFIG(0, 0xF, 1);
+}
+
+/**
+ * @brief Reset given counters to 0
+ * @tparam: SETRWC: which counter to reset, values = p_setrwc::[SET_A, SET_B, SET_D, SET_F]
+ */
+template <std::uint32_t SETRWC>
+inline void _reset_counters_()
+{
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, SETRWC);
+}
+
+/**
+ * @brief Inc dest counter using carriage return (why use the CR?)
+ * @tparam NUM_ROWS: number of 16 datum rows to increment dest by, value must be <=255
+ */
+template <std::uint32_t NUM_ROWS>
+inline void _inc_dst_addr_()
+{
+    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, NUM_ROWS, p_setrwc::SET_D);
+}
+
+/**
+ * @brief Sets destination register base address depending on tile idx
+ * @param tile_idx: Tile index in the dest reg
+ * 16bit dest reg data format -> tile_idx = 0 - 7
+ * 32bit dest reg data format -> tile_idx = 0 - 3
+ */
+template <ckernel::trisc::DstTileShape TILE_SHAPE>
+inline void _set_dst_write_addr_(const std::uint32_t tile_index)
+{
+    const std::uint32_t tile_shape_idx =
+        (TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x32) ? 6 : ((TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x16) ? 5 : 4);
+    const std::uint32_t dst_index = (tile_index << tile_shape_idx) + ckernel::trisc::_get_dest_buffer_base_();
+    ckernel::trisc::_set_dest_section_base_<TRISC_ID>(dst_index);
+}
+
+inline void _set_dst_write_addr_by_rows_(const std::uint32_t num_rows_per_tile, const std::uint32_t tile_index)
+{
+    const std::uint32_t tile_shape_idx =
+        (num_rows_per_tile == 64)
+            ? 6
+            : ((num_rows_per_tile == 32) ? 5 : ((num_rows_per_tile == 16) ? 4 : ((num_rows_per_tile == 8) ? 3 : ((num_rows_per_tile == 4) ? 2 : 1))));
+    const std::uint32_t dst_index = (tile_index << tile_shape_idx) + ckernel::trisc::_get_dest_buffer_base_();
+    ckernel::trisc::_set_dest_section_base_<TRISC_ID>(dst_index);
+}
+
+inline void move_d2a_fixed_face(const std::uint8_t addrmod)
+{
+    // MOVD2A src is relative to dest_section_base + dest_counter.
+    // Use fixed offsets (0, 8) — the dest counter handles face progression.
+    // NOTE: For different tile dimensions we need different amounts of MOV* instructions; see separate issue.
+    TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCA_VLD);
+    TTI_MOVD2A(0, 0, addrmod, p_movd2a::MOV_8_ROWS, 0);
+    TTI_MOVD2A(0, 8, addrmod, p_movd2a::MOV_8_ROWS, 8);
+}
+
+inline void move_d2b_fixed_face(const std::uint8_t addrmod)
+{
+    // MOVD2B src is relative to dest_section_base + dest_counter.
+    // Use fixed offsets (0, 8) — the dest counter handles face progression.
+    // NOTE: For different tile dimensions we need different amounts of MOV* instructions; see separate issue.
+    TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCB_VLD);
+    TTI_MOVD2B(0, 0, addrmod, p_movd2b::MOV_8_ROWS, 0, 0);
+    TTI_MOVD2B(0, 8, addrmod, p_movd2b::MOV_8_ROWS, 0, 8);
+}
+
+template <EltwiseBinaryReuseDestType binary_reuse_dest>
+inline void eltwise_binary_reuse_dest_as_src()
+{
+    if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
+    {
+        move_d2a_fixed_face(ADDR_MOD_3);
+    }
+    else if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)
+    {
+        move_d2b_fixed_face(ADDR_MOD_3);
+    }
+}
+
+} // namespace ckernel::math
