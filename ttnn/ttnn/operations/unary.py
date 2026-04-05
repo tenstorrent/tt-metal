@@ -110,6 +110,15 @@ def _golden_function_hardswish(input_tensor_a, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.hardswish, golden_function=_golden_function_hardswish)
 
 
+def _golden_function_swish(input_tensor_a, *args, **kwargs):
+    import torch
+
+    return torch.nn.functional.silu(input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn.swish, golden_function=_golden_function_swish)
+
+
 def _golden_function_softshrink(input_tensor_a, *args, lambd=0.5, **kwargs):
     import torch
 

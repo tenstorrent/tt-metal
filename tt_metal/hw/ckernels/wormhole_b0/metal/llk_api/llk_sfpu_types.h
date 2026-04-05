@@ -16,5 +16,9 @@ enum class SfpuType {
     rpow,
     hardswish,
     softshrink,
+<<<<<<< HEAD
     frac,
+=======
+    swish,
+>>>>>>> gen-swish-v2
 };
