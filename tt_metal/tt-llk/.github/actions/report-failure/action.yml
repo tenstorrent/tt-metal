@@ -1,0 +1,70 @@
+name: 'Report Status'
+description: 'Send Slack notification with test results'
+
+inputs:
+  test_name:
+    description: 'Name of the test suite'
+    required: true
+    type: string
+  slack_bot_token:
+    description: 'Slack bot token'
+    required: true
+    type: string
+  slack_channel_id:
+    description: 'Slack channel ID'
+    required: true
+    type: string
+  status:
+    description: 'Status of the test run (success or failure)'
+    required: true
+    type: string
+
+runs:
+  using: composite
+  steps:
+    - name: Construct message
+      id: message
+      shell: bash
+      run: |
+        COMMIT_URL="https://github.com/tenstorrent/tt-llk/commit/${{ github.sha }}"
+        COMMIT_SHA="${GITHUB_SHA:0:7}"
+        # GitHub does not expose job IDs; link to the workflow run instead
+        RUN_BASE="${{ github.server_url }}/${{ github.repository }}/actions/runs"
+        RUN_URL="$RUN_BASE/${{ github.run_id }}"
+        TRIGGERER="${{ github.event.sender.login }}"
+        if [ -z "$TRIGGERER" ]; then
+          TRIGGERER="scheduled run"
+        fi
+
+        if [ "${{ inputs.status }}" == "success" ]; then
+          MESSAGE=":white_check_mark: *${{ inputs.test_name }} passed* :white_check_mark:"
+          MESSAGE="$MESSAGE\n\nAll tests completed successfully!"
+        else
+          MESSAGE=":alert: *${{ inputs.test_name }} failed* :alert:"
+          MESSAGE="$MESSAGE\n\nThe scheduled run hit some test failures."
+        fi
+
+        MESSAGE="$MESSAGE\n\nTriggered by: \`$TRIGGERER\`"
+        MESSAGE="$MESSAGE\nCommit: <$COMMIT_URL|$COMMIT_SHA>"
+
+        if [ "${{ inputs.status }}" == "success" ]; then
+          MESSAGE="$MESSAGE\n<${RUN_URL}|View the run details.>"
+        else
+          MESSAGE="$MESSAGE\n<${RUN_URL}|Please check the logs to see what went wrong.>"
+        fi
+
+        {
+          echo 'text<<EOF'
+          echo "$MESSAGE"
+          echo 'EOF'
+        } >> $GITHUB_OUTPUT
+    - name: Send Slack notification
+      uses: slackapi/slack-github-action@v2.1.1
+      with:
+        method: chat.postMessage
+        token: ${{ inputs.slack_bot_token }}
+        payload: |
+          {
+            "channel": "${{ inputs.slack_channel_id }}",
+            "text": "${{ steps.message.outputs.text }}"
+          }
