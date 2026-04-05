@@ -22,9 +22,13 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.molmo2.tt.prefill_attention_mask import build_molmo2_prefill_attention_bias
+from models.demos.molmo2.tt.prefill_attention_mask import build_molmo2_prefill_attention_bias_ttnn
 from models.demos.molmo2.tt.text_model import TextModel
-from models.demos.molmo2.tt.vision_backbone import MAX_FRAMES_FOR_SINGLE_POOL, VisionBackbone
+from models.demos.molmo2.tt.vision_backbone import (
+    MAX_FRAMES_FOR_SINGLE_POOL,
+    VisionBackbone,
+    preprocess_pooling_indices_device,
+)
 
 
 class Molmo2Model(LightweightModule):
@@ -382,39 +386,21 @@ class Molmo2Model(LightweightModule):
         # STAGE 2: Pool + Project on ALL features together
         # This preserves cross-frame attention via GLOBAL indices
         # Use chunked pooling for large videos to avoid OOM
+        # Device-side preprocessing: clip/compare ops run on ttnn
         # ============================================================
-        valid = pooled_patches_idx >= 0
-        valid_token = torch.any(valid, dim=-1)  # [batch_size, N_out]
 
         # Threshold for using chunked pooling (based on memory analysis)
         if batch_size <= MAX_FRAMES_FOR_SINGLE_POOL:
             # Small video: use single pooling pass
-            logger.debug(f"  Stage 2: Single-pass pooling on {batch_size} frames")
+            logger.debug(f"  Stage 2: Single-pass pooling on {batch_size} frames (device-side preprocessing)")
 
-            clipped_idx = torch.clip(pooled_patches_idx, min=0)
-            flat_idx = clipped_idx.reshape(1, -1).to(torch.int32)
-            valid_mask = valid.reshape(1, 1, -1, 1).float()
+            # Device-side preprocessing: transfer once, clip/compare on device
+            idx_ttnn, valid_mask_ttnn, valid_token = preprocess_pooling_indices_device(
+                pooled_patches_idx, self.mesh_device, mesh_mapper
+            )
 
             combined_features_ttnn = ttnn.from_torch(
                 combined_vit_features,
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mesh_mapper,
-            )
-
-            idx_ttnn = ttnn.from_torch(
-                flat_idx,
-                device=self.mesh_device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mesh_mapper,
-            )
-
-            valid_mask_ttnn = ttnn.from_torch(
-                valid_mask,
                 device=self.mesh_device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
@@ -437,6 +423,10 @@ class Molmo2Model(LightweightModule):
         else:
             # Large video: use chunked pooling to reduce memory
             logger.debug(f"  Stage 2: Chunked pooling on {batch_size} frames")
+
+            # For chunked path, compute valid on CPU (passed to chunked function)
+            valid = pooled_patches_idx >= 0
+            valid_token = torch.any(valid, dim=-1)
 
             combined_features_ttnn = ttnn.from_torch(
                 combined_vit_features,
@@ -540,13 +530,17 @@ class Molmo2Model(LightweightModule):
         patch_features = vit.patch_size * vit.patch_size * 3  # 588
         pool_dim = vit.hidden_dim * 2  # 2304 (concat of 2 layers)
 
+        # Detect input format: patches [B, 729, 588] vs images [B, 3, H, W]
+        is_patches_format = pixel_values.dim() == 3 and pixel_values.shape[-1] == patch_features
+
         frames_per_pass = frames_per_device * num_devices
         num_passes = (total_frames + frames_per_pass - 1) // frames_per_pass
 
         logger.info(
             f"embed_image_data_parallel: {total_frames} frames, "
             f"{frames_per_device} frames/device, {num_devices} devices, "
-            f"{frames_per_pass} frames/pass, {num_passes} passes"
+            f"{frames_per_pass} frames/pass, {num_passes} passes, "
+            f"patches_format={is_patches_format}"
         )
 
         # Mesh mappers for sharding
@@ -569,41 +563,40 @@ class Molmo2Model(LightweightModule):
             )
 
             # Get frames for this pass
-            pass_pixels = pixel_values[pass_start:pass_end]  # [actual_frames, C, H, W]
+            pass_data = pixel_values[pass_start:pass_end]
 
             # Pad to full frames_per_pass if needed for even sharding
             if actual_frames_this_pass < frames_per_pass:
                 pad_frames = frames_per_pass - actual_frames_this_pass
-                # Pad with zeros (will be masked out later)
-                if pass_pixels.dim() == 4:
-                    pad_shape = (pad_frames,) + pass_pixels.shape[1:]
-                else:
-                    pad_shape = (pad_frames,) + pass_pixels.shape[1:]
-                padding = torch.zeros(pad_shape, dtype=pass_pixels.dtype)
-                pass_pixels = torch.cat([pass_pixels, padding], dim=0)
+                pad_shape = (pad_frames,) + pass_data.shape[1:]
+                padding = torch.zeros(pad_shape, dtype=pass_data.dtype)
+                pass_data = torch.cat([pass_data, padding], dim=0)
 
-            # Reshape for sharding: [num_devices, frames_per_device, C, H, W]
-            pass_pixels = pass_pixels.reshape(num_devices, frames_per_device, *pass_pixels.shape[1:])
+            if is_patches_format:
+                # Patches format: [frames_per_pass, 729, 588] -> [num_devices, 1, frames_per_device * 729, 588]
+                # Reshape: [frames_per_pass, 729, 588] -> [num_devices, frames_per_device, 729, 588]
+                pass_data = pass_data.reshape(num_devices, frames_per_device, num_patches_per_frame, patch_features)
+                # Merge frames and patches: [num_devices, frames_per_device * 729, 588]
+                all_patches = pass_data.reshape(num_devices, frames_per_device * num_patches_per_frame, patch_features)
+                # Add dim: [num_devices, 1, frames_per_device * 729, 588]
+                all_patches = all_patches.unsqueeze(1).float()
+            else:
+                # Image format: [frames_per_pass, C, H, W] - need to unfold
+                pass_data = pass_data.reshape(num_devices, frames_per_device, *pass_data.shape[1:])
 
-            # CPU preprocessing: unfold patches
-            # Each device's data: [frames_per_device, C, H, W] -> [frames_per_device, num_patches, patch_features]
-            device_patches_list = []
-            for dev_idx in range(num_devices):
-                dev_pixels = pass_pixels[dev_idx]  # [frames_per_device, C, H, W]
-                if dev_pixels.dim() == 4:
-                    # Unfold patches on CPU
+                device_patches_list = []
+                for dev_idx in range(num_devices):
+                    dev_pixels = pass_data[dev_idx]  # [frames_per_device, C, H, W]
                     B, C, H, W = dev_pixels.shape
                     x = dev_pixels.unfold(2, vit.patch_size, vit.patch_size)
                     x = x.unfold(3, vit.patch_size, vit.patch_size)
                     x = x.permute(0, 2, 3, 4, 5, 1).reshape(B * num_patches_per_frame, patch_features)
                     device_patches_list.append(x)
-                else:
-                    device_patches_list.append(dev_pixels.reshape(-1, patch_features))
 
-            # Stack for sharding: [num_devices, frames_per_device * num_patches, patch_features]
-            all_patches = torch.stack(device_patches_list, dim=0).float()
-            # Reshape to [num_devices, 1, frames_per_device * num_patches, patch_features]
-            all_patches = all_patches.unsqueeze(1)
+                # Stack for sharding: [num_devices, frames_per_device * num_patches, patch_features]
+                all_patches = torch.stack(device_patches_list, dim=0).float()
+                # Reshape to [num_devices, 1, frames_per_device * num_patches, patch_features]
+                all_patches = all_patches.unsqueeze(1)
 
             # Transfer to devices with SHARDING (each device gets its own frames)
             patches_ttnn = ttnn.from_torch(
@@ -664,38 +657,19 @@ class Molmo2Model(LightweightModule):
 
         # ============================================================
         # STAGE 2: Pool + Project (same as chunked version)
+        # Device-side preprocessing: clip/compare ops run on ttnn
         # ============================================================
-        valid = pooled_patches_idx >= 0
-        valid_token = torch.any(valid, dim=-1)
-
         batch_size = total_frames
 
         if batch_size <= MAX_FRAMES_FOR_SINGLE_POOL:
-            logger.debug(f"  Stage 2: Single-pass pooling on {batch_size} frames")
+            logger.debug(f"  Stage 2: Single-pass pooling on {batch_size} frames (device-side preprocessing)")
 
-            clipped_idx = torch.clip(pooled_patches_idx, min=0)
-            flat_idx = clipped_idx.reshape(1, -1).to(torch.int32)
-            valid_mask = valid.reshape(1, 1, -1, 1).float()
+            # Device-side preprocessing: transfer once, clip/compare on device
+            idx_ttnn, valid_mask_ttnn, valid_token = preprocess_pooling_indices_device(
+                pooled_patches_idx, self.mesh_device, replicate_mapper
+            )
 
             # combined_features_ttnn already on device from Stage 1
-
-            idx_ttnn = ttnn.from_torch(
-                flat_idx,
-                device=self.mesh_device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=replicate_mapper,
-            )
-
-            valid_mask_ttnn = ttnn.from_torch(
-                valid_mask,
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=replicate_mapper,
-            )
 
             visual_embeddings = self.vision_backbone.pool_and_project_ttnn(
                 image_features=combined_features_ttnn,
@@ -711,6 +685,10 @@ class Molmo2Model(LightweightModule):
             ttnn.deallocate(valid_mask_ttnn)
         else:
             logger.debug(f"  Stage 2: Chunked pooling on {batch_size} frames")
+
+            # For chunked path, compute valid_token on CPU (small tensor)
+            valid = pooled_patches_idx >= 0
+            valid_token = torch.any(valid, dim=-1)
 
             # combined_features_ttnn already on device from Stage 1
 
@@ -859,59 +837,45 @@ class Molmo2Model(LightweightModule):
             ttnn.deallocate(valid_visual_ttnn)
             return text_embeddings_ttnn
 
-        # O(n) index-based fusion instead of O(n²) selector matrix
-        # This avoids creating a [seq_len, num_valid] dense matrix which would be
-        # 5GB+ for 256 frames (50k visual tokens)
-        #
-        # Move to CPU, scatter visual embeddings at image positions, move back
-        mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0) if is_mesh_device else None
-
-        # Get text embeddings on CPU
-        if is_mesh_device:
-            text_emb_cpu = ttnn.to_torch(text_embeddings_ttnn, mesh_composer=mesh_composer)[0]
-        else:
-            text_emb_cpu = ttnn.to_torch(text_embeddings_ttnn)
-        ttnn.deallocate(text_embeddings_ttnn)
-
-        # Get visual embeddings on CPU
-        if is_mesh_device:
-            visual_cpu = ttnn.to_torch(valid_visual_ttnn, mesh_composer=mesh_composer)[0]
-        else:
-            visual_cpu = ttnn.to_torch(valid_visual_ttnn)
-        ttnn.deallocate(valid_visual_ttnn)
-
-        # text_emb_cpu shape: [1, seq_len, hidden_dim] (squeezed from [1, 1, seq_len, hidden_dim])
-        # visual_cpu shape: [1, num_valid, hidden_dim] (squeezed from [1, 1, num_valid, hidden_dim])
-        # Ensure 4D for consistency
-        if text_emb_cpu.dim() == 3:
-            text_emb_cpu = text_emb_cpu.unsqueeze(1)  # [1, 1, seq_len, hidden_dim]
-        if visual_cpu.dim() == 3:
-            visual_cpu = visual_cpu.unsqueeze(1)  # [1, 1, num_valid, hidden_dim]
-
-        logger.info(f"  O(n) fusion: text_emb_cpu shape={text_emb_cpu.shape}, visual_cpu shape={visual_cpu.shape}")
+        # Device-side scatter-add fusion using ttnn.scatter_add
+        # Avoids CPU roundtrip: text_emb[image_positions] += visual_emb
         logger.info(
-            f"  O(n) fusion: visual_cpu stats: mean={visual_cpu.mean().item():.4f}, std={visual_cpu.std().item():.4f}"
-        )
-        logger.info(
-            f"  O(n) fusion: text_emb_cpu stats (before): mean={text_emb_cpu.mean().item():.4f}, std={text_emb_cpu.std().item():.4f}"
+            f"  Device fusion: text_embeddings shape={text_embeddings_ttnn.shape}, visual shape={valid_visual_ttnn.shape}"
         )
 
-        # Fuse: ADD visual to text at image positions (O(n) indexing instead of O(n²) matmul)
-        # Reference: x.view(-1, x.shape[-1])[is_image_patch] += image_features
-        text_emb_cpu[0, 0, image_positions, :] += visual_cpu[0, 0, :, :]
-        logger.info(
-            f"  O(n) fusion: text_emb_cpu stats (after): mean={text_emb_cpu.mean().item():.4f}, std={text_emb_cpu.std().item():.4f}"
-        )
+        # Reshape text embeddings to 3D for scatter_add: [1, seq_len, hidden_dim]
+        text_3d = ttnn.reshape(text_embeddings_ttnn, [1, seq_len, hidden_dim])
 
-        # Move fused embeddings back to device
-        fused_ttnn = ttnn.from_torch(
-            text_emb_cpu,
+        # Reshape visual embeddings to 3D: [1, num_valid, hidden_dim]
+        visual_3d = ttnn.reshape(valid_visual_ttnn, [1, num_valid, hidden_dim])
+
+        # Create index tensor: [1, num_valid, hidden_dim] - each row has same index, broadcast across hidden_dim
+        # image_positions[i] tells us where visual_emb[i] goes in text_emb
+        index_cpu = image_positions.unsqueeze(0).unsqueeze(-1).expand(1, num_valid, hidden_dim).to(torch.int32)
+        index_ttnn = ttnn.from_torch(
+            index_cpu,
             device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper,
         )
+
+        # Convert to ROW_MAJOR for scatter_add
+        text_3d_rm = ttnn.to_layout(text_3d, ttnn.ROW_MAJOR_LAYOUT)
+        visual_3d_rm = ttnn.to_layout(visual_3d, ttnn.ROW_MAJOR_LAYOUT)
+
+        # Scatter-add: text_emb[index] += visual_emb
+        fused_3d = ttnn.scatter_add(text_3d_rm, dim=1, index=index_ttnn, src=visual_3d_rm)
+
+        ttnn.deallocate(text_3d_rm)
+        ttnn.deallocate(visual_3d_rm)
+        ttnn.deallocate(index_ttnn)
+        ttnn.deallocate(valid_visual_ttnn)
+
+        # Reshape back to 4D and convert to TILE_LAYOUT
+        fused_ttnn = ttnn.reshape(fused_3d, [1, 1, seq_len, hidden_dim])
+        fused_ttnn = ttnn.to_layout(fused_ttnn, ttnn.TILE_LAYOUT)
 
         return fused_ttnn
 
@@ -966,16 +930,14 @@ class Molmo2Model(LightweightModule):
         seq_len_hs = hidden_states_ttnn.shape[-2]
         attn_mask_ttnn = None
         if token_type_ids is not None and seq_len_hs > 1:
-            bias = build_molmo2_prefill_attention_bias(token_type_ids, attention_mask=attention_mask).to(torch.bfloat16)
+            # Build attention mask on device (avoids CPU mask creation + transfer)
             is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
             mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
-            attn_mask_ttnn = ttnn.from_torch(
-                bias,
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mesh_mapper,
+            attn_mask_ttnn = build_molmo2_prefill_attention_bias_ttnn(
+                token_type_ids,
+                self.mesh_device,
+                mesh_mapper,
+                attention_mask=attention_mask,
             )
 
         # Forward through text model (handles both prefill and decode via KV cache)
