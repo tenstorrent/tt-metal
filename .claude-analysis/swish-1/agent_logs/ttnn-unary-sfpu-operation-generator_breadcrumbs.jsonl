@@ -1,0 +1,12 @@
+{"ts":"2026-04-05T20:10:50+00:00","event":"start","agent":"ttnn-unary-sfpu-operation-generator","operation":"swish","input_files":[]}
+{"event":"pipeline_start","op_name":"swish","math_definition":"x * sigmoid(x) = x / (1 + exp(-x))","output_folder":".claude-analysis/swish-1","ts":"2026-04-05T20:10:54+00:00"}
+{"event":"phase_start","phase":1,"phase_name":"Reference Discovery","ts":"2026-04-05T20:11:06+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-reference-discoverer","phase":1,"ts":"2026-04-05T20:11:09+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-reference-discoverer","status":"ok","ts":"2026-04-05T20:15:07+00:00"}
+{"event":"phase_complete","phase":1,"phase_name":"Reference Discovery","status":"ok","references":["hardswish","selu","cosh","hardsigmoid","softsign"],"ts":"2026-04-05T20:15:07+00:00"}
+{"event":"phase_start","phase":2,"phase_name":"Reference Analysis","analyzer_count":5,"ts":"2026-04-05T20:15:13+00:00"}
+{"event":"phase_complete","phase":2,"phase_name":"Reference Analysis","status":"ok","analyzers_completed":5,"analyzers_failed":0,"ts":"2026-04-05T20:15:52+00:00"}
+{"event":"phase_start","phase":3,"phase_name":"Implementation","iteration":1,"ts":"2026-04-05T20:15:57+00:00"}
+{"event":"phase_complete","phase":3,"phase_name":"Implementation","status":"ok","ts":"2026-04-05T20:42:57+00:00"}
+{"event":"phase_start","phase":4,"phase_name":"Testing","iteration":1,"ts":"2026-04-05T20:43:21+00:00"}
+{"event":"phase_complete","phase":4,"phase_name":"Testing","status":"ok","test_result":"PASS","iterations":1,"ts":"2026-04-05T20:44:27+00:00"}

@@ -1821,6 +1821,12 @@ void py_module(nb::module_& mod) {
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
+    bind_unary_operation<"swish", &ttnn::swish>(
+        mod,
+        R"doc(\text{swish}(x) = x \times \sigma(x) = \frac{x}{1 + e^{-x}})doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+
     bind_unary_operation<"frac", &ttnn::frac>(
         mod, R"doc(\text{frac}(x) = x - \lfloor x \rfloor)doc", "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
