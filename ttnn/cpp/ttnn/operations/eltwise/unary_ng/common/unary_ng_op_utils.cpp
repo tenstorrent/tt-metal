@@ -24,6 +24,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::HARDSWISH: return "SFPU_OP_HARDSWISH_INCLUDE";
         case UnaryOpType::FRAC: return "SFPU_OP_FRAC_INCLUDE";
         case UnaryOpType::SWISH: return "SFPU_OP_SWISH_INCLUDE";
+        case UnaryOpType::SINH: return "SFPU_OP_SINH_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     }
 }
@@ -96,6 +97,7 @@ std::pair<std::string, std::string> get_op_init_and_func(
         case UnaryOpType::COSH: return {"cosh_tile_init();", fmt::format("cosh_tile({});", idst)};
         case UnaryOpType::FRAC: return {"frac_tile_init();", fmt::format("frac_tile({});", idst)};
         case UnaryOpType::SWISH: return {"swish_tile_init();", fmt::format("swish_tile({});", idst)};
+        case UnaryOpType::SINH: return {"sinh_tile_init();", fmt::format("sinh_tile({});", idst)};
         default: TT_FATAL(false, "Undefined unary_ng op type {}", op_type);
     }
 }

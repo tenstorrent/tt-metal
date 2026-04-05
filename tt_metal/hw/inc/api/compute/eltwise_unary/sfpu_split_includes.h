@@ -55,3 +55,7 @@
 #if SFPU_OP_ATANH_INCLUDE
 #include "api/compute/eltwise_unary/atanh.h"
 #endif
+
+#if SFPU_OP_SINH_INCLUDE
+#include "api/compute/eltwise_unary/sinh.h"
+#endif

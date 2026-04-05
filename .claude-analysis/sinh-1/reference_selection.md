@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Reference Operation Selection for sinh
 
 ## Target Operation
@@ -28,3 +29,27 @@
 ### 5. rpow
 - **Why selected**: `rpow` in `ckernel_sfpu_rpow.h` directly exposes the internals of the `exp_21f` algorithm (the Moroz et al. 2022 exponential approximation) that underlies `_sfpu_exp_21f_bf16_`. Reading `rpow` alongside `cosh` gives the implementor a deep understanding of what `_sfpu_exp_21f_bf16_` is doing internally — the `addexp`, `exexp`, `exman9`, `_float_to_int32_positive_`, and Horner polynomial steps — which is essential for debugging and understanding numerical precision of the `sinh` result. It also demonstrates the `SFPU_OP_*_INCLUDE` macro pattern and the `unary_op_utils.cpp` parameterized registration path (the only parameterized op in the custom ops set), which is a useful contrast to the simpler non-parameterized registration `sinh` will use.
 - **Relevance**: Medium — provides deep understanding of the exp_21f algorithm that sinh relies on via cosh's `_sfpu_exp_21f_bf16_` calls; useful for precision analysis and debugging.
+=======
+# Reference Selection: sinh
+
+## Operation
+- **Name**: sinh
+- **Math definition**: sinh(x) = (exp(x) - exp(-x)) / 2
+
+## Selected References
+
+| Rank | Operation | Rationale |
+|------|-----------|-----------|
+| 1 | **cosh** | Sister hyperbolic function with nearly identical `(exp(x) + exp(-x)) / 2` structure -- only the sign differs |
+| 2 | **selu** | Uses `exp()` with scaling/shifting, demonstrates SFPU exp + arithmetic patterns |
+| 3 | **elu** | Uses `exp(x) - 1` with conditional logic, shows exp-based subtraction patterns |
+| 4 | **lgamma** | Complex multi-step SFPU computation, demonstrates chaining multiple SFPU ops |
+| 5 | **rpow** | Shows exponential computation patterns and per-tile arithmetic |
+
+## Selection Methodology
+- Prioritized operations with similar mathematical structure (exp-based)
+- cosh is the closest match: identical formula except for sign
+- selu and elu show exp usage patterns in SFPU kernels
+- lgamma demonstrates complex multi-step SFPU computations
+- rpow shows exponential/power patterns
+>>>>>>> gen-sinh-v2
