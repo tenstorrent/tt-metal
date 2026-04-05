@@ -217,7 +217,7 @@ def preprocess_video(
         Dict with:
           - input_ids: [1, seq_len] tensor (with video tokens already inserted)
           - attention_mask: [1, seq_len] tensor
-          - pixel_values: [n_frames, 3, H, W] tensor
+          - pixel_values: [n_frames, 729, 588] tensor (HF patch format, already unfolded)
           - image_token_pooling: [n_frames * h * w, k_pool] tensor
           - pooled_patches_idx_flat: [1, n_tokens * k_pool] tensor for TTNN embedding
           - valid_mask_flat: [1, 1, n_tokens * k_pool, 1] mask tensor
@@ -240,8 +240,8 @@ def preprocess_video(
 
     result = processor(**call_kwargs)
 
-    # Convert pixel_values from HF patch format to image format
-    pixel_values = hf_patches_to_images(result["pixel_values_videos"])
+    # Keep pixel_values in HF patch format [n_frames, 729, 588] - skip redundant fold/unfold
+    pixel_values = torch.from_numpy(result["pixel_values_videos"]).float()
 
     # Extract video grid info
     n_frames, pooled_h, pooled_w = result["video_grids"][0]
