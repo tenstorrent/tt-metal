@@ -356,24 +356,11 @@ jobs:
             --result-dest results_export \
             --main-proc-verbose
 
-      - name: Compute artifact suffix
-        shell: bash
-        run: |
-          SCOPE_LABEL="${{ matrix.validation_scope }}"
-          DISPLAY_LABEL="${{ matrix.batch_display }}"
-          GROUP_LABEL="${{ matrix.test_group_name }}"
-          SUITE_LABEL="${{ matrix.suite_name }}"
-          FINGERPRINT="$SCOPE_LABEL|$GROUP_LABEL|$DISPLAY_LABEL"
-          if [[ -n "$SUITE_LABEL" ]]; then
-            FINGERPRINT="$FINGERPRINT|$SUITE_LABEL"
-          fi
-          echo "BATCH_SUFFIX=$(echo -n "$FINGERPRINT" | sha256sum | cut -d' ' -f1 | cut -c1-12)" >> "$GITHUB_ENV"
-
       - name: Upload sweep traces
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: sweep-traces-${{ matrix.test_group_name }}-batch-${{ env.BATCH_SUFFIX }}
+          name: sweep-traces-${{ matrix.validation_scope }}-${{ matrix.test_group_name }}-batch-${{ matrix.batch_index }}
           path: /work/model_tracer/traced_operations/sweep_trace_${{ matrix.test_group_name }}_batch${{ matrix.batch_index }}.json
           retention-days: 7
 
@@ -381,7 +368,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: sweeps-results-${{ matrix.test_group_name }}-batch-${{ env.BATCH_SUFFIX }}
+          name: sweeps-results-${{ matrix.validation_scope }}-${{ matrix.test_group_name }}-batch-${{ matrix.batch_index }}
           path: /work/tests/sweep_framework/results_export/
           retention-days: 7
 
