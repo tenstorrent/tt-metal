@@ -146,4 +146,3 @@ forward declaration). Always do a clean build after applying fixes.
 
 Same build flow as above (`clang-tidy-fix-parallel` or just `clang-tidy`), but after
 each build review the log and address each diagnostic by hand.
-
