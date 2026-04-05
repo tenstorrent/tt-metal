@@ -18,7 +18,12 @@
 # ============================================================================
 
 - name: "(Galaxy) DeepSeek Prefill module tests"
-  cmd: export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI MESH_DEVICE=TG && uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt && pytest models/demos/deepseek_v3_d_p/tests/pcc/test_moe_gate_prefill2d.py -k "mesh-8x4"
+  cmd: |
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI MESH_DEVICE=TG
+    uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_moe_gate_prefill2d.py -k "mesh-8x4"
+    export DEEPSEEK_V3_MLA_REF_CACHE=/mnt/MLPerf/deepseek-prefill-cache/test_mla_output
+    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla -k "8x4 and random and max_sl and check_pcc and balanced" -vvv --tb=short
   model: deepseek_prefill
   skus:
     bh_galaxy:
@@ -64,6 +69,44 @@
     bh_llmbox:
       timeout: 40
   owner_id: U08E1JCMAJF
+  team: models
+
+# ============================================================================
+# DeepSeek V3 B1 Decode Tests (Blitz) - Blackhole P300
+# ============================================================================
+
+- name: bh_p300_DeepSeek_B1_HostIO
+  cmd: |
+    TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
+  model: deepseek_decode
+  skus:
+    bh_p300:
+      timeout: 10
+  owner_id: U03HY7MK4BT
+  team: models
+
+# ============================================================================
+# DeepSeek V3 B1 Decode Tests (Blitz) - Blackhole Single Card
+# ============================================================================
+
+- name: bh_p150b_civ2_viommu_DeepSeek_B1_Full_Unit_Tests_SlowDispatch
+  cmd: |
+    TT_METAL_SLOW_DISPATCH_MODE=1 pytest --timeout 600 -m "not skip_post_commit" models/demos/deepseek_v3_b1/tests/unit_tests/
+  model: deepseek_decode
+  skus:
+    bh_p150b_civ2_viommu:
+      timeout: 20
+  owner_id: U03HY7MK4BT
+  team: models
+
+- name: bh_p150b_civ2_viommu_DeepSeek_B1_Full_Unit_Tests_FastDispatch
+  cmd: |
+    pytest --timeout 600 -m "not skip_post_commit" models/demos/deepseek_v3_b1/tests/unit_tests/
+  model: deepseek_decode
+  skus:
+    bh_p150b_civ2_viommu:
+      timeout: 20
+  owner_id: U03HY7MK4BT
   team: models
 
 # ============================================================================

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,8 +35,6 @@ constexpr uint32_t cb_dL_dgamma_components = tt::CBIndex::c_9;
 // CBs with intermediate computations
 constexpr uint32_t cb_recip_rms_a_bcasted_idx = tt::CBIndex::c_10;
 constexpr uint32_t cb_scale_idx = tt::CBIndex::c_11;
-
-constexpr uint32_t onetile = 1;
 
 #ifdef DO_MASK_W
 constexpr bool do_mask_w = true;

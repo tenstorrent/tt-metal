@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -60,11 +60,13 @@
 #include "ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.hpp"
 #include "ttnn/operations/experimental/topk_router_gpt/topk_router_gpt_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.hpp"
+#include "ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.hpp"
+#include "ttnn/operations/experimental/generic/patchable_generic_op_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -145,12 +147,15 @@ void py_module(nb::module_& mod) {
     deepseek::moe::detail::bind_moe_gate_mm(mod);
     topk_router_gpt::detail::bind_topk_router_gpt(mod);
     deepseek::mla::detail::bind_matmul_wo(mod);
+    moe_gpt::detail::bind_moe_gpt(mod);
 
     // DeepSeek prefill MoE operations
     deepseek_prefill::detail::bind_dispatch(mod);
     deepseek_prefill::detail::bind_combine(mod);
 
     deepseek_moe_post_combine_tilize::detail::bind_deepseek_moe_post_combine_tilize(mod);
+    // Fused generic op with source-descriptor-based override
+    generic::detail::bind_patchable_generic_op(mod);
 }
 
 }  // namespace ttnn::operations::experimental

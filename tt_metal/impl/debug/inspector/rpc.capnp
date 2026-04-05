@@ -80,6 +80,8 @@ struct BuildEnvData {
     buildKey @0 :UInt64; # Unique identifier for the build configuration
     firmwarePath @1 :Text; # Absolute path to the firmware directory for this device
     fwCompileHash @2 :UInt64; # Hash of the firmware compilation settings
+    # Whether DRAM programmable RISC cores are enabled on this device (Blackhole only)
+    dramProgrammableCoresEnabled @3 :Bool;
 }
 
 struct BuildEnvPerDevice {
@@ -151,6 +153,18 @@ struct ChipBlocksByType {
     blocks @1 :BlocksByTypePerChip;
 }
 
+enum ConfigurationScope {
+    environment @0;
+    rtOptions @1;
+    ttnnConfig @2;
+}
+
+struct ConfigurationEntry {
+    name @0 :Text;
+    value @1 :Text;
+    scope @2 :ConfigurationScope;
+}
+
 interface Inspector {
     # Get programs currently alive
     getPrograms @0 () -> (programs :List(ProgramData));
@@ -184,4 +198,7 @@ interface Inspector {
 
     # Chip -> block type -> list of logical (x,y). One entry per chip.
     getBlocksByType @9 () -> (chips :List(ChipBlocksByType));
+
+    # Get configuration data (environment variables, runtime options, TTNN config)
+    getConfiguration @10 () -> (entries :List(ConfigurationEntry));
 }
