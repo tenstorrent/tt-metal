@@ -140,17 +140,3 @@ to confirm nothing is broken.
 Same flow as above, but after each build review the log and address each diagnostic
 by hand.
 
-## FAQ
-
-### Can we turn on ALL the checks?
-
-No. Some checks are mutually exclusive — typically when a style opinion is involved.
-For example, `modernize-use-trailing-return-type` enforces trailing return types while
-`fuchsia-trailing-return` forbids them.
-
-### What about check options?
-
-Some checks have knobs that change their behavior — review the check's documentation
-if the default feels wrong. One check *requires* options to do anything:
-`readability-identifier-naming` silently does nothing without naming conventions
-configured.
