@@ -444,7 +444,7 @@ Tensor swiglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConf
 
     std::vector<Tensor> ab = detail::split_tensor_for_glu(input_a, dim, output_mem_config);
 
-    Tensor swish_b = ttnn::swish(ab[1], output_mem_config);
+    Tensor swish_b = ttnn::silu(ab[1], output_mem_config);
     Tensor swiglu_result = ttnn::multiply(ab[0], swish_b, std::nullopt, output_mem_config);
     return swiglu_result;
 }

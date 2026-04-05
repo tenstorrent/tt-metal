@@ -130,7 +130,6 @@ enum class UnaryOpType {
     LOGSIGMOID,
     XIELU,
     LGAMMA,
-    SWISH,
 };
 
 enum class VecMode {
