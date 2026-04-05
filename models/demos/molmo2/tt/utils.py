@@ -41,10 +41,9 @@ VIDEO_MAX_FPS = None  # None = use video's native fps (no downsampling)
 IMAGENET_MEAN = [0.48145466, 0.4578275, 0.40821073]
 IMAGENET_STD = [0.26862954, 0.26130258, 0.27577711]
 
-# Prefill sequence length buckets for trace reuse
-# Optimized for video processing: 1K, 4K, 8K, 16K, 32K
-# 128 frames = ~25K tokens -> 32K bucket
-PREFILL_SEQ_BUCKETS = [1024, 4096, 8192, 16384, 32768]
+# Prefill sequence length buckets for trace reuse (must match warmup_video_traces defaults).
+# Pads via get_padded_prefill_len / pad_input_ids; long video prompts use 16k–64k.
+PREFILL_SEQ_BUCKETS = [1024, 2048, 4096, 8192]
 
 # Padding token ID for sequence length padding
 VISION_PAD_TOKEN_ID = 151654  # <|vision_pad|>
@@ -60,7 +59,7 @@ def get_padded_prefill_len(seq_len: int) -> int:
     Get the padded sequence length for prefill trace reuse.
 
     Pads to the next bucket size to allow trace reuse across similar sequence lengths.
-    Uses buckets: 1024, 4096, 8192, 16384, 32768.
+    Uses :data:`PREFILL_SEQ_BUCKETS` (1024 … 65536).
     """
     for bucket in PREFILL_SEQ_BUCKETS:
         if seq_len <= bucket:

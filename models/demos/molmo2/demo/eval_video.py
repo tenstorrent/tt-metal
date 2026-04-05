@@ -18,7 +18,7 @@ from loguru import logger
 
 from models.demos.molmo2.tests.verification_jsonl import extract_prompt_video_max, find_local_video_for_url
 from models.demos.molmo2.tt.hf_processor import preprocess_video
-from models.demos.molmo2.tt.utils import VIDEO_PROMPT
+from models.demos.molmo2.tt.utils import PREFILL_SEQ_BUCKETS, VIDEO_PROMPT
 
 # Default paths
 SCRIPT_DIR = Path(__file__).parent
@@ -115,6 +115,7 @@ def run_eval(
     use_decode_trace: bool = False,
     use_vision_trace: bool = False,
     use_unified_trace: bool = False,
+    use_dp_vision_trace: bool = True,
     skip_download: bool = False,
     exact_jsonl: bool = True,
     unique_video_urls_only: bool = False,
@@ -136,6 +137,8 @@ def run_eval(
         use_decode_trace: Enable decode tracing
         use_vision_trace: Enable vision backbone tracing
         use_unified_trace: Enable unified Vision+Prefill trace
+        use_dp_vision_trace: Capture ViT + pool-chunk traces before inference (fast vision path).
+            When True, runs ``warmup_video_traces`` ViT+pool steps even if prefill/decode traces are off.
         skip_download: Skip downloading videos (assume they are already cached)
         exact_jsonl: If True (default), one run per JSONL line with that row's
             prompt and ``max_tokens`` (matches ``verification/test.jsonl`` harness).
@@ -254,6 +257,42 @@ def run_eval(
             max_seq_len=max_seq_len,
         )
 
+        # Upfront warmup: ViT+pool traces are required for fast DP vision (else eager path can be ~tens of seconds).
+        # Prefill/decode traces are optional and only captured when use_trace / use_decode_trace.
+        if runnable and (use_dp_vision_trace or use_trace or use_decode_trace):
+            from models.demos.molmo2.tt.vision_backbone import MAX_VIT_FRAMES_FOR_POOL
+
+            first = runnable[0]
+            warm_prompt = f"{VIDEO_PROMPT}\n{first['prompt_text']}"
+            warm_inputs = preprocess_video(
+                first["local_path"],
+                warm_prompt,
+                num_frames=max_frames,
+            )
+            _n_out = warm_inputs["n_tokens"] // warm_inputs["n_frames"]
+            _k_pool = warm_inputs["k_pool"]
+            _buckets = [b for b in PREFILL_SEQ_BUCKETS if b <= max_seq_len]
+
+            generator.init_kv_cache()
+            generator.warmup_video_traces(
+                frames_per_device=8,
+                num_devices=8,
+                prefill_buckets=_buckets,
+                max_frames_per_pool_chunk=16,
+                pool_n_out=_n_out,
+                pool_k_pool=_k_pool,
+                max_vit_frames=MAX_VIT_FRAMES_FOR_POOL,
+                use_prefill_trace=use_trace,
+                use_decode_trace=use_decode_trace,
+            )
+            if use_trace or use_decode_trace:
+                logger.info("Upfront video trace warmup complete (ViT + pool + prefill/decode as requested).")
+            else:
+                logger.info(
+                    "Upfront ViT + pool trace warmup complete (prefill/decode still eager; "
+                    "add --use-trace / --use-decode-trace to capture those traces)."
+                )
+
         results = []
         total_vision_ms = 0.0
         total_ttft_ms = 0.0
@@ -299,6 +338,7 @@ def run_eval(
                     use_decode_trace=use_decode_trace,
                     use_vision_trace=use_vision_trace,
                     use_unified_trace=use_unified_trace,
+                    use_dp_vision_trace=use_dp_vision_trace,
                 )
 
                 predicted = extract_answer_letter(response)
@@ -319,9 +359,11 @@ def run_eval(
                     "n_frames": n_frames,
                     "extract_ms": extract_ms,
                     "vision_ms": perf["vision_ms"],
+                    "compile_vision_ms": perf.get("compile_vision_ms", 0),
                     "frames_per_sec": perf["frames_per_sec"],
                     "ttft_ms": perf["ttft_ms"],
                     "total_decode_ms": perf["total_decode_ms"],
+                    "total_e2e_ms": extract_ms + perf["vision_ms"] + perf["ttft_ms"] + perf["total_decode_ms"],
                     "tokens_per_sec": perf["tokens_per_sec"],
                     "input_tokens": perf["input_tokens"],
                     "generated_tokens": perf["generated_tokens"],
@@ -331,11 +373,20 @@ def run_eval(
                 }
                 results.append(result)
 
+                compile_vision_ms = perf.get("compile_vision_ms", 0)
+                compile_str = f" [compile:{compile_vision_ms:.0f}ms]" if compile_vision_ms > 0 else ""
+                total_e2e_ms = extract_ms + perf["vision_ms"] + perf["ttft_ms"] + perf["total_decode_ms"]
                 logger.info(
-                    f"  Frames: {n_frames} | Vision: {perf['vision_ms']:.0f}ms "
+                    f"  Frames: {n_frames} | Vision: {perf['vision_ms']:.0f}ms{compile_str} "
                     f"({perf['frames_per_sec']:.1f} fps) | TTFT: {perf['ttft_ms']:.0f}ms | "
                     f"Decode: {perf['tokens_per_sec']:.1f} tok/s | "
                     f"Answer: {predicted}"
+                )
+                logger.info(
+                    f"  Total E2E (preproc+vision+prefill+decode): "
+                    f"preproc={extract_ms:.0f}ms + vision={perf['vision_ms']:.0f}ms + "
+                    f"prefill={perf['ttft_ms']:.0f}ms + decode={perf['total_decode_ms']:.0f}ms "
+                    f"= {total_e2e_ms:.0f}ms ({total_e2e_ms/1000:.2f}s)"
                 )
 
             except Exception as e:
@@ -449,6 +500,15 @@ def main():
         help="Enable unified Vision+Prefill trace",
     )
     parser.add_argument(
+        "--use-dp-vision-trace",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Capture DP ViT + pool-chunk traces before eval (recommended; avoids slow eager vision). "
+            "Use --no-use-dp-vision-trace to force the eager vision path for debugging."
+        ),
+    )
+    parser.add_argument(
         "--output-json",
         type=str,
         default=None,
@@ -469,6 +529,7 @@ def main():
         use_decode_trace=args.use_decode_trace,
         use_vision_trace=args.use_vision_trace,
         use_unified_trace=args.use_unified_trace,
+        use_dp_vision_trace=args.use_dp_vision_trace,
         skip_download=args.skip_download,
         exact_jsonl=not args.unique_video_urls_only,
         unique_video_urls_only=args.unique_video_urls_only,
