@@ -29,3 +29,6 @@ add_subdirectory(sources)
 include(CTest)
 enable_testing()
 add_subdirectory(tests)
+
+# Convenience target that covers all tt-train build artifacts
+add_custom_target(tt-train DEPENDS ttml ttml_tests)
