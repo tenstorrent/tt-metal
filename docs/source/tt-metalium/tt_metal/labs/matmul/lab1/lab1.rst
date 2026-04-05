@@ -864,7 +864,7 @@ needing deep knowledge of the underlying Tenstorrent architecture, while still a
 
 
 Exercise 4: Using DEVICE_PRINT to Debug a Kernel
-==========================================
+================================================
 
 Add DEVICE_PRINT statements to the writer kernel in our example program to print:
 
