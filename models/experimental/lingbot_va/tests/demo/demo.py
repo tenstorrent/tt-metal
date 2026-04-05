@@ -392,8 +392,6 @@ def _load_models_phase1(config, load_text_encoder=True, mesh_device=None):
     action_scheduler = FlowMatchSchedulerTtnn(
         mesh_device, shift=config.action_snr_shift, sigma_min=0.0, extra_one_step=True
     )
-    # scheduler.set_timesteps(1000, training=True)
-    # action_scheduler.set_timesteps(1000, training=True)
 
     return {
         "vae": vae,
@@ -1026,7 +1024,13 @@ def _reset_state(models, state, prompt):
             _free_tt_model(models, "text_encoder")
 
 
-def _infer_impl(models, state, obs, frame_st_id=0):
+def _infer_impl(models, state, obs, frame_st_id=0, *, single_run: bool = False):
+    """Run video + action denoise loops.
+
+    When ``single_run`` is True, returns ``(actions_tt, latents_tt)`` as ``ttnn.Tensor`` after
+    channel masking and **before** ``ttnn.to_torch`` and :func:`_postprocess_action`.
+    Otherwise returns postprocessed actions (e.g. NumPy) and ``torch`` latents.
+    """
     config = models["config"]
     dtype = models["dtype"]
     cache_name = models["cache_name"]
@@ -1235,6 +1239,9 @@ def _infer_impl(models, state, obs, frame_st_id=0):
 
     ch_mask = _action_channel_mask_ttnn(mesh_device, int(actions_tt.shape[1]), action_mask)
     actions_tt = ttnn.multiply(actions_tt, ch_mask)
+    if single_run:
+        return actions_tt, latents_tt
+
     actions = ttnn.to_torch(actions_tt).to(dtype)
     latents = ttnn.to_torch(latents_tt).to(dtype)
     actions_out = _postprocess_action(models, state, actions)

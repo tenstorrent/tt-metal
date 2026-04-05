@@ -13,24 +13,21 @@ import os
 from copy import deepcopy
 from pathlib import Path
 
-import torch
 import ttnn
 from reference.utils import VA_CONFIGS, apply_robotwin_inference_overrides
 
 from models.experimental.lingbot_va.tests.demo import demo as lingbot_demo
-from models.experimental.lingbot_va.tt.utils import get_mesh_id_ttnn
 
 
 class TtLingbotVA:
-    """Orchestrates Lingbot-VA TTNN inference (text → VAE encode → transformer) like ``run_inference``."""
+    """Orchestrates Lingbot-VA TTNN inference like ``run_inference``; forward runs ``demo._infer_impl``."""
 
     def __init__(self, models: dict, state: dict, message: dict, init_obs: dict) -> None:
         self.models = models
         self.state = state
-        # Kept for parity with run_inference payload; forward path reads state/init_obs only.
+        # Kept for parity with run_inference payload; ``_infer_impl`` uses state and init_obs.
         self.message = message
         self._init_obs = init_obs
-        self.single_run_inputs: dict | None = None
 
     @classmethod
     def prepare(
@@ -124,92 +121,21 @@ class TtLingbotVA:
 
         lingbot_demo._reset_state(models, state, prompt)
 
-        instance = cls(models, state, message, init_obs)
-        instance.single_run_inputs = instance._prepare_single_run_inputs()
-        return instance
-
-    def _prepare_single_run_inputs(self) -> dict:
-        """Precompute WanTransformer inputs for single-pass TTNN-only forward path."""
-        transformer = self.models["transformer"]
-        tt_transformer = getattr(transformer, "_tt_model", transformer)
-        mesh_device = self.models["mesh_device"]
-
-        spatial = self.state["init_latent"]
-        prompt = self.state["prompt_embeds"]
-        if not isinstance(prompt, ttnn.Tensor):
-            raise TypeError(
-                "state['prompt_embeds'] must be a ttnn.Tensor (same as run_inference / _encode_prompt_ttnn)."
-            )
-        if len(prompt.shape) == 2:
-            prompt = ttnn.unsqueeze(prompt, 0)
-
-        # ttnn.Shape supports int indexing only, not slicing (spatial.shape[:5] raises TypeError).
-        sh = spatial.shape
-        B, _c, F, H, W = (int(sh[i]) for i in range(5))
-        pF, pH, pW = tt_transformer.patch_size
-        patch_F, patch_H, patch_W = F // pF, H // pH, W // pW
-
-        # Match ``get_mesh_id_ttnn`` + batch dim, and mesh 1-D timestep (not torch on ``.device``).
-        grid_id = get_mesh_id_ttnn(mesh_device, patch_F, patch_H, patch_W, 0, 1, 0, action=False)
-        grid_id = ttnn.unsqueeze(grid_id, 0)
-        # ``WanTransformer.prepare_timestep_conditioning`` typecasts this 1-D tensor before reshape/TILE.
-        # ROW_MAJOR length-1 vectors can hit ttnn typecast padding rules (last dim multiple of 32); build as TILE.
-        timestep = ttnn.from_torch(
-            torch.zeros(B, dtype=torch.float32),
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-        )
-
-        rope_cos_1HND, rope_sin_1HND, trans_mat = tt_transformer.get_rope_features(grid_id)
-        temb_11BD, timestep_proj_1BTD, prompt_1BLP = tt_transformer.prepare_conditioning(
-            timestep, prompt, action_mode=False
-        )
-        spatial_1BNI, N = tt_transformer.preprocess_spatial_input(spatial)
-        spatial_1BND = tt_transformer.patch_embedding(spatial_1BNI)
-
-        metadata = {
-            "rope_cos": rope_cos_1HND,
-            "rope_sin": rope_sin_1HND,
-            "trans_mat": trans_mat,
-            "N": N,
-            "F": F,
-            "H": H,
-            "W": W,
-            "use_per_token": False,
-            "action_mode": False,
-        }
-        return {
-            "spatial_1BND": spatial_1BND,
-            "prompt_1BLP": prompt_1BLP,
-            "temb": temb_11BD,
-            "block_temb": timestep_proj_1BTD,
-            "metadata": metadata,
-        }
+        return cls(models, state, message, init_obs)
 
     def forward_reset_and_infer(self) -> ttnn.Tensor:
-        """Run one preprocessed WanTransformer forward with ``single_run=True``."""
-        # TODO: unused branch? verify before removal — ``prepare()`` always sets ``single_run_inputs``;
-        # this lazy path exists for hypothetical manual ``TtLingbotVA(models, …)`` construction.
-        if self.single_run_inputs is None:
-            self.single_run_inputs = self._prepare_single_run_inputs()
-
-        transformer = self.models["transformer"]
-        tt_transformer = getattr(transformer, "_tt_model", transformer)
-        return tt_transformer.forward(
-            spatial=self.single_run_inputs["spatial_1BND"],
-            prompt=self.single_run_inputs["prompt_1BLP"],
-            timestep=self.single_run_inputs["temb"],
-            grid_id=self.single_run_inputs["metadata"],
-            action_mode=False,
-            update_cache=0,
-            cache_name="pos",
-            timestep_per_frame=self.single_run_inputs["block_temb"],
+        """Run full ``demo._infer_impl`` (video + action denoise); returns latents on device for the pipeline."""
+        _actions_tt, latents_tt = lingbot_demo._infer_impl(
+            self.models,
+            self.state,
+            self._init_obs,
+            frame_st_id=int(self.state.get("frame_st_id", 0)),
             single_run=True,
         )
+        _ = _actions_tt
+        return latents_tt
 
     def __call__(self, l1_input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-        """Pipeline entrypoint: runs one Lingbot chunk."""
-        # Signature required by ``tt_cnn`` pipeline; forward uses ``single_run_inputs``, not this tensor.
+        """Pipeline entrypoint: runs one Lingbot chunk via ``_infer_impl``."""
         _ = l1_input_tensor
         return self.forward_reset_and_infer()
