@@ -404,6 +404,16 @@ void exchange_metadata(
     distributed_context->barrier();
 }
 
+bool is_bh_galaxy_rev_c(tt::umd::Cluster& cluster) {
+    auto* cluster_desc = cluster.get_cluster_description();
+    if (cluster_desc->get_board_type(0) != BoardType::UBB_BLACKHOLE) {
+        return false;
+    }
+    uint64_t board_id = cluster_desc->get_board_id_for_chip(0);
+    uint32_t revision_bits = (board_id >> 32) & 0xF;  // bits [35:32]
+    return revision_bits >= 3;
+}
+
 }  // namespace
 
 namespace discovery_impl {
@@ -415,6 +425,9 @@ PhysicalSystemDescriptor run_local_discovery(
     bool run_live_discovery,
     bool all_hostnames_unique) {
     PhysicalSystemDescriptor psd(target_device_type);
+    if (is_bh_galaxy_rev_c(cluster)) {
+        psd.set_is_bh_galaxy_rev_c(true);
+    }
 
     std::unique_ptr<umd::ClusterDescriptor> cluster_desc = nullptr;
     if (!run_live_discovery || target_device_type != TargetDevice::Silicon) {
