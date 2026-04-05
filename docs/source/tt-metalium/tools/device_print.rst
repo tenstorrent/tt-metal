@@ -41,6 +41,8 @@ An example with the different features available is shown below:
 
     #include "api/debug/device_print.h"  // required in all kernels using DEVICE_PRINT
 
+    enum TestEnum { VAL0, VAL1, VAL2 };
+
     void kernel_main() {
         // Supported scalar types: bool (prints false/true), char, all fixed-width integer types
         // (uint8_t-uint64_t, int8_t-int64_t), float, and double.
@@ -51,6 +53,13 @@ An example with the different features available is shown below:
         // BF16 type printing is supported via provided type
         bf16_t my_bf16_val(0x3dfb); // Equivalent to 0.122559
         DEVICE_PRINT("BF16 value: {}\n", my_bf16_val);
+
+        // DEVICE_PRINT supports printing enums directly
+        TestEnum e = VAL1;
+        DEVICE_PRINT("Enum value: {}\n", e); // prints: Enum value: VAL1
+        DEVICE_PRINT("Enum long name: {:#x}\n", e); // prints: Enum long name: TestEnum::VAL1
+        // If it is not valid value of the enum or if debugging information is not available, it will print the underlying integer value
+        DEVICE_PRINT("Invalid enum value: {}\n", (TestEnum)5); // prints: Invalid enum value: 5
 
         // DEVICE_PRINT supports formatting options that are supported by fmtlib:
         DEVICE_PRINT("{:.5f}\n", 0.123456f);
