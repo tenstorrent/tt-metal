@@ -221,7 +221,7 @@ jobs:
             needs.build-docker-image.outputs.ci-build-tag ||
             'docker-image-unresolved!' }}
       prereq-targets: 'tt_metal ttnn'
-      scan-targets: 'ttml ttml_tests'
+      scan-targets: 'tt-train'
 
   clang-tidy-incremental-catchall:
     name: 🤖 Clang Tidy (catchall)
