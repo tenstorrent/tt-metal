@@ -112,31 +112,32 @@ some_call();                           — suppress the following line
 
 ### Automatic (checks with FIX-ITs)
 
-If the check has FIX-ITs (see the "Offers fixes" column on the checks page):
+If the check has FIX-ITs (see the "Offers fixes" column on the checks page), use the
+parallel preset: it exports fixes to YAML files first, then applies them all at once
+with `clang-apply-replacements-20`. This avoids the race condition where parallel
+clang-tidy instances corrupt headers that are included by multiple TUs.
 
 ```sh
-cmake --preset clang-tidy-fix
-cmake --build --preset clang-tidy-fix --target clean
-cmake --build --preset clang-tidy-fix
+# Step 1: build and collect fixes (does not modify source yet)
+cmake --preset clang-tidy-fix-parallel
+cmake --build --preset clang-tidy-fix-parallel --target clean
+cmake --build --preset clang-tidy-fix-parallel
+
+# Step 2: apply all collected fixes atomically
+clang-apply-replacements-20 .build/clang-tidy-fix-parallel/fixes
 ```
 
 This will take several hours on a 12-core machine. When complete, review the diffs and
-re-run the final build step until no new fixes are applied. Then do a final clean build
-to confirm nothing is broken.
+re-run both steps until no new fixes are applied. Then do a final clean build to confirm
+nothing is broken.
 
-**FIX-IT gotchas:**
-
-- **Header race condition:** if a header is included by many TUs, parallel FIX-ITs can
-  corrupt it. Workaround: `git revert` the affected header, then `ninja -j1` to process
-  it single-threaded before resuming parallel builds.
-- **Partial fixes:** some checks only fix a subset of what they diagnose (e.g.,
-  `performance-unnecessary-value-param` skips templates and lambdas). Remaining
-  diagnostics need manual attention.
-- **Unbuildable state:** some fixes leave the repo broken (e.g., fixing a definition
-  without updating a forward declaration). Always do a clean build after auto-fixing.
+**Note:** some checks only fix a subset of what they diagnose (e.g.,
+`performance-unnecessary-value-param` skips templates and lambdas), and some fixes
+leave the repo in an unbuildable state (e.g., fixing a definition without updating a
+forward declaration). Always do a clean build after applying fixes.
 
 ### Manual
 
-Same flow as above, but after each build review the log and address each diagnostic
-by hand.
+Same build flow as above (`clang-tidy-fix-parallel` or just `clang-tidy`), but after
+each build review the log and address each diagnostic by hand.
 
