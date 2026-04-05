@@ -137,3 +137,13 @@ def _softsign_golden_function(input_tensor, *args, **kwargs):
 
 if hasattr(ttnn, "softsign"):
     ttnn.attach_golden_function(ttnn.softsign, _softsign_golden_function)
+
+
+def _atanh_golden_function(input_tensor, *args, **kwargs):
+    import torch
+
+    return torch.atanh(input_tensor)
+
+
+if hasattr(ttnn, "atanh"):
+    ttnn.attach_golden_function(ttnn.atanh, _atanh_golden_function)
