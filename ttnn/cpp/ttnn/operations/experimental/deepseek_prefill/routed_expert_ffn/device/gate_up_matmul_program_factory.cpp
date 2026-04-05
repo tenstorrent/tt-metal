@@ -54,33 +54,33 @@ CreatedProgram create_program(
     // ---------------------------------------------------------------
     // Derived counts
     // ---------------------------------------------------------------
-    uint32_t K_num_blocks = p.K_tiles / p.K_block_tiles;
-    uint32_t N_num_blocks = p.N_tiles / p.N_block_tiles;
-    uint32_t M_num_blocks = p.M_tiles / p.M_block_tiles;
+    uint32_t K_num_blocks = p.Kt / p.K_block_size;
+    uint32_t N_num_blocks = p.Nt / p.N_block_size;
+    uint32_t M_num_blocks = p.Mt / p.M_block_size;
 
-    uint32_t in0_block_tiles = p.M_block_tiles * p.K_block_tiles;
-    uint32_t in1_block_tiles = p.K_block_tiles * p.N_block_tiles;
-    uint32_t full_out_tiles = p.M_block_tiles * p.N_tiles;  // full N width per M block
+    uint32_t in0_block_size = p.M_block_size * p.K_block_size;
+    uint32_t in1_block_size = p.K_block_size * p.N_block_size;
+    uint32_t full_out_tiles = p.M_block_size * p.Nt;  // full N width per M block
 
     // ---------------------------------------------------------------
     // Circular buffers
     // ---------------------------------------------------------------
     // in0: one k-block at a time (M_block × K_block tiles), double-buffered
     {
-        uint32_t cb_size = 2 * in0_block_tiles * in0_tile_size;
+        uint32_t cb_size = 2 * in0_block_size * in0_tile_size;
         auto cfg = tt::tt_metal::CircularBufferConfig(cb_size, {{CB_IN0, in0_df}}).set_page_size(CB_IN0, in0_tile_size);
         tt::tt_metal::CreateCircularBuffer(program, core_set, cfg);
     }
     // in1_gate: one (k_block × n_block) at a time, double-buffered
     {
-        uint32_t cb_size = 2 * in1_block_tiles * in1_tile_size;
+        uint32_t cb_size = 2 * in1_block_size * in1_tile_size;
         auto cfg = tt::tt_metal::CircularBufferConfig(cb_size, {{CB_IN1_GATE, in1_df}})
                        .set_page_size(CB_IN1_GATE, in1_tile_size);
         tt::tt_metal::CreateCircularBuffer(program, core_set, cfg);
     }
     // in1_up: same
     {
-        uint32_t cb_size = 2 * in1_block_tiles * in1_tile_size;
+        uint32_t cb_size = 2 * in1_block_size * in1_tile_size;
         auto cfg =
             tt::tt_metal::CircularBufferConfig(cb_size, {{CB_IN1_UP, in1_df}}).set_page_size(CB_IN1_UP, in1_tile_size);
         tt::tt_metal::CreateCircularBuffer(program, core_set, cfg);
@@ -118,10 +118,10 @@ CreatedProgram create_program(
     // ---------------------------------------------------------------
 
     // --- BRISC: reader_x ---
-    // ct args: [M_num_blocks, K_num_blocks, M_block_tiles, K_block_tiles, in0_tile_size,
+    // ct args: [M_num_blocks, K_num_blocks, M_block_size, K_block_size, in0_tile_size,
     //           <TensorAccessor for x>]
     std::vector<uint32_t> reader_x_ct_args = {
-        M_num_blocks, K_num_blocks, p.M_block_tiles, p.K_block_tiles, in0_tile_size};
+        M_num_blocks, K_num_blocks, p.M_block_size, p.K_block_size, in0_tile_size};
     tt::tt_metal::TensorAccessorArgs(inputs.x.buffer()).append_to(reader_x_ct_args);
 
     auto reader_x_id = tt::tt_metal::CreateKernel(
@@ -131,20 +131,20 @@ CreatedProgram create_program(
         tt::tt_metal::ReaderDataMovementConfig(reader_x_ct_args, {}));
 
     // --- NCRISC: reader_weights_writer_outputs ---
-    // ct args: [M_num_blocks, K_num_blocks, N_num_blocks, M_block_tiles, K_block_tiles, N_block_tiles,
-    //           in1_tile_size, out_tile_size, N_tiles,
+    // ct args: [M_num_blocks, K_num_blocks, N_num_blocks, M_block_size, K_block_size, N_block_size,
+    //           in1_tile_size, out_tile_size, Nt,
     //           <TensorAccessor gate_proj>, <TensorAccessor up_proj>,
     //           <TensorAccessor gate_out>, <TensorAccessor up_out>]
     std::vector<uint32_t> rw_ct_args = {
         M_num_blocks,
         K_num_blocks,
         N_num_blocks,
-        p.M_block_tiles,
-        p.K_block_tiles,
-        p.N_block_tiles,
+        p.M_block_size,
+        p.K_block_size,
+        p.N_block_size,
         in1_tile_size,
         out_tile_size,
-        p.N_tiles};
+        p.Nt};
     tt::tt_metal::TensorAccessorArgs(inputs.gate_proj.buffer()).append_to(rw_ct_args);
     tt::tt_metal::TensorAccessorArgs(inputs.up_proj.buffer()).append_to(rw_ct_args);
     tt::tt_metal::TensorAccessorArgs(outputs[0].buffer()).append_to(rw_ct_args);
@@ -159,16 +159,16 @@ CreatedProgram create_program(
 
     // --- TRISC: compute_dual_gate_up ---
     // ct args: [M_num_blocks, K_num_blocks, N_num_blocks,
-    //           M_block_tiles, K_block_tiles, N_block_tiles, N_tiles,
+    //           M_block_size, K_block_size, N_block_size, Nt,
     //           subblock_h, subblock_w]
     std::vector<uint32_t> compute_ct_args = {
         M_num_blocks,
         K_num_blocks,
         N_num_blocks,
-        p.M_block_tiles,
-        p.K_block_tiles,
-        p.N_block_tiles,
-        p.N_tiles,
+        p.M_block_size,
+        p.K_block_size,
+        p.N_block_size,
+        p.Nt,
         p.subblock_h,
         p.subblock_w};
 

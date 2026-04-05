@@ -79,28 +79,27 @@ std::array<ttnn::Tensor, 2> gate_up_matmul(
     const auto& x_shape = x.padded_shape();
     const auto& w_shape = gate_proj.padded_shape();
 
-    // Fold all leading dims of x into M (e.g. (1, tokens, K) → M = tokens)
-    uint32_t K = x_shape[-1] / tt::constants::TILE_WIDTH;
-    uint32_t M = (x.physical_volume() / x_shape[-1]) / tt::constants::TILE_HEIGHT;
-    uint32_t N = w_shape[-1] / tt::constants::TILE_WIDTH;
+    // M — number of tokens (sequence length)
+    // K — shared inner dim: x's last dim == gate_proj's second-to-last dim (hidden size)
+    // N — output columns: gate_proj's last dim (intermediate/expert hidden size)
+    uint32_t Mt = (x.physical_volume() / x_shape[-1]) / tt::constants::TILE_HEIGHT;
+    uint32_t Kt = x_shape[-1] / tt::constants::TILE_WIDTH;
+    uint32_t Nt = w_shape[-1] / tt::constants::TILE_WIDTH;
 
-    // K_block=4, M_block=1 was measured as optimal (170ms vs 200ms with larger blocks).
-    // Larger blocks make the kernel computation faster but increase the compiled binary
-    // size (TENSIX COMPUTE 2: 4380 B → 5604 B), which costs more instruction-cache load
-    // time per invocation.  At 1024 expert calls that overhead dominates the compute gain.
-    constexpr uint32_t K_block_tiles = 4;
-    constexpr uint32_t N_block_tiles = 4;
-    constexpr uint32_t M_block_tiles = 1;
+    // Tune these parameters for best performance
+    constexpr uint32_t K_block_size = 4;
+    constexpr uint32_t N_block_size = 4;
+    constexpr uint32_t M_block_size = 1;
     constexpr uint32_t subblock_h = 1;
     constexpr uint32_t subblock_w = 4;
 
     Op::operation_attributes_t attrs{
-        .M_tiles = M,
-        .K_tiles = K,
-        .N_tiles = N,
-        .M_block_tiles = M_block_tiles,
-        .K_block_tiles = K_block_tiles,
-        .N_block_tiles = N_block_tiles,
+        .Mt = Mt,
+        .Kt = Kt,
+        .Nt = Nt,
+        .M_block_size = M_block_size,
+        .K_block_size = K_block_size,
+        .N_block_size = N_block_size,
         .subblock_h = subblock_h,
         .subblock_w = subblock_w,
         .output_mem_config = x.memory_config(),
