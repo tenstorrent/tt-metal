@@ -43,3 +43,7 @@
 #if SFPU_OP_SOFTSHRINK_INCLUDE
 #include "api/compute/eltwise_unary/softshrink.h"
 #endif
+
+#if SFPU_OP_FRAC_INCLUDE
+#include "api/compute/eltwise_unary/frac.h"
+#endif
