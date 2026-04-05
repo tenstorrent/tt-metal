@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -365,13 +365,14 @@ def test_ttnn_dispatch(
     )
 
     # Compute gate outputs (offsets and token counts) before dispatch
-    expert_offsets, expert_token_counts, cum_sum = get_gate_outputs(
+    expert_offsets, expert_token_counts, _ = get_gate_outputs(
         indices,
         dispatch_group_size,
         num_routed_experts,
         experts_per_chip,
         seq_len_per_chip,
         num_experts_per_tok,
+        expert_dispatch_table=expert_dispatch_table,
     )
 
     # Forward pass through TTNN dispatch
@@ -400,7 +401,6 @@ def test_ttnn_dispatch(
         logger.debug(f"{torch_metadata[0][0][0][0][0:4]=} | {torch_metadata[0][1][0][0][0:4]=}")
         logger.debug(f"{expert_token_counts.shape=}, {expert_token_counts=}")
         logger.debug(f"{expert_offsets.shape=}, {expert_offsets=}")
-        logger.debug(f"{cum_sum.shape=}, {cum_sum=}")
 
     # Verify dispatched data matches reference (each EP rank against its torch reference)
     buffer_result = validate_dispatch_buffer(
