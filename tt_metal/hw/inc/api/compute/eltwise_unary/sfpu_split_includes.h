@@ -51,3 +51,7 @@
 #if SFPU_OP_SWISH_INCLUDE
 #include "api/compute/eltwise_unary/swish.h"
 #endif
+
+#if SFPU_OP_ATANH_INCLUDE
+#include "api/compute/eltwise_unary/atanh.h"
+#endif
