@@ -67,7 +67,14 @@ from models.demos.molmo2.tt.hf_processor import preprocess_image, preprocess_vid
 from models.demos.molmo2.tt.prefill_attention_mask import build_molmo2_prefill_attention_bias
 
 # Import shared utilities from tt module
-from models.demos.molmo2.tt.utils import IMAGE_PROMPT, VIDEO_PROMPT, get_image_tokens, pad_input_ids, pad_seq_2d_right
+from models.demos.molmo2.tt.utils import (
+    IMAGE_PROMPT,
+    PREFILL_SEQ_BUCKETS,
+    VIDEO_PROMPT,
+    get_image_tokens,
+    pad_input_ids,
+    pad_seq_2d_right,
+)
 
 # Default paths
 DEMO_DIR = Path(__file__).parent
@@ -139,10 +146,31 @@ class Molmo2Generator:
         self.decode_trace_tensors = None
         self.decode_trace_output = None
 
-        # Vision trace state (ViT encoder)
+        # Vision trace state (ViT encoder) -- single-image / non-DP path
         self.vision_trace_id = None
         self.vision_trace_tensors = None
         self.vision_trace_outputs = None  # [feature_layer_18, feature_layer_24]
+
+        # DP=8 ViT trace state (video path)
+        self.dp_vit_trace_id = None
+        self.dp_vit_trace_input = None  # sharded [num_devices,1,fpd*729,588]
+        self.dp_vit_trace_output = None  # sharded [num_devices,1,fpd*729,2304]
+        self.dp_vit_pos_tiled = None  # replicated [1,1,fpd*729,vit_hidden_dim]
+        self.dp_vit_frames_per_device = None
+        self.dp_vit_num_devices = None
+
+        # Pool chunk trace state (TP=8, one trace per fixed chunk shape)
+        # Uses chunk-relative indexing: feat_buf = [chunk_frames*patches_per_frame, pool_dim]
+        self.dp_pool_trace_id = None
+        self.dp_pool_trace_tensors = None  # {image_features_2d, idx, valid_mask}
+        self.dp_pool_trace_output = None
+        self.dp_pool_chunk_frames = None
+        self.dp_pool_n_out = None
+        self.dp_pool_k_pool = None
+        self.dp_pool_patches_per_frame = None  # e.g. 729 for 27×27 patches
+
+        # Eager vision path: track whether the first (compile) call has been done
+        self._vision_eager_compiled = False
 
         # KV cache (initialized on first run)
         self.kv_caches = None
@@ -480,6 +508,678 @@ class Molmo2Generator:
             "batch_size": batch_size,
         }
 
+    # =========================================================================
+    # DP=8 ViT TRACE (video path)
+    # =========================================================================
+
+    def _warmup_vit_trace(
+        self,
+        frames_per_device: int = 8,
+        num_devices: int = 8,
+    ) -> None:
+        """
+        Compile and capture the ViT DP=8 trace for one pass of ``frames_per_device``
+        frames per device.
+
+        Must be called with the model already loaded on the mesh device.
+        After this call ``dp_vit_trace_id`` / ``dp_vit_trace_input`` /
+        ``dp_vit_trace_output`` / ``dp_vit_pos_tiled`` are all populated.
+        """
+        if not self.is_mesh_device:
+            logger.warning("DP ViT trace requires a MeshDevice; skipping.")
+            return
+
+        vit = self.model.vision_backbone.image_vit
+        num_patches_per_frame = (vit.image_size // vit.patch_size) ** 2  # 729
+        patch_features = vit.patch_size * vit.patch_size * 3  # 588
+        pool_dim = vit.hidden_dim * 2  # 2304 (concat of 2 feature layers)
+
+        shard_mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
+
+        # --- pre-compute positional embedding tiled for frames_per_device frames ---
+        pos_tiles = [vit.positional_embedding] * frames_per_device
+        pos_tiled = ttnn.concat(pos_tiles, dim=2)
+        self.dp_vit_pos_tiled = pos_tiled  # persistent device tensor (replicated)
+
+        # --- warmup (compile) pass ---
+        logger.info(f"  [ViT trace] Compiling DP=8 ViT: {frames_per_device} frames/device × {num_devices} devices")
+        dummy_patches = torch.zeros(
+            num_devices, 1, frames_per_device * num_patches_per_frame, patch_features, dtype=torch.bfloat16
+        )
+        patches_compile = ttnn.from_torch(
+            dummy_patches,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=shard_mapper,
+        )
+        compile_out = self.model._vit_pass_forward_ttnn(patches_compile, pos_tiled)
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.deallocate(compile_out)
+        ttnn.deallocate(patches_compile)
+        logger.info("  [ViT trace] Compile pass done")
+
+        # --- allocate stable trace input buffer (sharded) ---
+        trace_input = ttnn.from_torch(
+            torch.zeros(
+                num_devices, 1, frames_per_device * num_patches_per_frame, patch_features, dtype=torch.bfloat16
+            ),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=shard_mapper,
+        )
+
+        # --- capture trace ---
+        tok = trace_capture_run_begin()
+        try:
+            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            trace_output = self.model._vit_pass_forward_ttnn(trace_input, pos_tiled, trace_capture=True)
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        finally:
+            trace_capture_run_end(tok)
+
+        self.dp_vit_trace_id = trace_id
+        self.dp_vit_trace_input = trace_input
+        self.dp_vit_trace_output = trace_output
+        self.dp_vit_frames_per_device = frames_per_device
+        self.dp_vit_num_devices = num_devices
+        logger.info("  [ViT trace] Captured")
+        # Execute the ViT trace once with the dummy data already in trace_input so Metal
+        # transitions it out of "active" state before pool trace buffers are allocated.
+        # Without this, Metal warns "Allocating device buffers is unsafe due to the
+        # existence of an active trace" and those pool buffers get corrupted on first
+        # ViT trace replay (which causes pool trace execute_trace to hang).
+        ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(self.mesh_device)
+        logger.info("  [ViT trace] Dummy execute done (trace no longer active)")
+
+    def _execute_vit_trace_pass(
+        self,
+        all_patches_torch: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Execute the pre-captured ViT DP=8 trace for one pass.
+
+        Args:
+            all_patches_torch: CPU tensor [num_devices, 1, fpd*729, 588].
+
+        Returns:
+            vit_features_torch: CPU tensor [1, 1, num_devices*fpd*729, pool_dim]
+                                 (full pass result, already trimmed to non-padded length
+                                 by the caller).
+        """
+        shard_mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
+        mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+        pool_dim = self.model.vision_backbone.image_vit.hidden_dim * 2  # 2304
+
+        new_patches_ttnn = ttnn.from_torch(
+            all_patches_torch,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=shard_mapper,
+        )
+        ttnn.copy(new_patches_ttnn, self.dp_vit_trace_input)
+        ttnn.deallocate(new_patches_ttnn)
+
+        ttnn.execute_trace(self.mesh_device, self.dp_vit_trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(self.mesh_device)
+
+        vit_features_torch = ttnn.to_torch(self.dp_vit_trace_output, mesh_composer=mesh_composer)
+        # shape: [num_devices, 1, fpd*729, pool_dim] → [1, 1, num_devices*fpd*729, pool_dim]
+        vit_features_torch = vit_features_torch.reshape(1, 1, -1, pool_dim)
+        return vit_features_torch
+
+    # =========================================================================
+    # Pool chunk TRACE (TP=8, video path)
+    # =========================================================================
+
+    def _warmup_pool_chunk_trace(
+        self,
+        chunk_frames: int,
+        n_out: int,
+        k_pool: int,
+    ) -> None:
+        """
+        Compile and capture a single-chunk pooling trace for the given shape.
+
+        Uses CHUNK-RELATIVE indexing: each chunk's feature buffer only holds
+        that chunk's frames (chunk_frames * patches_per_frame rows), not the
+        full video.  Global pool indices are converted to chunk-relative before
+        each trace execution.  This keeps feat_2d_buf at ~53 MB instead of the
+        previous ~268 MB (which caused OOM on 12 GB Wormhole devices).
+
+        The trace input tensors are:
+          - ``image_features_2d``: [chunk_frames*patches_per_frame, pool_dim]
+            ROW_MAJOR (updated once per chunk).
+          - ``idx``: [1, chunk_frames*n_out*k_pool] uint32 CHUNK-RELATIVE
+            (updated per chunk).
+          - ``valid_mask``: [1, 1, chunk_frames*n_out*k_pool, 1] bfloat16
+            (updated per chunk).
+
+        After capture, ``dp_pool_trace_id`` / ``dp_pool_trace_tensors`` /
+        ``dp_pool_trace_output`` / ``dp_pool_patches_per_frame`` are set.
+        """
+        pool_dim = self.model.vision_backbone.image_vit.hidden_dim * 2  # 2304
+        patches_per_frame = (
+            self.model.vision_backbone.image_vit.image_size // self.model.vision_backbone.image_vit.patch_size
+        ) ** 2  # 729
+        chunk_total_patches = chunk_frames * patches_per_frame  # 16 * 729 = 11664
+        replicate = self.mesh_mapper  # ReplicateTensorToMesh or None
+        idx_len = chunk_frames * n_out * k_pool
+
+        logger.info(
+            f"  [Pool trace] Compiling chunk pooling: chunk_frames={chunk_frames} "
+            f"n_out={n_out} k_pool={k_pool} chunk_patches={chunk_total_patches} "
+            f"(chunk-relative indexing, ~{chunk_total_patches * pool_dim * 2 / 1e6:.0f} MB feat buf)"
+        )
+
+        # --- allocate stable trace input buffers (chunk-sized, not video-sized) ---
+        feat_2d_buf = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([chunk_total_patches, pool_dim]),
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        idx_buf = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, idx_len]),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        valid_mask_buf = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, idx_len, 1]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Initialise with dummy valid data so compile sees realistic shapes
+        dummy_feat = ttnn.from_torch(
+            torch.zeros(chunk_total_patches, pool_dim, dtype=torch.bfloat16),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=replicate,
+        )
+        ttnn.copy(dummy_feat, feat_2d_buf)
+        ttnn.deallocate(dummy_feat)
+
+        dummy_idx = ttnn.from_torch(
+            torch.zeros(1, idx_len, dtype=torch.int32),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=replicate,
+        )
+        ttnn.copy(dummy_idx, idx_buf)
+        ttnn.deallocate(dummy_idx)
+
+        dummy_mask = ttnn.from_torch(
+            torch.ones(1, 1, idx_len, 1, dtype=torch.bfloat16),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=replicate,
+        )
+        ttnn.copy(dummy_mask, valid_mask_buf)
+        ttnn.deallocate(dummy_mask)
+
+        # --- warmup (compile) pass ---
+        compile_out = self.model.vision_backbone.pool_chunk_from_features_ttnn(
+            feat_2d_buf, idx_buf, valid_mask_buf, chunk_frames, n_out, k_pool
+        )
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.deallocate(compile_out)
+        logger.info("  [Pool trace] Compile pass done")
+
+        # --- capture trace ---
+        tok = trace_capture_run_begin()
+        try:
+            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            trace_output = self.model.vision_backbone.pool_chunk_from_features_ttnn(
+                feat_2d_buf, idx_buf, valid_mask_buf, chunk_frames, n_out, k_pool
+            )
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        finally:
+            trace_capture_run_end(tok)
+
+        self.dp_pool_trace_id = trace_id
+        self.dp_pool_trace_tensors = {
+            "image_features_2d": feat_2d_buf,
+            "idx": idx_buf,
+            "valid_mask": valid_mask_buf,
+        }
+        self.dp_pool_trace_output = trace_output
+        self.dp_pool_chunk_frames = chunk_frames
+        self.dp_pool_n_out = n_out
+        self.dp_pool_k_pool = k_pool
+        self.dp_pool_patches_per_frame = patches_per_frame
+        logger.info(
+            f"  [Pool trace] Captured: feat_buf={chunk_total_patches}×{pool_dim} "
+            f"({chunk_total_patches * pool_dim * 2 / 1e6:.0f} MB, chunk-relative)"
+        )
+        ttnn.synchronize_device(self.mesh_device)
+
+    def _embed_image_data_parallel_traced(
+        self,
+        pixel_values: torch.Tensor,
+        pooled_patches_idx: torch.Tensor,
+        frames_per_device: int = 8,
+        num_devices: int = 8,
+        max_frames_per_pool_chunk: int = 16,
+    ) -> Tuple[ttnn.Tensor, torch.Tensor]:
+        """
+        DP=8 video embed with pre-captured ViT and pool traces.
+
+        Replaces the eager ``_embed_image_data_parallel`` when both
+        ``dp_vit_trace_id`` and ``dp_pool_trace_id`` are set.
+
+        The ViT trace is replayed once per pass (same trace, new data).
+        The pool trace is replayed for all chunks (including partial ones padded to
+        the trace shape); padded output is sliced after replay.
+        """
+        from models.demos.molmo2.tt.vision_backbone import MAX_FRAMES_FOR_SINGLE_POOL
+
+        vit = self.model.vision_backbone.image_vit
+        num_patches_per_frame = (vit.image_size // vit.patch_size) ** 2  # 729
+        patch_features = vit.patch_size * vit.patch_size * 3  # 588
+        pool_dim = vit.hidden_dim * 2  # 2304
+
+        total_frames = pooled_patches_idx.shape[0]
+        n_out = pooled_patches_idx.shape[1]
+        k_pool = pooled_patches_idx.shape[2]
+
+        frames_per_pass = frames_per_device * num_devices
+        num_passes = (total_frames + frames_per_pass - 1) // frames_per_pass
+
+        shard_mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
+        replicate_mapper = self.mesh_mapper
+        mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+
+        logger.info(
+            f"embed_image_data_parallel_traced: {total_frames} frames, "
+            f"{frames_per_device} fpd, {num_devices} devices, {num_passes} passes"
+        )
+
+        # ---- Stage 1: ViT passes (traced) ----
+        all_vit_features: List[torch.Tensor] = []
+
+        for pass_idx in range(num_passes):
+            pass_start = pass_idx * frames_per_pass
+            pass_end = min(pass_start + frames_per_pass, total_frames)
+            actual_frames_this_pass = pass_end - pass_start
+
+            pass_pixels = pixel_values[pass_start:pass_end]  # [actual, C, H, W]
+
+            # Pad to full frames_per_pass for uniform sharding
+            if actual_frames_this_pass < frames_per_pass:
+                pad_frames = frames_per_pass - actual_frames_this_pass
+                padding = torch.zeros((pad_frames,) + pass_pixels.shape[1:], dtype=pass_pixels.dtype)
+                pass_pixels = torch.cat([pass_pixels, padding], dim=0)
+
+            # Reshape → [num_devices, frames_per_device, C, H, W]
+            pass_pixels = pass_pixels.reshape(num_devices, frames_per_device, *pass_pixels.shape[1:])
+
+            # CPU patch unfolding per device
+            device_patches_list = []
+            for dev_idx in range(num_devices):
+                dev_pixels = pass_pixels[dev_idx]  # [fpd, C, H, W]
+                B, C, H, W = dev_pixels.shape
+                x = dev_pixels.unfold(2, vit.patch_size, vit.patch_size)
+                x = x.unfold(3, vit.patch_size, vit.patch_size)
+                x = x.permute(0, 2, 3, 4, 5, 1).reshape(B * num_patches_per_frame, patch_features)
+                device_patches_list.append(x)
+
+            # [num_devices, fpd*729, 588] → [num_devices, 1, fpd*729, 588]
+            all_patches = torch.stack(device_patches_list, dim=0).float().unsqueeze(1)
+
+            logger.debug(f"  Pass {pass_idx+1}/{num_passes}: frames {pass_start}-{pass_end}")
+            vit_features_torch = self._execute_vit_trace_pass(all_patches)
+
+            # Trim padding
+            actual_patches = actual_frames_this_pass * num_patches_per_frame
+            vit_features_torch = vit_features_torch[:, :, :actual_patches, :]
+            all_vit_features.append(vit_features_torch)
+
+        combined_vit_features = torch.cat(all_vit_features, dim=2)
+        logger.info(f"  Combined ViT features: {combined_vit_features.shape}")
+
+        # ---- Stage 2: Pooling (traced for all chunks; partial last chunk padded to trace shape) ----
+        valid = pooled_patches_idx >= 0
+        valid_token = torch.any(valid, dim=-1)
+        batch_size = total_frames
+
+        if batch_size <= MAX_FRAMES_FOR_SINGLE_POOL and self.dp_pool_trace_id is None:
+            # Single-pass eager path: only when no pool trace is captured
+            clipped_idx = torch.clip(pooled_patches_idx, min=0)
+            flat_idx = clipped_idx.reshape(1, -1).to(torch.int32)
+            valid_mask = valid.reshape(1, 1, -1, 1).float()
+
+            combined_features_ttnn = ttnn.from_torch(
+                combined_vit_features,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=replicate_mapper,
+            )
+            # Reshape to 2D feature table
+            image_features_2d = ttnn.reshape(combined_features_ttnn, [-1, pool_dim])
+            image_features_2d = ttnn.to_layout(image_features_2d, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(combined_features_ttnn)
+
+            idx_ttnn = ttnn.from_torch(
+                flat_idx,
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=replicate_mapper,
+            )
+            valid_mask_ttnn = ttnn.from_torch(
+                valid_mask,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=replicate_mapper,
+            )
+
+            visual_embeddings = self.model.vision_backbone.pool_and_project_from_features_ttnn(
+                image_features_2d=image_features_2d,
+                pooled_patches_idx_ttnn=idx_ttnn,
+                valid_mask_ttnn=valid_mask_ttnn,
+                n_out=n_out,
+                k_pool=k_pool,
+                batch_size=batch_size,
+            )
+            ttnn.deallocate(image_features_2d)
+            ttnn.deallocate(idx_ttnn)
+            ttnn.deallocate(valid_mask_ttnn)
+        else:
+            # Chunked pooling: traced for all chunks with CHUNK-RELATIVE indexing.
+            # Each chunk uploads only its own frames' features (53 MB) instead of the
+            # full video feature table (268 MB), avoiding OOM on 12 GB Wormhole devices.
+
+            # Pre-compute 2D CPU feature table for cheap chunk slicing
+            logger.info(
+                f"  [pool] flattening ViT features to 2D for chunk upload "
+                f"(patches={combined_vit_features.shape[2]}, dim={pool_dim})..."
+            )
+            combined_vit_features_2d = combined_vit_features.reshape(-1, pool_dim)
+            patches_per_frame = self.dp_pool_patches_per_frame if self.dp_pool_trace_id is not None else 729
+
+            all_device_chunks: List[ttnn.Tensor] = []
+            for chunk_start in range(0, batch_size, max_frames_per_pool_chunk):
+                chunk_end = min(chunk_start + max_frames_per_pool_chunk, batch_size)
+                chunk_frames = chunk_end - chunk_start
+
+                chunk_idx = pooled_patches_idx[chunk_start:chunk_end]
+                chunk_valid = valid[chunk_start:chunk_end]
+                # Clip to 0 (invalid positions become 0, masked out by valid_mask later)
+                flat_chunk_idx = torch.clip(chunk_idx, min=0).reshape(1, -1).to(torch.int32)
+                flat_chunk_valid = chunk_valid.reshape(1, 1, -1, 1).float()
+
+                is_trace_output = False
+                is_partial_padded = False
+
+                if (
+                    self.dp_pool_trace_id is not None
+                    and n_out == self.dp_pool_n_out
+                    and k_pool == self.dp_pool_k_pool
+                    and chunk_frames <= self.dp_pool_chunk_frames
+                ):
+                    trace_feat_buf = self.dp_pool_trace_tensors["image_features_2d"]
+                    chunk_total_patches = self.dp_pool_chunk_frames * patches_per_frame  # e.g. 16*729=11664
+                    pad_frames = self.dp_pool_chunk_frames - chunk_frames
+
+                    # --- 1. Upload chunk features to trace feat_buf (chunk-relative) ---
+                    chunk_start_feat = chunk_start * patches_per_frame
+                    chunk_end_feat = chunk_end * patches_per_frame  # may exceed total if partial
+                    chunk_end_feat = min(chunk_end_feat, combined_vit_features_2d.shape[0])
+                    chunk_feats_cpu = combined_vit_features_2d[
+                        chunk_start_feat:chunk_end_feat, :
+                    ]  # [actual_patches, pool_dim]
+                    actual_chunk_patches = chunk_feats_cpu.shape[0]
+                    logger.debug(
+                        f"  [chunk {chunk_start}] trace path: frames={chunk_frames}, "
+                        f"feat_rows={actual_chunk_patches}/{chunk_total_patches}"
+                    )
+
+                    feat_tmp = ttnn.from_torch(
+                        chunk_feats_cpu,
+                        device=self.mesh_device,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=replicate_mapper,
+                    )
+                    logger.info(f"  [chunk {chunk_start}] pool trace: feat host→device upload done")
+                    if actual_chunk_patches < chunk_total_patches:
+                        # Pad partial chunk features to full trace size (on-device, no CPU roundtrip)
+                        feat_padded = ttnn.pad(
+                            feat_tmp,
+                            padding=[(0, chunk_total_patches - actual_chunk_patches), (0, 0)],
+                            value=0.0,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        )
+                        ttnn.copy(feat_padded, trace_feat_buf)
+                        ttnn.deallocate(feat_padded)
+                    else:
+                        ttnn.copy(feat_tmp, trace_feat_buf)
+                    ttnn.deallocate(feat_tmp)
+                    # Ensure feat copy is visible before idx/mask uploads + trace replay (mesh CQ ordering).
+                    ttnn.synchronize_device(self.mesh_device)
+
+                    # --- 2. Convert global indices to chunk-relative ---
+                    # Valid indices are in [chunk_start_feat, chunk_end_feat); after shift they're in [0, chunk_total_patches)
+                    # Invalid (clipped-to-0) indices become negative after shift → re-clip to 0
+                    flat_chunk_idx_relative = torch.clip(flat_chunk_idx - chunk_start_feat, min=0).to(torch.int32)
+
+                    # --- 3. Pad partial chunk idx/mask to full trace shape ---
+                    if pad_frames > 0:
+                        flat_chunk_idx_relative = torch.nn.functional.pad(
+                            flat_chunk_idx_relative, (0, pad_frames * n_out * k_pool), value=0
+                        )
+                        flat_chunk_valid = torch.nn.functional.pad(
+                            flat_chunk_valid, (0, 0, 0, pad_frames * n_out * k_pool), value=0.0
+                        )
+                        is_partial_padded = True
+
+                    # --- 4. Upload idx/mask and execute pool trace ---
+                    idx_tmp = ttnn.from_torch(
+                        flat_chunk_idx_relative,
+                        device=self.mesh_device,
+                        dtype=ttnn.uint32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=replicate_mapper,
+                    )
+                    mask_tmp = ttnn.from_torch(
+                        flat_chunk_valid,
+                        device=self.mesh_device,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=replicate_mapper,
+                    )
+                    ttnn.copy(idx_tmp, self.dp_pool_trace_tensors["idx"])
+                    ttnn.copy(mask_tmp, self.dp_pool_trace_tensors["valid_mask"])
+                    ttnn.deallocate(idx_tmp)
+                    ttnn.deallocate(mask_tmp)
+                    logger.info(f"  [chunk {chunk_start}] pool trace: executing (blocking=True)...")
+                    # blocking=True: avoids rare CQ / fabric hangs with blocking=False on mesh + sync
+                    ttnn.execute_trace(self.mesh_device, self.dp_pool_trace_id, cq_id=0, blocking=True)
+                    ttnn.synchronize_device(self.mesh_device)
+                    logger.info(f"  [chunk {chunk_start}] pool trace: execute+sync done, reading output to CPU")
+                    pooled_chunk = self.dp_pool_trace_output
+                    is_trace_output = True
+                else:
+                    # Eager path: no trace captured, or n_out/k_pool mismatch
+                    # Upload full video features on first chunk; reuse on subsequent chunks
+                    if chunk_start == 0:
+                        combined_features_ttnn = ttnn.from_torch(
+                            combined_vit_features,
+                            device=self.mesh_device,
+                            dtype=ttnn.bfloat16,
+                            layout=ttnn.TILE_LAYOUT,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            mesh_mapper=replicate_mapper,
+                        )
+                        image_features_2d = ttnn.reshape(combined_features_ttnn, [-1, pool_dim])
+                        image_features_2d = ttnn.to_layout(image_features_2d, ttnn.ROW_MAJOR_LAYOUT)
+                        ttnn.deallocate(combined_features_ttnn)
+                    idx_tmp = ttnn.from_torch(
+                        flat_chunk_idx,
+                        device=self.mesh_device,
+                        dtype=ttnn.uint32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=replicate_mapper,
+                    )
+                    mask_tmp = ttnn.from_torch(
+                        flat_chunk_valid,
+                        device=self.mesh_device,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=replicate_mapper,
+                    )
+                    pooled_chunk = self.model.vision_backbone.pool_chunk_from_features_ttnn(
+                        image_features_2d, idx_tmp, mask_tmp, chunk_frames, n_out, k_pool
+                    )
+                    ttnn.deallocate(idx_tmp)
+                    ttnn.deallocate(mask_tmp)
+
+                # Keep chunk on device (trace output is overwritten on next execute_trace so always slice).
+                # Use ROW_MAJOR to avoid tile-alignment issues when chunk_frames*n_out is not a multiple of 32.
+                chunk_tokens = chunk_frames * n_out
+                if is_trace_output:
+                    logger.info(f"  [chunk {chunk_start}] pool trace: slicing [{chunk_tokens} tokens] to device buffer")
+                    pooled_slice = ttnn.slice(
+                        self.dp_pool_trace_output,
+                        (0, 0, 0, 0),
+                        (1, 1, chunk_tokens, pool_dim),
+                    )
+                    pooled_device = ttnn.to_layout(pooled_slice, ttnn.ROW_MAJOR_LAYOUT)
+                    ttnn.deallocate(pooled_slice)
+                else:
+                    # Eager path: pool_chunk_from_features_ttnn returns [1,1,chunk_tokens,pool_dim]
+                    pooled_device = ttnn.to_layout(pooled_chunk, ttnn.ROW_MAJOR_LAYOUT)
+                    ttnn.deallocate(pooled_chunk)
+                all_device_chunks.append(pooled_device)
+
+            # Eager path: deallocate the full-video device feature table (only exists in eager path)
+            if self.dp_pool_trace_id is None:
+                ttnn.deallocate(image_features_2d)
+
+            # Concat on device → to TILE → projector (no CPU roundtrip)
+            combined_rm = ttnn.concat(all_device_chunks, dim=2)
+            for t in all_device_chunks:
+                ttnn.deallocate(t)
+            combined_ttnn = ttnn.to_layout(combined_rm, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(combined_rm)
+            visual_embeddings = self.model.vision_backbone.image_projector(combined_ttnn)
+            ttnn.deallocate(combined_ttnn)
+
+        logger.info(f"embed_image_data_parallel_traced: Complete, output shape: {visual_embeddings.shape}")
+        return visual_embeddings, valid_token
+
+    # =========================================================================
+    # UPFRONT WARMUP (all traces together before inference)
+    # =========================================================================
+
+    def warmup_video_traces(
+        self,
+        frames_per_device: int = 8,
+        num_devices: int = 8,
+        prefill_buckets: Optional[List[int]] = None,
+        max_frames_per_pool_chunk: int = 16,
+        pool_n_out: int = 81,
+        pool_k_pool: int = 9,
+        max_vit_frames: int = 80,
+        use_prefill_trace: bool = True,
+        use_decode_trace: bool = True,
+    ) -> None:
+        """
+        Capture ALL traces upfront in the correct order:
+
+          1. DP=8 ViT trace
+          2. TP=8 pool-chunk trace
+          3. Prefill traces (per bucket)
+          4. Decode trace
+
+        Call this after model creation and before ``run_video_inference``.
+
+        If ``prefill_buckets`` is omitted, uses ``PREFILL_SEQ_BUCKETS`` from ``tt.utils``
+        (1024 … 65536), keeping only buckets ``<= max_seq_len``.
+        """
+        if prefill_buckets is None:
+            prefill_buckets = [b for b in PREFILL_SEQ_BUCKETS if b <= self.max_seq_len]
+
+        logger.info("=" * 60)
+        logger.info("WARMUP (video): capturing all traces upfront")
+        logger.info(f"  ViT: {frames_per_device} fpd × {num_devices} devices")
+        logger.info(f"  Pool chunk: {max_frames_per_pool_chunk} frames, n_out={pool_n_out}, k_pool={pool_k_pool}")
+        logger.info(f"  Prefill buckets: {prefill_buckets}")
+        logger.info("=" * 60)
+
+        self.init_kv_cache()
+
+        # Prefill traces + Decode trace
+        if use_prefill_trace or use_decode_trace:
+            logger.info("Capturing prefill/decode traces...")
+            self.warmup_all_buckets(
+                bucket_sizes=prefill_buckets,
+                use_decode_trace=use_decode_trace,
+                use_prefill_trace=use_prefill_trace,
+            )
+            logger.info("WARMUP complete: Prefill + Decode traces ready")
+        else:
+            logger.info("WARMUP complete (no traces captured)")
+        logger.info("=" * 60)
+
+    def _run_dp_vision_traced(
+        self,
+        input_ids: torch.Tensor,
+        pixel_values: torch.Tensor,
+        pooled_patches_idx: torch.Tensor,
+        frames_per_device: int,
+        num_devices: int,
+        max_frames_per_pool_chunk: int = 16,
+    ) -> "ttnn.Tensor":
+        """
+        Run DP=8 vision processing with pre-captured traces and fuse into text embeddings.
+
+        Returns hidden_states [1, 1, seq_len, hidden_dim] on device.
+        """
+        visual_embeddings_ttnn, valid_token = self._embed_image_data_parallel_traced(
+            pixel_values=pixel_values,
+            pooled_patches_idx=pooled_patches_idx,
+            frames_per_device=frames_per_device,
+            num_devices=num_devices,
+            max_frames_per_pool_chunk=max_frames_per_pool_chunk,
+        )
+
+        # Fuse visual embeddings with text embeddings using the existing traced fusion path
+        hidden_states_ttnn = self._prepare_text_inputs_traced(
+            input_ids=input_ids,
+            visual_embeddings_ttnn=visual_embeddings_ttnn,
+            valid_token_torch=valid_token,
+        )
+        return hidden_states_ttnn
+
     def _allocate_vision_trace_tensors(
         self,
         batch_size: int,
@@ -596,41 +1296,71 @@ class Molmo2Generator:
             # Reshape to 4D for matmul: [1, num_valid, hidden_dim] -> [1, 1, num_valid, hidden_dim]
             valid_visual_ttnn = ttnn.reshape(valid_visual_ttnn, [1, 1, num_valid, hidden_dim])
 
-            # 3. Create selector matrix for fusion (CPU - just positions, very fast)
-            # S[seq_pos, visual_idx] = 1.0 where seq_pos should get visual_idx embedding
+            # 3. Scatter visual embeddings into text positions via ttnn.embedding (no CPU loop, no matmul).
+            #
+            # Build a [seq_len] index vector (CPU, vectorized):
+            #   visual_index[text_pos] = i  (0..num_valid-1) for the i-th image-patch position
+            #   visual_index[text_pos] = num_valid  for non-image positions → zero row
+            # Then extend the valid_visual table with one zero row and gather with ttnn.embedding.
+            # Upload cost: [seq_len] int32 ≈ 4 KB vs old [seq_len × num_valid] bfloat16 ≈ 1.3 MB.
             image_positions = (input_ids[0] == image_patch_id).nonzero(as_tuple=True)[0]
 
             if len(image_positions) == num_valid:
-                # Create sparse selector matrix
-                selector = torch.zeros(seq_len, num_valid, dtype=torch.bfloat16)
-                for i, pos in enumerate(image_positions):
-                    selector[pos, i] = 1.0
+                # --- 3a. Build scatter index (vectorized, no Python loop) ---
+                visual_index = torch.full((seq_len,), num_valid, dtype=torch.int32)
+                visual_index[image_positions] = torch.arange(num_valid, dtype=torch.int32)
 
-                # Transfer selector to device
-                selector_ttnn = ttnn.from_torch(
-                    selector.unsqueeze(0).unsqueeze(0),  # [1, 1, seq_len, num_valid]
+                # --- 3b. Extend embedding table with zero row on device ---
+                # valid_visual_ttnn: [1, 1, num_valid, hidden_dim] → [num_valid, hidden_dim] ROW_MAJOR
+                valid_visual_2d = ttnn.reshape(valid_visual_ttnn, [num_valid, hidden_dim])
+                valid_visual_2d_rm = ttnn.to_layout(valid_visual_2d, ttnn.ROW_MAJOR_LAYOUT)
+                ttnn.deallocate(valid_visual_2d)
+                ttnn.deallocate(valid_visual_ttnn)
+
+                zero_row_ttnn = ttnn.from_torch(
+                    torch.zeros(1, hidden_dim, dtype=torch.bfloat16),
                     device=self.mesh_device,
                     dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=self.mesh_mapper,
                 )
+                # [num_valid+1, hidden_dim] ROW_MAJOR — the extra row is the "background" zero
+                valid_visual_ext = ttnn.concat([valid_visual_2d_rm, zero_row_ttnn], dim=0)
+                ttnn.deallocate(valid_visual_2d_rm)
+                ttnn.deallocate(zero_row_ttnn)
 
-                # 4. Compute visual contribution: selector @ visual_embeddings
-                # [1, 1, seq_len, num_valid] @ [1, 1, num_valid, hidden_dim] -> [1, 1, seq_len, hidden_dim]
-                visual_contribution = ttnn.matmul(selector_ttnn, valid_visual_ttnn)
-                ttnn.deallocate(selector_ttnn)
-                ttnn.deallocate(valid_visual_ttnn)
+                # --- 3c. Upload scatter index and gather (single embedding op) ---
+                visual_index_ttnn = ttnn.from_torch(
+                    visual_index.unsqueeze(0),  # [1, seq_len]
+                    device=self.mesh_device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=self.mesh_mapper,
+                )
+                # [1, seq_len, hidden_dim]: non-image positions get the zero row
+                visual_scattered = ttnn.embedding(
+                    visual_index_ttnn,
+                    valid_visual_ext,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                ttnn.deallocate(visual_index_ttnn)
+                ttnn.deallocate(valid_visual_ext)
 
-                # 5. Fuse: text_embeddings + visual_contribution (on device)
-                fused_ttnn = ttnn.add(text_embeddings_ttnn, visual_contribution)
+                # 4. Fuse: text_embeddings + scattered visual (on device)
+                visual_scattered_4d = ttnn.reshape(visual_scattered, [1, 1, seq_len, hidden_dim])
+                ttnn.deallocate(visual_scattered)
+                fused_ttnn = ttnn.add(text_embeddings_ttnn, visual_scattered_4d)
                 ttnn.deallocate(text_embeddings_ttnn)
-                ttnn.deallocate(visual_contribution)
+                ttnn.deallocate(visual_scattered_4d)
             else:
                 logger.warning(
                     f"Position mismatch: {len(image_positions)} placeholders vs {num_valid} visual tokens. "
                     "Falling back to text-only."
                 )
+                ttnn.deallocate(valid_visual_ttnn)
                 fused_ttnn = text_embeddings_ttnn
         else:
             # No visual tokens - just use text embeddings
@@ -781,6 +1511,8 @@ class Molmo2Generator:
         # Execute trace
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
 
+        # trace_output is the logits buffer; callers using ttnn.to_torch should copy to CPU
+        # (e.g. .detach().cpu().clone()) before another execute_trace overwrites it.
         return trace_output
 
     # =========================================================================
@@ -1545,9 +2277,6 @@ class Molmo2Generator:
 
             ttnn.deallocate(hidden_states_ttnn)
 
-        # Cleanup warmup page table
-        ttnn.deallocate(warmup_page_table)
-
         # Warmup decode trace
         if use_decode_trace:
             logger.info("Warming up decode trace...")
@@ -1611,6 +2340,9 @@ class Molmo2Generator:
 
             ttnn.deallocate(decode_hidden)
             logger.info("Decode trace captured")
+
+        # Cleanup warmup page table (must be after decode warmup which uses it for paged attention)
+        ttnn.deallocate(warmup_page_table)
 
         logger.info(
             f"Warmup complete: {len(self.prefill_traces)} prefill buckets, decode={'yes' if use_decode_trace else 'no'}"
@@ -1727,6 +2459,7 @@ class Molmo2Generator:
         use_trace: bool = False,
         use_vision_trace: bool = False,
         use_unified_trace: bool = False,
+        use_dp_vision_trace: bool = False,
         page_table: Optional[ttnn.Tensor] = None,
         user_id: int = 0,
         use_data_parallel: bool = False,
@@ -1744,6 +2477,7 @@ class Molmo2Generator:
             use_trace: Whether to trace text model prefill
             use_vision_trace: Whether to trace vision backbone (ViT + pooling)
             use_unified_trace: Whether to use unified Vision+Prefill trace (eliminates CPU roundtrip)
+            use_dp_vision_trace: Use pre-captured DP=8 ViT + pool traces (video path)
             page_table: Optional page table for paged attention (vLLM)
             user_id: Batch index for multi-user batching (determines KV cache slot)
             token_type_ids: Optional HF ``[B, S]`` multimodal token types (non-zero = image/mm)
@@ -1805,7 +2539,21 @@ class Molmo2Generator:
         # Start end-to-end TTFT timer (vision + fusion + prefill)
         e2e_ttft_start = None
 
-        if use_vision_trace and pixel_values is not None:
+        if use_dp_vision_trace and self.dp_vit_trace_id is not None and pixel_values is not None:
+            # DP=8 ViT + pool trace path (video)
+            e2e_ttft_start = time.perf_counter()
+            logger.info("Using pre-captured DP=8 ViT + pool traces for vision processing...")
+            vision_start = time.perf_counter()
+            hidden_states_ttnn = self._run_dp_vision_traced(
+                input_ids=input_ids,
+                pixel_values=pixel_values,
+                pooled_patches_idx=pooled_patches_idx,
+                frames_per_device=self.dp_vit_frames_per_device,
+                num_devices=self.dp_vit_num_devices,
+            )
+            timing["vision_ms"] = (time.perf_counter() - vision_start) * 1000
+            logger.info(f"Vision (DP traced) completed in {timing['vision_ms']:.2f}ms")
+        elif use_vision_trace and pixel_values is not None:
             # Vision tracing path - uses forward_ttnn with TTNN-native gather
             logger.info("Preparing vision inputs for tracing...")
             vision_prep_start = time.perf_counter()
@@ -1888,7 +2636,24 @@ class Molmo2Generator:
             logger.info(f"Vision processing completed in {timing['vision_ms']:.2f}ms (traced)")
         else:
             # Original path - no vision tracing
-            # START of end-to-end TTFT measurement
+            # Separate compile pass from timed inference, mirroring the non-traced prefill path.
+            if not self._vision_eager_compiled and pixel_values is not None:
+                logger.info("Running eager vision compile pass (ViT + pool)...")
+                compile_vision_start = time.perf_counter()
+                warmup_hs = self._prepare_text_inputs(
+                    input_ids,
+                    pixel_values,
+                    pooled_patches_idx,
+                    use_data_parallel=use_data_parallel,
+                    frames_per_device=frames_per_device,
+                )
+                ttnn.synchronize_device(self.mesh_device)
+                timing["compile_vision_ms"] = (time.perf_counter() - compile_vision_start) * 1000
+                ttnn.deallocate(warmup_hs)
+                self._vision_eager_compiled = True
+                logger.info(f"Eager vision compile completed in {timing['compile_vision_ms']:.2f}ms")
+
+            # START of end-to-end TTFT measurement (compile-free)
             e2e_ttft_start = time.perf_counter()
             logger.info("Preparing inputs (vision processing)...")
             vision_start = time.perf_counter()
@@ -1903,19 +2668,13 @@ class Molmo2Generator:
             logger.info(f"Vision processing completed in {timing['vision_ms']:.2f}ms")
 
         if use_trace:
-            # Allocate trace tensors if needed
+            # Prefill traces must be captured upfront (warmup_all_buckets / warmup_video_traces).
+            # No lazy allocation or capture during inference — avoids compile in the TTFT path.
             if seq_len not in self.prefill_traces:
-                logger.info("Allocating prefill trace tensors...")
-                trace_tensors = self._allocate_prefill_trace_tensors(seq_len, hidden_dim=4096)
-
-                # Warm-up (compile)
-                timing["compile_prefill_ms"] = self.warmup_prefill(
-                    hidden_states_ttnn, trace_tensors, use_trace=True, attn_mask=None
+                raise RuntimeError(
+                    f"Prefill trace for seq_len={seq_len} not found. "
+                    "Call warmup_all_buckets(...) or warmup_video_traces(...) before run_prefill with use_trace=True."
                 )
-
-                # Capture trace
-                trace_id, trace_output = self._capture_prefill_trace(trace_tensors)
-                self.prefill_traces[seq_len] = (trace_id, trace_tensors, trace_output)
 
             trace_id, trace_tensors, trace_output = self.prefill_traces[seq_len]
 
@@ -2125,19 +2884,11 @@ class Molmo2Generator:
 
         if use_trace:
             if self.decode_trace_id is None:
-                logger.info("Allocating decode trace tensors...")
-                # Calculate max_num_blocks based on max_seq_len for paged attention
-                max_num_blocks = (self.max_seq_len + self.block_size - 1) // self.block_size
-                self.decode_trace_tensors = self._allocate_decode_trace_tensors(
-                    hidden_dim=4096, max_num_blocks=max_num_blocks
+                raise RuntimeError(
+                    "Decode trace not captured (decode_trace_id is None). "
+                    "Call warmup_all_buckets(..., use_decode_trace=True) or warmup_video_traces(...) "
+                    "before run_decode_step with use_trace=True."
                 )
-                compile_time = self.warmup_decode(hidden_states, page_table=effective_page_table)
-                hidden_states = self.model.text_model.embed_tokens(token_id_ttnn)
-                trace_id, trace_output = self._capture_decode_trace(
-                    self.decode_trace_tensors, hidden_states, page_table=effective_page_table
-                )
-                self.decode_trace_id = trace_id
-                self.decode_trace_output = trace_output
 
             start_time = time.perf_counter()
             logits = self._execute_decode_trace(
@@ -2445,6 +3196,7 @@ class Molmo2Generator:
         use_decode_trace: bool = False,
         use_vision_trace: bool = False,
         use_unified_trace: bool = False,
+        use_dp_vision_trace: bool = True,
         use_data_parallel: bool = False,
         frames_per_device: int = 8,
     ) -> Tuple[str, dict]:
@@ -2463,6 +3215,7 @@ class Molmo2Generator:
             use_decode_trace: Whether to use tracing for decode
             use_vision_trace: Whether to use tracing for vision backbone
             use_unified_trace: Whether to use unified Vision+Prefill trace
+            use_dp_vision_trace: Use pre-captured DP=8 ViT + pool traces (default True; pass False for eager vision)
 
         Returns:
             Tuple of (output_text, perf_metrics)
@@ -2498,6 +3251,9 @@ class Molmo2Generator:
         # Vision timing starts here
         vision_start = time.perf_counter()
 
+        # DP vision path only when requested and warmup captured ViT+pool traces (no silent auto-enable).
+        _use_dp_vision_trace = bool(use_dp_vision_trace and self.dp_vit_trace_id is not None)
+
         # Run prefill (vision + text model)
         logits, prefill_timing = self.run_prefill(
             input_ids=input_ids,
@@ -2506,6 +3262,7 @@ class Molmo2Generator:
             use_trace=use_trace,
             use_vision_trace=use_vision_trace,
             use_unified_trace=use_unified_trace,
+            use_dp_vision_trace=_use_dp_vision_trace,
             use_data_parallel=use_data_parallel,
             frames_per_device=frames_per_device,
             token_type_ids=video_inputs.get("token_type_ids"),
@@ -2830,6 +3587,7 @@ def run_video_demo(
     use_decode_trace: bool = False,
     use_vision_trace: bool = False,
     use_unified_trace: bool = False,
+    use_dp_vision_trace: bool = False,
     use_paged_attention: bool = False,
     batch_size: int = 1,
     num_devices: int = 8,
@@ -2904,6 +3662,26 @@ def run_video_demo(
         logger.info(f"Prompt: {prompt}")
         logger.info("=" * 60)
 
+        # Upfront warmup: capture ALL traces before inference
+        if use_dp_vision_trace or use_decode_trace or use_trace:
+            from models.demos.molmo2.tt.vision_backbone import MAX_VIT_FRAMES_FOR_POOL
+
+            _n_out = video_inputs["n_tokens"] // video_inputs["n_frames"]
+            _k_pool = video_inputs["k_pool"]
+            # Use fixed MAX_VIT_FRAMES_FOR_POOL (80) so the pool trace buffer is always
+            # the same size and can be reused across different videos. The actual video
+            # features are zero-padded on-device to fill the buffer.
+            generator.warmup_video_traces(
+                frames_per_device=frames_per_device,
+                num_devices=num_devices,
+                prefill_buckets=[b for b in PREFILL_SEQ_BUCKETS if b <= generator.max_seq_len],
+                pool_n_out=_n_out,
+                pool_k_pool=_k_pool,
+                max_vit_frames=MAX_VIT_FRAMES_FOR_POOL,
+                use_prefill_trace=use_trace,
+                use_decode_trace=use_decode_trace,
+            )
+
         response, perf_metrics = generator.run_video_inference(
             video_inputs=video_inputs,
             # prompt not needed - HF processor already tokenized with visual tokens
@@ -2912,9 +3690,17 @@ def run_video_demo(
             use_decode_trace=use_decode_trace,
             use_vision_trace=use_vision_trace,
             use_unified_trace=use_unified_trace,
+            use_dp_vision_trace=use_dp_vision_trace,
             use_data_parallel=use_data_parallel,
             frames_per_device=frames_per_device,
         )
+
+        vision_ms = perf_metrics["vision_ms"]
+        ttft_ms = perf_metrics["ttft_ms"]
+        total_decode_ms = perf_metrics["total_decode_ms"]
+        compile_vision_ms = perf_metrics.get("compile_vision_ms", 0)
+        compile_prefill_ms = perf_metrics.get("compile_prefill_ms", 0)
+        total_inference_ms = video_extraction_ms + vision_ms + ttft_ms + total_decode_ms
 
         logger.info("\n" + "=" * 60)
         logger.info("Video Performance Metrics:")
@@ -2922,16 +3708,26 @@ def run_video_demo(
         logger.info(
             f"  Frame extraction:    {video_extraction_ms:.2f}ms ({n_frames / (video_extraction_ms/1000):.2f} frames/sec CPU)"
         )
-        logger.info(
-            f"  Vision (TTNN):       {perf_metrics['vision_ms']:.2f}ms ({perf_metrics['frames_per_sec']:.2f} frames/sec)"
-        )
-        logger.info(f"  TTFT:                {perf_metrics['ttft_ms']:.2f}ms")
+        if compile_vision_ms > 0:
+            logger.info(f"  Vision compile:      {compile_vision_ms:.2f}ms  [excluded from total]")
+        logger.info(f"  Vision (TTNN):       {vision_ms:.2f}ms ({perf_metrics['frames_per_sec']:.2f} frames/sec)")
+        if compile_prefill_ms > 0:
+            logger.info(f"  Prefill compile:     {compile_prefill_ms:.2f}ms  [excluded from total]")
+        logger.info(f"  TTFT (prefill):      {ttft_ms:.2f}ms")
         if perf_metrics.get("e2e_ttft_ms", 0) > 0:
             logger.info(f"  E2E TTFT:            {perf_metrics['e2e_ttft_ms']:.2f}ms")
         logger.info(f"  Input tokens:        {perf_metrics['input_tokens']}")
         logger.info(f"  Generated tokens:    {perf_metrics['generated_tokens']}")
         logger.info(
             f"  Decode:              {perf_metrics['avg_decode_ms']:.2f}ms/token ({perf_metrics['tokens_per_sec']:.2f} tok/s)"
+        )
+        logger.info(f"  Total decode:        {total_decode_ms:.2f}ms")
+        logger.info("-" * 60)
+        logger.info(
+            f"  TOTAL (preproc+vision+prefill+decode): {total_inference_ms:.0f}ms ({total_inference_ms/1000:.2f}s)"
+        )
+        logger.info(
+            f"    = preproc {video_extraction_ms:.0f}ms + vision {vision_ms:.0f}ms + prefill {ttft_ms:.0f}ms + decode {total_decode_ms:.0f}ms"
         )
         logger.info("=" * 60)
         logger.info(f"Response: {response}")
@@ -3338,6 +4134,12 @@ def main():
         help="Enable unified Vision+Prefill trace (eliminates CPU roundtrip, best TTFT)",
     )
     parser.add_argument(
+        "--use-dp-vision-trace",
+        action="store_true",
+        default=False,
+        help="Enable DP=8 ViT + pool chunk traces for video (requires warmup_video_traces upfront)",
+    )
+    parser.add_argument(
         "--input-file",
         type=str,
         default=None,
@@ -3387,11 +4189,11 @@ def main():
     decode_trace_video = True if _dt is None else _dt
     decode_trace_image_text = False if _dt is None else _dt
 
-    # Prefill + vision trace: video defaults ON; image/text/batched default OFF unless explicitly set.
+    # Prefill + vision trace: video defaults OFF for now (memory pressure during warmup)
     _ut = args.use_trace
     _vt = args.use_vision_trace
-    trace_prefill_video = True if _ut is None else _ut
-    trace_vision_video = True if _vt is None else _vt
+    trace_prefill_video = False if _ut is None else _ut
+    trace_vision_video = False if _vt is None else _vt
     trace_prefill_image_text = False if _ut is None else _ut
     trace_vision_image_text = False if _vt is None else _vt
 
@@ -3455,6 +4257,7 @@ def main():
             use_decode_trace=use_decode_trace_video,
             use_vision_trace=trace_vision_video,
             use_unified_trace=args.use_unified_trace,
+            use_dp_vision_trace=args.use_dp_vision_trace,
             use_paged_attention=use_paged_attention_video,
             batch_size=args.batch_size,
             num_devices=args.num_devices,
