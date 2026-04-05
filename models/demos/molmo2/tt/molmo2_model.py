@@ -988,6 +988,10 @@ class Molmo2Model(LightweightModule):
         batch_size = input_ids.shape[0]
         generated_ids = input_ids.clone()
 
+        is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
+        mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0) if is_mesh_device else None
+
         # Initial forward pass (prefill)
         logits, kv_caches = self.forward(
             input_ids=input_ids,
@@ -997,19 +1001,22 @@ class Molmo2Model(LightweightModule):
             token_type_ids=token_type_ids,
         )
 
-        # Get next token
-        logits_torch = ttnn.to_torch(logits).squeeze()
-        # Handle different output shapes
-        if logits_torch.dim() == 2:
-            # Shape: [seq_len, vocab_size] - take last position
-            next_token_logits = logits_torch[-1:, :]
-        else:
-            # Shape: [batch, seq_len, vocab_size]
-            next_token_logits = logits_torch[:, -1, :]
-
         for _ in range(max_new_tokens):
-            # Sample or greedy decode
+            # Device-side token selection
             if do_sample:
+                # Sampling requires CPU for multinomial (no ttnn.multinomial)
+                if is_mesh_device:
+                    logits_torch = ttnn.to_torch(logits, mesh_composer=mesh_composer)[0]
+                else:
+                    logits_torch = ttnn.to_torch(logits)
+                logits_torch = logits_torch.squeeze()
+
+                # Handle different output shapes
+                if logits_torch.dim() == 2:
+                    next_token_logits = logits_torch[-1:, :]
+                else:
+                    next_token_logits = logits_torch[:, -1, :]
+
                 # Apply temperature
                 next_token_logits = next_token_logits / temperature
 
@@ -1032,8 +1039,32 @@ class Molmo2Model(LightweightModule):
                 probs = torch.softmax(next_token_logits, dim=-1)
                 next_token = torch.multinomial(probs, num_samples=1)
             else:
-                # Greedy
-                next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
+                # Greedy decoding fully on device using ttnn.argmax
+                # logits shape: [1, 1, seq_len, vocab_size] or [1, seq_len, vocab_size]
+                # Take last position's logits
+                seq_len_logits = logits.shape[-2]
+                if seq_len_logits > 1:
+                    # Slice to get last position: [..., -1:, :]
+                    last_logits = ttnn.slice(
+                        logits,
+                        [0, 0, seq_len_logits - 1, 0],
+                        [1, 1, seq_len_logits, logits.shape[-1]],
+                    )
+                else:
+                    last_logits = logits
+
+                # Device-side argmax
+                next_token_ttnn = ttnn.argmax(last_logits, dim=-1, keepdim=False)
+
+                # Transfer only the token ID (single int) to CPU
+                if is_mesh_device:
+                    next_token = ttnn.to_torch(next_token_ttnn, mesh_composer=mesh_composer)[0]
+                else:
+                    next_token = ttnn.to_torch(next_token_ttnn)
+                ttnn.deallocate(next_token_ttnn)
+
+                # Reshape to [batch, 1]
+                next_token = next_token.reshape(batch_size, 1).to(torch.long)
 
             # Append to generated
             generated_ids = torch.cat([generated_ids, next_token], dim=-1)
@@ -1048,8 +1079,5 @@ class Molmo2Model(LightweightModule):
                 kv_caches=kv_caches,
                 start_pos=generated_ids.shape[1] - 1,
             )
-
-            logits_torch = ttnn.to_torch(logits).squeeze(0).squeeze(0)
-            next_token_logits = logits_torch[:, -1, :]
 
         return generated_ids
