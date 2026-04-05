@@ -764,7 +764,7 @@ The following example shows a simple print of local kernel variables, including 
        uint32_t iter = 5;
        bool done = false;
 
-       // DEVICE_PRINT uses a ftmlib format-like syntax; \n flushes the print buffer.
+       // DEVICE_PRINT uses a fmtlib format-like syntax; \n flushes the print buffer.
        DEVICE_PRINT("iter = {}\n", iter);
 
        // Booleans are printed as true/false.
