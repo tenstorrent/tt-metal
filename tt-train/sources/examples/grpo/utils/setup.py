@@ -34,34 +34,11 @@ class InferenceCtx:
 @dataclass
 class GrpoConfig:
     clip_eps: float
-    base_lr: float
     warmup_steps: int
     micro_batch_size: int
-    num_mini_epochs: int  # from training_config.num_epochs
+    num_mini_epochs: int
     prompts_to_train: int
-    completions_batch_size: int  # from training_config.batch_size
     gradient_accumulation_steps: int
-
-
-@dataclass
-class TrainingCtx:
-    inference: InferenceCtx
-    grpo_cfg: GrpoConfig
-    optimizer: object
-    output_dir: str
-    checkpoint_dir: str
-    logger: logging.Logger
-
-    def save_checkpoint(self, step: int) -> str:
-        os.makedirs(self.checkpoint_dir, exist_ok=True)
-        tensors = {}
-        for name, param in self.inference.tt_model.parameters().items():
-            tensors[name] = param.to_numpy(ttnn.DataType.FLOAT32)
-
-        filepath = os.path.join(self.checkpoint_dir, f"grpo_step_{step}.safetensors")
-        save_file(tensors, filepath)
-        self.logger.info(f"Saved checkpoint ({len(tensors)} tensors) to {filepath}")
-        return filepath
 
 
 def setup_inference(yaml_config_path, hf_model_id, checkpoint_path: str | None) -> InferenceCtx:
@@ -118,14 +95,6 @@ def setup_inference(yaml_config_path, hf_model_id, checkpoint_path: str | None) 
     )
 
     tt_model = LlamaCompositeKV(llama_cfg)
-    if checkpoint_path is not None:
-        load_checkpoint(tt_model, checkpoint_path)
-    else:
-        model_repo_path = snapshot_download(
-            repo_id=hf_model_id,
-            allow_patterns=["*.safetensors", "*.json", "*.model", "*.txt"],
-        )
-        load_from_safetensors(tt_model, model_repo_path, llama_cfg)
 
     use_ddp = device_config.enable_ddp
     dp_mapper = None
@@ -138,6 +107,15 @@ def setup_inference(yaml_config_path, hf_model_id, checkpoint_path: str | None) 
         dp_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
         dp_composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
         total_devices = device_config.total_devices()
+
+    if checkpoint_path is not None:
+        load_checkpoint(tt_model, checkpoint_path, dp_mapper=dp_mapper)
+    else:
+        model_repo_path = snapshot_download(
+            repo_id=hf_model_id,
+            allow_patterns=["*.safetensors", "*.json", "*.model", "*.txt"],
+        )
+        load_from_safetensors(tt_model, model_repo_path, llama_cfg)
 
     ctx = InferenceCtx(
         tt_model=tt_model,
@@ -157,7 +135,7 @@ def setup_inference(yaml_config_path, hf_model_id, checkpoint_path: str | None) 
     return ctx
 
 
-def load_checkpoint(model, checkpoint_path):
+def load_checkpoint(model, checkpoint_path, dp_mapper=None):
     from safetensors.numpy import load_file
     import numpy as np
     import ml_dtypes
@@ -175,7 +153,7 @@ def load_checkpoint(model, checkpoint_path):
                 arr = arr.reshape(1, 1, 1, -1)
             elif arr.ndim == 2:
                 arr = arr.reshape(1, 1, arr.shape[0], arr.shape[1])
-            restored = ttml.autograd.Tensor.from_numpy(arr, layout=ttnn.Layout.TILE)
+            restored = ttml.autograd.Tensor.from_numpy(arr, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, dp_mapper)
             param.assign(restored)
             loaded += 1
         else:
@@ -196,16 +174,19 @@ def setup_grpo_config(yaml_config_path) -> GrpoConfig:
 
     grpo_config = GrpoConfig(
         clip_eps=float(grpo_cfg.get("clip_eps", 0.2)),
-        base_lr=float(training_cfg["optimizer"]["lr"]),
         warmup_steps=int(grpo_cfg.get("warmup_steps", 20)),
         micro_batch_size=int(grpo_cfg.get("micro_batch_size", 16)),
         prompts_to_train=int(grpo_cfg.get("prompts_to_train", 1536)),
         num_mini_epochs=int(training_cfg.get("num_epochs", 1)),
-        completions_batch_size=int(training_cfg.get("batch_size", 4)),
         gradient_accumulation_steps=int(grpo_cfg.get("gradient_accumulation_steps", 1)),
     )
 
     return grpo_config
+
+
+def get_training_config(yaml_config_path) -> dict:
+    yaml_config = load_config(yaml_config_path, get_tt_metal_runtime_root())
+    return yaml_config["training_config"]
 
 
 def setup_training_optimizer(yaml_config_path, tt_model):
