@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -98,6 +98,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::RPOW: return "SFPU_OP_RPOW_INCLUDE";
         case UnaryOpType::HARDMISH: return "SFPU_OP_HARDMISH_INCLUDE";
         case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
+        case UnaryOpType::POLYGAMMA: return "SFPU_OP_POLYGAMMA_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -499,6 +500,17 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     idst,
                     std::bit_cast<uint32_t>(param0),
                     std::bit_cast<uint32_t>(1.0f / param0))};
+        case UnaryOpType::POLYGAMMA: {
+            TT_ASSERT(params.size() == 2, "Expected polygamma to take 2 parameters (n, scale)");
+            float param1 = static_cast<float>(params[1]);
+            return {
+                "polygamma_tile_init();",
+                fmt::format(
+                    "polygamma_tile({}, {:#x}u, {:#x}u);",
+                    idst,
+                    std::bit_cast<uint32_t>(param0),
+                    std::bit_cast<uint32_t>(param1))};
+        }
         case UnaryOpType::HARDSHRINK:
         case UnaryOpType::LOGIT: return {};
         case UnaryOpType::SOFTSHRINK:

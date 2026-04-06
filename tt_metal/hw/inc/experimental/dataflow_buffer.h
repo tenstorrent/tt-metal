@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -46,7 +46,9 @@ public:
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
         ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= num_entries);
         llk_wait_for_free_tiles(logical_dfb_id_, num_entries);
-        // DPRINT << "reserve_back: tc_id: " << static_cast<uint32_t>(tc_id) << " acked: " << static_cast<uint32_t>(tile_counters[tc_id].f.acked) << ENDL();
+        // DPRINT << "reserve_back: tc_id: " << static_cast<uint32_t>(tc_id) << " acked: " <<
+        // static_cast<uint32_t>(tile_counters[tc_id].f.acked) << ENDL(); DEVICE_PRINT("reserve_back: tc_id: {} acked:
+        // {}\n", static_cast<uint32_t>(tc_id), static_cast<uint32_t>(tile_counters[tc_id].f.acked));
 #elif !defined(COMPILE_FOR_TRISC)
         if (__builtin_expect(local_dfb_interface_.broadcast_tc, 0)) {
             // DM-DM BLOCKED: wait until every consumer TC has free space (throttled by slowest consumer)
@@ -56,7 +58,10 @@ public:
                 for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
                     dfb::PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
                     ASSERT(llk_intf_get_capacity(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) >= num_entries);
-                    // DPRINT << "reserve_back: tc_id: " << static_cast<uint32_t>(tc_id) << " free space: " << static_cast<uint32_t>(llk_intf_get_free_space(get_tensix_id(ptc), get_counter_id(ptc))) << ENDL();
+                    // DPRINT << "reserve_back: tc_id: " << static_cast<uint32_t>(tc_id) << " free space: " <<
+                    // static_cast<uint32_t>(llk_intf_get_free_space(get_tensix_id(ptc), get_counter_id(ptc))) <<
+                    // ENDL(); DEVICE_PRINT("reserve_back: tc_id: {} free space: {}\n", tc_id,
+                    // static_cast<uint32_t>(llk_intf_get_free_space(get_tensix_id(ptc), get_counter_id(ptc))));
                     if (llk_intf_get_free_space(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) < num_entries) {
                         ready = false;
                         break;
@@ -67,7 +72,9 @@ public:
             uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
             ASSERT(llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
             while (llk_intf_get_free_space(tensix_id, tc_id) < num_entries);
-            // DPRINT << "reserve_back: tc_id: " << static_cast<uint32_t>(tc_id) << " free space: " << static_cast<uint32_t>(llk_intf_get_free_space(tensix_id, tc_id)) << ENDL();
+            // DPRINT << "reserve_back: tc_id: " << static_cast<uint32_t>(tc_id) << " free space: " <<
+            // static_cast<uint32_t>(llk_intf_get_free_space(tensix_id, tc_id)) << ENDL(); DEVICE_PRINT("reserve_back:
+            // tc_id: {} free space: {}\n", tc_id, static_cast<uint32_t>(llk_intf_get_free_space(tensix_id, tc_id)));
         }
 #endif
     }
@@ -78,14 +85,19 @@ public:
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
         ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= num_entries);
         llk_push_tiles(logical_dfb_id_, num_entries);
-        // DPRINT << "push_bak: tc_id: " << static_cast<uint32_t>(tc_id) << " posted: " << static_cast<uint32_t>(tile_counters[tc_id].f.posted) << ENDL();
+        // DPRINT << "push_bak: tc_id: " << static_cast<uint32_t>(tc_id) << " posted: " <<
+        // static_cast<uint32_t>(tile_counters[tc_id].f.posted) << ENDL(); DEVICE_PRINT("push_back: tc_id: {} posted:
+        // {}\n", tc_id, static_cast<uint32_t>(tile_counters[tc_id].f.posted));
 #elif !defined(COMPILE_FOR_TRISC)
         if (__builtin_expect(local_dfb_interface_.broadcast_tc, 0)) {
             // DM-DM BLOCKED: post to all N TCs; wr_ptr tracked on slot 0
             for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
                 dfb::PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
                 ASSERT(llk_intf_get_capacity(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) >= num_entries);
-                // DPRINT << "push_back: tc_id: " << static_cast<uint32_t>(tc_id) << " posted: " << static_cast<uint32_t>(llk_intf_get_posted(get_tensix_id(ptc), get_counter_id(ptc))) << ENDL();
+                // DPRINT << "push_back: tc_id: " << static_cast<uint32_t>(tc_id) << " posted: " <<
+                // static_cast<uint32_t>(llk_intf_get_posted(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc))) <<
+                // ENDL(); DEVICE_PRINT("push_back: tc_id: {} posted: {}\n", tc_id,
+                // static_cast<uint32_t>(llk_intf_get_posted(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc))));
                 llk_intf_inc_posted(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc), num_entries);
             }
             local_dfb_interface_.tc_slots[0].wr_ptr += (num_entries * local_dfb_interface_.stride_size);
@@ -97,9 +109,16 @@ public:
             uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
             ASSERT(llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
             llk_intf_inc_posted(tensix_id, tc_id, num_entries);
-            DPRINT << "push_back: tensix_id: " << static_cast<uint32_t>(tensix_id) << " tc_id: " << static_cast<uint32_t>(tc_id) << " capacity: "
-                    << static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id))
-                    << " posted: " << static_cast<uint32_t>(llk_intf_get_posted(tensix_id, tc_id)) << ENDL();
+            DPRINT << "push_back: tensix_id: " << static_cast<uint32_t>(tensix_id)
+                   << " tc_id: " << static_cast<uint32_t>(tc_id)
+                   << " capacity: " << static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id))
+                   << " posted: " << static_cast<uint32_t>(llk_intf_get_posted(tensix_id, tc_id)) << ENDL();
+            DEVICE_PRINT(
+                "push_back: tensix_id: {} tc_id: {} capacity: {} posted: {}\n",
+                tensix_id,
+                tc_id,
+                static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id)),
+                static_cast<uint32_t>(llk_intf_get_posted(tensix_id, tc_id)));
 
             local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr += (num_entries * local_dfb_interface_.stride_size);
             if (local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr == local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].limit) {
@@ -119,7 +138,9 @@ public:
         if ((local_dfb_interface_.tensix_trisc_mask & (1u << ckernel::csr_read<ckernel::CSR::TRISC_ID>())) == 0) {
             return;
         }
-        DPRINT << "wait_front: tc_id: " << static_cast<uint32_t>(tc_id) << " num_entries: " << static_cast<uint32_t>(num_entries) << ENDL();
+        DPRINT << "wait_front: tc_id: " << static_cast<uint32_t>(tc_id)
+               << " num_entries: " << static_cast<uint32_t>(num_entries) << ENDL();
+        DEVICE_PRINT("wait_front: tc_id: {} num_entries: {}\n", tc_id, num_entries);
         llk_wait_tiles(logical_dfb_id_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
         uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
@@ -127,6 +148,9 @@ public:
         //        << " capacity: " << static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id))
         //        << " tc_id: " << static_cast<uint32_t>(tc_id)
         //        << " occupancy: " << static_cast<uint32_t>(llk_intf_get_occupancy(tensix_id, tc_id)) << ENDL();
+        // DEVICE_PRINT("wait_front: tensix_id: {} capacity: {} tc_id: {} occupancy: {}\n", tensix_id,
+        // static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id)), tc_id,
+        // static_cast<uint32_t>(llk_intf_get_occupancy(tensix_id, tc_id)));
         ASSERT(llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
         while (llk_intf_get_occupancy(tensix_id, tc_id) < num_entries);
 #endif
@@ -151,6 +175,7 @@ public:
         }
         local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
         // DPRINT << "pop_front: free space: " << (uint32_t)llk_intf_get_free_space(tensix_id, tc_id) << ENDL();
+        // DEVICE_PRINT("pop_front: free space: {}\n", (uint32_t)llk_intf_get_free_space(tensix_id, tc_id));
 #endif
     }
     // Explicit sync APIs end
@@ -166,13 +191,22 @@ public:
 
         // Wait for entries that were previously read across all transaction ids to be posted. Need to do this because HW doesn't track pending posts
         // When this condition is met, we know previous reads were committed
-        DPRINT << "read_in: tensix_id: " << static_cast<uint32_t>(tensix_id) << " tc_id: " << static_cast<uint32_t>(tc_id) << " posted: " << static_cast<uint32_t>(fast_llk_intf_read_posted(tensix_id, tc_id)) << ENDL();
+        DPRINT << "read_in: tensix_id: " << static_cast<uint32_t>(tensix_id)
+               << " tc_id: " << static_cast<uint32_t>(tc_id)
+               << " posted: " << static_cast<uint32_t>(fast_llk_intf_read_posted(tensix_id, tc_id)) << ENDL();
+        DEVICE_PRINT(
+            "read_in: tensix_id: {} tc_id: {} posted: {}\n",
+            tensix_id,
+            tc_id,
+            static_cast<uint32_t>(fast_llk_intf_read_posted(tensix_id, tc_id)));
         while (fast_llk_intf_read_posted(tensix_id, tc_id) < (ptxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc));
 
         // Make sure there is space for the new tile
         while (fast_llk_intf_get_free_space(tensix_id, tc_id) < 1);
 
-        // DPRINT << "issuing the read on " << static_cast<uint32_t>(local_dfb_interface_.txn_ids[ptxn_id_index_]) << ENDL();
+        // DPRINT << "issuing the read on " << static_cast<uint32_t>(local_dfb_interface_.txn_ids[ptxn_id_index_]) <<
+        // ENDL();
+        // DEVICE_PRINT("issuing the read on {}\n", local_dfb_interface_.txn_ids[ptxn_id_index_]);
 
         noc.async_read<Noc::TxnIdMode::ENABLED>(src, *this, get_entry_size(), src_args, {}, NOC_UNICAST_WRITE_VC, local_dfb_interface_.txn_ids[ptxn_id_index_]);
 
@@ -205,7 +239,9 @@ public:
 
         while (fast_llk_intf_get_occupancy(tensix_id, tc_id) < 1);
 
-        // DPRINT << "issuing the write on " << static_cast<uint32_t>(local_dfb_interface_.txn_ids[ctxn_id_index_]) << ENDL();
+        // DPRINT << "issuing the write on " << static_cast<uint32_t>(local_dfb_interface_.txn_ids[ctxn_id_index_]) <<
+        // ENDL();
+        // DEVICE_PRINT("issuing the write on {}\n", local_dfb_interface_.txn_ids[ctxn_id_index_]);
 
         noc.async_write<Noc::TxnIdMode::ENABLED>(*this, dst, get_entry_size(), {}, dst_args, NOC_UNICAST_WRITE_VC, local_dfb_interface_.txn_ids[ctxn_id_index_]);
 
@@ -231,7 +267,9 @@ public:
 #ifndef COMPILE_FOR_TRISC
         // Handle case where outstanding transactions do not meet ISR threshold
         // Each DM updates tile counters for the tiles it read/wrote by using its local counter
-        // DPRINT << "ptiles_read: " << static_cast<uint32_t>(ptiles_read_) << " ctiles_written: " << static_cast<uint32_t>(ctiles_written_) << ENDL();
+        // DPRINT << "ptiles_read: " << static_cast<uint32_t>(ptiles_read_) << " ctiles_written: " <<
+        // static_cast<uint32_t>(ctiles_written_) << ENDL();
+        // DEVICE_PRINT("ptiles_read: {} ctiles_written: {}\n", ptiles_read_, ctiles_written_);
         if (ptiles_read_ > 0) {
             handle_final_credits<true>(ptiles_read_, ptxn_id_index_);
         }
@@ -253,7 +291,13 @@ public:
                 all_acked = all_acked && (ckernel::trisc::tile_counters[tc_id].f.posted == 0);
 #elif !defined(COMPILE_FOR_TRISC)
                 uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
-                DPRINT << "read acked: " << static_cast<uint32_t>(fast_llk_intf_read_acked(tensix_id, tc_id)) << " read posted: " << static_cast<uint32_t>(fast_llk_intf_read_posted(tensix_id, tc_id)) << ENDL();
+                DPRINT << "read acked: " << static_cast<uint32_t>(fast_llk_intf_read_acked(tensix_id, tc_id))
+                       << " read posted: " << static_cast<uint32_t>(fast_llk_intf_read_posted(tensix_id, tc_id))
+                       << ENDL();
+                DEVICE_PRINT(
+                    "read acked: {} read posted: {}\n",
+                    static_cast<uint32_t>(fast_llk_intf_read_acked(tensix_id, tc_id)),
+                    static_cast<uint32_t>(fast_llk_intf_read_posted(tensix_id, tc_id)));
                 all_acked &=
                     (fast_llk_intf_read_acked(tensix_id, tc_id) == fast_llk_intf_read_posted(tensix_id, tc_id));
 #endif
@@ -286,9 +330,11 @@ private:
 #ifndef COMPILE_FOR_TRISC
         // Determine the txn_id for the last batch. If transactions_issued lands exactly on
         // a boundary, txn_id_index has already wrapped past it, so step back one slot.
-        uint8_t tail_txn_idx = (transactions_issued % local_dfb_interface_.num_entries_per_txn_id == 0)
-                                    ? static_cast<uint8_t>((txn_id_index + local_dfb_interface_.num_txn_ids - 1) % local_dfb_interface_.num_txn_ids)
-                                    : txn_id_index;
+        uint8_t tail_txn_idx =
+            (transactions_issued % local_dfb_interface_.num_entries_per_txn_id == 0)
+                ? static_cast<uint8_t>(
+                      (txn_id_index + local_dfb_interface_.num_txn_ids - 1) % local_dfb_interface_.num_txn_ids)
+                : txn_id_index;
         uint8_t tail_txn_id = local_dfb_interface_.txn_ids[tail_txn_idx];
 
         uint8_t N = local_dfb_interface_.num_tcs_to_rr;
@@ -322,13 +368,15 @@ private:
         while (read_actual_slot0() < expected_slot0) {
             uint64_t tack, tiles;
             if constexpr (is_producer) {
-                tack  = CMDBUF_TR_ACK_TRID(OVERLAY_RD_CMD_BUF, tail_txn_id);
+                tack = CMDBUF_TR_ACK_TRID(OVERLAY_RD_CMD_BUF, tail_txn_id);
                 tiles = CMDBUF_READ_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, tail_txn_id);
             } else {
-                tack  = CMDBUF_WR_SENT_TRID(OVERLAY_WR_CMD_BUF, tail_txn_id);
+                tack = CMDBUF_WR_SENT_TRID(OVERLAY_WR_CMD_BUF, tail_txn_id);
                 tiles = CMDBUF_READ_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, tail_txn_id);
             }
-            if (tack == 0 && tiles > 0) break;
+            if (tack == 0 && tiles > 0) {
+                break;
+            }
         }
 
         // Transactions are completed. Spin giving the ISR a chance to fire
@@ -341,32 +389,39 @@ private:
             } else {
                 tiles = CMDBUF_READ_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, tail_txn_id);
             }
-            if (tiles > 0 && tiles < threshold) break;
+            if (tiles > 0 && tiles < threshold) {
+                break;
+            }
         }
 
         // Manually post missing credits if ISR did not fire.
         uint16_t actual_slot0 = read_actual_slot0();
         // DPRINT << "actual_slot0: " << static_cast<uint32_t>(actual_slot0)
         //        << " expected_slot0: " << static_cast<uint32_t>(expected_slot0) << ENDL();
+        // DEVICE_PRINT("actual_slot0: {} expected_slot0: {}\n", actual_slot0, expected_slot0);
 
         if (actual_slot0 < expected_slot0) {
             for (uint8_t i = 0; i < N; i++) {
                 dfb::PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
                 uint8_t tensix_id = dfb::get_tensix_id(ptc);
-                uint8_t tc_id     = dfb::get_counter_id(ptc);
+                uint8_t tc_id = dfb::get_counter_id(ptc);
                 uint16_t expected = transactions_issued / N + (i < (transactions_issued % N) ? 1u : 0u);
                 if constexpr (is_producer) {
                     uint16_t actual = static_cast<uint16_t>(fast_llk_intf_read_posted(tensix_id, tc_id));
                     if (actual < expected) {
-                        // DPRINT << "inc_posted tc(" << static_cast<uint32_t>(tensix_id) << "," << static_cast<uint32_t>(tc_id)
+                        // DPRINT << "inc_posted tc(" << static_cast<uint32_t>(tensix_id) << "," <<
+                        // static_cast<uint32_t>(tc_id)
                         //        << ") delta: " << static_cast<uint32_t>(expected - actual) << ENDL();
+                        // DEVICE_PRINT("inc_posted tc({}, {}) delta: {}\n", tensix_id, tc_id, expected - actual);
                         fast_llk_intf_inc_posted(tensix_id, tc_id, expected - actual);
                     }
                 } else {
                     uint16_t actual = static_cast<uint16_t>(fast_llk_intf_read_acked(tensix_id, tc_id));
                     if (actual < expected) {
-                        // DPRINT << "inc_acked tc(" << static_cast<uint32_t>(tensix_id) << "," << static_cast<uint32_t>(tc_id)
+                        // DPRINT << "inc_acked tc(" << static_cast<uint32_t>(tensix_id) << "," <<
+                        // static_cast<uint32_t>(tc_id)
                         //        << ") delta: " << static_cast<uint32_t>(expected - actual) << ENDL();
+                        // DEVICE_PRINT("inc_acked tc({}, {}) delta: {}\n", tensix_id, tc_id, expected - actual);
                         fast_llk_intf_inc_acked(tensix_id, tc_id, expected - actual);
                     }
                 }
@@ -374,7 +429,6 @@ private:
         }
 #endif
     }
-
 
     void release_scoped_lock() {
         // TODO: Unregister with the debugger
