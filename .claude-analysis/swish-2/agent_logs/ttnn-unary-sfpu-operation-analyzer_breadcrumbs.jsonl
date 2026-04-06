@@ -20,3 +20,5 @@
 {"event":"instruction_analysis_complete","operation":"hardsigmoid","instructions_decoded":["SFPLOAD","SFPMAD","SFPLOADI","SFPSETCC","SFPSTORE","SFPENCC"],"cc_pattern":"v_if_clamp_pair","addr_mod":"WH=ADDR_MOD_7(dest.incr=0),BH=ADDR_MOD_7(dest.incr=0)","ts":"2026-04-06T09:38:55+00:00"}
 {"event":"dispatch_traced","operation":"cbrt","compute_kernel":"eltwise_sfpu.cpp","init_func":"cbrt_tile_init()","tile_func":"cbrt_tile(idst)","approx_mode":false,"include_guard":"SFPU_OP_COMPUTE_KERNEL_API_INCLUDE","ts":"2026-04-06T09:38:57+00:00"}
 {"event":"analysis_written","operation":"hardswish","output_file":".claude-analysis/swish-2/hardswish_analysis.md","sections":["dispatch_summary","call_chain","annotated_source","instruction_table","register_usage","addr_mode_config"],"ts":"2026-04-06T09:39:07+00:00"}
+{"event":"complete","operation":"softsign","final_status":"SUCCESS","output_file":".claude-analysis/swish-2/softsign_analysis.md","commit":"11e3b109d2","ts":"2026-04-06T09:39:36+00:00"}
+{"event":"complete","operation":"hardswish","final_status":"SUCCESS","output_file":".claude-analysis/swish-2/hardswish_analysis.md","ts":"2026-04-06T09:39:56+00:00"}
