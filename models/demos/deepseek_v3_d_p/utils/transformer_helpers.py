@@ -19,12 +19,13 @@ from pathlib import Path
 
 import torch
 from loguru import logger
+from transformers import DynamicCache
 from transformers.modeling_utils import no_init_weights
 
 import ttnn
 from models.common.utility_functions import profiler
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
-from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Model, DeepseekV3MoE, apply_rotary_pos_emb
+from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Model, DeepseekV3MoE
 
 # --- Constants ---
 
@@ -245,21 +246,6 @@ def tokenize_infinitebench_to_isl(tokenizer, prompt_text, isl_total, sp_factor):
     return torch.tensor(all_tokens, dtype=torch.int64).unsqueeze(0)  # [1, isl_total]
 
 
-# --- Reference KVPE computation ---
-
-
-def compute_reference_kvpe(self_attn, hidden_states, position_ids):
-    """Compute reference KVPE [batch, 1, seq, kv_lora_rank + qk_rope_head_dim] from HF attention weights."""
-    bsz, q_len, _ = hidden_states.size()
-    compressed_kv = self_attn.kv_a_proj_with_mqa(hidden_states)
-    compressed_kv, k_pe = torch.split(compressed_kv, [self_attn.kv_lora_rank, self_attn.qk_rope_head_dim], dim=-1)
-    k_pe = k_pe.view(bsz, 1, q_len, self_attn.qk_rope_head_dim)
-    k_nope = self_attn.kv_a_layernorm(compressed_kv).view(bsz, 1, q_len, self_attn.kv_lora_rank)
-    cos, sin = self_attn.rotary_emb(k_nope, seq_len=q_len, meta_style=True)
-    _, k_pe = apply_rotary_pos_emb(k_pe, k_pe, cos, sin, position_ids, meta_style=True)
-    return torch.cat([k_nope, k_pe], dim=-1)
-
-
 # --- Host reference caching ---
 
 
@@ -311,15 +297,21 @@ def get_or_compute_host_reference(
     with torch.no_grad():
         h_ref = hf_model.embed_tokens(token_ids).to(torch.bfloat16)
     ref_snapshots = [h_ref]
-    ref_kvpe_list = []
+    ref_cache = DynamicCache()
 
     for i in range(num_layers):
         with torch.no_grad():
-            attn_input = hf_model.layers[i].input_layernorm(h_ref)
-            ref_kvpe_list.append(compute_reference_kvpe(hf_model.layers[i].self_attn, attn_input, position_ids))
-            layer_out = hf_model.layers[i](h_ref, attention_mask=attention_mask, position_ids=position_ids)
+            layer_out = hf_model.layers[i](
+                h_ref,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_value=ref_cache,
+                use_cache=True,
+            )
             h_ref = layer_out[0]
         ref_snapshots.append(h_ref)
+
+    ref_kvpe_list = [ref_cache.key_cache[i] for i in range(num_layers)]
 
     with torch.no_grad():
         h_ref = hf_model.norm(h_ref)
