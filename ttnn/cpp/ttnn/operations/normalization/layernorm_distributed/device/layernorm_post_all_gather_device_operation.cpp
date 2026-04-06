@@ -111,47 +111,45 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
                 "Gamma tensor must be BFLOAT16, got: {}",
                 gamma_tensor.dtype());
         }
+    }
 
-        if (beta.has_value()) {
-            const auto& beta_tensor = beta.value();
-            if (beta_tensor.layout() == Layout::TILE) {
-                TT_FATAL(
-                    a.padded_shape()[-1] == beta_tensor.padded_shape()[-1],
-                    "Input and beta inner dimensions must match, got input: {} vs beta: {}",
-                    a.padded_shape()[-1],
-                    beta_tensor.padded_shape()[-1]);
-                TT_FATAL(
-                    beta_tensor.buffer() != nullptr,
-                    "Operands to layernorm need to be allocated in buffers on device!");
-                TT_FATAL(a.device() == beta_tensor.device(), "Input and beta tensors must be on same device");
-                TT_FATAL(
-                    beta_tensor.padded_shape()[-2] == tile_height,
-                    "Beta tensor height must equal tile height ({}), got: {}",
-                    tile_height,
-                    beta_tensor.padded_shape()[-2]);
-            } else {
-                TT_FATAL(
-                    beta_tensor.layout() == Layout::ROW_MAJOR,
-                    "Beta tensor must have ROW_MAJOR layout, got: {}",
-                    beta_tensor.layout());
-                TT_FATAL(
-                    (beta_tensor.padded_shape()[-1] == tile_width &&
-                     beta_tensor.physical_volume() / tile_width == a.padded_shape()[-1] / tile_width),
-                    "Beta tensor dimensions must align with input tensor. Got beta padded shape: {}, physical volume: "
-                    "{}, input padded shape: {}, tile_width: {}",
-                    beta_tensor.padded_shape()[-1],
-                    beta_tensor.physical_volume(),
-                    a.padded_shape()[-1],
-                    tile_width);
-                TT_FATAL(
-                    beta_tensor.buffer() != nullptr,
-                    "Operands to layernorm need to be allocated in buffers on device!");
-                TT_FATAL(a.device() == beta_tensor.device(), "Input and beta tensors must be on same device");
-                TT_FATAL(
-                    beta_tensor.dtype() == DataType::BFLOAT16,
-                    "Beta tensor must be BFLOAT16, got: {}",
-                    beta_tensor.dtype());
-            }
+    if (beta.has_value()) {
+        const auto& beta_tensor = beta.value();
+        if (beta_tensor.layout() == Layout::TILE) {
+            TT_FATAL(
+                a.padded_shape()[-1] == beta_tensor.padded_shape()[-1],
+                "Input and beta inner dimensions must match, got input: {} vs beta: {}",
+                a.padded_shape()[-1],
+                beta_tensor.padded_shape()[-1]);
+            TT_FATAL(
+                beta_tensor.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+            TT_FATAL(a.device() == beta_tensor.device(), "Input and beta tensors must be on same device");
+            TT_FATAL(
+                beta_tensor.padded_shape()[-2] == tile_height,
+                "Beta tensor height must equal tile height ({}), got: {}",
+                tile_height,
+                beta_tensor.padded_shape()[-2]);
+        } else {
+            TT_FATAL(
+                beta_tensor.layout() == Layout::ROW_MAJOR,
+                "Beta tensor must have ROW_MAJOR layout, got: {}",
+                beta_tensor.layout());
+            TT_FATAL(
+                (beta_tensor.padded_shape()[-1] == tile_width &&
+                 beta_tensor.physical_volume() / tile_width == a.padded_shape()[-1] / tile_width),
+                "Beta tensor dimensions must align with input tensor. Got beta padded shape: {}, physical volume: "
+                "{}, input padded shape: {}, tile_width: {}",
+                beta_tensor.padded_shape()[-1],
+                beta_tensor.physical_volume(),
+                a.padded_shape()[-1],
+                tile_width);
+            TT_FATAL(
+                beta_tensor.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+            TT_FATAL(a.device() == beta_tensor.device(), "Input and beta tensors must be on same device");
+            TT_FATAL(
+                beta_tensor.dtype() == DataType::BFLOAT16,
+                "Beta tensor must be BFLOAT16, got: {}",
+                beta_tensor.dtype());
         }
     }
 

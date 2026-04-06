@@ -158,7 +158,7 @@ void bind_normalization_layernorm_post_all_gather_operation(nb::module_& mod) {
                   - Input tensors must be on-device and rank 4.
                   - The last padded dim of :attr:`stats` must be a multiple of TILE_WIDTH.
                   - The first three padded dims of :attr:`stats` must match :attr:`input_tensor`.
-                  - If :attr:`weight` (gamma) is provided, :attr:`bias` (beta) must also be provided with matching layouts with their last padded dim matching TILE_WIDTH.
+                  - :attr:`weight` (gamma) and :attr:`bias` (beta) are independently optional; when either is provided it must be BFLOAT16 and match :attr:`input_tensor` per the layout rules above.
                   - Sharded runs: inputs cannot be height-sharded, padded height must equal TILE_HEIGHT (32), and :attr:`stats` must be sharded with `num_cores=1` and expected tile columns per device.
         )doc",
         &ttnn::layer_norm_post_all_gather,

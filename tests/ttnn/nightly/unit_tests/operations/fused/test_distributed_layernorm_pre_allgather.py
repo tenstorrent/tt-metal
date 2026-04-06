@@ -126,12 +126,14 @@ def run_layernorm_pre_all_gather_residual_pcc(device):
 
     tt_output_host = tt2torch_tensor(tt_stats)
     all_passing = True
-    reduction_width = inp_shape[-1]
+    n_devices = 1
+    reduction_width = inp_shape[-1] // n_devices
 
     device_offset = 0
+    # sum(x^2) lives in column 0 of the first stats tile (same layout as run_layernorm_part_1)
     passing, output_str = comp_allclose_and_pcc(
-        out_torch,
-        tt_output_host,
+        out_torch[:, :, :, 0 + device_offset],
+        tt_output_host[:, :, :, 0 + device_offset],
         rtol=1e-01 * reduction_width,
         atol=0,
         pcc=0.99,
@@ -146,9 +148,10 @@ def run_layernorm_pre_all_gather_residual_pcc(device):
     logger.debug(f"tt vs torch padding 1 residual path = {output_str}")
     all_passing &= passing
 
+    # sum(x) lives in column 0 of the second stats tile (offset 32)
     passing, output_str = comp_allclose_and_pcc(
-        out_torch,
-        tt_output_host,
+        out_torch[:, :, :, 32 + device_offset],
+        tt_output_host[:, :, :, 32 + device_offset],
         rtol=5e-01 * reduction_width,
         atol=10,
         pcc=0.99,
@@ -156,7 +159,6 @@ def run_layernorm_pre_all_gather_residual_pcc(device):
     logger.debug(f"tt vs torch sum(x) residual path = {output_str}")
     all_passing &= passing
 
-    # specific range for equality
     passing, output_str = comp_equal(
         out_torch[:, :, :, 33 + device_offset : 64 + device_offset],
         tt_output_host[:, :, :, 33 + device_offset : 64 + device_offset],
