@@ -504,16 +504,17 @@ def create_single_pod_spec_decode_pipeline_configuration(
             persistent_mode=persistent_mode,
         )
 
-    def stage_14(device: ttnn.MeshDevice) -> StageKind:
-        mtp_weights = weight_provider.load_mtp(device) if enable_mtp else None
-        return BaseLMHeadStage(
-            weights=weight_provider.load_lm_head(device),
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            persistent_mode=persistent_mode,
-            mtp_weights=mtp_weights,
-            send_mtp_output_downstream=enable_mtp,
-            embedding_weights=weight_provider.load_embedding(device),
-        )
+    def stage_15(device: ttnn.MeshDevice) -> StageKind:
+        # mtp_weights = weight_provider.load_mtp(device) if enable_mtp else None
+        # return BaseLMHeadStage(
+        #     weights=weight_provider.load_lm_head(device),
+        #     fp32_dest_acc_en=fp32_dest_acc_en,
+        #     persistent_mode=persistent_mode,
+        #     mtp_weights=mtp_weights,
+        #     send_mtp_output_downstream=enable_mtp,
+        #     embedding_weights=weight_provider.load_embedding(device),
+        # )
+        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
 
     def _dense_stage(layer_id: int):
         return lambda d: DenseDecoderStage(
@@ -537,8 +538,7 @@ def create_single_pod_spec_decode_pipeline_configuration(
         1: _dense_stage(dense_ids[0]),
         2: _dense_stage(dense_ids[1]),
         3: _dense_stage(dense_ids[2]),
-        **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 14)},
-        14: stage_14,
-        15: _decoder_stage(61),
+        **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 15)},
+        15: stage_15,
     }
     return PipelineConfiguration(stage_factories)
