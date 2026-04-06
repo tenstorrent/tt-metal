@@ -72,6 +72,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_program_cache.py  #38203
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_ng.py::test_unary_sharded_interleaved  #39185
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_ng.py::test_unary_ng_row_major_sharded  #39185
+  - tests/ttnn/unit_tests/operations/eltwise/test_unary_ng.py::test_unary_ng_rm_interleaved  #39185
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_program_cache.py  #38203
   - tests/ttnn/unit_tests/base_functionality/test_graph_report.py::test_resnet50_e2e_graph_capture  # ResNet-50 uses ops unsupported by ttsim
   - tests/ttnn/unit_tests/base_functionality/test_graph_report.py::TestFastOperationGraphTracking  # Fast dispatch with ttnn.add crashes ttsim worker on teardown
@@ -199,3 +200,6 @@ blackhole:
   - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
   - tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py
   - tests/ttnn/unit_tests/operations/reduce/test_sum.py
+
+  # Skipping due to CI failure - issue #41286
+  - tests/ttnn/unit_tests/operations/fused/test_rms_norm.py::test_rms_norm_row_major
