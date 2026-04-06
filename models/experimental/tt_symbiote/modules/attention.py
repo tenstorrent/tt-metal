@@ -28,6 +28,15 @@ def _unwrap_ttnn(x):
     return x
 
 
+def _symbiote_value_as_torch(x):
+    """Host tensor for HF submodules (e.g. LlamaRotaryEmbedding): TorchTTNNTensor uses a property; ttnn.Tensor uses a method."""
+    if isinstance(x, TorchTTNNTensor):
+        return x.to_torch
+    if isinstance(x, ttnn.Tensor):
+        return ttnn.to_torch(x)
+    return x
+
+
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinear,
     TTNNLinearIColShardedWRowSharded,
@@ -49,6 +58,39 @@ try:
     from transformers.cache_utils import CacheLayerMixin
 except ImportError:
     CacheLayerMixin = None
+
+try:
+    from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding as HFLlamaRotaryEmbedding
+except ImportError:
+    HFLlamaRotaryEmbedding = None
+
+
+@torch.no_grad()
+def _llama_rotary_cos_sin_from_buffers(
+    rotary_emb, position_ids: torch.Tensor, out_dtype: torch.dtype
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Match HF LlamaRotaryEmbedding.forward math without calling `rotary_emb.forward`.
+
+    Avoids per-layer `LlamaRotaryEmbedding` module dispatch / timing hooks and duplicate `forward` overhead
+    when every decoder layer would otherwise invoke the same submodule. Still runs small RoPE matmul on host PyTorch
+    (same work as inside HF forward); cos/sin are then uploaded to device for TTNNRoPE.
+    """
+    if "dynamic" in rotary_emb.rope_type:
+        rotary_emb._dynamic_frequency_update(position_ids, device=position_ids.device)
+
+    inv_freq_expanded = rotary_emb.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
+    position_ids_expanded = position_ids[:, None, :].float()
+    device_type = position_ids.device.type
+    device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
+    with torch.autocast(device_type=device_type, enabled=False):
+        freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
+        emb = torch.cat((freqs, freqs), dim=-1)
+        cos = emb.cos()
+        sin = emb.sin()
+    scale = getattr(rotary_emb, "attention_scaling", 1.0)
+    cos = cos * scale
+    sin = sin * scale
+    return cos.to(dtype=out_dtype), sin.to(dtype=out_dtype)
 
 
 class _PagedCacheLayer(CacheLayerMixin if CacheLayerMixin is not None else object):
@@ -1026,29 +1068,30 @@ class LlamaAttention(TTNNModule):
             value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
 
         if position_embeddings is None:
+            v_ref = _symbiote_value_as_torch(value_states)
+            p_ids = _symbiote_value_as_torch(position_ids)
             if hasattr(self.torch_layer, "rotary_emb"):
-                cos, sin = self.torch_layer.rotary_emb(value_states.to_torch, TorchTTNNTensor(position_ids).to_torch)
+                re = self.torch_layer.rotary_emb
+                if HFLlamaRotaryEmbedding is not None and isinstance(re, HFLlamaRotaryEmbedding):
+                    cos, sin = _llama_rotary_cos_sin_from_buffers(re, p_ids, v_ref.dtype)
+                else:
+                    cos, sin = re(v_ref, p_ids)
             else:
                 if not hasattr(self, "_rotary_emb_shim"):
                     from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
 
                     config = self.torch_layer.config
                     self._rotary_emb_shim = LlamaRotaryEmbedding(config=config)
-                v_torch = _unwrap_ttnn(value_states)
-                if isinstance(v_torch, ttnn.Tensor):
-                    v_torch = ttnn.to_torch(v_torch)
-                p_torch = _unwrap_ttnn(position_ids)
-                if isinstance(p_torch, ttnn.Tensor):
-                    p_torch = ttnn.to_torch(p_torch)
-                cos, sin = self._rotary_emb_shim(v_torch, p_torch)
-                if isinstance(cos, torch.Tensor) and not isinstance(cos, TorchTTNNTensor):
-                    cos = ttnn.from_torch(
-                        cos.to(torch.bfloat16), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
-                    )
-                if isinstance(sin, torch.Tensor) and not isinstance(sin, TorchTTNNTensor):
-                    sin = ttnn.from_torch(
-                        sin.to(torch.bfloat16), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
-                    )
+                cos, sin = _llama_rotary_cos_sin_from_buffers(self._rotary_emb_shim, p_ids, v_ref.dtype)
+            # HF RoPE returns CPU torch tensors; TTNNRotaryPositionEmbedding needs device ttnn.Tensor.
+            if isinstance(cos, torch.Tensor) and not isinstance(cos, TorchTTNNTensor):
+                cos = ttnn.from_torch(
+                    cos.to(torch.bfloat16), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
+                )
+            if isinstance(sin, torch.Tensor) and not isinstance(sin, TorchTTNNTensor):
+                sin = ttnn.from_torch(
+                    sin.to(torch.bfloat16), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
+                )
         else:
             cos, sin = position_embeddings
 
@@ -1094,6 +1137,9 @@ class LlamaAttention(TTNNModule):
             )
             query_states = ttnn.concat([zero_pad, query_states], dim=2)
 
+        attn_scale = getattr(self.torch_layer, "scaling", None)
+        if attn_scale is None:
+            attn_scale = self.torch_layer.head_dim**-0.5
         attn_out = self.sdpa(
             self,
             query_states,
@@ -1101,7 +1147,7 @@ class LlamaAttention(TTNNModule):
             value_states,
             None,
             dropout=0.0,
-            scaling=self.torch_layer.scaling,
+            scaling=attn_scale,
             is_causal=self.torch_layer.is_causal,
             transpose_output=False,
         )
