@@ -109,6 +109,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/udm/mesh_tensor_builder.hpp
     api/tt-metalium/experimental/udm/mesh_utils.hpp
     api/tt-metalium/experimental/context/metal_env.hpp
+    api/tt-metalium/experimental/disaggregation/kv_chunk_address_table.hpp
 )
 
 set(TT_METAL_SOURCES
