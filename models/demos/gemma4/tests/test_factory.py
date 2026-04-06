@@ -3,7 +3,12 @@
 
 """
 Test factory and helpers for Gemma4 unit tests.
+
+Uses HF_MODEL env var to determine which model variant to test against.
+All HF reference configs and layers are created from the real checkpoint.
 """
+
+import os
 
 import pytest
 import torch
@@ -12,6 +17,24 @@ import ttnn
 
 from ..config import MeshConfig, ModeConfig
 from ..tt.model_config import Gemma4ModelArgs
+
+_DEFAULT_MODEL_PATH = "/proj_sw/user_dev/gemma4/gemma-4-26B-A4B-it"
+
+
+def _get_model_path():
+    return os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", _DEFAULT_MODEL_PATH)
+
+
+def is_moe_model():
+    """Check if the current model has MoE enabled."""
+    from transformers import AutoConfig
+
+    config = AutoConfig.from_pretrained(_get_model_path(), trust_remote_code=True)
+    tc = getattr(config, "text_config", config)
+    return getattr(tc, "enable_moe_block", False)
+
+
+skip_if_not_moe = pytest.mark.skipif(not is_moe_model(), reason="Model does not use MoE")
 
 
 class TestFactory:
@@ -24,8 +47,12 @@ class TestFactory:
 
     @staticmethod
     def create_hf_config():
-        """Create a Gemma4ModelArgs with default values (no HF download needed)."""
-        return Gemma4ModelArgs()
+        """Create Gemma4ModelArgs from the real model checkpoint (HF_MODEL env var)."""
+        from transformers import AutoConfig
+
+        model_path = _get_model_path()
+        hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        return Gemma4ModelArgs.from_hf_config(hf_config)
 
     @staticmethod
     def create_mesh_config(mesh_shape=(1, 1)):
@@ -38,14 +65,20 @@ class TestFactory:
         return {}
 
     @staticmethod
-    def create_hf_text_config(num_experts=4, top_k=2):
-        """Create a Gemma4TextConfig from real model config, with reduced experts."""
+    def create_hf_text_config(num_experts=None, top_k=None):
+        """Create HF Gemma4TextConfig from real model checkpoint.
+
+        Optionally override num_experts/top_k for faster testing.
+        """
         from transformers import AutoConfig
 
-        config = AutoConfig.from_pretrained("/proj_sw/user_dev/gemma4/gemma-4-26B-A4B-it", trust_remote_code=True)
+        model_path = _get_model_path()
+        config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         tc = config.text_config
-        tc.num_experts = num_experts
-        tc.top_k_experts = top_k
+        if num_experts is not None:
+            tc.num_experts = num_experts
+        if top_k is not None:
+            tc.top_k_experts = top_k
         tc._attn_implementation = "eager"
         return tc
 

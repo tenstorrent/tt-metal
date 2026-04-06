@@ -8,9 +8,10 @@ import torch
 import ttnn
 from models.demos.gemma4.tt.moe import MoEBlock
 
-from ...tests.test_factory import TestFactory, compare_tensors, parametrize_batch_seq
+from ...tests.test_factory import TestFactory, compare_tensors, parametrize_batch_seq, skip_if_not_moe
 
 
+@skip_if_not_moe
 @parametrize_batch_seq(configs=[(1, 32)], ids=["prefill_32"])
 def test_moe(batch_size, seq_len, device):
     """

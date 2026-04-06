@@ -8,9 +8,10 @@ import torch
 import ttnn
 from models.demos.gemma4.tt.experts import Gemma4ExpertConfig, Gemma4Experts
 
-from ...tests.test_factory import TestFactory, compare_tensors, parametrize_batch_seq
+from ...tests.test_factory import TestFactory, compare_tensors, parametrize_batch_seq, skip_if_not_moe
 
 
+@skip_if_not_moe
 @parametrize_batch_seq(configs=[(1, 1), (1, 32)], ids=["decode", "prefill_32"])
 def test_experts(batch_size, seq_len, device):
     """Test on-device experts (decode + prefill) against HF Gemma4TextExperts."""

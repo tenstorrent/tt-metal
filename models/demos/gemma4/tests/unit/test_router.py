@@ -8,9 +8,10 @@ import torch
 import ttnn
 from models.demos.gemma4.tt.router import Gemma4Router
 
-from ...tests.test_factory import TestFactory, compare_tensors, parametrize_batch_seq
+from ...tests.test_factory import TestFactory, compare_tensors, parametrize_batch_seq, skip_if_not_moe
 
 
+@skip_if_not_moe
 @parametrize_batch_seq()
 def test_router(batch_size, seq_len, device):
     """Test Router returns dense routing weights that match HF reference."""

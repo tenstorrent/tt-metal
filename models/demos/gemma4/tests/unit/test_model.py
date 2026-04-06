@@ -19,35 +19,42 @@ from ...tests.test_factory import TestFactory, compare_tensors
 
 
 def test_model_config():
-    """Test that Gemma4ModelArgs defaults match the 26B-A4B architecture."""
+    """Test that Gemma4ModelArgs loads correctly from HF_MODEL checkpoint."""
     hf_config = TestFactory.create_hf_config()
 
-    assert hf_config.hidden_size == 2816
-    assert hf_config.num_hidden_layers == 30
-    assert hf_config.num_attention_heads == 16
-    assert hf_config.num_key_value_heads == 8
-    assert hf_config.head_dim == 256
-    assert hf_config.num_global_key_value_heads == 2
-    assert hf_config.global_head_dim == 512
-    assert hf_config.intermediate_size == 2112
-    assert hf_config.moe_intermediate_size == 704
-    assert hf_config.num_experts == 128
-    assert hf_config.top_k_experts == 8
-    assert hf_config.vocab_size == 262144
-    assert hf_config.final_logit_softcapping == 30.0
+    # Core fields must be populated
+    assert hf_config.hidden_size > 0
+    assert hf_config.num_hidden_layers > 0
+    assert hf_config.num_attention_heads > 0
+    assert hf_config.num_key_value_heads > 0
+    assert hf_config.head_dim > 0
+    assert hf_config.vocab_size > 0
     assert hf_config.tie_word_embeddings is True
 
-    assert len(hf_config.layer_types) == 30
-    for i in range(30):
-        expected = "full_attention" if (i % 6 == 5) else "sliding_attention"
-        assert hf_config.layer_types[i] == expected
+    # Layer types must cover all layers
+    assert len(hf_config.layer_types) == hf_config.num_hidden_layers
+    assert all(lt in ("sliding_attention", "full_attention") for lt in hf_config.layer_types)
+
+    # MoE fields: either fully populated or all zero
+    if hf_config.enable_moe_block:
+        assert hf_config.num_experts > 0
+        assert hf_config.top_k_experts > 0
+        assert hf_config.moe_intermediate_size > 0
+    else:
+        # Dense model — MoE fields should be zero/None
+        assert hf_config.num_experts == 0 or hf_config.num_experts is None
+
+    logger.info(
+        f"Model: hidden={hf_config.hidden_size}, layers={hf_config.num_hidden_layers}, "
+        f"heads={hf_config.num_attention_heads}, moe={hf_config.enable_moe_block}"
+    )
 
 
 def test_model_instantiation():
     """Test that Gemma4Model can be imported and config created."""
-    config = Gemma4ModelArgs()
-    assert config.hidden_size == 2816
-    assert config.num_hidden_layers == 30
+    hf_config = TestFactory.create_hf_config()
+    assert hf_config.hidden_size > 0
+    assert hf_config.num_hidden_layers > 0
 
 
 def test_softcapping():
@@ -64,14 +71,18 @@ def test_softcapping():
 # ── HF Reference Helpers ──────────────────────────────────────────────────
 
 
-def _create_hf_text_config(num_experts=4, top_k=2, vocab_size=256, num_layers=1):
+def _create_hf_text_config(num_experts=None, top_k=None, vocab_size=256, num_layers=1):
     """Create a Gemma4TextConfig from real model config with overrides for speed."""
     from transformers import AutoConfig
 
-    config = AutoConfig.from_pretrained("/proj_sw/user_dev/gemma4/gemma-4-26B-A4B-it", trust_remote_code=True)
+    from ...tests.test_factory import _get_model_path
+
+    config = AutoConfig.from_pretrained(_get_model_path(), trust_remote_code=True)
     tc = config.text_config
-    tc.num_experts = num_experts
-    tc.top_k_experts = top_k
+    if num_experts is not None:
+        tc.num_experts = num_experts
+    if top_k is not None:
+        tc.top_k_experts = top_k
     tc.vocab_size = vocab_size
     tc.num_hidden_layers = num_layers
     tc._attn_implementation = "eager"
@@ -155,7 +166,13 @@ def test_single_layer_model(device):
 
     Embed -> 1 decoder layer -> norm -> lm_head -> softcapping.
     """
-    hf_text_config = _create_hf_text_config(num_experts=4, top_k=2, vocab_size=256, num_layers=1)
+    # For MoE models, reduce experts for speed; dense models don't need override
+    base_config = _create_hf_text_config(vocab_size=256, num_layers=1)
+    is_moe = getattr(base_config, "enable_moe_block", False)
+    if is_moe:
+        base_config.num_experts = 4
+        base_config.top_k_experts = 2
+    hf_text_config = base_config
     hf_model = _create_hf_model(hf_text_config)
     model_args = Gemma4ModelArgs.from_hf_config(hf_text_config)
 

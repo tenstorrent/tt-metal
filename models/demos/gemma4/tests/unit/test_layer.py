@@ -56,14 +56,20 @@ def _create_hf_reference_layer(hf_text_config, layer_idx):
     return hf_layer
 
 
-def _create_hf_text_config(num_experts=4, top_k=2):
-    """Create a Gemma4TextConfig from real model config, with reduced experts for speed."""
+def _create_hf_text_config(num_experts=None, top_k=None):
+    """Create HF text config from HF_MODEL, with optional MoE overrides for speed."""
     from transformers import AutoConfig
 
-    config = AutoConfig.from_pretrained("/proj_sw/user_dev/gemma4/gemma-4-26B-A4B-it", trust_remote_code=True)
+    from ...tests.test_factory import _get_model_path
+
+    config = AutoConfig.from_pretrained(_get_model_path(), trust_remote_code=True)
     tc = config.text_config
-    tc.num_experts = num_experts
-    tc.top_k_experts = top_k
+    # Reduce experts for speed on MoE models
+    if getattr(tc, "enable_moe_block", False):
+        if num_experts is not None:
+            tc.num_experts = num_experts
+        if top_k is not None:
+            tc.top_k_experts = top_k
     tc._attn_implementation = "eager"
     return tc
 
