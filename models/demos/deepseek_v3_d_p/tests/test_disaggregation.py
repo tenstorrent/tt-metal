@@ -229,7 +229,7 @@ def test_kv_cache_address_table(mesh_device, seq_len):
     device_position_indices_low_strip = []
     device_position_indices_high_strip = []
     low_strip_start_idx = seq_len_per_rank * int(rank)
-    high_strip_end_idx = seq_len_per_rank * (int(size) - int(rank)) - 1
+    high_strip_end_idx = seq_len_per_rank * (int(size) - int(rank)) - 1 + seq_len // 2
     for row in range(len(device_group_idx_per_row)):
         low_strip_end_idx = low_strip_start_idx + num_chunks_in_strip * NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK - 1
         device_position_indices_low_strip.append((low_strip_start_idx, low_strip_end_idx))
