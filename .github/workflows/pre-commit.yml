@@ -29,6 +29,19 @@ jobs:
         with:
           extra_args: "--from-ref origin/main --to-ref HEAD"
 
+  check-spdx-licenses:
+    name: SPDX license headers
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Check SPDX licenses
+        uses: tenstorrent/tt-github-actions/.github/actions/spdx-checker@main
+        with:
+          ignore_config_file: '.github/spdx_ignore.yaml'
+          verbose: 'true'
+
   pr-comment:
     name: Post comment on PR
     runs-on: ubuntu-latest
