@@ -34,7 +34,7 @@ ReshardSameWidthFactory<local_is_output>::cached_program_t ReshardSameWidthFacto
     constexpr uint32_t cb_scratch_index = tt::CBIndex::c_1;
     auto local_cores = get_optimal_worker_cores_for_sharded_tensor(local_tensor);
     auto all_cores = CoreRangeSet(ttsl::Span<const CoreCoord>(local_cores));
-    auto remote_cores = get_optimal_worker_cores_for_sharded_tensor(remote_tensor);
+    auto remote_cores = remote_tensor.buffer()->buffer_distribution_spec().value().cores_with_data();
 
     uint32_t unit_size, local_units_per_shard, remote_units_per_shard;
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.dtype());

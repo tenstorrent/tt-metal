@@ -243,7 +243,7 @@ def run_conv3d_with_memory_config(
         tt_output = ttnn.experimental.conv3d(**conv3d_kwargs)
     except Exception as e:
         if "shard width" in str(e).lower() and "aligned" in str(e):
-            pytest.skip(f"Sharded input has unaligned shard width: {e}")
+            pytest.xfail(f"Sharded input has unaligned shard width: {e}")
         elif output_mem_config is not None:
             pytest.skip(f"Output memory configuration not supported: {e}")
         else:

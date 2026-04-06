@@ -31,7 +31,7 @@ ReshardSameHeightFactory<local_is_output>::cached_program_t ReshardSameHeightFac
     bool interface_with_dram = (remote_core_type == tt::CoreType::DRAM);
     auto local_cores = get_optimal_worker_cores_for_sharded_tensor(local_tensor);
     auto all_cores = CoreRangeSet(ttsl::Span<const CoreCoord>(local_cores));
-    auto remote_cores = get_optimal_worker_cores_for_sharded_tensor(remote_tensor);
+    auto remote_cores = remote_tensor.buffer()->buffer_distribution_spec().value().cores_with_data();
 
     const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.dtype());
     const uint32_t element_size = tt::datum_size(data_format);
