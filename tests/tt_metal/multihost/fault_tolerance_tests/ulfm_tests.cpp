@@ -947,8 +947,6 @@ TEST(FaultTolerance, FailureDuringNonBlockingOps) {
         raise(SIGKILL);  // never returns
     }
 
-    bool failure_detected = false;
-
     if (rank == 0) {
         // Post irecv from rank 1
         auto req = ctx->irecv(
@@ -956,14 +954,20 @@ TEST(FaultTolerance, FailureDuringNonBlockingOps) {
             Rank{1},
             Tag{TAG_VAL});
 
-        // Wait for the irecv — rank 1 is dying, so this should fail
+        // Wait for the irecv — rank 1 is dying, so this should fail.
+        // wait() returns Status{source, tag, count}. For a non-wildcard irecv
+        // the source and tag are already known; count (bytes received) is not
+        // asserted here because we only care whether an exception is thrown
+        // (failure detected) or not (send completed before the kill, recv_buf
+        // holds valid data). [[maybe_unused]] rather than (void): Status has
+        // real semantic content, so (void) would misrepresent it as garbage.
         try {
-            req->wait();
+            [[maybe_unused]] auto status = req->wait();
             // If wait() returned normally, the send completed before the kill.
             // That's acceptable — the data arrived.
         } catch (const DistributedException&) {
-            failure_detected = true;
-            // The irecv failed because rank 1 died. Recovery needed.
+            // The irecv failed because rank 1 died. Recovery happens below
+            // via the barrier collective which all survivors call.
         }
     }
 
@@ -972,7 +976,6 @@ TEST(FaultTolerance, FailureDuringNonBlockingOps) {
     try {
         ctx->barrier();
     } catch (const DistributedException&) {
-        failure_detected = true;
         ctx->revoke_and_shrink();
     }
 
