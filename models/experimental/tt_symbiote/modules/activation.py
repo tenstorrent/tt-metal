@@ -4,11 +4,36 @@
 
 """Activation function implementations for TTNN."""
 
+import math
+
 import torch
+import torch.nn.functional as F
 
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule
+from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig
 from models.experimental.tt_symbiote.core.utils import tree_map
+
+
+def _code2wav_bct_replicated_mesh_config(mesh_device):
+    """code2wav ``[B, C, T]`` activations are replicated per mesh device (see ``TTNNQwenOmniConv2dNHWC``)."""
+    if mesh_device is None or mesh_device.get_num_devices() <= 1:
+        return None
+    return DistributedTensorConfig(
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+        replicate_compose_slice_dim0_to_leading=True,
+    )
+
+
+def _ttnn_mesh_to_torch_one_replica(tt_tensor: ttnn.Tensor, mesh_device) -> torch.Tensor:
+    """Host ``torch`` tensor matching one logical replica (avoids bad concat/slice on rank-3 BCT)."""
+    if mesh_device is None or mesh_device.get_num_devices() <= 1:
+        return ttnn.to_torch(tt_tensor).contiguous()
+    shards = ttnn.get_device_tensors(tt_tensor)
+    if not shards:
+        return ttnn.to_torch(tt_tensor).contiguous()
+    return ttnn.to_torch(shards[0]).contiguous()
 
 
 class TTNNSilu(TTNNModule):
@@ -116,10 +141,7 @@ class TTNNSnakeBeta(TTNNModule):
             if not isinstance(t, TorchTTNNTensor) or t.ttnn_tensor is None:
                 return t
             tt = t.ttnn_tensor
-            b = int(tt.shape[0])
-            pt = ttnn.to_torch(tt, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
-            if pt.shape[0] > b:
-                pt = pt[:b]
+            pt = _ttnn_mesh_to_torch_one_replica(tt, self.device)
             t.elem = pt.contiguous()
             t.ttnn_tensor = None
             if getattr(t, "_distributed_tensor_config", None) is not None:
@@ -150,18 +172,13 @@ class TTNNSnakeBeta(TTNNModule):
 
 
 def _materialize_code2wav_bct_from_ttnn(tt_tensor: ttnn.Tensor, mesh_device) -> torch.Tensor:
-    """One logical ``[B, C, T]`` batch on host (replicated mesh → concat batch, keep first replica)."""
-    if mesh_device is None or mesh_device.get_num_devices() <= 1:
-        return ttnn.to_torch(tt_tensor).contiguous()
-    b = int(tt_tensor.shape[0])
-    pt = ttnn.to_torch(
-        tt_tensor,
-        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
-        device=mesh_device,
-    )
-    if pt.shape[0] > b:
-        pt = pt[:b]
-    return pt.contiguous()
+    """One logical ``[B, C, T]`` on host.
+
+    ``ConcatMeshToTensor(dim=0)`` + ``[:batch]`` can truncate the **time** dimension when mesh
+    layout/shape metadata does not match a pure batch stack (symptom: shortened / corrupted wav).
+    Reading ``get_device_tensors(...)[0]`` matches other models' replicated-activation readback.
+    """
+    return _ttnn_mesh_to_torch_one_replica(tt_tensor, mesh_device)
 
 
 def _materialize_code2wav_chain_output(x, mesh_device) -> torch.Tensor:
@@ -175,6 +192,48 @@ def _materialize_code2wav_chain_output(x, mesh_device) -> torch.Tensor:
     if isinstance(x, ttnn.Tensor):
         return _materialize_code2wav_bct_from_ttnn(x, mesh_device)
     return x.contiguous()
+
+
+class TTNNQwen3OmniMoeCausalConvNet(TTNNModule):
+    """HF ``Qwen3OmniMoeCausalConvNet``: causal padding on host ``torch``, convolution via :class:`TTNNConv1d`."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv = None
+        self.stride = None
+        self.kernel_size = None
+        self.dilation = None
+        self.padding = None
+
+    @classmethod
+    def from_torch(cls, m, *args, **kwargs):
+        from models.experimental.tt_symbiote.modules.conv import TTNNConv1d
+
+        new = cls()
+        new._fallback_torch_layer = m
+        new.stride = m.stride
+        new.kernel_size = m.kernel_size
+        new.dilation = m.dilation
+        new.padding = m.padding
+        new.conv = TTNNConv1d.from_torch(m.conv)
+        return new
+
+    def _get_extra_padding_for_conv1d(self, hidden_state: torch.Tensor) -> int:
+        length = hidden_state.shape[-1]
+        n_frames = (length - self.kernel_size + self.padding) / self.stride + 1
+        ideal_length = (math.ceil(n_frames) - 1) * self.stride + (self.kernel_size - self.padding)
+        return ideal_length - length
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        if self.conv is not None:
+            return self.conv.set_output_tensors_config_impl(output_tensors)
+        return super().set_output_tensors_config_impl(output_tensors)
+
+    def forward(self, hidden_state):
+        x_t = _materialize_code2wav_chain_output(hidden_state, self.device)
+        extra_padding = self._get_extra_padding_for_conv1d(x_t)
+        x_t = F.pad(x_t, (self.padding, extra_padding), mode="constant", value=0)
+        return self.conv(x_t)
 
 
 class TTNNQwen3OmniMoeCode2WavDecoderResidualUnit(TTNNModule):
@@ -192,18 +251,31 @@ class TTNNQwen3OmniMoeCode2WavDecoderResidualUnit(TTNNModule):
         new = cls()
         new._fallback_torch_layer = m
         new.act1 = TTNNSnakeBeta.from_torch(m.act1)
-        new.conv1 = m.conv1
+        new.conv1 = TTNNQwen3OmniMoeCausalConvNet.from_torch(m.conv1)
         new.act2 = TTNNSnakeBeta.from_torch(m.act2)
-        new.conv2 = m.conv2
+        new.conv2 = TTNNQwen3OmniMoeCausalConvNet.from_torch(m.conv2)
         return new
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        cfg = _code2wav_bct_replicated_mesh_config(self.device)
+        if cfg is None:
+            return super().set_output_tensors_config_impl(output_tensors)
+
+        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+        def apply(e):
+            if isinstance(e, TorchTTNNTensor):
+                e.set_distributed_tensor_config(cfg)
+            return e
+
+        return tree_map(apply, output_tensors)
 
     def forward(self, hidden_state):
         dev = self.device
         # TTNN children of a TTNN parent default to bypass=True, so ``module_run`` skips
-        # ``post_process_ttnn_module_output``. SnakeBeta then returns a raw ``ttnn.Tensor``,
-        # which HF ``Qwen3OmniMoeCausalConvNet`` passes to ``F.pad`` → TypeError (torch pad
-        # expects ``torch.Tensor``). Disable bypass so act outputs are wrapped / materialized
-        # like top-level code2wav SnakeBeta blocks.
+        # ``post_process_ttnn_module_output``. SnakeBeta then returns a raw ``ttnn.Tensor``;
+        # :class:`TTNNQwen3OmniMoeCausalConvNet` materializes to torch for ``F.pad`` before
+        # :class:`TTNNConv1d`. Disable bypass so act outputs are wrapped / materialized.
         if self.act1 is not None:
             self.act1._bypass_tensor_wrapping = False
         if self.act2 is not None:
