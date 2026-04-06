@@ -192,6 +192,7 @@ def test_large_tensor_rms_norm(device, batch_size, w):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        weight = ttnn.fill_implicit_tile_padding(weight, TEST_PADDING_VALUE)
 
         compute_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,

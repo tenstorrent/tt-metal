@@ -210,6 +210,9 @@ def run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
         (1, 1, 8192, 8192),
         (2, 1, 128, 8192),
         (1, 1, 128, 2048),
+        # (1,1,32,33) # Implicit padding case
+        # Disabled due to issue #31983:
+        # Incorrect results when padding values are included in computation for non tile-aligned inputs
     ],
 )
 @pytest.mark.parametrize(
@@ -239,6 +242,9 @@ def test_layernorm_part_1_with_program_cache(inp_shape, n_devices, is_rmsnorm, i
     "inp_shape",
     [
         (1, 1, 2048, 8192),
+        # (1,1,32,33) # Implicit padding case
+        # Disabled due to issue #31983:
+        # Incorrect results when padding values are included in computation for non tile-aligned inputs
     ],
 )
 @pytest.mark.parametrize(
