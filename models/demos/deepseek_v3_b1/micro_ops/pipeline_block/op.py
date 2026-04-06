@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -383,3 +383,11 @@ class PipelineBlock:
     def get_upstream_sockets(self):
         """Return list of sender sockets for multi-upstream exit SocketInterface."""
         return self.exit_socket_interface.get_upstream_sockets()
+
+    def export_host_socket_descriptors(self, io_socket_descriptor_prefix: str) -> None:
+        assert self.is_first_pipeline_stage(), "Host socket descriptors can only be exported from the first stage"
+        assert self.h2d_socket is not None, "Expected H2D socket on the first pipeline stage"
+        assert self.d2h_socket is not None, "Expected D2H socket on the first pipeline stage"
+
+        self.h2d_socket.export_descriptor(f"{io_socket_descriptor_prefix}_h2d")
+        self.d2h_socket.export_descriptor(f"{io_socket_descriptor_prefix}_d2h")

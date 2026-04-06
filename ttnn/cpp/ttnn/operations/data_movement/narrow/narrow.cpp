@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -126,7 +126,7 @@ ttnn::Tensor narrow(
             storage.get_mesh_buffer().device(),
             storage.get_mesh_buffer().address() + offset_bytes);
 
-        tt::tt_metal::DeviceStorage subtensor_storage(subtensor_mesh, storage.coords, storage.get_root_mesh_buffer());
+        tt::tt_metal::DeviceStorage subtensor_storage(storage, subtensor_mesh);
         TensorSpec subtensor_spec = TensorSpec(
             output_tensor_shape,
             tt::tt_metal::TensorLayout(
@@ -282,7 +282,7 @@ ttnn::Tensor narrow(
             storage.get_mesh_buffer().device(),
             storage.get_mesh_buffer().address() + (page_offset * buffer->aligned_page_size()));
 
-        tt::tt_metal::DeviceStorage subtensor_storage(subtensor_mesh, storage.coords, storage.get_root_mesh_buffer());
+        tt::tt_metal::DeviceStorage subtensor_storage(storage, subtensor_mesh);
 
         auto narrowed_memory_config =
             MemoryConfig(input_tensor.memory_config().memory_layout(), BufferType::L1, narrowed_shard_spec);

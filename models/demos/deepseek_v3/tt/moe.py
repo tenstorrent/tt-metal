@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
@@ -40,6 +40,9 @@ class MoE(SharedStateAddOn, AbstractModule):
     """MoE module from DeepSeek-R1.
     See the `AbstractModule` docstring for usage info.
     """
+
+    PREFILL_TOKEN_CHUNK_SIZE = 16384
+    PREFILL_BATCH_CHUNK_SIZE = 256
 
     @classmethod
     def convert_weights(
@@ -156,6 +159,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         mesh_device: ttnn.Device,
         fabric_config: ttnn.FabricConfig,
         mode: str,
+        batch_size_per_row: int,
         topk_fallback: bool = False,
     ) -> ModelDecodeConfig | ModelPrefillConfig:
         """Generate decode configuration for this module.
@@ -179,7 +183,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             per_core_width = (HIDDEN_SIZE // TP_SIZE) // shard_core_grid.num_cores
             input_output_memory_config = ttnn.create_sharded_memory_config(
                 shape=(
-                    ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE),
+                    ttnn.core.roundup(batch_size_per_row, ttnn.TILE_SIZE),
                     ttnn.core.roundup(per_core_width, ttnn.TILE_SIZE),
                 ),
                 core_grid=shard_core_grid,
@@ -216,7 +220,9 @@ class MoE(SharedStateAddOn, AbstractModule):
                     memory_config=input_output_memory_config,
                 ),
                 "ring_sum_experts_output_memory_config": DeepseekMoEReduceScatterConfig.create_default_input_memory_config(
-                    USERS_PER_ROW, HIDDEN_SIZE, TP_SIZE
+                    batch_size_per_row,
+                    HIDDEN_SIZE,
+                    TP_SIZE,
                 ),
                 "ring_final_output_reduce_scatter": DeepseekMoEReduceScatterConfig(
                     cluster_axis=1,
@@ -278,9 +284,17 @@ class MoE(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
         fabric_config: ttnn.FabricConfig,
+        batch_size_per_row: int,
         topk_fallback: bool = False,
     ) -> ModelDecodeConfig:
-        return cls.model_config(hf_config, mesh_device, fabric_config, "decode", topk_fallback=topk_fallback)
+        return cls.model_config(
+            hf_config,
+            mesh_device,
+            fabric_config,
+            "decode",
+            batch_size_per_row=batch_size_per_row,
+            topk_fallback=topk_fallback,
+        )
 
     @classmethod
     def prefill_model_config(
@@ -290,14 +304,21 @@ class MoE(SharedStateAddOn, AbstractModule):
         fabric_config: ttnn.FabricConfig,
         topk_fallback: bool = False,
     ) -> ModelPrefillConfig:
-        return cls.model_config(hf_config, mesh_device, fabric_config, "prefill", topk_fallback=topk_fallback)
+        return cls.model_config(
+            hf_config,
+            mesh_device,
+            fabric_config,
+            "prefill",
+            batch_size_per_row=USERS_PER_ROW,
+            topk_fallback=topk_fallback,
+        )
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
         # Chunk the full MoE prefill path at 16K tokens to avoid OOM.
         # Use global token count (local seq_len * num_dispatch_devices) to decide.
-        chunk_tokens = int(cfg.get("prefill_chunk_size", 16384))
-        num_dispatch_devices = int(cfg.get("num_dispatch_devices", 1))
+        chunk_tokens = cls.PREFILL_TOKEN_CHUNK_SIZE
+        num_dispatch_devices = cfg["num_dispatch_devices"]
         global_tokens = x.shape[2] * num_dispatch_devices
         if global_tokens > chunk_tokens:
             chunk_size = max(1, chunk_tokens // max(1, num_dispatch_devices))
@@ -326,8 +347,8 @@ class MoE(SharedStateAddOn, AbstractModule):
     def _forward_impl(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
         # Validate input dimensions
         hidden_size = cfg["hidden_size"]
-        mesh_device = cfg.get("mesh_device")
-        tp_size = mesh_device.shape[1] if mesh_device else 1
+        mesh_device = cfg["mesh_device"]
+        tp_size = mesh_device.shape[1]
 
         x_dim = x.shape[-1]
         expected_dims = [hidden_size, hidden_size // tp_size] if tp_size > 1 else [hidden_size]
@@ -351,12 +372,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         # MoE Gate
         topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(x, cfg)
 
-        # Repeat + Permute Expert weights
-
-        topk_experts_weights = cls._fwd_repeat_permute_expert_weights(topk_experts_weights, cfg)
-
         # MOE
-
         post_combine_output_tensor = cls._fwd_moe(
             x,
             topk_experts_indices,
@@ -366,6 +382,8 @@ class MoE(SharedStateAddOn, AbstractModule):
             batch_size,
             seq_len,
         )
+        ttnn.deallocate(topk_experts_weights)
+        ttnn.deallocate(topk_experts_indices)
 
         # Note: sum_experts and reduce_scatter is handled by the caller (decoder block or test)
 
@@ -374,17 +392,6 @@ class MoE(SharedStateAddOn, AbstractModule):
     @classmethod
     def _fwd_moe_gate(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         return MoEGate.forward(x, cfg["moe_gate"])
-
-    @classmethod
-    def _fwd_repeat_permute_expert_weights(
-        cls, topk_experts_weights: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig
-    ) -> ttnn.Tensor:
-        topk_experts_weights_rm = ttnn.to_layout(topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT)
-        topk_experts_weights_rm = ttnn.repeat(topk_experts_weights_rm, **cfg["topk_weights_repeat"])
-        topk_experts_weights_rm = ttnn.permute(topk_experts_weights_rm, (3, 1, 2, 0))
-        topk_experts_weights = ttnn.to_layout(topk_experts_weights_rm, ttnn.TILE_LAYOUT)
-        ttnn.deallocate(topk_experts_weights_rm)
-        return topk_experts_weights
 
     @classmethod
     def _fwd_moe(
@@ -409,18 +416,25 @@ class MoE(SharedStateAddOn, AbstractModule):
             topk_experts_indices_rm, shape=(batch_size_per_device, 1, seq_len, cfg["num_experts_per_tok"])
         )
 
-        # Chunk along local batch dimension to keep all_to_all_dispatch output small in prefill.
-        chunk_size = min(batch_size_per_device, max(1, cfg.get("moe_chunk_size", batch_size_per_device)))
+        # Chunk along local batch dimension to keep prefill intermediates (especially topk tilize) small.
+        chunk_size = min(batch_size_per_device, cls.PREFILL_BATCH_CHUNK_SIZE)
         output_chunks: list[ttnn.Tensor] = []
 
         def _slice_topk_weights(batch_start: int, batch_end: int) -> ttnn.Tensor:
             token_start = batch_start * seq_len
             token_end = batch_end * seq_len
-            return ttnn.slice(
+            topk_weights_chunk = ttnn.slice(
                 topk_experts_weights,
                 [0, 0, token_start, 0],
-                [cfg["num_experts_per_tok"], 1, token_end, cfg["hidden_size"]],
+                [1, 1, token_end, cfg["num_experts_per_tok"]],
             )
+            topk_weights_chunk_rm = ttnn.to_layout(topk_weights_chunk, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(topk_weights_chunk)
+            topk_weights_chunk_rm = ttnn.repeat(topk_weights_chunk_rm, **cfg["topk_weights_repeat"])
+            topk_weights_chunk_rm = ttnn.permute(topk_weights_chunk_rm, (3, 1, 2, 0))
+            topk_weights_chunk = ttnn.to_layout(topk_weights_chunk_rm, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(topk_weights_chunk_rm)
+            return topk_weights_chunk
 
         for batch_start in range(0, batch_size_per_device, chunk_size):
             batch_end = min(batch_start + chunk_size, batch_size_per_device)
@@ -452,7 +466,9 @@ class MoE(SharedStateAddOn, AbstractModule):
                 shape=(1, 1, batch_size_chunk * seq_len, cfg["hidden_size"]),
             )
             dispatch_chunk = ttnn.repeat(dispatch_chunk, **cfg["activations_repeat"])
-            dispatch_chunk = ttnn.to_layout(dispatch_chunk, ttnn.TILE_LAYOUT)
+            dispatch_chunk_rm = dispatch_chunk
+            dispatch_chunk = ttnn.to_layout(dispatch_chunk_rm, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(dispatch_chunk_rm)
             ttnn.deallocate(all_to_all_dispatch_output_tensors)
 
             experts_output = MoEExperts._forward(dispatch_chunk, cfg["moe_experts"])
@@ -481,14 +497,19 @@ class MoE(SharedStateAddOn, AbstractModule):
                 all_to_all_combine_output_tensors,
                 shape=(cfg["num_experts_per_tok"], 1, batch_chunk * seq_len, cfg["hidden_size"]),
             )
-            post_combine_output_tensor = ttnn.to_layout(post_combine_output_tensor, ttnn.TILE_LAYOUT)
+            post_combine_output_tensor_rm = post_combine_output_tensor
+            post_combine_output_tensor = ttnn.to_layout(post_combine_output_tensor_rm, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(all_to_all_combine_output_tensors)
 
             topk_weights_chunk = _slice_topk_weights(batch_start, batch_end)
-            post_combine_output_tensor = ttnn.mul(
+            post_combine_weighted_output_tensor = ttnn.mul(
                 post_combine_output_tensor, topk_weights_chunk, **cfg["mul_experts_output_with_weights"]
             )
+            ttnn.deallocate(post_combine_output_tensor)
             ttnn.deallocate(topk_weights_chunk)
 
+            post_combine_output_tensor = ttnn.sum(post_combine_weighted_output_tensor, dim=0, keepdim=True)
+            ttnn.deallocate(post_combine_weighted_output_tensor)
             output_chunks.append(post_combine_output_tensor)
 
         if len(output_chunks) == 1:

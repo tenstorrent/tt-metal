@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -1019,8 +1019,11 @@ def test_decoder(
     persistent_next_iter_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 1)
     ttnn.synchronize_device(submesh)
 
-    num_links = 1
-    attn_semaphores = AttentionBlock.create_semaphores(submesh, num_links=num_links)
+    num_links_bcast = 1
+    num_links_allreduce = 2
+    attn_semaphores = AttentionBlock.create_semaphores(
+        submesh, num_links_bcast=num_links_bcast, num_links_allreduce=num_links_allreduce
+    )
     moe_semaphores = MoeOp.create_semaphores(submesh)
 
     # ========================================================================
@@ -1029,7 +1032,9 @@ def test_decoder(
     ttnn_attn_ref_output_torch = None
     if validate_standalone_mla:
         logger.info(f"Running standalone AttentionBlock.op with position_id={position_id}...")
-        attn_ref_semaphores = AttentionBlock.create_semaphores(submesh, num_links=num_links)
+        attn_ref_semaphores = AttentionBlock.create_semaphores(
+            submesh, num_links_bcast=num_links_bcast, num_links_allreduce=num_links_allreduce
+        )
         ttnn_attn_ref_result = AttentionBlock.op(
             d["input_tensor_mesh"],
             d["gamma_overlapped"],
@@ -1063,7 +1068,8 @@ def test_decoder(
             attn_ref_semaphores,
             reduce_cluster_axis,
             0,  # sdpa_cluster_axis
-            num_links,
+            num_links_bcast,
+            num_links_allreduce,
             epsilon,
             use_fp32,
             False,  # skip_ccl
@@ -1140,7 +1146,8 @@ def test_decoder(
         enable_routing=True,
         reduce_cluster_axis=reduce_cluster_axis,
         sdpa_cluster_axis=0,  # sdpa_cluster_axis
-        num_links=num_links,
+        num_links_bcast=num_links_bcast,
+        num_links_allreduce=num_links_allreduce,
         epsilon=epsilon,
         fp32_dest_acc_en=use_fp32,
         skip_ccl=False,
@@ -1501,8 +1508,11 @@ def test_decoder_mlp(
     persistent_next_iter_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 1)
     ttnn.synchronize_device(submesh)
 
-    num_links = 1
-    attn_semaphores = AttentionBlock.create_semaphores(submesh, num_links=num_links)
+    num_links_bcast = 1
+    num_links_allreduce = 2
+    attn_semaphores = AttentionBlock.create_semaphores(
+        submesh, num_links_bcast=num_links_bcast, num_links_allreduce=num_links_allreduce
+    )
     moe_semaphores = MoeOp.create_semaphores(submesh)
 
     logger.info(f"Running dense decoder operation with position_id={position_id}...")
@@ -1564,7 +1574,8 @@ def test_decoder_mlp(
         enable_routing=False,
         reduce_cluster_axis=reduce_cluster_axis,
         sdpa_cluster_axis=0,
-        num_links=num_links,
+        num_links_bcast=num_links_bcast,
+        num_links_allreduce=num_links_allreduce,
         epsilon=epsilon,
         fp32_dest_acc_en=use_fp32,
         skip_ccl=False,

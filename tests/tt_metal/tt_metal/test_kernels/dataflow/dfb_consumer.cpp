@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,6 +16,9 @@ void kernel_main() {
 
     uint32_t consumer_mask = get_arg_val<uint32_t>(0);
     uint32_t logical_dfb_id = get_arg_val<uint32_t>(1);
+    // Base page offset for this core's slice of the global buffer.
+    // Single-core callers pass 0; multi-core callers pass core_idx * entries_per_core.
+    const uint32_t chunk_offset = get_arg_val<uint32_t>(2);
     const uint32_t num_consumers = static_cast<uint32_t>(__builtin_popcount(consumer_mask));
 
     experimental::DataflowBuffer dfb(logical_dfb_id);
@@ -26,8 +29,8 @@ void kernel_main() {
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
     uint32_t consumer_idx = static_cast<uint32_t>(__builtin_popcount(consumer_mask & ((1u << hartid) - 1u)));
 
-    // DPRINT << "consumer_idx: " << consumer_idx << " num_entries_per_consumer: " << num_entries_per_consumer <<
-    // ENDL();
+    DPRINT << "consumer_idx: " << consumer_idx << " num_entries_per_consumer: " << num_entries_per_consumer << ENDL();
+    DEVICE_PRINT("consumer_idx: {} num_entries_per_consumer: {}\n", consumer_idx, num_entries_per_consumer);
 
     uint32_t entry_size = dfb.get_entry_size();
     const auto tensor_accessor = TensorAccessor(dst_args, dst_addr_base, entry_size);
@@ -35,11 +38,12 @@ void kernel_main() {
     for (uint32_t tile_id = 0; tile_id < num_entries_per_consumer; tile_id++) {
         uint32_t page_id = 0;
         if constexpr (blocked_consumer) {
-            page_id = tile_id;
+            page_id = chunk_offset + tile_id;
         } else {
-            page_id = tile_id * num_consumers + consumer_idx;
+            page_id = chunk_offset + tile_id * num_consumers + consumer_idx;
         }
         DPRINT << "consumer tile id " << tile_id << " page id " << page_id << ENDL();
+        DEVICE_PRINT("consumer tile id {} page id {}\n", tile_id, page_id);
         if constexpr (implicit_sync) {
             dfb.write_out(noc, tensor_accessor, {.page_id = page_id});
         } else {
@@ -49,7 +53,10 @@ void kernel_main() {
             dfb.pop_front(1);
         }
     }
+    dfb.finish();
     DPRINT << "CBW" << ENDL();
+    DEVICE_PRINT("CBW\n");
     noc.async_write_barrier();
     DPRINT << "CBWD" << ENDL();
+    DEVICE_PRINT("CBWD\n");
 }

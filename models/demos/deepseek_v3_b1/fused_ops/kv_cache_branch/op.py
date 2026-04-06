@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -239,10 +239,9 @@ class KVCacheBranch:
             ("dkv_gather_sender_grid_end_x", dkv_gather_sender_grid_end_x),
             ("dkv_gather_sender_grid_end_y", dkv_gather_sender_grid_end_y),
             ("dkv_gather_row_major", 1),  # 1 = row-major linearization
-            ("dkv_gather_dst_cb", kv_rmsnorm_input_cb),  # Destination CB: write directly to kv_rmsnorm_input_cb
         ]
 
-        # Gather receiver compile-time args (named args for BRISC on kv rmsnorm core)
+        # Gather receiver compile-time args (now on NCRISC via ReceiverOnNCRISC mode)
         # ReceiverCTArgs: noc0_num_senders, noc1_num_senders, noc0_receiver_semaphore_id, noc1_receiver_semaphore_id
         # Plus destination CB info for reserve/push
         # Writes directly to kv_rmsnorm_input_cb
@@ -436,16 +435,17 @@ class KVCacheBranch:
             kernel_source="models/demos/deepseek_v3_b1/fused_ops/kv_cache_branch/kernels/kv_cache_branch_kernel.cpp",
             core_ranges=input_core_grid,
             # NCRISC named compile-time args:
+            # dkv_gather receiver args on NCRISC (ReceiverOnNCRISC mode)
             ncrisc_named_compile_time_args=dkv_matmul_ncrisc_named_compile_time_args
             + kv_rmsnorm_ncrisc_named_compile_time_args
             + dkv_gather_sender_named_compile_time_args
+            + dkv_gather_receiver_named_compile_time_args
             + krope_ncrisc_named_compile_time_args,
             ncrisc_common_runtime_args=[
                 metadata_tensor_addr,
             ],
             # BRISC named compile-time args
-            brisc_named_compile_time_args=dkv_gather_receiver_named_compile_time_args
-            + kv_rmsnorm_brisc_named_compile_time_args
+            brisc_named_compile_time_args=kv_rmsnorm_brisc_named_compile_time_args
             + krope_brisc_named_compile_time_args,
             # BRISC common runtime args: KV cache buffer address and write position
             brisc_common_runtime_args=[

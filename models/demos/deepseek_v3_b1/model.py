@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,11 +11,10 @@ read_fn(output_tensor); e.g. Pipeline.write_token / Pipeline.read_output.
 
 Algorithm (prefill-by-decode then generation):
   - Prefill: for i = 0..S-1, call with input_ids = x[i] (B, 1); device uses/updates
-    cache; ignore logits for i < S-1. prefill() returns the last step output (logits
-    in real decoder) so caller can sample y0.
-  - Start generation: last_logits = prefill(prompt_tokens); y0 = sample(last_logits).
-  - Generation loop: for t = 0,1,..., feed y[t] (B, 1) via decode_step(), get logits,
-    sample y[t+1], repeat.
+    cache; ignore outputs for i < S-1. prefill() returns the last output token.
+  - Start generation: y0 = prefill(prompt_tokens).
+  - Generation loop: for t = 0,1,..., feed y[t] (B, 1) via decode_step(), get y[t+1],
+    repeat.
 
 Input tensor shape (H2D):
   - Only (B, 1) is supported: one token per batch element per step. The embedding layer
@@ -207,34 +206,23 @@ class DeepSeekV3:
         if len(prompt_tokens) == 0:
             raise ValueError("Expected at least one prompt token")
 
+        last_output: ttnn.Tensor | None = None
         num_writes_before_readback = min(self._pipeline_depth, len(prompt_tokens))
-        total_reads = len(prompt_tokens)
+        # Schedules exactly len(prompt_tokens) writes and len(prompt_tokens) reads.
+        total_iterations = len(prompt_tokens) + num_writes_before_readback - 1
 
-        write_idx = 0
-        read_count = 0
+        for i in range(total_iterations):
+            if i < len(prompt_tokens):
+                self._write_fn(prompt_tokens[i])
 
-        # Phase 1: saturate the pipeline (no reads yet)
-        while write_idx < num_writes_before_readback:
-            self._write_fn(prompt_tokens[write_idx])
-            write_idx += 1
+            # Start draining once the pipeline is full or all prompt tokens have been written.
+            if i >= num_writes_before_readback - 1:
+                self._read_fn(self._output_buffer)
+                last_output = self._output_buffer
+                self._position += 1
 
-        # Phase 2: overlap — drain outputs and issue remaining writes in steady state
-        while write_idx < len(prompt_tokens):
-            self._read_fn(self._output_buffer)
-            read_count += 1
-            self._write_fn(prompt_tokens[write_idx])
-            write_idx += 1
-
-        # Phase 3: drain remaining outputs; save the last output
-        last_results: list[DecodeResult] = []
-        while read_count < total_reads:
-            self._read_fn(self._output_buffer)
-            read_count += 1
-            if read_count > total_reads - 1:
-                last_results.append(parse_output_page(self._output_buffer))
-
-        self._position += len(prompt_tokens)
-        return last_results
+        assert last_output is not None, "Last output tensor is None"
+        return last_output
 
     def decode_step(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """

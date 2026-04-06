@@ -1,9 +1,10 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
+import time
 from collections import deque
 from collections.abc import Callable
 from pathlib import Path
@@ -11,7 +12,7 @@ from typing import Literal
 
 import torch
 from loguru import logger
-import time
+from transformers import AutoTokenizer
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
@@ -31,8 +32,6 @@ from models.demos.deepseek_v3_b1.model import (
     to_spec_input,
 )
 
-from transformers import AutoTokenizer
-
 
 class ModelPipeline:
     def __init__(
@@ -46,6 +45,7 @@ class ModelPipeline:
         lm_head_persistent_mode: bool = True,
         dense_layer_id_override: int | None = None,
         moe_layer_id_override: int | None = None,
+        io_socket_descriptor_prefix: str | None = None,
     ):
         logger.info(
             "Initializing DeepSeek V3 B1 pod pipeline (weights={}, lm_head_fp32={}, lm_head_persistent_mode={})",
@@ -102,7 +102,12 @@ class ModelPipeline:
                 write_fn=self.pipeline.write_token,
                 read_fn=self.pipeline.read_output,
                 batch_size=1,
+                pipeline_depth=config.num_stages,
             )
+
+            if io_socket_descriptor_prefix is not None:
+                self.pipeline.export_host_socket_descriptors(io_socket_descriptor_prefix)
+
         logger.info(f"Created ModelPipeline for mesh id {self.pipeline.my_mesh_id}.")
 
     def prefill_forward(self, tokens: list[int]) -> list[DecodeResult]:
@@ -203,14 +208,18 @@ class ModelPipeline:
         while len(generated_tokens) < max_new_tokens:
             iteration += 1
             print("\n\n")
-            print(f"Iteration {iteration}: Base Accept: {base_accept}, Base Reject: {base_reject}, Spec Accept: {spec_accept}, Spec Reject: {spec_reject}, Base Accept Rate: {base_accept / (base_accept + base_reject + 1e-5)}, Spec Accept Rate: {spec_accept / (spec_accept + spec_reject + 1e-5)}")
+            print(
+                f"Iteration {iteration}: Base Accept: {base_accept}, Base Reject: {base_reject}, Spec Accept: {spec_accept}, Spec Reject: {spec_reject}, Base Accept Rate: {base_accept / (base_accept + base_reject + 1e-5)}, Spec Accept Rate: {spec_accept / (spec_accept + spec_reject + 1e-5)}"
+            )
 
             result = pending.popleft() if pending else self.model.read_result()
 
             print("Got MD from Device: ")
             print(f"Token 0 Pos: {result.token_0_pos}, Token 1 Pos: {result.token_1_pos}")
             print(f"Token 0 Type: {result.token_0_type}, Token 1 Type: {result.token_1_type}")
-            print(f"Token 0: {tokenizer.decode([result.token_0], skip_special_tokens=False)}, Token 1: {tokenizer.decode([result.token_1], skip_special_tokens=False)}")
+            print(
+                f"Token 0: {tokenizer.decode([result.token_0], skip_special_tokens=False)}, Token 1: {tokenizer.decode([result.token_1], skip_special_tokens=False)}"
+            )
             print(f"Slot ID: {result.slot_id}")
 
             if not unverified_spec_tokens and not verified_spec_tokens:
@@ -262,7 +271,9 @@ class ModelPipeline:
         end_time = time.time()
         print(f"Time taken: {end_time - start_time} seconds")
         print(f"Tokens per second: {num_emits / (end_time - start_time)}")
-        print(f"Base Accept: {base_accept}, Base Reject: {base_reject}, Spec Accept: {spec_accept}, Spec Reject: {spec_reject}, Base Accept Rate: {base_accept / (base_accept + base_reject + 1e-5)}, Spec Accept Rate: {spec_accept / (spec_accept + spec_reject + 1e-5)}")
+        print(
+            f"Base Accept: {base_accept}, Base Reject: {base_reject}, Spec Accept: {spec_accept}, Spec Reject: {spec_reject}, Base Accept Rate: {base_accept / (base_accept + base_reject + 1e-5)}, Spec Accept Rate: {spec_accept / (spec_accept + spec_reject + 1e-5)}"
+        )
         logger.debug("Generation complete ({} tokens generated)", len(generated_tokens))
         return generated_tokens if return_generated_tokens else None
 

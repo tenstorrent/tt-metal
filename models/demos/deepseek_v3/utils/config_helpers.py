@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
@@ -20,6 +20,7 @@ from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 # Constants
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
 USERS_PER_ROW = 32
+DEFAULT_MAX_SEQ_LEN = 2048
 SEQ_LEN_CHUNK_SIZE = 1024  # NOTE: should be 512 for blackhole (in case of future bring-up)
 TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
 MAX_TOP_K = 32
@@ -1128,7 +1129,7 @@ def _shard_device_impl(
         mesh_mapper=mesh_mapper,
         device=mesh_device,
         dtype=dtype,
-        fast_approx=True,
+        enable_bfloat_opt=True,
     )
 
     assert memory_config == ttnn_tensor.memory_config()
