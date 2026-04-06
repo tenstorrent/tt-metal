@@ -13,7 +13,11 @@ class TtnnBottleneck:
 
     def __call__(self, device, x, tile_shape=32):
         input = x
+        if x.get_layout() == ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = self.cv1(device, x)
+        if x.get_layout() == ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = self.cv2(device, x)
         if x.shape[3] < tile_shape:
             input = ttnn.to_layout(input, layout=ttnn.TILE_LAYOUT)
