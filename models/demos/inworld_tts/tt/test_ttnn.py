@@ -14,8 +14,17 @@ import torch
 import ttnn
 from models.demos.inworld_tts.reference import functional as ref
 from models.demos.inworld_tts.tt.attention import TtAttention
+from models.demos.inworld_tts.tt.codec_encoder import TtAcousticEncoder
 from models.demos.inworld_tts.tt.mlp import TtMLP
-from models.demos.inworld_tts.tt.model_config import VOCOS_DIM, VOCOS_HEADS, VOCOS_MLP_DIM, VOCOS_POS_EMB_DIM
+from models.demos.inworld_tts.tt.model_config import (
+    ENCODER_CHANNELS,
+    ENCODER_STRIDES,
+    ENCODER_TOTAL_STRIDE,
+    VOCOS_DIM,
+    VOCOS_HEADS,
+    VOCOS_MLP_DIM,
+    VOCOS_POS_EMB_DIM,
+)
 from models.demos.inworld_tts.tt.resnet_block import TtResnetBlock
 from models.demos.inworld_tts.tt.transformer_block import TtTransformerBlock
 from models.demos.inworld_tts.tt.vocos_backbone import TtVocosBackbone
@@ -113,6 +122,54 @@ def make_backbone_state_dict(prefix="", depth=12):
     # final LayerNorm
     sd[prefix + "final_layer_norm.weight"] = _bf16(torch.randn(dim))
     sd[prefix + "final_layer_norm.bias"] = _bf16(torch.randn(dim))
+
+    return sd
+
+
+ACOUSTIC_FIR_LEN = 12
+
+
+def _acoustic_snake_act_sd(sd: dict, p: str, channels: int, k_fir: int = ACOUSTIC_FIR_LEN) -> None:
+    """Add Activation1d (SnakeBeta + FIR) keys at prefix p (must end with '.')."""
+    sd[p + "act.alpha"] = _bf16(torch.randn(channels))
+    sd[p + "act.beta"] = _bf16(torch.rand(channels) + 4.1)  # beta=1 is a common default
+    sd[p + "upsample.filter"] = _bf16(torch.randn(1, 1, k_fir) / 4)
+    sd[p + "downsample.lowpass.filter"] = _bf16(torch.randn(1, 1, k_fir) / 4)
+
+
+def _acoustic_wn_conv_sd(sd: dict, p: str, cin: int, cout: int, kernel_size: int) -> None:
+    """Add weight-norm Conv1d keys at prefix p (must end with '.')."""
+    sd[p + "weight_g"] = _bf16(torch.randn(cout, 1, 1) / 10)
+    sd[p + "weight_v"] = _bf16(torch.randn(cout, cin, kernel_size) / 10)
+    sd[p + "bias"] = _bf16(torch.randn(cout))
+
+
+def make_acoustic_encoder_state_dict():
+    """Random state dict for AcousticEncoder / ref.acoustic_encoder_forward (xcodec2 key layout)."""
+    sd = {}
+    ch = ENCODER_CHANNELS
+    strides = ENCODER_STRIDES
+    k_fir = ACOUSTIC_FIR_LEN
+
+    _acoustic_wn_conv_sd(sd, "conv_blocks.0.", 1, 48, 7)
+
+    for b in range(5):
+        prefix = f"conv_blocks.{b + 1}."
+        cin, cout = ch[b], ch[b + 1]
+        stride = strides[b]
+
+        for res_idx in range(3):
+            ru = f"{prefix}block.{res_idx}."
+            _acoustic_snake_act_sd(sd, f"{ru}block.0.", cin, k_fir)
+            _acoustic_wn_conv_sd(sd, f"{ru}block.1.", cin, cin, 7)
+            _acoustic_snake_act_sd(sd, f"{ru}block.2.", cin, k_fir)
+            _acoustic_wn_conv_sd(sd, f"{ru}block.3.", cin, cin, 1)
+
+        _acoustic_snake_act_sd(sd, f"{prefix}block.3.", cin, k_fir)
+        _acoustic_wn_conv_sd(sd, f"{prefix}block.4.", cin, cout, stride * 2)
+
+    _acoustic_snake_act_sd(sd, "conv_final_block.0.", 1536, k_fir)
+    _acoustic_wn_conv_sd(sd, "conv_final_block.1.", 1536, 1024, 3)
 
     return sd
 
@@ -305,6 +362,22 @@ class TestTtVocosBackbone:
         print(f"VocosBackbone (depth={depth}) PCC: {pcc:.6f}")
         # Random weights amplify bfloat16 precision error; real weights will give better PCC
         assert pcc > 0.90, f"VocosBackbone PCC {pcc:.6f} < 0.90 (12 layers cumulative, random weights)"
+
+class TestTtAcousticEncoder:
+    def test_pcc_vs_reference(self, device):
+        """AcousticEncoder: reference vs TtAcousticEncoder (TTNN conv1d + host Activation1d)."""
+        torch.manual_seed(42)
+        sd = make_acoustic_encoder_state_dict()
+        n_samples = 10 * ENCODER_TOTAL_STRIDE  # 3200
+        x = _bf16(torch.randn(1, 1, n_samples))
+
+        ref_out = ref.acoustic_encoder_forward(x, sd)
+        tt_enc = TtAcousticEncoder(sd, device)
+        tt_out = tt_enc(x)
+
+        pcc = compute_pcc(ref_out, tt_out)
+        print(f"AcousticEncoder PCC: {pcc:.6f}")
+        assert pcc > 0.99, f"AcousticEncoder PCC {pcc:.6f} < 0.99"
 
 
 # ---------------------------------------------------------------------------

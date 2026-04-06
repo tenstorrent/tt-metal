@@ -214,13 +214,7 @@ def activation1d_forward_ttnn(
         return_weights_and_bias=True,
     )
     
-    # Convert back to torch
-    x_down = ttnn.to_torch(x_down_ttnn)
-    if x_down.dim() == 4:
-        x_down = x_down.squeeze(0).permute(0, 2, 1)  # Back to [B, C, T]
-    
-    
-    return x_down
+    return x_down_ttnn
 
 # ---------------------------------------------------------------------------
 # Test/Comparison
