@@ -15,7 +15,7 @@ The current stack is:
 
 1. **C++ ULFM detection** - detects rank failure at most `MPIContext` call sites
 2. **`std::set_terminate` handler** - catches uncaught C++ failures outside normal MPI returns
-3. **`MPI_Finalize` watchdog** - prevents teardown hangs in `atexit`
+3. **[`MPI_Finalize`](https://docs.open-mpi.org/en/v5.0.x/man-openmpi/man3/MPI_Finalize.3.html) watchdog** - prevents teardown hangs in `atexit`
 4. **ORTE/PRRTE abort-on-non-zero** - propagates early process crashes before a collective reports failure
 5. **Process-level timeout** - last-resort `--timeout <seconds>` backstop
 6. **Python mpi4py wrapper** - ULFM handling for Python-level collectives
@@ -31,7 +31,7 @@ flowchart TD
 
     subgraph layer1 [Layer 1: C++ ULFM Detection]
         mpiCall["Surviving rank enters MPI call"]
-        ulfmCheck{"ULFM error code?"}
+        ulfmCheck{"ULFM error code?\nERR_PROC_FAILED /\nERR_PROC_FAILED_PENDING /\nERR_REVOKED"}
         handleFailure["handle_rank_failure()"]
     end
 
@@ -41,14 +41,16 @@ flowchart TD
     end
 
     subgraph layer3 [Layer 3: MPI_Finalize Watchdog]
+        survivorExit["Surviving rank exits normally\nnon-MPI exception caught by test/Python"]
         atexitFinalize["atexit calls MPI_Finalize"]
         alarmFires{"Finalize returns within 30s?"}
         sigalrm["SIGALRM watchdog fires"]
     end
 
-    subgraph layer4 [Layer 4: ORTE/PRRTE Abort]
+    subgraph layer4 ["Layer 4: ORTE (4.x) / PRRTE (5.x) Abort\ndisabled when --with-ft ulfm active"]
         nonZeroExit["Rank exits non-zero before any collective"]
         runtimeAbort["MPI runtime abort propagation"]
+        allKilled["All remaining ranks terminated"]
     end
 
     subgraph layer5 [Layer 5: tt-run Timeout]
@@ -72,10 +74,10 @@ flowchart TD
     throwExc --> recovery
 
     rankFail --> uncaughtExc --> revokeWorld --> fastFail
-    rankFail --> atexitFinalize --> alarmFires
+    rankFail --> survivorExit --> atexitFinalize --> alarmFires
     alarmFires -->|No| sigalrm --> fastFail
     alarmFires -->|Yes| cleanExit["Normal exit"]
-    rankFail --> nonZeroExit --> runtimeAbort
+    rankFail --> nonZeroExit --> runtimeAbort --> allKilled
     wallClock --> sigkill --> timeoutExit
 ```
 
@@ -91,22 +93,22 @@ route MPI return codes through `MPI_CHECK_STATE(...)`, which delegates to
 (`MPIX_ERR_PROC_FAILED`, `MPIX_ERR_PROC_FAILED_PENDING`, or
 `MPIX_ERR_REVOKED`), `handle_rank_failure()`:
 
-1. Attempts `MPIX_Comm_failure_ack()` and `MPIX_Comm_failure_get_acked()` to
+1. Attempts [`MPIX_Comm_ack_failed()`](https://docs.open-mpi.org/en/v5.0.x/man-openmpi/man3/MPIX_Comm_ack_failed.3.html) and [`MPIX_Comm_get_failed()`](https://docs.open-mpi.org/en/v5.0.x/man-openmpi/man3/MPIX_Comm_get_failed.3.html) to
    identify failed world ranks
 2. Caches any successfully identified ranks before revoke
 3. Marks the communicator locally revoked
-4. Calls `MPIX_Comm_revoke()` so blocked survivors unblock
+4. Calls [`MPIX_Comm_revoke()`](https://docs.open-mpi.org/en/v5.0.x/man-openmpi/man3/MPIX_Comm_revoke.3.html) so blocked survivors unblock
 5. Prints a structured diagnostic to stderr
 6. Dispatches to the active `FailurePolicy`
 
 Under `FAST_FAIL` (the default), the process calls `_exit(70)` immediately so
-it does not run `MPI_Finalize()` on a revoked communicator. Under
+it does not run [`MPI_Finalize()`](https://docs.open-mpi.org/en/v5.0.x/man-openmpi/man3/MPI_Finalize.3.html) on a revoked communicator. Under
 `FAULT_TOLERANT`, it throws `MPIRankFailureException` so application code can
 coordinate recovery.
 
 Important call-site exceptions:
 
-- `MPIContext::abort()` calls `MPI_Abort()` directly.
+- `MPIContext::abort()` calls [`MPI_Abort()`](https://docs.open-mpi.org/en/v5.0.x/man-openmpi/man3/MPI_Abort.3.html) directly.
 
 Non-blocking completions: `MPIRequest::wait()`, `test()`, and `cancel()` route
 return codes through the same `mpi_check_ctx(...)` path as other `MPIContext`
@@ -119,7 +121,7 @@ back to plain `mpi_check(...)`.
 
 `init_env()` configures **global process behavior**: `std::set_terminate`,
 `sigaction(SIGALRM, ...)`, and an `atexit` handler that arms `alarm(2)` around
-`MPI_Finalize`. Embedding tt-metal MPI in a larger host that relies on its own
+[`MPI_Finalize`](https://docs.open-mpi.org/en/v5.0.x/man-openmpi/man3/MPI_Finalize.3.html). Embedding tt-metal MPI in a larger host that relies on its own
 terminate handler, `SIGALRM`, or `alarm` semantics may require coordination or
 avoiding `MPIContext::create` in that process.
 
@@ -139,7 +141,7 @@ uncaught C++ exception or explicit `std::terminate()`, the handler:
 - calls `_exit(70)`
 
 This is distinct from the watchdog path below: `mpi_terminate_handler()` runs
-in normal thread context, so the best-effort `MPIX_Comm_revoke()` is valid
+in normal thread context, so the best-effort [`MPIX_Comm_revoke()`](https://docs.open-mpi.org/en/v5.0.x/man-openmpi/man3/MPIX_Comm_revoke.3.html) is valid
 there.
 
 Limitation: exceptions that are caught by pytest, pybind11, or other language
@@ -149,7 +151,7 @@ The same applies to **GoogleTest**: by default it catches test-body exceptions, 
 `TT_FATAL` and other throws from test code never reach `std::terminate` and will
 not trigger `mpi_terminate_handler`.
 
-### Layer 3 - `MPI_Finalize` Watchdog
+### Layer 3 - [`MPI_Finalize`](https://docs.open-mpi.org/en/v5.0.x/man-openmpi/man3/MPI_Finalize.3.html) Watchdog
 
 File: `tt_metal/distributed/multihost/mpi_distributed_context.cpp`
 
@@ -158,12 +160,12 @@ A common multihost hang pattern is:
 1. one rank hits a non-MPI failure
 2. the exception is caught during Python/test teardown
 3. the process exits normally
-4. `atexit` reaches `MPI_Finalize()`
-5. `MPI_Finalize()` blocks forever waiting for peers that are dead or nowhere
+4. `atexit` reaches [`MPI_Finalize()`](https://docs.open-mpi.org/en/v5.0.x/man-openmpi/man3/MPI_Finalize.3.html)
+5. [`MPI_Finalize()`](https://docs.open-mpi.org/en/v5.0.x/man-openmpi/man3/MPI_Finalize.3.html) blocks forever waiting for peers that are dead or nowhere
    near finalize yet
 
 The implementation installs the signal handler once during `init_env()`, then
-arms a watchdog only around the `atexit` `MPI_Finalize()` call:
+arms a watchdog only around the `atexit` [`MPI_Finalize()`](https://docs.open-mpi.org/en/v5.0.x/man-openmpi/man3/MPI_Finalize.3.html) call:
 
 ```cpp
 struct sigaction sa = {};
@@ -176,13 +178,13 @@ std::atexit([] {
 });
 ```
 
-If `MPI_Finalize()` does not return within 30 seconds,
+If [`MPI_Finalize()`](https://docs.open-mpi.org/en/v5.0.x/man-openmpi/man3/MPI_Finalize.3.html) does not return within 30 seconds,
 `mpi_finalize_alarm_handler()` writes a short diagnostic and `_exit(70)`.
 
 Unlike the terminate handler, this signal handler does **not** call
-`MPIX_Comm_revoke()`: it must remain async-signal-safe.
+[`MPIX_Comm_revoke()`](https://docs.open-mpi.org/en/v5.0.x/man-openmpi/man3/MPIX_Comm_revoke.3.html): it must remain async-signal-safe.
 
-### Layer 4 - ORTE/PRRTE Abort on Non-Zero Exit
+### Layer 4 - ORTE (4.x) / PRRTE (5.x) Abort on Non-Zero Exit
 
 File: `ttnn/ttnn/distributed/ttrun.py`
 
@@ -191,8 +193,8 @@ to report yet. In its default multihost configuration, `tt-run` adds the Open
 MPI runtime knob that tells the launcher to abort the rest of the job when one
 rank exits non-zero:
 
-- Open MPI 4.x: `orte_abort_on_non_zero_status`
-- Open MPI 5.x / PRRTE: `prte_abort_on_non_zero_status`
+- Open MPI 4.x (ORTE): `orte_abort_on_non_zero_status`
+- Open MPI 5.x (PRRTE): `prte_abort_non_zero_exit`
 
 `tt-run` detects the Open MPI major version from `mpirun --version` and falls
 back to the `orte_` spelling when detection fails. `--bare` disables this
@@ -249,6 +251,12 @@ Degradation behavior is intentionally narrow:
 teardown hang and chose to exit immediately"; `124` means the outer wall-clock
 watchdog fired.
 
+Exit code `70` (`EX_SOFTWARE`) is borrowed from BSD `sysexits.h`, where it is
+defined as "an internal software error has been detected". It was chosen here
+because it is distinctive enough to be unambiguous in CI logs yet universally
+recognized as a software-level failure — unlike arbitrary numbers it has a
+documented meaning outside this codebase.
+
 ## Switching to Fault-Tolerant Mode
 
 The default `FAST_FAIL` policy is deliberate: it gives CI and tooling a clean,
@@ -264,17 +272,21 @@ sequenceDiagram
     App->>Ctx: set_failure_policy(FAULT_TOLERANT)
     App->>Ctx: barrier()
     Ctx->>MPI: MPI_Barrier(comm)
-    MPI-->>Ctx: MPIX_ERR_PROC_FAILED
-    Ctx->>Ctx: identify_failed_ranks() helper
+    MPI-->>Ctx: MPIX_ERR_PROC_FAILED or MPIX_ERR_REVOKED
+    Ctx->>MPI: MPIX_Comm_ack_failed(comm)
+    Ctx->>Ctx: identify_failed_ranks() via MPIX_Comm_get_failed
     Ctx->>MPI: MPIX_Comm_revoke(comm)
+    Note over Ctx,MPI: non-collective; skip if ERR_REVOKED (already revoked by peer)
     Ctx-->>App: throw MPIRankFailureException
     App->>Ctx: revoke_and_shrink()
+    Note over App,MPI: collective — all surviving ranks must call concurrently
     Ctx->>MPI: MPIX_Comm_shrink(old_comm)
-    MPI-->>Ctx: new_comm
+    MPI-->>Ctx: new_comm (rank numbers reassigned)
     Ctx->>Ctx: swap state_
     Ctx-->>App: return
     App->>Ctx: agree(local_ready) on new comm
     Ctx->>MPI: MPIX_Comm_agree(new_comm, &flag)
+    Note over MPI: bitwise AND across survivors; never raises MPIX_ERR_REVOKED
     Ctx-->>App: optional<bool>
     App->>Ctx: barrier() on new comm
 ```
@@ -367,8 +379,12 @@ important invariants that application code should understand:
   communicator or observe `MPIX_ERR_REVOKED`.
 - `revoke_and_shrink()` is single-caller by design. `shrink_in_progress_`
   rejects concurrent or re-entrant shrink calls.
-- `agree(bool)` wraps `MPIX_Comm_agree()`. It returns the logical AND across
-  surviving ranks, and returns `std::nullopt` when ULFM support is unavailable.
+- `agree(bool)` wraps [`MPIX_Comm_agree()`](https://docs.open-mpi.org/en/v5.0.x/man-openmpi/man3/MPIX_Comm_agree.3.html). It performs a *bitwise AND* across
+  surviving ranks (not a logical AND — passing `1` from all survivors yields `1`,
+  but mixed `1`/`0` inputs produce `0`). Returns `std::nullopt` when ULFM
+  support is unavailable. Note: [`MPIX_Comm_agree`](https://docs.open-mpi.org/en/v5.0.x/man-openmpi/man3/MPIX_Comm_agree.3.html) never raises
+  `MPIX_ERR_REVOKED`, even on a revoked communicator — it is safe to call
+  directly after catching `MPIX_ERR_REVOKED`.
 - `failed_ranks()` is best-effort. On `MPIX_ERR_REVOKED` paths it may need to
   fall back to cached pre-revoke data, and it can still return an empty set if
   rank identification failed before revoke propagation. The reliable fallback is
@@ -389,10 +405,25 @@ important invariants that application code should understand:
 - `tt-run` prefers `mpirun-ulfm` when it is present on `PATH`, but falls back to
   plain `mpirun` when it is not.
 - `tt-run` only appends `--with-ft ulfm` when the selected launcher basename
-  contains `ulfm`.
-- By default, `tt-run` adds the ORTE/PRRTE abort-on-non-zero MCA parameter so
-  launcher-level crash propagation stays enabled. `--bare` disables that
-  default bundle.
+  contains `ulfm`. However, `--with-ft ulfm` is a valid flag for any OpenMPI
+  5.x `mpirun` binary, not only the `mpirun-ulfm` wrapper — the wrapper is
+  simply a convenience that pre-selects ULFM.
+- By default, `tt-run` adds the ORTE (4.x) / PRRTE (5.x) abort-on-non-zero MCA
+  parameter so launcher-level crash propagation stays enabled. `--bare` disables
+  that default bundle.
+- **Transport constraint**: OpenMPI ULFM requires the `ob1` PML (point-to-point
+  messaging layer). The default `ucx` PML does not support ULFM. Pass
+  `--mca pml ob1` (or equivalent MCA config) when launching with ULFM; omitting
+  this on UCX-default builds silently disables fault tolerance.
+- **Failure detection latency**: The time between a rank crash and a surviving
+  rank observing a ULFM error code is governed by heartbeat / keepalive MCA
+  parameters. Key knobs:
+  - `mpi_keepalive_timeout` (seconds, default 20) — heartbeat timeout before
+    marking a peer failed
+  - `oob_tcp_keepalive_time`, `oob_tcp_keepalive_intvl`,
+    `oob_tcp_keepalive_probes` — TCP-level keepalive tuning for the OOB channel
+  Lower these for faster detection in test environments; raise them on lossy
+  networks to avoid false positives.
 
 ## Observability and Triage
 
@@ -406,7 +437,7 @@ Multihost tooling changes that matter when debugging ULFM failures:
   disabled behind `ENABLE_RANK_SCOPED_ENV_VARS = False`.
 - `tt_metal/distributed/multihost/mpi_failure_diagnostics.cpp` emits stable
   one-line `ULFM detected a rank failure; ...` records for remote ULFM
-  failures, local `std::terminate`, and the `MPI_Finalize` watchdog. These are
+  failures, local `std::terminate`, and the [`MPI_Finalize`](https://docs.open-mpi.org/en/v5.0.x/man-openmpi/man3/MPI_Finalize.3.html) watchdog. These are
   the structured fields that the shell smoke tests and CI grep for.
 - `tests/scripts/multihost/ulfm_github_workflow_wrappers.sh` promotes those
   structured lines to GitHub Actions annotations: `policy=fast_fail` becomes
@@ -472,5 +503,8 @@ Current gaps:
   non-zero-exit propagation path. Use `--timeout <seconds>` as the backstop.
 - In Python fault-tolerant mode, missing `Revoke()`, `Get_failed()`, or
   `Shrink()` methods in `mpi4py` limit how much recovery the helper can do.
+  ULFM-capable `mpi4py` builds also expose `Ack_failed()` (maps to
+  [`MPIX_Comm_ack_failed`](https://docs.open-mpi.org/en/v5.0.x/man-openmpi/man3/MPIX_Comm_ack_failed.3.html)) which can be called before `Get_failed()` to ensure
+  pending failures are acknowledged before querying the failed group.
 - `revoke_and_shrink()` is an expensive collective across survivors. Do not put
   it on a hot path.

@@ -133,6 +133,15 @@ jobs:
             # Setup shared venv and switch to it (handles multi-host race conditions)
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_dual_t3k_tooling_tests.sh
+      - name: Upload test artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ulfm-test-results-${{ github.run_id }}
+          path: |
+            generated/test_reports/
+            /tmp/ulfm-*.log
+          retention-days: 7
 
   multi-host-bh-lb-2x:
     if: ${{ github.event.inputs.bh_lb_2x_multihost == 'true' || github.event.schedule == '0 */3 * * *' }}

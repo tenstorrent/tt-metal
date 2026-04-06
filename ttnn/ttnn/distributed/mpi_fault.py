@@ -193,7 +193,10 @@ def ulfm_guard(
         # If ULFM constants aren't available in this mpi4py build, the set is
         # empty and we fall through to re-raise.
         if _ULFM_ERROR_CODES and error_code in _ULFM_ERROR_CODES:
-            rank = comm.Get_rank()
+            try:
+                rank = comm.Get_rank()
+            except Exception:
+                rank = -1
             if policy is UlfmFailurePolicy.FAULT_TOLERANT:
                 # Let the caller handle recovery (shrink communicator, etc.)
                 failed = _try_get_failed_ranks(comm)

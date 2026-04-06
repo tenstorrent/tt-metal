@@ -37,11 +37,8 @@ _run_ulfm_test() {
     local cmd_status=0
     tmpout=$(mktemp)
 
-    if "$@" 2>&1 | tee "$tmpout"; then
-        cmd_status=0
-    else
-        cmd_status=${PIPESTATUS[0]}
-    fi
+    "$@" 2>&1 | tee "$tmpout"
+    cmd_status=${PIPESTATUS[0]}
 
     if [[ ! -s "$tmpout" ]]; then
         echo "ERROR: no output captured for ${expected_test}; launcher exited ${cmd_status}" >&2

@@ -24,6 +24,16 @@ using tt::tt_metal::distributed::multihost::FailurePolicy;
 using tt::tt_metal::distributed::multihost::Key;
 using tt::tt_metal::distributed::multihost::MPIRankFailureException;
 using tt::tt_metal::distributed::multihost::Rank;
+using tt::tt_metal::distributed::multihost::Tag;
+
+// NOTE: Tests that kill ranks or call revoke_and_shrink() mutate the shared
+// world communicator.  This creates an ordering dependency: tests that shrink
+// the communicator affect all subsequent tests in the same process.
+// Ideally each such test should call ctx->duplicate() and operate on the
+// duplicate, but the downcast to MPIContext for set_failure_policy() makes
+// this non-trivial.  For now, tests that use kill_rank_and_recover() pass
+// a duplicated context where feasible.  Tests that directly manipulate the
+// world communicator still share state and MUST run in the order listed.
 
 TEST(FaultTolerance, ShrinkAfterRankFailure) {
     //----------------------------------------------------------------------
@@ -334,6 +344,12 @@ TEST(FaultTolerance, FastFailEmitsRankFailureDiagnostics) {
     // The shell harness expects mpirun to exit non-zero after the surviving
     // rank emits a line containing policy=fast_fail and hostname fields.
     //----------------------------------------------------------------------
+    const std::string filter = GTEST_FLAG_GET(filter);
+    if (filter == "*" || filter.empty()) {
+        GTEST_SKIP() << "This test calls _exit() and must be run in isolation: "
+                        "--gtest_filter=FaultTolerance.FastFailEmitsRankFailureDiagnostics";
+    }
+
     const auto& ctx = DistributedContext::get_current_world();
     SKIP_IF_NO_ULFM(ctx);
 
@@ -448,9 +464,10 @@ TEST(FaultTolerance, DoubleRevokeGuard) {
     // again (should be safe — it will revoke the already-healthy comm
     // and shrink again, producing a communicator with the same ranks).
     //----------------------------------------------------------------------
-    const auto& ctx = DistributedContext::get_current_world();
-    SKIP_IF_NO_ULFM(ctx);
+    const auto& world_ctx = DistributedContext::get_current_world();
+    SKIP_IF_NO_ULFM(world_ctx);
 
+    auto ctx = world_ctx->duplicate();
     const int world = *ctx->size();
     const int rank = *ctx->rank();
 
@@ -487,9 +504,10 @@ TEST(FaultTolerance, AgreeAfterRevokeAndShrink) {
     // revoke_and_shrink().  The new (shrunken) communicator should
     // support agree() just like a fresh communicator.
     //----------------------------------------------------------------------
-    const auto& ctx = DistributedContext::get_current_world();
-    SKIP_IF_NO_ULFM(ctx);
+    const auto& world_ctx = DistributedContext::get_current_world();
+    SKIP_IF_NO_ULFM(world_ctx);
 
+    auto ctx = world_ctx->duplicate();
     const int world = *ctx->size();
     const int rank = *ctx->rank();
 
@@ -817,3 +835,215 @@ TEST(FaultTolerance, SuccessPathNoErrorOutput) {
     // GTest will capture any unexpected output.
     ctx->barrier();
 }
+
+// =====================================================================
+// Multi-failure and non-blocking fault-tolerance tests
+// =====================================================================
+
+TEST(FaultTolerance, SequentialRankFailures) {
+    //----------------------------------------------------------------------
+    // Kill one rank, recover, then kill another rank, recover again.
+    // Verifies that the communicator can survive multiple sequential
+    // shrink operations and that all survivors agree on the final size.
+    //----------------------------------------------------------------------
+    const auto& world_ctx = DistributedContext::get_current_world();
+    SKIP_IF_NO_ULFM(world_ctx);
+
+    auto ctx = world_ctx->duplicate();
+    const int world = *ctx->size();
+    const int rank = *ctx->rank();
+
+    if (world < 3) {
+        GTEST_SKIP() << "Need at least 3 ranks for sequential failure test";
+    }
+
+    auto* mpi_ctx = dynamic_cast<tt::tt_metal::distributed::multihost::MPIContext*>(ctx.get());
+    ASSERT_NE(mpi_ctx, nullptr) << "Expected MPIContext for ULFM test";
+    mpi_ctx->set_failure_policy(FailurePolicy::FAULT_TOLERANT);
+
+    // -- Round 1: Kill rank 2 (highest rank in minimum 3-rank setup) ------
+    kill_rank_and_recover(ctx, /*victim_rank=*/2, [&](const ContextPtr& c) {
+        const int size_after_first = *c->size();
+        EXPECT_EQ(size_after_first, world - 1)
+            << "Rank " << rank << ": first shrink should remove exactly 1 rank";
+
+        EXPECT_EQ_SURVIVING_RANKS(size_after_first, c);
+        c->barrier();
+
+        // -- Round 2: Kill rank 1 from the shrunken communicator ----------
+        // Ranks have been renumbered after shrink; rank 1 in the new
+        // communicator is a valid target (we have at least 2 survivors).
+        auto* mpi_c = dynamic_cast<tt::tt_metal::distributed::multihost::MPIContext*>(c.get());
+        ASSERT_NE(mpi_c, nullptr);
+        mpi_c->set_failure_policy(FailurePolicy::FAULT_TOLERANT);
+
+        const int my_new_rank = *c->rank();
+        if (my_new_rank == 1) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            raise(SIGKILL);  // never returns
+        }
+
+        bool detected_second = false;
+        try {
+            c->barrier();
+        } catch (const DistributedException&) {
+            detected_second = true;
+            c->revoke_and_shrink();
+        }
+
+        // Only survivors of both rounds reach here
+        if (detected_second || *c->size() == world - 2) {
+            const int size_after_second = *c->size();
+            EXPECT_EQ(size_after_second, world - 2)
+                << "Rank " << rank << ": second shrink should leave original_size - 2 ranks";
+
+            EXPECT_EQ_SURVIVING_RANKS(size_after_second, c);
+            c->barrier();
+        }
+    });
+}
+
+TEST(FaultTolerance, FailureDuringNonBlockingOps) {
+    //----------------------------------------------------------------------
+    // Post non-blocking irecv on rank 0, then kill the sender (rank 1).
+    // Rank 0's wait() on the irecv should either:
+    //   a) throw MPIRankFailureException / DistributedException, or
+    //   b) return with an error that triggers recovery.
+    //
+    // After recovery, verify that surviving ranks can still communicate
+    // using the shrunken communicator.
+    //----------------------------------------------------------------------
+    const auto& world_ctx = DistributedContext::get_current_world();
+    SKIP_IF_NO_ULFM(world_ctx);
+
+    auto ctx = world_ctx->duplicate();
+    const int world = *ctx->size();
+    const int rank = *ctx->rank();
+
+    if (world < 3) {
+        GTEST_SKIP() << "Need at least 3 ranks for non-blocking failure test";
+    }
+
+    auto* mpi_ctx = dynamic_cast<tt::tt_metal::distributed::multihost::MPIContext*>(ctx.get());
+    ASSERT_NE(mpi_ctx, nullptr) << "Expected MPIContext for ULFM test";
+    mpi_ctx->set_failure_policy(FailurePolicy::FAULT_TOLERANT);
+
+    constexpr int TAG_VAL = 42;
+    int recv_buf = 0;
+    int send_buf = 0xDEAD;
+
+    // Rank 1 is the victim: it posts an isend then dies before completion.
+    // Rank 0 posts an irecv from rank 1 and attempts to wait().
+    // All other ranks go directly to the recovery barrier.
+
+    if (rank == 1) {
+        // Post the isend, then die — the send may or may not complete
+        auto req = ctx->isend(
+            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&send_buf), sizeof(send_buf)),
+            Rank{0},
+            Tag{TAG_VAL});
+        // Small delay so rank 0 has time to post its irecv
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        raise(SIGKILL);  // never returns
+    }
+
+    bool failure_detected = false;
+
+    if (rank == 0) {
+        // Post irecv from rank 1
+        auto req = ctx->irecv(
+            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&recv_buf), sizeof(recv_buf)),
+            Rank{1},
+            Tag{TAG_VAL});
+
+        // Wait for the irecv — rank 1 is dying, so this should fail
+        try {
+            req->wait();
+            // If wait() returned normally, the send completed before the kill.
+            // That's acceptable — the data arrived.
+        } catch (const DistributedException&) {
+            failure_detected = true;
+            // The irecv failed because rank 1 died. Recovery needed.
+        }
+    }
+
+    // All surviving ranks (including rank 0) must detect the failure
+    // via a collective and recover.
+    try {
+        ctx->barrier();
+    } catch (const DistributedException&) {
+        failure_detected = true;
+        ctx->revoke_and_shrink();
+    }
+
+    // If no exception was thrown (rank 0 got data before kill, and barrier
+    // somehow succeeded), we still need to verify the communicator is healthy.
+    // In practice, the barrier above will throw because rank 1 is dead.
+
+    const int new_world = *ctx->size();
+    EXPECT_EQ(new_world, world - 1)
+        << "Rank " << rank << ": expected world - 1 after rank 1 death";
+
+    EXPECT_EQ_SURVIVING_RANKS(new_world, ctx);
+
+    // Final sanity: do a round-trip send/recv on the shrunken communicator.
+    // Use rank 0 sending to the last surviving rank.
+    const int last_rank = new_world - 1;
+    constexpr int VERIFY_TAG = 99;
+    int verify_send = 0xCAFE;
+    int verify_recv = 0;
+    const int my_new_rank = *ctx->rank();
+
+    if (my_new_rank == 0 && new_world > 1) {
+        ctx->send(
+            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&verify_send), sizeof(verify_send)),
+            Rank{last_rank},
+            Tag{VERIFY_TAG});
+    } else if (my_new_rank == last_rank && new_world > 1) {
+        ctx->recv(
+            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&verify_recv), sizeof(verify_recv)),
+            Rank{0},
+            Tag{VERIFY_TAG});
+        EXPECT_EQ(verify_recv, 0xCAFE)
+            << "Rank " << my_new_rank << ": post-recovery send/recv data mismatch";
+    }
+
+    ctx->barrier();
+}
+
+// Split-brain test reference (requires network partition capability)
+//
+// A split-brain scenario occurs when two disjoint groups of ranks each believe
+// the other group has failed.  This is the most dangerous failure mode for
+// distributed systems because both partitions may independently proceed with
+// mutually inconsistent state.
+//
+// Testing this would require:
+//
+// 1. A network partition mechanism (e.g., iptables rules, network namespaces,
+//    or a specialized MPI test fabric that can selectively drop messages between
+//    subsets of ranks) to isolate ranks into two groups that cannot communicate.
+//
+// 2. Verification that MPIX_Comm_agree() detects the inconsistency when the
+//    partition heals.  In theory, agree() should fail or return inconsistent
+//    results if called while the partition is active, since it cannot reach
+//    consensus across the split.
+//
+// 3. Verification that revoke_and_shrink() produces a correct communicator
+//    after the partition.  Both partitions may have independently revoked,
+//    leading to ambiguity about which ranks are "surviving."
+//
+// 4. Cleanup that restores network connectivity after the test so that
+//    subsequent tests are not affected.
+//
+// This is not feasible in the current test harness, which only supports
+// process-level failures (raise(SIGKILL)) and has no ability to manipulate
+// network-level connectivity between MPI ranks.
+//
+// A potential approach for future work:
+//   - Use Linux network namespaces (ip netns) with veth pairs to run MPI
+//     ranks in isolated network contexts, then use iptables DROP rules to
+//     simulate partitions.
+//   - Alternatively, use a custom MPI transport layer that supports
+//     fault injection at the message level.
+//

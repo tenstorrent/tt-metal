@@ -162,8 +162,8 @@ public:
     //   When a rank detects failure via MPIX_ERR_REVOKED (error 77) rather than
     //   MPIX_ERR_PROC_FAILED (error 75), it means another rank already called
     //   MPIX_Comm_revoke() before this rank saw the failure.  On an already-revoked
-    //   communicator, MPIX_Comm_failure_ack() returns MPIX_ERR_REVOKED itself, so
-    //   MPIX_Comm_failure_get_acked() cannot record the failed-rank set.
+    //   communicator, MPIX_Comm_ack_failed() returns MPIX_ERR_REVOKED itself, so
+    //   MPIX_Comm_get_failed() cannot record the failed-rank set.
     //
     //   To mitigate this, handle_rank_failure() caches identified ranks in
     //   cached_failed_ranks_ *before* calling MPIX_Comm_revoke(), and this
@@ -226,14 +226,14 @@ private:
     [[nodiscard]] std::shared_ptr<CommunicatorState> snapshot_state() const;
 
     std::shared_ptr<CommunicatorState> state_;
-    mutable std::atomic_flag revoked_;  // set when MPIX_Comm_revoke() is called; cleared after shrink
+    mutable std::atomic_flag revoked_ = {};  // set when MPIX_Comm_revoke() is called; cleared after shrink
     // Atomic so that set_failure_policy() on one thread and MPI_CHECK_CTX reads
     // on another thread do not race.  Use memory_order_release on write,
     // memory_order_acquire on read.
     std::atomic<FailurePolicy> failure_policy_{FailurePolicy::FAST_FAIL};
     // Set while revoke_and_shrink() is in progress; caught by TT_ASSERT to
     // detect concurrent invocations, which violate the single-caller invariant.
-    std::atomic_flag shrink_in_progress_;
+    std::atomic_flag shrink_in_progress_ = {};
 
     // Detection-time cache of failed ranks, populated by handle_rank_failure()
     // *before* MPIX_Comm_revoke() is called and before throwing
@@ -242,7 +242,7 @@ private:
     // This cache exists to work around the REVOKED-path failure case (see the
     // failed_ranks() comment above).  Ranks that receive MPIX_ERR_REVOKED have
     // a revoked communicator by the time they enter handle_rank_failure(); the
-    // best-effort MPIX_Comm_failure_ack() in identify_failed_ranks() may still
+    // best-effort MPIX_Comm_ack_failed() in identify_failed_ranks() may still
     // succeed at that point (the ack is local state), allowing the failed group
     // to be captured here.  If identify_failed_ranks() also fails, the cache
     // remains empty and failed_ranks() will return {}.

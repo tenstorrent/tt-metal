@@ -137,9 +137,9 @@ static std::string identify_failed_ranks(MPI_Comm comm) {
     // MPIX_ERR_REVOKED; in that case we still try get_acked below because
     // prior acks from earlier operations may have recorded failure information
     // that we can retrieve.
-    MPIX_Comm_failure_ack(comm);  // best-effort; ignore return code
+    MPIX_Comm_ack_failed(comm);  // best-effort; ignore return code
     MpiGroupGuard failed_guard;
-    if (MPIX_Comm_failure_get_acked(comm, &failed_guard.g) != MPI_SUCCESS) {
+    if (MPIX_Comm_get_failed(comm, &failed_guard.g) != MPI_SUCCESS) {
         return "unknown";
     }
     int failed_size = 0;
@@ -259,7 +259,7 @@ static void handle_rank_failure(
     std::atomic_flag* revoked_flag) {
     // Identify who died before revoking (failure_get_acked requires pre-revoke comm).
     // Always attempt identify_failed_ranks() regardless of error code — even for
-    // MPIX_ERR_REVOKED.  On a revoked comm, MPIX_Comm_failure_ack() may still succeed
+    // MPIX_ERR_REVOKED.  On a revoked comm, MPIX_Comm_ack_failed() may still succeed
     // (the ack is local state); if it does, subsequent calls to failed_ranks() will
     // find the acked group.  If it fails, identify_failed_ranks() gracefully returns
     // "unknown".  Skipping the ack for REVOKED caused failed_ranks() to return empty
@@ -270,7 +270,7 @@ static void handle_rank_failure(
     // Cache any successfully identified failed ranks so that failed_ranks()
     // can return them even if the communicator is already revoked by the time
     // the caller queries.  This is the key fix: for ranks that see REVOKED,
-    // MPIX_Comm_failure_ack() inside failed_ranks() will fail, but we may
+    // MPIX_Comm_ack_failed() inside failed_ranks() will fail, but we may
     // have captured the information here before the revoke propagated.
     const auto parsed_failed_ranks = parse_failed_ranks_string(failed);
     if (failed_ranks_cache) {
@@ -669,6 +669,8 @@ inline void init_env(int& argc, char**& argv) {
         if (MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided) != MPI_SUCCESS) {
             TT_THROW("MPI_Init_thread failed");
         }
+        TT_FATAL(provided >= MPI_THREAD_MULTIPLE,
+            "MPI requires MPI_THREAD_MULTIPLE but only {} was provided", provided);
 
         // Install the terminate handler so that any uncaught exception
         // (including those thrown in thread-pool workers via std::async)
@@ -1120,12 +1122,15 @@ void MPIContext::revoke_and_shrink() {
     const auto old_state = snapshot_state();
 
     int rc = MPIX_Comm_revoke(old_state->comm);
-    if (rc != MPI_SUCCESS && rc != MPI_ERR_REVOKED) {  // another rank may have revoked first
+    if (rc != MPI_SUCCESS && rc != MPIX_ERR_REVOKED) {  // another rank may have revoked first
         abort(rc);
     }
     revoked_.test_and_set(std::memory_order_release);
 
     MPI_Comm new_comm = MPI_COMM_NULL;
+    // NOTE: If MPIX_Comm_shrink fails (e.g. another rank fails during shrink),
+    // MPI_CHECK_STATE will throw MPIRankFailureException to the caller.
+    // The caller must be prepared to handle nested failures during recovery.
     MPI_CHECK_STATE(old_state, MPIX_Comm_shrink(old_state->comm, &new_comm));
     // Route replacement-communicator setup through build_state(new_comm)
     // rather than MPI_CHECK_STATE(old_state, ...) so any setup failure is
@@ -1199,16 +1204,16 @@ std::vector<Rank> MPIContext::failed_ranks() const {
     const auto state = snapshot_state();
     // Query ULFM for currently-acked failed ranks on this communicator.
     //
-    // Attempt MPIX_Comm_failure_ack() first (best-effort, ignore return code).
+    // Attempt MPIX_Comm_ack_failed() first (best-effort, ignore return code).
     // On a non-revoked comm this records any pending failures; on an already-
     // revoked comm it returns MPIX_ERR_REVOKED, which we silently ignore.
-    // Then call MPIX_Comm_failure_get_acked() to retrieve the acked group.
+    // Then call MPIX_Comm_get_failed() to retrieve the acked group.
     //
     // POTENTIAL FAILURE CASE — REVOKED-path ranks:
     //   A rank that sees MPIX_ERR_REVOKED (77) receives a communicator that was
     //   revoked by a peer *before* this rank processed the failure.  By the time
-    //   this method runs, MPIX_Comm_failure_ack() returns MPIX_ERR_REVOKED, so
-    //   MPIX_Comm_failure_get_acked() sees no acked failures and returns an empty
+    //   this method runs, MPIX_Comm_ack_failed() returns MPIX_ERR_REVOKED, so
+    //   MPIX_Comm_get_failed() sees no acked failures and returns an empty
     //   group → failed_size == 0 → we fall through to cached_failed_ranks_.
     //
     //   cached_failed_ranks_ was populated by handle_rank_failure() before
@@ -1220,9 +1225,9 @@ std::vector<Rank> MPIContext::failed_ranks() const {
     //
     //   When reliable failed-rank identification is required, compare communicator
     //   size before vs. after revoke_and_shrink() — the delta is always accurate.
-    MPIX_Comm_failure_ack(state->comm);  // best-effort; ignore return code
+    MPIX_Comm_ack_failed(state->comm);  // best-effort; ignore return code
     MPI_Group failed_group = MPI_GROUP_NULL;
-    if (MPIX_Comm_failure_get_acked(state->comm, &failed_group) != MPI_SUCCESS) {
+    if (MPIX_Comm_get_failed(state->comm, &failed_group) != MPI_SUCCESS) {
         std::lock_guard cache_lock(failed_ranks_cache_mutex_);
         return cached_failed_ranks_;
     }
@@ -1234,7 +1239,10 @@ std::vector<Rank> MPIContext::failed_ranks() const {
         return cached_failed_ranks_;
     }
     MPI_Group world_group = MPI_GROUP_NULL;
-    MPI_Comm_group(state->comm, &world_group);
+    int rc = MPI_Comm_group(state->comm, &world_group);
+    if (rc != MPI_SUCCESS) {
+        world_group = MPI_GROUP_NULL;
+    }
     std::vector<int> local_indices(failed_size);
     std::iota(local_indices.begin(), local_indices.end(), 0);
     std::vector<int> world_ranks(failed_size, MPI_UNDEFINED);

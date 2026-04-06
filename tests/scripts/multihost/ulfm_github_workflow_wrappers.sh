@@ -46,6 +46,7 @@ _ULFM_GHA_CLEANUP_DONE=0
 _ULFM_GHA_TMP_OUTPUT=""
 _ULFM_GHA_EMITTED_LINES_FILE=""
 _ULFM_GHA_STREAM_FIFO=""
+_ULFM_GHA_STREAM_TMPDIR=""
 _ULFM_GHA_STREAM_PID=""
 #ULFM_GHA_DEBUG=1 # for verbose debugging
 
@@ -218,7 +219,7 @@ _ulfm_github_wrapper_cleanup() {
         kill "$_ULFM_GHA_STREAM_PID" 2>/dev/null || true
         wait "$_ULFM_GHA_STREAM_PID" 2>/dev/null || true
     fi
-    [[ -n "${_ULFM_GHA_STREAM_FIFO:-}" ]] && rm -f "$_ULFM_GHA_STREAM_FIFO"
+    [[ -n "${_ULFM_GHA_STREAM_TMPDIR:-}" ]] && rm -rf "$_ULFM_GHA_STREAM_TMPDIR"
     [[ -n "${_ULFM_GHA_TMP_OUTPUT:-}" ]] && rm -f "$_ULFM_GHA_TMP_OUTPUT"
     [[ -n "${_ULFM_GHA_EMITTED_LINES_FILE:-}" ]] && rm -f "$_ULFM_GHA_EMITTED_LINES_FILE"
 }
@@ -248,7 +249,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && [[ "${1:-}" == "run" ]]; then
 
     _ULFM_GHA_TMP_OUTPUT=$(mktemp)
     _ULFM_GHA_EMITTED_LINES_FILE=$(mktemp)
-    _ULFM_GHA_STREAM_FIFO=$(mktemp -u)
+    _ULFM_GHA_STREAM_TMPDIR=$(mktemp -d)
+    _ULFM_GHA_STREAM_FIFO="$_ULFM_GHA_STREAM_TMPDIR/pipe"
     : > "$_ULFM_GHA_EMITTED_LINES_FILE"
     mkfifo "$_ULFM_GHA_STREAM_FIFO"
     _ULFM_GHA_CLEANUP_DONE=0
@@ -268,7 +270,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && [[ "${1:-}" == "run" ]]; then
     set +o pipefail
     wait "$_ULFM_GHA_STREAM_PID" 2>/dev/null || true
     _ULFM_GHA_STREAM_PID=""
-    rm -f "$_ULFM_GHA_STREAM_FIFO"
+    rm -rf "$_ULFM_GHA_STREAM_TMPDIR"
+    _ULFM_GHA_STREAM_TMPDIR=""
     _ULFM_GHA_STREAM_FIFO=""
     _ulfm_gha_debug "phase=after-child status=${cmd_status}"
     exit "$cmd_status"
