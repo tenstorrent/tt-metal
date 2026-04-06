@@ -189,6 +189,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
     cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
     cpp/ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc_nanobind.cpp
+    cpp/ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc_fused/deepseek_moe_fast_reduce_nc_fused_nanobind.cpp
     cpp/ttnn/operations/experimental/reshape/view_nanobind.cpp
     cpp/ttnn/operations/experimental/slice_write/slice_write_nanobind.cpp
     cpp/ttnn/operations/experimental/padded_slice/padded_slice_nanobind.cpp
