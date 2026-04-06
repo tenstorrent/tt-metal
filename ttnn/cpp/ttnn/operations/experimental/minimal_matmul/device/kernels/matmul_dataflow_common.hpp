@@ -210,9 +210,10 @@ void write_block_sync(
  * For ternary_b:
  *   - broadcast_ternary_b=1: read 1 row of tiles (N_block_tiles), compute broadcasts across M rows.
  *   - broadcast_ternary_b=0: read M rows of tiles, pushed one row at a time (matches ternary_a pattern).
- *
- * Performance optimization: pushes tiles one row at a time. This allows the compute kernel to begin
- * processing as soon as the first row is ready.
+ * Performance optimization: Unlike read_in0_block_sync and read_in1_block_sync, pushes ternary_a
+ * tiles one row at a time. This allows the compute kernel to begin processing addcmul operations
+ * as soon as the first row is ready, rather than waiting for the entire block. This overlapping
+ * of data movement and compute improves overall throughput.
  */
 template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
 void read_ternary_blocks_sync(
@@ -270,7 +271,6 @@ void read_ternary_blocks_sync(
         }
     }
 
-    // ternary_a reading (unchanged): row-by-row
     uint32_t m_id = 0;
     uint32_t i = d0_start;
     for (; i < d0_end; i++, m_id++) {
@@ -279,6 +279,10 @@ void read_ternary_blocks_sync(
         uint32_t ternary_a_write_ptr = get_write_ptr(ternary_a_cb);
         for (uint32_t j = d1_start; j < d1_end; j++) {
             if (j >= shape.logical_d1) {
+                // Do not move tile data into CB if tile is outside ternary/output tensor.
+                // This can happen when ternary/output tensor shape is not a multiple of block sizes:
+                // For instance, if tensor shape is (M_tiles=7, N_tiles=3), but block sizes are (M_block_tiles=4,
+                // N_block_tiles=4)
                 break;
             }
             if (i < shape.logical_d0) {
