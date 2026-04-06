@@ -10,3 +10,13 @@
 {"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"hardsigmoid","background":true,"ts":"2026-04-06T09:26:43+00:00"}
 {"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"hardswish","background":true,"ts":"2026-04-06T09:26:43+00:00"}
 {"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"softshrink","background":true,"ts":"2026-04-06T09:26:43+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"rpow","status":"ok","commit":"60a55a2487","ts":"2026-04-06T09:42:41+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"hardsigmoid","status":"ok","commit":"b1d0e49171","ts":"2026-04-06T09:42:41+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"softshrink","status":"ok","commit":"5f380066b2","ts":"2026-04-06T09:42:41+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"cbrt","status":"failed","error":"agent timed out or failed to produce output","ts":"2026-04-06T09:42:41+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"hardswish","status":"failed","error":"agent timed out or failed to produce output","ts":"2026-04-06T09:42:41+00:00"}
+{"event":"phase_complete","phase":2,"phase_name":"Reference Analysis","status":"ok","analyzers_completed":3,"analyzers_failed":2,"issues":["cbrt and hardswish analyzers failed to complete"],"ts":"2026-04-06T09:42:41+00:00"}
+{"event":"phase_start","phase":3,"phase_name":"Implementation","iteration":1,"ts":"2026-04-06T09:43:00+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-implementor","phase":3,"ts":"2026-04-06T09:43:00+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"cbrt","status":"ok","commit":"05c1747504","ts":"2026-04-06T09:53:37+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"hardswish","status":"ok","commit":"f4a907d02d","ts":"2026-04-06T09:53:37+00:00"}
