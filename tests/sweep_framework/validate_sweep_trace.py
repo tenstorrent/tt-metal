@@ -145,8 +145,9 @@ class ConfigResult:
     op_name: str
     master_config_id: int | None
     sweep_config_id: int | None
-    status: str  # "match", "diff", "missing_sweep", "missing_master", "incidental"
+    status: str  # "match", "diff", "hash_mismatch", "missing_sweep", "incidental"
     diffs: list[Diff] = field(default_factory=list)
+    sweep_config_hash: str | None = None  # the sweep trace's own computed config_hash
 
 
 @dataclass
@@ -166,6 +167,10 @@ class ValidationReport:
         return [r for r in self.results if r.status == "missing_sweep"]
 
     @property
+    def hash_mismatch(self) -> list[ConfigResult]:
+        return [r for r in self.results if r.status == "hash_mismatch"]
+
+    @property
     def incidental(self) -> list[ConfigResult]:
         return [r for r in self.results if r.status == "incidental"]
 
@@ -178,7 +183,7 @@ class ValidationReport:
         targeted = [r for r in self.results if r.status != "incidental"]
         if not targeted:
             return 0.0
-        exercised = [r for r in targeted if r.status in ("match", "diff")]
+        exercised = [r for r in targeted if r.status in ("match", "diff", "hash_mismatch")]
         return len(exercised) / len(targeted)
 
 
@@ -244,20 +249,34 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
             # Direct match by hash — now compare arguments
             matched_hashes.add(source_hash)
             sweep_args = cfg.get("arguments", {})
+            sweep_config_hash = cfg.get("config_hash")
 
             norm_master = normalize(master_args)
             norm_sweep = normalize(sweep_args)
 
             if norm_master == norm_sweep:
-                report.results.append(
-                    ConfigResult(
-                        config_hash=source_hash,
-                        op_name=op_name,
-                        master_config_id=master_cid,
-                        sweep_config_id=sweep_cid,
-                        status="match",
+                # Arguments match — check if config_hash computation also agrees
+                if sweep_config_hash and sweep_config_hash != source_hash:
+                    report.results.append(
+                        ConfigResult(
+                            config_hash=source_hash,
+                            op_name=op_name,
+                            master_config_id=master_cid,
+                            sweep_config_id=sweep_cid,
+                            status="hash_mismatch",
+                            sweep_config_hash=sweep_config_hash,
+                        )
                     )
-                )
+                else:
+                    report.results.append(
+                        ConfigResult(
+                            config_hash=source_hash,
+                            op_name=op_name,
+                            master_config_id=master_cid,
+                            sweep_config_id=sweep_cid,
+                            status="match",
+                        )
+                    )
             else:
                 diffs = deep_diff(norm_master, norm_sweep)
                 report.results.append(
@@ -268,6 +287,7 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
                         sweep_config_id=sweep_cid,
                         status="diff",
                         diffs=diffs,
+                        sweep_config_hash=sweep_config_hash,
                     )
                 )
 
@@ -307,6 +327,7 @@ def render_report(report: ValidationReport) -> str:
     lines.append(f"**Total master configs:** {report.total_master}")
     lines.append(f"**Exact matches:** {len(report.matched)}")
     lines.append(f"**With diffs:** {len(report.diffed)}")
+    lines.append(f"**Hash mismatch (args match, hash differs):** {len(report.hash_mismatch)}")
     lines.append(f"**Not exercised by sweep:** {len(report.missing_sweep)}")
     lines.append(f"**Incidental (non-target ops):** {len(report.incidental)}")
     lines.append(f"**Coverage:** {report.coverage:.1%}")
@@ -317,18 +338,20 @@ def render_report(report: ValidationReport) -> str:
     for r in report.results:
         if r.status == "incidental":
             continue
-        stats = op_stats.setdefault(r.op_name, {"match": 0, "diff": 0, "missing_sweep": 0})
+        stats = op_stats.setdefault(r.op_name, {"match": 0, "diff": 0, "hash_mismatch": 0, "missing_sweep": 0})
         stats[r.status] = stats.get(r.status, 0) + 1
 
     if op_stats:
         lines.append("## Per-operation summary")
         lines.append("")
-        lines.append("| Operation | Match | Diff | Missing | Total |")
-        lines.append("|-----------|------:|-----:|--------:|------:|")
+        lines.append("| Operation | Match | Diff | Hash Mismatch | Missing | Total |")
+        lines.append("|-----------|------:|-----:|--------------:|--------:|------:|")
         for op in sorted(op_stats):
             s = op_stats[op]
             total = sum(s.values())
-            lines.append(f"| `{op}` | {s['match']} | {s['diff']} | {s['missing_sweep']} | {total} |")
+            lines.append(
+                f"| `{op}` | {s['match']} | {s['diff']} | {s['hash_mismatch']} | {s['missing_sweep']} | {total} |"
+            )
         lines.append("")
 
     # Missing sweep configs (collapsed for brevity)
@@ -345,6 +368,24 @@ def render_report(report: ValidationReport) -> str:
             lines.append(f"| `{r.op_name}` | {r.master_config_id} | `{r.config_hash[:16]}...` |")
         lines.append("")
         lines.append("</details>")
+        lines.append("")
+
+    # Hash mismatches (args identical but config_hash differs)
+    if report.hash_mismatch:
+        lines.append("## Config hash mismatches")
+        lines.append("")
+        lines.append(
+            "These configs have identical normalized arguments but different `config_hash` values, "
+            "indicating a divergence in the hash computation between the master trace and the sweep trace."
+        )
+        lines.append("")
+        lines.append("| Operation | Config ID | Master Hash | Sweep Hash |")
+        lines.append("|-----------|----------:|-------------|------------|")
+        for r in report.hash_mismatch:
+            lines.append(
+                f"| `{r.op_name}` | {r.master_config_id} "
+                f"| `{r.config_hash[:16]}...` | `{(r.sweep_config_hash or '?')[:16]}...` |"
+            )
         lines.append("")
 
     # Diff category summary
@@ -461,7 +502,15 @@ def main() -> int:
 
     if failing_diffs:
         print(
-            f"FAIL: {len(failing_diffs)} config(s) have diffs " f"(ignoring categories: {ignore or 'none'})",
+            f"FAIL: {len(failing_diffs)} config(s) have argument diffs " f"(ignoring categories: {ignore or 'none'})",
+            file=sys.stderr,
+        )
+        return 1
+
+    if report.hash_mismatch:
+        print(
+            f"FAIL: {len(report.hash_mismatch)} config(s) have matching arguments "
+            f"but different config_hash (hash computation divergence)",
             file=sys.stderr,
         )
         return 1

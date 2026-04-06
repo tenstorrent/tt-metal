@@ -104,6 +104,17 @@ jobs:
             ${{ inputs.allow-partial-hash-changes && '--allow-partial' || '' }} \
             --report validation_artifacts/config_hash_preflight.txt
 
+      - name: Publish preflight to summary
+        if: always()
+        run: |
+          if [[ -f validation_artifacts/config_hash_preflight.txt ]]; then
+            echo '## Config Hash Preflight' >> "$GITHUB_STEP_SUMMARY"
+            echo '' >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat validation_artifacts/config_hash_preflight.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Upload master JSON artifact
         if: always()
         uses: actions/upload-artifact@v5
@@ -410,12 +421,6 @@ jobs:
           name: ${{ needs.prepare-validation-inputs.outputs.master-json-artifact-name }}
           path: model_tracer/traced_operations
 
-      - name: Download preflight artifact
-        uses: actions/download-artifact@v5
-        with:
-          name: ${{ needs.prepare-validation-inputs.outputs.preflight-artifact-name }}
-          path: validation_artifacts
-
       - name: Download sweep traces
         uses: actions/download-artifact@v5
         with:
@@ -476,7 +481,15 @@ jobs:
       - name: Fail job on validation mismatches
         if: always() && steps.validate-traces.outputs.validation_exit_code != '0'
         run: |
-          echo "Validation failed with exit code ${{ steps.validate-traces.outputs.validation_exit_code }}"
+          echo "::error::Sweep trace validation failed (exit code ${{ steps.validate-traces.outputs.validation_exit_code }})."
+          echo ""
+          echo "This means one or more of the following:"
+          echo "  - Sweep trace configs have argument diffs against the master trace"
+          echo "  - Coverage fell below the required threshold"
+          echo "  - No sweep trace files were found in the validation_traces directory"
+          echo ""
+          echo "Review the validation summary in the job summary tab or download the"
+          echo "validation-summary artifact for the full report."
           exit 1
 
       - name: Upload validation summary
