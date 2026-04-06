@@ -280,6 +280,24 @@ class ImagePooling(LightweightModule):
 
         attn_kv_len = padded_pool_size if (attn_mask is not None and pool_pad > 0) else pool_size
 
+        # When K/V are padded for tile alignment, attention scores are [..., attn_kv_len] but the
+        # additive mask from the caller still has length pool_size (e.g. 4 vs 32). Extend the
+        # mask with -inf on padded key slots so add/softmax match SDPA behavior.
+        attn_mask_to_use = attn_mask
+        mask_was_padded = False
+        if attn_mask is not None and pool_pad > 0:
+            mask_pad = ttnn.full(
+                (attn_mask.shape[0], attn_mask.shape[1], attn_mask.shape[2], pool_pad),
+                fill_value=float("-inf"),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=attn_mask.device(),
+                memory_config=matmul_output_memory_config,
+            )
+            attn_mask_to_use = ttnn.concat([attn_mask, mask_pad], dim=-1)
+            ttnn.deallocate(mask_pad)
+            mask_was_padded = True
+
         # Q projection
         q = ttnn.linear(
             query,
@@ -351,9 +369,11 @@ class ImagePooling(LightweightModule):
 
         # Apply attention mask (additive mask: 0 for valid, -inf for invalid)
         if attn_mask is not None:
-            # Expand mask from [batch_seq, 1, 1, pool_size] to [batch_seq, num_heads, num_queries, pool_size]
+            # Expand mask from [batch_seq, 1, 1, attn_kv_len] to [batch_seq, num_heads, num_queries, attn_kv_len]
             # Broadcasting should handle this automatically
-            attn_weights = ttnn.add(attn_weights, attn_mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            attn_weights = ttnn.add(attn_weights, attn_mask_to_use, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if mask_was_padded:
+                ttnn.deallocate(attn_mask_to_use)
 
         # Softmax
         attn_probs = ttnn.softmax(attn_weights, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
