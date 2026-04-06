@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
@@ -13,7 +13,6 @@
 
 namespace ttnn::operations::unary {
 
-Tensor frac(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor is_odd(const Tensor&, const std::optional<MemoryConfig>&);
 
 }  // namespace ttnn::operations::unary

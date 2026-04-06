@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,8 @@
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+
+#include <numeric>
 
 namespace ttnn::operations::data_movement {
 
