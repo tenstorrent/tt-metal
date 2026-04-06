@@ -1625,8 +1625,8 @@ def test_wan_decoder_chunked_consistency(
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
         )
 
-    # Run baseline: full-T, no cache
-    logger.info("Running baseline (t_chunk_size=None)")
+    # Run baseline: per-frame cached decode
+    logger.info("Running baseline (t_chunk_size=1)")
     baseline = run_decoder(t_chunk_size=1)
     logger.info(f"Baseline output shape: {baseline.shape}")
 

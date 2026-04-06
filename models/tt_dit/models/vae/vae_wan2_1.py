@@ -1377,6 +1377,7 @@ class WanDecoder(Module):
             1     – one frame at a time with caching (slowest, least memory)
             N > 1 – N frames at a time with caching between chunks
         """
+        assert t_chunk_size is None or t_chunk_size >= 1, f"t_chunk_size must be None or >= 1, got {t_chunk_size}"
         B, T, H, W, C = z_BTHWC.shape
 
         self.clear_cache()
