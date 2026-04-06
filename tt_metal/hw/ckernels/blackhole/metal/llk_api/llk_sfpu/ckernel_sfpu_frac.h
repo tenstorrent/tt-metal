@@ -10,55 +10,48 @@
 namespace ckernel::sfpu {
 
 // frac(x) = x - trunc(x)
-// Uses IEEE 754 bit manipulation to extract the fractional part:
-//   Case 1: E < 0 (|x| < 1) => result = x (entire value is fractional)
-//   Case 2: E >= 23 (x is exact integer) => result = 0
-//   Case 3: 0 <= E < 23 (mixed) => mask mantissa bits, subtract trunc(x) from x
+//
+// Matches PyTorch torch.frac() semantics (truncation toward zero, not floor).
+//
+// Algorithm:
+// 1. Extract unbiased exponent from x.
+// 2. If exp < 0 (|x| < 1): trunc(x) = 0, so frac = x.
+// 3. If exp >= 23: x is already an integer, frac = 0.
+// 4. Otherwise (0 <= exp < 23): compute trunc(x) by masking out fractional bits.
+// 5. Result = x - trunc(x).
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_frac() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::vFloat x = sfpi::dst_reg[0];
 
-        // Get the debiased exponent E of v
-        // For IEEE 754: value = (-1)^s * 2^E * (1 + mantissa)
-        // exexp returns the debiased exponent (biased_exp - 127)
-        sfpi::vInt exp = sfpi::exexp(v);
+        // Default: frac = 0 for integers (exp >= 23)
+        sfpi::vFloat trunc_x = x;
 
-        // Default result is 0 (for the E >= 23 case: exact integer)
-        sfpi::vFloat result = 0.0f;
+        // Extract unbiased exponent
+        sfpi::vInt exp = sfpi::exexp(x);
 
-        // Case 1: E < 0 means |x| < 1, the entire value is fractional
-        v_if(exp < 0) { result = v; }
+        // Case 1: |x| < 1 (exp < 0) — trunc toward zero gives 0
+        v_if(exp < 0) { trunc_x = 0.0f; }
         v_endif;
 
-        // Case 3: 0 <= E < 23 means mixed integer+fractional parts
-        // Create a mask to zero out the fractional mantissa bits
-        // The mantissa has 23 bits. If E bits are integer part,
-        // then (23 - E) bits are fractional. We need to mask those out.
-        // mask = 0xFFFFFFFF << (23 - E) = ~0 << (23 - E)
-        v_if(exp >= 0) {
-            sfpi::vInt shift_amt = sfpi::vInt(23) - exp;
+        // Case 2: 0 <= exp < 23 (has fractional bits in float32)
+        v_if(exp >= 0 && exp < 23) {
+            // Create bitmask to zero out fractional mantissa bits.
+            // IEEE 754 float32 has 23 mantissa bits. For exponent e,
+            // the lowest (23 - e) bits are fractional.
+            // mask = 0xFFFFFFFF << (23 - exp)
+            sfpi::vUInt shift = sfpi::vUInt(23 - exp);
+            sfpi::vInt mask = sfpi::vInt(-1) << shift;
 
-            v_if(shift_amt > 0) {
-                // Build mask: all 1s shifted left by (23 - E) bits
-                // This zeros out the fractional mantissa bits
-                sfpi::vUInt mask = sfpi::shft(sfpi::vUInt(0xFFFFFFFF), shift_amt);
-
-                // Apply mask to get trunc(x): zero out fractional bits
-                sfpi::vInt v_bits = sfpi::reinterpret<sfpi::vInt>(v);
-                sfpi::vFloat trunc_val = sfpi::reinterpret<sfpi::vFloat>(v_bits & sfpi::reinterpret<sfpi::vInt>(mask));
-
-                // frac(x) = x - trunc(x)
-                result = v - trunc_val;
-            }
-            v_endif;
+            // Apply mask to get trunc(x) (round toward zero)
+            sfpi::vInt xi = sfpi::reinterpret<sfpi::vInt>(x);
+            trunc_x = sfpi::reinterpret<sfpi::vFloat>(xi & mask);
         }
         v_endif;
 
-        // Case 2 (E >= 23) is already handled: result stays 0.0f
-
-        sfpi::dst_reg[0] = result;
+        // frac(x) = x - trunc(x)
+        sfpi::dst_reg[0] = x - trunc_x;
         sfpi::dst_reg++;
     }
 }
