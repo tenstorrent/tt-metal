@@ -53,7 +53,7 @@ class DecoderStage(StageKind):
         num_routed_experts: int,
         use_hardcoded_expert_index: bool,
         enable_routing: bool,
-        forward_metadata: bool = False,
+        forward_metadata: bool = True,
     ) -> None:
         if state_dict is None and weights is None:
             raise ValueError("Either state_dict or weights must be provided")

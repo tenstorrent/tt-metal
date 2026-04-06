@@ -38,7 +38,7 @@ def open_mesh_device():
     my_rank = int(ttnn.distributed_context_get_rank())
 
     worker_l1_size = 1431568
-    if my_rank == 14:
+    if my_rank == 62:
         worker_l1_size = 1499000
     """Open mesh device using bh_2d_mesh_device_context (pod pipeline settings)."""
     if not os.environ.get("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"):
