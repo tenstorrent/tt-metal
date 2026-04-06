@@ -106,7 +106,6 @@ jobs:
             --report validation_artifacts/config_hash_preflight.txt
 
       - name: Publish preflight to summary
-        if: always()
         run: |
           if [[ -f validation_artifacts/config_hash_preflight.txt ]]; then
             echo '## Config Hash Preflight' >> "$GITHUB_STEP_SUMMARY"

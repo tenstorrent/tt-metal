@@ -32,6 +32,7 @@ import json
 import shutil
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
 
 from model_tracer.generic_ops_tracer import recompute_config_hashes
@@ -106,10 +107,11 @@ def format_report(json_path, total, changed_entries, decision, allow_partial):
         f"  Decision:        {decision}",
     ]
     if changed_entries:
+        changed_by_operation = Counter(entry["operation"] for entry in changed_entries)
         lines.append("")
-        lines.append("Changed hashes:")
-        for e in changed_entries:
-            lines.append(f"  {e['operation']} config_id={e['config_id']}: " f"{e['old_hash']} -> {e['new_hash']}")
+        lines.append("Changed hashes by operation:")
+        for operation, count in sorted(changed_by_operation.items()):
+            lines.append(f"  {operation}: {count}")
     return "\n".join(lines) + "\n"
 
 
