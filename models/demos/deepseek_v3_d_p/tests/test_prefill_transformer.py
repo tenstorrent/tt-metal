@@ -98,6 +98,7 @@ def test_prefill_transformer(
     pcc_validation,
     input_source,
     use_pretrained,
+    weight_cache_path,
     is_ci_env,
     is_ci_v2_env,
     request,
@@ -122,6 +123,15 @@ def test_prefill_transformer(
     isl_per_chip = isl_total // sp_factor
 
     weight_type = "pretrained" if use_pretrained else "random"
+
+    # Only enable weight caching for pretrained runs
+    if use_pretrained and weight_cache_path is not None:
+        rows, cols = mesh_shape
+        effective_cache_path = weight_cache_path / f"{rows}x{cols}"
+        effective_cache_path.mkdir(parents=True, exist_ok=True)
+    else:
+        effective_cache_path = None
+
     logger.info(f"mesh_shape={mesh_shape}, sp_factor={sp_factor}, tp_factor={tp_factor}")
     logger.info(
         f"isl_total={isl_total}, isl_per_chip={isl_per_chip}, "
@@ -183,6 +193,7 @@ def test_prefill_transformer(
         tp_axis=tp_axis,
         gate_fallback_mode=gate_fallback_mode,
         capacity_factor=capacity_factor,
+        weight_cache_path=effective_cache_path,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_transformer_creation")

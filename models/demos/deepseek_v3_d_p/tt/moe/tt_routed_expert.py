@@ -12,6 +12,7 @@ Unlike TtSharedExpert, this module:
 - Each device holds weights for `experts_per_chip` local experts
 """
 
+from pathlib import Path
 from typing import Optional
 
 import torch
@@ -63,6 +64,8 @@ class TtRoutedExpert(LightweightModule):
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_HIFI2,
+        weight_cache_path: Optional[Path] = None,
+        cache_name_prefix: Optional[str] = None,
     ):
         """
         Initialize TtRoutedExpert module.
@@ -92,6 +95,8 @@ class TtRoutedExpert(LightweightModule):
         self.activations_dtype = activations_dtype
         self.weights_dtype = weights_dtype
         self.compute_kernel_config = compute_kernel_config
+        self.weight_cache_path = weight_cache_path
+        self.cache_name_prefix = cache_name_prefix
 
         # Build program configs for matmuls using optimal parameters from sweeps
         logger.warning(
@@ -135,13 +140,13 @@ class TtRoutedExpert(LightweightModule):
                 )
 
                 self.gate_projs.append(
-                    self._create_weight_from_torch_per_device(gate_weights, name=f"expert_{local_expert_idx}_gate")
+                    self._create_weight_from_torch_per_device(gate_weights, name=f"local_{local_expert_idx}_gate")
                 )
                 self.up_projs.append(
-                    self._create_weight_from_torch_per_device(up_weights, name=f"expert_{local_expert_idx}_up")
+                    self._create_weight_from_torch_per_device(up_weights, name=f"local_{local_expert_idx}_up")
                 )
                 self.down_projs.append(
-                    self._create_weight_from_torch_per_device(down_weights, name=f"expert_{local_expert_idx}_down")
+                    self._create_weight_from_torch_per_device(down_weights, name=f"local_{local_expert_idx}_down")
                 )
         else:
             logger.debug("Creating random weights (replicated across devices)")
@@ -149,6 +154,11 @@ class TtRoutedExpert(LightweightModule):
                 self.gate_projs.append(self._create_random_weight((emb_dim, hidden_dim), name=f"expert_{i}_gate"))
                 self.up_projs.append(self._create_random_weight((emb_dim, hidden_dim), name=f"expert_{i}_up"))
                 self.down_projs.append(self._create_random_weight((hidden_dim, emb_dim), name=f"expert_{i}_down"))
+
+    def _cache_name(self, name: str) -> Optional[str]:
+        if self.weight_cache_path is None or self.cache_name_prefix is None:
+            return None
+        return str(self.weight_cache_path / f"{self.cache_name_prefix}.{name}")
 
     def _create_weight_from_torch_per_device(
         self, torch_weights_per_device: list[torch.Tensor], name: str
@@ -173,12 +183,14 @@ class TtRoutedExpert(LightweightModule):
 
         mesh_mapper = ExpertMapping.get_weights_mesh_mapper(self.mesh_device)
 
-        tt_weight = ttnn.from_torch(
+        tt_weight = ttnn.as_tensor(
             stacked,
             mesh_mapper=mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             dtype=self.weights_dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=self._cache_name(name),
         )
 
         # Remove the mesh dimensions: (1, 1, in_features, out_features) -> (in_features, out_features)

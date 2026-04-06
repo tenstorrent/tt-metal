@@ -2,6 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+from typing import Optional
+
 from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
@@ -52,6 +55,7 @@ class TtPrefillBlock(LightweightModule):
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         activations_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
+        weight_cache_path: Optional[Path] = None,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -71,6 +75,8 @@ class TtPrefillBlock(LightweightModule):
             cluster_axis=tp_axis,
             num_links=num_links,
             topology=topology,
+            weight_cache_path=weight_cache_path,
+            cache_name_prefix=f"layer_{layer_idx}.attn_norm",
         )
 
         # --- MLA ---
@@ -83,6 +89,7 @@ class TtPrefillBlock(LightweightModule):
             sp_axis=sp_axis,
             tp_axis=tp_axis,
             is_balanced=is_balanced,
+            weight_cache_path=weight_cache_path,
         )
 
         # --- FFN norm ---
@@ -93,6 +100,8 @@ class TtPrefillBlock(LightweightModule):
             cluster_axis=tp_axis,
             num_links=num_links,
             topology=topology,
+            weight_cache_path=weight_cache_path,
+            cache_name_prefix=f"layer_{layer_idx}.ffn_norm",
         )
 
         # --- FFN (MoE or dense) ---
@@ -109,6 +118,8 @@ class TtPrefillBlock(LightweightModule):
                 gate_fallback_mode=gate_fallback_mode,
                 activations_dtype=activations_dtype,
                 weights_dtype=weights_dtype,
+                weight_cache_path=weight_cache_path,
+                layer_idx=layer_idx,
             )
         else:
             self.ffn = TtFfn(
@@ -116,6 +127,8 @@ class TtPrefillBlock(LightweightModule):
                 torch_weights=state_dict["ffn_weights"],
                 num_links=num_links,
                 topology=topology,
+                weight_cache_path=weight_cache_path,
+                cache_name_prefix=f"layer_{layer_idx}.ffn",
             )
 
     @staticmethod
@@ -131,6 +144,8 @@ class TtPrefillBlock(LightweightModule):
         gate_fallback_mode,
         activations_dtype,
         weights_dtype,
+        weight_cache_path=None,
+        layer_idx=0,
     ):
         mesh_config = extract_mesh_config(mesh_device)
         sp_factor = mesh_device.shape[sp_axis]
@@ -165,6 +180,8 @@ class TtPrefillBlock(LightweightModule):
             weights_dtype=weights_dtype,
             gate_weights=state_dict["gate_weights"],
             gate_fallback_mode=gate_fallback_mode,
+            weight_cache_path=weight_cache_path,
+            layer_idx=layer_idx,
         )
 
     def forward(self, x: ttnn.Tensor, rope_tensors: dict) -> ttnn.Tensor:
