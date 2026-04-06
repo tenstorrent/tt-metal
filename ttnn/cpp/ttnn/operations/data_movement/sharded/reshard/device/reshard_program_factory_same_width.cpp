@@ -8,6 +8,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -27,15 +28,13 @@ ReshardSameWidthFactory<local_is_output>::cached_program_t ReshardSameWidthFacto
 
     const auto local_shard_spec = local_tensor.shard_spec().value();
     const auto remote_shard_spec = remote_tensor.shard_spec().value();
-    const auto& all_cores = local_shard_spec.grid;
 
     auto remote_core_type = remote_tensor.buffer()->core_type();
     constexpr uint32_t cb_index = tt::CBIndex::c_0;
     constexpr uint32_t cb_scratch_index = tt::CBIndex::c_1;
-    auto local_cores = corerange_to_cores(
-        local_shard_spec.grid, std::nullopt, local_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-    auto remote_cores = corerange_to_cores(
-        remote_shard_spec.grid, std::nullopt, remote_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    auto local_cores = get_optimal_worker_cores_for_sharded_tensor(local_tensor);
+    auto all_cores = CoreRangeSet(ttsl::Span<const CoreCoord>(local_cores));
+    auto remote_cores = get_optimal_worker_cores_for_sharded_tensor(remote_tensor);
 
     uint32_t unit_size, local_units_per_shard, remote_units_per_shard;
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.dtype());

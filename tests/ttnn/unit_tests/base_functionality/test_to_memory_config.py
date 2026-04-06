@@ -2582,3 +2582,53 @@ def test_to_memory_config_tile_interleaved_to_width_sharded_bf8(device):
 
     output_torch = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_input, output_torch, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "src_buffer, dst_buffer",
+    [
+        (ttnn.BufferType.L1, ttnn.BufferType.DRAM),
+        (ttnn.BufferType.DRAM, ttnn.BufferType.L1),
+    ],
+)
+def test_to_memory_config_rm_interleaved_l1_dram(device, src_buffer, dst_buffer):
+    torch.manual_seed(0)
+    shape = [1, 1, 64, 128]
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+
+    src_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, src_buffer)
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=src_mem_config
+    )
+
+    dst_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, dst_buffer)
+    output_tensor = ttnn.to_memory_config(input_tensor, memory_config=dst_mem_config)
+
+    assert output_tensor.memory_config().buffer_type == dst_buffer
+    output_torch = ttnn.to_torch(output_tensor)
+    assert_equal(torch_input, output_torch)
+
+
+@pytest.mark.parametrize(
+    "src_buffer, dst_buffer",
+    [
+        (ttnn.BufferType.L1, ttnn.BufferType.DRAM),
+        (ttnn.BufferType.DRAM, ttnn.BufferType.L1),
+    ],
+)
+def test_to_memory_config_tile_interleaved_l1_dram(device, src_buffer, dst_buffer):
+    torch.manual_seed(0)
+    shape = [1, 1, 64, 128]
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+
+    src_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, src_buffer)
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=src_mem_config
+    )
+
+    dst_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, dst_buffer)
+    output_tensor = ttnn.to_memory_config(input_tensor, memory_config=dst_mem_config)
+
+    assert output_tensor.memory_config().buffer_type == dst_buffer
+    output_torch = ttnn.to_torch(output_tensor)
+    assert_equal(torch_input, output_torch)

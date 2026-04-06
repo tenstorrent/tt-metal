@@ -262,7 +262,6 @@ Tensor to_memory_config(
     const auto original_memory_config = ttnn::get_memory_config(tensor);
     if (original_memory_config.has_value() && original_memory_config.value() == memory_config &&
         !output_tensor.has_value()) {
-        std::cout << "Returning original tensor" << std::endl;
         return tensor;
     }
     std::vector<std::optional<Tensor>> optional_output_tensors;
@@ -275,7 +274,6 @@ Tensor to_memory_config(
         if (tensor.is_sharded()) {
             // reshard
             if (can_use_reshard(tensor, memory_config, dtype, output_tensor)) {
-                std::cout << "Using reshard" << std::endl;
                 return ttnn::reshard(tensor, memory_config, output_tensor);
             }
         }
@@ -285,7 +283,6 @@ Tensor to_memory_config(
                 dtype,
                 optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0))) {
             const bool keep_l1_aligned = false;
-            std::cout << "Using interleaved_to_sharded" << std::endl;
             return ttnn::interleaved_to_sharded(
                 tensor,
                 memory_config,
@@ -296,11 +293,9 @@ Tensor to_memory_config(
     }
     // to_interleaved path
     if (tensor.is_sharded() && can_use_sharded_to_interleaved(tensor, memory_config, dtype, output_tensor)) {
-        std::cout << "Using sharded_to_interleaved" << std::endl;
         return ttnn::prim::sharded_to_interleaved(tensor, memory_config, dtype.value_or(tensor.dtype()), output_tensor);
     }
     // Fallback to ttnn::copy as the default general to_memory_config operation
-    std::cout << "Using copy" << std::endl;
     return ttnn::prim::copy(
         tensor,
         memory_config,

@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/data_movement/sharded/reshard/device/reshard_program_factory_same_height.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -22,17 +23,15 @@ ReshardSameHeightFactory<local_is_output>::cached_program_t ReshardSameHeightFac
     const auto& remote_tensor = local_is_output ? input : output;
     const auto local_shard_spec = local_tensor.shard_spec().value();
     const auto remote_shard_spec = remote_tensor.shard_spec().value();
-    const auto& all_cores = local_shard_spec.grid;
 
     auto* device = input.device();
     tt::tt_metal::Program program{};
 
     const auto remote_core_type = remote_tensor.buffer()->core_type();
     bool interface_with_dram = (remote_core_type == tt::CoreType::DRAM);
-    const auto local_cores = corerange_to_cores(
-        local_shard_spec.grid, std::nullopt, local_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-    const auto remote_cores = corerange_to_cores(
-        remote_shard_spec.grid, std::nullopt, remote_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    auto local_cores = get_optimal_worker_cores_for_sharded_tensor(local_tensor);
+    auto all_cores = CoreRangeSet(ttsl::Span<const CoreCoord>(local_cores));
+    auto remote_cores = get_optimal_worker_cores_for_sharded_tensor(remote_tensor);
 
     const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.dtype());
     const uint32_t element_size = tt::datum_size(data_format);
