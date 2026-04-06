@@ -51,7 +51,7 @@ def random_weights(config, emb_dim: int, vocab_size: int, dtype: torch.dtype):
 
 
 @pytest.mark.parametrize(
-    "batch_seq_len, emb_dim, vocab_size, run_pcc_check",
+    "batch_seq_len, emb_dim, vocab_size, run_full_pcc_check",
     [
         # fmt: off
         pytest.param(32, 1024, 10240, True, id="small"),
@@ -96,7 +96,7 @@ def test_lm_head(
     batch_seq_len: int,
     emb_dim: int,
     vocab_size: int,
-    run_pcc_check: bool,
+    run_full_pcc_check: bool,
     num_links: int,
     topology: ttnn.Topology,
 ):
@@ -105,7 +105,7 @@ def test_lm_head(
 
     Torch dtypes are set inline; TTNN dtypes are derived automatically.
     """
-    if batch_seq_len != ttnn.TILE_SIZE and run_pcc_check:
+    if batch_seq_len != ttnn.TILE_SIZE and run_full_pcc_check:
         pytest.skip("PCC check is only run for seq_len == TILE_SIZE to avoid slicing complexities")
 
     # Derive TTNN dtypes from torch dtypes
@@ -127,7 +127,7 @@ def test_lm_head(
 
     # Run the reference model in case the PCC check is enabled
     weights = None
-    if run_pcc_check:
+    if run_full_pcc_check:
         config, weights = random_weights(config_only, emb_dim, vocab_size, torch_weights_dtype)
 
         # Create PyTorch reference model (Linear without bias), matching dtypes
@@ -163,14 +163,15 @@ def test_lm_head(
     logger.debug(f"Created ttnn input (sp and tp sharding): {tt_input.shape}")
 
     logger.debug("Running ttnn forward pass")
-    tt_output = tt_model(tt_input)
+    global_token_id = batch_seq_len * dispatch_group_size - 1
+    tt_output, token_offset = tt_model(tt_input, global_token_id=global_token_id)
     logger.debug(f"TTNN output shape (sharded): {tt_output.shape}")
 
-    # For now, we only run the PCC check on input tensors with seq_len == TILE_SIZE to avoid slicing
+    # For now, we only run the full PCC check on input tensors with seq_len == TILE_SIZE to avoid slicing
     # because we have yet to decide in which order tokens will be distributed in seq_len (See Zigzag
     # attention for more details).
-    if not run_pcc_check:
-        logger.debug("run_pcc_check=False, skipping PCC validation")
+    if not run_full_pcc_check:
+        logger.debug("run_full_pcc_check=False, skipping full PCC validation")
         return
 
     # Convert and compare
