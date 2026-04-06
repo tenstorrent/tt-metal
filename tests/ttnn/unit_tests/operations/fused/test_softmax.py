@@ -9,7 +9,7 @@ import torch.nn.functional as F
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import torch_random, skip_with_llk_assert
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)

@@ -6,8 +6,12 @@ import pytest
 import ttnn
 
 from tests.ttnn.unit_tests.operations.sdpa.mla_test_utils import run_flash_mla_prefill_impl
+from models.common.utility_functions import skip_with_llk_assert
 
 
+@skip_with_llk_assert(
+    "Hit LLK ASSERT for unpack reconfigure. Might be related to significant code size overhead introduced by many LLK_ASSERT-s. Issue: #41480."
+)
 @pytest.mark.parametrize(
     "batch, seq_len, nh, nkv, kv_lora_rank, d_rope",
     # batch, seq_len, num heads q, num heads kv, kv lora rank, dim rope
