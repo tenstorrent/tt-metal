@@ -70,6 +70,17 @@ void kernel_main() {
     const uint32_t mcast_num_dests = get_arg_val<uint32_t>(argidx++);
     const uint32_t mcast_sender_wait = get_arg_val<uint32_t>(argidx++);
 
+    // K chain runtime args (for MLA mode when K is shared across heads)
+    const uint32_t k_is_chain_participant = get_arg_val<uint32_t>(argidx++);
+    const uint32_t k_is_injector = get_arg_val<uint32_t>(argidx++);
+    const uint32_t k_is_sink = get_arg_val<uint32_t>(argidx++);
+    const uint32_t k_chain_batch = get_arg_val<uint32_t>(argidx++);
+    const uint32_t k_prev_physical_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t k_prev_physical_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t k_next_physical_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t k_next_physical_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t k_next_core_total_reads = get_arg_val<uint32_t>(argidx++);
+
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         true, /* wait_for_op_signal */
         argidx);
@@ -85,6 +96,14 @@ void kernel_main() {
         get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 2));
     constexpr bool mcast_enabled = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 3) == 1;
 
+    // K chain semaphores (for MLA mode when K is shared across heads)
+    uint32_t k_sender_semaphore_addr =
+        get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 4));
+    uint32_t k_receiver_semaphore_addr =
+        get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 5));
+    uint32_t k_valid_semaphore_addr =
+        get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 6));
+
     // VALID sem used to write L1-L1 valid semaphore
     volatile tt_l1_ptr uint32_t* valid_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(valid_semaphore_addr);
@@ -96,12 +115,29 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* sender_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
 
+    // K chain semaphore pointers
+    volatile tt_l1_ptr uint32_t* k_valid_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(k_valid_semaphore_addr);
+    *(k_valid_semaphore_addr_ptr) = VALID;
+
+    volatile tt_l1_ptr uint32_t* k_receiver_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(k_receiver_semaphore_addr);
+
+    volatile tt_l1_ptr uint32_t* k_sender_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(k_sender_semaphore_addr);
+
     uint64_t receiver_semaphore_noc_addr = 0;
     uint64_t mcast_base_noc_addr = 0;
     uint64_t mcast_sem_noc_addr = 0;
     uint32_t sender_wait_count = 1;
 
     const uint64_t sender_semaphore_noc_addr = get_noc_addr(prev_physical_x, prev_physical_y, sender_semaphore_addr);
+
+    // K chain NOC addresses
+    const uint64_t k_sender_semaphore_noc_addr =
+        get_noc_addr(k_prev_physical_x, k_prev_physical_y, k_sender_semaphore_addr);
+    const uint64_t k_receiver_semaphore_noc_addr =
+        get_noc_addr(k_next_physical_x, k_next_physical_y, k_receiver_semaphore_addr);
 
     if constexpr (mcast_enabled) {
         if (is_injector) {
@@ -161,6 +197,9 @@ void kernel_main() {
     // Tracks whether Q has been pushed for q_per_core == 1 optimization.
     // When q_per_core == 1, Q is identical across ring iterations so we only push it once.
     bool q_pushed = false;
+
+    // Track K read count for K chain forwarding (batch-level, for MLA mode)
+    uint32_t k_total_reads = 0;
 
     /**
      * Iterate over ring indices.
@@ -234,11 +273,17 @@ void kernel_main() {
                 q_end_seq_tile = local_padded_Nt;
             }
 
-            // Chain forwarding conditions are k_chunk-invariant — compute once before the KV loop
+            // V chain forwarding conditions (head-level, existing logic)
             const uint32_t q_iter_local = q_iter;
-            const bool should_forward = is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
-                                        (q_iter_local < next_core_q_chunks);
-            const bool should_receive = is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
+            const bool should_forward_v = is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
+                                          (q_iter_local < next_core_q_chunks);
+            const bool should_receive_v =
+                is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
+
+            // K chain forwarding conditions (batch-level, for MLA mode)
+            // K chain is active when k_is_chain_participant is true (NHK < NH case)
+            const bool should_receive_k = k_is_chain_participant && !k_is_injector && (nb == k_chain_batch);
+            // Note: should_forward_k depends on k_total_reads which is updated inside the k_chunk loop
 
             // When q_per_core == 1, Q is identical across ring iterations: compute keeps it
             // fronted in the CB, so we only need to read it once on the first active ring iteration.
@@ -291,14 +336,14 @@ void kernel_main() {
                     }
                 }
 
-                // K: either read locally (injector or not participant) or receive from previous core
+                // K: either read locally (injector or not participant) or receive from K chain
                 cb_reserve_back(cb_k_in, k_chunk_tiles);
                 uint32_t cb_k_start_address = get_write_ptr(cb_k_in);
-                if (should_receive) {
-                    // Receive forwarded K chunk from previous core
-                    noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
-                    noc_semaphore_inc(sender_semaphore_noc_addr, 1);
-                    noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
+                if (should_receive_k) {
+                    // Receive forwarded K chunk from K chain (batch-level chain for MLA)
+                    noc_semaphore_set(k_receiver_semaphore_addr_ptr, INVALID);
+                    noc_semaphore_inc(k_sender_semaphore_noc_addr, 1);
+                    noc_semaphore_wait(k_receiver_semaphore_addr_ptr, VALID);
                     cb_push_back(cb_k_in, k_chunk_tiles);
                 } else {
                     read_block(
@@ -312,28 +357,20 @@ void kernel_main() {
                     );
                 }
 
-                // Forward K chunk to next core(s): initiate async write (NOC write channel)
-                // For mcast: send linked data + companion semaphore back-to-back.
-                if (should_forward) {
-                    noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
-                    noc_semaphore_set(sender_semaphore_addr_ptr, 0);
-                    if constexpr (mcast_enabled) {
-                        uint64_t k_mcast_addr = mcast_base_noc_addr | cb_k_start_address;
-                        noc_async_write_multicast(
-                            cb_k_start_address,
-                            k_mcast_addr,
-                            k_chunk_tiles * k_tile_bytes,
-                            mcast_num_dests,
-                            true /* linked: semaphore mcast follows */);
-                        noc_semaphore_set_multicast(valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
-                    } else {
-                        uint64_t k_unicast_data_addr =
-                            get_noc_addr(next_physical_x, next_physical_y, cb_k_start_address);
-                        noc_async_write(cb_k_start_address, k_unicast_data_addr, k_chunk_tiles * k_tile_bytes);
-                        noc_async_writes_flushed();
-                        noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
-                    }
+                // Forward K chunk via K chain (batch-level, for MLA mode)
+                // Compute should_forward_k here since it depends on k_total_reads
+                const bool should_forward_k = k_is_chain_participant && !k_is_sink && (nb == k_chain_batch) &&
+                                              (k_total_reads < k_next_core_total_reads);
+                if (should_forward_k) {
+                    noc_semaphore_wait(k_sender_semaphore_addr_ptr, 1);
+                    noc_semaphore_set(k_sender_semaphore_addr_ptr, 0);
+                    uint64_t k_unicast_data_addr =
+                        get_noc_addr(k_next_physical_x, k_next_physical_y, cb_k_start_address);
+                    noc_async_write(cb_k_start_address, k_unicast_data_addr, k_chunk_tiles * k_tile_bytes);
+                    noc_async_writes_flushed();
+                    noc_semaphore_set_remote(k_valid_semaphore_addr, k_receiver_semaphore_noc_addr);
                 }
+                k_total_reads++;
 
                 // Download Q on the first K iteration — after K is downloaded and forwarded.
                 // Push Q one subblock at a time so compute can start QK matmul incrementally.
@@ -367,11 +404,11 @@ void kernel_main() {
                     q_pushed = true;
                 }
 
-                // V: either read locally (injector or not participant) or receive from previous core
+                // V: either read locally (injector or not participant) or receive from V chain (head-level)
                 cb_reserve_back(cb_v_in, v_chunk_tiles);
                 uint32_t cb_v_start_address = get_write_ptr(cb_v_in);
-                if (should_receive) {
-                    // Receive forwarded V chunk from previous core
+                if (should_receive_v) {
+                    // Receive forwarded V chunk from V chain (head-level chain)
                     noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
                     noc_semaphore_inc(sender_semaphore_noc_addr, 1);
                     noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
@@ -388,8 +425,8 @@ void kernel_main() {
                     );
                 }
 
-                // Forward V chunk to next core(s) if applicable
-                if (should_forward) {
+                // Forward V chunk via V chain (head-level) if applicable
+                if (should_forward_v) {
                     noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
                     noc_semaphore_set(sender_semaphore_addr_ptr, 0);
                     if constexpr (mcast_enabled) {

@@ -432,12 +432,21 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     auto receiver_semaphore_id = CreateSemaphore(program, core_grid, INVALID);
     auto valid_semaphore_id = CreateSemaphore(program, core_grid, VALID);
 
+    // K chain semaphores (separate from V chain semaphores, used when NHK < NH for MLA)
+    auto k_sender_semaphore_id = CreateSemaphore(program, core_grid, INVALID);
+    auto k_receiver_semaphore_id = CreateSemaphore(program, core_grid, INVALID);
+    auto k_valid_semaphore_id = CreateSemaphore(program, core_grid, VALID);
+
     // Append semaphore ids to reader compile-time args (must match reader kernel expectations)
     const auto sem_args_offset = reader_compile_time_args.size();
     reader_compile_time_args.push_back(sender_semaphore_id);
     reader_compile_time_args.push_back(receiver_semaphore_id);
     reader_compile_time_args.push_back(valid_semaphore_id);
     reader_compile_time_args.push_back(0);  // mcast_enabled placeholder (patched after chain construction)
+    // K chain semaphores
+    reader_compile_time_args.push_back(k_sender_semaphore_id);
+    reader_compile_time_args.push_back(k_receiver_semaphore_id);
+    reader_compile_time_args.push_back(k_valid_semaphore_id);
 
     std::vector<uint32_t> writer_compile_time_args = {
         B,
@@ -758,8 +767,20 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         uint32_t mcast_sender_wait = 0;
     };
 
+    // K chain info for MLA mode (K shared across heads)
+    struct CoreKChainInfo {
+        bool participates = false;
+        bool is_injector = false;
+        bool is_sink = false;
+        uint32_t batch = 0;
+        CoreCoord prev_physical = CoreCoord{0, 0};
+        CoreCoord next_physical = CoreCoord{0, 0};
+        uint32_t next_core_total_k_reads = 0;
+    };
+
     std::vector<CoreWork> core_work(num_cores);
     std::vector<CoreChainInfo> core_chain_info(num_cores);
+    std::vector<CoreKChainInfo> core_k_chain_info(num_cores);
     const uint32_t total_heads = B * NH;
     std::vector<std::vector<HeadSegmentRef>> head_segments(total_heads);
 
@@ -1085,6 +1106,80 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             static_cast<uint32_t>(candidates.size()));
     }
 
+    // Build K chains: one chain per batch when NHK < NH (MLA case)
+    // K is shared across all heads, so we build a single chain spanning all cores per batch
+    if (NHK < NH) {
+        // Helper: count total K reads for a core (conservative upper bound)
+        const uint32_t total_kv_chunks = num_local_k_chunks + num_joint_k_chunks;
+        const uint32_t ring_size = args.all_gather_operation_attributes.ring_size;
+        auto count_total_k_reads = [total_kv_chunks, ring_size](const CoreWork& work) -> uint32_t {
+            return work.global_q_count * total_kv_chunks * ring_size;
+        };
+
+        // Group active cores by batch
+        std::map<uint32_t, std::vector<uint32_t>> batch_to_cores;
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            if (core_work[i].global_q_count == 0) {
+                continue;
+            }
+            for (const auto& hw : core_work[i].head_work) {
+                batch_to_cores[hw.batch].push_back(i);
+                break;  // Each core only counted once per batch
+            }
+        }
+
+        for (auto& [batch, core_indices] : batch_to_cores) {
+            if (core_indices.size() < 2) {
+                continue;
+            }
+
+            // Sort by physical core order for linear chain
+            std::sort(core_indices.begin(), core_indices.end(), [&](uint32_t a, uint32_t b) {
+                const auto& pa = core_work[a].physical_core;
+                const auto& pb = core_work[b].physical_core;
+                return (pa.y < pb.y) || (pa.y == pb.y && pa.x < pb.x);
+            });
+
+            // Find injector: first core with single head segment
+            std::optional<std::size_t> injector_idx;
+            for (std::size_t idx = 0; idx + 1 < core_indices.size(); ++idx) {
+                if (core_work[core_indices[idx]].head_work.size() == 1) {
+                    injector_idx = idx;
+                    break;
+                }
+            }
+            if (!injector_idx.has_value()) {
+                continue;
+            }
+
+            // Build chain from injector forward
+            for (std::size_t idx = injector_idx.value(); idx < core_indices.size(); ++idx) {
+                uint32_t ci = core_indices[idx];
+                auto& kc = core_k_chain_info[ci];
+                kc.participates = true;
+                kc.batch = batch;
+                kc.is_injector = (idx == injector_idx.value());
+                kc.is_sink = (idx == core_indices.size() - 1);
+
+                if (idx > injector_idx.value()) {
+                    kc.prev_physical = core_work[core_indices[idx - 1]].physical_core;
+                }
+                if (idx + 1 < core_indices.size()) {
+                    uint32_t next_ci = core_indices[idx + 1];
+                    kc.next_physical = core_work[next_ci].physical_core;
+                    kc.next_core_total_k_reads = count_total_k_reads(core_work[next_ci]);
+                }
+            }
+
+            log_debug(
+                tt::LogOp,
+                "K chain for batch {}: {} cores, injector at core {}",
+                batch,
+                core_indices.size() - injector_idx.value(),
+                core_indices[injector_idx.value()]);
+        }
+    }
+
     // Update mcast_enabled compile-time arg now that chain construction is complete
     reader_compile_time_args[sem_args_offset + 3] = (mcast_chains > 0) ? 1 : 0;
 
@@ -1175,6 +1270,18 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         reader_args.push_back(chain.next_core_q_chunks);
         reader_args.push_back(chain.mcast_num_dests);
         reader_args.push_back(chain.mcast_sender_wait);
+
+        // K chain runtime args (for MLA mode when K is shared across heads)
+        const auto& k_chain = core_k_chain_info.at(i);
+        reader_args.push_back(static_cast<uint32_t>(k_chain.participates));
+        reader_args.push_back(static_cast<uint32_t>(k_chain.is_injector));
+        reader_args.push_back(static_cast<uint32_t>(k_chain.is_sink));
+        reader_args.push_back(k_chain.batch);
+        reader_args.push_back(static_cast<uint32_t>(k_chain.prev_physical.x));
+        reader_args.push_back(static_cast<uint32_t>(k_chain.prev_physical.y));
+        reader_args.push_back(static_cast<uint32_t>(k_chain.next_physical.x));
+        reader_args.push_back(static_cast<uint32_t>(k_chain.next_physical.y));
+        reader_args.push_back(k_chain.next_core_total_k_reads);
 
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_args);
