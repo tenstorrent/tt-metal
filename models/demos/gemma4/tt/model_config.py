@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import torch
+from loguru import logger
 from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM
 
@@ -118,7 +119,7 @@ class Gemma4ModelArgs:
 
     @staticmethod
     def load_state_dict(weights_path, dummy_weights=False):
-        """Load model state dict from HuggingFace checkpoint.
+        """Load model state dict from safetensors (fast) or HF checkpoint.
 
         Args:
             weights_path: Path to model weights directory
@@ -130,10 +131,33 @@ class Gemma4ModelArgs:
         if dummy_weights:
             return {}
 
+        # Fast path: load directly from safetensors (avoids instantiating full HF model)
+        from pathlib import Path
+
+        safetensor_files = sorted(Path(weights_path).glob("*.safetensors"))
+        if safetensor_files:
+            from safetensors.torch import load_file
+
+            logger.info(f"Loading {len(safetensor_files)} safetensor files from {weights_path}")
+            state_dict = {}
+            for f in tqdm(safetensor_files, desc="Loading safetensors"):
+                shard = load_file(str(f))
+                state_dict.update(shard)
+
+            # Convert to bfloat16 if needed
+            for k, v in state_dict.items():
+                if v.dtype == torch.float32:
+                    state_dict[k] = v.to(torch.bfloat16)
+
+            logger.info(f"Loaded {len(state_dict)} tensors")
+            return state_dict
+
+        # Fallback: load via HF AutoModel (slow for large models)
+        logger.info(f"No safetensors found, loading via AutoModelForCausalLM from {weights_path}")
         model = AutoModelForCausalLM.from_pretrained(weights_path, torch_dtype="auto")
         state_dict = model.state_dict()
+        del model  # Free memory
 
-        # Convert to bfloat16 if needed
         if any(v.dtype == torch.float32 for v in state_dict.values()):
             state_dict = {
                 k: v.to(torch.bfloat16) if v.dtype == torch.float32 else v

@@ -41,6 +41,9 @@ def create_tt_model(
 
     hf_config = Gemma4ModelArgs.load_hf_config(model_path)
     model_args = Gemma4ModelArgs.from_hf_config(hf_config)
+    # Store the real HF text config for RoPE creation (Gemma4TextRotaryEmbedding needs it)
+    hf_text_config = getattr(hf_config, "text_config", hf_config)
+    model_args._hf_text_config = hf_text_config
 
     if num_layers is not None:
         model_args.num_hidden_layers = num_layers
@@ -53,8 +56,12 @@ def create_tt_model(
             mesh_config = MeshConfig((1, 1), decode=ModeConfig(tp=1))
 
     is_mesh = hasattr(mesh_device, "shape")
-    num_links = 1 if not is_mesh or mesh_device.get_num_devices() <= 2 else 4
-    ccl_manager = CCLManager(mesh_device, num_links=num_links) if is_mesh else None
+    num_devices = mesh_device.get_num_devices() if is_mesh else 1
+    if is_mesh and num_devices > 1:
+        num_links = 1 if num_devices <= 2 else 4
+        ccl_manager = CCLManager(mesh_device, num_links=num_links)
+    else:
+        ccl_manager = None
 
     if state_dict is None:
         state_dict = Gemma4ModelArgs.load_state_dict(model_path, dummy_weights=False)

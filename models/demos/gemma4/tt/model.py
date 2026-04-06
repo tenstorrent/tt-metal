@@ -92,7 +92,13 @@ class Gemma4Model:
         n_layers = num_layers or hf_config.num_hidden_layers
 
         # RoPE caches per layer type (sliding vs global)
-        self.rope_caches = create_rope_caches(mesh_device, hf_config, max_seq_len)
+        # Needs real HF text config (set by create_tt_model via _hf_text_config)
+        hf_text_config = getattr(hf_config, "_hf_text_config", None)
+        if hf_text_config is not None:
+            self.rope_caches = create_rope_caches(mesh_device, hf_text_config, max_seq_len)
+        else:
+            # Fallback: no automatic RoPE — caller must pass rope_mats explicitly
+            self.rope_caches = {}
 
         # Embedding
         is_mesh = hasattr(mesh_device, "shape")
