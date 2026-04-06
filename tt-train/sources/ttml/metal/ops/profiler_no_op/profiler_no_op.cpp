@@ -1,0 +1,15 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "profiler_no_op.hpp"
+
+#include "device/profiler_no_op_device_operation.hpp"
+
+namespace ttml::metal {
+
+ttnn::Tensor profiler_no_op(const ttnn::Tensor& input_tensor, const std::string& identifier) {
+    return ttnn::prim::ttml_profiler_no_op(input_tensor, identifier);
+}
+
+}  // namespace ttml::metal

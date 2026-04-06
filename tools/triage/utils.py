@@ -1,0 +1,172 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+from __future__ import annotations
+import os
+import sys
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from rich.theme import Theme
+
+
+def should_use_color() -> bool:
+    """
+    Determine if color output should be enabled based on environment.
+
+    Returns:
+        bool: True if colors should be used, False otherwise.
+
+    Checks:
+        - TT_TRIAGE_COLOR environment variable (0 = disabled, other values = enabled)
+        - Whether stdout is connected to a TTY (terminal)
+    """
+    # Respect TT_TRIAGE_COLOR environment variable
+    color_env = os.environ.get("TT_TRIAGE_COLOR")
+    if color_env is not None:
+        return color_env != "0"
+
+    # Check if output is going to a terminal
+    return sys.stdout.isatty()
+
+
+def create_console_theme(disable_colors: bool) -> Theme:
+    """Create a Rich theme for console output based on color support."""
+    from rich.theme import Theme
+    from rich.style import Style
+
+    blue = Style(color="blue")
+    red = Style(color="red")
+    green = Style(color="green")
+    grey = Style(color="grey85")
+    yellow = Style(color="yellow")
+    styles: dict[str, str | Style] = {
+        "command": green,  # Command that user should execute
+        "debug": green,  # Debug messages
+        "info": blue,  # Informational messages
+        "error": red,  # Error messages
+        "status": blue,  # Status messages
+        "warning": yellow,  # Warning messages
+        "verbose": grey,  # Verbose output messages
+        "progress.tasks": "gray50",  # Progress task numbers
+        "progress.description": "grey85",  # Progress description
+        "blue": blue,
+        "red": red,
+        "green": green,
+        "grey": grey,
+        "yellow": yellow,
+    }
+    if disable_colors or not should_use_color():
+        for key in styles.keys():
+            styles[key] = ""
+    return Theme(styles)
+
+
+# Verbosity and logging methods
+from enum import Enum
+
+
+class Verbosity(Enum):
+    NONE = 0
+    ERROR = 1
+    WARN = 2
+    INFO = 3
+    VERBOSE = 4
+    DEBUG = 5
+
+    @staticmethod
+    def set(verbosity: "Verbosity | int") -> None:
+        """Set the verbosity level of messages shown.
+
+        Args:
+            verbosity (int): Verbosity level.
+                1: ERROR
+                2: WARN
+                3: INFO
+                4: VERBOSE
+                5: DEBUG
+        """
+        global VERBOSITY_VALUE
+
+        VERBOSITY_VALUE = Verbosity(verbosity)
+
+    @staticmethod
+    def get() -> "Verbosity":
+        """Get the verbosity level of messages shown.
+
+        Returns:
+            int: Verbosity level.
+                1: ERROR
+                2: WARN
+                3: INFO
+                4: VERBOSE
+                5: DEBUG
+        """
+        global VERBOSITY_VALUE
+
+        return VERBOSITY_VALUE
+
+    @staticmethod
+    def supports(verbosity: "Verbosity") -> bool:
+        """Check if the verbosity level is supported and should be printed.
+
+        Returns:
+            bool: True if supported, False otherwise.
+        """
+        global VERBOSITY_VALUE
+
+        return VERBOSITY_VALUE.value >= verbosity.value
+
+
+VERBOSITY_VALUE: Verbosity = Verbosity.INFO
+
+
+def ERROR(s, **kwargs):
+    if Verbosity.supports(Verbosity.ERROR):
+        try:
+            from triage import console
+
+            console.print(f"[error]{s}[/]", **kwargs)
+        except ImportError:
+            print(f"ERROR: {s}", **kwargs)
+
+
+def WARN(s, **kwargs):
+    if Verbosity.supports(Verbosity.WARN):
+        try:
+            from triage import console
+
+            console.print(f"[warning]{s}[/]", **kwargs)
+        except ImportError:
+            print(f"WARNING: {s}", **kwargs)
+
+
+def DEBUG(s, **kwargs):
+    if Verbosity.supports(Verbosity.DEBUG):
+        try:
+            from triage import console
+
+            console.print(f"[debug]{s}[/]", **kwargs)
+        except ImportError:
+            print(f"DEBUG: {s}", **kwargs)
+
+
+def INFO(s, **kwargs):
+    if Verbosity.supports(Verbosity.INFO):
+        try:
+            from triage import console
+
+            console.print(f"[info]{s}[/]", **kwargs)
+        except ImportError:
+            print(f"INFO: {s}", **kwargs)
+
+
+def VERBOSE(s, **kwargs):
+    if Verbosity.supports(Verbosity.VERBOSE):
+        try:
+            from triage import console
+
+            console.print(f"[verbose]{s}[/]", **kwargs)
+        except ImportError:
+            print(f"VERBOSE: {s}", **kwargs)

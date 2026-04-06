@@ -1,0 +1,14 @@
+asic_to_fabric_node_mapping:
+  hostnames:
+    - hostname: g14glx03
+      mesh:
+        - mesh: 0
+        - chips:
+            - umd_chip_id: 0
+              asic_position:
+                tray_id: 0
+                asic_location: 0
+              fabric_node_id:
+                mesh_id: 0
+                chip_id: 0
+              asic_id: 4476187513037

@@ -1,0 +1,51 @@
+# BGE-Large-EN-v1.5 Knowledge Base
+# Add one entry per line for semantic search demonstration
+
+# AI and Machine Learning
+Artificial intelligence enables machines to learn from experience and perform human-like tasks.
+Machine learning algorithms can identify patterns in large datasets automatically.
+Deep learning uses neural networks with multiple layers to process complex data.
+Natural language processing allows computers to understand and generate human language.
+Computer vision systems can recognize objects and scenes in images and videos.
+
+# Technology and Computing
+Cloud computing provides on-demand access to computing resources over the internet.
+Cybersecurity protects systems and networks from digital attacks and threats.
+Blockchain technology enables secure and transparent distributed ledger systems.
+Quantum computing uses quantum mechanical phenomena to perform calculations.
+Edge computing processes data closer to where it is generated for faster response times.
+
+# Data Science
+Data analysis involves inspecting and modeling data to discover useful information.
+Big data refers to extremely large datasets that require special tools to process.
+Data visualization helps communicate complex information through graphics and charts.
+Predictive analytics uses historical data to forecast future outcomes.
+Statistical modeling describes relationships between variables using mathematical equations.
+
+# Software Development
+Agile methodology emphasizes iterative development and customer collaboration.
+DevOps combines software development and IT operations for faster delivery.
+Microservices architecture structures applications as collections of loosely coupled services.
+Version control systems track changes to source code over time.
+Continuous integration automatically tests and integrates code changes.
+
+# Internet and Web
+The internet is a global network of interconnected computer networks.
+Web browsers allow users to access and navigate websites and web applications.
+APIs enable different software applications to communicate with each other.
+HTTP protocol facilitates communication between web servers and clients.
+RESTful services provide a standard way to create web APIs.
+
+# Databases
+Relational databases organize data into tables with rows and columns.
+NoSQL databases provide flexible schemas for storing unstructured data.
+Database indexing improves query performance by creating fast lookup structures.
+SQL is the standard language for managing and querying relational databases.
+Database normalization reduces data redundancy and improves data integrity.
+
+# General Knowledge
+The solar system consists of the sun and objects that orbit around it.
+Photosynthesis is the process by which plants convert light energy into chemical energy.
+The human body contains approximately 37 trillion cells.
+Climate change refers to long-term shifts in global temperature and weather patterns.
+Renewable energy comes from natural sources that are constantly replenished.

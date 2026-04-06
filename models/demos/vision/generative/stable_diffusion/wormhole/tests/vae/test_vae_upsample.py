@@ -1,0 +1,77 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+import pytest
+import torch
+
+import ttnn
+from models.demos.vision.generative.stable_diffusion.wormhole.common import SD_L1_SMALL_SIZE
+from models.demos.vision.generative.stable_diffusion.wormhole.sd_helper_funcs import get_reference_vae
+from models.demos.vision.generative.stable_diffusion.wormhole.tt.vae.ttnn_vae_upsample import UpsampleBlock
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize(
+    "input_channels, input_height, input_width, out_channels, output_height, output_width, block_id",
+    [
+        (512, 64, 64, 512, 128, 128, 0),
+        (512, 128, 128, 512, 256, 256, 1),
+        (256, 256, 256, 256, 512, 512, 2),
+    ],
+)
+def test_upsample(
+    device,
+    input_channels,
+    input_height,
+    input_width,
+    out_channels,
+    output_height,
+    output_width,
+    block_id,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
+):
+    vae = get_reference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
+    torch_upsample = vae.decoder.up_blocks[block_id].upsamplers[0]
+
+    # Run pytorch model
+    torch_input = torch.randn([1, input_channels, input_height, input_width])
+    torch_output = torch_upsample(torch_input)
+
+    # Initialize ttnn model
+    ttnn_model = UpsampleBlock(
+        torch_upsample,
+        device,
+        input_channels,
+        input_height,
+        input_width,
+        out_channels,
+        output_height,
+        output_width,
+    )
+
+    # Prepare ttnn input
+    ttnn_input = ttnn.from_torch(
+        torch_input.permute([0, 2, 3, 1]),
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Run ttnn model twice to test program cache and weights reuse
+    ttnn_output = ttnn_model(ttnn_input)
+    ttnn_output.deallocate(True)
+    ttnn_output = ttnn_model(ttnn_input)
+
+    ttnn_output = ttnn.reshape(
+        ttnn_output,
+        [1, output_height, output_width, out_channels],
+    )
+    ttnn_output = ttnn.permute(ttnn_output, [0, 3, 1, 2])
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_output, ttnn_output, 0.99)

@@ -1,0 +1,123 @@
+name: "[internal] Docs build and deploy to GitHub pages on main impl"
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: false
+        type: string
+        default: latest
+      docker-image:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      dry-run:
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  build-docs:
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+          path: /work
+      - name: Install Wheel
+        run: |
+          WHEEL_FILENAME=$(ls -1 *.whl)
+          uv pip install $WHEEL_FILENAME
+      - name: Build Docs
+        timeout-minutes: 15
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          ./tests/scripts/run_build_docs.sh
+      - name: Prepare artifact - move output
+        run: |
+          mkdir gh_pages
+          mv docs/build/html gh_pages/${{ inputs.version }}
+      - name: Upload docs artifact (skipped for dry run)
+        if: ${{ !inputs.dry-run }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gh_pages_${{ inputs.version }}
+          path: /work/gh_pages/${{ inputs.version }}/
+          if-no-files-found: error
+
+  deploy-docs:
+    needs: build-docs
+    if: ${{ !inputs.dry-run && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
+    runs-on: ubuntu-latest
+    concurrency:
+      # Note that people may spam the post-commit pipeline on their branch, and
+      # we have this docs pipeline in the post-commit pipeline, then people
+      # would have to wait until the previous one fully completes. That may be
+      # ok because each post-commit pipeline definitely takes more than 30 min
+      group: "pages-${{ github.ref }}"
+      cancel-in-progress: false # WARNING: This will only queue a single job; all else will still be cancelled!
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: ⬇️ Checkout
+        # This is needed by the pages-deploy action so
+        # that the folder is initialized for .git
+        uses: actions/checkout@v4
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        timeout-minutes: 10
+        with:
+          name: gh_pages_${{ inputs.version }}
+          path: gh_pages/${{ inputs.version }}
+      - name: Deploy to GitHub Pages
+        uses: JamesIves/github-pages-deploy-action@v4
+        id: deployment
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: gh-pages
+          target-folder: ${{ inputs.version }}
+          folder: ./gh_pages/${{ inputs.version }}
+          force: false
+      - name: Delete artifact if deployment failed
+        # When the deployment API call fails, the artifacts are not cleaned up correctly
+        # and the next attempt (!) run will cause an error.
+        # See more:
+        # https://github.com/tenstorrent/tt-metal/issues/17623
+        if: ${{ failure() }}
+        uses: geekyeggo/delete-artifact@v5
+        continue-on-error: true
+        with:
+            name: github-pages
+      - name: Check the docs deployment is up
+        if: ${{ github.ref == 'refs/heads/main' }}
+        # TODO: Enhance this by looping over all the published versions in docs/published_versions.json
+        run: |
+          set -eu # basic shell hygiene
+          curl --fail -LI https://docs.tenstorrent.com/tt-metal/latest/ttnn/index.html -o /dev/null -s

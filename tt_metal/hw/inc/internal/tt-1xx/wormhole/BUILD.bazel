@@ -1,0 +1,46 @@
+
+config_setting(
+    name = "ENABLE_FWLOG",
+    define_values = {
+        "disable_fwlog": "0",
+        "ckdebug": "1",
+    },
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "ENABLE_FWASSERT",
+    define_values = {
+        "fwassert": "1",
+    },
+    visibility = ["//visibility:public"],
+)
+
+headers = glob(["**/*.h", "**/*.hpp", "**/*.h"]) + ["cmds.def"]
+sources = glob(["**/*.cc", "**/*.cpp"])
+
+cc_library(
+    name = "rv-wh",
+    hdrs = headers + sources,
+    includes = ["."],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "rv-wh-hdrs",
+    hdrs = headers,
+    includes = ["."],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "tensix_types",
+    hdrs = ["tensix_types.h"],
+    includes = ["."],
+    visibility = ["//visibility:public"],
+)
+filegroup(
+    name = "rv-wh-firmware-hdrs",
+    srcs = headers,
+    visibility = ["//visibility:public"],
+)

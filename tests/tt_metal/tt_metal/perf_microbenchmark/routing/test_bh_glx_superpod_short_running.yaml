@@ -1,0 +1,82 @@
+Tests:
+
+# ================================================
+# Fabric 2D Tests (Mesh and Torus)
+# ================================================
+
+  - name: "AllToAllMesh"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      num_links: 2
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [2048, 4096]
+
+    defaults:
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+        iterations: 1
+
+  - name: "AllToAll2DTorus"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+      num_links: 2
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [2048, 4096]
+
+    defaults:
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+        iterations: 1
+
+# ================================================
+# Fabric 1D Tests (Line and Ring)
+# ================================================
+
+  - name: "AllToAllLinear"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Linear
+      num_links: 2
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [2048, 4096]
+
+    defaults:
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+        iterations: 1
+
+  - name: "AllToAllRing"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Ring
+      num_links: 2
+
+    parametrization_params:
+      ftype: [mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [2048, 4096]
+
+    defaults:
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+        iterations: 1

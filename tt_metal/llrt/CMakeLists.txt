@@ -1,0 +1,40 @@
+# Provide unique architecture specific translation units and include paths for each ARCH
+
+include(sources.cmake)
+
+add_library(llrt OBJECT ${LLRT_SRC})
+add_library(Metalium::Metal::LLRT ALIAS llrt)
+
+# Enable unity builds for faster compilation
+TT_ENABLE_UNITY_BUILD(llrt)
+target_precompile_headers(llrt REUSE_FROM metal_common_pch)
+
+add_subdirectory(hal)
+add_dependencies(llrt hal_generate_dev_msgs_header)
+
+target_link_libraries(
+    llrt
+    PUBLIC
+        umd::device
+        TT::Metalium::HostDevCommon
+    PRIVATE
+        HAL::1xx
+        HAL::2xx
+        Tracy::TracyClient
+        nlohmann_json::nlohmann_json
+        Reflect::Reflect
+        yaml-cpp::yaml-cpp
+        enchantum::enchantum
+        TT::Metalium::Common
+        tt-logger::tt-logger
+        Metalium::Metal::Hardware
+)
+target_include_directories(llrt PUBLIC .)
+target_compile_options(llrt PRIVATE -Wno-int-to-pointer-cast)
+
+include(GNUInstallDirs)
+
+set(TT_METAL_DEFAULT_INSTALL_ROOT "/usr/${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium")
+target_compile_definitions(llrt PRIVATE TT_METAL_INSTALL_ROOT="${TT_METAL_DEFAULT_INSTALL_ROOT}")
+
+message(STATUS "TT_METAL_INSTALL_ROOT == ${TT_METAL_DEFAULT_INSTALL_ROOT}")

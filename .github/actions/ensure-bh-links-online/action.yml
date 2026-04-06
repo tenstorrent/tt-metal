@@ -1,0 +1,31 @@
+name: "Ensure BH Eth links online"
+description: "Perform smi reset and health check in a loop"
+
+inputs:
+  runner-label:
+    required: true
+    description: "Runner label to determine health check parameters"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Ensure Blackhole links are online
+      shell: bash
+      working-directory: /work
+      run: |
+        # Health check loop. Needed due to the following issues:
+        # https://tenstorrent.atlassian.net/browse/SYS-1634
+        # https://tenstorrent.atlassian.net/browse/BH-84
+        for i in {1..10}; do
+          echo "Health check attempt $i"
+          if tt-smi -r >/dev/null 2>&1 && ./build/test/tt_metal/tt_fabric/test_system_health ${{ inputs.runner-label == 'BH-DeskBox' && '--min-connections 4' || '' }}; then
+            echo "Health checks passed"
+            break
+          fi
+          if [ $i -eq 10 ]; then
+            echo "Health checks failed after 10 attempts"
+            exit 1
+          fi
+          echo "Health checks failed, retrying..."
+          sleep 5
+        done

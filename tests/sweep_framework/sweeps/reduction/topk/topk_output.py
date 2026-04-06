@@ -1,0 +1,209 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+import random
+from functools import partial
+from typing import Optional, Tuple
+
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.common.utility_functions import torch_random
+from tests.sweep_framework.framework.permutations import permutations
+from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
+from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import assert_equal, start_measuring_time, stop_measuring_time
+
+# Override the default timeout in seconds for hang detection.
+TIMEOUT = 30
+
+random.seed(0)
+
+# Parameters provided to the test vector generator are defined here.
+# They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
+# Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
+# Developers can create their own generator functions and pass them to the parameters as inputs.
+parameters = {
+    "nightly": {
+        "input_shape": gen_shapes([1, 1, 32, 64], [2, 6, 128, 128], [1, 1, 32, 64], 32)
+        + gen_shapes([1, 32, 64], [12, 256, 1024], [1, 32, 64], 8)
+        + gen_shapes([32, 64], [256, 1024], [32, 64], 8),
+        "dim": [0, 1, 2, 3, -1, -2, -3, -4, None],
+        "largest": [True],
+        "k": [32],
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_layout": [ttnn.TILE_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+    },
+    "xfail": {
+        "input_shape": gen_shapes([1, 1, 32, 64], [6, 12, 256, 1024], [1, 1, 32, 64], 32)
+        + gen_shapes([1, 32, 64], [12, 256, 1024], [1, 32, 64], 8)
+        + gen_shapes([32, 64], [256, 1024], [32, 64], 8),
+        "dim": [0, 1, 2, 3, -1, -2, -3, -4, None],
+        "largest": [False],
+        "k": [32],
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_layout": [ttnn.TILE_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+    },
+}
+
+
+# Invalidate vector is called during the generation phase where each vector will be passed in.
+# If invalidated, the vector will still be stored but will be skipped.
+# Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    if test_vector["dim"] is None:
+        return True, "Invalid input configuration: dim parameter cannot be None."
+    if (
+        test_vector["dim"] * (-1) > len(test_vector["input_shape"])
+        and test_vector["dim"] < 0
+        or test_vector["dim"] > (len(test_vector["input_shape"]) - 1)
+        and test_vector["dim"] >= 0
+    ):
+        return (
+            True,
+            "Invalid input configuration: Absolute value of dim must be less or equal than the rank of input tensor.",
+        )
+    if test_vector["input_shape"][test_vector["dim"]] < test_vector["k"]:
+        return True, "Invalid input configuration: k must be less than or equal to the maximum dimension size."
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
+        return True, "Unsupported configuration: TopK operation requires tensor to be in Tile layout."
+    return False, None
+
+
+def run_topk(
+    input_shape: list,
+    dim: int,
+    largest: bool,
+    k: int,
+    input_a_dtype,
+    input_layout,
+    input_a_memory_config,
+    output_memory_config,
+    device,
+) -> list:
+    # Set random seed for data generation
+    data_seed = random.randint(0, 20000000)
+    torch.manual_seed(data_seed)
+
+    # Sanitize input shape
+    input_shape = sanitize_shape(input_shape, "topk")
+    torch_input_tensor_a = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+    )(input_shape)
+
+    if input_a_dtype == ttnn.bfloat8_b:
+        pytest.xfail("BFLOAT8_B not supported by pad operation")
+
+    output_indices_shape = input_shape.copy()
+    output_indices_shape[dim] = k
+
+    torch_optional_output = [
+        gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
+            output_indices_shape
+        ),
+        torch.randint(-1, 1, output_indices_shape, dtype=torch.int16),
+    ]
+    torch_output_values, torch_output_indices = torch.topk(
+        torch_input_tensor_a, k, dim=dim, largest=largest, sorted=True
+    )
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=input_a_dtype,
+        layout=input_layout,
+        device=device,
+        memory_config=input_a_memory_config,
+    )
+    op_output_values = ttnn.from_torch(
+        torch_optional_output[0],
+        dtype=input_a_dtype,
+        layout=input_layout,
+        device=device,
+        memory_config=output_memory_config,
+    )
+    op_output_indices = ttnn.from_torch(
+        torch_optional_output[1],
+        dtype=ttnn.uint16,
+        layout=input_layout,
+        device=device,
+        memory_config=output_memory_config,
+    )
+
+    start_time = start_measuring_time()
+    ttnn.topk(
+        input_tensor_a, k=k, dim=dim, largest=largest, sorted=True, output_tensor=(op_output_values, op_output_indices)
+    )
+    output_values = ttnn.to_torch(op_output_values)
+    output_indices = ttnn.to_torch(op_output_indices).to(torch.int64)
+    e2e_perf = stop_measuring_time(start_time)
+    expected_pcc = 0.999
+    assert_equal(output_values, torch_output_values)
+    tensors = [input_tensor_a, op_output_values, op_output_indices]
+    return get_run_return(torch_output_values, output_values, expected_pcc, tensors, e2e_perf)
+
+
+@pytest.mark.parametrize("params", list(permutations(parameters["nightly"])))
+def test_nightly(device, params):
+    invalidated, output_str = invalidate_vector(params)
+
+    if invalidated:
+        pytest.skip(output_str)
+
+    (result, msg), e2e_perf = run_topk(**params, device=device)
+
+    assert result, msg
+    logger.info(msg)
+    if e2e_perf:
+        logger.info(f"E2E Performance: {e2e_perf}")
+
+
+@pytest.mark.parametrize("params", list(permutations(parameters["xfail"])))
+def test_xfail(device, params):
+    invalidated, output_str = invalidate_vector(params)
+
+    if invalidated:
+        pytest.skip(output_str)
+
+    (result, msg), e2e_perf = run_topk(**params, device=device)
+
+    assert result, msg
+    logger.info(msg)
+    if e2e_perf:
+        logger.info(f"E2E Performance: {e2e_perf}")
+
+
+# This is the run instructions for the test, defined by the developer.
+# The run function must take the above-defined parameters as inputs.
+# The runner will call this run function with each test vector, and the returned results from this function will be stored.
+# If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
+def run(
+    input_shape,
+    dim,
+    largest,
+    k,
+    input_a_dtype,
+    input_layout,
+    input_a_memory_config,
+    output_memory_config,
+    *,
+    device,
+) -> list:
+    return run_topk(
+        input_shape,
+        dim,
+        largest,
+        k,
+        input_a_dtype,
+        input_layout,
+        input_a_memory_config,
+        output_memory_config,
+        device,
+    )

@@ -1,0 +1,22 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "silu_bw.hpp"
+
+#include "core/compute_kernel_config.hpp"
+#include "device/silu_bw_device_operation.hpp"
+
+namespace ttml::metal {
+
+ttnn::Tensor silu_bw(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& dL_dout_tensor,
+    const std::optional<ttnn::Tensor>& preallocated_output) {
+    return ttnn::prim::ttml_silu_bw(
+        input_tensor,    // [B,1,S,C]
+        dL_dout_tensor,  // [B,1,S,C]
+        preallocated_output);
+}
+
+}  // namespace ttml::metal

@@ -1,0 +1,52 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "global_avg_pool_nanobind.hpp"
+
+#include <fmt/format.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
+
+#include "ttnn-nanobind/bind_function.hpp"
+#include "ttnn/operations/pool/global_avg_pool/global_avg_pool.hpp"
+
+namespace ttnn::operations::avgpool {
+
+namespace {
+
+void bind_global_avg_pool2d(nb::module_& mod) {
+    const auto* doc = R"doc(
+        Applies global_avg_pool2d to :attr:`input_tensor` by performing a 2D adaptive average pooling over an input signal composed of several input planes. This operation computes the average of all elements in each channel across the entire spatial dimensions.
+
+        .. math::
+            global\_avg\_pool(\mathrm{{input\_tensor}}_i)
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor. Typically of shape (batch_size, channels, height, width).
+
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to `None`
+
+
+        Returns:
+            ttnn.Tensor: the output tensor with the averaged values. The output tensor shape is (batch_size, channels, 1, 1).
+        )doc";
+
+    ttnn::bind_function<"global_avg_pool2d">(
+        mod,
+        doc,
+        &ttnn::global_avg_pool2d,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dtype") = nb::none());
+}
+
+}  // namespace
+
+void py_module(nb::module_& mod) { bind_global_avg_pool2d(mod); }
+
+}  // namespace ttnn::operations::avgpool

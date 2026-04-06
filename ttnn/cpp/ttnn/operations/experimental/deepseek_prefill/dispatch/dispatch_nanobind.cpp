@@ -1,0 +1,96 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "dispatch_nanobind.hpp"
+
+#include <array>
+#include <cstdint>
+#include <optional>
+
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/array.h>
+#include <nanobind/stl/optional.h>
+
+#include "ttnn-nanobind/bind_function.hpp"
+#include "dispatch.hpp"
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+
+namespace ttnn::operations::experimental::deepseek_prefill::dispatch::detail {
+
+void bind_dispatch(nb::module_& mod) {
+    ttnn::bind_function<"dispatch", "ttnn.experimental.deepseek_prefill.">(
+        mod,
+        R"doc(
+        Prefill dispatch operation for DeepSeek MoE models.
+
+        Routes tokens from their original positions to expert-specific buffers.
+        Each token is routed to multiple experts based on router indices.
+        Tokens are gathered into per-expert buffers with metadata tracking their origin.
+
+        Args:
+            input_tensor (ttnn.Tensor): Input tensor of shape (dispatch_group_size, seq_len, hidden_dim)
+            weights_tensor (ttnn.Tensor): Router weights of shape (dispatch_group_size, seq_len, num_experts_per_tok)
+            indices_tensor (ttnn.Tensor): Expert indices of shape (dispatch_group_size, seq_len, num_experts_per_tok)
+            expert_offsets_tensor (ttnn.Tensor): Base offset for each expert from each chip in the dispatched buffer, shape (dispatch_group_size, num_routed_experts), dtype int32
+            expert_dispatch_table_tensor (ttnn.Tensor): Expert dispatch table mapping expert ID to destination chip ID, shape (dispatch_group_size_rep, num_routed_experts), dtype int32
+
+        Keyword Args:
+            dispatch_group_size (int): Number of chips in the system
+            experts_per_chip (int): Number of experts per chip
+            num_routed_experts (int): Total number of routed experts across all chips
+            num_experts_per_tok (int): Number of experts each token is routed to
+            metadata_len (int): Length of metadata per token (stores: chip, token, topk_indice, routed_expert, weight)
+            max_dispatched_tokens_per_expert (int): Maximum number of tokens that can be dispatched to each expert
+            memory_config (ttnn.MemoryConfig, optional): Output memory configuration. Defaults to None.
+            subdevice_id (ttnn.SubDeviceId, optional): Subdevice ID for core allocation. Defaults to None.
+            cluster_axis (int, optional): Mesh axis to operate along (0=rows, 1=cols). Defaults to 0. Currently only 0 is tested.
+            num_links (int, optional): Number of ethernet links to use for fabric communication. Defaults to 1. Currently only 1 is tested.
+            topology (ttnn.Topology, optional): Fabric topology (Linear or Ring). Defaults to Linear. Currently only Linear is tested.
+
+        Returns:
+            Tuple[ttnn.Tensor, ttnn.Tensor]:
+                - dispatched: Dispatched tokens of shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
+                - metadata: Metadata tensor of shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
+
+        Example:
+            >>> dispatched, metadata = ttnn.experimental.deepseek_prefill.dispatch(
+                    input_tensor,
+                    weights_tensor,
+                    indices_tensor,
+                    expert_offsets_tensor,
+                    dispatch_group_size=2,
+                    experts_per_chip=8,
+                    num_routed_experts=16,
+                    metadata_len=5,
+                    max_dispatched_tokens_per_expert=256)
+        )doc",
+        ttnn::overload_t(
+            &dispatch,
+            nb::arg("input_tensor").noconvert(),
+            nb::arg("weights_tensor").noconvert(),
+            nb::arg("indices_tensor").noconvert(),
+            nb::arg("expert_offsets_tensor").noconvert(),
+            nb::arg("expert_dispatch_table_tensor").noconvert(),
+            nb::kw_only(),
+            nb::arg("dispatch_group_size"),
+            nb::arg("experts_per_chip"),
+            nb::arg("num_routed_experts"),
+            nb::arg("num_experts_per_tok"),
+            nb::arg("metadata_len"),
+            nb::arg("max_dispatched_tokens_per_expert"),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("subdevice_id") = nb::none(),
+            nb::arg("cluster_axis") = nb::none(),
+            nb::arg("num_links") = 1,
+            nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear)));
+}
+
+}  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch::detail
+
+namespace ttnn::operations::experimental::deepseek_prefill::detail {
+
+void bind_dispatch(::nanobind::module_& mod) { dispatch::detail::bind_dispatch(mod); }
+
+}  // namespace ttnn::operations::experimental::deepseek_prefill::detail

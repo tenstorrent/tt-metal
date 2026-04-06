@@ -1,0 +1,128 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <cstdint>
+#include <utility>
+
+#include "ttnn/tensor/types.hpp"
+#include "selective_reduce_combine_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
+#include "cpp/ttnn/operations/data_movement/common/common.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/work_split.hpp>
+
+namespace ttnn::experimental::prim {
+
+void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& token_activations_tensor = tensor_args.dense_activations_tensor;
+
+    const auto num_devices = token_activations_tensor.device()->get_view().num_devices();
+
+    const auto experts = operation_attributes.experts;
+    const auto batch_size = operation_attributes.batch_size;
+    const auto seq_size = operation_attributes.seq_size;
+    const auto total_tokens = batch_size * seq_size;
+
+    const auto experts_per_device = experts / num_devices;
+
+    const uint32_t activations_stride_elm = token_activations_tensor.logical_shape()[-1] / total_tokens;
+
+    const auto datum_size =
+        tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(token_activations_tensor.dtype()));
+
+    const auto alignment = (token_activations_tensor.memory_config().buffer_type() == BufferType::L1)
+                               ? tt::tt_metal::hal::get_l1_alignment()
+                               : tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t expected_activations_stride_elm =
+        tt::align((2 * experts_per_device + 1) * datum_size, alignment) / datum_size;
+
+    TT_FATAL(
+        activations_stride_elm == expected_activations_stride_elm,
+        "The token activations tensor is expected to have aligned 2 * experts_per_device + 1 elements per token");
+}
+
+SelectiveReduceCombineDeviceOperation::spec_return_value_t SelectiveReduceCombineDeviceOperation::compute_output_specs(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    using namespace tt::tt_metal;
+
+    const auto& input_tensor = tensor_args.dense_input_tensor;
+    auto* mesh_device = input_tensor.device();
+    const auto& mesh_view = mesh_device->get_view();
+
+    const auto hidden_size = operation_attributes.hidden_size;
+
+    const uint32_t batch_size = operation_attributes.batch_size;
+    const uint32_t seq_size = operation_attributes.seq_size;
+    const uint32_t select_experts_k = operation_attributes.select_experts_k;
+
+    const auto& axis = operation_attributes.axis;
+    const auto num_devices_cluster = (axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+
+    const uint32_t total_tokens_per_device = batch_size * seq_size / num_devices_cluster;
+    auto output_shape = ttnn::Shape({select_experts_k, total_tokens_per_device, hidden_size});
+
+    auto mem_config = operation_attributes.output_memory_config;
+    return TensorSpec(
+        Shape(output_shape), TensorLayout(input_tensor.dtype(), PageConfig(Layout::ROW_MAJOR), mem_config));
+}
+
+SelectiveReduceCombineDeviceOperation::tensor_return_value_t
+SelectiveReduceCombineDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    return tensor_args.optional_output_tensor.value_or(
+        create_device_tensor(output_spec, tensor_args.dense_input_tensor.device()));
+}
+
+}  // namespace ttnn::experimental::prim
+
+namespace ttnn::prim {
+ttnn::Tensor selective_reduce_combine(
+    const ttnn::Tensor& dense_input_tensor,
+    const ttnn::Tensor& dense_activations_tensor,
+    const ttnn::Tensor& dense_token_maps_tensor,
+    const ttnn::Tensor& dense_token_counts_tensor,
+    uint32_t hidden_size,
+    uint32_t batch_size,
+    uint32_t seq_size,
+    uint32_t select_experts_k,
+    uint32_t experts,
+    const std::optional<uint32_t>& axis,
+    tt::tt_fabric::Topology topology,
+    uint32_t num_links,
+    uint32_t num_token_parallel_cores,
+    uint32_t num_data_parallel_cores,
+    const std::vector<ttnn::CoreCoord>& worker_cores,
+    const CoreRangeSet& mux_core_range_set,
+    const std::optional<ttnn::MemoryConfig>& output_memory_config,
+    const std::optional<ttnn::Tensor>& optional_output_tensor,
+    const std::optional<GlobalSemaphore>& optional_cross_device_semaphore) {
+    using OperationType = ttnn::experimental::prim::SelectiveReduceCombineDeviceOperation;
+    auto memory_config = output_memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
+            .hidden_size = hidden_size,
+            .batch_size = batch_size,
+            .seq_size = seq_size,
+            .select_experts_k = select_experts_k,
+            .experts = experts,
+            .num_links = num_links,
+            .axis = axis,
+            .topology = topology,
+            .num_token_parallel_cores = num_token_parallel_cores,
+            .num_data_parallel_cores = num_data_parallel_cores,
+            .worker_cores = worker_cores,
+            .mux_core_range_set = mux_core_range_set,
+            .output_memory_config = memory_config,
+            .optional_cross_device_semaphore = optional_cross_device_semaphore},
+        OperationType::tensor_args_t{
+            .dense_input_tensor = dense_input_tensor,
+            .dense_activations_tensor = dense_activations_tensor,
+            .dense_token_maps_tensor = dense_token_maps_tensor,
+            .dense_token_counts_tensor = dense_token_counts_tensor,
+            .optional_output_tensor = optional_output_tensor});
+}
+}  // namespace ttnn::prim

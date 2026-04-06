@@ -1,0 +1,33 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "ckernel.h"
+#include "api/compute/compute_kernel_api.h"
+#include <sfpi.h>
+
+// Check initialized and uninitialized data are initialized correctly.
+
+using namespace sfpi;
+volatile uint32_t global __attribute__((used)) = 0x12345678;
+volatile uint32_t zero __attribute__((used));
+
+// Do not let compiler propagate knowledge of the initialized value;
+static uint32_t __attribute__((noinline)) get(volatile uint32_t *ptr) {
+    return *ptr;
+}
+
+void kernel_main() {
+#if COMPILE_FOR_TRISC == 1  // compute
+#include "pre.inc"
+    {
+        vUInt g = get(&global);
+        FAIL_IF(g != 0x12345678);
+    }
+    {
+        vUInt z = get(&zero);
+        FAIL_IF(z != 0);
+    }
+#include "post.inc"
+#endif
+}

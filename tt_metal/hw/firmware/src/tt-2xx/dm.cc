@@ -1,0 +1,423 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "internal/firmware_common.h"
+// #include "risc_common.h"
+#include "internal/risc_attribs.h"
+#include "internal/debug/watcher_common.h"
+#include "internal/hw_thread.h"
+#include "api/debug/waypoint.h"
+#include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
+#include "internal/debug/stack_usage.h"
+#include "internal/debug/sanitize.h"
+#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
+#include "hostdev/dev_msgs.h"
+#include "tools/profiler/kernel_profiler.hpp"
+#include "api/kernel_thread_globals.h"
+
+uint8_t noc_index;
+constexpr uint8_t noc_mode = DM_DEDICATED_NOC;
+
+constexpr uint32_t RISCV_IC_TRISC3_MASK = 0x1;
+constexpr uint32_t RISCV_IC_TRISC2_MASK = 0x2;
+constexpr uint32_t RISCV_IC_TRISC1_MASK = 0x4;
+constexpr uint32_t RISCV_IC_TRISC0_MASK = 0x8;
+constexpr uint32_t RISCV_IC_TRISC_ALL_MASK =
+    RISCV_IC_TRISC0_MASK | RISCV_IC_TRISC1_MASK | RISCV_IC_TRISC2_MASK | RISCV_IC_TRISC3_MASK;
+
+uint8_t my_x[NUM_NOCS] __attribute__((used));
+uint8_t my_y[NUM_NOCS] __attribute__((used));
+uint8_t my_logical_x_ __attribute__((used));
+uint8_t my_logical_y_ __attribute__((used));
+uint8_t my_relative_x_ __attribute__((used));
+uint8_t my_relative_y_ __attribute__((used));
+
+uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
+uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
+uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
+uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
+uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
+
+// temporary for things to build
+thread_local CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
+
+thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
+thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
+thread_local uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+thread_local uint32_t rta_count __attribute__((used));
+thread_local uint32_t crta_count __attribute__((used));
+#endif
+
+// These arrays are stored in local memory of FW, but primarily used by the kernel which shares
+// FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
+uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
+uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
+int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
+int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
+
+tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(UNCACHED_MEM_MAILBOX_BASE);
+tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
+
+void set_deassert_addresses() {
+    WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC0_RESET_PC_REG_ADDR, MEM_TRISC0_FIRMWARE_BASE);
+    WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC1_RESET_PC_REG_ADDR, MEM_TRISC1_FIRMWARE_BASE);
+    WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC2_RESET_PC_REG_ADDR, MEM_TRISC2_FIRMWARE_BASE);
+    WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC3_RESET_PC_REG_ADDR, MEM_TRISC3_FIRMWARE_BASE);
+    WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE_REG_ADDR, 0b1111);
+    WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_TRISC0_RESET_PC_REG_ADDR, MEM_TRISC0_FIRMWARE_BASE);
+    WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_TRISC1_RESET_PC_REG_ADDR, MEM_TRISC1_FIRMWARE_BASE);
+    WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_TRISC2_RESET_PC_REG_ADDR, MEM_TRISC2_FIRMWARE_BASE);
+    WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_TRISC3_RESET_PC_REG_ADDR, MEM_TRISC3_FIRMWARE_BASE);
+    WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE_REG_ADDR, 0b1111);
+    WRITE_REG(NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_TRISC0_RESET_PC_REG_ADDR, MEM_TRISC0_FIRMWARE_BASE);
+    WRITE_REG(NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_TRISC1_RESET_PC_REG_ADDR, MEM_TRISC1_FIRMWARE_BASE);
+    WRITE_REG(NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_TRISC2_RESET_PC_REG_ADDR, MEM_TRISC2_FIRMWARE_BASE);
+    WRITE_REG(NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_TRISC3_RESET_PC_REG_ADDR, MEM_TRISC3_FIRMWARE_BASE);
+    WRITE_REG(NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE_REG_ADDR, 0b1111);
+    WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_TRISC0_RESET_PC_REG_ADDR, MEM_TRISC0_FIRMWARE_BASE);
+    WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_TRISC1_RESET_PC_REG_ADDR, MEM_TRISC1_FIRMWARE_BASE);
+    WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_TRISC2_RESET_PC_REG_ADDR, MEM_TRISC2_FIRMWARE_BASE);
+    WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_TRISC3_RESET_PC_REG_ADDR, MEM_TRISC3_FIRMWARE_BASE);
+    WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE_REG_ADDR, 0b1111);
+}
+
+void invalidate_trisc_instruction_cache() {
+    // invalidate TRISCs
+    WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_RISCV_IC_INVALIDATE_REG_ADDR, RISCV_IC_TRISC_ALL_MASK);
+    WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_RISCV_IC_INVALIDATE_REG_ADDR, RISCV_IC_TRISC_ALL_MASK);
+    WRITE_REG(NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_RISCV_IC_INVALIDATE_REG_ADDR, RISCV_IC_TRISC_ALL_MASK);
+    WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_RISCV_IC_INVALIDATE_REG_ADDR, RISCV_IC_TRISC_ALL_MASK);
+}
+
+void deassert_trisc() {
+    subordinate_sync->allNeo0 = RUN_SYNC_MSG_ALL_INIT;
+    subordinate_sync->allNeo1 = RUN_SYNC_MSG_ALL_INIT;
+    subordinate_sync->allNeo2 = RUN_SYNC_MSG_ALL_INIT;
+    subordinate_sync->allNeo3 = RUN_SYNC_MSG_ALL_INIT;
+    deassert_trisc_reset();
+}
+
+thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
+RemapperAPI g_remapper_configurator __attribute__((used));
+volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
+
+void device_setup() {
+    // instn_buf
+    // pc_buf
+    // clock gating
+    // NOC setup
+    set_deassert_addresses();
+    setup_isr_csrs();
+    // wzeromem
+    // invalidate_l1_cache
+    // clear_destination_registers
+    // enable_cc_stack
+    // set_default_sfpu_constant_register_state
+}
+
+inline __attribute__((always_inline)) void signal_subordinate_completion() {
+    uint32_t hartid = internal_::get_hw_thread_idx();
+    *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
+}
+
+inline void run_triscs(uint32_t enables) {
+    // Wait for init_sync_registers to complete. Should always be done by the time we get here.
+    DPRINT << "DM-FW: waiting for TRISCs to complete" << ENDL();
+    while (subordinate_sync->allNeo0 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
+           subordinate_sync->allNeo1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
+           subordinate_sync->allNeo2 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
+           subordinate_sync->allNeo3 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
+        invalidate_l1_cache();
+    }
+    DPRINT << "DM-FW: running TRISCs " << enables << ENDL();
+    if (enables &
+        (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::E0_MATH0))) {
+        subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo0_trisc1 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo0_trisc2 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo0_trisc3 = RUN_SYNC_MSG_GO;
+    }
+    if (enables &
+        (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::E1_MATH0))) {
+        subordinate_sync->neo1_trisc0 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo1_trisc1 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo1_trisc2 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo1_trisc3 = RUN_SYNC_MSG_GO;
+    }
+    if (enables &
+        (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::E2_MATH0))) {
+        subordinate_sync->neo2_trisc0 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo2_trisc1 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo2_trisc2 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo2_trisc3 = RUN_SYNC_MSG_GO;
+    }
+    if (enables &
+        (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::E3_MATH0))) {
+        subordinate_sync->neo3_trisc0 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo3_trisc1 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo3_trisc2 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo3_trisc3 = RUN_SYNC_MSG_GO;
+    }
+}
+
+inline void start_subordinate_kernel_run_early(uint32_t enables) {
+    for (int i = 1; i < NUM_DM_CORES; i++) {  // start from 1 to skip DM0
+        if (enables & (1u << i)) {
+            *((volatile uint8_t*)&(subordinate_sync->dm1) + i - 1) = RUN_SYNC_MSG_GO;
+        }
+    }
+}
+
+inline void wait_subordinates() {
+    WAYPOINT("NTW");
+    while (subordinate_sync->allDMs != RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE ||
+           subordinate_sync->allNeo0 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
+           subordinate_sync->allNeo1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
+           subordinate_sync->allNeo2 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
+           subordinate_sync->allNeo3 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
+    WAYPOINT("NTD");
+}
+
+inline void trigger_sync_register_init() { subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
+
+extern "C" uint32_t _start1() {
+    configure_csr();
+    uint32_t hartid = internal_::get_hw_thread_idx();
+    if (hartid == 0) {
+        extern uint32_t __ldm_data_start[];
+        do_crt1(__ldm_data_start);
+    }
+    extern uint32_t __ldm_tdata_init[];
+    do_thread_crt1(__ldm_tdata_init);
+    WAYPOINT("I");
+    DPRINT << "DM0-FW: initialized" << ENDL();
+
+    // handle noc_tobank ???
+    mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
+    noc_index = 0;
+    my_logical_x_ = mailboxes->core_info.absolute_logical_x;
+    my_logical_y_ = mailboxes->core_info.absolute_logical_y;
+
+    device_setup();
+    if (hartid > 0) {
+        signal_subordinate_completion();
+    } else {  // This is DM0
+        DEVICE_PRINT_INITIALIZE_LOCK();
+        risc_init();
+        noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
+
+        deassert_trisc();
+        DPRINT << "DM0-FW: deasserted TRISC" << ENDL();
+        wait_subordinates();
+        mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+
+        trigger_sync_register_init();
+
+        DeviceProfilerInit();
+        while (1) {
+            WAYPOINT("GW");
+            uint8_t go_message_signal = RUN_MSG_DONE;
+            // kernel_configs.preload is last in the launch message. so other data is
+            // valid by the time it's set. All multicast data from the dispatcher is
+            // written in order, so it will arrive in order. We also have a barrier
+            // before mcasting the launch message (as a hang workaround), which
+            // ensures that the unicast data will also have been received.
+            DPRINT << "DM0-FW: waiting for GO message" << ENDL();
+            while (((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
+                   !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload &
+                     DISPATCH_ENABLE_FLAG_PRELOAD)) {
+                invalidate_l1_cache();
+                // While the go signal for kernel execution is not sent, check if the worker was signalled
+                // to reset its launch message read pointer.
+                if ((go_message_signal == RUN_MSG_RESET_READ_PTR) ||
+                    (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) ||
+                    (go_message_signal == RUN_MSG_REPLAY_TRACE)) {
+                    // Set the rd_ptr on workers to specified value
+                    mailboxes->launch_msg_rd_ptr = 0;
+                    if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_REPLAY_TRACE) {
+                        if (go_message_signal == RUN_MSG_REPLAY_TRACE) {
+                            DeviceIncrementTraceCount();
+                            DeviceTraceOnlyProfilerInit();
+                        }
+                        uint32_t go_message_index = mailboxes->go_message_index;
+                        // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently
+                        // guaranteed to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid
+                        // value. For future proofing, the noc_index value is initialized to 0, to ensure an invalid NOC
+                        // txn is not issued.
+                        uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
+                        mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
+                        // Notify dispatcher that this has been done
+                        DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
+                        notify_dispatch_core_done(dispatch_addr, noc_index);
+                    }
+                }
+            }
+
+            WAYPOINT("GD");
+
+            {
+                // Only include this iteration in the device profile if the launch message is valid. This is because all
+                // workers get a go signal regardless of whether they're running a kernel or not. We don't want to
+                // profile "invalid" iterations.
+                DeviceZoneScopedMainN("DM0-FW");
+                uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
+                launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
+                DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
+                DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
+                uint32_t enables = launch_msg_address->kernel_config.enables;
+                // Trigger the NCRISC to start loading CBs and IRAM as soon as possible.
+                // if (enables &
+                //     (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1)))
+                //     { subordinate_sync.dm1 = RUN_SYNC_MSG_LOAD;
+                // }
+                // Copies from L1 to IRAM on chips where NCRISC has IRAM
+                uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
+                // Invalidate the i$ now the kernels have loaded and before running
+                // volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
+                // cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
+                //     RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
+
+                run_triscs(enables);
+
+                // noc_index = launch_msg_address->kernel_config.brisc_noc_id;
+                // noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
+                my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
+                my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
+                noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+                // re-initialize the NoCs
+                // uint8_t cmd_buf;
+                // if (noc_mode == DM_DEDICATED_NOC) {
+                //     if (prev_noc_mode != noc_mode) {
+                //         noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+                //     }
+                //     cmd_buf = BRISC_AT_CMD_BUF;
+                // } else {
+                //     if (prev_noc_mode != noc_mode) {
+                //         dynamic_noc_init();
+                //     }
+                //     dynamic_noc_local_state_init();
+                //     cmd_buf = DYNAMIC_NOC_BRISC_AT_CMD_BUF;
+                // }
+                // prev_noc_mode = noc_mode;
+
+                uint32_t tt_l1_ptr* dfb_l1_base =
+                    (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
+                                          launch_msg_address->kernel_config.local_cb_offset);
+                for (uint32_t i = 0; i < MaxDMProcessorsPerCoreType; i++) {
+                    mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
+                }
+                start_subordinate_kernel_run_early(enables);
+
+                // Run the kernel
+                WAYPOINT("R");
+                int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
+                if (enables & (1u << index)) {
+                    uint32_t num_local_dfbs = launch_msg_address->kernel_config.local_cb_mask;
+                    setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
+                    uint32_t kernel_lma =
+                        (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
+                    asm("FENCE.i");
+                    uint32_t* kernel_ptr = reinterpret_cast<uint32_t*>(kernel_lma);
+                    auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
+                    record_stack_usage(stack_free);
+                } else {
+#if defined(PROFILE_KERNEL)
+                    // This was not initialized in the kernel
+                    // Currently FW does not issue a barrier except when using profiler
+                    // if (noc_mode == DM_DEDICATED_NOC) {
+                    //     noc_local_state_init(noc_index);
+                    // }
+#endif
+                    // DM0 is responsible for issuing any noc cmds needed when initializing remote cbs
+                    // So have DM0 setup remote cb interfaces even when DM0 is not in use
+                    // if (launch_msg_address->kernel_config.enables) {
+                    //     cb_l1_base =
+                    //         (uint32_t tt_l1_ptr*)(kernel_config_base +
+                    //         launch_msg_address->kernel_config.remote_cb_offset);
+                    //     uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
+                    //     experimental::setup_remote_cb_interfaces<true>(
+                    //         cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
+                    //     barrier_remote_cb_interface_setup(noc_index, end_cb_index);
+                    // }
+                    wait_for_go_message();
+                }
+                WAYPOINT("D");
+
+                wait_subordinates();
+
+                trigger_sync_register_init();
+
+                // Need to ensure that Remapper state is cleared for next kernel launch
+                if (g_remapper_configurator.is_remapper_enabled()) {
+                    g_remapper_configurator.clear_all_pairs();
+                    g_remapper_configurator.disable_remapper();
+                }
+
+                uint32_t go_message_index = mailboxes->go_message_index;
+                mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
+
+                // Notify dispatcher core that tensix has completed running kernels, if the launch_msg was populated
+                if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
+                    // Set launch message to invalid, so that the next time this slot is encountered, kernels are only
+                    // run if a valid launch message is sent.
+                    launch_msg_address->kernel_config.enables = 0;
+                    launch_msg_address->kernel_config.preload = 0;
+                    uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
+                    DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
+                    // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid
+                    // launch messages in the ring buffer. Must be executed before the atomic increment, as after that
+                    // the launch message is no longer owned by us.
+                    CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
+                    notify_dispatch_core_done(dispatch_addr, noc_index);
+                    mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
+                }
+            }
+        }
+    }
+    // Subordinates run this
+    while (1) {
+        // WAYPOINT("GW");
+        WAYPOINT("W1");
+        while (true) {
+            if (*((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) == RUN_SYNC_MSG_GO ||
+                *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) == RUN_SYNC_MSG_LOAD) {
+                break;
+            }
+            asm("nop; nop; nop; nop; nop");
+        }
+        uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
+        launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
+
+        uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
+        int index = hartid;
+
+        uint32_t kernel_lma = kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
+
+        uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
+                                                                launch_msg->kernel_config.local_cb_offset);
+        uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
+
+        setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
+        my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
+        my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
+
+        WAYPOINT("R1");
+        while (*((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) != RUN_SYNC_MSG_GO) {
+            asm("nop; nop; nop; nop; nop");
+        }
+        asm("FENCE.i");
+        auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
+
+        record_stack_usage(stack_free);
+        WAYPOINT("D1");
+        DEVICE_PRINT_KERNEL_FINISHED();
+
+        *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
+    }
+
+    return 0;
+}

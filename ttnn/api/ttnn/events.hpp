@@ -1,0 +1,30 @@
+// SPDX-FileCopyrightText: © 2024-2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "tt-metalium/mesh_event.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/distributed/types.hpp"
+
+#include "tt-metalium/device.hpp"
+#include "tt-metalium/sub_device_types.hpp"
+
+namespace ttnn {
+
+using MeshEvent = tt::tt_metal::distributed::MeshEvent;
+
+namespace events {
+
+MeshEvent record_mesh_event(
+    MeshDevice* mesh_device,
+    std::optional<QueueId> cq_id,
+    const std::vector<tt::tt_metal::SubDeviceId>& sub_device_ids = {},
+    const std::optional<ttnn::MeshCoordinateRange>& device_range = std::nullopt);
+void wait_for_mesh_event(std::optional<QueueId> cq_id, const MeshEvent& event);
+
+void event_synchronize(const MeshEvent& event);
+
+}  // namespace events
+}  // namespace ttnn

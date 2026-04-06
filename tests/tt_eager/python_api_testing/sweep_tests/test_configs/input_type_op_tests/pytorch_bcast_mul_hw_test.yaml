@@ -1,0 +1,19 @@
+---
+test-list:
+  bcast-mul-hw:
+    shape:
+      start-shape: [1, 1, 1, 2]
+      end-shape: [2, 2, 2048, 2048]
+      interval: [1, 1, 1, 2]
+      num-shapes: 2
+      num-samples: 2048
+      method: bcast_hw
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    args-gen: gen_dtype_layout_device
+    output-file: bcast_mul_hw_sweep.csv

@@ -1,0 +1,280 @@
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+import os
+
+import pytest
+import torch
+from loguru import logger
+from transformers import AutoConfig, AutoModelForVision2Seq
+from transformers.cache_utils import DynamicCache
+from transformers.models.mllama.modeling_mllama import MllamaTextCrossAttention
+
+import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
+from models.tt_transformers.tests.multimodal.utils import load_partial_weights
+from models.tt_transformers.tt.ccl import TT_CCL
+from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.multimodal.llama_cross_attention import TtLlamaCrossAttention
+
+
+@pytest.mark.parametrize(
+    "text_seq_len",
+    (2048,),
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "batch",
+    (1, 2),
+    ids=[
+        "batch_1",
+        "batch_2",
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds, ensure_gc):
+    dtype = ttnn.bfloat16
+    pcc_required = 0.99
+
+    model_args = ModelArgs(mesh_device)
+    model_args.max_seq_len = text_seq_len
+    state_dict = model_args.load_state_dict()
+
+    # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
+    first_layer_prefix = "text_model.cross_attention_layers.0.attention."
+
+    dim = model_args.dim
+    head_dim = model_args.head_dim
+    n_heads = model_args.n_heads
+    n_kv_heads = model_args.n_kv_heads
+    norm_eps = model_args.norm_eps
+
+    # Initialization of HF subclass parameters
+    hf_weights_repo_name = os.getenv("HF_MODEL")
+    past_key_values = DynamicCache()
+    config = AutoConfig.from_pretrained(hf_weights_repo_name)
+    config.text_config._attn_implementation = "sdpa"
+
+    # the layer id of the first cross-attention branch that occurs in the nnet needed for cache allocation id
+    layer_idx = config.text_config.cross_attention_layers[0]
+    reference_model = MllamaTextCrossAttention(config.text_config, layer_idx=layer_idx)
+    # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
+    partial_state_dict = load_partial_weights(
+        AutoModelForVision2Seq, hf_weights_repo_name, f"model.language_model.layers.{layer_idx}.cross_attn."
+    )
+    reference_model.load_state_dict(partial_state_dict)
+    num_chunks = 4
+    vision_seq_len = num_chunks * nearest_32(model_args.vision_chunk_ntok)
+
+    all_tests_pass = True
+
+    tt_ccl = TT_CCL(mesh_device)
+    tt_model = TtLlamaCrossAttention(
+        mesh_device,
+        tt_ccl,
+        state_dict,
+        state_dict_prefix=first_layer_prefix,
+        weight_cache_path=model_args.weight_cache_path(dtype),
+        dtype=dtype,
+        configuration=model_args,
+        dim=dim,
+        head_dim=head_dim,
+        n_heads=n_heads,
+        n_kv_heads=n_kv_heads,
+        norm_eps=norm_eps,
+    )
+
+    pt_xattn_tokens = (torch.rand(batch, vision_seq_len, dim) * 2) - 1
+    tt_xattn_tokens = pt_xattn_tokens.clone()
+
+    # Initially the cache functionality of HF is used with a placeholder tensor of torch.ones to compute and store the Key and Value projections in memory
+    # see link on how the cache is used: https://github.com/huggingface/transformers/blob/v4.53.0/src/transformers/models/mllama/modeling_mllama.py#L484-L496
+    reference_model.forward(
+        torch.ones(batch, 1, dim), pt_xattn_tokens, past_key_value=past_key_values, attention_mask=None
+    )
+    # tt_model expects a list of Key and Value projections
+    pt_xattn_cache_chunks = [past_key_values.key_cache[layer_idx], past_key_values.value_cache[layer_idx]]
+    # Preallocate K and V caches
+    tt_xattn_cache = [
+        ttnn.from_torch(
+            torch.zeros(batch, n_kv_heads, vision_seq_len, head_dim),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+        )
+        for _ in range(2)
+    ]
+
+    """
+    Test forward, prefill and decode!
+    """
+    n_iter = 10
+    for i in range(n_iter):
+        mode = Mode.PREFILL if i == 0 else Mode.DECODE
+        seq_len = text_seq_len if mode == Mode.PREFILL else 1
+        pt_x = (torch.rand(batch, seq_len, dim) * 2) - 1
+        tt_x = pt_x.clone()
+
+        # Common mask prep
+        xattn_mask = torch.bernoulli(
+            torch.full(
+                (
+                    batch,
+                    seq_len,
+                    vision_seq_len,
+                ),
+                0.25,
+            )
+        )
+        xattn_mask = xattn_mask.unsqueeze(1)
+        xattn_mask = xattn_mask * -1e9
+
+        xattn_mask_expand = xattn_mask.expand(-1, n_heads // model_args.num_devices, -1, -1)
+
+        full_text_mask = torch.bernoulli(
+            torch.full(
+                (
+                    batch,
+                    seq_len,
+                ),
+                0.75 if seq_len != 1 else 1.0,
+            )
+        )
+        full_text_mask = full_text_mask.unsqueeze(1).unsqueeze(-1)
+        full_text_mask_expand = full_text_mask.expand(-1, n_heads // model_args.num_devices, -1, head_dim)
+
+        # Key and Values projections are stored in cache thus the cross-attention features are replaced with None and only Query input is passed to compute its projection and proceed to the computation of attention.
+        # We wish to compare only the hidden state from reference model that outputs this layer so this is the 1st output of the subclass method indexed as [0].
+        pt_out = reference_model.forward(
+            pt_x, None, past_key_value=past_key_values, attention_mask=xattn_mask, cache_position=[layer_idx]
+        )[0] * full_text_mask.squeeze(1)
+
+        if mode == Mode.PREFILL:
+            outputs = []
+            for b in range(batch):
+                tt_tensor_xattn_tokens = model_args.prepare_residual_tensor_prefill(
+                    tt_xattn_tokens[b : b + 1],
+                    force_replicated=True,
+                )
+                tt_tensor_x = model_args.prepare_residual_tensor_prefill(
+                    tt_x[b : b + 1],
+                    force_replicated=True,
+                )
+                tt_xattn_mask = ttnn.from_torch(
+                    xattn_mask[b : b + 1],
+                    device=mesh_device,
+                    dtype=ttnn.bfloat4_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+                tt_full_text_mask = ttnn.from_torch(
+                    full_text_mask_expand[b : b + 1],
+                    device=mesh_device,
+                    dtype=ttnn.bfloat4_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+                tt_out = tt_model(
+                    tt_tensor_x,
+                    xattn_mask=tt_xattn_mask,
+                    full_text_row_masked_out_mask_1NSH=tt_full_text_mask,
+                    xattn_cache=tt_xattn_cache,
+                    mode=mode,
+                    user_id=b,
+                    vision_tokens=tt_tensor_xattn_tokens,
+                )
+
+                tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+                tt_output_torch = tt_output_torch[..., :seq_len, :].view(1, seq_len, dim)
+                outputs.append(tt_output_torch)
+            tt_output_torch = torch.cat(outputs, dim=0).view(batch, seq_len, dim)
+
+        else:
+            tt_x = model_args.prepare_residual_tensor_decode(
+                tt_x,
+                model_args.get_attn_input_mem_config(Mode.DECODE, None),
+                force_replicated=True,
+            )
+
+            xattn_mask_expand = xattn_mask_expand.permute(2, 0, 1, 3).contiguous()
+            tt_xattn_mask = ttnn.from_torch(
+                xattn_mask_expand,
+                device=mesh_device,
+                dtype=ttnn.bfloat4_b,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            tt_xattn_mask = ttnn.reshape(
+                tt_xattn_mask,
+                [1, batch, n_heads // model_args.num_devices, vision_seq_len],
+                [1, batch, 32, vision_seq_len],
+            )
+
+            full_text_mask_expand = full_text_mask_expand.permute(2, 0, 1, 3).contiguous()
+            tt_full_text_mask = ttnn.from_torch(
+                full_text_mask_expand,
+                device=mesh_device,
+                dtype=ttnn.bfloat4_b,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            tt_full_text_mask = ttnn.reshape(
+                tt_full_text_mask,
+                [1, batch, n_heads // model_args.num_devices, head_dim],
+                [1, batch, 32, head_dim],
+            )
+
+            tt_out = tt_model(
+                tt_x,
+                xattn_mask=tt_xattn_mask,
+                full_text_row_masked_out_mask_1NSH=tt_full_text_mask,
+                xattn_cache=tt_xattn_cache,
+                mode=mode,
+            )
+
+            tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+            tt_output_torch = tt_output_torch[:, :, :batch, :].reshape(batch, seq_len, dim)
+
+        passing, pcc_message = comp_pcc(pt_out, tt_output_torch, pcc_required)
+        logger.info(comp_allclose(pt_out, tt_output_torch))
+        logger.info(f"PCC: {pcc_message}")
+        all_tests_pass = all_tests_pass and passing
+
+        if mode == Mode.PREFILL:
+            tt_xattn_cache_torch = [
+                ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)).view(
+                    batch,
+                    n_kv_heads,
+                    vision_seq_len,
+                    head_dim,
+                )
+                for x in tt_xattn_cache
+            ]
+
+            for pt, tt in zip(pt_xattn_cache_chunks, tt_xattn_cache_torch):
+                passing, pcc_message = comp_pcc(pt, tt, pcc_required)
+
+                logger.info(comp_allclose(pt, tt))
+                logger.info(f"PCC: {pcc_message}")
+                if passing:
+                    logger.info(f"compute_xattn_kv_cache Passed!")
+                else:
+                    logger.warning(f"compute_xattn_kv_cache Failed!")
+                    all_tests_pass = False
+
+    assert all_tests_pass, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"

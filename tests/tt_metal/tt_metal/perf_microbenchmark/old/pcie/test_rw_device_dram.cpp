@@ -1,0 +1,129 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <chrono>
+#include <cerrno>
+#include <fmt/base.h>
+#include <cstdint>
+#include <cstdlib>
+#include <ctime>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include "impl/context/metal_context.hpp"
+#include <algorithm>
+#include <cstring>
+#include <exception>
+#include <optional>
+#include <ratio>
+#include <string>
+#include <tuple>
+#include <vector>
+
+#include <tt_stl/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include "test_common.hpp"
+
+namespace tt::tt_metal {
+class IDevice;
+}  // namespace tt::tt_metal
+
+using namespace tt;
+using namespace tt::tt_metal;
+using std::chrono::duration_cast;
+using std::chrono::microseconds;
+using std::chrono::steady_clock;
+
+int main(int argc, char** argv) {
+    bool pass = true;
+
+    try {
+        // Initial Runtime Args Parse
+        std::vector<std::string> input_args(argv, argv + argc);
+
+        std::string size_string;
+        uint32_t iter;
+        try {
+            std::tie(size_string, input_args) = test_args::get_command_option_and_remaining_args(input_args, "--size");
+            std::tie(iter, input_args) =
+                test_args::get_command_option_uint32_and_remaining_args(input_args, "--iter", 1);
+        } catch (const std::exception& e) {
+            TT_THROW("Please input test size with \"--size <size to test>\"", e.what());
+        }
+        uint64_t buffer_size = stoul(size_string);
+
+        log_info(LogTest, "Measuring performance for size={}bytes", buffer_size);
+
+        // Device Setup
+        int device_id = 0;
+        auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+
+        // Application Setup
+        srand(time(nullptr));
+        uint32_t dram_addr =
+            tt::tt_metal::MetalContext::instance().hal().get_dev_addr(tt::tt_metal::HalDramMemAddrType::UNRESERVED);
+        uint32_t dram_channel = rand() % 8;
+        log_info(LogTest, "Target DRAM channel = {}", dram_channel);
+
+        // Execute Application
+        log_info(LogTest, "iter {}", iter);
+        std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
+            buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
+
+        {
+            auto begin = std::chrono::steady_clock::now();
+            auto end = std::chrono::steady_clock::now();
+            auto elapsed_sum = end - begin;
+
+            for (int i = 0; i < iter; i++) {
+                begin = std::chrono::steady_clock::now();
+                pass &= tt_metal::detail::WriteToDeviceDRAMChannel(
+                    device->get_devices()[0], dram_channel, dram_addr, src_vec);
+                end = std::chrono::steady_clock::now();
+                elapsed_sum += end - begin;
+            }
+
+            auto elapsed_us = duration_cast<microseconds>(elapsed_sum / iter).count();
+            auto bw = (buffer_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0);
+            log_info(LogTest, "WriteToDeviceDRAMChannel {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, bw);
+        }
+
+        std::vector<uint32_t> result_vec;
+        {
+            auto begin = std::chrono::steady_clock::now();
+            auto end = std::chrono::steady_clock::now();
+            auto elapsed_sum = end - begin;
+
+            for (int i = 0; i < iter; i++) {
+                begin = std::chrono::steady_clock::now();
+                tt_metal::detail::ReadFromDeviceDRAMChannel(
+                    device->get_devices()[0], dram_channel, dram_addr, buffer_size, result_vec);
+                end = std::chrono::steady_clock::now();
+                elapsed_sum += end - begin;
+            }
+
+            auto elapsed_us = duration_cast<microseconds>(elapsed_sum / iter).count();
+            auto bw = (buffer_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0);
+            log_info(LogTest, "ReadFromDeviceDRAMChannel {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, bw);
+        }
+
+        // Validation & Teardown
+        pass &= (src_vec == result_vec);
+        pass &= device->close();
+    } catch (const std::exception& e) {
+        pass = false;
+        log_error(LogTest, "{}", e.what());
+        log_error(LogTest, "System error message: {}", std::strerror(errno));
+    }
+
+    if (pass) {
+        log_info(LogTest, "Test Passed");
+    } else {
+        TT_THROW("Test Failed");
+    }
+
+    TT_FATAL(pass, "PCIe DRAM read/write test failed");
+    return 0;
+}

@@ -1,0 +1,6 @@
+termcolor
+beautifultable
+faster-fifo
+# For PostgreSQL database connectivity
+psycopg2-binary == 2.9.11
+ijson

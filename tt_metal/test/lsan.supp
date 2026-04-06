@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
+# Manifests in OpenMPI v4.1.2 and remains an issue on v5.0.3
+# Bug: https://github.com/open-mpi/ompi/issues/12584
+# ASan Build with LeakSantizer complains about leaks in openmpi lib.
+leak:openmpi

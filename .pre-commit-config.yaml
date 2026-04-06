@@ -1,0 +1,98 @@
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+repos:
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v3.2.0
+  hooks:
+    - id: trailing-whitespace
+      exclude: \.patch$
+    - id: end-of-file-fixer
+      exclude: \.patch$
+    - id: check-yaml
+      args: ["--unsafe"]
+    - id: check-added-large-files
+# Using this mirror lets us use mypyc-compiled black, which is about 2x faster
+- repo: https://github.com/psf/black-pre-commit-mirror
+  rev: 23.10.1
+  hooks:
+    - id: black
+      language_version: python3
+- repo: https://github.com/PyCQA/autoflake
+  rev: v2.3.1
+  hooks:
+    - id: autoflake
+      args: [--remove-all-unused-imports, --in-place, --recursive, --exclude=__init__.py]
+      files: ^models/  # Run only on files in the models directory
+- repo: https://github.com/pycqa/isort
+  rev: 5.13.2
+  hooks:
+    - id: isort
+      files: ^models/
+      exclude: ^models/(demos/llama3_70b_galaxy|experimental)/
+- repo: https://github.com/BlankSpruce/gersemi
+  rev: 0.16.2
+  hooks:
+    - id: gersemi
+- repo: https://github.com/adrienverge/yamllint.git
+  rev: v1.35.1
+  hooks:
+    - id: yamllint
+- repo: https://github.com/pre-commit/mirrors-clang-format
+  rev: v19.1.4
+  hooks:
+    - id: clang-format
+      entry: git-clang-format
+      require_serial: true
+      types_or: [c++, c]
+      args: ["--style=file"]
+- repo: local
+  hooks:
+    - id: validate-metalium-includes
+      name: validate-metalium-includes
+      entry: python3 scripts/validate_api/validate_includes.py tt_metal/api --check-ttnn-forwards
+      language: system
+      pass_filenames: false
+    - id: validate-metalium-deprecation
+      name: validate-metalium-deprecation
+      entry: python3 scripts/validate_api/validate_deprecation.py tt_metal/api origin/main
+      language: system
+      pass_filenames: false
+- repo: local
+  hooks:
+    - id: check-torch-imports-in-ttnn
+      name: Verify that there is no global torch import in ttnn
+      entry: python3 scripts/validate_no_global_torch_imports.py
+      language: system
+      pass_filenames: false
+- repo: local
+  hooks:
+    - id: block-ttnn-pybind-changes
+      name: Prevent edits to frozen pybind11 sources under ttnn
+      entry: python3 scripts/block_ttnn_pybind_changes.py
+      language: system
+      pass_filenames: true
+      files: ^ttnn/
+- repo: local
+  hooks:
+    - id: convert-notebooks-to-py
+      name: Convert .ipynb to .py for ttnn basic examples
+      entry: python3 scripts/convert_notebooks_to_python.py
+      language: system
+- repo: local
+  hooks:
+    - id: detect-legacy-device-op
+      name: Detect legacy device operation classes in newly added files
+      entry: python3 scripts/detect_legacy_device_op.py --check-new-only
+      language: system
+      types: [file]
+      files: ^ttnn/.*\.hpp$
+      pass_filenames: true
+      require_serial: true
+- repo: local
+  hooks:
+    - id: validate-golden-csv-columns
+      name: Validate golden bandwidth CSV column headers
+      entry: bash .github/scripts/utils/validate_golden_csv_columns.sh
+      language: system
+      pass_filenames: false
+      files: ^tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden/.*bandwidth.*\.csv$

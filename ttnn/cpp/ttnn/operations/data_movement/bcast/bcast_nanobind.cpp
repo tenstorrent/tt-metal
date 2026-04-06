@@ -1,0 +1,71 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "bcast_nanobind.hpp"
+
+#include <optional>
+
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
+
+#include "ttnn-nanobind/bind_function.hpp"
+#include "ttnn/operations/data_movement/bcast/bcast.hpp"
+
+namespace ttnn::operations::data_movement::detail {
+namespace nb = nanobind;
+
+void bind_bcast(nb::module_& mod) {
+    const char* doc =
+        R"doc(
+            Perform a binary elementwise operation ``math_op`` between tensors ``input_a`` and ``input_b``, where values from tensor ``input_b`` are broadcast.
+
+            Let tensor ``input_a`` have shape ``[W0, Z0, Y0, X0]`` and tensor ``input_b`` shape ``[W1, Z1, Y1, X1]``. ``dim`` determines the type of broadcast performed.
+
+            For ``dim=BcastOpDim::W`` broadcast is performed on dimension ``X``. ``Y0`` and ``Y1`` must be the same and either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1).
+
+            For ``dim=BcastOpDim::H`` broadcast is performed on dimension  ``Y``. ``X0`` and ``X1`` must be the same and either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1).
+
+            For ``dim=BcastOpDim::HW`` broadcast is performed on dimensions ``X`` and ``Y``. Either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1) must hold for input shapes.
+
+            Both input tensors must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input_a", "Input tensor", "Tensor", "Tensor of shape [W0, Z0, Y0, X0]", "Yes"
+                "input_b", "Input tensor to broadcast", "Tensor", "Tensor of shape [W1, Z1, Y1, X1]", "Yes"
+                "math_op", "Aggregating math operation", " BcastOpMath", "ADD, SUB, MUL", "Yes"
+                "dim", "Dimension on which to broadcast", "BcastOpDim", "W, H, HW", "Yes"
+                "memory_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "Optional preallocated output tensor", "Tensor", "Default is None", "No"
+
+            Args:
+                * :attr:`input_tensor_a`: First Input Tensor for bcast.
+                * :attr:`input_tensor_b`: Second Input Tensor for bcast.
+                * :attr:`math_op`: Operation to be performed during broadcasting.
+                * :attr:`dim`: the dimension to reduce. If None, the bcast of the flattened input is returned
+
+            Keyword Args:
+                * :attr:`memory_config`: Memory Config of the output tensor
+                * :attr:`output_tensor`: Preallocated output tensor
+
+        )doc";
+
+    ttnn::bind_function<"bcast">(
+        mod,
+        doc,
+        ttnn::overload_t(
+            &ttnn::bcast,
+            nb::arg("input_a").noconvert(),
+            nb::arg("input_b").noconvert(),
+            nb::arg("math_op"),
+            nb::arg("dim"),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none()));
+}
+
+}  // namespace ttnn::operations::data_movement::detail

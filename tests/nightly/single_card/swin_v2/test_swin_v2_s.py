@@ -1,0 +1,1 @@
+../../../../models/experimental/swin_v2/tests/pcc/test_ttnn_swin_v2_s.py

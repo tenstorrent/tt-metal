@@ -1,0 +1,69 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <stdint.h>
+#include <mutex>
+#include <vector>
+
+#include "core_coord.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/experimental/context/metal_env.hpp>
+#include "dispatch_core_common.hpp"
+#include "dispatch_core_manager.hpp"
+#include <umd/device/types/xy_pair.hpp>
+
+namespace tt::tt_metal {
+
+// Cluster level interface through which device-dispatch characteristics can be
+// queried. This layer builds on top of the dispatch core manager (responsible for
+// assigning cores to specific dispatch tasks) and the Cluster (tracks multi-chip topology)
+// to provide users with higher level queries about the dispatch topology.
+
+// Any new functions querying dispatch state should be placed in this interface (along
+// with any existing functions that are in the device class but are exposing lower
+// level dispatch details to the user)
+class DispatchQueryManager {
+public:
+    DispatchQueryManager& operator=(const DispatchQueryManager&) = delete;
+    DispatchQueryManager& operator=(DispatchQueryManager&& other) noexcept = delete;
+    DispatchQueryManager(const DispatchQueryManager&) = delete;
+    DispatchQueryManager(DispatchQueryManager&& other) noexcept = delete;
+    DispatchQueryManager(
+        MetalEnv& env,
+        dispatch_core_manager& core_manager,
+        DispatchCoreConfig& dispatch_core_config,
+        uint8_t num_hw_cqs);
+
+    // dispatch_s related queries
+    bool dispatch_s_enabled() const;
+    bool distributed_dispatcher() const;
+    NOC go_signal_noc() const;
+    // General Dispatch related queries - configs and core placement
+    const std::vector<CoreCoord>& get_logical_dispatch_cores(uint32_t device_id) const;
+    const std::vector<CoreCoord>& get_logical_dispatch_cores_on_user_chips() const;
+    tt_cxy_pair get_dispatch_core(uint8_t cq_id) const;
+
+private:
+    void reset(DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs);
+
+    MetalEnv& env_;
+    dispatch_core_manager& core_manager_;
+    bool dispatch_s_enabled_ = false;
+    bool distributed_dispatcher_ = false;
+    NOC go_signal_noc_ = NOC::NOC_0;
+    uint8_t num_hw_cqs_ = 0;
+    DispatchCoreConfig dispatch_core_config_;  // The config this object was initialized with, need to store it so we
+                                               // know when to reset if it changes.
+    // Store the list of dispatch cores on user exposed chips. Expected to be identical across chips.
+    // Made mutable so it can be refreshed dynamically when dispatch mode changes (SD<->FD)
+    std::vector<CoreCoord> logical_dispatch_cores_on_user_chips_;
+    // Make this mutable, since this is JIT populated
+    // through a const instance when queried
+    mutable std::vector<tt_cxy_pair> dispatch_cores_;
+    mutable std::mutex modifier_mutex;
+};
+
+}  // namespace tt::tt_metal

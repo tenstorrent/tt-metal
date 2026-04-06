@@ -1,0 +1,526 @@
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+from typing import List, Mapping, Union
+
+import torch
+from loguru import logger
+from PIL.Image import Image
+from tqdm import tqdm
+from vllm.model_executor.models.gemma3_mm import (
+    Gemma3DummyInputsBuilder,
+    Gemma3MultiModalProcessor,
+    Gemma3ProcessingInfo,
+)
+from vllm.model_executor.models.interfaces import SupportsMultiModal
+from vllm.multimodal import MULTIMODAL_REGISTRY
+from vllm.multimodal.inputs import MultiModalDataDict
+from vllm.multimodal.profiling import BaseDummyInputsBuilder
+
+import ttnn
+from models.common.llama_models import create_vision_mask
+from models.common.utility_functions import is_wormhole_b0, nearest_32
+from models.tt_transformers.tt.generator import Generator, create_submeshes
+from models.tt_transformers.tt.model import Transformer
+from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
+
+
+def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
+    submesh_devices = [model.mesh_device for model in dp_model]
+    kv_cache = []
+    for mesh_idx, submesh in enumerate(submesh_devices):
+        cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
+        kv_tt = []
+        for layer_num in tqdm(range(num_layers), desc=f"Allocating TT kv caches for each layer (submesh {mesh_idx+1})"):
+            # Get the dtype for the kv cache based on the configured optimizations in the model
+            if dp_model[mesh_idx].args.optimizations is not None:
+                kv_cache_dtype = dp_model[mesh_idx].args.optimizations.get_tensor_dtype(
+                    decoder_id=layer_num, tensor=TensorGroup.KV_CACHE
+                )
+            else:
+                logger.info("No dtype specified for the model KV cache - defaulting to ttnn.bfloat8_b.")
+                kv_cache_dtype = None
+            # Set default to bfloat8_b when no optimizations are configured
+            kv_cache_dtype = ttnn.bfloat8_b if kv_cache_dtype is None else kv_cache_dtype
+            kv_tt_i = [
+                ttnn.as_tensor(
+                    cache_kv,
+                    device=submesh,
+                    # TODO: this could be ShardTensorToMesh, removing the need for vLLM to know about TP for num_kv_heads.
+                    # Could affect other calculations which use TTCacheEngine.num_kv_heads, though.
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=kv_cache_dtype,
+                    # Separate cache files for K and V to avoid collision.
+                    cache_file_name=tt_cache_path / f"empty_{kv}cache_paged_attention{kv_cache_shape}",
+                )
+                for kv in ["k", "v"]
+            ]
+
+            kv_tt.append(kv_tt_i)
+        kv_cache.append(kv_tt)
+    return kv_cache
+
+
+def initialize_vllm_text_transformer(
+    hf_config,
+    tt_data_parallel,
+    mesh_device,
+    max_batch_size,
+    max_seq_len,
+    n_layers=None,
+    dtype=ttnn.bfloat8_b,
+    optimizations=DecodersPrecision.performance,
+):
+    submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
+    # Load model args, weights
+    model_args = []
+    for submesh in submesh_devices:
+        model_args_i = ModelArgs(
+            submesh,
+            instruct=(
+                "Instruct" in hf_config._name_or_path or "DeepSeek-R1-Distill-Llama-70B" in hf_config._name_or_path
+            ),
+            max_batch_size=max_batch_size // tt_data_parallel,
+            optimizations=lambda model_args: optimizations(model_args.n_layers, model_args.model_name),
+            max_seq_len=max_seq_len,
+        )
+
+        assert model_args_i.model_name.replace("-", "") in hf_config._name_or_path.replace(
+            "-", ""
+        ), f"The model specified in vLLM ({hf_config._name_or_path}) does not match the model name ({model_args_i.model_name}) with model weights ({model_args_i.CKPT_DIR})."
+        if n_layers is not None:
+            model_args_i.n_layers = n_layers
+
+        model_args.append(model_args_i)
+
+    state_dict = model_args[0].load_state_dict()
+
+    tt_model = []
+    for i, submesh in enumerate(submesh_devices):
+        tt_model_i = Transformer(
+            args=model_args[i],
+            mesh_device=submesh,
+            dtype=dtype,
+            state_dict=state_dict,
+            weight_cache_path=model_args[i].weight_cache_path(dtype),
+            use_paged_kv_cache=True,
+        )
+        tt_model.append(tt_model_i)
+
+    return tt_model, model_args
+
+
+class DummyInputsBuilder(BaseDummyInputsBuilder):
+    """
+    We don't need to implement a dummy input builder since we don't do profiling in vLLM.
+    Create callable class just for processor registration.
+    """
+
+    def get_dummy_text(self, mm_counts: Mapping[str, int]) -> str:
+        raise NotImplementedError
+
+    def get_dummy_mm_data(
+        self,
+        seq_len: int,
+        mm_counts: Mapping[str, int],
+    ) -> MultiModalDataDict:
+        raise NotImplementedError
+
+
+# Mllama is currently not supported in vLLM V1.
+# TODO: Remove or re-enable when Mllama is supported in vLLM V1.
+# @MULTIMODAL_REGISTRY.register_processor(
+#     MllamaMultiModalProcessor, info=TT_MllamaProcessingInfo, dummy_inputs=DummyInputsBuilder
+# )
+class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
+    # Class-level capabilities
+    # Note: Mllama doesn't support prefix caching (it's V0 only)
+    model_capabilities = {
+        "supports_prefix_caching": False,
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.MLLAMA_IMAGE_TOKEN_ID = 128256
+        self.max_gen_len = self.model_args[0].max_seq_len - 1  # TODO: double check what this should be
+
+    @classmethod
+    def initialize_vllm_model(
+        cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, optimizations: str = None
+    ):
+        assert optimizations is None, "Custom optimizations are not supported for this model"
+        from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
+
+        submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
+
+        model_args = []
+        model = []
+        state_dict = None
+
+        for submesh in submesh_devices:
+            model_args_i, model_i, state_dict = create_multimodal_model(
+                mesh_device=submesh,
+                max_batch_size=max_batch_size // tt_data_parallel,
+                max_seq_len=max_seq_len,
+                use_paged_kv_cache=True,
+                checkpoint=state_dict,
+            )
+            model_args.append(model_args_i)
+            model.append(model_i)
+
+        return cls(model, model_args, mesh_device)
+
+    @property
+    def cache_path(self):
+        return self.model_args[0].model_cache_path
+
+    @property
+    def max_cross_attn_tokens(self):
+        return self.model_args[0].vision_max_num_chunks * nearest_32(self.model_args[0].vision_chunk_ntok)
+
+    def prefill_forward(
+        self,
+        tokens: torch.Tensor,
+        images: Union[List[Image], List[List[Image]]],
+        page_table: torch.Tensor,
+        kv_cache,
+        prompt_lens,
+        cross_page_table: torch.Tensor,
+    ):
+        """
+        Replaces prefill_forward from Generator with a version that supports mask creation.
+        """
+        batch = tokens.shape[0]
+
+        vision_images = []
+        vision_masks = []
+        total_lens = []
+        for user_id in range(batch):
+            image = images[user_id]
+            if isinstance(image, list):
+                assert len(image) == 1, "Only one image is supported for each user in the batch"
+                image = image[0]
+            vision_images.append([image] if image else None)
+            prompt_tokens = [int(tokens[user_id, i]) for i in range(prompt_lens[user_id])]
+            vision_masks.append(create_vision_mask(prompt_tokens, self.MLLAMA_IMAGE_TOKEN_ID) if image else None)
+            total_lens.append(prompt_lens[user_id] + self.max_gen_len)
+
+        return super().prefill_forward(
+            vision_images,
+            vision_masks,
+            tokens,
+            None,
+            total_lens,
+            prompt_lens,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            cross_page_table=cross_page_table,
+        )
+
+    def decode_forward(self, *args, **kwargs):
+        logits = super().decode_forward_llama_vision(*args, **kwargs)
+        if isinstance(logits, tuple):
+            return logits[0]
+        else:
+            return logits
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+
+class LlamaForCausalLM(Generator):
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": True,
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    @classmethod
+    def initialize_vllm_model(
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations: str = "performance",
+    ):
+        hf_model_name = hf_config._name_or_path
+        if (
+            ("3.1-8B" in hf_model_name or "3.2-11B" in hf_model_name)
+            and mesh_device.get_num_devices() == 1
+            and is_wormhole_b0()
+        ):
+            MAX_PROMPT_LEN = 32768
+            if max_seq_len > MAX_PROMPT_LEN:
+                raise ValueError(
+                    f"TT-LLama8B and TT-Llama11B do not support max_model_len greater than {MAX_PROMPT_LEN} on N150 "
+                    f"(received {max_seq_len}). Set --max_model_len to {MAX_PROMPT_LEN} or lower in vLLM."
+                )
+
+        tt_model, model_args = initialize_vllm_text_transformer(
+            hf_config,
+            tt_data_parallel,
+            mesh_device,
+            max_batch_size,
+            max_seq_len=max_seq_len,
+            n_layers=n_layers,
+            dtype=ttnn.bfloat8_b,
+            optimizations=DecodersPrecision.from_string(optimizations)
+            if optimizations is not None
+            else DecodersPrecision.performance,
+        )
+        return cls(tt_model, model_args, mesh_device)
+
+    @property
+    def cache_path(self):
+        return self.model_args[0].model_cache_path
+
+    def prefill_forward(self, *args, **kwargs):
+        return super().prefill_forward_text(*args, **kwargs)
+
+    def decode_forward(self, *args, **kwargs):
+        return super().decode_forward(*args, **kwargs)
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+
+class QwenForCausalLM(Generator):
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": True,
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    @classmethod
+    def initialize_vllm_model(
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations: str = "performance",
+    ):
+        tt_model, model_args = initialize_vllm_text_transformer(
+            hf_config,
+            tt_data_parallel,
+            mesh_device,
+            max_batch_size,
+            max_seq_len=max_seq_len,
+            n_layers=n_layers,
+            dtype=ttnn.bfloat8_b,
+            optimizations=DecodersPrecision.from_string(optimizations)
+            if optimizations is not None
+            else DecodersPrecision.performance,
+        )
+        return cls(tt_model, model_args, mesh_device)
+
+    @property
+    def cache_path(self):
+        return self.model_args[0].model_cache_path
+
+    def prefill_forward(self, *args, **kwargs):
+        return super().prefill_forward_text(*args, **kwargs)
+
+    def decode_forward(self, *args, **kwargs):
+        return super().decode_forward(*args, **kwargs)
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+
+class MistralForCausalLM(Generator):
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": True,
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    @classmethod
+    def initialize_vllm_model(
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations: str = "performance",
+    ):
+        tt_model, model_args = initialize_vllm_text_transformer(
+            hf_config,
+            tt_data_parallel,
+            mesh_device,
+            max_batch_size,
+            max_seq_len=max_seq_len,
+            n_layers=n_layers,
+            dtype=ttnn.bfloat8_b,
+            optimizations=DecodersPrecision.from_string(optimizations)
+            if optimizations is not None
+            else DecodersPrecision.performance,
+        )
+        return cls(tt_model, model_args, mesh_device)
+
+    @property
+    def cache_path(self):
+        return self.model_args[0].model_cache_path
+
+    def prefill_forward(self, *args, **kwargs):
+        return super().prefill_forward_text(*args, **kwargs)
+
+    def decode_forward(self, *args, **kwargs):
+        return super().decode_forward(*args, **kwargs)
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+
+@MULTIMODAL_REGISTRY.register_processor(
+    Gemma3MultiModalProcessor,
+    info=Gemma3ProcessingInfo,
+    dummy_inputs=Gemma3DummyInputsBuilder,
+)
+class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": False,
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    @classmethod
+    def initialize_vllm_model(
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len=131072,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations: str = "performance",
+    ):
+        from models.demos.multimodal.gemma3.demo.vision_demo import create_multimodal_model
+
+        optimizations = (
+            DecodersPrecision.from_string(optimizations) if optimizations is not None else DecodersPrecision.performance
+        )
+
+        submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
+
+        model_args = []
+        model = []
+        state_dict = None
+
+        for submesh in submesh_devices:
+            model_args_i, model_i, state_dict = create_multimodal_model(
+                mesh_device=submesh,
+                max_batch_size=max_batch_size // tt_data_parallel,
+                max_seq_len=max_seq_len,
+                use_paged_kv_cache=True,
+                checkpoint=state_dict,
+                optimizations=lambda model_args: optimizations(model_args.n_layers, model_args.model_name),
+            )
+            model_args.append(model_args_i)
+            model.append(model_i)
+
+        return cls(model, model_args, mesh_device)
+
+    @property
+    def cache_path(self):
+        return self.model_args[0].model_cache_path
+
+    def prefill_forward(self, *args, **kwargs):
+        return super().prefill_forward_text(**kwargs)
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+    def decode_forward(self, *args, **kwargs):
+        return super().decode_forward(*args, **kwargs)
+
+
+class GptOssForCausalLM(Generator):
+    """GPT-OSS model for vLLM integration"""
+
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": False,  # Sliding window => no prefix caching
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    @classmethod
+    def initialize_vllm_model(
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations: str = None,
+    ):
+        assert optimizations is None, "Custom optimizations are not supported for this model"
+        from models.demos.gpt_oss.tt.common import create_tt_model
+
+        model_args = []
+        model = []
+        state_dict = None
+        # GPT-OSS throughput profile uses user-row sharding on
+        # multi-row meshes with large max batch sizes (e.g., 128 on 4x8).
+        # This must be selected at model init time to ensure correct sharding
+        # and input preparation.
+        users_row_sharded = bool(mesh_device.shape[0] > 1 and max_batch_size > 32)
+        if users_row_sharded:
+            # For users_row_sharded, we internally manage DP=4 in attention so we don't need to create submeshes
+            tt_data_parallel = 1
+        submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
+        for submesh in submesh_devices:
+            # Use the existing create_tt_model function
+            model_args_i, model_i, _, state_dict = create_tt_model(
+                mesh_device=submesh,
+                max_batch_size=max_batch_size // tt_data_parallel,
+                max_seq_len=max_seq_len,
+                paged_attention_config=None,
+                dtype=ttnn.bfloat8_b,
+                state_dict=state_dict,
+                num_layers=n_layers,
+                mesh_config=None,
+                create_kv_cache=False,
+                users_row_sharded=users_row_sharded,
+                use_throughput_experts=submesh.shape[0] > 1 and (max_batch_size > 1),
+            )
+
+            model_args.append(model_args_i)
+            model.append(model_i)
+
+        return cls(model, model_args, mesh_device)
+
+    @property
+    def cache_path(self):
+        return self.model_args[0].weight_cache_path(ttnn.bfloat8_b)
+
+    def prefill_forward(self, *args, **kwargs):
+        return super().prefill_forward_text(*args, **kwargs)
+
+    def decode_forward(self, *args, **kwargs):
+        return super().decode_forward(*args, **kwargs)
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)

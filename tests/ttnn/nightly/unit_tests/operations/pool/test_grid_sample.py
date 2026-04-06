@@ -1,0 +1,799 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+import pytest
+import torch
+import torch.nn.functional as F
+from loguru import logger
+
+import ttnn
+from tests.ttnn.utils_for_testing import assert_with_pcc
+from ttnn.operations.pool import golden_grid_sample
+
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
+
+def validate_grid_sample_output(
+    expected_output,
+    actual_output,
+    use_precomputed_grid=False,
+    grid_dtype=ttnn.bfloat16,
+    mode="bilinear",
+):
+    """
+    Validate grid sample output using both PCC and allclose checks.
+
+    Args:
+        expected_output: Expected PyTorch tensor output
+        actual_output: Actual TTNN tensor output (converted to torch)
+        use_precomputed_grid: Whether precomputed grid was used
+        grid_dtype: Grid data type used (ttnn.bfloat16 or ttnn.float32)
+        pcc_threshold: PCC threshold for validation (default 0.99)
+
+    Returns:
+        tuple: (pcc_passed, allclose_passed, pcc_message)
+
+    Raises:
+        AssertionError: If either PCC or allclose validation fails
+    """
+
+    # Determine allclose tolerances based on grid type and precomputed grid usage
+    if mode == "bilinear":
+        if use_precomputed_grid:
+            atol, rtol = 0.02, 2e-2  # Precomputed grid has slightly lower accuracy
+        else:
+            if grid_dtype == ttnn.float32:
+                atol, rtol = 0.02, 1e-2
+            else:  # bfloat16
+                atol, rtol = 1.0, 1e-1
+
+        allclose_passed = torch.allclose(expected_output, actual_output, atol=atol, rtol=rtol)
+    else:
+        allclose_passed = torch.equal(expected_output, actual_output)
+
+    # Assertions
+    if mode == "bilinear":
+        assert allclose_passed, f"Test failed allclose comparison (atol={atol}, rtol={rtol})"
+    else:
+        assert allclose_passed, f"Test failed exact equality comparison for nearest mode"
+    return allclose_passed
+
+
+# Constants
+L1_ALIGNMENT_BYTES = 16
+BFLOAT16_BYTES_PER_ELEMENT = 2
+FLOAT32_BYTES_PER_ELEMENT = 4
+PRECOMPUTED_GRID_ELEMENTS_PER_POINT = 6  # For bilinear mode
+PRECOMPUTED_GRID_ELEMENTS_PER_POINT_NEAREST = 2  # For nearest mode
+STANDARD_GRID_ELEMENTS_PER_POINT = 2
+BFLOAT16S_PER_L1_ALIGNMENT = L1_ALIGNMENT_BYTES // BFLOAT16_BYTES_PER_ELEMENT  # 8
+FLOAT32S_PER_L1_ALIGNMENT = L1_ALIGNMENT_BYTES // FLOAT32_BYTES_PER_ELEMENT  # 4
+
+
+# Utility functions
+def div_up(numerator, denominator):
+    """Integer division with ceiling (round up)"""
+    return (numerator + denominator - 1) // denominator
+
+
+def align_to_boundary(value, alignment):
+    """Round up value to the nearest alignment boundary"""
+    return div_up(value, alignment) * alignment
+
+
+def _prepare_grid_tensor_host(
+    torch_grid,
+    use_precomputed_grid,
+    grid_dtype,
+    input_shape_nhwc,
+    grid_batching_factor,
+    mode="bilinear",
+    align_corners=False,
+):
+    """
+    Common grid preparation logic for both interleaved and sharded grids.
+
+    Args:
+        torch_grid: PyTorch grid tensor
+        use_precomputed_grid: Whether to use precomputed grid
+        grid_dtype: Grid data type (ttnn.bfloat16 or ttnn.float32)
+        input_shape_nhwc: Input shape in NHWC format (required for precomputed grid)
+        grid_batching_factor: Optional batching factor for reshaping grid
+        mode: Interpolation mode ("nearest" or "bilinear")
+
+    Returns:
+        ttnn tensor: Prepared grid tensor on host (not yet on device)
+    """
+    batch_size, grid_h, grid_w, grid_coords = torch_grid.shape
+
+    if use_precomputed_grid:
+        if input_shape_nhwc is None:
+            raise ValueError("input_shape_nhwc is required for precomputed grid")
+
+        # Create precomputed grid
+        ttnn_grid_host = ttnn.from_torch(torch_grid, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.float32)
+        ttnn_grid_precomputed = ttnn.prepare_grid_sample_grid(
+            ttnn_grid_host,
+            input_shape_nhwc,
+            mode=mode,
+            align_corners=align_corners,
+            padding_mode="zeros",
+            output_dtype=ttnn.bfloat16,
+        )
+
+        if grid_batching_factor is not None:
+            # Reshape for grid batching: (N, H, W*K, elements) -> (N, H, W, elements*K)
+            new_grid_w = grid_w // grid_batching_factor
+            elements_per_point = (
+                PRECOMPUTED_GRID_ELEMENTS_PER_POINT_NEAREST
+                if mode == "nearest"
+                else PRECOMPUTED_GRID_ELEMENTS_PER_POINT
+            )
+            final_last_dim = elements_per_point * grid_batching_factor
+            return ttnn.reshape(ttnn_grid_precomputed, (batch_size, grid_h, new_grid_w, final_last_dim))
+        else:
+            return ttnn_grid_precomputed
+    else:
+        # Create regular grid
+        ttnn_grid_host = ttnn.from_torch(torch_grid, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=grid_dtype)
+
+        if grid_batching_factor is not None:
+            # Reshape for grid batching: (N, H, W*K, 2) -> (N, H, W, 2*K)
+            new_grid_w = grid_w // grid_batching_factor
+            new_last_dim = STANDARD_GRID_ELEMENTS_PER_POINT * grid_batching_factor
+            return ttnn.reshape(ttnn_grid_host, (batch_size, grid_h, new_grid_w, new_last_dim))
+        else:
+            return ttnn_grid_host
+
+
+def prepare_ttnn_grid(
+    torch_grid,
+    device,
+    use_precomputed_grid,
+    grid_dtype,
+    input_shape_nhwc=None,
+    grid_batching_factor=None,
+    mode="bilinear",
+    align_corners=False,
+):
+    """
+    Prepare TTNN grid tensor from PyTorch grid.
+
+    Args:
+        torch_grid: PyTorch grid tensor
+        device: TTNN device
+        use_precomputed_grid: Whether to use precomputed grid
+        grid_dtype: Grid data type (ttnn.bfloat16 or ttnn.float32)
+        input_shape_nhwc: Input shape in NHWC format (required for precomputed grid)
+        grid_batching_factor: Optional batching factor for reshaping grid
+        mode: Interpolation mode ("nearest" or "bilinear")
+
+    Returns:
+        ttnn tensor: Prepared grid tensor on device
+    """
+    ttnn_grid_reshaped = _prepare_grid_tensor_host(
+        torch_grid, use_precomputed_grid, grid_dtype, input_shape_nhwc, grid_batching_factor, mode, align_corners
+    )
+    return ttnn.to_device(ttnn_grid_reshaped, device)
+
+
+def prepare_sharded_grid_memory_config(
+    device,
+    batch_size,
+    grid_h,
+    grid_w,
+    use_precomputed_grid,
+    grid_dtype,
+    grid_batching_factor=None,
+    core_grid_override=None,
+    mode="bilinear",
+):
+    """
+    Create sharded memory configuration for grid tensor.
+
+    Args:
+        device: TTNN device
+        batch_size: Batch size
+        grid_h: Grid height
+        grid_w: Grid width
+        use_precomputed_grid: Whether using precomputed grid
+        grid_dtype: Grid data type
+        grid_batching_factor: Optional batching factor
+        core_grid_override: Optional core grid override (for custom sharding)
+        mode: Interpolation mode ("nearest" or "bilinear")
+
+    Returns:
+        ttnn.MemoryConfig: Sharded memory configuration
+    """
+    compute_grid_size = device.compute_with_storage_grid_size()
+
+    if core_grid_override is not None:
+        # Check if device has enough cores for the specified core grid
+        if core_grid_override.y > compute_grid_size.y or core_grid_override.x > compute_grid_size.x:
+            import pytest
+
+            pytest.skip(f"Device grid {compute_grid_size} insufficient for test core grid {core_grid_override}")
+        core_grid = core_grid_override
+    else:
+        # Use full device compute grid by default instead of hardcoded values
+        core_grid = ttnn.CoreGrid(y=compute_grid_size.y, x=compute_grid_size.x)
+
+    # Calculate grid dimensions based on batching
+    if grid_batching_factor is not None:
+        new_grid_w = grid_w // grid_batching_factor
+        grid_total_height = batch_size * grid_h * new_grid_w
+        if use_precomputed_grid:
+            elements_per_point = (
+                PRECOMPUTED_GRID_ELEMENTS_PER_POINT_NEAREST
+                if mode == "nearest"
+                else PRECOMPUTED_GRID_ELEMENTS_PER_POINT
+            )
+        else:
+            elements_per_point = STANDARD_GRID_ELEMENTS_PER_POINT
+        grid_logical_width = elements_per_point * grid_batching_factor
+    else:
+        grid_total_height = batch_size * grid_h * grid_w
+        if use_precomputed_grid:
+            grid_logical_width = (
+                PRECOMPUTED_GRID_ELEMENTS_PER_POINT_NEAREST
+                if mode == "nearest"
+                else PRECOMPUTED_GRID_ELEMENTS_PER_POINT
+            )
+        else:
+            grid_logical_width = STANDARD_GRID_ELEMENTS_PER_POINT
+
+    grid_shard_height = div_up(grid_total_height, core_grid.num_cores)
+
+    # Round up to L1 alignment: width * BYTES_PER_ELEMENT should be multiple of L1_ALIGNMENT_BYTES
+    bytes_per_element = FLOAT32_BYTES_PER_ELEMENT if grid_dtype == ttnn.float32 else BFLOAT16_BYTES_PER_ELEMENT
+    grid_shard_width_aligned = (
+        align_to_boundary(grid_logical_width * bytes_per_element, L1_ALIGNMENT_BYTES) // bytes_per_element
+    )
+
+    return ttnn.create_sharded_memory_config(
+        (grid_shard_height, grid_shard_width_aligned),
+        core_grid,
+        ttnn.ShardStrategy.HEIGHT,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
+def prepare_sharded_ttnn_grid(
+    torch_grid,
+    device,
+    use_precomputed_grid,
+    mode,
+    align_corners,
+    grid_dtype,
+    input_shape_nhwc=None,
+    grid_batching_factor=None,
+    core_grid_override=None,
+):
+    """
+    Prepare TTNN grid tensor with sharding from PyTorch grid.
+
+    Args:
+        torch_grid: PyTorch grid tensor
+        device: TTNN device
+        use_precomputed_grid: Whether to use precomputed grid
+        grid_dtype: Grid data type (ttnn.bfloat16 or ttnn.float32)
+        input_shape_nhwc: Input shape in NHWC format (required for precomputed grid)
+        grid_batching_factor: Optional batching factor for reshaping grid
+        core_grid_override: Optional core grid override (for custom sharding)
+
+    Returns:
+        ttnn tensor: Prepared sharded grid tensor on device
+    """
+    batch_size, grid_h, grid_w, grid_coords = torch_grid.shape
+
+    # Use common grid preparation logic
+    ttnn_grid_reshaped = _prepare_grid_tensor_host(
+        torch_grid, use_precomputed_grid, grid_dtype, input_shape_nhwc, grid_batching_factor, mode, align_corners
+    )
+
+    grid_memory_config = prepare_sharded_grid_memory_config(
+        device,
+        batch_size,
+        grid_h,
+        grid_w,
+        use_precomputed_grid,
+        grid_dtype,
+        grid_batching_factor,
+        core_grid_override,
+        mode,
+    )
+
+    ttnn_grid_interleaved = ttnn.to_device(ttnn_grid_reshaped, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.to_memory_config(ttnn_grid_interleaved, grid_memory_config)
+
+
+@pytest.mark.parametrize(
+    "input_shape, grid_shape",
+    [
+        ((1, 256, 48, 160), (1, 1, 1408, 2)),
+        ((1, 256, 24, 80), (1, 1, 1408, 2)),
+        ((1, 256, 48, 160), (1, 1, 1408, 2)),
+        ((1, 256, 12, 40), (1, 7, 25281, 2)),
+        ((1, 256, 24, 80), (1, 7, 25281, 2)),
+        ((1, 256, 48, 160), (1, 7, 25281, 2)),
+        ((16, 32, 100, 100), (16, 10000, 4, 2)),
+        ((48, 32, 12, 20), (48, 3567, 8, 2)),
+        ((8, 32, 100, 100), (8, 300, 4, 2)),
+        ((8, 32, 100, 100), (8, 2000, 4, 2)),
+        ((16, 32, 50, 50), (16, 10000, 1, 2)),
+        ((48, 32, 80, 45), (48, 4832, 1, 2)),
+        ((48, 32, 40, 23), (48, 4832, 1, 2)),
+        ((48, 32, 20, 12), (48, 4832, 1, 2)),
+        ((48, 32, 10, 6), (48, 4832, 1, 2)),
+        ((8, 32, 50, 50), (8, 3604, 1, 2)),
+    ],
+)
+@pytest.mark.parametrize(
+    "mode, align_corners, use_precomputed_grid",
+    [
+        ("nearest", True, True),
+        ("nearest", False, True),
+        ("bilinear", False, True),
+        ("bilinear", False, False),
+    ],
+)
+def test_grid_sample_near_uniform_grid(device, input_shape, mode, align_corners, grid_shape, use_precomputed_grid):
+    torch.manual_seed(0)
+    if grid_shape != (1, 1, 1408, 2) and mode == "nearest":
+        pytest.skip("Tensors too large for sharded output which nearest mode supports")
+
+    batch_size, channels, height, width = input_shape
+    _, grid_h, grid_w, _ = grid_shape
+
+    input_shape_nhwc = [batch_size, height, width, channels]
+
+    torch_input_nhwc = torch.randn((batch_size, height, width, channels), dtype=torch.bfloat16)
+
+    # Generates a uniform grid using torch affine grid
+    theta = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=torch.float32)
+    theta_batched = theta.unsqueeze(0).expand(batch_size, -1, -1)
+    shape = (batch_size, 1, grid_h, grid_w)
+    torch_grid = F.affine_grid(theta_batched, shape, align_corners=align_corners)
+
+    # Add small noise to the grid
+    torch_grid += torch.randn(grid_shape) * 0.05
+
+    # Use float32 grid for golden when precomputed grid is used (precomputed grid computation uses float32 internally)
+    golden_grid_dtype = torch.float32 if use_precomputed_grid else torch.bfloat16
+    torch_output_nhwc = golden_grid_sample(
+        input_tensor=torch_input_nhwc,
+        grid=torch_grid.to(golden_grid_dtype),
+        mode=mode,
+        padding_mode="zeros",
+        align_corners=align_corners,
+    )
+
+    ttnn_input = ttnn.from_torch(
+        torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+
+    # Prepare grid tensor
+    ttnn_grid_device = prepare_ttnn_grid(
+        torch_grid,
+        device,
+        use_precomputed_grid,
+        ttnn.bfloat16,
+        input_shape_nhwc,
+        mode=mode,
+        align_corners=align_corners,
+    )
+
+    ttnn_output = ttnn.grid_sample(
+        ttnn_input, ttnn_grid_device, mode=mode, align_corners=align_corners, use_precomputed_grid=use_precomputed_grid
+    )
+
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
+
+    validate_grid_sample_output(
+        torch_output_nhwc,
+        ttnn_output_torch,
+        use_precomputed_grid=use_precomputed_grid,
+        grid_dtype=ttnn.bfloat16,
+        mode=mode,
+    )
+
+
+@pytest.mark.parametrize("use_precomputed_grid", [True, False])
+@pytest.mark.parametrize("batch_output_channels", [True, False])
+@pytest.mark.parametrize("grid_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize(
+    "input_shape, grid_shape, grid_batching_factor",
+    [
+        ((1, 256, 48, 160), (1, 25281, 7, 2), 7),
+        ((1, 64, 16, 32), (1, 8, 12, 2), 3),
+        ((2, 32, 8, 16), (2, 6, 8, 2), 2),
+        ((1, 128, 32, 32), (1, 16, 16, 2), 4),
+    ],
+)
+def test_grid_sample_batch_output_channels_flag(
+    device, input_shape, grid_shape, grid_batching_factor, batch_output_channels, use_precomputed_grid, grid_dtype
+):
+    if grid_dtype == ttnn.float32 and use_precomputed_grid:
+        pytest.skip("Precomputed grid only supports bfloat16")
+
+    torch.manual_seed(42)
+
+    batch_size, channels, height, width = input_shape
+    grid_n, grid_h, grid_w, grid_coords = grid_shape
+
+    torch_input_nchw = torch.randn(input_shape, dtype=torch.float32)
+    torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+
+    grid_tensor = torch.rand(batch_size, grid_h, grid_w, 2, dtype=torch.float32) * 2.0 - 1.0
+
+    torch_output_nhwc = golden_grid_sample(
+        torch_input_nhwc,
+        grid_tensor,
+        mode="bilinear",
+        padding_mode="zeros",
+        align_corners=False,
+        batch_output_channels=batch_output_channels,
+        grid_batching_factor=grid_batching_factor,
+    )
+
+    ttnn_input = ttnn.from_torch(
+        torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+
+    input_shape_nhwc = [batch_size, height, width, channels]
+    ttnn_grid_device = prepare_ttnn_grid(
+        grid_tensor,
+        device,
+        use_precomputed_grid,
+        grid_dtype,
+        input_shape_nhwc,
+        grid_batching_factor,
+        mode="bilinear",
+        align_corners=False,
+    )
+
+    ttnn_output = ttnn.grid_sample(
+        ttnn_input,
+        ttnn_grid_device,
+        use_precomputed_grid=use_precomputed_grid,
+        batch_output_channels=batch_output_channels,
+        mode="bilinear",
+        align_corners=False,
+    )
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
+
+    validate_grid_sample_output(
+        torch_output_nhwc,
+        ttnn_output_torch,
+        use_precomputed_grid=use_precomputed_grid,
+        grid_dtype=grid_dtype,
+        mode="bilinear",
+    )
+
+
+@pytest.mark.parametrize("grid_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize(
+    "input_shape, grid_shape",
+    [
+        ((1, 256, 48, 160), (1, 1, 1408, 2)),
+        ((1, 256, 24, 80), (1, 1, 1408, 2)),
+        ((1, 256, 48, 160), (1, 1, 25281, 2)),
+        ((48, 64, 32, 64), (48, 15, 15, 2)),
+        ((13, 96, 8, 16), (13, 6, 7, 2)),
+    ],
+)
+@pytest.mark.parametrize(
+    "core_grid",
+    [
+        None,  # Use full device grid
+        ttnn.CoreGrid(y=4, x=5),  # 4,5 is the grid size of the BOS N1 device
+    ],
+)
+@pytest.mark.parametrize(
+    "mode, align_corners, use_precomputed_grid",
+    [
+        ("nearest", True, True),
+        ("nearest", False, True),
+        ("bilinear", False, True),
+        ("bilinear", False, False),
+    ],
+)
+def test_grid_sample_sharded(
+    device, input_shape, mode, align_corners, grid_shape, use_precomputed_grid, grid_dtype, core_grid
+):
+    """Test grid sample with sharded grid tensor and interleaved input tensor"""
+    # Skip precomputed grid tests for float32 since precomputed grid only supports bfloat16
+    if use_precomputed_grid and grid_dtype == ttnn.float32:
+        pytest.skip("Precomputed grid only supports bfloat16")
+
+    torch.manual_seed(42)
+
+    batch_size, channels, height, width = input_shape
+    grid_n, grid_h, grid_w, grid_coords = grid_shape
+
+    input_shape_nhwc = [batch_size, height, width, channels]
+
+    torch_input_nhwc = torch.randn((batch_size, height, width, channels), dtype=torch.bfloat16)
+
+    torch_grid = torch.rand(grid_shape, dtype=torch.float32) * 2 - 1
+
+    # Use float32 grid for golden when precomputed grid is used (precomputed grid computation uses float32 internally)
+    # or when grid_dtype is float32 (to match precision of ttnn)
+    golden_grid_dtype = torch.float32 if (grid_dtype == ttnn.float32 or use_precomputed_grid) else torch.bfloat16
+    torch_output_nhwc = golden_grid_sample(
+        input_tensor=torch_input_nhwc,
+        grid=torch_grid.to(golden_grid_dtype),
+        mode=mode,
+        padding_mode="zeros",
+        align_corners=align_corners,
+    )
+
+    ttnn_input = ttnn.from_torch(
+        torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+
+    ttnn_grid_device = prepare_sharded_ttnn_grid(
+        torch_grid,
+        device,
+        use_precomputed_grid,
+        mode=mode,
+        align_corners=align_corners,
+        grid_dtype=grid_dtype,
+        input_shape_nhwc=input_shape_nhwc,
+        core_grid_override=core_grid,
+    )
+
+    # Call TTNN grid_sample - should automatically use sharded implementation
+    ttnn_output = ttnn.grid_sample(
+        ttnn_input, ttnn_grid_device, mode=mode, align_corners=align_corners, use_precomputed_grid=use_precomputed_grid
+    )
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
+
+    validate_grid_sample_output(
+        torch_output_nhwc,
+        ttnn_output_torch,
+        use_precomputed_grid=use_precomputed_grid,
+        grid_dtype=grid_dtype,
+        mode=mode,
+    )
+
+
+@pytest.mark.parametrize("batch_output_channels", [True, False])
+@pytest.mark.parametrize("grid_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize(
+    "input_shape, grid_shape, grid_batching_factor",
+    [
+        ((1, 256, 48, 160), (1, 1, 2809 * 7, 2), 7),
+        ((7, 32, 16, 32), (7, 8, 8, 2), 2),
+        ((1, 96, 24, 32), (1, 6, 16, 2), 4),
+    ],
+)
+@pytest.mark.parametrize(
+    "core_grid",
+    [
+        None,  # Use full device grid
+        ttnn.CoreGrid(y=5, x=4),  # Limited core grid (5x4=20 cores)
+    ],
+)
+@pytest.mark.parametrize(
+    "mode, align_corners, use_precomputed_grid",
+    [
+        ("nearest", True, True),
+        ("nearest", False, True),
+        ("bilinear", False, True),
+        ("bilinear", False, False),
+    ],
+)
+def test_grid_sample_sharded_batched(
+    device,
+    input_shape,
+    mode,
+    align_corners,
+    grid_shape,
+    grid_batching_factor,
+    use_precomputed_grid,
+    batch_output_channels,
+    grid_dtype,
+    core_grid,
+):
+    if use_precomputed_grid and grid_dtype == ttnn.float32:
+        pytest.skip("Precomputed grid only supports bfloat16")
+
+    torch.manual_seed(0)
+
+    batch_size, channels, height, width = input_shape
+    grid_n, grid_h, grid_w, grid_coords = grid_shape
+
+    input_shape_nhwc = [batch_size, height, width, channels]
+
+    torch_input_nhwc = torch.randn((batch_size, height, width, channels), dtype=torch.bfloat16)
+
+    torch_grid = torch.rand(grid_shape, dtype=torch.float32) * 2 - 1
+
+    # Use float32 grid for golden when precomputed grid is used (precomputed grid computation uses float32 internally)
+    # or when grid_dtype is float32 (to match precision of ttnn)
+    golden_grid_dtype = torch.float32 if (grid_dtype == ttnn.float32 or use_precomputed_grid) else torch.bfloat16
+    torch_output_nhwc = golden_grid_sample(
+        input_tensor=torch_input_nhwc,
+        grid=torch_grid.to(golden_grid_dtype),
+        mode=mode,
+        padding_mode="zeros",
+        align_corners=align_corners,
+        batch_output_channels=batch_output_channels,
+        grid_batching_factor=grid_batching_factor,
+    )
+
+    ttnn_input = ttnn.from_torch(
+        torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+
+    ttnn_grid_device = prepare_sharded_ttnn_grid(
+        torch_grid,
+        device,
+        use_precomputed_grid,
+        mode,
+        align_corners,
+        grid_dtype,
+        input_shape_nhwc,
+        grid_batching_factor,
+        core_grid,
+    )
+
+    ttnn_output = ttnn.grid_sample(
+        ttnn_input,
+        ttnn_grid_device,
+        mode=mode,
+        align_corners=align_corners,
+        use_precomputed_grid=use_precomputed_grid,
+        batch_output_channels=batch_output_channels,
+    )
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
+
+    validate_grid_sample_output(
+        torch_output_nhwc,
+        ttnn_output_torch,
+        use_precomputed_grid=use_precomputed_grid,
+        grid_dtype=grid_dtype,
+        mode=mode,
+    )
+
+
+@pytest.mark.parametrize("use_precomputed_grid", [True])
+@pytest.mark.parametrize("io_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("grid_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize(
+    "input_shape, grid_shape, grid_batching_factor, num_slices",
+    [
+        ((1, 256, 48, 160), (1, 25344, 7, 2), 7, 18),
+        ((1, 256, 24, 80), (1, 25344, 7, 2), 7, 12),
+        ((1, 256, 48, 160), (1, 25344 // 18, 7, 2), 7, 1),  # single slice
+        ((1, 256, 24, 80), (1, 25344 // 12, 7, 2), 7, 1),  # single slice
+    ],
+)
+@pytest.mark.parametrize(
+    "core_grid",
+    [
+        ttnn.CoreGrid(x=5, y=4),  # Limited core grid (5x4=20 cores)
+    ],
+)
+def test_grid_sample_oft(
+    device,
+    input_shape,
+    grid_shape,
+    grid_batching_factor,
+    num_slices,
+    use_precomputed_grid,
+    io_dtype,
+    grid_dtype,
+    core_grid,
+):
+    # Skip specific OOM test case
+    if (
+        input_shape == (1, 256, 24, 80)
+        and grid_shape == (1, 25344, 7, 2)
+        and io_dtype == ttnn.float32
+        and grid_dtype == ttnn.bfloat16
+        and use_precomputed_grid == True
+    ):
+        pytest.skip("Skipping OOM test case")
+
+    if use_precomputed_grid and grid_dtype == ttnn.float32:
+        pytest.skip("Precomputed grid only supports bfloat16")
+
+    if io_dtype == ttnn.float32:
+        torch_io_dtype = torch.float32
+    elif io_dtype == ttnn.bfloat16:
+        torch_io_dtype = torch.bfloat16
+    else:
+        pytest.skip("Unsupported input dtype")
+
+    torch.manual_seed(0)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    # Check if device has enough cores for the specified core grid
+    if core_grid.y > compute_grid_size.y or core_grid.x > compute_grid_size.x:
+        core_grid = ttnn.CoreGrid(x=compute_grid_size.x, y=compute_grid_size.y)
+
+    batch_size, channels, height, width = input_shape
+    grid_n, grid_h, grid_w, grid_coords = grid_shape
+
+    input_shape_nhwc = [batch_size, height, width, channels]
+
+    torch_input_nchw = torch.randn(input_shape, dtype=torch.float32)
+    torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1).to(torch_io_dtype)
+
+    torch_grid = torch.randn(grid_shape, dtype=torch.float32) * 2 - 1
+
+    # Prepare TTNN input and grid slices
+    ttnn_input = ttnn.from_torch(
+        torch_input_nhwc,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        dtype=io_dtype,
+    )
+    ttnn_grid_device = prepare_ttnn_grid(
+        torch_grid,
+        device,
+        use_precomputed_grid,
+        grid_dtype,
+        input_shape_nhwc,
+        grid_batching_factor,
+        mode="nearest",
+        align_corners=True,
+    )
+    ttnn_grid_device = ttnn.reshape(ttnn_grid_device, (1, 1, ttnn_grid_device.shape[1], ttnn_grid_device.shape[3]))
+    ttnn_grid_device_slices = ttnn.split(ttnn_grid_device, ttnn_grid_device.shape[2] // num_slices, dim=2)
+
+    if use_signpost:
+        signpost(header=f"Starting OFT grid_sample with {num_slices} slices and input shape {input_shape}")
+
+    # Compute golden output on the full grid with batch_output_channels=True to match TTNN's output layout.
+    # grid_batching_factor is passed explicitly since the grid is in un-batched form (last_dim=2, K=1).
+    torch_output_nhwc = golden_grid_sample(
+        torch_input_nhwc,
+        torch_grid,
+        mode="nearest",
+        padding_mode="zeros",
+        align_corners=True,
+        batch_output_channels=True,
+        grid_batching_factor=grid_batching_factor,
+    )
+
+    # Run grid_sample on each slice and collect outputs
+    ttnn_output_slices = []
+    for slice_idx in range(num_slices):
+        ttnn_grid_slice = ttnn_grid_device_slices[slice_idx]
+        ttnn_grid_slice = ttnn.to_memory_config(ttnn_grid_slice, ttnn.DRAM_MEMORY_CONFIG)
+
+        ttnn_output = ttnn.grid_sample(
+            ttnn_input,
+            ttnn_grid_slice,
+            use_precomputed_grid=use_precomputed_grid,
+            batch_output_channels=True,
+            mode="nearest",
+            align_corners=True,
+        )
+
+        ttnn_output_torch = ttnn.to_torch(ttnn_output).reshape(1, ttnn_output.shape[2], 1, ttnn_output.shape[3])
+        ttnn_output_slices.append(ttnn_output_torch)
+
+    # Concatenate all slice outputs and validate against the full golden output
+    ttnn_output_full = torch.cat(ttnn_output_slices, dim=1)
+
+    validate_grid_sample_output(
+        torch_output_nhwc,
+        ttnn_output_full,
+        use_precomputed_grid=use_precomputed_grid,
+        grid_dtype=grid_dtype,
+        mode="nearest",
+    )
+
+    if use_signpost:
+        signpost(header="Completed OFT grid_sample test")

@@ -1,0 +1,1 @@
+../../../../models/demos/vision/generative/stable_diffusion/wormhole/tests/test_downblock_2d.py

@@ -1,0 +1,259 @@
+name: "(Galaxy) Choose your pipeline"
+
+on:
+  workflow_dispatch:
+    inputs:
+      trigger_type:
+        description: "'manual' = custom selection below; other options = predefined configs. ⚠️ Resource intensive!"
+        required: true
+        type: choice
+        options:
+          - manual
+          - models-mandatory
+          - models-extended
+          - op-pr
+          - nightly
+          - hw-self-test
+        default: "manual"
+      extra-tag:
+        required: true
+        type: string
+        default: "in-service"
+      galaxy-quick:
+        required: false
+        type: boolean
+        default: false
+      galaxy-unit:
+        description: 'Unit tests: Select all, specific model, or disabled'
+        required: false
+        type: choice
+        options:
+          - disabled
+          - all
+          - unit
+          - fabric
+          - multiprocess
+          - llama3-70b
+          - prefetcher
+          - distributed-ops
+          - gpt-oss
+        default: 'disabled'
+      galaxy-demo:
+        description: 'Demo tests: Select all, specific model, or disabled'
+        required: false
+        type: choice
+        options:
+          - disabled
+          - all
+          - llama3
+          - llama3_long_context
+          - llama3_evals
+          - llama3_8b_dp
+          - llama3_70b_dp
+          - falcon7b
+          - sentence_bert
+          - whisper
+          - sd35
+          - flux1
+          - gpt-oss
+          - motif
+          - wan22
+          - mochi
+          - qwen3_32b
+          - qwen3_32b_long_context
+          - deepseek_v3
+          - qwenimage
+        default: 'disabled'
+      galaxy-integration:
+        description: 'Integration tests: Select all, specific model, or disabled'
+        required: false
+        type: choice
+        options:
+          - disabled
+          - all
+          - llama3
+          - resnet50
+          - unit
+          - sd35
+          - wan22
+          - mochi
+          - flux1
+          - motif
+          - qwenimage
+        default: 'disabled'
+      galaxy-perf:
+        description: 'Perf tests: Select all, specific model, or disabled'
+        required: false
+        type: choice
+        options:
+          - disabled
+          - all
+#          - cnn
+#          - llama70b
+#          - llama_unit_tests
+#          - llama70b_prefill
+          - sd35
+          - flux1-dev
+          - motif
+#          - sentence_bert
+          - wan2-2
+          - mochi
+          - qwenimage
+        default: 'disabled'
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        default: "Release"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
+run-name: ${{ inputs.description }}
+jobs:
+  # Centralized logic to determine what should run
+  determine-tests:
+    runs-on: ubuntu-latest
+    outputs:
+      run-quick: ${{ steps.logic.outputs.run-quick }}
+      run-unit: ${{ steps.logic.outputs.run-unit }}
+      run-integration: ${{ steps.logic.outputs.run-integration }}
+      run-demo: ${{ steps.logic.outputs.run-demo }}
+      run-model-perf: ${{ steps.logic.outputs.run-model-perf }}
+    steps:
+      - name: Determine test execution
+        id: logic
+        # Skip all but galaxy-quick if trigger-type is not manual
+        run: |
+          case "${{ inputs.trigger_type }}" in
+            "manual")
+              echo "run-quick=${{ inputs.galaxy-quick }}" >> $GITHUB_OUTPUT
+              echo "run-unit=${{ inputs.galaxy-unit != 'disabled' }}" >> $GITHUB_OUTPUT
+              echo "run-integration=${{ inputs.galaxy-integration != 'disabled' }}" >> $GITHUB_OUTPUT
+              echo "run-demo=${{ inputs.galaxy-demo != 'disabled' }}" >> $GITHUB_OUTPUT
+              echo "run-model-perf=${{ inputs.galaxy-perf != 'disabled' }}" >> $GITHUB_OUTPUT
+              ;;
+            "models-mandatory")
+              echo "run-quick=true" >> $GITHUB_OUTPUT
+              echo "run-unit=false" >> $GITHUB_OUTPUT
+              echo "run-integration=false" >> $GITHUB_OUTPUT
+              echo "run-demo=false" >> $GITHUB_OUTPUT
+              echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              ;;
+            "models-extended")
+              echo "run-quick=true" >> $GITHUB_OUTPUT
+              echo "run-unit=false" >> $GITHUB_OUTPUT
+              echo "run-integration=false" >> $GITHUB_OUTPUT
+              echo "run-demo=true" >> $GITHUB_OUTPUT
+              echo "run-model-perf=true" >> $GITHUB_OUTPUT
+              ;;
+            "op-pr")
+              echo "run-quick=false" >> $GITHUB_OUTPUT
+              echo "run-unit=true" >> $GITHUB_OUTPUT
+              echo "run-integration=false" >> $GITHUB_OUTPUT
+              echo "run-demo=false" >> $GITHUB_OUTPUT
+              echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              ;;
+            "nightly")
+              echo "run-quick=false" >> $GITHUB_OUTPUT
+              echo "run-unit=true" >> $GITHUB_OUTPUT
+              echo "run-integration=true" >> $GITHUB_OUTPUT
+              echo "run-demo=true" >> $GITHUB_OUTPUT
+              echo "run-model-perf=true" >> $GITHUB_OUTPUT
+              ;;
+            "hw-self-test")
+              echo "run-quick=false" >> $GITHUB_OUTPUT
+              echo "run-unit=false" >> $GITHUB_OUTPUT
+              echo "run-integration=true" >> $GITHUB_OUTPUT
+              echo "run-demo=false" >> $GITHUB_OUTPUT
+              echo "run-model-perf=true" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "run-quick=true" >> $GITHUB_OUTPUT
+              echo "run-unit=false" >> $GITHUB_OUTPUT
+              echo "run-integration=false" >> $GITHUB_OUTPUT
+              echo "run-demo=false" >> $GITHUB_OUTPUT
+              echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              ;;
+          esac
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    needs: determine-tests
+    with:
+      build-type: ${{ inputs.build-type || 'Release' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+      tracy: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
+      build-wheel: true
+      build-umd-tests: true
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+  galaxy-quick:
+    if: ${{ needs.determine-tests.outputs.run-quick == 'true' }}
+    needs: [build-artifact, determine-tests]
+    secrets: inherit
+    uses: ./.github/workflows/galaxy-quick-impl.yaml
+    with:
+      extra-tag: ${{ inputs.extra-tag }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  galaxy-unit-tests:
+    if: ${{ needs.determine-tests.outputs.run-unit == 'true' }}
+    needs: [build-artifact, determine-tests]
+    secrets: inherit
+    uses: ./.github/workflows/galaxy-unit-tests-impl.yaml
+    with:
+      extra-tag: ${{ inputs.extra-tag }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-unit || 'all' }}
+      topology: 'topology-6u'
+  galaxy-integration-tests:
+    if: ${{ needs.determine-tests.outputs.run-integration == 'true' }}
+    needs: [build-artifact, determine-tests]
+    secrets: inherit
+    uses: ./.github/workflows/galaxy-integration-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enabled-skus: wh_galaxy
+      model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-integration || 'all' }}
+  galaxy-demo-tests:
+    if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
+    needs: [build-artifact, determine-tests]
+    secrets: inherit
+    uses: ./.github/workflows/galaxy-demo-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-demo || 'all' }}
+  galaxy-model-perf-tests:
+    if: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
+    needs: [build-artifact, determine-tests]
+    secrets: inherit
+    uses: ./.github/workflows/galaxy-perf-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enabled-skus: wh_galaxy_perf
+      model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-perf || 'all' }}

@@ -1,0 +1,5 @@
+> [!NOTE]
+>
+> If you are installing from a release, please refer to the README, INSTALLATION instructions, and any other documentation packaged with the release, not on the main branch. There may be differences between the latest main and the previous release.
+
+The changelog will now follow, showing the changes from last release.

@@ -1,0 +1,1 @@
+../../../../models/demos/stable_diffusion_xl_base/tests/pcc/test_sdxl_clip_encoders.py

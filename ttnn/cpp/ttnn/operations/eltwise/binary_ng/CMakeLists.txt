@@ -1,0 +1,52 @@
+add_library(ttnn_op_eltwise_binary_ng ${LIB_TYPE})
+add_library(TTNN::Ops::Eltwise::Binary::NG ALIAS ttnn_op_eltwise_binary_ng)
+
+tt_reuse_precompile_headers(ttnn_op_eltwise_binary_ng TTNN::PCH)
+TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_binary_ng)
+set_target_properties(
+    ttnn_op_eltwise_binary_ng
+    PROPERTIES
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
+)
+
+# Globbing non-build files is acceptable for now because devs don't generate packages.
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*
+    device/kernels_ng/*
+)
+target_sources(
+    ttnn_op_eltwise_binary_ng
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
+    PRIVATE
+        device/binary_ng_device_operation.cpp
+        device/binary_ng_program_factory.cpp
+        device/binary_ng_utils.cpp
+)
+
+target_include_directories(ttnn_op_eltwise_binary_ng PRIVATE ${FixmeOpIncDirs})
+target_link_libraries(
+    ttnn_op_eltwise_binary_ng
+    PRIVATE
+        TT::Metalium
+        TTNN::Core
+)
+
+install(
+    TARGETS
+        ttnn_op_eltwise_binary_ng
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/eltwise/binary_ng
+        COMPONENT ttnn-runtime
+)
+install(TARGETS ttnn_op_eltwise_binary_ng LIBRARY COMPONENT tar)

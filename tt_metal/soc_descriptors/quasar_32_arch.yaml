@@ -1,0 +1,69 @@
+grid:
+  x_size: 8
+  y_size: 4
+
+arc:
+  []
+
+pcie:
+  []
+
+dram:
+  [[2-7],
+  [3-7]]
+
+dram_views:
+  [
+    {
+      channel: 0,
+      eth_endpoint: [0,0],
+      worker_endpoint: [0,0],
+      address_offset: 0
+    },
+    {
+      channel: 0,
+      eth_endpoint: [0,0],
+      worker_endpoint: [0,0],
+      address_offset: 0
+    }
+  ]
+
+dram_view_size:
+  1073741824
+
+eth:
+  []
+
+functional_workers:
+  [2-2, 3-2, 4-2, 5-2, 6-2, 7-2, 8-2, 9-2,
+  2-3, 3-3, 4-3, 5-3, 6-3, 7-3, 8-3, 9-3,
+  2-4, 3-4, 4-4, 5-4, 6-4, 7-4, 8-4, 9-4,
+  2-5, 3-5, 4-5, 5-5, 6-5, 7-5, 8-5, 9-5]
+
+harvested_workers:
+  []
+
+router_only:
+  [0-2]
+
+worker_l1_size:
+  1499136
+
+dram_bank_size:
+  1073741824
+
+eth_l1_size:
+  0
+
+arch_name: QUASAR
+
+features:
+  unpacker:
+    version: 1
+    inline_srca_trans_without_srca_trans_instr: False
+  math:
+    dst_size_alignment: 32768
+  packer:
+    version: 1
+  overlay:
+    version: 1

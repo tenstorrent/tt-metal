@@ -1,0 +1,114 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <cstdint>
+#include <map>
+#include <string>
+#include <vector>
+
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
+#include "tt_metal/impl/kernels/kernel.hpp"
+
+using namespace tt;
+using namespace tt::tt_metal;
+
+void RunFillUpAllBuffers(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, int loop_count, bool fast_dispatch) {
+    IDevice* device = mesh_device->get_devices()[0];
+
+    CoreCoord compute_with_storage_size = mesh_device->compute_with_storage_grid_size();
+    CoreCoord start_core = {0, 0};
+    CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
+    CoreRange all_cores(start_core, end_core);
+    auto eth_cores = device->get_active_ethernet_cores(true);
+
+    // Mesh workload + device range span the mesh; program encapsulates kernels
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram();
+
+    constexpr int loop_size = 200;
+    constexpr int enqueue_times = 2;
+    std::map<std::string, std::string> kernel_defines = {
+        {"LOOP_COUNT", std::to_string(loop_count)}, {"LOOP_SIZE", std::to_string(loop_size)}};
+
+    tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tools/profiler/kernels/timestamped_events.cpp",
+        all_cores,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = kernel_defines});
+    tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tools/profiler/kernels/timestamped_events.cpp",
+        all_cores,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .defines = kernel_defines});
+    std::vector<uint32_t> trisc_kernel_args = {};
+    tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tools/profiler/kernels/timestamped_events_compute.cpp",
+        all_cores,
+        tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines});
+
+    for (auto core : eth_cores) {
+        tt_metal::CreateKernel(
+            program,
+            "tests/tt_metal/tools/profiler/kernels/timestamped_events.cpp",
+            (CoreCoord){core.x, core.y},
+            tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .defines = kernel_defines});
+    }
+
+    workload.add_program(device_range, std::move(program));
+    if (fast_dispatch) {
+        for (int i = 0; i < enqueue_times; i++) {
+            // Enqueue the same mesh workload multiple times to generate profiler events
+            distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        }
+    } else {
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    }
+}
+
+int main() {
+    bool pass = true;
+
+    try {
+        ////////////////////////////////////////////////////////////////////////////
+        //                      Device Setup
+        ////////////////////////////////////////////////////////////////////////////
+        int device_id = 0;
+        std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+
+        const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
+
+        constexpr int device_loop_count = 150;
+
+        RunFillUpAllBuffers(mesh_device, device_loop_count, USE_FAST_DISPATCH);
+        ReadMeshDeviceProfilerResults(*mesh_device);
+
+        pass &= mesh_device->close();
+
+    } catch (const std::exception& e) {
+        pass = false;
+        // Capture the exception error message
+        fmt::print(stderr, "{}\n", e.what());
+        // Capture system call errors that may have returned from driver/kernel
+        fmt::print(stderr, "System error message: {}\n", std::strerror(errno));
+    }
+
+    if (pass) {
+        fmt::print("Test Passed\n");
+    } else {
+        TT_THROW("Test Failed");
+    }
+
+    return 0;
+}

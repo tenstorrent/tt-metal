@@ -1,0 +1,67 @@
+# HAL_1xx - Hardware Abstraction Layer for Wormhole and Blackhole
+
+include(sources.cmake)
+
+# FIXME: Don't want to be reaching above to project dir
+# Prefer a library target to be explicit about the dependency in CMake
+set(HAL_INCLUDE_DIRS
+    .
+    ${PROJECT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/tt_metal
+    ${PROJECT_SOURCE_DIR}/tt_metal/llrt
+)
+
+add_library(wh_hal OBJECT)
+add_dependencies(wh_hal hal_generate_dev_msgs_header)
+target_sources(wh_hal PRIVATE ${WH_HAL_SOURCES})
+target_include_directories(wh_hal BEFORE PRIVATE ${HAL_INCLUDE_DIRS})
+target_include_directories(
+    wh_hal
+    SYSTEM
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/wormhole
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines
+)
+target_link_libraries(
+    wh_hal
+    PRIVATE
+        Tracy::TracyClient
+        hw
+        fmt::fmt-header-only
+        umd::device
+        TT::STL
+        tt-logger::tt-logger
+)
+
+add_library(bh_hal OBJECT ${BH_HAL_SRC})
+add_dependencies(bh_hal hal_generate_dev_msgs_header)
+target_sources(bh_hal PRIVATE ${BH_HAL_SOURCES})
+target_include_directories(bh_hal BEFORE PRIVATE ${HAL_INCLUDE_DIRS})
+target_include_directories(bh_hal SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/blackhole)
+target_link_libraries(
+    bh_hal
+    PRIVATE
+        Tracy::TracyClient
+        hw
+        fmt::fmt-header-only
+        umd::device
+        TT::STL
+        tt-logger::tt-logger
+)
+
+add_library(hal_1xx STATIC)
+add_library(HAL::1xx ALIAS hal_1xx)
+target_sources(hal_1xx PRIVATE ${HAL_1XX_SOURCES})
+target_include_directories(hal_1xx BEFORE PRIVATE ${HAL_INCLUDE_DIRS})
+target_link_libraries(
+    hal_1xx
+    PUBLIC
+        wh_hal
+        bh_hal
+    PRIVATE
+        fmt::fmt-header-only
+        hw
+        umd::device
+        TT::STL
+        tt-logger::tt-logger
+)

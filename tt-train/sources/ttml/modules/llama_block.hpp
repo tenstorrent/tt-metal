@@ -1,0 +1,58 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <optional>
+
+#include "autograd/tensor.hpp"
+#include "modules/grouped_query_attention.hpp"
+#include "modules/linear_module.hpp"
+#include "modules/rms_norm_module.hpp"
+#include "ops/rope_op.hpp"
+
+namespace ttml::modules {
+
+class LlamaMLP : public modules::ModuleBase {
+private:
+    std::shared_ptr<LinearLayer> m_w1;
+    std::shared_ptr<LinearLayer> m_w3;
+    std::shared_ptr<LinearLayer> m_w2;
+    float m_dropout_prob = 0.0F;
+
+public:
+    LlamaMLP(uint32_t embedding_size, std::optional<uint32_t> intermediate_dim, float dropout_prob = 0.0F);
+
+    autograd::TensorPtr operator()(const autograd::TensorPtr& input);
+};
+
+class LlamaBlock : public modules::ModuleBase {
+private:
+    std::shared_ptr<LlamaMLP> m_mlp;
+    std::shared_ptr<RMSNormLayer> m_attention_norm;
+    std::shared_ptr<RMSNormLayer> m_mlp_norm;
+    std::shared_ptr<GroupedQueryAttention> m_attention;
+
+public:
+    explicit LlamaBlock(
+        uint32_t embedding_size,
+        uint32_t num_heads,
+        uint32_t num_groups,
+        const ops::RotaryEmbeddingParams& rope_params,
+        float dropout_prob = 0.0F,
+        std::optional<uint32_t> intermediate_dim = std::nullopt);
+
+    autograd::TensorPtr operator()(
+        const autograd::TensorPtr& input, const std::optional<autograd::TensorPtr>& mask) override;
+
+    // Forward with KV cache for inference
+    autograd::TensorPtr operator()(
+        const autograd::TensorPtr& input,
+        const autograd::TensorPtr& mask,
+        std::shared_ptr<ttml::models::common::transformer::KvCache> kv_cache,
+        const uint32_t layer_idx,
+        const uint32_t new_tokens);
+};
+
+}  // namespace ttml::modules

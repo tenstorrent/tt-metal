@@ -1,0 +1,514 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <umd/device/types/core_coordinates.hpp>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <tt_stl/unreachable.hpp>
+
+#include "api/tt-metalium/kernel_types.hpp"
+#include "api/tt-metalium/runtime_args_data.hpp"
+#include "api/tt-metalium/device.hpp"
+#include "api/tt-metalium/experimental/host_api.hpp"
+#include "impl/context/metal_context.hpp"
+#include "core_coord.hpp"
+#include "hal_types.hpp"
+#include "jit_build/jit_build_settings.hpp"
+#include "jit_build/jit_build_options.hpp"
+#include "impl/program/program_impl.hpp"
+#include <enchantum/enchantum.hpp>
+#include "tt_cluster.hpp"
+
+namespace tt::tt_metal {
+
+enum Eth : uint8_t {
+    SENDER = 0,
+    RECEIVER = 1,
+    IDLE = 2,
+};
+
+struct EthernetConfig {
+    Eth eth_mode = Eth::SENDER;
+    NOC noc = NOC::NOC_0;
+    DataMovementProcessor processor = DataMovementProcessor::RISCV_0;
+    std::vector<uint32_t> compile_args;
+    // Will cause CompileProgram to emit a file hlk_defines_generated.h
+    // Each unique combination of defines will produce a unique compiled instantiation
+    // This file is then automatically included in the generated compiled kernel files
+    std::map<std::string, std::string> defines;
+    // Both compile_args and named_compile_args contain compile time arguments
+    // The former is accessed by index, the latter by name
+    // Can be used in new/existing kernels by explicitly defining them in the config
+    // Ex. std::vector<uint32_t> compile_args = {5, 7};
+    //     std::unordered_map<std::string, uint32_t> named_compile_args = {{"arg1", 5}, {"arg2", 7}};
+    //     CreateKernel(program, "kernel.cpp", core, EthernetConfig{.compile_args = compile_args, .named_compile_args =
+    //     named_compile_args})
+    std::unordered_map<std::string, uint32_t> named_compile_args;
+    // Set the compiler and linker optimization level
+    KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
+    NOC_MODE noc_mode = NOC_MODE::DM_DEDICATED_NOC;
+};
+
+KernelHandle CreateKernel(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const EthernetConfig& config);
+
+KernelHandle CreateKernelFromString(
+    Program& program,
+    const std::string& kernel_src_code,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const EthernetConfig& config);
+
+struct KernelSource {
+    enum SourceType { FILE_PATH, SOURCE_CODE };
+
+    std::string source_;
+    SourceType source_type_;
+    // if source_type_ is FILE_PATH, file pointed by path_ exists at time of construction
+    std::filesystem::path path_;
+
+    KernelSource(const std::string& source, const SourceType& source_type);
+
+    std::string name() const {
+        std::string name;
+        if (this->source_type_ == SourceType::FILE_PATH) {
+            const std::size_t start_pos_of_name = this->source_.rfind('/') + 1;
+            const std::size_t pos_of_dot = this->source_.rfind('.');
+            name = this->source_.substr(start_pos_of_name, (pos_of_dot - start_pos_of_name));
+        } else {
+            name = "Kernel_Source_Code";
+        }
+        return name;
+    }
+
+    // Returns the actual source code (file content or source string)
+    std::string get_content() const {
+        switch (source_type_) {
+            case SourceType::FILE_PATH: {
+                std::ifstream file(path_);
+                if (!file.is_open()) {
+                    throw std::runtime_error("Cannot open kernel source file: " + path_.string());
+                }
+                std::stringstream buffer;
+                buffer << file.rdbuf();
+                if (file.fail() && !file.eof()) {
+                    throw std::runtime_error("Failed to read kernel source file: " + path_.string());
+                }
+                return buffer.str();
+            }
+            case SourceType::SOURCE_CODE: return source_;
+        }
+        ttsl::unreachable();
+    }
+};
+
+class Kernel : public JitBuildSettings {
+public:
+    using Config = std::variant<
+        DataMovementConfig,
+        EthernetConfig,
+        ComputeConfig,
+        experimental::quasar::QuasarDataMovementConfig,
+        experimental::quasar::QuasarComputeConfig>;
+
+    ~Kernel() override = default;
+
+    std::string name() const;
+
+    const KernelSource& kernel_source() const { return kernel_src_; }
+
+    const CoreRangeSet& core_range_set() const { return core_range_set_; }
+
+    const std::set<CoreCoord>& cores_with_runtime_args() const { return core_with_runtime_args_; }
+
+    const std::map<std::string, std::string>& defines() const { return defines_; }
+
+    const std::set<CoreCoord>& logical_cores() const;
+
+    std::vector<CoreRange> logical_coreranges() const;
+
+    bool is_on_logical_core(const CoreCoord& logical_core) const;
+
+    std::vector<uint32_t> compile_time_args() const { return compile_time_args_; }
+    std::unordered_map<std::string, uint32_t> named_compile_time_args() const { return named_compile_time_args_; }
+
+    // Note: When watcher assert is enabled, vector is stored as [count | args...]
+    std::vector<uint32_t>& runtime_args(const CoreCoord& logical_core);
+    RuntimeArgsData& runtime_args_data(const CoreCoord& logical_core);
+    std::vector<std::vector<std::vector<uint32_t>>>& runtime_args();
+    std::vector<std::vector<RuntimeArgsData>>& runtime_args_data();
+    void set_runtime_args_count(CoreRangeSet& core_ranges, uint32_t count);
+
+    // Note: When watcher assert is enabled, vector is stored as [count | args...]
+    std::vector<uint32_t>& common_runtime_args();
+    RuntimeArgsData& common_runtime_args_data();
+    void set_common_runtime_args_count(uint32_t count);
+    uint32_t get_common_runtime_args_count() const { return this->common_runtime_args_count_; }
+
+    virtual bool configure(
+        IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const = 0;
+
+    virtual Config config() const = 0;
+
+    uint64_t compute_hash() const;
+
+    const std::string& get_full_kernel_name() const override;
+    void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
+    void process_compile_time_args(std::function<void(const std::vector<uint32_t>& values)>) const override;
+    void process_named_compile_time_args(
+        std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
+    void process_include_paths(const std::function<void(const std::string& path)>&) const override;
+
+    void validate_runtime_args_size(
+        size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) const;
+    void set_runtime_args(const CoreCoord& logical_core, stl::Span<const uint32_t> runtime_args);
+    void set_common_runtime_args(stl::Span<const uint32_t> runtime_args);
+
+    int get_watcher_kernel_id() const { return watcher_kernel_id_; }
+
+    // Get the corresponding core type, processor class, and processor type of the kernel as defined by HAL.
+    // The processor type is per-binary, where 0 <= index < expected_num_binaries.
+    HalProgrammableCoreType get_kernel_programmable_core_type() const { return this->programmable_core_type_; }
+    HalProcessorClassType get_kernel_processor_class() const { return this->processor_class_; }
+    virtual uint32_t get_kernel_processor_type(int index) const = 0;
+
+    CoreType get_kernel_core_type() const;
+    void set_full_name(const std::string& s) { kernel_full_name_ = s; }
+    void add_defines(const std::map<std::string, std::string>& defines);
+
+    virtual uint8_t expected_num_binaries() const = 0;
+    // Returns the HAL processor indices that use the given binary (for L1 offset / set_iram_text_size).
+    virtual std::vector<uint32_t> get_processor_indices_for_binary(int binary_index) const;
+    uint32_t get_binary_packed_size(IDevice* device, int index) const;
+    uint32_t get_binary_text_size(IDevice* device, int index) const;
+
+    bool is_idle_eth() const;
+
+    // Collects metadata of the kernel and the binaries within the kernel if device is non-null
+    // Note: device is nullable
+    detail::KernelMeta meta(IDevice* device) const;
+
+    // Binary management (moved from KernelImpl)
+    const std::vector<const ll_api::memory*>& binaries(uint64_t build_key) const;
+    void set_binaries(uint64_t build_key, std::vector<const ll_api::memory*>&& binaries);
+    bool binaries_exist_on_disk(const IDevice* device) const;
+
+    virtual void set_build_options(JitBuildOptions& /*build_options*/) const {}
+    virtual void generate_binaries(IDevice* device, JitBuildOptions& build_options) const = 0;
+    virtual void read_binaries(IDevice* device) = 0;
+
+    void register_kernel_elf_paths_with_watcher(IDevice& device) const;
+
+protected:
+    Kernel(
+        HalProgrammableCoreType programmable_core_type,
+        HalProcessorClassType processor_class,
+        const KernelSource& kernel_src,
+        const CoreRangeSet& core_range_set,
+        const std::vector<uint32_t>& compile_args,
+        const std::map<std::string, std::string>& defines,
+        const std::unordered_map<std::string, uint32_t>& named_compile_args);
+
+    HalProgrammableCoreType programmable_core_type_;
+    HalProcessorClassType processor_class_;
+
+    int watcher_kernel_id_{};
+    KernelSource kernel_src_;
+    std::string kernel_full_name_;  // Name + hash
+    CoreRangeSet core_range_set_;
+    std::vector<uint32_t> compile_time_args_;
+    std::unordered_map<std::string, uint32_t> named_compile_time_args_;
+    std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
+    std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
+    uint32_t common_runtime_args_count_{0};
+    std::vector<uint32_t> common_runtime_args_;
+    RuntimeArgsData common_runtime_args_data_{};
+    std::set<CoreCoord> core_with_runtime_args_;
+    std::size_t max_runtime_args_per_core_{0};  // For validation
+    CoreCoord core_with_max_runtime_args_;   // For validation
+    std::map<std::string, std::string>
+        defines_;  // preprocessor defines. this is to be able to generate generic instances.
+    const bool watcher_assert_enabled_;
+    const uint32_t watcher_count_word_offset_;
+    std::set<CoreCoord> logical_cores_;
+
+    // Build key -> binaries (moved from KernelImpl)
+    std::unordered_map<uint64_t, std::vector<const ll_api::memory*>> binaries_;
+
+    virtual std::string config_hash() const = 0;
+
+    std::vector<std::string> file_paths(IDevice& device) const;
+
+private:
+    void register_kernel_with_watcher();
+};
+
+class DataMovementKernel : public Kernel {
+public:
+    DataMovementKernel(const KernelSource& kernel_src, const CoreRangeSet& cr_set, const DataMovementConfig& config) :
+        Kernel(
+            HalProgrammableCoreType::TENSIX,
+            HalProcessorClassType::DM,
+            kernel_src,
+            cr_set,
+            config.compile_args,
+            config.defines,
+            config.named_compile_args),
+        config_(config) {
+        TT_FATAL(
+            MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
+            "DataMovementKernel is not supported on Quasar. Use QuasarDataMovementKernel instead.");
+    }
+
+    ~DataMovementKernel() override = default;
+
+    uint32_t get_kernel_processor_type(int index) const override;
+    void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    void read_binaries(IDevice* device) override;
+
+    bool configure(
+        IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
+
+    Config config() const override { return this->config_; }
+
+    void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
+
+    std::string_view get_compiler_opt_level() const override;
+
+    std::string_view get_linker_opt_level() const override;
+
+private:
+    const DataMovementConfig config_;
+
+    uint8_t expected_num_binaries() const override;
+
+    std::string config_hash() const override;
+};
+
+class EthernetKernel : public Kernel {
+public:
+    EthernetKernel(const KernelSource& kernel_src, const CoreRangeSet& cr_set, const EthernetConfig& config) :
+        Kernel(
+            config.eth_mode == Eth::IDLE ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH,
+            HalProcessorClassType::DM,
+            kernel_src,
+            cr_set,
+            config.compile_args,
+            config.defines,
+            config.named_compile_args),
+        config_(config) {}
+
+    ~EthernetKernel() override = default;
+
+    uint32_t get_kernel_processor_type(int index) const override;
+    void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    void read_binaries(IDevice* device) override;
+
+    bool configure(
+        IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
+
+    Config config() const override { return this->config_; }
+
+    void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
+
+    std::string_view get_compiler_opt_level() const override;
+
+    std::string_view get_linker_opt_level() const override;
+
+private:
+    const EthernetConfig config_;
+
+    uint8_t expected_num_binaries() const override;
+
+    std::string config_hash() const override;
+};
+
+class ComputeKernel : public Kernel {
+public:
+    ComputeKernel(const KernelSource& kernel_src, const CoreRangeSet& cr_set, const ComputeConfig& config) :
+        Kernel(
+            HalProgrammableCoreType::TENSIX,
+            HalProcessorClassType::COMPUTE,
+            kernel_src,
+            cr_set,
+            config.compile_args,
+            config.defines,
+            config.named_compile_args),
+        config_(config) {
+        TT_FATAL(
+            MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
+            "ComputeKernel is not supported on Quasar. Use QuasarComputeKernel instead.");
+    }
+
+    ~ComputeKernel() override = default;
+
+    uint32_t get_kernel_processor_type(int index) const override;
+    void set_build_options(JitBuildOptions& build_options) const override;
+    void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    void read_binaries(IDevice* device) override;
+
+    bool configure(
+        IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
+
+    Config config() const override { return this->config_; }
+
+    void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
+
+    std::string_view get_compiler_opt_level() const override;
+
+    std::string_view get_linker_opt_level() const override;
+
+private:
+    const ComputeConfig config_;
+
+    uint8_t expected_num_binaries() const override;
+
+    std::string config_hash() const override;
+};
+
+namespace experimental::quasar {
+
+static constexpr uint32_t QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE = 4;
+
+enum class QuasarComputeProcessor : uint8_t {
+    NEO_0_COMPUTE_0 = 0,
+    NEO_0_COMPUTE_1 = 1,
+    NEO_0_COMPUTE_2 = 2,
+    NEO_0_COMPUTE_3 = 3,
+    NEO_1_COMPUTE_0 = 4,
+    NEO_1_COMPUTE_1 = 5,
+    NEO_1_COMPUTE_2 = 6,
+    NEO_1_COMPUTE_3 = 7,
+    NEO_2_COMPUTE_0 = 8,
+    NEO_2_COMPUTE_1 = 9,
+    NEO_2_COMPUTE_2 = 10,
+    NEO_2_COMPUTE_3 = 11,
+    NEO_3_COMPUTE_0 = 12,
+    NEO_3_COMPUTE_1 = 13,
+    NEO_3_COMPUTE_2 = 14,
+    NEO_3_COMPUTE_3 = 15,
+};
+
+class QuasarDataMovementKernel : public Kernel {
+public:
+    QuasarDataMovementKernel(
+        const KernelSource& kernel_src,
+        const CoreRangeSet& cr_set,
+        const QuasarDataMovementConfig& config,
+        const std::set<DataMovementProcessor>& dm_processors) :
+        Kernel(
+            HalProgrammableCoreType::TENSIX,
+            HalProcessorClassType::DM,
+            kernel_src,
+            cr_set,
+            config.compile_args,
+            config.defines,
+            config.named_compile_args),
+        config_(config),
+        dm_processors_(dm_processors.begin(), dm_processors.end()) {
+        TT_FATAL(
+            MetalContext::instance().get_cluster().arch() == ARCH::QUASAR,
+            "QuasarDataMovementKernel is only supported on Quasar");
+        TT_FATAL(
+            config.num_threads_per_cluster == dm_processors.size(),
+            "Number of DM cores per cluster specified in config must match number of DM cores per cluster that have "
+            "been reserved");
+        TT_FATAL(std::is_sorted(dm_processors_.begin(), dm_processors_.end()), "DM cores must be ordered");
+    }
+
+    ~QuasarDataMovementKernel() override = default;
+
+    uint32_t get_kernel_processor_type(int index) const override;
+    std::vector<uint32_t> get_processor_indices_for_binary(int binary_index) const override;
+    void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    void read_binaries(IDevice* device) override;
+
+    bool configure(
+        IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
+
+    Config config() const override { return this->config_; }
+
+    void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
+
+    std::string_view get_compiler_opt_level() const override;
+
+    std::string_view get_linker_opt_level() const override;
+
+    const std::vector<DataMovementProcessor>& get_dm_processors() const { return this->dm_processors_; }
+
+private:
+    const QuasarDataMovementConfig config_;
+    const std::vector<DataMovementProcessor> dm_processors_;
+
+    uint8_t expected_num_binaries() const override;
+
+    std::string config_hash() const override;
+};
+
+class QuasarComputeKernel : public Kernel {
+public:
+    QuasarComputeKernel(
+        const KernelSource& kernel_src,
+        const CoreRangeSet& cr_set,
+        const QuasarComputeConfig& config,
+        const std::set<QuasarComputeProcessor>& compute_processors) :
+        Kernel(
+            HalProgrammableCoreType::TENSIX,
+            HalProcessorClassType::COMPUTE,
+            kernel_src,
+            cr_set,
+            config.compile_args,
+            config.defines,
+            config.named_compile_args),
+        config_(config),
+        compute_processors_(compute_processors.begin(), compute_processors.end()) {
+        TT_FATAL(
+            MetalContext::instance().get_cluster().arch() == ARCH::QUASAR,
+            "QuasarComputeKernel is only supported on Quasar");
+        TT_FATAL(
+            config.num_threads_per_cluster * QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE ==
+                compute_processors.size(),
+            "Number of Tensix engines per cluster specified in config multiplied by the number of compute processors "
+            "per Tensix engine must match number of compute cores per cluster that have been reserved");
+        TT_FATAL(
+            std::is_sorted(compute_processors_.begin(), compute_processors_.end()), "Compute cores must be ordered");
+    }
+
+    ~QuasarComputeKernel() override = default;
+
+    uint32_t get_kernel_processor_type(int index) const override;
+    void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    void read_binaries(IDevice* device) override;
+
+    bool configure(
+        IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
+
+    Config config() const override { return this->config_; }
+
+    void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
+
+    std::string_view get_compiler_opt_level() const override;
+
+    std::string_view get_linker_opt_level() const override;
+
+    void set_build_options(JitBuildOptions& build_options) const override;
+
+    const std::vector<QuasarComputeProcessor>& get_compute_processors() const { return this->compute_processors_; }
+
+private:
+    const QuasarComputeConfig config_;
+    const std::vector<QuasarComputeProcessor> compute_processors_;
+
+    uint8_t expected_num_binaries() const override;
+
+    std::string config_hash() const override;
+};
+}  // namespace experimental::quasar
+
+}  // namespace tt::tt_metal

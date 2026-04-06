@@ -1,0 +1,205 @@
+name: "[post-commit] all - Static checks, linters etc."
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  pull_request:
+    branches:
+      - "main"
+  merge_group:
+
+jobs:
+  find-changed-files:
+    runs-on: ubuntu-latest
+    outputs:
+      docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
+    steps:
+      - id: find-changes
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
+  pre-commit:
+    name: Run Pre-commit Hooks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history and all branches / tags so 'origin/main' is available
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.11
+
+      - name: Run Pre-commit
+        uses: pre-commit/action@v3.0.1
+        env:
+          PRE_COMMIT_FROM_REF: ${{ github.event_name == 'pull_request' && format('refs/remotes/origin/{0}', github.event.pull_request.base.ref) || 'HEAD^' }}
+          PRE_COMMIT_TO_REF: HEAD
+        with:
+          extra_args: |
+            --from-ref ${{ env.PRE_COMMIT_FROM_REF }} \
+            --to-ref ${{ env.PRE_COMMIT_TO_REF }}
+        continue-on-error: false
+  check-black:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Do Nothing
+        run: echo "Black is covered by pre-commit. This is a placeholder to be removed after updating branch restrictions."
+
+
+  check-spdx-licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check SPDX licenses
+        uses: tenstorrent/tt-github-actions/.github/actions/spdx-checker@main
+        with:
+          ignore_config_file: '.github/spdx_ignore.yaml'
+          verbose: 'true'
+  check-metal-kernel-count:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check kernel count in base metal is less than maximum
+        run: if (( $(find tt_metal/kernels/ -type f | wc -l) > 8 )); then exit 1; fi
+  check-doc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ASPELL
+        run: sudo apt-get install -y aspell
+      - name: Run checks on docs
+        run: TT_METAL_HOME=$(pwd) docs/spellcheck.sh
+  check-docs-links:
+    runs-on: ubuntu-latest
+    needs: find-changed-files
+    # We get rate-limited if we run too often; only run when it's useful
+    # Issue 21637: Disable check-docs-links for now to unblock developers
+    if: false  # ${{ github.ref_name == 'main' || needs.find-changed-files.outputs.docs-changed == 'true' }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          clean: false
+      - name: Link Checker
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --verbose './README.md' './INSTALLING.md'  './docs/source/**/*.rst' './docs/source/**/*.md'
+          fail: true
+  check-forbidden-imports:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check ttnn is not used in tt_metal tests
+        run: if (( $(grep -Rnw 'tests/tt_metal' -e 'ttnn' | wc -l ) > 11 )); then exit 1; fi
+      - name: Check tt_eager constructs is not used in tt_metal tests
+        run: |
+          if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_lib' | wc -l ) > 0 )); then exit 1; fi
+          if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_eager' | wc -l ) > 10 )); then exit 1; fi
+  check-interleaved-addr-gen-usage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for git diff comparison
+      - name: Check for new InterleavedAddrGen usages in changed files
+        run: |
+          set -euo pipefail
+          # Get the base branch for comparison
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_REF="origin/${{ github.event.pull_request.base.ref }}"
+          else
+            BASE_REF="HEAD^"
+          fi
+
+          declare -A OLD_FOR_NEW
+          CHANGED=()
+
+          # Collect changed C/C++ files and map renames (old -> new)
+          while IFS=$'\t' read -r status path1 path2; do
+            case "$status" in
+              A|M)
+                if [[ "$path1" =~ \.(c|cc|cxx|cpp|h|hh|hpp)$ ]] && [[ ! "$path1" =~ ^tt_metal/hw/inc/ ]]; then
+                  CHANGED+=("$path1")
+                fi
+                ;;
+              R*)
+                if [[ "$path2" =~ \.(c|cc|cxx|cpp|h|hh|hpp)$ ]] && [[ ! "$path2" =~ ^tt_metal/hw/inc/ ]]; then
+                  CHANGED+=("$path2")
+                  OLD_FOR_NEW["$path2"]="$path1"
+                fi
+                ;;
+            esac
+          done < <(git diff --name-status -M "$BASE_REF" HEAD)
+
+          if (( ${#CHANGED[@]} == 0 )); then
+            echo "No C/C++ files changed in this PR."
+            exit 0
+          fi
+
+          NEW_USAGE_FOUND=0
+          regex='(Interleaved[^[:space:]]*AddrGen|get_interleaved_addr_gen)'
+
+          for file in "${CHANGED[@]}"; do
+            old_path="${OLD_FOR_NEW[$file]:-$file}"
+
+            base_count=$(git show "$BASE_REF:$old_path" 2>/dev/null | grep -E -o "$regex" | wc -l || true)
+            if [ -f "$file" ]; then
+              head_count=$(grep -E -o "$regex" "$file" 2>/dev/null | wc -l || true)
+            else
+              head_count=0
+            fi
+
+            if [ "$head_count" -gt "$base_count" ]; then
+              echo "❌ Increased InterleavedAddrGen usage in: $file (base=$base_count → head=$head_count)"
+              echo "Added matching lines:"
+              git diff "$BASE_REF" HEAD -- "$file" | grep -E '^\+[^+].*(Interleaved[^[:space:]]*AddrGen|get_interleaved_addr_gen)' || true
+              NEW_USAGE_FOUND=1
+            fi
+          done
+
+          if [ "$NEW_USAGE_FOUND" -eq 1 ]; then
+            echo ""
+            echo "❌ New InterleavedAddrGen usages detected!"
+            echo "Please use TensorAccessor instead."
+            exit 1
+          else
+            echo "✅ No increase in InterleavedAddrGen usages found in changed files."
+          fi
+  check-sweeps-workflow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5.0.0
+        with:
+          python-version: '3.10'
+      - name: Check sweeps workflow option count against sweep file count
+        run: |
+          pip install pyyaml
+          python tests/sweep_framework/framework/sweeps_workflow_verification.py
+  codeowners-validator:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mszostok/codeowners-validator@7f3f5e28c6d7b8dfae5731e54ce2272ca384592f # v0.7.4
+        with:
+          checks: "files,duppatterns,syntax"
+          experimental_checks: "avoid-shadowing"
+  check-symlinks-valid:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for broken symlinks
+        run: |
+          broken_links=$(find . -type l ! -exec test -e {} \; -print)
+          if [ -n "$broken_links" ]; then
+            echo "Broken symlinks found:"
+            echo "$broken_links"
+            exit 1
+          else
+            echo "All symlinks are valid."
+          fi

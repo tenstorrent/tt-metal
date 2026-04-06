@@ -1,0 +1,22 @@
+# SPDX ignore patterns for tt-metal repository
+# This file contains patterns for files/directories to skip during SPDX license checking.
+# The standard license settings are provided by the centralized spdx-checker action.
+
+ignore:
+  perform_check: no
+  include:
+    - .github/
+    - tt_metal/third_party/sfpi/
+    - tt_metal/third_party/
+    - third_party/
+    - __pycache__
+    - /tests/end_to_end_tests/env/
+    - "*.ld"
+    - "*.S"
+    - build/
+    - env/
+    - eevenv/
+    - built/
+    - models/demos/t3000/llama2_70b/reference/
+    - infra/
+    - models/demos/deepseek_v3/reference/deepseek/

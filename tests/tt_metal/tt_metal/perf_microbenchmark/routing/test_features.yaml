@@ -1,0 +1,444 @@
+# This YAML file demonstrates the various features of the fabric performance test framework.
+# It will be updated as new features are added.
+# For multi-host testing, see test_t3k_2x2.yaml.
+
+# ======================================================================================
+# Optional Top-Level Configuration: Allocation Policies
+# This block allows you to globally configure how sender and receiver worker cores
+# are allocated across all tests in this file.
+# ======================================================================================
+allocation_policies:
+  # This sets the payload chunk size for all workers, sender and receiver.
+  default_payload_chunk_size: 4096
+  sender:
+    # Policy can be 'RoundRobin' or 'ExhaustFirst'.
+    # 'ExhaustFirst' will fill up one core with workers before moving to the next.
+    # 'RoundRobin' will distribute workers one by one across available cores.
+    policy: ExhaustFirst
+    max_configs_per_core: 2
+    # The initial number of cores to use for allocation before needing to add more.
+    initial_pool_size: 1
+    # When the initial pool is exhausted, how many new cores to add.
+    pool_refill_size: 1
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 8
+
+Tests:
+  # ======================================================================================
+  # Test 1: A simple, fully specified unicast test.
+  # This demonstrates the most basic configuration.
+  # ======================================================================================
+  - name: "SimpleUnicast"
+    fabric_setup:
+      topology: Linear
+
+    senders:
+      - device: 0 # Source is physical chip 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 1024
+            num_packets: 100
+            destination:
+              device: 1 # Destination is physical chip 1
+
+  # ======================================================================================
+  # Test 2: Parametrized All-to-All Test on a Mesh.
+  # This shows how to use high-level patterns and parametrization to generate
+  # a matrix of tests that sweep across different parameters.
+  # The test builder will generate a separate test for each combination, e.g.,
+  #   - AllToAll_size_256_num_packets_50
+  #   - AllToAll_size_256_num_packets_100
+  #   - AllToAll_size_512_num_packets_50
+  #   - ... and so on.
+  # =======================================================================================
+  - name: "ParametrizedAllToAll"
+    fabric_setup:
+      topology: Mesh
+
+    # These parameters will be used to generate a cross-product of test configurations.
+    parametrization_params:
+      size: [256, 512, 1024]
+      num_packets: [50, 100]
+      ntype: [unicast_write, atomic_inc]
+
+    # Default values that will be applied to all generated traffic patterns unless
+    # overridden by the parametrization.
+    defaults:
+      ftype: unicast
+
+    # High-level patterns automatically generate the sender configurations.
+    patterns:
+      - type: all_to_all_unicast
+        # 'iterations' will run the entire generated test matrix this many times,
+        # each time with a new random seed for the payload data.
+        iterations: 2
+
+  # ======================================================================================
+  # Test 3: Logical Devices and Mixed Traffic Types.
+  # This demonstrates using logical device identifiers and sending multiple different
+  # kinds of traffic from the same sender core.
+  # ======================================================================================
+  - name: "LogicalDevices_MixedTraffic"
+    fabric_setup:
+      topology: Mesh
+
+    senders:
+      - device: [0, 0] # Source is mesh 0, chip 0
+        core: [1, 1]   # Specifies the sender worker core to use
+        patterns:
+          # First traffic stream from core [1,1]
+          - ntype: unicast_write
+            size: 4096
+            num_packets: 200
+            destination:
+              device: [0, 1] # Destination is mesh 0, chip 1
+              core: [1, 5]   # Specifies the receiver worker core
+
+          # A second, different traffic stream from the same sender core
+          - ntype: fused_atomic_inc
+            size: 64 # Payload size for the write part of the fused op
+            num_packets: 500
+            destination:
+              device: [0, 2] # A different destination
+
+    defaults:
+      ftype: unicast # This default applies to both patterns above
+
+  # ======================================================================================
+  # Test 4: Mesh Coordinate Device Specification
+  # This demonstrates how to specify devices using mesh coordinates instead of
+  # physical chip IDs. The format is [mesh_id, [row, col]] where mesh_id is the
+  # mesh identifier and [row, col] are the coordinates within that mesh.
+  # ======================================================================================
+  - name: "MeshCoordinateDevices"
+    fabric_setup:
+      topology: Linear
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+
+    senders:
+      - device: [0, [0, 0]]  # Source is mesh 0, coordinate [0, 0]
+        patterns:
+          - destination:
+              device: [0, [0, 1]]  # Destination is mesh 0, coordinate [0, 1]
+
+  # ======================================================================================
+  # Test 5: Full Device Random Pairing Pattern
+  # This pattern requires an even number of devices and will create random
+  # one-to-one pairings between them. For example, with 4 chips {0,1,2,3},
+  # it might generate pairs (0,3) and (1,2) in one iteration, and (0,1) and
+  # (2,3) in the next.
+  # ======================================================================================
+  - name: "FullDevicePairing"
+    fabric_setup:
+      topology: Mesh
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 2048
+      num_packets: 100
+
+    patterns:
+      - type: full_device_random_pairing
+        iterations: 5 # Generate 5 different random pairings
+
+  # ======================================================================================
+  # Test 6: Automatic Randomization of Missing Parameters
+  # This test shows how to specify only the bare minimum (a sender and a
+  # destination) and let the framework randomize the rest of the traffic
+  # parameters (ftype, ntype, size, num_packets).
+  # ======================================================================================
+  - name: "RandomizeMissingParams"
+    fabric_setup:
+      topology: Linear
+
+    on_missing_param_policy: randomize
+
+    senders:
+      - device: 0
+        patterns:
+          # Only the destination is specified. The rest will be randomized.
+          - destination:
+              device: 1
+      - device: 1
+        patterns:
+          # You can also partially specify. Here, size is fixed but other
+          # parameters like ntype and num_packets will be randomized.
+          - size: 333
+            destination:
+              device: 0
+
+  # ======================================================================================
+  # Test 7: Multicast via Hops
+  # This demonstrates how to create a multicast group by specifying the number
+  # of hops in each cardinal direction from the source.
+  # ======================================================================================
+  - name: "MulticastHops"
+    fabric_setup:
+      topology: Mesh
+
+    defaults:
+      ntype: unicast_write
+      size: 128
+      num_packets: 50
+
+    senders:
+      - device: [0, 0] # Source is mesh 0, chip 0
+        patterns:
+          - ftype: mcast
+            destination:
+              # This will send a multicast packet that travels:
+              # - 1 hop South (to chip [0,1])
+              # - 1 hop East (to chip [1,0])
+              hops:
+                S: 1
+                E: 1
+            # For a multicast that doesn't start at the source chip, you can specify
+            # how many hops to traverse before the multicast packet is opened.
+            mcast_start_hops: 1
+
+  # ======================================================================================
+  # Test 8: Ring Topology and All-to-All Multicast
+  # This demonstrates the Ring topology and the all_to_all_multicast pattern, which
+  # creates a multicast from each device to every other device.
+  # ======================================================================================
+  - name: "Ring_AllToAllMulticast"
+    fabric_setup:
+      topology: Ring
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 128
+      num_packets: 10
+
+    patterns:
+      - type: all_to_all_multicast
+
+  # ======================================================================================
+  # Test 9: Custom Atomic Operations
+  # This shows how to customize the behavior of atomic increment operations.
+  # ======================================================================================
+  - name: "CustomAtomics"
+    fabric_setup:
+      topology: Mesh
+
+    senders:
+      - device: 0
+        patterns:
+          - ftype: unicast
+            ntype: atomic_inc
+            destination:
+              device: 1
+            # Specify the value to increment by for each atomic operation.
+            atomic_inc_val: 5
+
+  # ======================================================================================
+  # Test 10: Advanced Destination and Test Control
+  # This demonstrates specifying a fixed L1 address for the destination buffer,
+  # setting a fixed seed for reproducibility, and specifying a bandwidth calculation
+  # function.
+  # ======================================================================================
+  - name: "FixedDestinationAndSeed"
+    # Setting a seed ensures that any random elements (like payload data or
+    # randomized parameters) are the same every time you run the test.
+    seed: 12345
+    # Placeholder for a custom bandwidth calculation function identifier.
+    bw_calc_func: "MyCustomBWFunc"
+
+    fabric_setup:
+      topology: Linear
+
+    senders:
+      - device: 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 1024
+            num_packets: 10
+            destination:
+              device: 1
+              # Manually specify the target L1 address on the destination core.
+              # The allocator will respect this address.
+              target_address: 0x40000 # Example L1 address
+
+  # ======================================================================================
+  # Test 11: Latency Test Mode
+  # This demonstrates the latency testing feature, which measures round-trip latency
+  # between devices. Latency mode is mutually exclusive with benchmark_mode.
+  # Latency tests use specialized kernels that measure:
+  #   - Raw latency: Total round-trip time from sender's perspective
+  #   - Responder time: Time spent processing the request on the responder device
+  #   - Net latency: Raw latency minus responder processing time
+  # Results are reported with min/max/avg/p99 statistics and compared against golden values.
+  # ======================================================================================
+  - name: "BasicLatencyTest"
+    # Enable latency test mode (mutually exclusive with benchmark_mode)
+    latency_test_mode: true
+
+    fabric_setup:
+      topology: Linear
+
+    # Parametrize across different payload sizes
+    parametrization_params:
+      size: [16, 1024, 4096]
+      ntype: [unicast_write, fused_atomic_inc]
+
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            # In latency mode, num_packets represents the number of latency samples to collect
+            # Each sample is a complete round-trip measurement
+            num_packets: 256  # number of independent latency samples to collect
+            destination:
+              device: [0, 1]
+
+  # ======================================================================================
+  # Test 12: Multi-Hop Latency Testing
+  # Latency tests can measure round-trip times across multiple hops in the network.
+  # This is useful for characterizing latency scaling with distance.
+  # ======================================================================================
+  - name: "MultiHopLatency"
+    latency_test_mode: true
+
+    fabric_setup:
+      topology: Ring
+
+    parametrization_params:
+      size: [16, 64, 256, 1024, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+
+    senders:
+      - device: [0, 0]
+        patterns:
+          - num_packets: 256  # collect 256 independent latency samples
+            destination:
+              device: [0, 3]  # Destination 3 hops away in ring topology
+
+  # ======================================================================================
+    # Test 13: Skip packet validation during testing
+    # This demonstrates the ability to skip packet validation during test execution.
+    # This is useful for testing focused on pure volume and traffic throughput
+  # ======================================================================================
+  - name: "SkipPacketValidation"
+    skip_packet_validation: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    senders:
+      - device: 0 # Source is physical chip 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 1024
+            num_packets: 100
+            destination:
+              device: 1 # Destination is physical chip 1
+
+  # ======================================================================================
+  # Test 14: Sequential Latency Test
+  # Unlike neighbor_exchange (all pairs simultaneously), sequential_neighbor_exchange
+  # tests ONE neighbor pair per iteration. This is required for latency tests which
+  # need exactly one sender. Iterations are auto-detected from neighbor pair count.
+  # The same applies for all_to_all vs sequential_all_to_all
+  # ======================================================================================
+  - name: "SequentialNeighborExchangeLatency"
+    latency_test_mode: true
+
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      size: [16, 1024, 4096]
+      ntype: [unicast_write, fused_atomic_inc]
+
+    defaults:
+      ftype: unicast
+      num_packets: 256  # number of latency samples per iteration
+
+    patterns:
+      - type: sequential_neighbor_exchange
+  # ======================================================================================
+  # Test 14: NOC ID Selection
+  # This demonstrates how to explicitly select which NOC (0 or 1) to use by worker cores.
+  # By default, NOC 0 is used. This test uses NOC 1.
+  # ======================================================================================
+  - name: "NocIdSelection"
+    fabric_setup:
+      topology: Linear
+
+    senders:
+      - device: [0, [0, 0]]
+        noc_id: 1 # Explicitly select NOC 1 for this sender
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 1024
+            num_packets: 100
+            destination:
+              device: [0, [0, 1]]
+
+  # ======================================================================================
+  # Test 15: Core Sweep
+  # This test shows the core sweeping feature available. It will generate sequential tests
+  # which sweep across all worker core pairs from src to destination depending on whether
+  # a core coordinate or `all` is specified for the field. To be used with caution as
+  # many tests can be generated
+  # ======================================================================================
+
+  - name: "CoreSweep"
+    fabric_setup:
+      topology: Linear
+
+    benchmark_mode: true
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 1000
+      size: 1024
+
+    senders:
+      - device: [0, [0, 1]]
+
+        patterns:
+          - destination:
+              device: [0, [1, 0]]
+              core: all
+
+  # ======================================================================================
+  # Test 16: Channel Trimming
+  # This demonstrates the channel trimming feature. When enabled, the test runs twice:
+  # first with fabric channel trimming capture enabled (recording which router channels
+  # are actually used), then with the fabric relaunched consuming the captured profile
+  # (optimizing router construction by disabling unused channels).
+  # For parameterized tests, all parametrizations share the same capture.
+  # ======================================================================================
+  - name: "ChannelTrimming"
+    fabric_setup:
+      topology: Linear
+      enable_channel_trimming: true
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    senders:
+      - device: 0
+        patterns:
+          - destination:
+              device: 1

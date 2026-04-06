@@ -1,0 +1,30 @@
+name: "[internal] Python wheels test impl"
+
+on:
+  workflow_call:
+    inputs:
+      wheel-artifact-name:
+        description: "Name of the wheel artifact to download and test"
+        required: true
+        type: string
+
+jobs:
+  test-wheels-host:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system dependencies
+        shell: bash
+        run: sudo ./install_dependencies.sh
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+      - name: Set up end-to-end tests environment
+        run: ./tests/scripts/set_up_end_to_end_tests_env.sh
+      - name: Activate env and run release tests - host
+        shell: bash
+        run: |
+          source tests/end_to_end_tests/env/bin/activate
+          cd tests/end_to_end_tests
+          pytest -c conftest.py . -m eager_host_side

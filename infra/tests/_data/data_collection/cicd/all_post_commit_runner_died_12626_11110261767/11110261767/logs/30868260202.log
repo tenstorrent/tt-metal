@@ -1,0 +1,7 @@
+2024-09-30T16:42:38.6994568Z Requested labels: N300, cloud-virtual-machine, in-service
+2024-09-30T16:42:38.6994806Z Job defined at: tenstorrent/tt-metal/.github/workflows/build-and-unit-tests.yaml@refs/heads/asaigal/dispatch_s
+2024-09-30T16:42:38.6995054Z Reusable workflow chain:
+2024-09-30T16:42:38.6995163Z tenstorrent/tt-metal/.github/workflows/all-post-commit-workflows.yaml@refs/heads/asaigal/dispatch_s (a6fea2adef8786a0615456df19fd0582e925bc61)
+2024-09-30T16:42:38.6995240Z -> tenstorrent/tt-metal/.github/workflows/build-and-unit-tests.yaml@refs/heads/asaigal/dispatch_s (a6fea2adef8786a0615456df19fd0582e925bc61)
+2024-09-30T16:42:38.6995328Z Waiting for a runner to pick up this job...
+2024-09-30T16:51:40.6203230Z Job is about to start running on the runner: tt-metal-ci-vm-46 (repository)

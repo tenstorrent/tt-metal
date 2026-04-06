@@ -1,0 +1,128 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <stdint.h>
+#include <optional>
+
+#include "core_coord.hpp"
+#include "fd_kernel.hpp"
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include "impl/context/context_descriptor.hpp"
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include "dispatch/kernel_config/relay_mux.hpp"
+
+namespace tt::tt_metal {
+
+struct prefetch_static_config_t {
+    std::optional<uint32_t> my_downstream_cb_sem_id;
+
+    std::optional<uint32_t> pcie_base;
+    std::optional<uint32_t> pcie_size;
+    std::optional<uint32_t> prefetch_q_base;
+    std::optional<uint32_t> prefetch_q_size;
+    std::optional<uint32_t> prefetch_q_rd_ptr_addr;
+    std::optional<uint32_t> prefetch_q_pcie_rd_ptr_addr;
+
+    std::optional<uint32_t> cmddat_q_base;
+    std::optional<uint32_t> cmddat_q_size;
+
+    // Used for prefetch_h
+    std::optional<uint32_t> scratch_db_base;
+    std::optional<uint32_t> scratch_db_size;
+    std::optional<uint32_t> downstream_sync_sem_id;
+    std::optional<uint32_t> ringbuffer_size;
+
+    // Used for prefetch_d
+    std::optional<uint32_t> cmddat_q_pages;
+    std::optional<uint32_t> my_upstream_cb_sem_id;
+    std::optional<uint32_t> cmddat_q_log_page_size;
+    std::optional<uint32_t> cmddat_q_blocks;
+
+    // Used for prefetch_d <--> dispatch_s data path
+    std::optional<uint32_t> dispatch_s_buffer_base;
+    std::optional<uint32_t> my_dispatch_s_cb_sem_id;
+    std::optional<uint32_t> dispatch_s_buffer_size;
+    std::optional<uint32_t> dispatch_s_cb_log_page_size;
+
+    std::optional<uint32_t> fabric_header_rb_base;
+    std::optional<uint32_t> fabric_header_rb_entries;
+    std::optional<uint32_t> my_fabric_sync_status_addr;
+
+    std::optional<bool> is_2d_fabric;
+
+    std::optional<bool> is_d_variant;
+    std::optional<bool> is_h_variant;
+
+    // Offsets of runtime args
+    std::optional<uint32_t> offsetof_my_dev_id;
+    std::optional<uint32_t> offsetof_to_dev_id;
+    std::optional<uint32_t> offsetof_router_direction;
+};
+
+struct prefetch_dependent_config_t {
+    std::optional<tt_cxy_pair> upstream_logical_core;
+    std::optional<tt_cxy_pair> downstream_logical_core;
+    std::optional<tt_cxy_pair> downstream_s_logical_core;
+
+    std::optional<uint32_t> downstream_cb_base;
+    std::optional<uint32_t> downstream_cb_log_page_size;
+    std::optional<uint32_t> downstream_cb_pages;
+    std::optional<uint32_t> downstream_cb_sem_id;
+
+    std::optional<uint32_t> upstream_cb_sem_id;
+
+    std::optional<uint32_t> downstream_dispatch_s_cb_sem_id;
+
+    std::optional<uint32_t> num_hops;
+
+    tt::tt_metal::relay_mux_client_config fabric_mux_client_config;
+
+    std::optional<uint32_t> my_dev_id;
+    std::optional<uint32_t> ew_dim;
+    std::optional<uint32_t> to_mesh_id;
+    std::optional<uint32_t> to_dev_id;
+    std::optional<uint32_t> router_direction;
+};
+
+class PrefetchKernel : public FDKernel {
+public:
+    PrefetchKernel(
+        int node_id,
+        ChipId device_id,
+        ChipId servicing_device_id,
+        uint8_t cq_id,
+        noc_selection_t noc_selection,
+        bool h_variant,
+        bool d_variant,
+        const ContextDescriptor& descriptor,
+        dispatch_core_manager& dispatch_core_manager,
+        const GetControlPlaneFn& get_control_plane = {},
+        const GetDispatchQueryManagerFn& get_dispatch_query_manager = {},
+        const GetMaxNumEthCoresFn& get_max_num_eth_cores = {},
+        const GetReadsDispatchCoresFn& get_reads_dispatch_cores = {});
+
+    void CreateKernel() override;
+
+    void GenerateStaticConfigs() override;
+
+    void GenerateDependentConfigs() override;
+
+    void InitializeRuntimeArgsValues() override;
+
+    void ConfigureCore() override;
+
+    const prefetch_static_config_t& GetStaticConfig() { return static_config_; }
+
+private:
+    prefetch_static_config_t static_config_;
+    prefetch_dependent_config_t dependent_config_;
+    FDKernelEdmConnectionAttributes edm_connection_attributes_;
+
+    bool is_hd() const { return static_config_.is_h_variant.value() && static_config_.is_d_variant.value(); }
+};
+
+}  // namespace tt::tt_metal
