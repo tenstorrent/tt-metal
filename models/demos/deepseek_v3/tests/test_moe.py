@@ -88,23 +88,8 @@ _max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
 _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DEFAULT_PREFILL_SEQ_LEN
 
 
-@pytest.mark.timeout(1200)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {"fabric_config": get_fabric_config()},
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "mode, batch_size_per_row, seq_len",
-    [
-        ("decode", USERS_PER_ROW, 1),
-        ("prefill", 1, _prefill_seq_len),
-    ],
-)
-def test_forward_pass(
-    device_params,
+def run_test_forward_pass_moe(
+    *,
     mode,
     num_tokens,
     batch_size_per_row,
@@ -121,7 +106,6 @@ def test_forward_pass(
 
     module_path = "model.layers.3.mlp"
     checkpoint_state_dict = request.getfixturevalue("state_dict")
-    num_tokens = batch_size_per_row * mesh_device.shape[0] if mode == "decode" else seq_len
     state_dict, torch_input, reference_output = generate_reference_io(
         mode=mode,
         num_tokens=num_tokens,
@@ -142,7 +126,14 @@ def test_forward_pass(
         layer_id=module_path,
     )
 
-    model_config = get_model_config(MoE, mode, hf_config, mesh_device, device_params["fabric_config"])
+    model_config = get_model_config(
+        MoE,
+        mode,
+        hf_config,
+        mesh_device,
+        device_params["fabric_config"],
+        batch_size_per_row=batch_size_per_row,
+    )
     model_state = MoE.create_state(hf_config, mesh_device, ccl)
     model_shared_state = MoE.create_shared_state(hf_config, mesh_device)
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
@@ -192,13 +183,6 @@ def test_forward_pass(
         ("prefill", 1, _prefill_seq_len),
     ],
 )
-@pytest.mark.parametrize(
-    "topk_fallback",
-    [
-        True,
-    ],
-)
-@pytest.mark.parametrize("weight_type", ["random", "real"])
 def test_forward_pass(
     device_params,
     mode,
@@ -211,8 +195,6 @@ def test_forward_pass(
     cache_path,
     mesh_device,
     ccl,
-    topk_fallback,
-    weight_type,
     force_recalculate_weight_config,
 ):
     run_test_forward_pass_moe(
@@ -225,8 +207,6 @@ def test_forward_pass(
         cache_path=cache_path,
         mesh_device=mesh_device,
         ccl=ccl,
-        topk_fallback=topk_fallback,
-        weight_type=weight_type,
         force_recalculate_weight_config=force_recalculate_weight_config,
         device_params=device_params,
     )
@@ -261,8 +241,6 @@ def test_mode_decode_forward_pass_batch_8_users_per_row(
         cache_path=cache_path,
         mesh_device=mesh_device,
         ccl=ccl,
-        topk_fallback=True,
-        weight_type="real",
         force_recalculate_weight_config=force_recalculate_weight_config,
         device_params=device_params,
     )

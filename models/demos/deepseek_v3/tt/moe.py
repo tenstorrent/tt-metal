@@ -160,6 +160,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         mesh_device: ttnn.Device,
         fabric_config: ttnn.FabricConfig,
         mode: str,
+        batch_size_per_row: int,
     ) -> ModelDecodeConfig | ModelPrefillConfig:
         """Generate decode configuration for this module.
 
@@ -283,8 +284,15 @@ class MoE(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
         fabric_config: ttnn.FabricConfig,
+        batch_size_per_row: int,
     ) -> ModelDecodeConfig:
-        return cls.model_config(hf_config, mesh_device, fabric_config, "decode")
+        return cls.model_config(
+            hf_config,
+            mesh_device,
+            fabric_config,
+            "decode",
+            batch_size_per_row=batch_size_per_row,
+        )
 
     @classmethod
     def prefill_model_config(
@@ -293,7 +301,13 @@ class MoE(SharedStateAddOn, AbstractModule):
         mesh_device: ttnn.Device,
         fabric_config: ttnn.FabricConfig,
     ) -> ModelPrefillConfig:
-        return cls.model_config(hf_config, mesh_device, fabric_config, "prefill")
+        return cls.model_config(
+            hf_config,
+            mesh_device,
+            fabric_config,
+            "prefill",
+            batch_size_per_row=USERS_PER_ROW,
+        )
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
@@ -376,16 +390,6 @@ class MoE(SharedStateAddOn, AbstractModule):
         return MoEGate.forward(x, cfg["moe_gate"])
 
     @classmethod
-    def _fwd_repeat_permute_expert_weights(
-        cls, topk_experts_weights: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig
-    ) -> ttnn.Tensor:
-        topk_experts_weights_rm = ttnn.repeat(topk_experts_weights, **cfg["topk_weights_repeat"])
-        topk_experts_weights_rm = ttnn.permute(topk_experts_weights_rm, (3, 1, 2, 0))
-        topk_experts_weights = ttnn.to_layout(topk_experts_weights_rm, ttnn.TILE_LAYOUT)
-        ttnn.deallocate(topk_experts_weights_rm)
-        return topk_experts_weights
-
-    @classmethod
     def _fwd_moe(
         cls,
         x: ttnn.Tensor,
@@ -421,7 +425,6 @@ class MoE(SharedStateAddOn, AbstractModule):
                 [1, 1, token_end, cfg["num_experts_per_tok"]],
             )
             topk_weights_chunk_rm = ttnn.to_layout(topk_weights_chunk, ttnn.ROW_MAJOR_LAYOUT)
-            ttnn.deallocate(topk_weights_chunk)
             topk_weights_chunk_rm = ttnn.repeat(topk_weights_chunk_rm, **cfg["topk_weights_repeat"])
             topk_weights_chunk_rm = ttnn.permute(topk_weights_chunk_rm, (3, 1, 2, 0))
             topk_weights_chunk = ttnn.to_layout(topk_weights_chunk_rm, ttnn.TILE_LAYOUT)
