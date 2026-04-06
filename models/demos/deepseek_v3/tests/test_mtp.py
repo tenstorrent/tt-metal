@@ -722,6 +722,8 @@ def _run_mtp_step(
     ttnn.deallocate(rot_idxs)
     ttnn.deallocate(rope_tensors["cos_matrix"])
     ttnn.deallocate(rope_tensors["sin_matrix"])
+    ttnn.deallocate(rope_tensors["cos_matrix_prefill_shape"])
+    ttnn.deallocate(rope_tensors["sin_matrix_prefill_shape"])
 
     return logits
 
@@ -951,6 +953,8 @@ def _decode_step_layerwise_host(
         ttnn.deallocate(rot_idxs)
         ttnn.deallocate(rope_tensors["cos_matrix"])
         ttnn.deallocate(rope_tensors["sin_matrix"])
+        ttnn.deallocate(rope_tensors["cos_matrix_prefill_shape"])
+        ttnn.deallocate(rope_tensors["sin_matrix_prefill_shape"])
 
 
 class _MtpTraceRunner:
