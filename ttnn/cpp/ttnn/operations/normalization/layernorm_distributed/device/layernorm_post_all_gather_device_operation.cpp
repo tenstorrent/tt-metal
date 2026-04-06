@@ -111,9 +111,6 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
                 "Gamma tensor must be BFLOAT16, got: {}",
                 gamma_tensor.dtype());
         }
-        const bool is_layernorm = args.norm_type == LayerNormDistributedType::LAYERNORM;
-        const bool has_beta = beta.has_value();
-        TT_FATAL(is_layernorm == has_beta, "Beta tensor must be present if and only if using layernorm (vs rmsnorm)");
 
         if (beta.has_value()) {
             const auto& beta_tensor = beta.value();
