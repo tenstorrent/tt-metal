@@ -147,10 +147,6 @@ std::map<std::string, std::string> get_defines(
             op_binary_type = "EltwiseBinaryType::ELWADD";
             defines.merge(get_defines(UnaryOpType::SQRT, std::nullopt, "0", idst, input_dtype));
             break;
-        case BinaryOpType::ATAN2:
-            defines["BINARY_SFPU_INIT"] = "atan2_binary_tile_init();";
-            defines["BINARY_SFPU_OP"] = "atan2_binary_tile(i, i + 1, i);";
-            break;
         default: TT_THROW("Undefined op type {}", op_type);
     }
 
