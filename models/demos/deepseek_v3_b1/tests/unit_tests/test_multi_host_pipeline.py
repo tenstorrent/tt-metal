@@ -659,290 +659,6 @@ def test_pipeline_block_no_loopback(mesh_device, vocab_size, embedding_dim, toke
     pipeline_block.terminate()
 
 
-@pytest.mark.parametrize(
-    "tensor_size_bytes, fifo_size, num_iterations",
-    [
-        (512, 1024, 512),
-        (1024, 2048, 128),
-    ],
-)
-@pytest.mark.parametrize(
-    "h2d_mode",
-    [
-        ttnn.H2DMode.HOST_PUSH,
-        ttnn.H2DMode.DEVICE_PULL,
-    ],
-)
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(4, 2)],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-            "fabric_router_config": create_fabric_router_config(15232),
-        }
-    ],
-    indirect=True,
-)
-def test_multi_host_parallel_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size, num_iterations, h2d_mode):
-    """Test loopback pipeline using ParallelSocketInterface for forwarding stages.
-
-    Uses a single parallel channel (N=1) to exercise the full ParallelSocketInterface
-    code path (socket creation, program building, merge_program_descriptors, dispatch,
-    and termination) while remaining compatible with the single-channel H2D/D2H boundary
-    on the first pipeline stage.
-    """
-    # if ttnn.get_num_devices() < 32:
-    #    pytest.skip("Test requires a full galaxy")
-    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
-
-    if not is_slow_dispatch():
-        pytest.skip("Skipping test in fast dispatch mode")
-
-    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
-
-    my_mesh_id = mesh_device.get_system_mesh_id()
-    is_pipeline_start = my_mesh_id == 0
-    num_procs = int(ttnn.distributed_context_get_size())
-    assert len(pipeline_config) == num_procs + 1
-
-    pipeline_core_coord = ttnn.CoreCoord(0, 0)
-
-    if is_pipeline_start:
-        h2d_device_coord = pipeline_config[my_mesh_id].entry_node_coord
-        d2h_device_coord = pipeline_config[num_procs].exit_node_coord
-
-        logger.debug(
-            f"[Parallel] Creating Host IO Interface on First Pipeline stage. "
-            f"H2D Coord: {h2d_device_coord} D2H Coord: {d2h_device_coord}"
-        )
-
-        h2d_socket = ttnn.H2DSocket(
-            mesh_device,
-            ttnn.MeshCoreCoord(h2d_device_coord, pipeline_core_coord),
-            ttnn.BufferType.L1,
-            fifo_size,
-            h2d_mode,
-        )
-        d2h_socket = ttnn.D2HSocket(mesh_device, ttnn.MeshCoreCoord(d2h_device_coord, pipeline_core_coord), fifo_size)
-
-        host_io = HostInterface(
-            h2d_socket,
-            d2h_socket,
-            tensor_size_bytes,
-            tensor_size_bytes,
-            core_to_core_socket_buffer_size=fifo_size,
-            h2d_downstream_core=ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].exit_node_coord, pipeline_core_coord),
-            d2h_upstream_core=ttnn.MeshCoreCoord(pipeline_config[num_procs].entry_node_coord, pipeline_core_coord),
-        )
-
-        exit_socket_interface = SocketInterface(
-            tensor_size_bytes,
-            fifo_size,
-            tensor_size_bytes,
-            ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].exit_node_coord, pipeline_core_coord),
-            ttnn.MeshCoreCoord(pipeline_config[my_mesh_id + 1].entry_node_coord, pipeline_core_coord),
-            upstream_socket=host_io.get_downstream_socket(),
-            sender_mesh=MeshWrapper(mesh_device),
-            receiver_mesh=MeshWrapper(mesh_id=my_mesh_id + 1),
-        )
-        entry_socket_interface = SocketInterface(
-            tensor_size_bytes,
-            fifo_size,
-            tensor_size_bytes,
-            ttnn.MeshCoreCoord(pipeline_config[num_procs - 1].exit_node_coord, pipeline_core_coord),
-            ttnn.MeshCoreCoord(pipeline_config[num_procs].entry_node_coord, pipeline_core_coord),
-            downstream_socket=host_io.get_upstream_socket(),
-            sender_mesh=MeshWrapper(mesh_id=num_procs - 1),
-            receiver_mesh=MeshWrapper(mesh_device),
-        )
-        host_io.run()
-        exit_socket_interface.run()
-        entry_socket_interface.run()
-
-        tensor_size_datums = tensor_size_bytes // 4
-        for i in range(num_iterations):
-            torch_input = torch.arange(
-                i * tensor_size_datums, (i + 1) * tensor_size_datums, dtype=torch.float32
-            ).reshape(1, tensor_size_datums)
-
-            input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
-            torch_output = torch.zeros(1, tensor_size_datums, dtype=torch.float32)
-            output_tensor = ttnn.from_torch(torch_output, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
-
-            h2d_socket.write_tensor(input_tensor)
-            d2h_socket.read_tensor(output_tensor)
-
-            result_torch = ttnn.to_torch(output_tensor)
-            match = torch.equal(torch_input, result_torch)
-            assert match, f"H2D → D2H parallel loopback data mismatch!\nExpected: {torch_input}\nGot: {result_torch}"
-
-        ttnn.distributed_context_barrier()
-        host_io.terminate(False)
-        exit_socket_interface.terminate(False)
-        entry_socket_interface.terminate(True)
-
-    else:
-        send_core_coords = [ttnn.MeshCoreCoord(pipeline_config[my_mesh_id - 1].exit_node_coord, pipeline_core_coord)]
-        recv_core_coords = [ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].entry_node_coord, pipeline_core_coord)]
-        downstream_core_coords = [ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].exit_node_coord, pipeline_core_coord)]
-
-        logger.debug(
-            f"[Parallel] Creating ParallelSocketInterface entry on stage {my_mesh_id}. "
-            f"send_cores={send_core_coords}, recv_cores={recv_core_coords}"
-        )
-        entry_socket_interface = ParallelSocketInterface(
-            tensor_size_bytes,
-            fifo_size,
-            send_core_coords=send_core_coords,
-            recv_core_coords=recv_core_coords,
-            downstream_core_coords=downstream_core_coords,
-            sender_mesh=MeshWrapper(mesh_id=my_mesh_id - 1),
-            receiver_mesh=MeshWrapper(mesh_device),
-        )
-
-        exit_send_cores = [ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].exit_node_coord, pipeline_core_coord)]
-        exit_recv_cores = [ttnn.MeshCoreCoord(pipeline_config[my_mesh_id + 1].entry_node_coord, pipeline_core_coord)]
-
-        logger.debug(
-            f"[Parallel] Creating ParallelSocketInterface exit on stage {my_mesh_id}. "
-            f"send_cores={exit_send_cores}, recv_cores={exit_recv_cores}"
-        )
-        exit_socket_interface = ParallelSocketInterface(
-            tensor_size_bytes,
-            fifo_size,
-            send_core_coords=exit_send_cores,
-            recv_core_coords=exit_recv_cores,
-            upstream_sockets=entry_socket_interface.get_downstream_sockets(),
-            sender_mesh=MeshWrapper(mesh_device),
-            receiver_mesh=MeshWrapper(mesh_id=my_mesh_id + 1 if my_mesh_id < num_procs - 1 else 0),
-        )
-        entry_socket_interface.run()
-        exit_socket_interface.run()
-
-        ttnn.distributed_context_barrier()
-
-        entry_socket_interface.terminate(False)
-        exit_socket_interface.terminate(True)
-
-
-@pytest.mark.parametrize(
-    "vocab_size, embedding_dim",
-    [
-        (256, 14336),
-        (512, 7168),
-        (1024, 3584),
-    ],
-)
-@pytest.mark.parametrize(
-    "token_fifo_size, embedding_fifo_factor",
-    [
-        (128, 2),
-        (256, 4),
-    ],
-)
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(4, 2)],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-            "fabric_router_config": create_fabric_router_config(15232),
-        }
-    ],
-    indirect=True,
-)
-def test_pipeline_block_parallel(mesh_device, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor):
-    """Test PipelineBlock with parallel forwarding stages via ParallelSocketInterface.
-
-    The first pipeline stage (process 0) uses single-channel H2D/D2H as usual.
-    All forwarding stages use ParallelSocketInterface with N=1 channel, exercising
-    the parallel code path through the PipelineBlock API end-to-end.
-    """
-    if not is_slow_dispatch():
-        pytest.skip("Skipping test in fast dispatch mode")
-    # if ttnn.get_num_devices() < 32:
-    #     pytest.skip("Test requires a full galaxy")
-
-    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
-
-    pipeline_core_coord = ttnn.CoreCoord(0, 0)
-    parallel_core_coords = [ttnn.CoreCoord(0, 0)]
-
-    embedding_dtype = torch.bfloat16
-    embedding_shape = (1, 1, vocab_size, embedding_dim)
-    embedding_size_bytes = embedding_dim * dtype_size(embedding_dtype)
-    embedding_fifo_size = embedding_size_bytes * embedding_fifo_factor
-
-    if mesh_device.get_system_mesh_id() == 0:
-        torch_embedding = torch.randn(embedding_shape, dtype=embedding_dtype)
-        embedding_tensor = ttnn.from_torch(
-            torch_embedding, dtype=ttnn_dtype_from_torch_dtype(embedding_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
-        )
-        embedding_tensor = ttnn.to_device(embedding_tensor, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        pipeline_block = PipelineBlock(
-            mesh_device,
-            pipeline_core_coord,
-            embedding_fifo_size,
-            embedding_fifo_size,
-            embedding_size_bytes,
-            embedding_size_bytes,
-            h2d_socket_fifo_size=token_fifo_size,
-            d2h_socket_fifo_size=embedding_fifo_size,
-            d2h_socket_page_size=embedding_size_bytes,
-            embedding_tensor=embedding_tensor,
-        )
-    else:
-        pipeline_block = PipelineBlock(
-            mesh_device,
-            pipeline_core_coord,
-            embedding_fifo_size,
-            embedding_fifo_size,
-            embedding_size_bytes,
-            embedding_size_bytes,
-            pipeline_core_coords=parallel_core_coords,
-        )
-
-    pipeline_block.run()
-
-    if pipeline_block.is_first_pipeline_stage():
-        token_dtype = torch.uint32
-        token_size_bytes = 64
-        token_size_datums = token_size_bytes // dtype_size(token_dtype)
-
-        for token_id in range(vocab_size):
-            torch_input = torch.zeros(1, token_size_datums, dtype=token_dtype)
-            torch_input[0, 0] = token_id
-            input_tensor = ttnn.from_torch(
-                torch_input, dtype=ttnn_dtype_from_torch_dtype(token_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
-            )
-            torch_output = torch.zeros(1, embedding_shape[3], dtype=embedding_dtype)
-            output_tensor = ttnn.from_torch(
-                torch_output, dtype=ttnn_dtype_from_torch_dtype(embedding_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
-            )
-            pipeline_block.write_token(input_tensor)
-            pipeline_block.read_output(output_tensor)
-
-            result_torch = ttnn.to_torch(output_tensor).reshape(-1)
-            expected = torch_embedding[0, 0, token_id, :].reshape(-1)
-            match = torch.equal(expected, result_torch)
-            assert match, (
-                f"Token {token_id}: D2H output does not match embedding row!\n"
-                f"Expected: {expected[:8]}...\nGot: {result_torch[:8]}..."
-            )
-        logger.info(f"{vocab_size} token lookups verified via parallel pipeline")
-
-    pipeline_block.terminate()
-
-
 def _dispatch_merged_programs(all_entries, mesh_device):
     """Merge (device_coord, program) entries by device and dispatch in a single generic_op.
 
@@ -1163,20 +879,20 @@ def test_pipeline_block_parallel_devices(mesh_device, tensor_size_bytes, fifo_si
 def test_multi_host_multi_channel_parallel_loopback_pipeline(
     mesh_device, tensor_size_bytes, fifo_size, num_iterations, num_channels
 ):
-    """Test loopback pipeline with N parallel channels using ParallelSocketInterface.
+    """Test loopback pipeline with N parallel channels across devices.
 
     Each channel uses a DIFFERENT device in the mesh (not different cores on the
-    same device). This avoids fabric EDM slot conflicts since each device has its
-    own independent EDM channels.
+    same device). Process 0 manually sets up N independent H2D/D2H pairs and
+    ParallelSocketInterface for exit/entry (loopback). Forwarding stages (processes
+    1+) use PipelineBlock with pipeline_device_coords.
 
     Core assignments per device:
-      - core_io (0,2): H2D receiver + D2H sender (process 0 only, same_device=True)
+      - core_io (0,2): H2D receiver + D2H sender (process 0 only)
       - core_entry (0,0): entry d2d_exchange (receives from previous process)
       - core_exit (0,1): exit d2d_exchange (sends to next process)
     """
     # if ttnn.get_num_devices() < 32:
     #    pytest.skip("Test requires a full galaxy")
-    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
 
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -1186,7 +902,6 @@ def test_multi_host_multi_channel_parallel_loopback_pipeline(
     my_mesh_id = mesh_device.get_system_mesh_id()
     is_pipeline_start = my_mesh_id == 0
     num_procs = int(ttnn.distributed_context_get_size())
-    assert len(pipeline_config) == num_procs + 1
 
     mesh_rows, mesh_cols = mesh_device.shape
     num_mesh_devices = int(mesh_rows) * int(mesh_cols)
@@ -1203,6 +918,8 @@ def test_multi_host_multi_channel_parallel_loopback_pipeline(
     print(f"Mesh ID {my_mesh_id}: {num_channels} channels on devices {device_coords}")
 
     if is_pipeline_start:
+        ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+
         h2d_sockets = []
         d2h_sockets = []
         host_ios = []
@@ -1300,44 +1017,15 @@ def test_multi_host_multi_channel_parallel_loopback_pipeline(
         exit_socket_interface.terminate(True)
 
     else:
-        print(f"Mesh ID {my_mesh_id}: Creating ParallelSocketInterfaces for forwarding stage")
-
-        send_core_coords = [ttnn.MeshCoreCoord(dc, core_exit) for dc in device_coords]
-        recv_core_coords = [ttnn.MeshCoreCoord(dc, core_entry) for dc in device_coords]
-        downstream_core_coords = [ttnn.MeshCoreCoord(dc, core_exit) for dc in device_coords]
-
-        entry_socket_interface = ParallelSocketInterface(
-            tensor_size_bytes,
+        pipeline_block = PipelineBlock(
+            mesh_device,
+            core_entry,
             fifo_size,
-            send_core_coords=send_core_coords,
-            recv_core_coords=recv_core_coords,
-            downstream_core_coords=downstream_core_coords,
-            sender_mesh=MeshWrapper(mesh_id=my_mesh_id - 1),
-            receiver_mesh=MeshWrapper(mesh_device),
-        )
-
-        next_mesh_id = my_mesh_id + 1 if my_mesh_id < num_procs - 1 else 0
-        exit_send_cores = [ttnn.MeshCoreCoord(dc, core_exit) for dc in device_coords]
-        exit_recv_cores = [ttnn.MeshCoreCoord(dc, core_entry) for dc in device_coords]
-
-        exit_socket_interface = ParallelSocketInterface(
-            tensor_size_bytes,
             fifo_size,
-            send_core_coords=exit_send_cores,
-            recv_core_coords=exit_recv_cores,
-            upstream_sockets=entry_socket_interface.get_downstream_sockets(),
-            sender_mesh=MeshWrapper(mesh_device),
-            receiver_mesh=MeshWrapper(mesh_id=next_mesh_id),
+            tensor_size_bytes,
+            tensor_size_bytes,
+            pipeline_device_coords=device_coords,
+            pipeline_exit_core_coord=core_exit,
         )
-
-        all_entries = []
-        all_entries.extend(entry_socket_interface.build_programs())
-        all_entries.extend(exit_socket_interface.build_programs())
-        print(f"Mesh ID {my_mesh_id}: Dispatching {len(all_entries)} programs across {num_channels} devices")
-        _dispatch_merged_programs(all_entries, mesh_device)
-        print(f"Mesh ID {my_mesh_id}: Finished running socket interfaces")
-        ttnn.distributed_context_barrier()
-
-        entry_socket_interface.terminate(False)
-        exit_socket_interface.terminate(True)
-        print(f"Mesh ID {my_mesh_id}: Finished terminating socket interfaces")
+        pipeline_block.run()
+        pipeline_block.terminate()
