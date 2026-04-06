@@ -285,6 +285,20 @@ jobs:
           )
           echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
 
+      - name: Show execution matrix
+        run: |
+          echo "::group::Validation execution matrix"
+          jq . tests/sweep_framework/framework/validation_matrix.json
+          echo "::endgroup::"
+
+          {
+            echo "### Validation execution matrix"
+            echo
+            echo '```json'
+            jq . tests/sweep_framework/framework/validation_matrix.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   run-sweeps-with-tracer:
     name: ${{ matrix.batch_display }}
     needs: [build-artifact, prepare-validation-inputs, generate-sweeps, compute-sweep-matrix]
