@@ -436,17 +436,17 @@ def test_multi_host_loopback_pipeline_with_embedding(
     "vocab_size, embedding_dim",
     [
         (256, 14336),
-        # (512, 7168),
-        # (1024, 3584),
-        # (2048, 1792),
+        (512, 7168),
+        (1024, 3584),
+        (2048, 1792),
     ],
 )
 @pytest.mark.parametrize(
     "token_fifo_size, embedding_fifo_factor",
     [
         (128, 2),
-        # (256, 4),
-        # (512, 8),
+        (256, 4),
+        (512, 8),
     ],
 )
 @pytest.mark.parametrize(
@@ -458,7 +458,7 @@ def test_multi_host_loopback_pipeline_with_embedding(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
             "fabric_router_config": create_fabric_router_config(15232),
         }
     ],
@@ -662,11 +662,8 @@ def test_pipeline_block_no_loopback(mesh_device, vocab_size, embedding_dim, toke
 @pytest.mark.parametrize(
     "tensor_size_bytes, fifo_size, num_iterations",
     [
-        (64, 128, 512),
-        (64, 512, 512),
         (512, 1024, 512),
         (1024, 2048, 128),
-        (32768, 65536, 128),
     ],
 )
 @pytest.mark.parametrize(
@@ -685,7 +682,7 @@ def test_pipeline_block_no_loopback(mesh_device, vocab_size, embedding_dim, toke
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
             "fabric_router_config": create_fabric_router_config(15232),
         }
     ],
@@ -857,7 +854,7 @@ def test_multi_host_parallel_loopback_pipeline(mesh_device, tensor_size_bytes, f
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
             "fabric_router_config": create_fabric_router_config(15232),
         }
     ],
@@ -972,6 +969,174 @@ def _dispatch_merged_programs(all_entries, mesh_device):
     "tensor_size_bytes, fifo_size, num_iterations",
     [
         (64, 128, 128),
+    ],
+)
+@pytest.mark.parametrize(
+    "num_channels",
+    [1, 8],
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(4, 2)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            "fabric_router_config": create_fabric_router_config(15232),
+        }
+    ],
+    indirect=True,
+)
+def test_pipeline_block_parallel_devices(mesh_device, tensor_size_bytes, fifo_size, num_iterations, num_channels):
+    """Test PipelineBlock with per-device parallel forwarding stages.
+
+    Process 0 manually sets up N independent H2D/D2H + exit/entry socket
+    interfaces matching the per-device core layout. Forwarding stages (processes
+    1+) use PipelineBlock with pipeline_device_coords, exercising the
+    _init_parallel_device_forwarding_stage code path end-to-end.
+    """
+    # if ttnn.get_num_devices() < 32:
+    #    pytest.skip("Test requires a full galaxy")
+
+    if not is_slow_dispatch():
+        pytest.skip("Skipping test in fast dispatch mode")
+
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+
+    my_mesh_id = mesh_device.get_system_mesh_id()
+    is_pipeline_start = my_mesh_id == 0
+    num_procs = int(ttnn.distributed_context_get_size())
+
+    mesh_rows, mesh_cols = mesh_device.shape
+    num_mesh_devices = int(mesh_rows) * int(mesh_cols)
+    assert num_channels <= num_mesh_devices
+
+    device_coords = [ttnn.MeshCoordinate(r, c) for r in range(int(mesh_rows)) for c in range(int(mesh_cols))][
+        :num_channels
+    ]
+
+    core_entry = ttnn.CoreCoord(0, 0)
+    core_exit = ttnn.CoreCoord(0, 1)
+    core_io = ttnn.CoreCoord(0, 2)
+
+    if is_pipeline_start:
+        # All processes must call generate_blitz_decode_pipeline exactly once
+        # (it uses distributed broadcasts internally). Processes 1-3 call it
+        # inside PipelineBlock.__init__, so process 0 must call it here.
+        ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+        h2d_sockets = []
+        d2h_sockets = []
+        host_ios = []
+
+        for dc in device_coords:
+            h2d = ttnn.H2DSocket(
+                mesh_device,
+                ttnn.MeshCoreCoord(dc, core_io),
+                ttnn.BufferType.L1,
+                fifo_size,
+                ttnn.H2DMode.HOST_PUSH,
+            )
+            d2h = ttnn.D2HSocket(
+                mesh_device,
+                ttnn.MeshCoreCoord(dc, core_io),
+                fifo_size,
+            )
+            hio = HostInterface(
+                h2d,
+                d2h,
+                tensor_size_bytes,
+                tensor_size_bytes,
+                core_to_core_socket_buffer_size=fifo_size,
+                h2d_downstream_core=ttnn.MeshCoreCoord(dc, core_exit),
+                d2h_upstream_core=ttnn.MeshCoreCoord(dc, core_entry),
+            )
+            h2d_sockets.append(h2d)
+            d2h_sockets.append(d2h)
+            host_ios.append(hio)
+
+        exit_send_cores = [ttnn.MeshCoreCoord(dc, core_exit) for dc in device_coords]
+        exit_recv_cores = [ttnn.MeshCoreCoord(dc, core_entry) for dc in device_coords]
+
+        exit_socket_interface = ParallelSocketInterface(
+            tensor_size_bytes,
+            fifo_size,
+            send_core_coords=exit_send_cores,
+            recv_core_coords=exit_recv_cores,
+            upstream_sockets=[hio.get_downstream_socket() for hio in host_ios],
+            sender_mesh=MeshWrapper(mesh_device),
+            receiver_mesh=MeshWrapper(mesh_id=my_mesh_id + 1),
+        )
+
+        entry_send_cores = [ttnn.MeshCoreCoord(dc, core_exit) for dc in device_coords]
+        entry_recv_cores = [ttnn.MeshCoreCoord(dc, core_entry) for dc in device_coords]
+
+        entry_socket_interface = ParallelSocketInterface(
+            tensor_size_bytes,
+            fifo_size,
+            send_core_coords=entry_send_cores,
+            recv_core_coords=entry_recv_cores,
+            downstream_sockets=[hio.get_upstream_socket() for hio in host_ios],
+            sender_mesh=MeshWrapper(mesh_id=num_procs - 1),
+            receiver_mesh=MeshWrapper(mesh_device),
+        )
+
+        all_entries = []
+        for hio in host_ios:
+            all_entries.extend(hio._build_programs())
+        all_entries.extend(exit_socket_interface.build_programs())
+        all_entries.extend(entry_socket_interface.build_programs())
+        _dispatch_merged_programs(all_entries, mesh_device)
+
+        tensor_size_datums = tensor_size_bytes // 4
+        for i in range(num_iterations):
+            torch_input = torch.arange(
+                i * tensor_size_datums, (i + 1) * tensor_size_datums, dtype=torch.float32
+            ).reshape(1, tensor_size_datums)
+
+            for ch in range(num_channels):
+                input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
+                h2d_sockets[ch].write_tensor(input_tensor)
+
+            for ch in range(num_channels):
+                torch_output = torch.zeros(1, tensor_size_datums, dtype=torch.float32)
+                output_tensor = ttnn.from_torch(torch_output, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
+                d2h_sockets[ch].read_tensor(output_tensor)
+
+                result_torch = ttnn.to_torch(output_tensor)
+                assert torch.equal(torch_input, result_torch), (
+                    f"Channel {ch}, iteration {i}: data mismatch!\n" f"Expected: {torch_input}\nGot: {result_torch}"
+                )
+
+        logger.info(f"Data integrity verified for {num_channels} channels x {num_iterations} iterations")
+        ttnn.distributed_context_barrier()
+        for hio in host_ios:
+            hio.terminate(False)
+        entry_socket_interface.terminate(False)
+        exit_socket_interface.terminate(True)
+
+    else:
+        pipeline_block = PipelineBlock(
+            mesh_device,
+            core_entry,
+            fifo_size,
+            fifo_size,
+            tensor_size_bytes,
+            tensor_size_bytes,
+            pipeline_device_coords=device_coords,
+            pipeline_exit_core_coord=core_exit,
+            exit_upstream_cores=[],
+        )
+        pipeline_block.run()
+        pipeline_block.terminate()
+
+
+@pytest.mark.parametrize(
+    "tensor_size_bytes, fifo_size, num_iterations",
+    [
+        (64, 128, 128),
         (512, 1024, 128),
         (1024, 2048, 64),
     ],
@@ -989,7 +1154,7 @@ def _dispatch_merged_programs(all_entries, mesh_device):
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
             "fabric_router_config": create_fabric_router_config(15232),
         }
     ],

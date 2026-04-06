@@ -357,9 +357,10 @@ class SocketInterface:
         assert my_downstream_socket.get_active_cores()[0] == my_core_coord
 
         num_upstream = len(my_upstream_sockets)
-        num_sockets_per_risc = num_upstream // 2
-        brisc_sockets = my_upstream_sockets[:num_sockets_per_risc]
-        ncrisc_sockets = my_upstream_sockets[num_sockets_per_risc:]
+        brisc_count = (num_upstream + 1) // 2
+        brisc_sockets = my_upstream_sockets[:brisc_count]
+        ncrisc_sockets = my_upstream_sockets[brisc_count:]
+        num_sockets_per_risc = brisc_count
         brisc_socket_addrs = [s.get_config_buffer_address() for s in brisc_sockets]
         ncrisc_socket_addrs = [s.get_config_buffer_address() for s in ncrisc_sockets]
 
@@ -441,9 +442,12 @@ class SocketInterface:
             return ct_args
 
         core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(my_core_coord.core_coord, my_core_coord.core_coord)])
+        print("running d2d exchange with multi-upstream support:")
         kernel_source = "models/demos/deepseek_v3_b1/micro_ops/d2d_exchange/kernels/d2d_exchange_multiple_upstreams.cpp"
 
-        # BRISC kernel: handles sockets 0..N/2-1, packet header slots 0-1, fabric link 0
+        # BRISC (Writer/NOC0) gets ceil(N/2) sockets; NCRISC (Reader/NOC1) gets floor(N/2).
+        # Giving the odd-one-out to BRISC ensures local NOC writes use NOC0 addresses.
+        # BRISC kernel: handles sockets 0..brisc_count-1, packet header slots 0-1, fabric link 0
         brisc_kernel = ttnn.KernelDescriptor(
             kernel_source=kernel_source,
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
@@ -452,7 +456,7 @@ class SocketInterface:
             config=ttnn.WriterConfigDescriptor(),
         )
 
-        # NCRISC kernel: handles sockets N/2..N-1, packet header slots 2-3, fabric link 1
+        # NCRISC kernel: handles sockets brisc_count..N-1, packet header slots 2-3, fabric link 1
         if use_fabric_on_sender and not use_fabric_on_receiver:
             ncrisc_pkt_hdr_slot_start = 1
         else:
@@ -552,10 +556,13 @@ class SocketInterface:
                 packet_header_cb_index,
             )
 
-    def run(self):
-        dummy_tensor = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh_device
-        )
+    def build_programs(self):
+        """Build exchange programs and return (device_coord, program) pairs without dispatching.
+
+        This enables multiple SocketInterface instances to have their programs
+        merged and dispatched together in a single generic_op call.
+        """
+        entries = []
         if self.local_socket:
             sender_program = self._create_sender_program(
                 self.mesh_device,
@@ -563,7 +570,6 @@ class SocketInterface:
                 self.internal_socket_pair[0],
                 self.sender_packet_header_cb_index,
             )
-
             receiver_program = self._create_single_upstream_program(
                 self.mesh_device,
                 self.recv_core_coord,
@@ -571,26 +577,7 @@ class SocketInterface:
                 self.downstream_socket,
                 self.receiver_packet_header_cb_index,
             )
-        else:
-            if self.upstream_socket or self.upstream_sockets_list:
-                program = self._create_sender_program(
-                    self.mesh_device,
-                    self.send_core_coord,
-                    self.internal_socket,
-                    self.sender_packet_header_cb_index,
-                )
-            else:
-                assert self.downstream_socket, "Internal Error - Has no upstream or downstream socket"
-                program = self._create_single_upstream_program(
-                    self.mesh_device,
-                    self.recv_core_coord,
-                    self.internal_socket,
-                    self.downstream_socket,
-                    self.receiver_packet_header_cb_index,
-                )
 
-        mesh_program_descriptor = ttnn.MeshProgramDescriptor()
-        if self.local_socket:
             same_device = self.send_core_coord.device_coord == self.recv_core_coord.device_coord
             if same_device:
                 sender_cb_ids = {fd.buffer_index for cb in sender_program.cbs for fd in cb.format_descriptors}
@@ -604,33 +591,47 @@ class SocketInterface:
                     semaphores=[],
                     cbs=combined_cbs,
                 )
-                # Preserve per-kernel runtime args from the independently built programs.
                 for i, k in enumerate(sender_program.kernels):
                     combined_program.kernels[i].runtime_args = k.runtime_args
                 for i, k in enumerate(receiver_program.kernels):
                     combined_program.kernels[len(sender_program.kernels) + i].runtime_args = k.runtime_args
-                mesh_program_descriptor[
-                    ttnn.MeshCoordinateRange(self.send_core_coord.device_coord, self.send_core_coord.device_coord)
-                ] = combined_program
+                entries.append((self.send_core_coord.device_coord, combined_program))
             else:
-                mesh_program_descriptor[
-                    ttnn.MeshCoordinateRange(self.send_core_coord.device_coord, self.send_core_coord.device_coord)
-                ] = sender_program
-                mesh_program_descriptor[
-                    ttnn.MeshCoordinateRange(self.recv_core_coord.device_coord, self.recv_core_coord.device_coord)
-                ] = receiver_program
+                entries.append((self.send_core_coord.device_coord, sender_program))
+                entries.append((self.recv_core_coord.device_coord, receiver_program))
         else:
-            device_coord = (
-                self.send_core_coord.device_coord
-                if (self.upstream_socket or self.upstream_sockets_list)
-                else self.recv_core_coord.device_coord
-            )
+            if self.upstream_socket or self.upstream_sockets_list:
+                program = self._create_sender_program(
+                    self.mesh_device,
+                    self.send_core_coord,
+                    self.internal_socket,
+                    self.sender_packet_header_cb_index,
+                )
+                entries.append((self.send_core_coord.device_coord, program))
+            else:
+                assert self.downstream_socket, "Internal Error - Has no upstream or downstream socket"
+                program = self._create_single_upstream_program(
+                    self.mesh_device,
+                    self.recv_core_coord,
+                    self.internal_socket,
+                    self.downstream_socket,
+                    self.receiver_packet_header_cb_index,
+                )
+                entries.append((self.recv_core_coord.device_coord, program))
+        return entries
+
+    def run(self):
+        entries = self.build_programs()
+
+        dummy_tensor = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh_device
+        )
+
+        mesh_program_descriptor = ttnn.MeshProgramDescriptor()
+        for device_coord, program in entries:
             mesh_program_descriptor[ttnn.MeshCoordinateRange(device_coord, device_coord)] = program
 
-        io_tensors = [
-            dummy_tensor,
-            dummy_tensor,
-        ]
+        io_tensors = [dummy_tensor, dummy_tensor]
         return ttnn.generic_op(io_tensors, mesh_program_descriptor)
 
     def terminate(self, sync_devices):

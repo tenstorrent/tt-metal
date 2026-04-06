@@ -40,10 +40,30 @@ Parallel mode (pipeline_core_coords):
   D2D connections between adjacent stages. Each channel runs on a distinct
   core, sharing the same device coordinates from the pipeline config.
   First and last stages remain single-connection (host I/O boundary).
+
+Per-device parallel mode (pipeline_device_coords):
+  When a list of MeshCoordinate device coordinates is provided, each channel
+  maps to a different device in the mesh. Within each device, pipeline_core_coord
+  (entry) and pipeline_exit_core_coord (exit) handle incoming and outgoing data,
+  matching the caller-supplied pattern used by the single-channel forwarding stage.
+  All programs are merged per device and dispatched in a single generic_op to avoid
+  deadlock. Optionally supports the d2d_exchange_multiple_upstreams kernel per device
+  via exit_upstream_cores and exit_upstream_page_size parameters.
+
+entry_socket_interface / exit_socket_interface can be any of:
+  - None: not applicable for this stage
+  - SocketInterface: single-channel mode
+  - ParallelSocketInterface: parallel mode (multiple cores, one device pair)
+  - list[SocketInterface]: per-device parallel mode (one per device)
 """
 
 import ttnn
-from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, ParallelSocketInterface, SocketInterface
+from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import (
+    MeshWrapper,
+    ParallelSocketInterface,
+    SocketInterface,
+    _group_by_device,
+)
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 
@@ -66,6 +86,10 @@ class PipelineBlock:
         embedding_tensor=None,
         initialize_loopback=True,
         pipeline_core_coords=None,
+        pipeline_device_coords=None,
+        pipeline_exit_core_coord=None,
+        entry_downstream_core=None,
+        exit_upstream_cores=None,
     ):
         assert (
             upstream_d2d_socket_fifo_size >= upstream_d2d_socket_page_size
@@ -77,7 +101,9 @@ class PipelineBlock:
         self.my_mesh_id = mesh_device.get_system_mesh_id()
         self.num_procs = int(ttnn.distributed_context_get_size())
         self.initialize_loopback = initialize_loopback
+        self.mesh_device = mesh_device
         self.parallel = pipeline_core_coords is not None and len(pipeline_core_coords) > 0
+        self.parallel_devices = pipeline_device_coords is not None and len(pipeline_device_coords) > 0
 
         pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
         if initialize_loopback:
@@ -127,7 +153,24 @@ class PipelineBlock:
                 exit_node_upstream,
             )
         else:
-            if self.parallel:
+            if self.parallel_devices:
+                assert (
+                    pipeline_exit_core_coord is not None
+                ), "pipeline_exit_core_coord is required for per-device parallel mode"
+                self._init_parallel_device_forwarding_stage(
+                    mesh_device,
+                    pipeline_device_coords,
+                    upstream_d2d_socket_fifo_size,
+                    downstream_d2d_socket_fifo_size,
+                    upstream_d2d_socket_page_size,
+                    downstream_d2d_socket_page_size,
+                    core_entry=pipeline_core_coord,
+                    core_exit=pipeline_exit_core_coord,
+                    entry_downstream_core=entry_downstream_core,
+                    exit_upstream_cores=exit_upstream_cores,
+                    exit_upstream_page_size=exit_upstream_page_size,
+                )
+            elif self.parallel:
                 self._init_parallel_forwarding_stage(
                     mesh_device,
                     pipeline_config,
@@ -381,8 +424,133 @@ class PipelineBlock:
             receiver_mesh=MeshWrapper(mesh_id=next_mesh_id),
         )
 
+    def _init_parallel_device_forwarding_stage(
+        self,
+        mesh_device,
+        pipeline_device_coords,
+        upstream_d2d_socket_fifo_size,
+        downstream_d2d_socket_fifo_size,
+        upstream_d2d_socket_page_size,
+        downstream_d2d_socket_page_size,
+        core_entry,
+        core_exit,
+        entry_downstream_core=None,
+        exit_upstream_cores=None,
+        exit_upstream_page_size=None,
+    ):
+        """Per-device parallel forwarding stage.
+
+        Each channel maps to a different device in the mesh. Within each device,
+        core_entry (pipeline_core_coord) and core_exit (pipeline_exit_core_coord)
+        handle incoming and outgoing data respectively. Both are caller-supplied,
+        mirroring the pattern used by _init_forwarding_stage where device coords
+        come from the pipeline config and the core coord is caller-supplied.
+
+        Optional entry_downstream_core specifies where entry forwards data for compute.
+
+        exit_upstream_cores controls the exit kernel variant, matching the
+        isinstance-based pattern in _init_forwarding_stage:
+          - None: single-upstream passthrough (d2d_exchange.cpp)
+          - [] (empty list): multi-upstream passthrough — uses
+            d2d_exchange_multiple_upstreams.cpp with the entry's downstream
+            socket as a single-element upstream list
+          - [CoreCoord, ...] (non-empty list): multi-upstream with separate
+            socket pairs to the specified cores (for compute integration)
+
+        Sets entry_socket_interface / exit_socket_interface to list[SocketInterface].
+        """
+        use_multi_upstream = isinstance(exit_upstream_cores, list)
+        next_mesh_id = self.my_mesh_id + 1 if not self.is_last_stage else 0
+
+        self.entry_socket_interface = []
+        self.exit_socket_interface = []
+
+        # Two-pass creation: all entries first, then all exits.
+        # MeshSocket creation is a blocking pairwise handshake between
+        # sender and receiver processes. Process 0 creates all exit sockets
+        # (via ParallelSocketInterface) before all entry sockets.  Forwarding
+        # stages must match that order — entries first (matching the previous
+        # stage's exits), then exits (matching the next stage's entries) — to
+        # avoid cascading delays that accumulate into timeouts with many channels.
+
+        effective_downstream_core = entry_downstream_core if entry_downstream_core else core_exit
+
+        for dc in pipeline_device_coords:
+            entry_si = SocketInterface(
+                upstream_d2d_socket_page_size,
+                upstream_d2d_socket_fifo_size,
+                upstream_d2d_socket_page_size,
+                ttnn.MeshCoreCoord(dc, core_exit),
+                ttnn.MeshCoreCoord(dc, core_entry),
+                downstream_core_coord=ttnn.MeshCoreCoord(dc, effective_downstream_core),
+                sender_mesh=MeshWrapper(mesh_id=self.my_mesh_id - 1),
+                receiver_mesh=MeshWrapper(mesh_device),
+            )
+            self.entry_socket_interface.append(entry_si)
+
+        for i, dc in enumerate(pipeline_device_coords):
+            entry_si = self.entry_socket_interface[i]
+
+            if use_multi_upstream and len(exit_upstream_cores) > 0:
+                per_device_upstream_cores = [ttnn.MeshCoreCoord(dc, uc) for uc in exit_upstream_cores]
+                exit_si = SocketInterface(
+                    downstream_d2d_socket_page_size,
+                    downstream_d2d_socket_fifo_size,
+                    downstream_d2d_socket_page_size,
+                    ttnn.MeshCoreCoord(dc, core_exit),
+                    ttnn.MeshCoreCoord(dc, core_entry),
+                    sender_mesh=MeshWrapper(mesh_device),
+                    receiver_mesh=MeshWrapper(mesh_id=next_mesh_id),
+                    upstream_core_coords=per_device_upstream_cores,
+                    upstream_page_size=exit_upstream_page_size,
+                )
+            elif use_multi_upstream:
+                exit_si = SocketInterface(
+                    downstream_d2d_socket_page_size,
+                    downstream_d2d_socket_fifo_size,
+                    downstream_d2d_socket_page_size,
+                    ttnn.MeshCoreCoord(dc, core_exit),
+                    ttnn.MeshCoreCoord(dc, core_entry),
+                    sender_mesh=MeshWrapper(mesh_device),
+                    receiver_mesh=MeshWrapper(mesh_id=next_mesh_id),
+                    upstream_sockets=[entry_si.get_downstream_socket()],
+                    upstream_page_size=upstream_d2d_socket_page_size,
+                )
+            else:
+                exit_si = SocketInterface(
+                    downstream_d2d_socket_page_size,
+                    downstream_d2d_socket_fifo_size,
+                    downstream_d2d_socket_page_size,
+                    ttnn.MeshCoreCoord(dc, core_exit),
+                    ttnn.MeshCoreCoord(dc, core_entry),
+                    upstream_socket=entry_si.get_downstream_socket(),
+                    sender_mesh=MeshWrapper(mesh_device),
+                    receiver_mesh=MeshWrapper(mesh_id=next_mesh_id),
+                )
+            self.exit_socket_interface.append(exit_si)
+
+    def _dispatch_parallel_device_programs(self):
+        """Collect programs from all per-device socket interfaces and dispatch in a single generic_op."""
+        all_entries = []
+        for si in self.entry_socket_interface:
+            all_entries.extend(si.build_programs())
+        for si in self.exit_socket_interface:
+            all_entries.extend(si.build_programs())
+
+        dummy_tensor = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh_device
+        )
+        groups = _group_by_device(all_entries)
+        mesh_program_descriptor = ttnn.MeshProgramDescriptor()
+        for device_coord, progs in groups:
+            merged = ttnn.merge_program_descriptors(progs) if len(progs) > 1 else progs[0]
+            mesh_program_descriptor[ttnn.MeshCoordinateRange(device_coord, device_coord)] = merged
+        return ttnn.generic_op([dummy_tensor, dummy_tensor], mesh_program_descriptor)
+
     def run(self):
-        if self.is_pipeline_start:
+        if self.parallel_devices:
+            self._dispatch_parallel_device_programs()
+        elif self.is_pipeline_start:
             self.host_io.run()
             self.exit_socket_interface.run()
             if self.initialize_loopback:
@@ -395,10 +563,13 @@ class PipelineBlock:
                 self.host_io.run()
 
     def terminate(self):
-        # Multi-Process barrier here that all outstanding requests issued to pipeline block
-        # are completed by all stages before termination signal is sent
         ttnn.distributed_context_barrier()
-        if self.is_pipeline_start:
+        if self.parallel_devices:
+            for si in self.entry_socket_interface:
+                si.terminate(False)
+            for i, si in enumerate(self.exit_socket_interface):
+                si.terminate(i == len(self.exit_socket_interface) - 1)
+        elif self.is_pipeline_start:
             self.host_io.terminate(False)
             if self.initialize_loopback:
                 self.entry_socket_interface.terminate(False)
@@ -425,7 +596,7 @@ class PipelineBlock:
 
     def get_upstream_socket(self):
         """Return a single upstream socket (non-parallel mode only)."""
-        assert not self.parallel, "Use get_upstream_sockets() for parallel mode"
+        assert not self.parallel and not self.parallel_devices, "Use get_upstream_sockets() for parallel mode"
         if self.exit_socket_interface is not None:
             return self.exit_socket_interface.get_upstream_socket()
         elif self.host_io is not None:
@@ -433,15 +604,19 @@ class PipelineBlock:
 
     def get_downstream_socket(self):
         """Return a single downstream socket (non-parallel mode only)."""
-        assert not self.parallel, "Use get_downstream_sockets() for parallel mode"
+        assert not self.parallel and not self.parallel_devices, "Use get_downstream_sockets() for parallel mode"
         return self.entry_socket_interface.get_downstream_socket()
 
     def get_upstream_sockets(self):
-        """Return list of upstream sockets (works for both parallel and multi-upstream modes)."""
+        """Return list of upstream sockets (works for parallel and multi-upstream modes)."""
+        if self.parallel_devices:
+            return [si.get_upstream_sockets() for si in self.exit_socket_interface]
         return self.exit_socket_interface.get_upstream_sockets()
 
     def get_downstream_sockets(self):
         """Return list of downstream sockets (parallel mode)."""
+        if self.parallel_devices:
+            return [si.get_downstream_socket() for si in self.entry_socket_interface]
         assert self.parallel, "get_downstream_sockets() requires parallel mode"
         return self.entry_socket_interface.get_downstream_sockets()
 
