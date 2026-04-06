@@ -243,8 +243,8 @@ def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, transpose, fu
         ttnn.bfloat4_b,
     ],
 )
-# Does not provide meaningful additional coverage, used only for collecting more detailed performance data
-def test_matmul_single_core_benchmark(device, M, K, N, in1_dtype):
+# This test does not provide additional functional coverage and is just used for performance benchmarking
+def DISABLED_test_matmul_single_core_benchmark(device, M, K, N, in1_dtype):
     _run_matmul_single_core(device, M, K, N, ttnn.bfloat16, in1_dtype, False, None, False)
 
 

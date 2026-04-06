@@ -214,7 +214,8 @@ DISTRIBUTIONS = [
 @pytest.mark.parametrize("M, K, N", SHAPES)
 @pytest.mark.parametrize("formats", SINGLE_FORMATS)
 @pytest.mark.parametrize("implementation", IMPLEMENTATIONS)
-def test_matmul_custom_compressed_benchmark_baseline_single_format(device, M, K, N, formats, implementation):
+# This test does not provide additional functional coverage and is just used for performance benchmarking
+def DISABLED_test_matmul_custom_compressed_benchmark_baseline_single_format(device, M, K, N, formats, implementation):
     _run_matmul_custom_compressed_benchmark(device, M, K, N, formats, implementation, "clustered")
 
 
@@ -222,7 +223,8 @@ def test_matmul_custom_compressed_benchmark_baseline_single_format(device, M, K,
 @pytest.mark.parametrize("formats", MULTI_FORMATS)
 @pytest.mark.parametrize("implementation", IMPLEMENTATIONS)
 @pytest.mark.parametrize("distribution", DISTRIBUTIONS)
-def test_matmul_custom_compressed_benchmark_baseline_mixed_formats(
+# This test does not provide additional functional coverage and is just used for performance benchmarking
+def DISABLED_test_matmul_custom_compressed_benchmark_baseline_mixed_formats(
     device, M, K, N, formats, implementation, distribution
 ):
     if ("bfp2" in formats or "bfp0" in formats) and "barrier" not in implementation:
@@ -232,27 +234,29 @@ def test_matmul_custom_compressed_benchmark_baseline_mixed_formats(
 
 @pytest.mark.parametrize("M, K, N", SHAPES)
 @pytest.mark.parametrize("formats", SINGLE_FORMATS)
-def test_matmul_custom_compressed_benchmark_optimized_single_format(device, M, K, N, formats):
+# This test does not provide additional functional coverage and is just used for performance benchmarking
+def DISABLED_test_matmul_custom_compressed_benchmark_optimized_single_format(device, M, K, N, formats):
     _run_matmul_custom_compressed_benchmark(device, M, K, N, formats, "new", "clustered")
 
 
 @pytest.mark.parametrize("M, K, N", SHAPES)
 @pytest.mark.parametrize("formats", MULTI_FORMATS)
 @pytest.mark.parametrize("distribution", DISTRIBUTIONS)
-def test_matmul_custom_compressed_benchmark_optimized_mixed_formats(device, M, K, N, formats, distribution):
+# This test does not provide additional functional coverage and is just used for performance benchmarking
+def DISABLED_test_matmul_custom_compressed_benchmark_optimized_mixed_formats(device, M, K, N, formats, distribution):
     _run_matmul_custom_compressed_benchmark(device, M, K, N, formats, "new", distribution)
 
 
 @pytest.mark.parametrize("M, K, N", SHAPES)
 @pytest.mark.parametrize("formats", SINGLE_FORMATS)
-def test_matmul_custom_compressed_benchmark_baseline_single_format_aggregated(device, M, K, N, formats):
+def DISABLED_test_matmul_custom_compressed_benchmark_baseline_single_format_aggregated(device, M, K, N, formats):
     for implementation in IMPLEMENTATIONS:
         _run_matmul_custom_compressed_benchmark(device, M, K, N, formats, implementation, "clustered", pcc_threshold=-2)
 
 
 @pytest.mark.parametrize("M, K, N", SHAPES)
 @pytest.mark.parametrize("formats", MULTI_FORMATS)
-def test_matmul_custom_compressed_benchmark_baseline_mixed_formats_aggregated(device, M, K, N, formats):
+def DISABLED_test_matmul_custom_compressed_benchmark_baseline_mixed_formats_aggregated(device, M, K, N, formats):
     for implementation in IMPLEMENTATIONS:
         for distribution in DISTRIBUTIONS:
             if ("bfp2" in formats or "bfp0" in formats) and "barrier" not in implementation:
@@ -264,12 +268,13 @@ def test_matmul_custom_compressed_benchmark_baseline_mixed_formats_aggregated(de
 
 @pytest.mark.parametrize("M, K, N", SHAPES)
 @pytest.mark.parametrize("formats", SINGLE_FORMATS)
-def test_matmul_custom_compressed_benchmark_optimized_single_format_aggregated(device, M, K, N, formats):
+def DISABLED_test_matmul_custom_compressed_benchmark_optimized_single_format_aggregated(device, M, K, N, formats):
     _run_matmul_custom_compressed_benchmark(device, M, K, N, formats, "new", "clustered", pcc_threshold=-2)
 
 
 @pytest.mark.parametrize("M, K, N", SHAPES)
 @pytest.mark.parametrize("formats", MULTI_FORMATS)
-def test_matmul_custom_compressed_benchmark_optimized_mixed_formats_aggregated(device, M, K, N, formats):
+# This test does not provide additional functional coverage and is just used for performance benchmarking
+def DISABLED_test_matmul_custom_compressed_benchmark_optimized_mixed_formats_aggregated(device, M, K, N, formats):
     for distribution in DISTRIBUTIONS:
         _run_matmul_custom_compressed_benchmark(device, M, K, N, formats, "new", distribution, pcc_threshold=-2)
