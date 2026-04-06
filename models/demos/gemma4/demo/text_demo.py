@@ -50,7 +50,7 @@ def run_generation(
     logger.info(f"Tokenizer loaded from {model_path}")
 
     # Create model
-    max_seq_len = 1024  # Keep small for demo
+    max_seq_len = 128  # Keep very small for initial testing
     logger.info(f"Creating model with {num_layers or 'all'} layers, max_seq_len={max_seq_len}...")
     t0 = time.time()
     model_args, model, tt_kv_cache, state_dict = create_tt_model(
@@ -199,29 +199,25 @@ def model_path():
     return os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", "/proj_sw/user_dev/gemma4/gemma-4-26B-A4B-it")
 
 
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
-def test_demo_single_layer(mesh_device, device_params, model_path):
-    """Quick demo with 1 layer on N300 (TP=2) — verifies the pipeline works."""
+def test_demo_single_layer(device, model_path):
+    """Quick demo with 1 layer — verifies the pipeline works on single device."""
     prompts = ["The capital of France is"]
     results = run_generation(
-        mesh_device=mesh_device,
+        mesh_device=device,
         model_path=model_path,
         prompts=prompts,
         max_new_tokens=8,
         num_layers=1,
     )
     assert len(results) == 1
-    assert len(results[0]) > len(prompts[0])  # Generated something
+    assert len(results[0]) > len(prompts[0])
 
 
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
-def test_demo_full_model(mesh_device, device_params, model_path):
-    """Full model demo on N300 (TP=2) — requires sufficient DRAM for all 30 layers."""
+def test_demo_full_model(device, model_path):
+    """Full model demo — requires sufficient DRAM for all layers."""
     prompts = ["Explain quantum computing in simple terms:"]
     results = run_generation(
-        mesh_device=mesh_device,
+        mesh_device=device,
         model_path=model_path,
         prompts=prompts,
         max_new_tokens=64,

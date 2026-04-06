@@ -284,20 +284,19 @@ class Gemma4Model:
 
         # Extract last token tile for next-token prediction
         if get_last_token != -1:
-            logits_sliced = ttnn.slice(
+            logits = ttnn.slice(
                 logits,
                 (0, 0, get_last_token, 0),
                 (1, 1, get_last_token + 32, logits.shape[-1]),
             )
-            logits.deallocate(True)
-            logits = logits_sliced
 
         return logits
 
     def ttnn_decode_forward(self, tokens, current_pos, rot_mat_idxs=None, page_table=None, kv_cache=None):
         """Decode forward — matches tt_transformers Generator interface."""
         input_embeds = self.embed_tokens(tokens)
-        input_embeds = ttnn.unsqueeze(input_embeds, 0)
+        input_embeds = ttnn.reshape(input_embeds, (1, 1, tokens.shape[-1], self.hidden_size))
+        input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
 
         # Get position as int for token_index
         if isinstance(current_pos, ttnn.Tensor):
