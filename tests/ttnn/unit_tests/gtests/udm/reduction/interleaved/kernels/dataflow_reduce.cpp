@@ -27,7 +27,6 @@
 #include "tt_metal/hw/inc/experimental/udm/udm_api.hpp"
 #include "tests/ttnn/unit_tests/gtests/udm/nd_iter_args.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
-#include "llk_defs.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/debug/dprint.h"
 

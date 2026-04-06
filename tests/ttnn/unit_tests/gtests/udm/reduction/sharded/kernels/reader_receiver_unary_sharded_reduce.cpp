@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/hw/inc/experimental/udm/udm_api.hpp"
-#include "llk_defs.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 /**
