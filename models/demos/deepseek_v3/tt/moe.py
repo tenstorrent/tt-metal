@@ -3,6 +3,7 @@
 
 from pathlib import Path
 from time import perf_counter
+from typing import Iterable
 
 import torch
 from loguru import logger
@@ -34,6 +35,18 @@ from models.demos.deepseek_v3.utils.run_config import (
     WeightConfig,
 )
 from models.demos.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
+
+
+def cluster_distance(d0: int, d1: int, mesh_shape: tuple[int, int], cluster_axis: int) -> int | None:
+    """Calculate Manhattan distance between two devices along the cluster axis.
+
+    Returns None if devices are not on the same cluster line, otherwise returns
+    the distance along the cluster axis.
+    """
+    c0 = (d0 // mesh_shape[1], d0 % mesh_shape[1])
+    c1 = (d1 // mesh_shape[1], d1 % mesh_shape[1])
+
+    return None if c0[1 - cluster_axis] != c1[1 - cluster_axis] else abs(c0[cluster_axis] - c1[cluster_axis])
 
 
 def map_shared_experts(
@@ -113,7 +126,7 @@ def map_shared_experts(
             # disp_d then this expert will also get skipped by dispatch on disp_d
             routed_and_shared_expert_mapping[disp_d, se] = rec_ds[0]
             for rec_d in rec_ds:
-                distance = _cluster_distance(disp_d, rec_d, mesh_shape, cluster_axis)
+                distance = cluster_distance(disp_d, rec_d, mesh_shape, cluster_axis)
                 if distance is not None and distance < min_distance:
                     routed_and_shared_expert_mapping[disp_d, se] = rec_d
                     min_distance = distance

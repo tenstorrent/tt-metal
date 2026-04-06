@@ -836,6 +836,9 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
                                  });
 
             std::ranges::copy(packed_values, std::back_inserter(reader_runtime_args));
+        } else {
+            // avoid OoB rt arg
+            reader_runtime_args.push_back(0);
         }
 
         if (use_mux) {

@@ -118,7 +118,9 @@ void kernel_main() {
     constexpr uint32_t noc_y_start = get_named_compile_time_arg_val("noc_y_start");
     constexpr uint32_t noc_x_end = get_named_compile_time_arg_val("noc_x_end");
     constexpr uint32_t noc_y_end = get_named_compile_time_arg_val("noc_y_end");
-    constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
+    constexpr uint32_t num_local_experts = get_named_compile_time_arg_val("num_local_experts");
+
+    // constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
     constexpr uint32_t global_num_tokens = get_named_compile_time_arg_val("global_num_tokens");  // global token size
     constexpr uint32_t source_token_segment_buffer_size_bytes =
         get_named_compile_time_arg_val("source_token_segment_buffer_size_bytes");
@@ -152,8 +154,8 @@ void kernel_main() {
     constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
     constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
 
-    constexpr uint32_t num_local_experts = experts / num_devices;
-    constexpr uint32_t num_cluster_experts = experts / replicate_factor;
+    // constexpr uint32_t num_local_experts = experts / num_devices;
+    // constexpr uint32_t num_cluster_experts = experts / replicate_factor;
     constexpr uint32_t tokens_per_device = global_num_tokens / replicate_group_devices;
 
     constexpr uint8_t Num_Directions = 4;
@@ -223,6 +225,10 @@ void kernel_main() {
         token_split_offsets[e] = token_counts_l1_ptr[num_local_experts + e];
         token_split_counts[e] = token_counts_l1_ptr[num_local_experts + num_local_experts + e];
         token_activation_offsets[e] = token_counts_l1_ptr[num_local_experts + 2 * num_local_experts + e];
+
+        DPRINT << "expert: " << e << " split offset " << token_split_offsets[e]
+               << " split counts: " << token_split_counts[e] << " activation offset: " << token_activation_offsets[e]
+               << "\n";
     }
     cb_pop_front(token_counts_cb_id, 1);
 
@@ -261,6 +267,9 @@ void kernel_main() {
     auto* compute_sync_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(compute_sync_semaphore_addr);
     uint32_t compute_sync_semaphore_val = compute_cores_per_combine_core;
     for (uint32_t e = 0; e < num_local_experts; ++e) {
+        if (e == 2) {
+            DPRINT << "COMBINE DOING SHARED \n";
+        }
         auto* expert_token_activations_ptr =
             token_activations_l1_ptr + token_activation_offsets[e] * activations_stride_elm;
 

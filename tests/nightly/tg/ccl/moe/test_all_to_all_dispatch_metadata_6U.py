@@ -8,11 +8,10 @@ import random
 from loguru import logger
 from math import prod
 import torch
-from typing import Iterable
 
 import ttnn
 
-from models.demos.deepseek_v3.tt.moe import map_shared_experts
+from models.demos.deepseek_v3.tt.moe import cluster_distance, map_shared_experts
 from tests.nightly.t3000.ccl.test_all_to_all_dispatch import (
     get_mesh_mapper,
     gen_tensors,
@@ -49,12 +48,6 @@ def create_fabric_router_config(*, max_payload_size=None):
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from tracy import signpost
-
-
-def _cluster_distance(d0: int, d1: int, mesh_shape: Iterable[int], cluster_axis: int) -> int | None:
-    c0, c1 = tuple(map(lambda d: (d // mesh_shape[1], d % mesh_shape[1]), (d0, d1)))
-
-    return None if c0[1 - cluster_axis] != c1[1 - cluster_axis] else abs(c0[cluster_axis] - c1[cluster_axis])
 
 
 def _metadata_ref_with_shared_experts(
@@ -120,7 +113,7 @@ def _sparse_output_with_shared_experts(
                 # Use the expert mapping to find target device
                 target_device = expert_mapping_new[src_device, shared_expert_id].item()
 
-                if _cluster_distance(src_device, target_device, mesh_shape, cluster_axis) is not None:
+                if cluster_distance(src_device, target_device, mesh_shape, cluster_axis) is not None:
                     # Dispatch token to target device, if on axis
                     sparse_output_token_tensor[target_device, batch_idx, seq_idx, :] = token_data
 
@@ -809,7 +802,7 @@ def get_shared_expert_to_device_map(routed_experts, devices, mode):
 def test_correctness(mesh_device, mesh_shape, cluster_axis, routed_experts_per_device, shared_expert_mode):
     batches_per_device = 32
     routed_experts = routed_experts_per_device * mesh_shape[cluster_axis]
-    select_experts_k = 5
+    select_experts_k = 8
     hidden_size = 7168
     seq_len = 1
     num_iters = 20
@@ -824,9 +817,7 @@ def test_correctness(mesh_device, mesh_shape, cluster_axis, routed_experts_per_d
     batch = batches_per_device * dispatch_devices
     trace_mode = True
 
-    shared_expert_ids_to_devices = _get_shared_expert_to_device_map(
-        routed_experts, prod(mesh_shape), shared_expert_mode
-    )
+    shared_expert_ids_to_devices = get_shared_expert_to_device_map(routed_experts, prod(mesh_shape), shared_expert_mode)
 
     run_all_to_all_dispatch_metadata_test(
         mesh_device,
@@ -946,9 +937,7 @@ def test_decode_perf(
     batch = batches_per_device * dispatch_devices
     trace_mode = True
 
-    shared_expert_ids_to_devices = _get_shared_expert_to_device_map(
-        routed_experts, prod(mesh_shape), shared_expert_mode
-    )
+    shared_expert_ids_to_devices = get_shared_expert_to_device_map(routed_experts, prod(mesh_shape), shared_expert_mode)
 
     profiler = BenchmarkProfiler()
     step_name = "All2AllDispatchMetadataOp"

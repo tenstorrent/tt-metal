@@ -258,8 +258,9 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
 
     const uint32_t num_devices_total = mesh_view.num_devices();
 
-    // this should eventually be variable per device
-    const uint32_t experts_per_device = experts / num_devices_total;
+    // NOTE: shared experts are slightly delicate since they show up as an additional entry in the mapping tensor the
+    // result is fractional experts per device so div_up is required to get the right value here.
+    const uint32_t experts_per_device = tt::div_up(experts, num_devices_total);
 
     const auto input_dtype = input_tensor.dtype();
     const auto& dense_token_maps_tensor_spec = dense_token_maps_tensor.tensor_spec();
@@ -438,7 +439,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         {"noc_y_start", start_coord.y},
         {"noc_x_end", end_coord.x},
         {"noc_y_end", end_coord.y},
-        {"experts", experts},
+        {"num_local_experts", experts_per_device},
         {"global_num_tokens", total_tokens},
         {"token_activations_page_size_bytes", aligned_token_activations_page_size_bytes},
         {"source_token_segment_buffer_size_bytes", token_segment_buffer_size_bytes},

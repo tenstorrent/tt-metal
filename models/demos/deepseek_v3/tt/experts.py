@@ -38,30 +38,55 @@ def add_shared_expert_weights(
     shared_w2: dict[int, torch.Tensor],  # id: (layers, 1, matmul N, hidden)
     shared_expert_ids_to_device: dict[int, list[int]],
     num_devices: int,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Note: better validation of shared_expert_ids_to_device mapping occurs in tt.moe.map_shared_experts
     """
     num_routed_experts = routed_w0.shape[1]
     num_routed_experts_per_device = num_routed_experts // num_devices
     num_shared_experts_per_device = get_shared_experts_per_device(shared_expert_ids_to_device, num_devices)[0]
+    total_experts_per_device = num_routed_experts_per_device + num_shared_experts_per_device
 
-    def _add_shared_expert_weight(routed, shared):
-        expert_weights = []
-        for d in range(devices):
-            expert_weights.append(
-                routed[:, d * num_routed_experts_per_device : (d + 1) * num_routed_experts_per_device, :, :]
-            )
-            for shared_id, shared_ds in sorted(shared_expert_ids_to_device.items(), key=lambda k, _: k):
-                if d in ds:
-                    expert_weights.append(shared[shared_id])
-        return torch.cat(expert_weights)
+    device_to_shared_experts = [[] for _ in range(num_devices)]
+    sorted_shared_ids = sorted(shared_expert_ids_to_device.keys())
 
-    return (
-        _add_shared_expert_weight(routed_w0, shared_w0),
-        _add_shared_expert_weight(routed_w1, shared_w1),
-        _add_shared_expert_weight(routed_w2, shared_w2),
-    )
+    for shared_id in sorted_shared_ids:
+        for device in shared_expert_ids_to_device[shared_id]:
+            device_to_shared_experts[device].append(shared_id)
+
+    # Get tensor dimensions for pre-allocation
+    layers = routed_w0.shape[0]
+    hidden_dim = routed_w0.shape[2]
+    matmul_n = routed_w0.shape[3]
+
+    # Pre-allocate output tensors
+    total_experts = num_devices * total_experts_per_device
+    output_w0 = torch.empty((layers, total_experts, hidden_dim, matmul_n), dtype=routed_w0.dtype)
+    output_w1 = torch.empty((layers, total_experts, hidden_dim, matmul_n), dtype=routed_w1.dtype)
+    output_w2 = torch.empty((layers, total_experts, matmul_n, hidden_dim), dtype=routed_w2.dtype)
+
+    # Fill output tensors using direct indexing
+    for d in range(num_devices):
+        # Calculate output indices for this device
+        start_idx = d * total_experts_per_device
+        routed_end_idx = start_idx + num_routed_experts_per_device
+
+        # Copy routed experts for this device using slice assignment
+        routed_start = d * num_routed_experts_per_device
+        routed_end = (d + 1) * num_routed_experts_per_device
+
+        output_w0[:, start_idx:routed_end_idx, :, :] = routed_w0[:, routed_start:routed_end, :, :]
+        output_w1[:, start_idx:routed_end_idx, :, :] = routed_w1[:, routed_start:routed_end, :, :]
+        output_w2[:, start_idx:routed_end_idx, :, :] = routed_w2[:, routed_start:routed_end, :, :]
+
+        # Copy shared experts for this device
+        for i, shared_id in enumerate(device_to_shared_experts[d]):
+            shared_idx = routed_end_idx + i
+            output_w0[:, shared_idx : shared_idx + 1, :, :] = shared_w0[shared_id]
+            output_w1[:, shared_idx : shared_idx + 1, :, :] = shared_w1[shared_id]
+            output_w2[:, shared_idx : shared_idx + 1, :, :] = shared_w2[shared_id]
+
+    return output_w0, output_w1, output_w2
 
 
 class Experts(AbstractModule):

@@ -194,6 +194,10 @@ void kernel_main() {
     // both sections of the double buffer are initially free
     uint32_t combine_semaphore_val = 0;
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
+        if (expert_id == 2) {
+            DPRINT << "COMPUTE WRITER DOING SHARED\n";
+        }
+
         const uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
         const uint32_t active_tokens = NUM_TOKENS_PER_EXPERT[expert_id];
         const uint32_t tokens_per_height_shard_chunk = active_tokens / height_shard_dim;

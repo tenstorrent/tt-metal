@@ -10,6 +10,9 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/pack_untilize.h"
 
+// DEBUG
+#include "api/compute/eltwise_unary/fill.h"
+
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
@@ -156,6 +159,10 @@ void kernel_main() {
     // This decides which half of the buffer will have the valid data sent by tilize cores
     bool use_second_half_buffer = false;
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
+        if (expert_id == 2) {
+            DPRINT << "COMPUTE KERNEL DOING SHARED" << "\n";
+        }
+
         uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
             // Initialize SFPU for SILU and eltwise multiply
@@ -274,6 +281,12 @@ void kernel_main() {
                     }
                     cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
                 }
+                //                 fill_tile_init();
+                //                 fill_tile(0,1.0);
+                //                 fill_tile(1,1.0);
+                //                 fill_tile(2,1.0);
+                //                 fill_tile(3,1.0);
+
                 tile_regs_commit();
 
                 tile_regs_wait();
