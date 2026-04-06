@@ -57,8 +57,21 @@ bool MemoryConfig::is_l1() const { return buffer_type_ == BufferType::L1 or buff
 bool MemoryConfig::is_dram() const { return buffer_type_ == BufferType::DRAM; }
 
 bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b) {
-    return config_a.buffer_type() == config_b.buffer_type() && config_a.memory_layout() == config_b.memory_layout() &&
-           config_a.shard_spec() == config_b.shard_spec() && config_a.nd_shard_spec() == config_b.nd_shard_spec();
+    if (config_a.buffer_type() != config_b.buffer_type() || config_a.memory_layout() != config_b.memory_layout()) {
+        return false;
+    }
+    // Compare only the authoritative shard spec based on creation path.
+    // TensorSpec auto-populates the other spec (nd from legacy or legacy from nd),
+    // so the non-authoritative field can differ between a user-constructed MemoryConfig
+    // and the tensor's MemoryConfig without implying a semantic difference.
+    if (config_a.created_with_nd_shard_spec() && config_b.created_with_nd_shard_spec()) {
+        return config_a.nd_shard_spec() == config_b.nd_shard_spec();
+    }
+    if (!config_a.created_with_nd_shard_spec() && !config_b.created_with_nd_shard_spec()) {
+        return config_a.shard_spec() == config_b.shard_spec();
+    }
+    // Mixed creation paths: compare both fields
+    return config_a.shard_spec() == config_b.shard_spec() && config_a.nd_shard_spec() == config_b.nd_shard_spec();
 }
 
 bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b) { return not(config_a == config_b); }
