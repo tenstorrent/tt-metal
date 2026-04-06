@@ -146,6 +146,12 @@ class Molmo2Generator:
         self.decode_trace_tensors = None
         self.decode_trace_output = None
 
+        # Decode trace state tracking (TTTransformers pattern)
+        # Track previous page_table to detect changes that require full input re-copy
+        self.prev_page_table = None
+        # Flag to force full trace input re-copy on next decode (set by reset_state)
+        self.decode_trace_needs_reset = True
+
         # Vision trace state (ViT encoder) -- single-image / non-DP path
         self.vision_trace_id = None
         self.vision_trace_tensors = None
@@ -308,9 +314,11 @@ class Molmo2Generator:
 
         Call this between sequential video/image requests to:
         1. Reset KV cache position to 0
-        2. Reset VisionAttention SDPA counters
-        3. Synchronize device to flush pending operations
-        4. Run garbage collection to free Python objects
+        2. Clear KV cache content to prevent stale data leakage
+        3. Reset VisionAttention SDPA counters
+        4. Mark decode trace for full input re-copy (TTTransformers pattern)
+        5. Synchronize device to flush pending operations
+        6. Run garbage collection to free Python objects
         """
         import gc
 
@@ -318,6 +326,49 @@ class Molmo2Generator:
 
         # Reset KV cache position
         self.reset_kv_cache(0)
+
+        # Clear KV cache content to prevent stale data leakage between requests
+        # This is critical for correct behavior when reusing traces across multiple inferences
+        if self.kv_caches is not None:
+            for layer_idx, (k_cache, v_cache) in enumerate(self.kv_caches):
+                # Get cache shape and dtype for creating zeros
+                k_shape = list(k_cache.shape)
+                k_dtype = k_cache.dtype
+
+                # Create zeros tensor matching the cache configuration
+                zeros_torch = torch.zeros(k_shape, dtype=torch.bfloat16)
+
+                # Create zeros on device with matching dtype and copy to cache
+                zeros_k = ttnn.from_torch(
+                    zeros_torch,
+                    dtype=k_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=self.mesh_mapper,
+                )
+                zeros_v = ttnn.from_torch(
+                    zeros_torch,
+                    dtype=k_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=self.mesh_mapper,
+                )
+
+                # Copy zeros to cache
+                ttnn.copy(zeros_k, k_cache)
+                ttnn.copy(zeros_v, v_cache)
+
+                # Deallocate temporary zeros
+                ttnn.deallocate(zeros_k)
+                ttnn.deallocate(zeros_v)
+
+            logger.debug(f"Cleared KV cache content for {len(self.kv_caches)} layers")
+
+        # Reset page table tracking - next decode will re-copy all inputs
+        self.prev_page_table = None
+        self.decode_trace_needs_reset = True
 
         # Reset page table if exists
         if hasattr(self, "page_table") and self.page_table is not None:
@@ -2148,14 +2199,13 @@ class Molmo2Generator:
         logger.info("Capturing decode trace...")
         self._copy_decode_trace_inputs(trace_tensors, hidden_states, page_table)
 
-        # Materialize rot_mats and compile the rot_mats decode path BEFORE trace capture.
-        # forward_decode deallocates its input hidden_states; never run compile on
-        # trace_tensors["hidden_states"] — use a scratch copy. JIT/allocations during
-        # capture enqueue host writes and hit TT_FATAL (writes not allowed in capture).
-        rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode_traced(self.rot_mat_idxs)
         page_table_for_trace = trace_tensors.get("page_table") if self.use_paged_attention else None
 
+        # Compile warmup: run decode path once to trigger JIT compilation BEFORE trace capture.
+        # forward_decode deallocates its input hidden_states; never run compile on
+        # trace_tensors["hidden_states"] — use a scratch copy.
         logger.info("Compile warmup: decode forward (rot_mats path, scratch buffer)...")
+        rot_mats_warmup = self.model.text_model.rotary_setup.get_rot_mats_decode_traced(self.rot_mat_idxs)
         compile_hidden = ttnn.allocate_tensor_on_device(
             ttnn.Shape(list(trace_tensors["hidden_states"].shape)),
             ttnn.bfloat16,
@@ -2168,7 +2218,7 @@ class Molmo2Generator:
             hidden_states=compile_hidden,
             kv_caches=self.kv_caches,
             current_pos=self.current_pos,
-            rot_mats=rot_mats,
+            rot_mats=rot_mats_warmup,
             page_table=page_table_for_trace,
         )
         ttnn.deallocate(compile_hidden)
@@ -2177,6 +2227,10 @@ class Molmo2Generator:
         tok = trace_capture_run_begin()
         try:
             trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+
+            # RoPE embedding lookup INSIDE trace capture so it uses updated rot_mat_idxs
+            # on each trace replay. This is critical for correct position encoding.
+            rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode_traced(self.rot_mat_idxs)
 
             logits_trace = self.model.text_model.forward_decode(
                 hidden_states=trace_tensors["hidden_states"],
@@ -2210,6 +2264,10 @@ class Molmo2Generator:
     ) -> ttnn.Tensor:
         """Execute captured decode trace with new inputs.
 
+        TTTransformers pattern: Track state changes and force full synchronization
+        when switching between requests. This prevents stale state from causing
+        incorrect behavior across multiple sequential inferences.
+
         Position tensors (current_pos, rot_mat_idxs) are kept on device and
         incremented via ttnn.plus_one in run_decode_step after trace execution.
         The trace reads their current values for RoPE and KV cache updates.
@@ -2220,6 +2278,37 @@ class Molmo2Generator:
         Use blocking=True so mesh trace replay finishes before we read logits
         (non-blocking + immediate to_torch/argmax can sample stale/corrupt output).
         """
+        # TTTransformers pattern: detect if inputs need full re-synchronization
+        # This is critical for correct behavior across multiple sequential requests
+        reset_inputs = self.decode_trace_needs_reset
+
+        # Check if page_table has changed (TTTransformers tracks prev_page_table)
+        if page_table is not None:
+            if self.prev_page_table is None:
+                reset_inputs = True
+            else:
+                # Compare page tables - trigger reset if different
+                try:
+                    mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+                    curr_pt = ttnn.to_torch(page_table, mesh_composer=mesh_composer)[0]
+                    prev_pt = ttnn.to_torch(self.prev_page_table, mesh_composer=mesh_composer)[0]
+                    if not torch.equal(curr_pt, prev_pt):
+                        reset_inputs = True
+                except Exception:
+                    # If comparison fails, force reset to be safe
+                    reset_inputs = True
+
+        if reset_inputs:
+            # Full synchronization: ensure device state is consistent before copying
+            ttnn.synchronize_device(self.mesh_device)
+            logger.debug("Decode trace: full input reset (new request or page_table changed)")
+
+            # Update page_table tracking
+            if page_table is not None:
+                self.prev_page_table = page_table
+            self.decode_trace_needs_reset = False
+
+        # Copy inputs to trace tensors
         self._copy_decode_trace_inputs(trace_tensors, hidden_states, page_table)
 
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=True)
