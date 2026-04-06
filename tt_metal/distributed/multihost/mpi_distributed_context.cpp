@@ -137,7 +137,11 @@ static std::string identify_failed_ranks(MPI_Comm comm) {
     // MPIX_ERR_REVOKED; in that case we still try get_acked below because
     // prior acks from earlier operations may have recorded failure information
     // that we can retrieve.
-    MPIX_Comm_ack_failed(comm);  // best-effort; ignore return code
+    // Acknowledge all pending failures (best-effort). num_to_ack=INT_MAX acks
+    // every pending failure in one call. num_acked is intentionally discarded;
+    // we only care that failures are acked so get_failed() can see them.
+    int num_acked = 0;
+    (void)MPIX_Comm_ack_failed(comm, std::numeric_limits<int>::max(), &num_acked);
     MpiGroupGuard failed_guard;
     if (MPIX_Comm_get_failed(comm, &failed_guard.g) != MPI_SUCCESS) {
         return "unknown";
@@ -1225,7 +1229,10 @@ std::vector<Rank> MPIContext::failed_ranks() const {
     //
     //   When reliable failed-rank identification is required, compare communicator
     //   size before vs. after revoke_and_shrink() — the delta is always accurate.
-    MPIX_Comm_ack_failed(state->comm);  // best-effort; ignore return code
+    // Acknowledge all pending failures (best-effort); see identify_failed_ranks()
+    // for rationale on num_to_ack=INT_MAX and discarding num_acked.
+    int num_acked = 0;
+    (void)MPIX_Comm_ack_failed(state->comm, std::numeric_limits<int>::max(), &num_acked);
     MPI_Group failed_group = MPI_GROUP_NULL;
     if (MPIX_Comm_get_failed(state->comm, &failed_group) != MPI_SUCCESS) {
         std::lock_guard cache_lock(failed_ranks_cache_mutex_);
