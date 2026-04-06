@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@
 namespace ckernel {
 
 // clang-format off
-/**
+ /**
  * Performs element-wise inverse hyperbolic tangent: atanh(x) = 0.5 * ln((1+x)/(1-x)).
  * The DST register buffer must be in acquired state via *acquire_dst* call.
  * This call is blocking and is only available on the compute engine.

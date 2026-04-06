@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_atanh_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::atanh, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::atanh, APPROXIMATE>(sfpu::atanh_init<APPROXIMATE>);
 }
 
 template <bool APPROXIMATE, int ITERATIONS = 8>

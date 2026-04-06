@@ -27,3 +27,7 @@
 #if SFPU_OP_FRAC_INCLUDE
 #include "api/compute/eltwise_unary/frac.h"
 #endif
+
+#if SFPU_OP_ATANH_INCLUDE
+#include "api/compute/eltwise_unary/atanh.h"
+#endif
