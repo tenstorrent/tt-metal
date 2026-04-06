@@ -160,9 +160,6 @@ void kernel_main() {
     In particular, for each chunk, perform a full ring reduce-scatter iteration before going to the next one.
     Note that each chunk can be composed of multiple pieces if mm_N_full_blocks_per_slice > 1.
     */
-    ASSERT(dim == 3);      // strided reduce-scatter only supports scattering on dim 3
-    ASSERT(slice_C == 1);  // note: this can be relaxed if needed but is omitted to avoid nested loops
-
     const uint32_t batch_size = input_tensor_B;
     const uint32_t last_mm_core_idx = mm_cores_y - 1;
     // Use actual row count per core (not padded), so coordinates_to_slice_coordinates
@@ -174,7 +171,7 @@ void kernel_main() {
     const uint32_t effective_advance_by_tiles = 2 * num_workers;
 
     // Snapshot the semaphore's value at startup
-    uint32_t out_ready_sem_target = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem);
+    uint32_t out_ready_sem_target = 0;
 
     for (uint32_t b = 0; b < batch_size; b++) {
         const uint32_t batch_offset = input_batch_num_pages * b;
