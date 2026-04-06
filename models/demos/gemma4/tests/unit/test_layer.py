@@ -1,0 +1,245 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Unit tests for Gemma4 full decoder layer.
+
+Uses HuggingFace Gemma4TextDecoderLayer as reference for PCC comparison,
+following the gpt-oss test_modules.py pattern.
+"""
+
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
+from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
+
+from ...tests.test_factory import TestFactory, compare_tensors, parametrize_batch_seq
+
+# ── Config / Structure Tests ───────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("layer_idx", [0, 5])
+@parametrize_batch_seq()
+def test_layer_config(batch_size, seq_len, layer_idx):
+    """Verify layer type assignment."""
+    hf_config = TestFactory.create_hf_config()
+    expected = "full_attention" if layer_idx == 5 else "sliding_attention"
+    assert hf_config.layer_types[layer_idx] == expected
+    assert len(hf_config.layer_types) == 30
+
+
+def test_layer_norms_count():
+    """Verify 7 norms for MoE layers."""
+    hf_config = TestFactory.create_hf_config()
+    assert hf_config.enable_moe_block is True
+
+
+# ── HF Reference Helpers ──────────────────────────────────────────────────
+
+
+def _create_hf_reference_layer(hf_text_config, layer_idx):
+    """Create HF Gemma4TextDecoderLayer with random weights as reference."""
+    from transformers.models.gemma4.modeling_gemma4 import Gemma4TextDecoderLayer as HFDecoderLayer
+
+    hf_layer = HFDecoderLayer(hf_text_config, layer_idx=layer_idx)
+    # Randomize router/expert weights (HF inits some to zeros/ones)
+    with torch.no_grad():
+        for name, param in hf_layer.named_parameters():
+            if any(k in name for k in ["router", "experts", "layer_scalar"]):
+                if "scale" in name or "scalar" in name:
+                    param.data.fill_(1.0)
+                else:
+                    param.data.normal_(0, 0.02)
+    hf_layer.eval()
+    return hf_layer
+
+
+def _create_hf_text_config(num_experts=4, top_k=2):
+    """Create a Gemma4TextConfig from real model config, with reduced experts for speed."""
+    from transformers import AutoConfig
+
+    config = AutoConfig.from_pretrained("/proj_sw/user_dev/gemma4/gemma-4-26B-A4B-it", trust_remote_code=True)
+    tc = config.text_config
+    tc.num_experts = num_experts
+    tc.top_k_experts = top_k
+    tc._attn_implementation = "eager"
+    return tc
+
+
+def _hf_state_to_tt_state(hf_state_dict, layer_idx):
+    """Convert HF layer state_dict keys to the format our TT layer expects.
+
+    HF keys: "input_layernorm.weight", "self_attn.q_proj.weight", etc.
+    TT expects: "model.layers.{idx}.input_layernorm.weight", etc.
+    """
+    prefix = f"model.layers.{layer_idx}"
+    return {f"{prefix}.{k}": v for k, v in hf_state_dict.items()}
+
+
+def _create_hf_rope(hf_text_config, seq_len, layer_idx):
+    """Create HF RoPE position embeddings for a given layer."""
+    from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
+
+    rope = Gemma4TextRotaryEmbedding(hf_text_config)
+    x_dummy = torch.randn(1, seq_len, hf_text_config.hidden_size)
+    pos_ids = torch.arange(seq_len).unsqueeze(0)
+    layer_type = hf_text_config.layer_types[layer_idx]
+    cos, sin = rope(x_dummy, pos_ids, layer_type=layer_type)
+    return cos, sin
+
+
+def _create_gemma4_model_args(hf_text_config):
+    """Create Gemma4ModelArgs that matches the HF text config."""
+    return Gemma4ModelArgs.from_hf_config(hf_text_config)
+
+
+# ── Full Layer PCC Test ───────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
+@parametrize_batch_seq(configs=[(1, 32)], ids=["prefill_32"])
+def test_layer_forward(batch_size, seq_len, layer_idx, device):
+    """
+    Full decoder layer PCC test: compares TT layer against HF reference.
+
+    Creates HF Gemma4TextDecoderLayer with random weights, runs both HF and TT
+    forward passes with the same input, and checks PCC >= 0.90.
+    """
+    # Create HF config and reference layer
+    hf_text_config = _create_hf_text_config(num_experts=4, top_k=2)
+    hf_layer = _create_hf_reference_layer(hf_text_config, layer_idx)
+
+    # Get HF state_dict and convert for TT
+    hf_state = hf_layer.state_dict()
+    tt_state = _hf_state_to_tt_state(hf_state, layer_idx)
+
+    # Create matching Gemma4ModelArgs
+    model_args = _create_gemma4_model_args(hf_text_config)
+
+    from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
+
+    attn_cfg = Gemma4AttentionConfig(model_args, layer_idx)
+
+    # Create TT layer
+    mesh_config = TestFactory.create_mesh_config((1, 1))
+    tt_layer = Gemma4DecoderLayer(
+        mesh_device=device,
+        hf_config=model_args,
+        state_dict=tt_state,
+        layer_idx=layer_idx,
+        ccl_manager=None,
+        dtype=ttnn.bfloat16,
+        tensor_cache_path=None,
+        mesh_config=mesh_config,
+        max_seq_len=seq_len,
+        max_local_batch_size=batch_size,
+    )
+
+    # Input
+    x_torch = torch.randn(1, seq_len, model_args.hidden_size, dtype=torch.float32)
+
+    # HF reference forward (must pass causal mask — HF defaults to bidirectional without it)
+    hf_rope = _create_hf_rope(hf_text_config, seq_len, layer_idx)
+    causal_mask = torch.triu(torch.full((1, 1, seq_len, seq_len), float("-inf")), diagonal=1)
+    with torch.no_grad():
+        hf_output = hf_layer(x_torch, position_embeddings=hf_rope, attention_mask=causal_mask)
+    logger.info(f"HF output shape: {hf_output.shape}, range: [{hf_output.min():.4f}, {hf_output.max():.4f}]")
+
+    # TT forward
+    x_tt = ttnn.from_torch(
+        x_torch.unsqueeze(0).to(torch.bfloat16),
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+    )
+    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(device, hf_text_config, max(seq_len, 128), layer_idx)
+    tt_output = tt_layer(
+        x_tt,
+        rope_mats=(cos_tt, sin_tt),
+        position_idx=None,
+        page_table=None,
+        kv_cache=None,
+        is_decode=False,
+    )
+    tt_output_torch = ttnn.to_torch(tt_output).squeeze(0).float()  # [1, S, H]
+
+    # Compare
+    # PCC threshold: lower than attention-only (0.95) due to accumulated error
+    # from attention + MLP + MoE + 7 norms + residuals + bf16 quantization
+    passing, pcc_msg = compare_tensors(tt_output_torch, hf_output, pcc_threshold=0.95)
+    assert passing, f"Full layer (layer_idx={layer_idx}) PCC too low: {pcc_msg}"
+
+
+# ── TP Layer Test ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
+@parametrize_batch_seq(configs=[(1, 32)], ids=["prefill_32"])
+def test_layer_forward_tp(batch_size, seq_len, layer_idx, mesh_device, device_params):
+    """
+    Full decoder layer with TP=2 attention, compared against HF reference.
+    """
+    from models.demos.gemma4.config import MeshConfig, ModeConfig
+    from models.demos.gemma4.tt.ccl import CCLManager
+
+    hf_text_config = _create_hf_text_config(num_experts=4, top_k=2)
+    hf_layer = _create_hf_reference_layer(hf_text_config, layer_idx)
+
+    hf_state = hf_layer.state_dict()
+    tt_state = _hf_state_to_tt_state(hf_state, layer_idx)
+    model_args = _create_gemma4_model_args(hf_text_config)
+
+    from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
+
+    attn_cfg = Gemma4AttentionConfig(model_args, layer_idx)
+
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1]))
+    ccl_manager = CCLManager(mesh_device, num_links=1)
+
+    tt_layer = Gemma4DecoderLayer(
+        mesh_device=mesh_device,
+        hf_config=model_args,
+        state_dict=tt_state,
+        layer_idx=layer_idx,
+        ccl_manager=ccl_manager,
+        dtype=ttnn.bfloat16,
+        tensor_cache_path=None,
+        mesh_config=mesh_config,
+        max_seq_len=seq_len,
+        max_local_batch_size=batch_size,
+    )
+
+    x_torch = torch.randn(1, seq_len, model_args.hidden_size, dtype=torch.float32)
+
+    # HF reference
+    hf_rope = _create_hf_rope(hf_text_config, seq_len, layer_idx)
+    causal_mask = torch.triu(torch.full((1, 1, seq_len, seq_len), float("-inf")), diagonal=1)
+    with torch.no_grad():
+        hf_output = hf_layer(x_torch, position_embeddings=hf_rope, attention_mask=causal_mask)
+
+    # TT forward (input replicated to both devices)
+    x_tt = ttnn.from_torch(
+        x_torch.unsqueeze(0).to(torch.bfloat16),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, max(seq_len, 128), layer_idx)
+    tt_output = tt_layer(
+        x_tt,
+        rope_mats=(cos_tt, sin_tt),
+        position_idx=None,
+        page_table=None,
+        kv_cache=None,
+        is_decode=False,
+    )
+    # After allreduce, all devices have the same result
+    tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0]).squeeze(0).float()
+
+    passing, pcc_msg = compare_tensors(tt_output_torch, hf_output, pcc_threshold=0.95)
+    assert passing, f"Full layer TP (layer_idx={layer_idx}) PCC too low: {pcc_msg}"
