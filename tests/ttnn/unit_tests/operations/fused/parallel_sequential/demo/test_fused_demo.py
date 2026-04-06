@@ -35,7 +35,7 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, is_watcher_enabled
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 from models.experimental.ops.descriptors.fusion import clear_build_cache
 
@@ -1814,6 +1814,7 @@ void kernel_main() {
         local_cb.pop_front(1);
     }
     remote_cb.commit();
+    noc_async_atomic_barrier();
 }
 """
 
@@ -1839,6 +1840,7 @@ void kernel_main() {
         remote_cb.pop_front(noc, 1);
     }
     remote_cb.commit();
+    noc_async_atomic_barrier();
 }
 """
 
@@ -2138,6 +2140,9 @@ def _barrier_bench_setup(device, num_phases, num_cores):
     return [_build_noop_op(core_ranges, dummy) for _ in range(num_phases)]
 
 
+@pytest.mark.skipif(
+    is_watcher_enabled(), reason="pytest-timeout plugin interacts with watcher on device reopen (noop kernels)"
+)
 @pytest.mark.parametrize("perf_mode", ["cold_start", "e2e", "device_fw"])
 @pytest.mark.parametrize("num_cores", [1, 8, 16, 64])
 @pytest.mark.parametrize("num_phases", [2, 3, 4, 5, 6])
