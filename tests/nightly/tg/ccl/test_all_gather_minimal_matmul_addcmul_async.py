@@ -4,6 +4,7 @@
 
 import pytest
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 
 from models.tt_dit.tests.models.wan2_2.test_all_gather_minimal_matmul_async import (
     create_fabric_router_config,
@@ -33,6 +34,9 @@ def test_all_gather_minimal_matmul_addcmul(
     topology,
     broadcast_gate,
 ):
+    if is_wormhole_b0():
+        pytest.skip("core grid (12, 9) exceeds wormhole_b0 compute grid (8x8), blackhole-only config")
+
     check_result = run_test_linear(
         mesh_device,
         M=3072,
