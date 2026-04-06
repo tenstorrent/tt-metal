@@ -198,6 +198,8 @@ NN_TO_TTNN_CODE2WAV = {
     Qwen3OmniMoeCode2WavRMSNorm: TTNNDistributedRMSNorm,
     Qwen3OmniMoeCode2WavMlp: TTNNGlm4MoeMLP,
     Qwen3OmniMoeCode2WavDecoderResidualUnit: TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
+    # ``code2wav.pre_transformer.rotary_emb`` (same HF class as code_predictor 1D RoPE)
+    Qwen3OmniMoeRotaryEmbedding: TTNNQwen3OmniMoeRotaryEmbedding,
     **_QWEN_OMNI_ACTIVATION_NN_TO_TTNN,
     **_QWEN_OMNI_LAYERNORM_NN_TO_TTNN,
 }

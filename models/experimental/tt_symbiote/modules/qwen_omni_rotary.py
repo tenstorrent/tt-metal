@@ -5,9 +5,10 @@
 """TTNN-backed rotary embeddings for Qwen3-Omni-MoE (replaces HF ``nn.Module`` RoPE layers).
 
 Frequency layout matches Hugging Face ``modeling_qwen3_omni_moe`` (MRoPE / 1D / vision freqs).
-``inv_freq`` matmuls and MRoPE interleaving run in **PyTorch** (same numerics as HF). The
-embedding ``cos`` / ``sin`` (and vision ``freqs`` table when applicable) are computed with
-``ttnn`` on device where a mesh is available.
+``inv_freq`` matmuls and MRoPE interleaving run in **PyTorch** (same numerics as HF).
+Embedding ``cos`` / ``sin`` are computed with ``ttnn.cos`` / ``ttnn.sin``. On a multi-device mesh,
+unaries may leave ``[B, S, H]`` **sequence-sharded** (``S/num_devices`` per chip); we then
+``ttnn.all_gather`` along dim 1 so host readback matches full ``S`` before wrapping for attention.
 
 For ``rope_type != "default"`` (dynamic / longrope / etc.), forwards delegate to the original
 HF layer stored in ``_fallback_torch_layer``.
@@ -19,7 +20,9 @@ import torch
 import ttnn
 
 from models.experimental.tt_symbiote.core.module import TTNNModule
+from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+from models.experimental.tt_symbiote.core.utils import tree_map
 
 
 def _x_dtype(x) -> torch.dtype:
@@ -30,6 +33,40 @@ def _x_dtype(x) -> torch.dtype:
     if isinstance(x, torch.Tensor):
         return x.dtype
     return torch.bfloat16
+
+
+def _is_host_ttnn_tensor_obj(x) -> bool:
+    """True for mesh-backed ``ttnn`` tensors that may not pass ``isinstance(..., ttnn.Tensor)``."""
+    if x is None or isinstance(x, (torch.Tensor, TorchTTNNTensor)):
+        return False
+    if isinstance(x, ttnn.Tensor):
+        return True
+    cls = type(x)
+    mod = getattr(cls, "__module__", "") or ""
+    return cls.__name__ == "Tensor" and ("ttnn" in mod or "_ttnn" in mod)
+
+
+def _replicated_mesh_config(mesh_device):
+    if mesh_device is None or mesh_device.get_num_devices() <= 1:
+        return None
+    return DistributedTensorConfig(
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+    )
+
+
+def _set_rotary_outputs_replicated(module: TTNNModule, output_tensors):
+    """RoPE outputs are fully replicated; avoid ``get_tensor_config_for_tensor`` shard heuristics + log spam."""
+    cfg = _replicated_mesh_config(module.device)
+    if cfg is None:
+        return TTNNModule.set_output_tensors_config_impl(module, output_tensors)
+
+    def apply(e):
+        if isinstance(e, TorchTTNNTensor):
+            e.set_distributed_tensor_config(cfg)
+        return e
+
+    return tree_map(apply, output_tensors)
 
 
 def _ttnn_replicated_to_torch(mesh_device, tensor: ttnn.Tensor, *, leading_dim: int) -> torch.Tensor:
@@ -51,7 +88,7 @@ def _position_ids_torch(position_ids, mesh_device=None) -> torch.Tensor:
     ``torch.as_tensor`` cannot ingest ``ttnn.Tensor`` — convert with ``ttnn.to_torch`` + mesh composer.
     """
 
-    def _ttnn_to_torch_long(raw: ttnn.Tensor) -> torch.Tensor:
+    def _ttnn_to_torch_long(raw) -> torch.Tensor:
         ld = int(raw.shape[0])
         if mesh_device is not None and mesh_device.get_num_devices() > 1 and ld > 0:
             t = _ttnn_replicated_to_torch(mesh_device, raw, leading_dim=ld)
@@ -59,20 +96,21 @@ def _position_ids_torch(position_ids, mesh_device=None) -> torch.Tensor:
             t = ttnn.to_torch(raw)
         return t.long()
 
-    # Unwrapped device tensor (see module_run / tree_map)
-    if isinstance(position_ids, ttnn.Tensor):
+    if isinstance(position_ids, ttnn.Tensor) or _is_host_ttnn_tensor_obj(position_ids):
         return _ttnn_to_torch_long(position_ids)
 
     if isinstance(position_ids, TorchTTNNTensor):
         t = position_ids.elem if position_ids.elem is not None else None
         if t is None and position_ids.ttnn_tensor is not None:
             t = _ttnn_to_torch_long(position_ids.ttnn_tensor)
-        if isinstance(t, ttnn.Tensor):
+        elif isinstance(t, ttnn.Tensor) or _is_host_ttnn_tensor_obj(t):
             t = _ttnn_to_torch_long(t)
         position_ids = t
 
     if isinstance(position_ids, torch.Tensor):
         return position_ids.long()
+    if _is_host_ttnn_tensor_obj(position_ids):
+        return _ttnn_to_torch_long(position_ids)
     return torch.as_tensor(position_ids, dtype=torch.long)
 
 
@@ -90,8 +128,15 @@ def _apply_interleaved_mrope_torch(
 
 
 def _cos_sin_ttnn(emb: torch.Tensor, attention_scaling: float, device, out_dtype: torch.dtype):
-    """Compute ``cos(emb)``, ``sin(emb)`` on device via ``ttnn``, return torch tensors."""
-    mesh_mapper = ttnn.ReplicateTensorToMesh(device) if device.get_num_devices() > 1 else None
+    """Compute ``cos(emb)``, ``sin(emb)`` on device with ``ttnn``; stitch seq shards on mesh if needed."""
+    if emb.ndim != 3:
+        raise ValueError(f"_cos_sin_ttnn expects [batch, seq, dim], got {tuple(emb.shape)}")
+
+    b, s, h = int(emb.shape[0]), int(emb.shape[1]), int(emb.shape[2])
+    target_shape = (b, s, h)
+    nd = int(device.get_num_devices())
+    mesh_mapper = ttnn.ReplicateTensorToMesh(device) if nd > 1 else None
+
     emb_tt = ttnn.from_torch(
         emb.float().contiguous(),
         device=device,
@@ -107,9 +152,29 @@ def _cos_sin_ttnn(emb: torch.Tensor, attention_scaling: float, device, out_dtype
     elif out_dtype == torch.float16:
         cos = ttnn.typecast(cos, ttnn.float16)
         sin = ttnn.typecast(sin, ttnn.float16)
-    lead = int(emb.shape[0])
-    cos_t = _ttnn_replicated_to_torch(device, cos, leading_dim=lead)
-    sin_t = _ttnn_replicated_to_torch(device, sin, leading_dim=lead)
+
+    if nd > 1:
+        s_local = int(cos.shape[1])
+        if s_local != s and s_local * nd == s:
+            cos = ttnn.all_gather(cos, dim=1, num_links=1, topology=ttnn.Topology.Linear)
+            sin = ttnn.all_gather(sin, dim=1, num_links=1, topology=ttnn.Topology.Linear)
+            ttnn.synchronize_device(device)
+
+    if nd <= 1:
+        cos_t = ttnn.to_torch(cos)
+        sin_t = ttnn.to_torch(sin)
+    else:
+        composer = ttnn.ConcatMeshToTensor(device, dim=0)
+        cos_t = ttnn.to_torch(cos, mesh_composer=composer)
+        sin_t = ttnn.to_torch(sin, mesh_composer=composer)
+        if cos_t.shape != target_shape:
+            if cos_t.numel() == b * s * h:
+                cos_t = cos_t.reshape(target_shape)
+                sin_t = sin_t.reshape(target_shape)
+            elif cos_t.ndim == 3 and cos_t.shape[0] == nd * b and cos_t.shape[1] == s and cos_t.shape[2] == h:
+                cos_t = cos_t[:b].contiguous()
+                sin_t = sin_t[:b].contiguous()
+
     return cos_t.to(dtype=out_dtype), sin_t.to(dtype=out_dtype)
 
 
@@ -143,6 +208,9 @@ class TTNNQwen3OmniMoeThinkerTextRotaryEmbedding(TTNNModule):
 
     def deallocate_weights_impl(self):
         return self
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        return _set_rotary_outputs_replicated(self, output_tensors)
 
     def forward(self, x, position_ids):
         if self._fallback_torch_layer is not None and self.rope_type != "default":
@@ -207,6 +275,9 @@ class TTNNQwen3OmniMoeRotaryEmbedding(TTNNModule):
     def deallocate_weights_impl(self):
         return self
 
+    def set_output_tensors_config_impl(self, output_tensors):
+        return _set_rotary_outputs_replicated(self, output_tensors)
+
     def forward(self, x, position_ids):
         if self._fallback_torch_layer is not None and self.rope_type != "default":
             return self._fallback_torch_layer(x, position_ids)
@@ -259,6 +330,9 @@ class TTNNQwen3OmniMoeVisionRotaryEmbedding(TTNNModule):
 
     def deallocate_weights_impl(self):
         return self
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        return _set_rotary_outputs_replicated(self, output_tensors)
 
     def forward(self, seqlen: int):
         inv_freq = self._inv_freq_cpu
