@@ -237,5 +237,4 @@ void kernel_main() {
     }
     const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem);
     noc_inline_dw_write(dest_noc_addr, 0);
-    noc_async_write_barrier();
 }
