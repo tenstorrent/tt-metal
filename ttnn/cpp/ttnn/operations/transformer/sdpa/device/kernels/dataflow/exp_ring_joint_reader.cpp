@@ -7,6 +7,7 @@
 #include "dataflow_common.hpp"
 #include "exp_fused_op_receiver.hpp"
 void kernel_main() {
+    noc_async_write_barrier();
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
     constexpr uint32_t DHt = get_compile_time_arg_val(2);
@@ -320,6 +321,7 @@ void kernel_main() {
                             k_chunk_tiles * k_tile_bytes,
                             mcast_num_dests,
                             true /* linked: semaphore mcast follows */);
+                        // noc_async_writes_flushed();
                         noc_semaphore_set_multicast(valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
                     } else {
                         uint64_t k_unicast_data_addr =
@@ -403,6 +405,7 @@ void kernel_main() {
                             v_chunk_tiles * v_tile_bytes,
                             mcast_num_dests,
                             true /* linked: semaphore mcast follows */);
+                        // noc_async_writes_flushed();
                         noc_semaphore_set_multicast(valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
                     } else {
                         uint64_t v_unicast_data_addr =
@@ -437,4 +440,5 @@ void kernel_main() {
         }
     }
     noc_async_writes_flushed();
+    noc_async_write_barrier();
 }
