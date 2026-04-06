@@ -1,5 +1,5 @@
 #!/bin/bash
-set -eo pipefail
+set -euo pipefail
 
 _MULTIHOST_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=multihost_gtest_env.sh
@@ -25,13 +25,13 @@ run_dual_t3k_unit_tests() {
   local strict_rank_binding="tests/tt_metal/distributed/config/dual_t3k_strict_connection_rank_bindings.yaml"
   local bigmesh_rank_binding="tests/tt_metal/distributed/config/dual_t3k_1x16_experimental_bigmesh_rank_bindings.yaml"
 
-  mpirun $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery "${MULTIHOST_GTEST_FLAGS[@]}" ; fail+=$?
-  mpirun $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation  --print-connectivity --send-traffic --hard-fail ; fail+=$?
-  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric "${MULTIHOST_GTEST_FLAGS[@]}" --test_config tests/tt_metal/perf_microbenchmark/routing/test_dual_t3k.yaml ; fail+=$?
-  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests "${MULTIHOST_GTEST_FLAGS[@]}" ; fail+=$?
-  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/test_mesh_socket_main "${MULTIHOST_GTEST_FLAGS[@]}" --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_dual_t3k.yaml ; fail+=$?
-  tt-run --rank-binding "$strict_rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests "${MULTIHOST_GTEST_FLAGS[@]}" ; fail+=$?
-  tt-run --rank-binding "$bigmesh_rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests "${MULTIHOST_GTEST_FLAGS[@]}" --gtest_filter='*BigMesh1x16*' ; fail+=$?
+  mpirun $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery "${MULTIHOST_GTEST_FLAGS[@]}" ; fail=$((fail + $?))
+  mpirun $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation  --print-connectivity --send-traffic --hard-fail ; fail=$((fail + $?))
+  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric "${MULTIHOST_GTEST_FLAGS[@]}" --test_config tests/tt_metal/perf_microbenchmark/routing/test_dual_t3k.yaml ; fail=$((fail + $?))
+  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests "${MULTIHOST_GTEST_FLAGS[@]}" ; fail=$((fail + $?))
+  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/test_mesh_socket_main "${MULTIHOST_GTEST_FLAGS[@]}" --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_dual_t3k.yaml ; fail=$((fail + $?))
+  tt-run --rank-binding "$strict_rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests "${MULTIHOST_GTEST_FLAGS[@]}" ; fail=$((fail + $?))
+  tt-run --rank-binding "$bigmesh_rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests "${MULTIHOST_GTEST_FLAGS[@]}" --gtest_filter='*BigMesh1x16*' ; fail=$((fail + $?))
 
   # Record the end time
   end_time=$(date +%s)

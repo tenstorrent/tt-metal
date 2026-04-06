@@ -125,7 +125,9 @@ inline void kill_rank_and_recover(
     }
     try {
         ctx->barrier();
-    } catch (const tt::tt_metal::distributed::multihost::DistributedException&) {
+    } catch (const tt::tt_metal::distributed::multihost::DistributedException& e) {
+        fmt::print(stderr, "Rank {}: caught exception during barrier recovery: {}\n",
+                   *ctx->rank(), e.what());
         ctx->revoke_and_shrink();
     }
     std::forward<Fn>(post_recovery)(ctx);

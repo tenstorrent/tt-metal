@@ -20,3 +20,7 @@
 #define OMPI_HAS_ULFM 0
 #endif
 #endif
+
+#if defined(ENABLE_DISTRIBUTED) && !OMPI_HAS_ULFM
+#  pragma message("ULFM support not available — fault tolerance disabled")
+#endif

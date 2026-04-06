@@ -353,5 +353,3 @@ void emit_local_mpi_process_fatal_diagnostic(
 }
 
 }  // namespace tt::tt_metal::distributed::multihost
-
-#undef OMPI_HAS_ULFM

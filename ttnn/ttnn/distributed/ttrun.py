@@ -979,6 +979,9 @@ def build_rank_environment_args(binding: RankBinding, config: TTRunConfig, launc
     Args:
         binding: Rank binding configuration
         config: Global configuration
+        launcher_env: Environment variables from the launcher process, used to
+            determine which keys can be exported by name only (already present
+            in the environment) vs. which need explicit KEY=value assignment.
 
     Returns:
         List of ["-x", "KEY=value"] arguments for mpirun
@@ -1247,6 +1250,8 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
     if len(cmd) > PRETTY_PRINT_THRESHOLD:
         logger.info(f"{prefix} Command:")
         parts = []
+        # NOTE: Always shows "mpirun" regardless of actual launcher (e.g. mpirun-ulfm).
+        # This is intentional — the displayed command is for human readability, not execution.
         current_part = ["mpirun"]
 
         for arg in cmd[1:]:

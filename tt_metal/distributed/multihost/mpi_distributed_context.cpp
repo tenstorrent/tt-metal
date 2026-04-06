@@ -669,6 +669,8 @@ inline void init_env(int& argc, char**& argv) {
         if (MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided) != MPI_SUCCESS) {
             TT_THROW("MPI_Init_thread failed");
         }
+        TT_FATAL(provided >= MPI_THREAD_MULTIPLE,
+            "MPI requires MPI_THREAD_MULTIPLE but only {} was provided", provided);
 
         // Install the terminate handler so that any uncaught exception
         // (including those thrown in thread-pool workers via std::async)
@@ -1120,12 +1122,15 @@ void MPIContext::revoke_and_shrink() {
     const auto old_state = snapshot_state();
 
     int rc = MPIX_Comm_revoke(old_state->comm);
-    if (rc != MPI_SUCCESS && rc != MPI_ERR_REVOKED) {  // another rank may have revoked first
+    if (rc != MPI_SUCCESS && rc != MPIX_ERR_REVOKED) {  // another rank may have revoked first
         abort(rc);
     }
     revoked_.test_and_set(std::memory_order_release);
 
     MPI_Comm new_comm = MPI_COMM_NULL;
+    // NOTE: If MPIX_Comm_shrink fails (e.g. another rank fails during shrink),
+    // MPI_CHECK_STATE will throw MPIRankFailureException to the caller.
+    // The caller must be prepared to handle nested failures during recovery.
     MPI_CHECK_STATE(old_state, MPIX_Comm_shrink(old_state->comm, &new_comm));
     // Route replacement-communicator setup through build_state(new_comm)
     // rather than MPI_CHECK_STATE(old_state, ...) so any setup failure is
@@ -1234,7 +1239,10 @@ std::vector<Rank> MPIContext::failed_ranks() const {
         return cached_failed_ranks_;
     }
     MPI_Group world_group = MPI_GROUP_NULL;
-    MPI_Comm_group(state->comm, &world_group);
+    int rc = MPI_Comm_group(state->comm, &world_group);
+    if (rc != MPI_SUCCESS) {
+        world_group = MPI_GROUP_NULL;
+    }
     std::vector<int> local_indices(failed_size);
     std::iota(local_indices.begin(), local_indices.end(), 0);
     std::vector<int> world_ranks(failed_size, MPI_UNDEFINED);

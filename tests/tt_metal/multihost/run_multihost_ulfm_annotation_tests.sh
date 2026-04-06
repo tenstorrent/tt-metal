@@ -100,11 +100,8 @@ _run_expected_diagnostic_test() {
     local diag_line=""
     tmpout=$(mktemp)
 
-    if "$@" 2>&1 | tee "$tmpout"; then
-        cmd_status=0
-    else
-        cmd_status=${PIPESTATUS[0]}
-    fi
+    "$@" 2>&1 | tee "$tmpout"
+    cmd_status=${PIPESTATUS[0]}
 
     if [[ ! -s "$tmpout" ]]; then
         echo "ERROR: no output captured for ${expected_test}; launcher exited ${cmd_status}" >&2

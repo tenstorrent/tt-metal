@@ -18,6 +18,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 _MOD_NAME = "ttnn.distributed.mpi_fault"
 # Source-tree path used as fallback when the package is not installed.
 _SOURCE_PATH = pathlib.Path(__file__).resolve().parents[3] / "ttnn" / "ttnn" / "distributed" / "mpi_fault.py"
