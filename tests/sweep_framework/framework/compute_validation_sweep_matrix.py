@@ -25,6 +25,9 @@ from constants import format_hardware_suffix, parse_hardware_suffix, strip_group
 from matrix_runner_config import GENERATION_MANIFEST_FILENAME, get_runner_config, get_test_group_name_for_hardware_group
 
 
+DEFAULT_PRETTY_MATRIX_PATH = "tests/sweep_framework/framework/validation_matrix.json"
+
+
 def _load_generation_manifest(vectors_path: Path) -> dict:
     """Load generation manifest metadata if present."""
     manifest_path = vectors_path / GENERATION_MANIFEST_FILENAME
@@ -231,6 +234,17 @@ def main():
         help="Top-level validation scope target used to combine one or both per-scope matrices",
     )
     parser.add_argument("--batch-size", type=int, default=10, help="Maximum number of modules per matrix batch")
+    parser.add_argument(
+        "--write-to-file",
+        required=False,
+        nargs="?",
+        const=DEFAULT_PRETTY_MATRIX_PATH,
+        default=DEFAULT_PRETTY_MATRIX_PATH,
+        help=(
+            "Optional path to write a pretty-printed matrix JSON for human review. "
+            f"If provided without a value, defaults to {DEFAULT_PRETTY_MATRIX_PATH}."
+        ),
+    )
     args = parser.parse_args()
 
     if args.vectors_root and args.scope_target:
@@ -251,6 +265,17 @@ def main():
         )
     else:
         parser.error("Provide either --vectors-dir with --validation-scope, or --vectors-root with --scope-target.")
+
+    if args.write_to_file:
+        output_path = Path(args.write_to_file)
+        try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, "w", encoding="utf-8") as file:
+                json.dump(matrix, file, indent=2)
+                file.write("\n")
+        except OSError as error:
+            print(f"Failed to write matrix JSON to {output_path}: {error}", file=sys.stderr)
+            sys.exit(1)
 
     print(json.dumps(matrix, separators=(",", ":")))
 

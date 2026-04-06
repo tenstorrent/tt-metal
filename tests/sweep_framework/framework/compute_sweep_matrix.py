@@ -19,6 +19,7 @@ Output:
 Prints GitHub Actions output lines to stdout (matrix + per-hw matrices).
 """
 
+import argparse
 import os
 import json
 import sys
@@ -41,6 +42,8 @@ from matrix_runner_config import (
     get_runner_config,
     get_test_group_name_for_hardware_group,
 )
+
+DEFAULT_PRETTY_MATRIX_PATH = "tests/sweep_framework/framework/sweep_matrix.json"
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -333,6 +336,20 @@ def compute_standard_matrix(modules, batch_size, suite_name):
 
 def main():
     """Main entry point."""
+    parser = argparse.ArgumentParser(description="Compute sweep matrix and emit GitHub Actions outputs.")
+    parser.add_argument(
+        "--write-to-file",
+        required=False,
+        nargs="?",
+        const=DEFAULT_PRETTY_MATRIX_PATH,
+        default=DEFAULT_PRETTY_MATRIX_PATH,
+        help=(
+            "Optional path to write a pretty-printed matrix JSON for human review. "
+            f"If provided without a value, defaults to {DEFAULT_PRETTY_MATRIX_PATH}."
+        ),
+    )
+    args = parser.parse_args()
+
     schedule_expr = os.environ.get("GITHUB_EVENT_SCHEDULE", "")
     event_name = os.environ.get("GITHUB_EVENT_NAME", "")
     sweep_name = os.environ.get("SWEEP_NAME", "")
@@ -382,6 +399,18 @@ def main():
         "ccl_batches": ccl_batches,
         "include": include_entries,
     }
+
+    if args.write_to_file:
+        output_path = Path(args.write_to_file)
+        try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, "w", encoding="utf-8") as file:
+                json.dump(result, file, indent=2)
+                file.write("\n")
+        except OSError as error:
+            print(f"Failed to write matrix JSON to {output_path}: {error}", file=sys.stderr)
+            sys.exit(1)
+
     print("matrix=" + json.dumps(result, **compact))
 
     for hw_key, group_names in HW_GROUP_MATRIX_KEYS.items():
