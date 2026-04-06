@@ -13,7 +13,7 @@ from models.demos.deepseek_v3_b1.micro_ops.matmul_custom_compressed.op import Ma
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_eltwise_add_compressed import scale_tiles_for_mixed_formats
 
 
-def _get_asignment_for_distribution(distribution, K, N, formats):
+def _get_assignment_for_distribution(distribution, K, N, formats):
     FORMAT_MAP = {
         "bfp8": 0,
         "bfp4": 1,
@@ -25,11 +25,11 @@ def _get_asignment_for_distribution(distribution, K, N, formats):
     num_tiles = (K // 32) * (N // 32)
     if distribution == "clustered":
         num_runs = min(len(formats), num_tiles)
-        run_lenth = num_tiles // num_runs
-        last_run_length = num_tiles - run_lenth * (num_runs - 1)
+        run_length = num_tiles // num_runs
+        last_run_length = num_tiles - run_length * (num_runs - 1)
         assignment = []
         for i in range(num_runs - 1):
-            assignment.extend([formats[i]] * run_lenth)
+            assignment.extend([formats[i]] * run_length)
         assignment.extend([formats[num_runs - 1]] * last_run_length)
         assignment = np.array(assignment, dtype=np.int8).reshape((K // 32, N // 32))
     elif distribution.startswith("interleaved "):
@@ -87,7 +87,7 @@ def _run_matmul_custom_compressed_benchmark(
         )
         ct = CompressedTensor.from_torch(torch_b, assigner, device=device, memory_config=b_mem_config)
     else:
-        assignment = _get_asignment_for_distribution(distribution, K, N, formats)
+        assignment = _get_assignment_for_distribution(distribution, K, N, formats)
         ct = CompressedTensor(torch_b, assignment, device=device, memory_config=b_mem_config)
 
     logger.info(f"Custom compressed B: {ct}")

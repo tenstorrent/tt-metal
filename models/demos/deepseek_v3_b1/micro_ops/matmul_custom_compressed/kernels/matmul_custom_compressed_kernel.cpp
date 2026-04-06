@@ -114,10 +114,10 @@ void kernel_main() {
     compressed::custom_mm_compressed_block_runtime<num_tiles_k, out_w>(
         fmt_l1_addr, addr_in0, addr_in1, in0_face_r_dim, 0);
 #elif COMPRESSED_MM_IMPL == 1 || COMPRESSED_MM_IMPL == 4
-    compressed::custom_mm_compressed_block_constexpr<num_tiles_k, out_w, num_packed, fmt_packed>(
+    compressed::custom_mm_compressed_block_compact<num_tiles_k, out_w, num_packed, fmt_packed>(
         addr_in0, addr_in1, in0_face_r_dim, 0);
 #elif COMPRESSED_MM_IMPL == 2 || COMPRESSED_MM_IMPL == 5
-    compressed::custom_mm_compressed_block_compact<num_tiles_k, out_w, num_packed, fmt_packed>(
+    compressed::custom_mm_compressed_block_constexpr<num_tiles_k, out_w, num_packed, fmt_packed>(
         addr_in0, addr_in1, in0_face_r_dim, 0);
 #elif COMPRESSED_MM_IMPL == 6
     compressed_custom_mm_block<split_acc, clear_src>(cb_in0, cb_in1, fmt_l1_addr, 0, num_tiles_k, out_w);
