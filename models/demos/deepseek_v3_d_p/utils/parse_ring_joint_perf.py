@@ -229,17 +229,21 @@ def print_summary(ops, num_iters):
             run_num = i + 1
             row_str = ""
             for r in ranks:
-                dev = row[r]
-                dev_short = dev.split("/")[-1] if "/" in dev else dev
-                row_str += f"{dev_short:>16}"
+                dev = row.get(r)
+                if pd.isna(dev):
+                    row_str += f"{'n/a':>16}"
+                else:
+                    dev_short = dev.split("/")[-1] if "/" in dev else dev
+                    row_str += f"{dev_short:>16}"
             print(f"{'RUN ' + str(run_num):>12}{row_str}")
         print()
 
     # --- Summary ---
     # For each iteration, take max and min of worst-device-per-rank across ranks
+    # (skipna handles ranks with missing iterations)
     # max = slowest rank (wall-clock wait), min = fastest rank (actual op time)
-    iter_max = perf_max_table.max(axis=1)
-    iter_min = perf_max_table.min(axis=1)
+    iter_max = perf_max_table.max(axis=1, skipna=True)
+    iter_min = perf_max_table.min(axis=1, skipna=True)
     iter_max.index = range(1, num_perf_runs + 1)
     iter_min.index = range(1, num_perf_runs + 1)
     iter_skew = iter_max - iter_min
@@ -249,14 +253,20 @@ def print_summary(ops, num_iters):
 
     # Find bottleneck devices
     worst_run_row = perf_max_table.iloc[worst_run - 1]
-    worst_run_dev = perf_max_devs.iloc[worst_run - 1][worst_run_row.idxmax()]
+    worst_run_bottleneck_rank = worst_run_row.idxmax()
+    worst_run_dev = perf_max_devs.iloc[worst_run - 1].get(worst_run_bottleneck_rank, "n/a")
+    if pd.isna(worst_run_dev):
+        worst_run_dev = "n/a"
 
     best_run_row = perf_max_table.iloc[best_run - 1]
-    best_run_dev = perf_max_devs.iloc[best_run - 1][best_run_row.idxmax()]
+    best_run_bottleneck_rank = best_run_row.idxmax()
+    best_run_dev = perf_max_devs.iloc[best_run - 1].get(best_run_bottleneck_rank, "n/a")
+    if pd.isna(best_run_dev):
+        best_run_dev = "n/a"
 
     # Fastest rank = actual op time, slowest rank = wait time
-    fastest_rank = perf_max_table.mean(axis=0).idxmin()
-    slowest_rank = perf_max_table.mean(axis=0).idxmax()
+    fastest_rank = perf_max_table.mean(axis=0, skipna=True).idxmin()
+    slowest_rank = perf_max_table.mean(axis=0, skipna=True).idxmax()
 
     print(f"=== Summary ({num_perf_runs} perf runs, {num_devices} devices, {len(ranks)} rank(s)) ===")
     print(f"  Best run:  RUN {best_run}  {iter_max[best_run] / 1e6:.3f} ms  (bottleneck: {best_run_dev})")
