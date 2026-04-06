@@ -317,20 +317,22 @@ jobs:
     steps:
     - uses: actions/checkout@v4
       with:
-        ref: >-
-          ${{ github.event_name == 'pull_request' &&
-              github.event.pull_request.head.sha || '' }}
-        fetch-depth: 0
+        ref: ${{ github.event.pull_request.head.sha }}
+        fetch-depth: 1
         submodules: "recursive"
     - name: Set safe directory for Git
       run: git config --global --add safe.directory $GITHUB_WORKSPACE
-    - name: Fetch base branch
+    - name: Fetch PR base commit
       timeout-minutes: 5
       run: |
+        # Fetch only the single base commit the PR was opened against.
+        # github.event.pull_request.base.sha is the merge-base equivalent —
+        # no need to fetch the full branch history.
         BASE_REPO="${{ github.event.pull_request.base.repo.full_name }}"
-        BASE_REF="${{ github.event.pull_request.base.ref }}"
+        BASE_SHA="${{ github.event.pull_request.base.sha }}"
         git remote add upstream "https://github.com/${BASE_REPO}"
-        git fetch --no-tags upstream "${BASE_REF}"
+        git fetch --no-tags --depth=1 upstream "${BASE_SHA}"
+        git tag _pr_base FETCH_HEAD
     - name: Set up clang-tidy symlinks
       run: |
         # The ci-build image ships clang-tidy-20 and clang-tidy-diff-20.py.
@@ -391,9 +393,7 @@ jobs:
         jq --arg prefix "$PREFIX/" -r \
           '.[].file | sub("^" + $prefix; "")' \
           build/compile_commands.json > relative_files_in_build.txt
-        BASE_REF="${{ github.event.pull_request.base.ref }}"
-        git diff --name-only \
-          "$(git merge-base HEAD "upstream/${BASE_REF}")..." > changed_files.txt
+        git diff --name-only "_pr_base..." > changed_files.txt
         grep -F -f relative_files_in_build.txt changed_files.txt > common_files.txt || true
 
         # Exit if there are no modified files known to CMake
@@ -403,8 +403,7 @@ jobs:
         }
 
         # Analyze the relevant diffs of the relevant files
-        BASE_REF="${{ github.event.pull_request.base.ref }}"
-        git diff "$(git merge-base HEAD "upstream/${BASE_REF}")" \
+        git diff "_pr_base" \
           -- $(cat common_files.txt) > filtered_changes.diff
         clang-tidy-diff-20.py -p1 -path build \
           -export-fixes clang-tidy-result/fixes.yml \
