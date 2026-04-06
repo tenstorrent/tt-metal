@@ -17,34 +17,34 @@ permissions:
   packages: write
 
 jobs:
-  display-manifest-options:
-    name: Display trace manifest configuration
+  inspect-trace-selection-registry:
+    name: Inspect trace selection registry
     runs-on: ubuntu-latest
     outputs:
-      manifest-path: ${{ steps.parse-manifest.outputs.manifest_path }}
-      scope-targets: ${{ steps.parse-manifest.outputs.scope_targets }}
-      models: ${{ steps.parse-manifest.outputs.models }}
-      trace-ids: ${{ steps.parse-manifest.outputs.trace_ids }}
+      trace-selection-registry-path: ${{ steps.parse-trace-selection-registry.outputs.trace_selection_registry_path }}
+      scope-targets: ${{ steps.parse-trace-selection-registry.outputs.scope_targets }}
+      selected-models: ${{ steps.parse-trace-selection-registry.outputs.selected_models }}
+      selected-trace-ids: ${{ steps.parse-trace-selection-registry.outputs.selected_trace_ids }}
       caller-id: ${{ format('{0}/run-{1}/attempt-{2}', github.workflow, github.run_id, github.run_attempt) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Install manifest parser dependency
+      - name: Install registry parser dependency
         run: pip3 install PyYAML
 
-      - name: Parse manifest
-        id: parse-manifest
+      - name: Parse trace selection registry
+        id: parse-trace-selection-registry
         run: |
           python3 - <<'PY'
           import os
           import yaml
 
-          manifest_path = "model_tracer/trace_selection_registry.yaml"
-          with open(manifest_path, "r", encoding="utf-8") as f:
-              manifest = yaml.safe_load(f)
+          registry_path = "model_tracer/trace_selection_registry.yaml"
+          with open(registry_path, "r", encoding="utf-8") as f:
+              registry_data = yaml.safe_load(f)
 
-          targets = manifest.get("targets", {})
+          targets = registry_data.get("targets", {})
           target_keys = set(targets.keys())
           if target_keys == {"lead_models"}:
               scope_target = "lead_models"
@@ -66,23 +66,25 @@ jobs:
           unique_trace_ids = sorted(set(all_trace_ids))
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
-              out.write(f"manifest_path={manifest_path}\n")
+              out.write(f"trace_selection_registry_path={registry_path}\n")
               out.write(f"scope_targets={scope_target}\n")
-              out.write(f"models={', '.join(unique_models) or 'none'}\n")
-              out.write(f"trace_ids={', '.join(str(trace_id) for trace_id in unique_trace_ids) or 'auto-resolve'}\n")
+              out.write(f"selected_models={', '.join(unique_models) or 'none'}\n")
+              out.write(
+                  f"selected_trace_ids={', '.join(str(trace_id) for trace_id in unique_trace_ids) or 'auto-resolve'}\n"
+              )
           PY
 
-      - name: Display selected manifest options
+      - name: Display selected registry options
         run: |
           echo "::group::🔧 Workflow Configuration Options"
           echo "┌─────────────────────────────────────────────────────────────┐"
-          echo "│             TTNN Sweep Validation Configuration             │"
+          echo "│        TTNN Model Trace Sweep Validation Configuration      │"
           echo "├─────────────────────────────────────────────────────────────┤"
           echo "│ Branch/Ref:           ${{ github.ref_name }}"
-          echo "│ Manifest:             ${{ steps.parse-manifest.outputs.manifest_path }}"
-          echo "│ Scope Target:         ${{ steps.parse-manifest.outputs.scope_targets }}"
-          echo "│ Models:               ${{ steps.parse-manifest.outputs.models }}"
-          echo "│ Trace IDs:            ${{ steps.parse-manifest.outputs.trace_ids }}"
+          echo "│ Registry:             ${{ steps.parse-trace-selection-registry.outputs.trace_selection_registry_path }}"
+          echo "│ Selected Scope:       ${{ steps.parse-trace-selection-registry.outputs.scope_targets }}"
+          echo "│ Selected Models:      ${{ steps.parse-trace-selection-registry.outputs.selected_models }}"
+          echo "│ Selected Trace IDs:   ${{ steps.parse-trace-selection-registry.outputs.selected_trace_ids }}"
           echo "│ Allow Partial Changes:${{ inputs.allow-partial-hash-changes && ' true' || ' false' }}"
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
@@ -94,15 +96,15 @@ jobs:
           echo "Triggered by: ${{ github.actor }}"
           echo "::endgroup::"
 
-  validate-model-traces:
-    name:
-    needs: display-manifest-options
+  run-model-trace-sweep-validation:
+    name: Run model trace sweep validation
+    needs: inspect-trace-selection-registry
     uses: ./.github/workflows/ttnn-model-trace-sweep-validation-impl.yaml
     secrets: inherit
     with:
-      manifest-path: ${{ needs.display-manifest-options.outputs.manifest-path }}
-      scope-targets: ${{ needs.display-manifest-options.outputs.scope-targets }}
-      models: ${{ needs.display-manifest-options.outputs.models }}
-      trace-ids: ${{ needs.display-manifest-options.outputs.trace-ids }}
-      caller-id: ${{ needs.display-manifest-options.outputs.caller-id }}
+      manifest-path: ${{ needs.inspect-trace-selection-registry.outputs.trace-selection-registry-path }}
+      scope-targets: ${{ needs.inspect-trace-selection-registry.outputs.scope-targets }}
+      models: ${{ needs.inspect-trace-selection-registry.outputs.selected-models }}
+      trace-ids: ${{ needs.inspect-trace-selection-registry.outputs.selected-trace-ids }}
+      caller-id: ${{ needs.inspect-trace-selection-registry.outputs.caller-id }}
       allow-partial-hash-changes: ${{ inputs.allow-partial-hash-changes }}

@@ -63,7 +63,7 @@ jobs:
           echo " Sweep Validation"
           echo "========================================"
           echo "  Branch:        ${GITHUB_REF_NAME}"
-          echo "  Manifest:      ${MANIFEST_PATH}"
+          echo "  Registry:      ${MANIFEST_PATH}"
           echo "  Scope target:  ${SCOPE_TARGET}"
           echo "  Models:        ${MODELS}"
           echo "  Trace IDs:     ${TRACE_IDS}"
@@ -88,7 +88,7 @@ jobs:
           echo "master-json-artifact-name=ttnn-operations-master-json" >> "$GITHUB_OUTPUT"
           echo "preflight-artifact-name=validation-preflight" >> "$GITHUB_OUTPUT"
 
-      - name: Generate JSON from database via manifest
+      - name: Generate JSON from database via trace selection registry
         env:
           TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
           MANIFEST_PATH: ${{ inputs.manifest-path }}
