@@ -301,8 +301,17 @@ def test_fnids(mesh_device):
     host_name = socket.gethostname()
     logger.info(f"Host name: {host_name}")
 
+    rank = ttnn.distributed_context_get_rank()
+    size = ttnn.distributed_context_get_size()
+
+    total_rows = mesh_shape[0]
+    rank_row_start = int(rank) * total_rows // int(size)
+    rank_row_end = int(rank) + 1 * total_rows // int(size)
+
+    logger.info(f"Rank: {rank}, Size: {size}, Row start: {rank_row_start}, Row end: {rank_row_end}")
+
     all_fabric_node_ids = []
-    for row in range(mesh_shape[0]):
+    for row in range(rank_row_start, rank_row_end):
         fabric_node_ids = []
         for col in range(mesh_shape[1]):
             coord = ttnn.MeshCoordinate(row, col)
