@@ -239,21 +239,19 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
         all_cores = ttnn::CoreRangeSet(ttnn::CoreRange(cores[0]));
     }
 
-    uint32_t ntiles_per_block = ntiles / ncores;
-    uint32_t nblocks = (ntiles / ntiles_per_block);
-    uint32_t nblocks_per_core = nblocks / ncores;
+    uint32_t ntiles_per_core = ntiles / ncores;
 
     std::vector<CoreCoord> cores_with_rtargs;
 
-    uint32_t src0_cb_index = tt::CBIndex::c_0;
-    uint32_t num_input_tiles = ntiles_per_block * 2;
+    constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
+    constexpr uint32_t num_input_tiles = 2;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    uint32_t output_cb_index = tt::CBIndex::c_2;
-    uint32_t num_output_tiles = ntiles_per_block * 2;
+    constexpr uint32_t output_cb_index = tt::CBIndex::c_2;
+    constexpr uint32_t num_output_tiles = 2;
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(
             num_output_tiles * single_tile_size_output, {{output_cb_index, cb_data_format_output}})
@@ -281,8 +279,8 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     std::vector<uint32_t> compute_kernel_args = {
-        static_cast<uint32_t>(nblocks_per_core),  // per_core_block_cnt
-        static_cast<uint32_t>(ntiles_per_block),  // per_block_ntiles // per_core_block_size
+        ntiles_per_core,  // per_core_block_cnt
+        1,                // per_block_ntiles (stream one tile at a time, matching TypecastProgramFactory)
         src0_cb_index,
         output_cb_index};
 
@@ -319,7 +317,6 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
             .defines = unary_defines});
 
     uint32_t tile_start_id = 0;
-    auto ntiles_per_core = ntiles_per_block * nblocks_per_core;
 
     for (auto core : cores) {
         tt::tt_metal::SetRuntimeArgs(
