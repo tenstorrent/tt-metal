@@ -255,13 +255,16 @@ class RotarySetup:
             use_height_and_width_as_shard_shape=True,
         )
 
-        # For using height-sharded prefill-mode in decode with batch reinterpreted as seq_len
-        # Possible because `rotary_embedding_llama` is (almost) an eltwise op.
+        # For using height-sharded trans_mat prefill-mode in decode with batch reinterpreted as seq_len
+        # Ideally we want these cos, sin to be height sharded too, but there is some issue on dual/quad
+        # Galaxy where RoPE output is BWR but demo output is garbage, so we keep cos, sin L1 interleaved
+        # See issue #40629.
+        # Using prefill-mode kernel is possible because `rotary_embedding_llama` is (almost) an eltwise op.
         cos_matrix_prefill_shape = ttnn.to_memory_config(
-            cos, memory_config=mem_config
+            cos, memory_config=ttnn.L1_MEMORY_CONFIG
         )  # ttnn.interleaved_to_sharded(cos, mem_config)
         sin_matrix_prefill_shape = ttnn.to_memory_config(
-            sin, memory_config=mem_config
+            sin, memory_config=ttnn.L1_MEMORY_CONFIG
         )  # ttnn.interleaved_to_sharded(sin, mem_config)
 
         cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], dim]
@@ -325,13 +328,16 @@ class RotarySetup:
             use_height_and_width_as_shard_shape=True,
         )
 
-        # For using height-sharded prefill-mode in decode with batch reinterpreted as seq_len
-        # Possible because `rotary_embedding_llama` is (almost) an eltwise op.
+        # For using height-sharded trans_mat prefill-mode in decode with batch reinterpreted as seq_len
+        # Ideally we want these cos, sin to be height sharded too, but there is some issue on dual/quad
+        # Galaxy where RoPE output is BWR but demo output is garbage, so we keep cos, sin L1 interleaved
+        # See issue #40629.
+        # Using prefill-mode kernel is possible because `rotary_embedding_llama` is (almost) an eltwise op.
         cos_matrix_prefill_shape = ttnn.to_memory_config(
-            cos, memory_config=mem_config
+            cos, memory_config=ttnn.L1_MEMORY_CONFIG
         )  # ttnn.interleaved_to_sharded(cos, mem_config)
         sin_matrix_prefill_shape = ttnn.to_memory_config(
-            sin, memory_config=mem_config
+            sin, memory_config=ttnn.L1_MEMORY_CONFIG
         )  # ttnn.interleaved_to_sharded(sin, mem_config)
 
         cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], dim]
