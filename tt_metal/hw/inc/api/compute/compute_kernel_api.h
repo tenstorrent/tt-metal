@@ -60,6 +60,34 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
+// clang-format on
+template <bool fast_and_approx = false>
+ALWI void sigmoid_tile_init() {
+    MATH((llk_math_eltwise_unary_sfpu_sigmoid_init<fast_and_approx>()));
+}
+
+// clang-format off
+/**
+ * Performs element-wise computation of sigmoid on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+template <int vec_mode = VectorMode::RC, bool fast_and_approx = false>
+ALWI void sigmoid_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_sigmoid<fast_and_approx, DST_ACCUM_MODE>(idst, vec_mode)));
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
 template <bool fast_and_approx = false>
 ALWI void log_tile_init() {
     MATH((llk_math_eltwise_unary_sfpu_log_init<APPROX, fast_and_approx, DST_ACCUM_MODE>()));  // TODO(AP): move out init
@@ -114,6 +142,41 @@ ALWI void log_with_base_tile_init() {
 template <bool fast_and_approx = false>
 ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
     MATH((llk_math_eltwise_unary_sfpu_log_with_base<APPROX, fast_and_approx, DST_ACCUM_MODE>(idst, base_scale)));
+}
+
+// TODO: Move to trigonometry.h
+/**
+ * Please refer to documentation for any_init.
+ *
+ * If using fast and approximate implementation of tanh_tile(), then tanh_tile_init() should be also be called with
+ * fast_and_approx = true.
+ */
+template <bool fast_and_approx = false>
+ALWI void tanh_tile_init() {
+    MATH((llk_math_eltwise_unary_sfpu_tanh_init<fast_and_approx, DST_ACCUM_MODE>()));  // TODO(AP): move out init
+}
+
+// TODO: Move to trigonometry.h
+// clang-format off
+/**
+ * Performs element-wise computation of tanh on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * If using fast and approximate mode, then tanh_tile_init() should be also be called with fast_and_approx = true beforehand.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | fast_and_approx | Whether to use fast and approximate mode                                   | bool     | True or False                                         | False    |
+ */
+// clang-format on
+template <bool fast_and_approx = false>
+ALWI void tanh_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_tanh<fast_and_approx, DST_ACCUM_MODE>(idst)));
 }
 
 /**

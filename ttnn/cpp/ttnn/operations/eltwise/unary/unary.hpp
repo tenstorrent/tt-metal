@@ -155,12 +155,12 @@ REGISTER_UNARY_OPERATION(frac, FRAC)
 REGISTER_UNARY_OPERATION(round, ROUND)
 REGISTER_UNARY_OPERATION(tiled_prod, TILED_PROD)
 REGISTER_UNARY_OPERATION(hardswish, HARDSWISH)
-REGISTER_UNARY_OPERATION(swish, SWISH)
 REGISTER_UNARY_OPERATION(tanhshrink, TANHSHRINK)
 REGISTER_UNARY_OPERATION(softsign, SOFTSIGN)
 REGISTER_UNARY_OPERATION(cbrt, CBRT)
 REGISTER_UNARY_OPERATION(logsigmoid, LOGSIGMOID)
 REGISTER_UNARY_OPERATION(lgamma, LGAMMA)
+REGISTER_UNARY_OPERATION(swish, SWISH)
 REGISTER_UNARY_OPERATION(hardmish, HARDMISH)
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(softshrink, SOFTSHRINK)
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(hardshrink, HARDSHRINK)
@@ -208,6 +208,8 @@ inline Tensor sigmoid_accurate(
     const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
     return sigmoid(input_tensor, 4, operations::unary::SigmoidMode::ACCURATE, memory_config, optional_output_tensor);
 }
+
+// swish is now a first-class SFPU operation registered via REGISTER_UNARY_OPERATION(swish, SWISH)
 
 // sqrt (avoid name clash with std::sqrt)
 inline Tensor sqrt(

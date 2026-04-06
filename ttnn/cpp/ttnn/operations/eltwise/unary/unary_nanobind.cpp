@@ -1794,12 +1794,6 @@ void py_module(nb::module_& mod) {
         "[supported range -9 to 9]",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
-    bind_unary_operation<"atanh", &ttnn::atanh>(
-        mod,
-        R"doc(\mathrm{{output\_tensor}}_i = \text{atanh}(\mathrm{{input\_tensor}}_i))doc",
-        "[supported range -1 to 1]",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-
     bind_unary_operation<"hardsigmoid", &ttnn::hardsigmoid>(
         mod,
         R"doc(\text{hardsigmoid}(x) = \max(0, \min(1, x / 6 + 0.5)))doc",
@@ -1812,11 +1806,14 @@ void py_module(nb::module_& mod) {
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
+    bind_unary_operation<"atanh", &ttnn::atanh>(
+        mod,
+        R"doc(\mathrm{{output\_tensor}}_i = \text{atanh}(\mathrm{{input\_tensor}}_i))doc",
+        "[supported range -1 to 1]",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+
     bind_unary_operation<"softsign", &ttnn::softsign>(
         mod, R"doc(\text{softsign}(x) = \frac{x}{1 + |x|})doc", "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-
-    bind_unary_operation<"swish", &ttnn::swish>(
-        mod, R"doc(\text{swish}(x) = x \cdot \sigma(x) = \frac{x}{1 + e^{-x}})doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     bind_unary_operation<"lgamma", &ttnn::lgamma>(
         mod,
@@ -1827,6 +1824,12 @@ void py_module(nb::module_& mod) {
     bind_unary_operation<"silu", &ttnn::silu>(
         mod,
         R"doc(\text{silu}(x) = x \times \sigma(x) = \frac{x}{1 + e^{-x}})doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+
+    bind_unary_operation<"swish", &ttnn::swish>(
+        mod,
+        R"doc(\text{swish}(x) = x \times \sigma(x) = \frac{x}{1 + e^{-x}})doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 

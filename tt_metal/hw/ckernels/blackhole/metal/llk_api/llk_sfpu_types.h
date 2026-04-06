@@ -6,12 +6,23 @@
 
 enum class SfpuType {
     unused = 0,
+    cosh,
+    cbrt,
     hardsigmoid,
+    selu,
     hardtanh,
+    softsign,
+    lgamma,
+    rpow,
     hardswish,
     softshrink,
-    swish,
+<<<<<<< HEAD
+<<<<<<< HEAD
     frac,
+=======
+    swish,
+>>>>>>> gen-swish-v2
+=======
     atanh,
-    sinh,
+>>>>>>> gen-atanh-v2
 };
