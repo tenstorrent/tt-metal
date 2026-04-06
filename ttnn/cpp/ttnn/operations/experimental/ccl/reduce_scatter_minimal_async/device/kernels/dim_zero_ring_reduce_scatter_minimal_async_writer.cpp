@@ -8,7 +8,6 @@
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
-#include "cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
@@ -68,16 +67,19 @@ void kernel_main() {
     address_t output_address = get_arg_val<address_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
+    arg_idx++;  // opposite_core_x (unused by dim0 kernel)
+    arg_idx++;  // opposite_core_y (unused by dim0 kernel)
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     size_t batch_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 1 is forward, 0 is backward
     const uint32_t chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
-    arg_idx++;  // start_pages_read_in_row unused by dim0 kernel
-    arg_idx++;  // start_row_offset unused by dim 0 kernel
+    arg_idx++;  // start_pages_read_in_row (unused by dim0 kernel)
+    arg_idx++;  // start_row_offset (unused by dim 0 kernel)
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
+
     const bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
     const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t fabric_mux_x = get_arg_val<uint32_t>(arg_idx++);
@@ -102,53 +104,12 @@ void kernel_main() {
     constexpr uint32_t ct_idx =
         num_ct_args + 2 * (ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args);
 
-#ifdef INTERMEDIATE_IS_SHARDED
-    constexpr uint32_t ct_offset = 7;
-
-    using intermediate_tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(ct_idx),       // Memory layout
-        get_compile_time_arg_val(ct_idx + 1),   // The number of sharding cores
-        get_compile_time_arg_val(ct_idx + 2),   // The page size we offset each write to
-        get_compile_time_arg_val(ct_idx + 3),   // The number of pages in each sharding row not including padding pages
-        get_compile_time_arg_val(ct_idx + 4),   // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(ct_idx + 5),   // pages_per_shard_x
-        get_compile_time_arg_val(ct_idx + 6)>;  // pages_per_shard_y
-
-    const auto [intermediate_mapping_table, intermediate_rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<intermediate_tensor_shard_info>(get_arg_addr(arg_idx));
-    experimental::ShardedAddrGen<intermediate_tensor_shard_info> intermediate_addrgen = {
-        .bank_base_address = intermediate_address, .shard_array = intermediate_mapping_table};
-
-    arg_idx += intermediate_rt_increment;
-
-#else
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx>();
     constexpr uint32_t ct_offset = intermediate_tensor_args.num_compile_time_args();
     auto intermediate_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_address, page_size);
-#endif
 
-#ifdef OUTPUT_IS_SHARDED
-    using output_tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(ct_idx + ct_offset),       // Memory layout
-        get_compile_time_arg_val(ct_idx + ct_offset + 1),   // The number of sharding cores
-        get_compile_time_arg_val(ct_idx + ct_offset + 2),   // The page size we offset each write to
-        get_compile_time_arg_val(ct_idx + ct_offset + 3),   // The number of pages in each sharding row not including
-                                                            // padding pages
-        get_compile_time_arg_val(ct_idx + ct_offset + 4),   // This defines times when contiguous pages can't be
-                                                            // calculated
-        get_compile_time_arg_val(ct_idx + ct_offset + 5),   // pages_per_shard_x
-        get_compile_time_arg_val(ct_idx + ct_offset + 6)>;  // pages_per_shard_y
-
-    const auto [output_mapping_table, output_rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<output_tensor_shard_info>(get_arg_addr(arg_idx));
-    experimental::ShardedAddrGen<output_tensor_shard_info> output_addrgen = {
-        .bank_base_address = output_address, .shard_array = output_mapping_table};
-
-    arg_idx += output_rt_increment;
-#else
     constexpr auto output_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
     auto output_addrgen = TensorAccessor(output_tensor_args, output_address, page_size);
-#endif
 
     auto mux_connection_handle = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
         fabric_mux_x,
@@ -363,7 +324,7 @@ void kernel_main() {
                     size_t l1_read_addr = get_read_ptr(cb_output_id);
                     for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                         uint32_t output_tile_id = output_tile_id_start + tiles_read;
-                        uint64_t local_noc_addr = get_noc_addr(output_tile_id, output_addrgen);
+                        uint64_t local_noc_addr = output_addrgen.get_noc_addr(output_tile_id);
                         noc_async_write(l1_read_addr, local_noc_addr, page_size);
                         l1_read_addr += page_size;
                         tiles_read++;
