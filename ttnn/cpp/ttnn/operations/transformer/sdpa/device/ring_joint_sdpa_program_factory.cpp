@@ -851,10 +851,43 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         }
     };
 
-    // Print chains grouped by head
+    // Helper: format chain as "(x,y)[cnt:ROLE]->(x,y)[cnt:ROLE]"
+    auto format_chain = [](const std::vector<std::tuple<CoreCoord, uint32_t, std::string>>& chain_cores) {
+        std::string parts;
+        for (size_t i = 0; i < chain_cores.size(); ++i) {
+            if (i > 0) {
+                parts += "->";
+            }
+            parts += "(" + std::to_string(std::get<0>(chain_cores[i]).x) + "," +
+                     std::to_string(std::get<0>(chain_cores[i]).y) + ")[" +
+                     std::to_string(std::get<1>(chain_cores[i])) + ":" + std::get<2>(chain_cores[i]) + "]";
+        }
+        return parts;
+    };
+
+    // Helper: compute DRAM ratio as string
+    auto dram_ratio_str = [](uint32_t max_count, uint32_t total_count) {
+        float ratio = total_count > 0 ? static_cast<float>(max_count) / total_count : 1.0f;
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "%.2f", ratio);
+        return std::string(buf);
+    };
+
+    // Helper: get role string from chain flags
+    auto get_role = [](bool is_injector, bool is_sink) {
+        if (is_injector) {
+            return "INJ";
+        }
+        if (is_sink) {
+            return "SNK";
+        }
+        return "RCV";
+    };
+
+    // Print V chains grouped by head
     auto print_chains = [&](const char* pass_name) {
         log_debug(tt::LogOp, "============================================================");
-        log_debug(tt::LogOp, "Chains after: {}", pass_name);
+        log_debug(tt::LogOp, "V Chains after: {}", pass_name);
         log_debug(tt::LogOp, "============================================================");
 
         uint32_t chain_count = 0;
@@ -862,32 +895,19 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         uint32_t total_max_chunks = 0;
 
         for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
-            const auto& segments = head_segments[head_id];
-
-            // Collect participating cores for this head
             std::vector<std::tuple<CoreCoord, uint32_t, std::string>> chain_cores;
             uint32_t total_chunks = 0;
             uint32_t max_chunks = 0;
 
-            for (const auto& seg : segments) {
+            for (const auto& seg : head_segments[head_id]) {
                 const auto& chain = core_chain_info[seg.core_idx];
-                if (!chain.participates) {
+                if (!chain.participates || chain.batch != head_id / NH || chain.head != head_id % NH) {
                     continue;
                 }
-                if (chain.batch != head_id / NH || chain.head != head_id % NH) {
-                    continue;
-                }
-
-                std::string role;
-                if (chain.is_injector) {
-                    role = "INJ";
-                } else if (chain.is_sink) {
-                    role = "SNK";
-                } else {
-                    role = "RCV";
-                }
-
-                chain_cores.push_back({core_work[seg.core_idx].logical_core, chain.q_chunk_count, role});
+                chain_cores.push_back(
+                    {core_work[seg.core_idx].logical_core,
+                     chain.q_chunk_count,
+                     get_role(chain.is_injector, chain.is_sink)});
                 total_chunks += chain.q_chunk_count;
                 max_chunks = std::max(max_chunks, chain.q_chunk_count);
             }
@@ -899,30 +919,67 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             total_all_chunks += total_chunks;
             total_max_chunks += max_chunks;
 
-            // Format: Chain(head=N: (x,y)[cnt:ROLE]->(x,y)[cnt:ROLE], dram_ratio=X.XX)
-            std::string parts;
-            for (size_t i = 0; i < chain_cores.size(); ++i) {
-                if (i > 0) {
-                    parts += "->";
-                }
-                parts += "(" + std::to_string(std::get<0>(chain_cores[i]).x) + "," +
-                         std::to_string(std::get<0>(chain_cores[i]).y) + ")[" +
-                         std::to_string(std::get<1>(chain_cores[i])) + ":" + std::get<2>(chain_cores[i]) + "]";
-            }
-
-            float dram_ratio = total_chunks > 0 ? static_cast<float>(max_chunks) / total_chunks : 1.0f;
-
-            char ratio_buf[16];
-            std::snprintf(ratio_buf, sizeof(ratio_buf), "%.2f", dram_ratio);
-
-            log_debug(tt::LogOp, "Chain(head={}: {}, dram_ratio={})", head_id, parts, ratio_buf);
+            log_debug(
+                tt::LogOp,
+                "V-Chain(head={}: {}, dram_ratio={})",
+                head_id,
+                format_chain(chain_cores),
+                dram_ratio_str(max_chunks, total_chunks));
         }
 
-        float total_dram_ratio = total_all_chunks > 0 ? static_cast<float>(total_max_chunks) / total_all_chunks : 1.0f;
-        char total_ratio_buf[16];
-        std::snprintf(total_ratio_buf, sizeof(total_ratio_buf), "%.2f", total_dram_ratio);
+        log_debug(
+            tt::LogOp,
+            "Total V chains: {}, DRAM ratio: {}",
+            chain_count,
+            dram_ratio_str(total_max_chunks, total_all_chunks));
+    };
 
-        log_debug(tt::LogOp, "Total chains: {}, Total DRAM ratio: {}", chain_count, total_ratio_buf);
+    // Print K chains (batch-level chains for MLA mode)
+    auto print_k_chains = [&]() {
+        log_debug(tt::LogOp, "============================================================");
+        log_debug(tt::LogOp, "K Chains (batch-level, MLA mode)");
+        log_debug(tt::LogOp, "============================================================");
+
+        // Group K chain participants by batch
+        std::map<uint32_t, std::vector<uint32_t>> batch_to_cores;
+        for (uint32_t i = 0; i < core_k_chain_info.size(); ++i) {
+            if (core_k_chain_info[i].participates) {
+                batch_to_cores[core_k_chain_info[i].batch].push_back(i);
+            }
+        }
+
+        uint32_t k_chain_count = 0;
+        for (const auto& [batch, core_indices] : batch_to_cores) {
+            if (core_indices.size() < 2) {
+                continue;
+            }
+            k_chain_count++;
+
+            std::vector<std::tuple<CoreCoord, uint32_t, std::string>> chain_cores;
+            uint32_t total_k_reads = 0;
+            uint32_t max_k_reads = 0;
+
+            for (uint32_t ci : core_indices) {
+                const auto& kc = core_k_chain_info[ci];
+                uint32_t k_reads = core_work[ci].global_q_count;
+                chain_cores.push_back({core_work[ci].logical_core, k_reads, get_role(kc.is_injector, kc.is_sink)});
+                total_k_reads += k_reads;
+                max_k_reads = std::max(max_k_reads, k_reads);
+            }
+
+            log_debug(
+                tt::LogOp,
+                "K-Chain(batch={}: {}, dram_ratio={})",
+                batch,
+                format_chain(chain_cores),
+                dram_ratio_str(max_k_reads, total_k_reads));
+        }
+
+        if (k_chain_count == 0) {
+            log_debug(tt::LogOp, "No K chains (NHK >= NH or insufficient cores)");
+        } else {
+            log_debug(tt::LogOp, "Total K chains: {}", k_chain_count);
+        }
     };
 
     // ===== END CHAIN VISUALIZATION HELPERS =====
@@ -1328,6 +1385,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                 core_indices[injector_idx.value()]);
         }
     }
+
+    print_k_chains();
 
     // Update mcast_enabled compile-time arg now that chain construction is complete
     reader_compile_time_args[sem_args_offset + 3] = (mcast_chains > 0) ? 1 : 0;
