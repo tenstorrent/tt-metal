@@ -37,6 +37,7 @@ def test_torch_dispatch_combine(
     seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_group_size, capacity_factor
 ):
     """Test dispatch→combine round-trip using PyTorch reference implementation."""
+    torch.manual_seed(42)
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
         seq_len_per_chip,
         num_routed_experts,
@@ -55,7 +56,6 @@ def test_torch_dispatch_combine(
         num_routed_experts=num_routed_experts,
         num_experts_per_tok=num_experts_per_tok,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
-        seed=42,
     )
     # Squeeze the dispatch_group dimension since this is a single-rank pure torch test
     weights = weights.squeeze(0)
