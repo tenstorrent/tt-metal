@@ -16,15 +16,44 @@ class TtnnC3k2:
         n_inner = len(conv_pt.m)
 
         if is_bk_enabled:
-            self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1, reshard=reshard, deallocate_activation=True)
-            self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2, reshard=True)
+            self.cv1 = TtnnConv(
+                device,
+                parameter.cv1,
+                conv_pt.cv1,
+                reshard=False,
+                deallocate_activation=True,
+                slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=8),
+            )
+            # cv2: DRAM activations + auto slice (like conv2) — L1 sharded concat + HEIGHT_SHARDED cv2 peaked L1 (tilize/matmul OOM).
+            self.cv2 = TtnnConv(
+                device,
+                parameter.cv2,
+                conv_pt.cv2,
+                reshard=True,
+                deallocate_activation=True,
+                shard_layout=None,
+            )
             self.inner = [TtnnBottleneck(device, parameter[i], conv_pt.m[i]) for i in range(n_inner)]
         else:
-            self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1, reshard=reshard, deallocate_activation=True)
-            self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2, reshard=True)
+            self.cv1 = TtnnConv(
+                device,
+                parameter.cv1,
+                conv_pt.cv1,
+                reshard=reshard,
+                deallocate_activation=True,
+                slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=8),
+            )
+            self.cv2 = TtnnConv(
+                device,
+                parameter.cv2,
+                conv_pt.cv2,
+                reshard=True,
+                deallocate_activation=True,
+                shard_layout=None,
+            )
             self.inner = [TtnnC3K(device, parameter[i], conv_pt.m[i]) for i in range(n_inner)]
 
-    def __call__(self, device, x, use_shard_concat=True, tile_shape=32):
+    def __call__(self, device, x, use_shard_concat=True):
         x = self.cv1(device, x)
         x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -43,13 +72,18 @@ class TtnnC3k2:
                 branches[i] = t
 
         if use_shard_concat:
-            to_interleaved = True if (branches[0].shape[3] < tile_shape) else False
-            x = sharded_concat(branches, to_interleaved=to_interleaved)
+            x = sharded_concat(branches, to_interleaved=False)
         else:
             interleaved = [ttnn.sharded_to_interleaved(t, ttnn.L1_MEMORY_CONFIG) for t in branches]
             x = ttnn.concat(tuple(interleaved), 3, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        x = self.cv2(device, x)
+        # Spill concat to DRAM before freeing branches: deallocating y1/y2/chain first can free storage still aliased by
+        # the sharded concat output and corrupt the tensor, leading to conv2d reshape "different volumes" later.
+        if use_shard_concat:
+            x = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
 
         deallocate_tensors(*branches)
+        x = self.cv2(device, x)
         return x
