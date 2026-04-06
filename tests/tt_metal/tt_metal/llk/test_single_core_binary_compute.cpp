@@ -561,9 +561,6 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileMulFullInit) {
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAddWithDestReuse) {
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "DestReuse test support will be added with DestReuse bring-up";
-    }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -579,14 +576,14 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAddWithDestReuse
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            if (this->arch_ == ARCH::QUASAR) {
+                return;
+            }
         }
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSubWithDestReuse) {
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "DestReuse test support will be added with DestReuse bring-up";
-    }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -602,14 +599,14 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSubWithDestReuse
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            if (this->arch_ == ARCH::QUASAR) {
+                return;
+            }
         }
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMulWithDestReuse) {
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "DestReuse test support will be added with DestReuse bring-up";
-    }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -625,6 +622,9 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMulWithDestReuse
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            if (this->arch_ == ARCH::QUASAR) {
+                return;
+            }
         }
     }
 }
