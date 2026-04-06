@@ -3,6 +3,12 @@ add_library(TTNN::Ops::Eltwise::Unary::Backward ALIAS ttnn_op_eltwise_unary_back
 
 tt_reuse_precompile_headers(ttnn_op_eltwise_unary_backward TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_unary_backward)
+set_target_properties(
+    ttnn_op_eltwise_unary_backward
+    PROPERTIES
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
+)
 
 file(GLOB_RECURSE tanh_bw_kernels tanh_bw/device/kernels/*)
 
