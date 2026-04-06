@@ -17,6 +17,28 @@
 
 namespace compute_kernel_lib {
 
+// HiFi4 fidelity for matmul-based reduce (higher precision than kernel default)
+constexpr ckernel::MathFidelity REDUCE_MATMUL_FIDELITY = ckernel::MathFidelity::HiFi4;
+
+// Matmul wrappers that use REDUCE_MATMUL_FIDELITY instead of MATH_FIDELITY
+ALWI void reduce_mm_init_short(uint32_t in0_cb_id, uint32_t in1_cb_id) {
+    state_configure(in1_cb_id, in0_cb_id);
+    MATH((llk_math_matmul_init<REDUCE_MATMUL_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, 0)));
+    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, 0)));
+}
+
+ALWI void reduce_mm_init_short_with_dt(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t c_in_old_srca) {
+    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(c_in_old_srca, in1_cb_id)));
+    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(c_in_old_srca, in1_cb_id)));
+    reduce_mm_init_short(in0_cb_id, in1_cb_id);
+}
+
+ALWI void reduce_matmul_tiles(
+    uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t in0_tile_index, uint32_t in1_tile_index, uint32_t idst) {
+    UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index)));
+    MATH((llk_math_matmul<REDUCE_MATMUL_FIDELITY, MM_THROTTLE>(idst)));
+}
+
 // =============================================================================
 // ReduceDataFormatReconfigMode Helper Functions
 // =============================================================================
@@ -92,7 +114,7 @@ ALWI void reload_accumulator_if_needed(
             // Use short version since packer config is still valid from initial init
             // Pass accumulator CB as old_cbid to reconfigure data format from accumulator to input CB
             if constexpr (use_matmul) {
-                mm_init_short_with_dt(input_cb, scaler_cb, accumulate.config.cb_accumulator);
+                reduce_mm_init_short_with_dt(input_cb, scaler_cb, accumulate.config.cb_accumulator);
             } else {
                 reduce_init_short_with_dt<reduce_type, reduce_dim>(
                     accumulate.config.cb_accumulator, input_cb, scaler_cb);
@@ -205,7 +227,7 @@ ALWI void reduce(
     }
     // Initialization
     if constexpr (use_matmul) {
-        mm_init_short(input_cb, scaler_cb);
+        reduce_mm_init_short(input_cb, scaler_cb);
     } else {
         reduce_init<reduce_type, reduce_dim>(input_cb, scaler_cb, output_cb);
     }
@@ -335,7 +357,7 @@ ALWI void reduce(
                         // One-at-a-time: wait/pop per tile
                         cb_input.wait_front(onetile);
                         if constexpr (use_matmul) {
-                            matmul_tiles(input_cb, scaler_cb, 0, 0, dst_idx);
+                            reduce_matmul_tiles(input_cb, scaler_cb, 0, 0, dst_idx);
                         } else {
                             reduce_tile<reduce_type, reduce_dim>(input_cb, scaler_cb, 0, 0, dst_idx);
                         }
@@ -343,14 +365,14 @@ ALWI void reduce(
                     } else if constexpr (waits_bulk(input_policy)) {
                         // BulkWaitBulkPop: use indexed access
                         if constexpr (use_matmul) {
-                            matmul_tiles(input_cb, scaler_cb, wt, 0, dst_idx);
+                            reduce_matmul_tiles(input_cb, scaler_cb, wt, 0, dst_idx);
                         } else {
                             reduce_tile<reduce_type, reduce_dim>(
                                 input_cb, scaler_cb, wt, 0, dst_idx);
                         }
                     } else {  // PreloadedPolicy or PersistentPolicy: indexed access
                         if constexpr (use_matmul) {
-                            matmul_tiles(input_cb, scaler_cb, wt + index_offset, 0, dst_idx);
+                            reduce_matmul_tiles(input_cb, scaler_cb, wt + index_offset, 0, dst_idx);
                         } else {
                             reduce_tile<reduce_type, reduce_dim>(
                                 input_cb, scaler_cb, wt + index_offset, 0, dst_idx);
