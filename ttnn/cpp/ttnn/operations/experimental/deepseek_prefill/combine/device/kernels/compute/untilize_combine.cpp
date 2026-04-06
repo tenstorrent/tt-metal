@@ -16,16 +16,16 @@
 
 // Compile-time args:
 //   0: cb_untilize_out_id - CB for reader->compute messages (sentinel-terminated)
-//   1: cb_compute_ack_id  - CB for compute->reader ack signal
-//   2: cb_in_id           - CB for untilize input (c_0, data already present)
-//   3: cb_untilized_id    - CB for untilize output (c_19)
-//   4: hidden_size        - hidden dimension (e.g., 7168)
+//   1: cb_in_id           - CB for untilize input (c_0, data already present)
+//   2: cb_untilized_id    - CB for untilize output (c_19), also serves as compute→reader ack
+//   3: hidden_size        - hidden dimension (e.g., 7168)
+//   4: read_batch_size    - number of rows per untilize batch (e.g., 32)
 void kernel_main() {
     constexpr uint32_t cb_untilize_out_id = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_compute_ack_id = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_in_id = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_untilized_id = get_compile_time_arg_val(3);
-    constexpr uint32_t hidden_size = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_in_id = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_untilized_id = get_compile_time_arg_val(2);
+    constexpr uint32_t hidden_size = get_compile_time_arg_val(3);
+    constexpr uint32_t read_batch_size = get_compile_time_arg_val(4);
 
     // 7168 / 32 = 224 tiles per tile-row, 8 tiles per DEST section = 28 blocks
     constexpr uint32_t block_ct_dim = 8;
@@ -37,6 +37,7 @@ void kernel_main() {
 
     while (true) {
         // Wait for reader signal (sentinel check)
+        cb_reserve_back(cb_untilized_id, read_batch_size);
         cb_wait_front(cb_untilize_out_id, 1);
         uint32_t val = read_tile_value(cb_untilize_out_id, 0, 0);
         cb_pop_front(cb_untilize_out_id, 1);
@@ -67,8 +68,8 @@ void kernel_main() {
         }
 
         // Signal reader that we processed this page via ack CB
-        cb_reserve_back(cb_compute_ack_id, 1);
-        cb_push_back(cb_compute_ack_id, 1);
+        // cb_reserve_back(cb_compute_ack_id, 1);
+        cb_push_back(cb_untilized_id, read_batch_size);  // allow next batch to proceed
     }
 
     ckernel::pack_untilize_uninit(cb_untilized_id);

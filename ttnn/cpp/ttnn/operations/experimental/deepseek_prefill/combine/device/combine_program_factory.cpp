@@ -186,15 +186,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         /*buffering_factor=*/1,
         /*cb_id=*/tt::CBIndex::c_17,
         "untilize_output");
-    // c_18: 1-page CB for compute→reader ack signal
-    {
-        uint32_t ack_page_size = l1_alignment;
-        tt::tt_metal::CircularBufferConfig ack_cb_config =
-            tt::tt_metal::CircularBufferConfig(ack_page_size, {{tt::CBIndex::c_18, tt::DataFormat::UInt8}})
-                .set_page_size(tt::CBIndex::c_18, ack_page_size);
-        tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, ack_cb_config);
-    }
-    // c_19: 1-page CB for untilized output from compute (same page size as dispatched_buffer)
+    // c_19: untilized output from compute (push_back serves as compute→reader ack)
     detail::create_tensor_cb(
         program,
         sender_core_grid,
@@ -420,7 +412,6 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         reader_compile_time_args.push_back(num_zero_init_cores);                      // num_idle_cores
     }
     reader_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_17));  // cb_untilize_out_id
-    reader_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_18));  // cb_compute_ack_id
     reader_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_19));  // cb_untilized_id
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -452,10 +443,10 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         tt::tt_metal::ComputeConfig{
             .compile_args = {
                 static_cast<uint32_t>(tt::CBIndex::c_17),  // cb_untilize_out_id
-                static_cast<uint32_t>(tt::CBIndex::c_18),  // cb_compute_ack_id
                 static_cast<uint32_t>(tt::CBIndex::c_0),   // cb_in_id (untilize input)
-                static_cast<uint32_t>(tt::CBIndex::c_19),  // cb_untilized_id (untilize output)
+                static_cast<uint32_t>(tt::CBIndex::c_19),  // cb_untilized_id (untilize output + ack)
                 static_cast<uint32_t>(hidden_size),        // hidden_size
+                static_cast<uint32_t>(read_batch_size),    // read_batch_size
             }});
     // Pre-compute NOC coordinates for all sender cores (for inter-core barrier signaling)
     std::vector<std::pair<uint32_t, uint32_t>> sender_noc_coords;
