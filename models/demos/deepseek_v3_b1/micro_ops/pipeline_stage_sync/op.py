@@ -83,7 +83,7 @@ class PipelineStageSync:
             mesh_device: mesh_device micro op operates on
             src_device_mesh_coord: src mesh coordinate
             signalling_core: core that signalling logic is executed on
-            run_signalling_kernel_on_ncrisc: whether to run the signalling kernel on ncrsic or brisc
+            run_signalling_kernel_on_ncrisc: whether to run the signalling kernel on ncrisc or brisc
             dst_device_mesh_coord: dst mesh coordinate
             stalling_core: core that stalling logic is executed on
             run_stalling_kernel_on_ncrisc: whether to run the stalling kernel on ncrisc or brisc
