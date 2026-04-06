@@ -60,6 +60,10 @@ from models.experimental.tt_symbiote.modules.linear import (
     TTNNQwen3OmniVisionMLP,
 )
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm, TTNNQwenLayerNorm
+from models.experimental.tt_symbiote.modules.qwen_omni_lm_head import (
+    TTNNQwenOmniThinkerLmHead,
+    replace_thinker_lm_head_with_ttnn,
+)
 from models.experimental.tt_symbiote.modules.qwen_omni_rotary import (
     TTNNQwen3OmniMoeRotaryEmbedding,
     TTNNQwen3OmniMoeTalkerRotaryEmbedding,
@@ -495,6 +499,31 @@ pytestmark = [
 ]
 
 
+def test_qwen_omni_thinker_lm_head_pcc(mesh_device, full_omni_model_for_pcc):
+    _require_symbiote_run_mode()
+    m = full_omni_model_for_pcc
+    torch_lm = m.thinker.lm_head
+    tt_lm = TTNNQwenOmniThinkerLmHead.from_torch(torch_lm)
+    set_device(tt_lm, mesh_device)
+    tt_lm.preprocess_weights()
+    tt_lm.move_weights_to_device()
+
+    text_config = m.config.thinker_config.text_config
+    x = torch.randn(1, 8, text_config.hidden_size, dtype=torch.bfloat16)
+    with torch.no_grad():
+        torch_out = torch_lm(x)
+    tt_x = ttnn.from_torch(
+        x,
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=_replicate_mesh_mapper(mesh_device),
+    )
+    tt_ret = tt_lm(tt_x)
+    passing, pcc = _comp_pcc_in_test(torch_out, tt_ret, mesh_device)
+    assert passing, f"Thinker lm_head PCC too low: {pcc}"
+
+
 def test_qwen_omni_thinker_attention_pcc(mesh_device, full_omni_model_for_pcc):
     _require_symbiote_run_mode()
     m = full_omni_model_for_pcc
@@ -775,8 +804,11 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
     _register_code_predictor_nn_to_ttnn(model)
     _register_code2wav_nn_to_ttnn(model)
     _restore_torch_rmsnorm_in_code_predictor(model)
+    replace_thinker_lm_head_with_ttnn(model.thinker)
     set_device(model, mesh_device)
     _patch_thinker_talker_device_dtype(model)
+
+    assert isinstance(model.thinker.lm_head, TTNNQwenOmniThinkerLmHead)
 
     n_thinker = len(model.thinker.model.layers)
     for i, layer in enumerate(model.thinker.model.layers):
@@ -878,6 +910,7 @@ def test_qwen_omni(mesh_device):
     _register_code_predictor_nn_to_ttnn(model)
     _register_code2wav_nn_to_ttnn(model)
     _restore_torch_rmsnorm_in_code_predictor(model)
+    replace_thinker_lm_head_with_ttnn(model.thinker)
 
     # Set device for all TTNN modules
     print(f"Setting device for TTNN modules (mesh: {mesh_device.get_num_devices()} device(s))...")
