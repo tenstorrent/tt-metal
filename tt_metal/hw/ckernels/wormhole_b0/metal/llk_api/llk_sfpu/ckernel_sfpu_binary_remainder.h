@@ -167,11 +167,8 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     sfpi::vFloat a = in0;
     sfpi::vFloat b = in1;
 
-    // Compute reciprocal 1/b
-    sfpi::vFloat recip = _sfpu_reciprocal_<2>(b);
-
     // Compute a/b = a * (1/b)
-    sfpi::vFloat div_result = a * recip;
+    sfpi::vFloat div_result = a * _sfpu_reciprocal_<2>(b);
 
     // Compute floor(a/b)
     // Input in LReg0, output in LReg1. LReg2/LReg3 are clobbered by _floor_body_(),
@@ -192,6 +189,20 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
         sfpi::vInt signs = sfpi::reinterpret<sfpi::vUInt>(result) ^ sfpi::reinterpret<sfpi::vUInt>(b);
         v_and(signs < 0);
         result += b;
+    }
+    v_endif;
+
+    // Magnitude correction: reciprocal imprecision can cause floor() to be greater than the true floor value.
+    v_if(b > sfpi::vFloat(0.0f) && a > sfpi::vFloat(0.0f)) {
+        sfpi::vFloat diff = result - b;
+        v_if(diff >= sfpi::vFloat(0.0f)) { result = diff; }
+        v_endif;
+    }
+    v_endif;
+    v_if(b < sfpi::vFloat(0.0f) && a < sfpi::vFloat(0.0f)) {
+        sfpi::vFloat diff = result - b;
+        v_if(diff <= sfpi::vFloat(0.0f)) { result = diff; }
+        v_endif;
     }
     v_endif;
 

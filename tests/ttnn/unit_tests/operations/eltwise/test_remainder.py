@@ -53,11 +53,7 @@ def test_broken_remainder1(input_shapes, device):
     assert torch.allclose(result, golden, atol=0.01, rtol=0)
 
 
-@pytest.mark.parametrize(
-    "input_shapes",
-    ((torch.Size([1, 1, 32, 32])),),
-)
-def test_optional_output_tensor_remainder(input_shapes, device):
+def test_optional_output_tensor_remainder(device):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.tensor([[5.0, 7.0, -5.0, -7.0, 3.5, 10.0, 1.5, -1.5, 9.0, 15.0]], dtype=torch.bfloat16)
@@ -69,7 +65,8 @@ def test_optional_output_tensor_remainder(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.remainder)
     torch_golden = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
-    optional_output_tensor = ttnn.from_torch(torch_golden, layout=ttnn.TILE_LAYOUT, device=device)
+    torch_opt_output_tensor = torch.zeros_like(torch_golden)
+    optional_output_tensor = ttnn.from_torch(torch_opt_output_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
     ttnn.remainder(
         input_tensor_a,

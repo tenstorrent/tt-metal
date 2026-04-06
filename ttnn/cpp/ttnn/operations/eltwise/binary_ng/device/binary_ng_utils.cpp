@@ -425,7 +425,9 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case DIV_FLOOR: return {"div_int32_floor_tile_init();", "div_int32_floor_tile"};
         case DIV_TRUNC: return {"div_int32_trunc_tile_init();", "div_int32_trunc_tile"};
         case REMAINDER:
-            if (dtype == DataType::INT32) {
+            if (dtype == DataType::UINT32 || dtype == DataType::UINT16 || dtype == DataType::UINT8) {
+                TT_THROW("Unsupported data type for remainder {}", dtype);
+            } else if (dtype == DataType::INT32) {
                 return {"remainder_int32_tile_init();", "remainder_int32_tile"};
             } else {
                 return {"remainder_binary_tile_init();", "remainder_binary_tile"};

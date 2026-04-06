@@ -43,8 +43,8 @@ ALWI void remainder_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_remai
 // clang-format off
 /**
  * Performs an elementwise remainder operation with the two float inputs: y = remainder(x0,x1)
- * Compute integer value r such that x0 % x1 = r. Output is a floating point that has been rounded to the nearest integer value
- * If x0 < 0, then r will be negative calculated as 'r = -( |r| % x1 )'
+ * Computes y = x0 - x1 * floor(x0 / x1).
+ * Sign correction: remainder must match the sign of x1; if (y ≠ 0) and sign(y) ≠ sign(x1) then y += x1.
  *
  * Output overwrites odst in DST.
  *
