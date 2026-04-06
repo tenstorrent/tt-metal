@@ -14,7 +14,6 @@ from models.tt_dit.models.vae.vae_wan2_1 import (
 from models.experimental.lingbot_va.tt.residual_block import WanResidualBlock
 from models.experimental.lingbot_va.tt.residual_down_block import WanResidualDownBlock
 from models.tt_dit.layers.normalization import RMSNorm
-from models.tt_dit.utils.conv3d import count_convs
 
 CACHE_T = 2
 _ALIGNMENT = 32
@@ -226,8 +225,10 @@ class WanVAEEncoder(Module):
         if not _disable_cap:
             _cap_conv3d_blocking(self, max_c_in_block=max_c_in_block)
         self._patch_wormhole_math_for_encoder_parity()
-        # One feat_cache slot per WanCausalConv3d call order in forward (must match streaming wrapper list size).
-        self.num_causal_conv_slots = count_convs(self)
+        # One feat_cache slot per streaming step that uses feat_idx (WanCausalConv3d only). Do not use
+        # count_convs(): WanResample also has WanConv2d with conv_config, but those convs do not use
+        # feat_cache — must match AutoencoderKLWan._cached_conv_counts["encoder"] on the torch VAE.
+        self.num_causal_conv_slots = sum(1 for m in _iter_tt_module_submodules(self) if isinstance(m, WanCausalConv3d))
 
     def _patch_wormhole_math_for_encoder_parity(self) -> None:
         if self.mesh_device is None:
