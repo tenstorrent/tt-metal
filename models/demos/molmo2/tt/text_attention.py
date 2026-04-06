@@ -437,7 +437,6 @@ class TextAttention(LightweightModule):
         kv_cache: Tuple[ttnn.Tensor, ttnn.Tensor],
         current_pos: ttnn.Tensor,
         page_table: Optional[ttnn.Tensor] = None,
-        page_table: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
         Decode-mode forward pass with KV cache update and tensor parallelism.
