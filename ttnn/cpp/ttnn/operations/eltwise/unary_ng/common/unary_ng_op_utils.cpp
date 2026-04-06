@@ -18,10 +18,6 @@ namespace {
 
 std::string get_macro_definition(UnaryOpType op_type) {
     switch (op_type) {
-        case UnaryOpType::COSH: return "SFPU_OP_COSH_INCLUDE";
-        case UnaryOpType::CBRT: return "SFPU_OP_CBRT_INCLUDE";
-        case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
-        case UnaryOpType::HARDSWISH: return "SFPU_OP_HARDSWISH_INCLUDE";
         case UnaryOpType::FRAC: return "SFPU_OP_FRAC_INCLUDE";
         case UnaryOpType::SWISH: return "SFPU_OP_SWISH_INCLUDE";
         case UnaryOpType::SINH: return "SFPU_OP_SINH_INCLUDE";
@@ -89,12 +85,6 @@ std::pair<std::string, std::string> get_op_init_and_func(
         case UnaryOpType::FLOOR: return {"rounding_op_tile_init();", fmt::format("floor_tile({});", idst)};
         case UnaryOpType::CEIL: return {"rounding_op_tile_init();", fmt::format("ceil_tile({});", idst)};
         case UnaryOpType::TRUNC: return {"rounding_op_tile_init();", fmt::format("trunc_tile({});", idst)};
-        case UnaryOpType::HARDSIGMOID: return {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
-        case UnaryOpType::HARDSWISH: return {"hardswish_tile_init();", fmt::format("hardswish_tile({});", idst)};
-        case UnaryOpType::LGAMMA: return {"lgamma_tile_init();", fmt::format("lgamma_tile({});", idst)};
-        case UnaryOpType::SOFTSIGN: return {"softsign_tile_init();", fmt::format("softsign_tile({});", idst)};
-        case UnaryOpType::CBRT: return {"cbrt_tile_init();", fmt::format("cbrt_tile({});", idst)};
-        case UnaryOpType::COSH: return {"cosh_tile_init();", fmt::format("cosh_tile({});", idst)};
         case UnaryOpType::FRAC: return {"frac_tile_init();", fmt::format("frac_tile({});", idst)};
         case UnaryOpType::SWISH: return {"swish_tile_init();", fmt::format("swish_tile({});", idst)};
         case UnaryOpType::SINH: return {"sinh_tile_init();", fmt::format("sinh_tile({});", idst)};

@@ -13,7 +13,7 @@
 [submodule "tt_metal/third_party/tt_llk"]
 	path = tt_metal/third_party/tt_llk
 	url = https://github.com/tenstorrent/tt-llk.git
-	branch = vignjatijevic/sfpu-agent-codegen_kernel_bench_v2
+	branch = vignjatijevic/sfpu-agent-codegen_kernel_bench_v3
 [submodule "tt_metal/third_party/tt_ops_code_gen"]
 	path = tt_metal/third_party/tt_ops_code_gen
 	url = https://github.com/tenstorrent/tt_ops_code_gen.git
