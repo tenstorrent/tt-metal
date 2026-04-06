@@ -36,7 +36,7 @@ for idx in "${!SRC_FILES[@]}"; do
     OUT_IMPL_FILE="${OUT_DIR}/${BASENAME}_impl.hpp"
 
     cat > "${OUT_INTF_FILE}" <<EOF
-// SPDX-FileCopyrightText: © ${YEAR} Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © ${YEAR} Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -50,7 +50,7 @@ for idx in "${!SRC_FILES[@]}"; do
 EOF
 
     cat > "${OUT_IMPL_FILE}" <<EOF
-// SPDX-FileCopyrightText: © ${YEAR} Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © ${YEAR} Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
