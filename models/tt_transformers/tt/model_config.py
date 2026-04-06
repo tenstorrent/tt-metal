@@ -1111,6 +1111,8 @@ class ModelArgs:
                 if seq_len > 1024:
                     to_warmup_seq_lens = to_warmup_seq_lens[: to_warmup_seq_lens.index(seq_len)]
                     break
+        if self.base_model_name == "Mistral-Small-3.1-24B":
+            to_warmup_seq_lens = [s for s in to_warmup_seq_lens if s <= self.max_seq_len]
         return to_warmup_seq_lens
 
     # =========================================================================
