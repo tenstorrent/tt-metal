@@ -6,181 +6,28 @@
 Test for TtPrefillBlock — verifies composition of norm → MLA → residual → norm → FFN/MoE → residual.
 
 Validates output shapes and PCC against torch reference.
+
+Uses HF DeepseekV3Model layer as the reference: creates a model with random weights,
+extracts those weights into our TT state_dict format, and compares forward passes.
 """
 
 import pytest
 import torch
-import torch.nn.functional as F
 from loguru import logger
-from transformers.cache_utils import DynamicCache
 
 import ttnn
 from models.common.utility_functions import profiler
-from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
-from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
-    create_fabric_router_config,
-    create_gate_weights,
-    create_shared_expert_weights,
-    create_torch_expert_weights,
-)
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block import TtPrefillBlock
+from models.demos.deepseek_v3_d_p.utils.transformer_helpers import create_hf_model, extract_layer_state_dict
 from tests.ttnn.utils_for_testing import comp_pcc
 
 PCC_THRESHOLD_DENSE = 0.999
 PCC_THRESHOLD_MOE_GATE_HOST = 0.993
 PCC_THRESHOLD_MOE_GATE_DEVICE = 0.980
-
-
-def _create_mla_random_weights(config):
-    """Generate random MLA weights matching test_mla.py pattern."""
-    torch.manual_seed(42)
-    std = config.initializer_range
-    return {
-        "q_a_proj.weight": (torch.randn(config.q_lora_rank, config.hidden_size) * std).to(torch.bfloat16),
-        "q_a_layernorm.weight": torch.ones(config.q_lora_rank, dtype=torch.bfloat16),
-        "q_b_proj.weight": (
-            torch.randn(
-                config.num_attention_heads * (config.qk_nope_head_dim + config.qk_rope_head_dim),
-                config.q_lora_rank,
-            )
-            * std
-        ).to(torch.bfloat16),
-        "kv_a_proj_with_mqa.weight": (
-            torch.randn(
-                config.kv_lora_rank + config.qk_rope_head_dim,
-                config.hidden_size,
-            )
-            * std
-        ).to(torch.bfloat16),
-        "kv_a_layernorm.weight": torch.ones(config.kv_lora_rank, dtype=torch.bfloat16),
-        "kv_b_proj.weight": (
-            torch.randn(
-                config.num_attention_heads * (config.qk_nope_head_dim + config.v_head_dim),
-                config.kv_lora_rank,
-            )
-            * std
-        ).to(torch.bfloat16),
-        "o_proj.weight": (
-            torch.randn(
-                config.hidden_size,
-                config.num_attention_heads * config.v_head_dim,
-            )
-            * std
-        ).to(torch.bfloat16),
-    }
-
-
-def _build_state_dict(config, layer_type):
-    """Build a state_dict for TtPrefillBlock with random weights."""
-    emb_dim = config.hidden_size
-
-    state_dict = {
-        "attn_norm_weight": torch.ones(emb_dim, dtype=torch.bfloat16),
-        "mla_weights": _create_mla_random_weights(config),
-        "ffn_norm_weight": torch.ones(emb_dim, dtype=torch.bfloat16),
-    }
-
-    if layer_type == "moe":
-        state_dict["gate_weights"] = create_gate_weights(DeepSeekV3Config.NUM_ROUTED_EXPERTS, emb_dim)
-        state_dict["routed_expert_weights"] = create_torch_expert_weights(
-            DeepSeekV3Config.NUM_ROUTED_EXPERTS, emb_dim, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE
-        )
-        state_dict["shared_expert_weights"] = create_shared_expert_weights(
-            emb_dim, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE
-        )
-    else:
-        state_dict["ffn_weights"] = create_shared_expert_weights(emb_dim, DeepSeekV3Config.INTERMEDIATE_SIZE)
-
-    return state_dict
-
-
-# --- Torch reference helpers ---
-
-
-def _torch_rms_norm(x, weight, eps=1e-6):
-    """RMSNorm: x / sqrt(mean(x^2) + eps) * weight."""
-    variance = x.float().pow(2).mean(-1, keepdim=True)
-    return (x.float() * torch.rsqrt(variance + eps) * weight.float()).to(x.dtype)
-
-
-def _torch_dense_ffn(x, weights):
-    """SwiGLU FFN: silu(x @ gate.T) * (x @ up.T) @ down.T."""
-    gate = F.silu(x @ weights["gate_proj"].to(x.dtype).T)
-    up = x @ weights["up_proj"].to(x.dtype).T
-    return (gate * up) @ weights["down_proj"].to(x.dtype).T
-
-
-def _create_hf_moe_reference(config, state_dict):
-    """Create HuggingFace DeepseekV3MoE loaded with our random weights."""
-    moe = DeepseekV3MoE(config)
-
-    # Load gate weights
-    moe.gate.weight.data.copy_(state_dict["gate_weights"]["weight"])
-    moe.gate.e_score_correction_bias.data.copy_(state_dict["gate_weights"]["e_score_correction_bias"])
-
-    # Load routed expert weights (HF format: nn.Linear stores weight as [out, in])
-    for i, expert_w in enumerate(state_dict["routed_expert_weights"]):
-        moe.experts[i].gate_proj.weight.data.copy_(expert_w["gate_proj"])
-        moe.experts[i].up_proj.weight.data.copy_(expert_w["up_proj"])
-        moe.experts[i].down_proj.weight.data.copy_(expert_w["down_proj"])
-
-    # Load shared expert weights
-    shared_w = state_dict["shared_expert_weights"]
-    moe.shared_experts.gate_proj.weight.data.copy_(shared_w["gate_proj"])
-    moe.shared_experts.up_proj.weight.data.copy_(shared_w["up_proj"])
-    moe.shared_experts.down_proj.weight.data.copy_(shared_w["down_proj"])
-
-    return moe.eval().to(torch.bfloat16)
-
-
-def _torch_reference_block(x, config, state_dict, layer_type, layer_idx, isl_total):
-    """
-    Torch reference for a single transformer block.
-
-    Args:
-        x: [batch, isl_total, emb_dim] bfloat16
-    Returns:
-        x: [batch, isl_total, emb_dim] bfloat16
-    """
-    batch = x.shape[0]
-
-    # --- Attention ---
-    attn_norm_out = _torch_rms_norm(x, state_dict["attn_norm_weight"], config.rms_norm_eps)
-
-    mla_ref = create_mla_reference(
-        config=config,
-        state_dict={"model.layers.0.self_attn." + k: v for k, v in state_dict["mla_weights"].items()},
-        layer_idx=layer_idx,
-        module_path="model.layers.0.self_attn",
-    )
-    mla_ref = mla_ref.eval().to(torch.bfloat16)
-
-    position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0).expand(batch, isl_total)
-    with torch.no_grad():
-        mla_out, _, _ = mla_ref(
-            hidden_states=attn_norm_out,
-            position_ids=position_ids,
-            past_key_value=DynamicCache(),
-            use_cache=True,
-        )
-    x = x + mla_out
-
-    # --- FFN ---
-    ffn_norm_out = _torch_rms_norm(x, state_dict["ffn_norm_weight"], config.rms_norm_eps)
-
-    if layer_type == "dense":
-        ffn_out = _torch_dense_ffn(ffn_norm_out, state_dict["ffn_weights"])
-    else:
-        moe_ref = _create_hf_moe_reference(config, state_dict)
-        with torch.no_grad():
-            ffn_out = moe_ref(ffn_norm_out)
-
-    x = x + ffn_out
-    return x
 
 
 @pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
@@ -245,9 +92,13 @@ def test_prefill_block(
         f"layer_type={layer_type}, layer_idx={layer_idx}, gate_fallback_mode={gate_fallback_mode}"
     )
 
-    # --- Build state dict ---
+    # --- Build HF reference model and extract weights ---
     profiler.start("weights_creation")
-    state_dict = _build_state_dict(config, layer_type)
+    torch.manual_seed(42)
+    num_layers = layer_idx + 1
+    hf_model = create_hf_model(config, num_layers)
+    hf_sd = hf_model.state_dict()
+    state_dict = extract_layer_state_dict(hf_sd, layer_idx, hf_model.layers[layer_idx])
     profiler.end("weights_creation")
 
     # --- Create input ---
@@ -259,7 +110,13 @@ def test_prefill_block(
     if pcc_validation:
         profiler.start("torch_reference")
         logger.info("Running torch reference forward...")
-        torch_output = _torch_reference_block(torch_input, config, state_dict, layer_type, layer_idx, isl_total)
+        position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
+        attention_mask = torch.zeros(1, 1, isl_total, isl_total, dtype=torch.bfloat16)
+        with torch.no_grad():
+            layer_out = hf_model.layers[layer_idx](
+                torch_input, attention_mask=attention_mask, position_ids=position_ids
+            )
+            torch_output = layer_out[0]
         logger.info(f"Torch reference output shape: {torch_output.shape}")
         profiler.end("torch_reference")
 
