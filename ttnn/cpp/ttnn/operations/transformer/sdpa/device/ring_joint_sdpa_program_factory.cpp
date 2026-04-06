@@ -784,6 +784,136 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const uint32_t total_heads = B * NH;
     std::vector<std::vector<HeadSegmentRef>> head_segments(total_heads);
 
+    // ===== BEGIN CHAIN VISUALIZATION HELPERS =====
+
+    // Core zigzag logic from kernel's linear_to_zigzag (q_chunk_remapping.hpp)
+    // Operates on within-head indices since CoreHeadWork already tracks per-head
+    auto linear_to_zigzag = [](uint32_t pos_in_head, uint32_t num_q_chunks) -> uint32_t {
+        if (pos_in_head % 2 == 0) {
+            return pos_in_head / 2;
+        } else {
+            return num_q_chunks - 1 - (pos_in_head / 2);
+        }
+    };
+
+    // Print per-core workload with zigzag indices
+    auto print_per_core_work = [&]() {
+        log_debug(tt::LogOp, "============================================================");
+        log_debug(tt::LogOp, "Per-Core Workload (zigzag indices)");
+        log_debug(tt::LogOp, "============================================================");
+
+        const uint32_t half = num_q_chunks / 2;
+
+        for (size_t i = 0; i < core_work.size(); ++i) {
+            const auto& work = core_work[i];
+            if (work.global_q_count == 0) {
+                continue;
+            }
+
+            std::string line = "Core " + std::to_string(i) + " (" + std::to_string(work.logical_core.x) + "," +
+                               std::to_string(work.logical_core.y) + "): ";
+
+            for (const auto& hw : work.head_work) {
+                uint32_t light_cnt = 0, heavy_cnt = 0;
+                std::string indices_str;
+
+                for (uint32_t j = 0; j < hw.q_chunk_count; ++j) {
+                    uint32_t lin_idx = hw.q_chunk_start + j;
+                    uint32_t zz_idx = enable_zigzag_balancing ? linear_to_zigzag(lin_idx, num_q_chunks) : lin_idx;
+                    if (!indices_str.empty()) {
+                        indices_str += ",";
+                    }
+                    indices_str += std::to_string(zz_idx);
+                    if (zz_idx < half) {
+                        light_cnt++;
+                    } else {
+                        heavy_cnt++;
+                    }
+                }
+
+                line += "H:" + std::to_string(hw.head) + "-Q:[" + indices_str + "]{L" + std::to_string(light_cnt) +
+                        "+H" + std::to_string(heavy_cnt) + "} ";
+            }
+            log_debug(tt::LogOp, "{}", line);
+        }
+    };
+
+    // Print chains grouped by head
+    auto print_chains = [&](const char* pass_name) {
+        log_debug(tt::LogOp, "============================================================");
+        log_debug(tt::LogOp, "Chains after: {}", pass_name);
+        log_debug(tt::LogOp, "============================================================");
+
+        uint32_t chain_count = 0;
+        uint32_t total_all_chunks = 0;
+        uint32_t total_max_chunks = 0;
+
+        for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
+            const auto& segments = head_segments[head_id];
+
+            // Collect participating cores for this head
+            std::vector<std::tuple<CoreCoord, uint32_t, std::string>> chain_cores;
+            uint32_t total_chunks = 0;
+            uint32_t max_chunks = 0;
+
+            for (const auto& seg : segments) {
+                const auto& chain = core_chain_info[seg.core_idx];
+                if (!chain.participates) {
+                    continue;
+                }
+                if (chain.batch != head_id / NH || chain.head != head_id % NH) {
+                    continue;
+                }
+
+                std::string role;
+                if (chain.is_injector) {
+                    role = "INJ";
+                } else if (chain.is_sink) {
+                    role = "SNK";
+                } else {
+                    role = "RCV";
+                }
+
+                chain_cores.push_back({core_work[seg.core_idx].logical_core, chain.q_chunk_count, role});
+                total_chunks += chain.q_chunk_count;
+                max_chunks = std::max(max_chunks, chain.q_chunk_count);
+            }
+
+            if (chain_cores.size() < 2) {
+                continue;
+            }
+            chain_count++;
+            total_all_chunks += total_chunks;
+            total_max_chunks += max_chunks;
+
+            // Format: Chain(head=N: (x,y)[cnt:ROLE]->(x,y)[cnt:ROLE], dram_ratio=X.XX)
+            std::string parts;
+            for (size_t i = 0; i < chain_cores.size(); ++i) {
+                if (i > 0) {
+                    parts += "->";
+                }
+                parts += "(" + std::to_string(std::get<0>(chain_cores[i]).x) + "," +
+                         std::to_string(std::get<0>(chain_cores[i]).y) + ")[" +
+                         std::to_string(std::get<1>(chain_cores[i])) + ":" + std::get<2>(chain_cores[i]) + "]";
+            }
+
+            float dram_ratio = total_chunks > 0 ? static_cast<float>(max_chunks) / total_chunks : 1.0f;
+
+            char ratio_buf[16];
+            std::snprintf(ratio_buf, sizeof(ratio_buf), "%.2f", dram_ratio);
+
+            log_debug(tt::LogOp, "Chain(head={}: {}, dram_ratio={})", head_id, parts, ratio_buf);
+        }
+
+        float total_dram_ratio = total_all_chunks > 0 ? static_cast<float>(total_max_chunks) / total_all_chunks : 1.0f;
+        char total_ratio_buf[16];
+        std::snprintf(total_ratio_buf, sizeof(total_ratio_buf), "%.2f", total_dram_ratio);
+
+        log_debug(tt::LogOp, "Total chains: {}, Total DRAM ratio: {}", chain_count, total_ratio_buf);
+    };
+
+    // ===== END CHAIN VISUALIZATION HELPERS =====
+
     // Evenly distribute flat global q chunks across cores
     const uint32_t total_q_chunks = B * NH * num_q_chunks;
 
@@ -857,6 +987,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         next_global_chunk += chunk_count;
     }
 
+    print_per_core_work();
+
     // Construct chains: for each head that spans >= 2 cores, pick first core
     // with single head segment as injector. Linear forward traversal only —
     // no wrap-around (wrapping back would pull in straddling cores whose
@@ -918,6 +1050,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             }
         }
     }
+
+    print_chains("Initial Chains");
 
     // Third pass: Check multicast eligibility and configure mcast for eligible chains
     uint32_t mcast_chains = 0;
@@ -1105,6 +1239,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             mcast_chains,
             static_cast<uint32_t>(candidates.size()));
     }
+
+    print_chains("Mcast Configuration");
 
     // Build K chains: one chain per batch when NHK < NH (MLA case)
     // K is shared across all heads, so we build a single chain spanning all cores per batch
