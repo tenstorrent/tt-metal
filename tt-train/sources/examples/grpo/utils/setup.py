@@ -9,6 +9,7 @@ from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_saf
 from .llama_overrides import LlamaCompositeKV
 import logging
 import os
+import ttml
 
 
 @dataclass
