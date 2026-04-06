@@ -7,14 +7,50 @@ PipelineStageSync Operation using ttnn.generic_op
 
 This module implements a multi-device synchronization on an arbitrary mesh.
 
-Stalling device waits until a signal from the signalling device.
-
-Stalling device and signalling device can be the same, as long as the stalling core and signalling core are not the same.
 """
 
 
 import ttnn
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreCompileTimeDescriptor, UnifiedKernelDescriptor
+
+
+def build_signalling_path(src_device_mesh_coord, dst_device_mesh_coord, mesh_rows, mesh_cols):
+    src_row, src_col = src_device_mesh_coord[0], src_device_mesh_coord[1]
+    dst_row, dst_col = dst_device_mesh_coord[0], dst_device_mesh_coord[1]
+
+    path = [ttnn.MeshCoordinate(src_row, src_col)]
+    current_row, current_col = src_row, src_col
+
+    # traverse across rows first (wrap around present)
+    positive_row_distance = (dst_row - src_row) % mesh_rows
+    negative_row_distance = (src_row - dst_row) % mesh_rows
+
+    if positive_row_distance <= negative_row_distance:
+        row_step = 1
+        row_num_hops = positive_row_distance
+    else:
+        row_step = -1
+        row_num_hops = negative_row_distance
+
+    for _ in range(row_num_hops):
+        current_row = (current_row + row_step) % mesh_rows
+        path.append(ttnn.MeshCoordinate(current_row, current_col))
+
+    # traverse across cols second (wrap around not present)
+    while current_col != dst_col:
+        current_col += 1 if dst_col > current_col else -1
+        path.append(ttnn.MeshCoordinate(current_row, current_col))
+
+    # signalling and intermediate signalling sets
+    signalling_devices = set(path[0:-1])
+    intermediate_signalling_devices = set(path[1:-1])
+
+    # build signalling device to target device mapping
+    signaller_device_mapping = {}
+    for i in range(len(path) - 1):
+        signaller_device_mapping[path[i]] = path[i + 1]
+
+    return signalling_devices, intermediate_signalling_devices, signaller_device_mapping
 
 
 class PipelineStageSync:
@@ -45,17 +81,22 @@ class PipelineStageSync:
 
         Args:
             mesh_device: mesh_device micro op operates on
-            dst_device_mesh_coord: mesh coordinate on which the stalling_core stalls
-            stalling_core: core that the stalling device stalls on
-            run_stalling_kernel_on_ncrisc: whether to run the stalling kernel on ncrisc or brisc
-            src_device_mesh_coord: mesh coordinate on which the signalling_core signals
-            signalling_core: core that the signalling device signals on
+            src_device_mesh_coord: src mesh coordinate
+            signalling_core: core that signalling logic is executed on
             run_signalling_kernel_on_ncrisc: whether to run the signalling kernel on ncrsic or brisc
+            dst_device_mesh_coord: dst mesh coordinate
+            stalling_core: core that stalling logic is executed on
+            run_stalling_kernel_on_ncrisc: whether to run the stalling kernel on ncrisc or brisc
             num_iterations: Number of iterations to run inside the kernel
 
         Returns:
             None
         """
+
+        # mesh details
+        mesh_shape = mesh_device.shape
+        mesh_rows = mesh_shape[0]
+        mesh_cols = mesh_shape[1]
 
         # create mesh program descriptor
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
@@ -63,7 +104,7 @@ class PipelineStageSync:
         # kernel path
         kernel_path = "models/demos/deepseek_v3_b1/micro_ops/pipeline_stage_sync/kernels/pipeline_stage_sync_kernel.cpp"
 
-        assert not (dst_device_mesh_coord == src_device_mesh_coord), f"Src and dst device cannot be the same"
+        assert not (src_device_mesh_coord == dst_device_mesh_coord), f"src and dst device cannot be the same"
 
         # cores
         if stalling_core == signalling_core:
@@ -81,57 +122,21 @@ class PipelineStageSync:
         semaphore_l1_addr = ttnn.get_global_semaphore_address(global_semaphore)
 
         # construct path
-        mesh_shape = mesh_device.shape
-        mesh_rows = mesh_shape[0]
-        mesh_cols = mesh_shape[1]
-
-        src_row, src_col = src_device_mesh_coord[0], src_device_mesh_coord[1]
-        dst_row, dst_col = dst_device_mesh_coord[0], dst_device_mesh_coord[1]
-
-        path = []
-        row, col = src_row, src_col
-        path.append(ttnn.MeshCoordinate(row, col))
-
-        forward_distance = (dst_row - src_row) % mesh_rows  # hops going +1
-        backward_distance = (src_row - dst_row) % mesh_rows  # hops going -1
-
-        if forward_distance <= backward_distance:
-            row_step = 1
-            row_hops = forward_distance
-        else:
-            row_step = -1
-            row_hops = backward_distance
-
-        print(row_step)
-
-        for _ in range(row_hops):
-            row = (row + row_step) % mesh_rows
-            path.append(ttnn.MeshCoordinate(row, col))
-
-        # Column dimension: no wrap, just step linearly
-        while col != dst_col:
-            col += 1 if dst_col > col else -1
-            path.append(ttnn.MeshCoordinate(row, col))
-
-        # Build lookup structures (same as before)
-        signaller_devices_mapping = {}
-        for i in range(len(path) - 1):
-            signaller_devices_mapping[path[i]] = path[i + 1]
-
-        signaller_devices = set(path[0:-1])
-        intermediate_signaller_devices = set(path[1:-1])
+        signalling_devices, intermediate_signalling_devices, signaller_device_mapping = build_signalling_path(
+            src_device_mesh_coord, dst_device_mesh_coord, mesh_rows, mesh_cols
+        )
 
         for row in range(mesh_rows):
             for col in range(mesh_cols):
                 mesh_coord = ttnn.MeshCoordinate(row, col)
-                target_device = signaller_devices_mapping.get(mesh_coord, None)
+                target_device = signaller_device_mapping.get(mesh_coord, None)
 
                 # === Compile-time args ===
 
                 # Reader (NCRISC) and Writer (BRISC) compile-time args
-                is_intermediate_signaller = mesh_coord in intermediate_signaller_devices
+                is_intermediate_signaller = mesh_coord in intermediate_signalling_devices
                 is_signalling_to_intermediate_signaller = (
-                    mesh_coord in signaller_devices and target_device in intermediate_signaller_devices
+                    mesh_coord in signalling_devices and target_device in intermediate_signalling_devices
                 )
 
                 signalling_core_phys = mesh_device.worker_core_from_logical_core(signalling_core)
@@ -160,7 +165,7 @@ class PipelineStageSync:
                 # === Unified Kernel Descriptor ===
 
                 # select risc for signalling cores
-                if mesh_coord in signaller_devices:
+                if mesh_coord in signalling_devices:
                     if run_signalling_kernel_on_ncrisc:
                         run_signalling_logic_on_ncrisc = True
                         run_signalling_logic_on_brisc = False
@@ -223,7 +228,8 @@ class PipelineStageSync:
                     cbs=[],
                 )
 
-                if mesh_coord in signaller_devices:
+                # Setup fabric
+                if mesh_coord in signalling_devices:
                     if run_signalling_kernel_on_ncrisc:
                         kernel_idx = kernel_result.get_group_by_arg(
                             "run_signalling_logic_on_ncrisc", 1
