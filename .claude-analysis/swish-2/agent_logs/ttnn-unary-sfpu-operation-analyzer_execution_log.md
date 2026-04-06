@@ -55,3 +55,65 @@
 - Start: Analysis session start
 - End: Analysis session end
 - Total: Single pass, no retries needed
+
+---
+
+## Operation: hardsigmoid
+
+### Summary
+- **Status**: SUCCESS
+- **Output**: `.claude-analysis/swish-2/hardsigmoid_analysis.md`
+- **Commit**: 85131da7a2
+- **Key Finding**: The hardsigmoid SFPU kernel is a simple piecewise-linear function using SFPI abstractions. Computes `max(0, min(1, x/6 + 0.5))` using a single SFPMAD for the linear portion and two v_if blocks for clamping. APPROXIMATION_MODE template parameter is unused. WH and BH implementations are identical.
+
+### Analysis Steps
+1. Read `unary_op_utils.cpp` — Confirmed HARDSIGMOID dispatch: compute kernel `eltwise_sfpu.cpp`, init `hardsigmoid_tile_init()`, func `hardsigmoid_tile(idst)`, approx_mode=false (default)
+2. Found include path: `get_macro_definition(HARDSIGMOID)` returns `SFPU_OP_COMPUTE_KERNEL_API_INCLUDE` (default), meaning hardsigmoid is included via `llk_math_unary_sfpu_api.h` directly, NOT through the `sfpu_split_includes.h` conditional guard
+3. Read API header (`hardsigmoid.h`) — Confirmed forwarding to `llk_math_eltwise_unary_sfpu_hardsigmoid<APPROX>()`
+4. Read LLK dispatch (both WH and BH) — Identical files calling `_llk_math_eltwise_unary_sfpu_params_` with `calculate_hardsigmoid<APPROXIMATE, 8>` and `VectorMode::RC`
+5. Read core SFPU kernel (both WH and BH) — Identical SFPI-style kernels
+6. Read params dispatch (from tt_llk submodule in main repo) — WH uses direct TTI_SETRWC, BH uses helper functions; both loop 4 faces
+7. Read init/addrmod (from tt_llk submodule) — Only ADDR_MOD_7 (all zeros) configured
+8. Verified all identifiers and file paths exist
+9. Wrote analysis file, committed with hash 85131da7a2
+
+### Challenges
+- The `tt_llk` submodule is empty in the worktree. Had to read params dispatch and init files from the parent repo at `/localdev/vignjatijevic/tt-metal/tt_metal/third_party/tt_llk/`.
+
+### Timing
+- Start: Analysis session start
+- End: Analysis session end
+- Total: Single pass, no retries needed
+
+---
+
+## Operation: cbrt
+
+### Summary
+- **Status**: SUCCESS
+- **Output**: `.claude-analysis/swish-2/cbrt_analysis.md`
+- **Key Finding**: The cbrt SFPU kernel implements a fast cube root approximation based on Moroz et al.'s magic-constant method. It uses `int32_to_float` + `SFPMAD` + `SFPSHFT` for the initial guess and Horner polynomial refinement via programmable constants. The FP32 path adds an extra Halley iteration for precision; the FP16b path truncates with `float_to_fp16b`. APPROXIMATION_MODE template parameter is accepted but never referenced. WH and BH implementations are identical.
+
+### Analysis Steps
+1. Confirmed `CBRT` exists in `UnaryOpType` enum (line 129 of `unary_op_types.hpp`)
+2. Found CBRT is NOT in the legacy `unary_op_utils.cpp` dispatch (neither `get_op_init_and_func_default` nor `get_op_init_and_func_parameterized`)
+3. Found CBRT is also NOT in the `unary_ng_op_utils.cpp` dispatch
+4. Verified CBRT is registered via `REGISTER_UNARY_OPERATION(cbrt, CBRT)` in `unary.hpp`
+5. Traced API header: `cbrt.h` → `llk_math_eltwise_unary_sfpu_cbrt<APPROX, DST_ACCUM_MODE>(idst)`
+6. Traced LLK dispatch: both WH and BH are identical, using `_llk_math_eltwise_unary_sfpu_params_` with `calculate_cube_root<APPROXIMATE, fp32_dest_acc_en, ITERATIONS>`
+7. Read core SFPU implementation: Moroz et al. magic-constant method with Horner polynomial refinement
+8. Read params dispatch from tt_llk submodule (parent repo)
+9. Read init/addrmod configuration: ADDR_MOD_7 with all-zero increments
+10. Read SFPI library functions (`sfpi_lib.h`) to map intrinsics to hardware instructions
+11. Verified all function names and file paths exist in codebase
+12. Wrote analysis file to `.claude-analysis/swish-2/cbrt_analysis.md`
+
+### Challenges
+- The `tt_llk` submodule is empty in the worktree. Had to read params dispatch and init files from the parent repo.
+- CBRT is not in any dispatch switch statement in `unary_op_utils.cpp` or `unary_ng_op_utils.cpp` — it must rely on the compute kernel API include mechanism (`SFPU_OP_COMPUTE_KERNEL_API_INCLUDE`).
+- `SfpuType::cbrt` is referenced in the LLK dispatch but does not exist in the `SfpuType` enum in the worktree, indicating the enum needs to be extended for compilation.
+
+### Timing
+- Start: Analysis session start
+- End: Analysis session end
+- Total: Single pass, no retries needed
