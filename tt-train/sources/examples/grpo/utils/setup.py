@@ -39,6 +39,7 @@ class GrpoConfig:
     num_mini_epochs: int  # from training_config.num_epochs
     prompts_to_train: int
     completions_batch_size: int  # from training_config.batch_size
+    gradient_accumulation_steps: int
 
 
 @dataclass
@@ -200,6 +201,7 @@ def setup_grpo_config(yaml_config_path) -> GrpoConfig:
         prompts_to_train=int(grpo_cfg.get("prompts_to_train", 1536)),
         num_mini_epochs=int(training_cfg.get("num_epochs", 1)),
         completions_batch_size=int(training_cfg.get("batch_size", 4)),
+        gradient_accumulation_steps=int(grpo_cfg.get("gradient_accumulation_steps", 1)),
     )
 
     return grpo_config
