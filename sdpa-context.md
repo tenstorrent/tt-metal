@@ -204,7 +204,32 @@ Disabling DRAM access improves Math Util from 46.9% → 59.3%. CCL has no impact
 
 ## Development Targets
 
-### 1. Improving Tests
+### 1. K Chaining for MLA
+
+**Motivation:** In MLA, K is shared across all heads with shape `(1, 1, <token_count>, 576)`. Chains are already enabled, but each chain has its own injector — meaning multiple injector cores read the same K from DRAM. Since DRAM is the bottleneck, we want a single K read shared across all cores.
+
+**Approach (two chains):**
+- **K chain:** Single injector reads K, forwards to all cores (new)
+- **V chain:** Existing per-head chaining remains unchanged
+
+**Implementation phases:**
+
+**Phase 1: Enable chain for K**
+- Single injector core reads K from DRAM
+- Forwards K via L1→L1 to all cores processing heads
+
+**Phase 2: 2D multicast for full grid**
+- Injector broadcasts K to entire compute grid simultaneously
+- **Complexity:** Requires a full 2D rectangle where all cores do the same amount of work
+- Cores with less work need padding
+- Cores with no work need dummy compute to participate in the multicast synchronization
+
+**Reference implementations (conv2d multicast patterns):**
+- `ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp`
+- `ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp`
+- `ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.cpp`
+
+### 2. Improving Tests (existing target)
 
 **Key invariants to test:**
 - Host reorder + kernel zigzag produce correct attention output
@@ -220,7 +245,7 @@ Disabling DRAM access improves Math Util from 46.9% → 59.3%. CCL has no impact
 - Joint tensors present vs absent
 - Chaining with balanced mode enabled
 
-### 2. Enabling Arbitrary q_chunk_size
+### 3. Enabling Arbitrary q_chunk_size (existing target)
 
 **Current blocker:** `ring_joint_sdpa_device_operation.cpp:115-117`
 ```cpp
