@@ -30,3 +30,6 @@
 {"event":"phase_complete","phase":5,"phase_name":"Documentation","status":"ok","ts":"2026-04-06T10:55:21+00:00"}
 {"event":"phase_start","phase":6,"phase_name":"Self-Reflection","ts":"2026-04-06T10:55:37+00:00"}
 {"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-self-reflection","phase":6,"ts":"2026-04-06T10:55:37+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-self-reflection","status":"ok","commit":"9eeaf8053a","ts":"2026-04-06T11:06:42+00:00"}
+{"event":"phase_complete","phase":6,"phase_name":"Self-Reflection","status":"ok","ts":"2026-04-06T11:06:42+00:00"}
+{"event":"pipeline_complete","op_name":"swish","final_status":"SUCCESS","total_iterations":6,"phases_completed":[1,2,3,4,5,6],"ts":"2026-04-06T11:06:59+00:00"}
