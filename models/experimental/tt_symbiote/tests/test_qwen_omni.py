@@ -14,6 +14,7 @@ from transformers.activations import GELUActivation, GELUTanh, SiLUActivation
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeAudioAttention,
     Qwen3OmniMoeCausalConvNet,
+    Qwen3OmniMoeCausalTransConvNet,
     Qwen3OmniMoeCode2WavAttention,
     Qwen3OmniMoeCode2WavDecoderResidualUnit,
     Qwen3OmniMoeCode2WavRMSNorm,
@@ -52,6 +53,7 @@ from models.experimental.tt_symbiote.modules.moe import TTNNGlm4MoeMLP
 from models.experimental.tt_symbiote.modules.activation import (
     TTNNGelu,
     TTNNQwen3OmniMoeCausalConvNet,
+    TTNNQwen3OmniMoeCausalTransConvNet,
     TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
     TTNNSilu,
     # TTNNSnakeBeta,
@@ -72,7 +74,11 @@ from models.experimental.tt_symbiote.modules.qwen_omni_rotary import (
     TTNNQwen3OmniMoeThinkerTextRotaryEmbedding,
     TTNNQwen3OmniMoeVisionRotaryEmbedding,
 )
-from models.experimental.tt_symbiote.modules.conv import TTNNConv1d, TTNNQwenOmniConv2dNHWC
+from models.experimental.tt_symbiote.modules.conv import (
+    TTNNConv1d,
+    TTNNConv3d,
+    TTNNQwenOmniConv2dNHWC,
+)
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 
@@ -101,7 +107,9 @@ _QWEN_OMNI_LAYERNORM_NN_TO_TTNN = {
 # Use :class:`TTNNQwenOmniConv2dNHWC` so tile alignment is handled without altering ``TTNNConv2dNHWC``.
 _QWEN_OMNI_CONV_NN_TO_TTNN = {
     torch.nn.Conv2d: TTNNQwenOmniConv2dNHWC,
+    torch.nn.Conv3d: TTNNConv3d,
     torch.nn.Conv1d: TTNNConv1d,
+    # torch.nn.ConvTranspose1d: TTNNConvTranspose1d,
 }
 
 
@@ -211,6 +219,7 @@ NN_TO_TTNN_THINKER = {
 NN_TO_TTNN_CODE2WAV = {
     Qwen3OmniMoeCode2WavAttention: TTNNQwen3OmniMoeCode2WavAttention,
     Qwen3OmniMoeCausalConvNet: TTNNQwen3OmniMoeCausalConvNet,
+    # Qwen3OmniMoeCausalTransConvNet: TTNNQwen3OmniMoeCausalTransConvNet,
     Qwen3OmniMoeCode2WavRMSNorm: TTNNDistributedRMSNorm,
     Qwen3OmniMoeCode2WavMlp: TTNNGlm4MoeMLP,
     # Qwen3OmniMoeCode2WavDecoderResidualUnit: TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,

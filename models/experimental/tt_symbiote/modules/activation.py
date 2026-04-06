@@ -12,7 +12,7 @@ import torch.nn.functional as F
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig
-from models.experimental.tt_symbiote.core.utils import tree_map
+from models.experimental.tt_symbiote.core.utils import torch_dtype_to_ttnn_dtype, tree_map
 
 
 def _code2wav_bct_replicated_mesh_config(mesh_device):
@@ -31,9 +31,17 @@ def _ttnn_mesh_to_torch_one_replica(tt_tensor: ttnn.Tensor, mesh_device) -> torc
     if mesh_device is None or mesh_device.get_num_devices() <= 1:
         return ttnn.to_torch(tt_tensor).contiguous()
     shards = ttnn.get_device_tensors(tt_tensor)
-    if not shards:
-        return ttnn.to_torch(tt_tensor).contiguous()
-    return ttnn.to_torch(shards[0]).contiguous()
+    if shards:
+        return ttnn.to_torch(shards[0]).contiguous()
+    # Replicated mesh layouts often yield no per-device shards here; plain ``to_torch`` can then
+    # compose 8 replicas along the wrong axis (e.g. T×8 → 5464 vs 683). Match
+    # ``TorchTTNNTensor.to_torch``: concat on batch dim then keep leading batch only.
+    composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    result = ttnn.to_torch(tt_tensor, mesh_composer=composer)
+    lead = int(tt_tensor.shape[0])
+    if result.dim() >= 1 and int(result.shape[0]) > lead:
+        result = result[:lead].contiguous()
+    return result.contiguous()
 
 
 class TTNNSilu(TTNNModule):
@@ -234,6 +242,54 @@ class TTNNQwen3OmniMoeCausalConvNet(TTNNModule):
         extra_padding = self._get_extra_padding_for_conv1d(x_t)
         x_t = F.pad(x_t, (self.padding, extra_padding), mode="constant", value=0)
         return self.conv(x_t)
+
+
+class TTNNQwen3OmniMoeCausalTransConvNet(TTNNModule):
+    """HF ``Qwen3OmniMoeCausalTransConvNet``: TTNN transpose conv, then host crop to match HF time trimming."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv = None
+        self.left_pad = None
+        self.right_pad = None
+
+    @classmethod
+    def from_torch(cls, m, *args, **kwargs):
+        from models.experimental.tt_symbiote.modules.conv import TTNNConvTranspose1d
+
+        new = cls()
+        new._fallback_torch_layer = m
+        new.left_pad = int(m.left_pad)
+        new.right_pad = int(m.right_pad)
+        new.conv = TTNNConvTranspose1d.from_torch(m.conv)
+        return new
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        if self.conv is not None:
+            return self.conv.set_output_tensors_config_impl(output_tensors)
+        return super().set_output_tensors_config_impl(output_tensors)
+
+    def forward(self, hidden_state):
+        x_t = _materialize_code2wav_chain_output(hidden_state, self.device)
+        out = self.conv(x_t)
+        if isinstance(out, ttnn.Tensor):
+            y_t = _materialize_code2wav_bct_from_ttnn(out, self.device)
+        else:
+            y_t = out
+        t_out = int(y_t.shape[-1])
+        end = t_out - self.right_pad
+        y_t = y_t[..., self.left_pad : end].contiguous()
+        dev = self.device
+        mesh_mapper = None
+        if dev is not None and hasattr(dev, "get_num_devices") and dev.get_num_devices() > 1:
+            mesh_mapper = ttnn.ReplicateTensorToMesh(dev)
+        return ttnn.from_torch(
+            y_t,
+            dtype=torch_dtype_to_ttnn_dtype(y_t.dtype),
+            layout=ttnn.TILE_LAYOUT,
+            device=dev,
+            mesh_mapper=mesh_mapper,
+        )
 
 
 class TTNNQwen3OmniMoeCode2WavDecoderResidualUnit(TTNNModule):

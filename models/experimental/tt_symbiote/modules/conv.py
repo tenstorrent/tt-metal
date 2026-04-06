@@ -55,6 +55,31 @@ class NHWCConvPytorch(nn.Module):
         return x
 
 
+class NHWCConvTransposePytorch(nn.Module):
+    """A wrapper around nn.ConvTranspose2d to handle NHWC input/output."""
+
+    def __init__(self, conv: nn.ConvTranspose2d) -> None:
+        super().__init__()
+        self.conv = conv
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.permute(0, 3, 1, 2)
+        x = self.conv(x)
+        x = x.permute(0, 2, 3, 1)
+        return x
+
+
+class NCDHWConv3dPytorch(nn.Module):
+    """PyTorch fallback for :class:`TTNNConv3d` (NCDHW in/out)."""
+
+    def __init__(self, conv: nn.Conv3d) -> None:
+        super().__init__()
+        self.conv = conv
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.conv(x)
+
+
 class NHWCMaxpoolPytorch(nn.Module):
     """A wrapper around nn.MaxPool2d to handle NHWC input/output."""
 
@@ -352,6 +377,686 @@ class TTNNConv1d(TTNNModule):
         out = self.conv2d(x, reshape_output=reshape_output)
         out = ttnn.squeeze(out, 1)
         return ttnn.permute(out, (0, 2, 1))
+
+
+def _int_pair_2d(x) -> tuple:
+    if isinstance(x, int):
+        return (x, x)
+    t = tuple(int(v) for v in x)
+    if len(t) == 1:
+        return (t[0], t[0])
+    return (t[0], t[1])
+
+
+def _transpose_conv_output_w(
+    input_width: int,
+    kernel_w: int,
+    stride_w: int,
+    pad_w: int,
+    dilation_w: int,
+    out_pad_w: int,
+) -> int:
+    """Output width for conv transpose (symmetric padding), matches PyTorch / TTNN sliding window."""
+    return (input_width - 1) * stride_w - 2 * pad_w + dilation_w * (kernel_w - 1) + out_pad_w + 1
+
+
+def _conv_transpose2d_dram_width_slice_config(w_out: int):
+    """Explicit DRAM width slicing for large transpose convs.
+
+    Without this, TTNN auto-slice can pick a marginal slice count (e.g. 12 for ~5.4k-wide
+    output) that still exhausts L1 vs circular buffers on Wormhole (TT_THROW CB clash).
+    """
+    max_slices = 172
+    if w_out <= 512:
+        return None
+    # Smaller slices than auto (~output/450) to keep per-slice L1 well under free DRAM/L1 budget.
+    num_slices = max(48, min(max_slices, (w_out + 79) // 80))
+    return ttnn.Op2DSliceConfig(num_slices=num_slices, slice_type=ttnn.Op2DDRAMSliceWidth)
+
+
+def _conv_transpose1d_to_height1_conv_transpose2d(c1: nn.ConvTranspose1d) -> nn.ConvTranspose2d:
+    """Map ``nn.ConvTranspose1d`` to ``nn.ConvTranspose2d`` with ``kernel_size=(1, k)`` for TTNN 2D transpose conv."""
+
+    k = _int_pair_2d(c1.kernel_size)[0]
+    s = _int_pair_2d(c1.stride)[0]
+    p = _int_pair_2d(c1.padding)[0]
+    op = _int_pair_2d(c1.output_padding)[0]
+    d = _int_pair_2d(c1.dilation)[0]
+
+    c2 = nn.ConvTranspose2d(
+        in_channels=c1.in_channels,
+        out_channels=c1.out_channels,
+        kernel_size=(1, k),
+        stride=(1, s),
+        padding=(0, p),
+        output_padding=(0, op),
+        dilation=(1, d),
+        groups=c1.groups,
+        bias=c1.bias is not None,
+        device=c1.weight.device,
+        dtype=c1.weight.dtype,
+    )
+    with torch.no_grad():
+        c2.weight.copy_(c1.weight.unsqueeze(2))
+        if c1.bias is not None:
+            c2.bias.copy_(c1.bias)
+    return c2
+
+
+@trace_enabled
+class TTNNConvTranspose2dNHWC(TTNNModule):
+    """TTNN ``conv_transpose2d`` on NHWC activations (``[B, H, W, C]``)."""
+
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride,
+        padding,
+        output_padding,
+        dilation,
+        groups: int = 1,
+        slice_config=None,
+    ) -> None:
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        self.output_padding = output_padding
+        self.dilation = dilation
+        self.groups = groups
+        self.slice_config = slice_config
+        self.reshape = TTNNReshape()
+
+    @classmethod
+    def from_torch(cls, conv: nn.ConvTranspose2d, slice_config=None) -> "TTNNConvTranspose2dNHWC":
+        new_conv = cls(
+            in_channels=conv.in_channels,
+            out_channels=conv.out_channels,
+            kernel_size=_int_pair_2d(conv.kernel_size),
+            stride=_int_pair_2d(conv.stride),
+            padding=_int_pair_2d(conv.padding),
+            output_padding=_int_pair_2d(conv.output_padding),
+            dilation=_int_pair_2d(conv.dilation),
+            groups=conv.groups,
+            slice_config=slice_config,
+        )
+        new_conv._fallback_torch_layer = NHWCConvTransposePytorch(conv)
+        return new_conv
+
+    def preprocess_weights_impl(self):
+        if self.torch_layer is None:
+            self._fallback_torch_layer = NHWCConvTransposePytorch(
+                nn.ConvTranspose2d(
+                    in_channels=self.in_channels,
+                    out_channels=self.out_channels,
+                    kernel_size=self.kernel_size,
+                    stride=self.stride,
+                    padding=self.padding,
+                    output_padding=self.output_padding,
+                    dilation=self.dilation,
+                    groups=self.groups,
+                )
+            )
+        inner = self.torch_layer.conv
+        self.tt_weight, self.tt_bias = Conv2dConfiguration.convert_torch_weight_and_bias_to_ttnn(
+            inner.weight, inner.bias
+        )
+        super().preprocess_weights_impl()
+
+    def deallocate_weights_impl(self):
+        ttnn.deallocate(self.tt_weight)
+        if self.tt_bias is not None:
+            ttnn.deallocate(self.tt_bias)
+        super().deallocate_weights_impl()
+
+    def forward(self, input_tensor: ttnn.Tensor, reshape_output=True) -> ttnn.Tensor:
+        batch_size, input_height, input_width, _ = input_tensor.shape
+        batch_size, input_height, input_width = int(batch_size), int(input_height), int(input_width)
+
+        conv_config = ttnn.Conv2dConfig(
+            weights_dtype=ttnn.bfloat16,
+            output_layout=ttnn.TILE_LAYOUT,
+            deallocate_activation=True,
+            config_tensors_in_dram=True,
+        )
+        if self.slice_config is not None:
+            conv_config.shard_layout = self.slice_config
+
+        dev = input_tensor.device()
+        w_out_est = _transpose_conv_output_w(
+            input_width,
+            int(self.kernel_size[1]),
+            int(self.stride[1]),
+            int(self.padding[1]),
+            int(self.dilation[1]),
+            int(self.output_padding[1]),
+        )
+        dram_slice_config = _conv_transpose2d_dram_width_slice_config(w_out_est)
+        # LoFi reduces circular-buffer pressure for very wide transpose paths (still DRAM-sliced).
+        math_fidelity = ttnn.MathFidelity.LoFi if w_out_est > 4096 else ttnn.MathFidelity.HiFi4
+        compute_config = ttnn.init_device_compute_kernel_config(
+            dev.arch(),
+            math_fidelity=math_fidelity,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
+        if input_tensor.memory_config().is_sharded():
+            input_tensor = ttnn.sharded_to_interleaved(input_tensor)
+
+        kwargs = dict(
+            input_tensor=input_tensor,
+            weight_tensor=self.tt_weight,
+            device=dev,
+            in_channels=self.in_channels,
+            out_channels=self.out_channels,
+            batch_size=batch_size,
+            input_height=input_height,
+            input_width=input_width,
+            kernel_size=self.kernel_size,
+            stride=self.stride,
+            padding=self.padding,
+            output_padding=self.output_padding,
+            dilation=self.dilation,
+            groups=self.groups,
+            bias_tensor=self.tt_bias,
+            conv_config=conv_config,
+            compute_config=compute_config,
+            mirror_kernel=True,
+            dtype=ttnn.bfloat16,
+        )
+        if dram_slice_config is not None:
+            kwargs["dram_slice_config"] = dram_slice_config
+        if reshape_output:
+            out, (oh, ow) = ttnn.conv_transpose2d(**kwargs, return_output_dim=True)
+            return self.reshape(out, [batch_size, oh, ow, -1])
+        return ttnn.conv_transpose2d(**kwargs, return_output_dim=False)
+
+
+class TTNNConvTranspose1d(TTNNModule):
+    """1D transposed convolution via TTNN ``conv_transpose2d`` with height 1 (``[B,C,T]`` ↔ NHWC ``[B,1,T,C]``)."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv2d_t = None
+
+    @classmethod
+    def from_torch(cls, conv1d: nn.ConvTranspose1d, slice_config=None):
+        new = cls()
+        new._fallback_torch_layer = conv1d
+        equiv = _conv_transpose1d_to_height1_conv_transpose2d(conv1d)
+        new.conv2d_t = TTNNConvTranspose2dNHWC.from_torch(equiv, slice_config=slice_config)
+        return new
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        cfg = _qwen_omni_conv2d_mesh_output_config(self.device)
+        if cfg is None:
+            return super().set_output_tensors_config_impl(output_tensors)
+
+        def apply(e):
+            if isinstance(e, TorchTTNNTensor):
+                e.set_distributed_tensor_config(cfg)
+            return e
+
+        return tree_map(apply, output_tensors)
+
+    def forward(self, input_tensor, reshape_output=True):
+        if isinstance(input_tensor, TorchTTNNTensor):
+            input_tensor = input_tensor.ttnn_tensor if input_tensor.ttnn_tensor is not None else input_tensor.elem
+        if isinstance(input_tensor, torch.Tensor):
+            mesh_mapper = None
+            dev = self.device
+            if dev is not None and hasattr(dev, "get_num_devices") and dev.get_num_devices() > 1:
+                mesh_mapper = ttnn.ReplicateTensorToMesh(dev)
+            input_tensor = ttnn.from_torch(
+                input_tensor,
+                dtype=torch_dtype_to_ttnn_dtype(input_tensor.dtype),
+                layout=ttnn.TILE_LAYOUT,
+                device=dev,
+                mesh_mapper=mesh_mapper,
+            )
+        x = ttnn.permute(input_tensor, (0, 2, 1))
+        x = ttnn.unsqueeze(x, 1)
+        out = self.conv2d_t(x, reshape_output=reshape_output)
+        out = ttnn.squeeze(out, 1)
+        return ttnn.permute(out, (0, 2, 1))
+
+
+# TTNN ``experimental.conv3d`` layout (see ``tests/ttnn/unit_tests/operations/conv/test_conv3d.py``).
+_CONV3D_CHANNEL_ALIGNMENT = 32
+
+
+def _conv3d_mesh_max_n_per_chunk(dev) -> int:
+    """Upper bound on leading batch N for one conv3d upload on a mesh (patch embed flattens many patches).
+
+    Without chunking, ``from_torch`` + ``experimental.conv3d`` + output readback can request 100+ GiB DRAM
+    for large ``N``.  Set ``TT_SYMBIOTE_CONV3D_CHUNK_N`` to tune (default 1024).
+    """
+    if dev is None or not hasattr(dev, "get_num_devices") or dev.get_num_devices() <= 1:
+        return 0
+    import os
+
+    return max(1, int(os.environ.get("TT_SYMBIOTE_CONV3D_CHUNK_N", "1024")))
+
+
+def _int_triplet_3d(x) -> tuple:
+    if isinstance(x, int):
+        return (x, x, x)
+    t = tuple(int(v) for v in x)
+    if len(t) == 1:
+        return (t[0], t[0], t[0])
+    if len(t) == 3:
+        return (t[0], t[1], t[2])
+    raise ValueError(f"Expected int or length-1/3 tuple for 3D conv hyperparameter, got {x!r}")
+
+
+def _conv3d_out_dim(size_in: int, pad: int, stride: int, kernel: int, dilation: int = 1) -> int:
+    eff_k = dilation * (kernel - 1) + 1
+    return (size_in + 2 * pad - eff_k) // stride + 1
+
+
+def _conv3d_padding_triple_for_ttnn(padding) -> tuple:
+    """Map ``nn.Conv3d.padding`` to a ``(pd, ph, pw)`` triple for TTNN (symmetric triple only)."""
+    if isinstance(padding, int):
+        return (padding, padding, padding)
+    p = tuple(int(x) for x in padding)
+    if len(p) == 3:
+        return (p[0], p[1], p[2])
+    if len(p) == 6:
+        raise ValueError("TTNNConv3d does not support 6-tuple asymmetric padding; use PyTorch fallback.")
+    raise ValueError(f"Unsupported Conv3d padding: {padding!r}")
+
+
+def _conv3d_torch_weights_to_ttnn_layout(
+    conv: nn.Conv3d,
+    *,
+    alignment: int = _CONV3D_CHANNEL_ALIGNMENT,
+    c_in_block: int = 0,
+) -> tuple:
+    """Layout ``nn.Conv3d`` weights/bias like ``prepare_weights`` in ``test_conv3d`` (host torch)."""
+    w = conv.weight.data  # [out, in, kD, kH, kW]
+    c_in = int(conv.in_channels)
+    out_ch = int(conv.out_channels)
+    w = w.permute(2, 3, 4, 1, 0)  # kD, kH, kW, C, out
+    align_pad = (alignment - c_in % alignment) % alignment
+    if align_pad:
+        w = torch.nn.functional.pad(w, (0, 0, 0, align_pad))
+    kD, kH, kW, c_pad, _ = w.shape
+    c_in_block_eff = c_pad if c_in_block == 0 else int(c_in_block)
+    num_c_in_blocks = c_pad // c_in_block_eff
+    assert num_c_in_blocks * c_in_block_eff == c_pad
+    w = w.reshape(kD, kH, kW, num_c_in_blocks, c_in_block_eff, out_ch)
+    w = w.permute(3, 0, 1, 2, 4, 5)
+    w = w.reshape(-1, out_ch).contiguous()
+    b = conv.bias.data.reshape(1, -1).contiguous() if conv.bias is not None else None
+    return w, b
+
+
+def _conv3d_torch_input_to_ndhwc_row_major(
+    x: torch.Tensor, *, alignment: int = _CONV3D_CHANNEL_ALIGNMENT
+) -> torch.Tensor:
+    """NCDHW → NDHWC and pad channel to ``alignment`` (TTNN conv3d input)."""
+    if x.dim() != 5:
+        raise RuntimeError(f"TTNNConv3d expects 5D NCDHW input, got shape {tuple(x.shape)}")
+    c_in = int(x.shape[1])
+    tt_input = x.permute(0, 2, 3, 4, 1).contiguous()
+    align_pad = (alignment - c_in % alignment) % alignment
+    if align_pad:
+        tt_input = torch.nn.functional.pad(tt_input, (0, align_pad))
+    return tt_input
+
+
+def _ttnn_conv3d_output_to_torch_ncdhw(
+    tt_out: ttnn.Tensor,
+    *,
+    n: int,
+    d_out: int,
+    h_out: int,
+    w_out: int,
+    out_channels: int,
+    mesh_device,
+) -> torch.Tensor:
+    """Match ``reshape_output`` in ``test_conv3d``; host ``[N,C,D,H,W]``."""
+    if mesh_device is None or mesh_device.get_num_devices() <= 1:
+        t = ttnn.to_torch(tt_out).float()
+    else:
+        shards = ttnn.get_device_tensors(tt_out)
+        if shards:
+            t = ttnn.to_torch(shards[0]).float()
+        else:
+            composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+            t = ttnn.to_torch(tt_out, mesh_composer=composer).float()
+            lead = int(tt_out.shape[0])
+            if t.dim() >= 1 and int(t.shape[0]) > lead:
+                t = t[:lead].contiguous()
+    t = t.reshape(n, d_out, h_out, w_out, out_channels)
+    return t.permute(0, 4, 1, 2, 3).contiguous()
+
+
+def _ttnn_tensor_to_torch_batch_leading(tt: ttnn.Tensor, mesh_device) -> torch.Tensor:
+    """Device/mesh tensor → host torch; for multi-device concat on dim 0, slice to logical batch."""
+    n0 = int(tt.shape[0])
+    if mesh_device is None or not hasattr(mesh_device, "get_num_devices") or mesh_device.get_num_devices() <= 1:
+        return ttnn.to_torch(tt)
+    shards = ttnn.get_device_tensors(tt)
+    if shards:
+        return ttnn.to_torch(shards[0])
+    composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    t = ttnn.to_torch(tt, mesh_composer=composer)
+    if t.dim() >= 1 and int(t.shape[0]) > n0:
+        t = t[:n0].contiguous()
+    return t
+
+
+@trace_enabled
+class TTNNConv3d(TTNNModule):
+    """3D convolution via ``ttnn.experimental.conv3d`` (NDHWC activations, Qwen3-Omni vision patch embed).
+
+    Matches the weight/input layout used in ``tests/ttnn/unit_tests/operations/conv/test_conv3d.py``.
+    For large patch kernels (e.g. ``kernel_size == stride`` with spatial product ≥ 196) and
+    ``out_channels % 32 == 0``, uses Qwen-VL-style L1 blocking (``C_in_block=16``, ``C_out_block=32``).
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: tuple,
+        stride: tuple,
+        padding: tuple,
+        dilation: tuple,
+        groups: int,
+        padding_mode: str,
+        conv3d_blocking=None,
+    ) -> None:
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        self.dilation = dilation
+        self.groups = groups
+        self.padding_mode = padding_mode
+        self.conv3d_blocking = conv3d_blocking
+        self.tt_weight = None
+        self.tt_bias = None
+
+    @property
+    def weight(self):
+        """HF ``Qwen3OmniMoeVisionPatchEmbed`` reads ``proj.weight.dtype``; mirror ``nn.Conv3d``."""
+        if self.torch_layer is None:
+            raise AttributeError("weight")
+        return self.torch_layer.conv.weight
+
+    @property
+    def bias(self):
+        if self.torch_layer is None:
+            raise AttributeError("bias")
+        return self.torch_layer.conv.bias
+
+    @classmethod
+    def from_torch(cls, conv: nn.Conv3d, conv3d_blocking=None) -> "TTNNConv3d":
+        ks = _int_triplet_3d(conv.kernel_size)
+        st = _int_triplet_3d(conv.stride)
+        try:
+            pad_triple = _conv3d_padding_triple_for_ttnn(conv.padding)
+        except ValueError:
+            pad_triple = (0, 0, 0)
+        blocking = conv3d_blocking
+        if blocking is None:
+            if ks == st and ks[0] * ks[1] * ks[2] >= 196 and conv.out_channels % 32 == 0 and conv.groups == 1:
+                blocking = (16, 32, 1, 1, 1)
+        new_mod = cls(
+            in_channels=conv.in_channels,
+            out_channels=conv.out_channels,
+            kernel_size=ks,
+            stride=st,
+            padding=pad_triple,
+            dilation=_int_triplet_3d(conv.dilation),
+            groups=conv.groups,
+            padding_mode=conv.padding_mode,
+            conv3d_blocking=blocking,
+        )
+        new_mod._fallback_torch_layer = NCDHWConv3dPytorch(conv)
+        return new_mod
+
+    def preprocess_weights_impl(self):
+        if self.torch_layer is None:
+            self._fallback_torch_layer = NCDHWConv3dPytorch(
+                nn.Conv3d(
+                    self.in_channels,
+                    self.out_channels,
+                    self.kernel_size,
+                    stride=self.stride,
+                    padding=self.padding,
+                    dilation=self.dilation,
+                    groups=self.groups,
+                    bias=True,
+                )
+            )
+        conv = self.torch_layer.conv
+        c_in_block = 0
+        if self.conv3d_blocking is not None:
+            c_in_block = int(self.conv3d_blocking[0])
+        w_torch, b_torch = _conv3d_torch_weights_to_ttnn_layout(conv, c_in_block=c_in_block)
+        self.tt_weight = ttnn.from_torch(w_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, pad_value=0)
+        if b_torch is not None:
+            self.tt_bias = ttnn.from_torch(b_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, pad_value=0)
+        else:
+            self.tt_bias = None
+        super().preprocess_weights_impl()
+
+    def move_weights_to_device_impl(self):
+        if self.tt_weight is not None:
+            self.tt_weight = ttnn.to_device(self.tt_weight, self.device)
+        if self.tt_bias is not None:
+            self.tt_bias = ttnn.to_device(self.tt_bias, self.device)
+        super().move_weights_to_device_impl()
+
+    def deallocate_weights_impl(self):
+        if self.tt_weight is not None:
+            ttnn.deallocate(self.tt_weight)
+        if self.tt_bias is not None:
+            ttnn.deallocate(self.tt_bias)
+        super().deallocate_weights_impl()
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        cfg = _qwen_omni_conv2d_mesh_output_config(self.device)
+        if cfg is None:
+            return super().set_output_tensors_config_impl(output_tensors)
+
+        def apply(e):
+            if isinstance(e, TorchTTNNTensor):
+                e.set_distributed_tensor_config(cfg)
+            return e
+
+        return tree_map(apply, output_tensors)
+
+    def __call__(self, *args, **kwds):
+        """Same as ``NormalRun.module_run`` but skip ``to_ttnn_wrap`` on inputs.
+
+        Default mesh ``to_ttnn`` for 5D NCDHW activations can size buffers incorrectly; we keep
+        ``TorchTTNNTensor.elem`` as torch until :meth:`forward` uploads NDHWC via ``from_torch``.
+        """
+        bypass = getattr(self, "_bypass_tensor_wrapping", False)
+        if bypass:
+            from models.experimental.tt_symbiote.core.run_config import NormalRun
+
+            return NormalRun.module_run(self, *args, **kwds)
+
+        import time
+
+        from tracy import signpost
+
+        from models.experimental.tt_symbiote.core.run_config import (
+            DispatchManager,
+            NormalRun,
+            compose_transforms,
+            post_process_ttnn_module_output,
+            set_device_wrap,
+            wrap_to_torch_ttnn_tensor,
+        )
+
+        print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
+        assert self.device is not None, "Device must be set for TTNN module execution."
+        begin_full = time.time()
+        transform = compose_transforms(wrap_to_torch_ttnn_tensor, set_device_wrap(self.device))
+        func_args = tree_map(transform, args)
+        other_kwargs = {k: v for k, v in kwds.items() if "past_key_value" not in k}
+        func_kwargs = tree_map(transform, other_kwargs)
+        func_kwargs.update({k: v for k, v in kwds.items() if "past_key_value" in k})
+        begin = time.time()
+        self.preprocess_weights()
+        end = time.time()
+        DispatchManager.set_current_module_name(self.module_name)
+        DispatchManager.record_timing(
+            "TTNN", self.module_name, self.__class__.__name__ + "_preprocess_weights", {}, end - begin
+        )
+        begin = time.time()
+        self.move_weights_to_device()
+        end = time.time()
+        DispatchManager.record_timing(
+            "TTNN", self.module_name, self.__class__.__name__ + "_move_weights_to_device", {}, end - begin
+        )
+        if NormalRun.signpost_mode is not None:
+            signpost(f"{self.module_name}", f"{self.__class__.__name__}")
+        begin = time.time()
+        result = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
+        end = time.time()
+        DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
+        DispatchManager.set_current_module_name(None)
+        end_full = time.time()
+        DispatchManager.record_timing(
+            "TorchModules", self.module_name, self.__class__.__name__, {}, end_full - begin_full
+        )
+        return result
+
+    def _experimental_conv3d_ncdhw_torch(self, x: torch.Tensor) -> torch.Tensor:
+        """Run ``ttnn.experimental.conv3d`` for one CPU ``[N,C,D,H,W]`` batch; return host ``[N,C_out,D_out,H_out,W_out]``."""
+        n, _, d_in, h_in, w_in = x.shape
+        pd, ph, pw = self.padding
+        sd, sh, sw = self.stride
+        dd, dh, dw = self.dilation
+        kd, kh, kw = self.kernel_size
+        d_out = _conv3d_out_dim(d_in, pd, sd, kd, dd)
+        h_out = _conv3d_out_dim(h_in, ph, sh, kh, dh)
+        w_out = _conv3d_out_dim(w_in, pw, sw, kw, dw)
+
+        dev = self.device
+        mesh_mapper = None
+        if dev is not None and hasattr(dev, "get_num_devices") and dev.get_num_devices() > 1:
+            mesh_mapper = ttnn.ReplicateTensorToMesh(dev)
+        ndhwc = _conv3d_torch_input_to_ndhwc_row_major(x)
+        tt_in = ttnn.from_torch(
+            ndhwc,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=dev,
+            mesh_mapper=mesh_mapper,
+        )
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            dev.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        grid = dev.compute_with_storage_grid_size()
+        grid_xy = (int(grid.x), int(grid.y))
+
+        kwargs = dict(
+            input_tensor=tt_in,
+            weight_tensor=self.tt_weight,
+            bias_tensor=self.tt_bias,
+            dtype=ttnn.bfloat16,
+            output_channels=self.out_channels,
+            kernel_size=self.kernel_size,
+            stride=self.stride,
+            padding=self.padding,
+            dilation=self.dilation,
+            padding_mode=self.padding_mode,
+            compute_kernel_config=compute_kernel_config,
+        )
+        if self.conv3d_blocking is not None:
+            cin_b, cout_b, tb, hb, wb = self.conv3d_blocking
+            kwargs["config"] = ttnn.Conv3dConfig(
+                weights_dtype=ttnn.bfloat16,
+                output_layout=ttnn.ROW_MAJOR_LAYOUT,
+                T_out_block=int(tb),
+                W_out_block=int(wb),
+                H_out_block=int(hb),
+                C_out_block=int(cout_b),
+                C_in_block=int(cin_b),
+                dilation=self.dilation,
+                compute_with_storage_grid_size=grid_xy,
+            )
+        tt_out = ttnn.experimental.conv3d(**kwargs)
+        out_torch = _ttnn_conv3d_output_to_torch_ncdhw(
+            tt_out,
+            n=n,
+            d_out=d_out,
+            h_out=h_out,
+            w_out=w_out,
+            out_channels=self.out_channels,
+            mesh_device=dev,
+        )
+        ttnn.deallocate(tt_in)
+        ttnn.deallocate(tt_out)
+        return out_torch
+
+    def forward(self, x):
+        if isinstance(x, TorchTTNNTensor):
+            x = x.ttnn_tensor if x.ttnn_tensor is not None else x.elem
+        dev = self.device
+        conv_pad = self.torch_layer.conv.padding
+        if isinstance(conv_pad, tuple) and len(conv_pad) == 6:
+            if isinstance(x, ttnn.Tensor):
+                x = _ttnn_tensor_to_torch_batch_leading(x, dev)
+            if not isinstance(x, torch.Tensor):
+                raise TypeError(f"TTNNConv3d expected torch or ttnn tensor, got {type(x)}")
+            return self.torch_layer.conv(x)
+
+        if self.groups != 1 or self.padding_mode != "zeros":
+            if isinstance(x, ttnn.Tensor):
+                x = _ttnn_tensor_to_torch_batch_leading(x, dev)
+            if not isinstance(x, torch.Tensor):
+                raise TypeError(f"TTNNConv3d expected torch or ttnn tensor, got {type(x)}")
+            x = x.to(dtype=self.torch_layer.conv.weight.dtype)
+            return self.torch_layer.conv(x)
+
+        if isinstance(x, ttnn.Tensor):
+            x = _ttnn_tensor_to_torch_batch_leading(x, dev)
+            x = x.to(dtype=torch.bfloat16).contiguous()
+
+        if not isinstance(x, torch.Tensor):
+            raise TypeError(f"TTNNConv3d expected torch or ttnn tensor, got {type(x)}")
+        x = x.to(dtype=torch.bfloat16).contiguous()
+        n = int(x.shape[0])
+        max_chunk = _conv3d_mesh_max_n_per_chunk(dev)
+        if max_chunk > 0 and n > max_chunk:
+            parts = []
+            for s in range(0, n, max_chunk):
+                e = min(s + max_chunk, n)
+                parts.append(self._experimental_conv3d_ncdhw_torch(x[s:e].contiguous()))
+            out_torch = torch.cat(parts, dim=0)
+        else:
+            out_torch = self._experimental_conv3d_ncdhw_torch(x)
+
+        mesh_mapper_out = None
+        if dev is not None and hasattr(dev, "get_num_devices") and dev.get_num_devices() > 1:
+            mesh_mapper_out = ttnn.ReplicateTensorToMesh(dev)
+        return ttnn.from_torch(
+            out_torch,
+            dtype=torch_dtype_to_ttnn_dtype(out_torch.dtype),
+            layout=ttnn.TILE_LAYOUT,
+            device=dev,
+            mesh_mapper=mesh_mapper_out,
+        )
 
 
 class TTNNConv2dBNNHWC(TTNNConv2dNHWC):
