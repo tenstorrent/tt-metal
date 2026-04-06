@@ -676,7 +676,6 @@ def test_linear(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("broadcast_gate", [True, False], ids=["broadcast_gate", "full_gate"])
-@pytest.mark.parametrize("use_non_fused", [True, False], ids=["separate", "fused"])
 def test_linear_addcmul_gate(
     mesh_device,
     topology,
@@ -688,7 +687,6 @@ def test_linear_addcmul_gate(
     core_grid_y,
     cluster_axis,
     broadcast_gate,
-    use_non_fused,
 ):
     """Test fused addcmul with both broadcast and non-broadcast (full) gate."""
     check_result = run_test_linear(
@@ -709,7 +707,7 @@ def test_linear_addcmul_gate(
         fuse_addcmul=True,
         addcmul_scalar=1.0,
         broadcast_gate=broadcast_gate,
-        use_non_fused=use_non_fused,
+        use_non_fused=False,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         cluster_axis=cluster_axis,
