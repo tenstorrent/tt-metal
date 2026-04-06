@@ -549,8 +549,7 @@ std::vector<PhysicalPipelineStageConfig> generate_physical_pipeline_config(bool 
 }
 
 std::vector<BlitzDecodePipelineStage> build_pipeline(
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate>& asic_id_to_mesh_coord) {
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
     bool rev_c = physical_system_descriptor.is_bh_galaxy_rev_c();
     std::vector<PhysicalPipelineStageConfig> physical_pipeline_stage_configs = generate_physical_pipeline_config(rev_c);
 
@@ -615,8 +614,8 @@ std::vector<BlitzDecodePipelineStage> build_pipeline(
                     if (candidate_entry == candidate_exit) {
                         continue;
                     }
-                    if (avoid_already_used && (used_on_mesh.find(candidate_entry) != used_on_mesh.end() ||
-                                               used_on_mesh.find(candidate_exit) != used_on_mesh.end())) {
+                    if (avoid_already_used &&
+                        (used_on_mesh.contains(candidate_entry) || used_on_mesh.contains(candidate_exit))) {
                         continue;
                     }
                     entry_exit_pair = {candidate_entry, candidate_exit};

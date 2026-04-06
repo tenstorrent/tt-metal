@@ -37,9 +37,6 @@ _OPENMPI_VERSION_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Log once per process when forcing mpirun under Slurm (many call sites use get_mpi_launcher).
-_slurm_mpirun_choice_logged: bool = False
-
 # How to extend Phase 2 failure messages (see legacy_flow phase2_failure_hint).
 Phase2FailureHint = Optional[Literal["stale_phase1_cache", "legacy"]]
 
@@ -88,16 +85,9 @@ class RankfileSyntax(Enum):
 def get_mpi_launcher() -> str:
     """Get the MPI launcher executable for the current PATH.
 
-    When ``SLURM_JOB_ID`` is set, returns ``\"mpirun\"``. Otherwise prefers
-    ``mpirun-ulfm`` from :func:`shutil.which` if found, else ``\"mpirun\"``.
+    Prefers ``mpirun-ulfm`` from :func:`shutil.which` if found; otherwise logs and
+    returns ``\"mpirun\"``.
     """
-    # global _slurm_mpirun_choice_logged
-    # if os.environ.get("SLURM_JOB_ID") is not None:
-    #     if not _slurm_mpirun_choice_logged:
-    #         logger.warning(f"{TT_RUN_PREFIX} SLURM job detected, using mpirun")
-    #         _slurm_mpirun_choice_logged = True
-    #     return "mpirun"
-
     mpi_launcher = shutil.which("mpirun-ulfm")
     if not mpi_launcher:
         logger.warning(f"{TT_RUN_PREFIX} mpirun-ulfm not found in PATH, falling back to mpirun")

@@ -10,7 +10,6 @@ import importlib
 from pathlib import Path
 from unittest.mock import patch
 import pytest
-import click
 from click.testing import CliRunner
 
 from ttnn.distributed.ttrun import (
