@@ -24,7 +24,7 @@ class TtnnC3K:
         if use_shard_concat:
             x2 = ttnn.to_layout(x2, ttnn.ROW_MAJOR_LAYOUT)
             k2 = ttnn.to_layout(k2, ttnn.ROW_MAJOR_LAYOUT)
-            x = sharded_concat([k2, x2], to_interleaved=False)
+            x = sharded_concat([k2, x2], to_interleaved=True)
         else:
             x = ttnn.concat((k2, x2), 3, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = self.cv3(device, x)

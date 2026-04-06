@@ -5,7 +5,13 @@
 import math
 
 import ttnn
-from models.demos.yolov11l.tt.common import TtnnConv, deallocate_tensors, sharded_concat, sharded_concat_2
+from models.demos.yolov11l.tt.common import (
+    TtnnConv,
+    deallocate_tensors,
+    sharded_concat,
+    sharded_concat_2,
+    untilize_tile_for_conv2d_dram,
+)
 from models.demos.yolov11l.tt.ttnn_yolov11_c2psa import TtnnC2PSA
 from models.demos.yolov11l.tt.ttnn_yolov11_c3k2 import TtnnC3k2
 from models.demos.yolov11l.tt.ttnn_yolov11_detect import TtnnDetect
@@ -17,9 +23,20 @@ class TtnnYoloV11:
     def __init__(self, device, parameters):
         self.device = device
         self.conv1 = TtnnConv(
-            device, parameters.conv_args[0], parameters.model[0], deallocate_activation=True, shard_layout=None
+            device,
+            parameters.conv_args[0],
+            parameters.model[0],
+            deallocate_activation=True,
+            shard_layout=None,
+            slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=16),
         )
-        self.conv2 = TtnnConv(device, parameters.conv_args[1], parameters.model[1], deallocate_activation=True)
+        self.conv2 = TtnnConv(
+            device,
+            parameters.conv_args[1],
+            parameters.model[1],
+            deallocate_activation=True,
+            shard_layout=None,
+        )
         self.c3k2_1 = TtnnC3k2(device, parameters.conv_args[2], parameters.model[2], is_bk_enabled=False)
         self.conv3 = TtnnConv(device, parameters.conv_args[3], parameters.model[3], deallocate_activation=True)
         self.c3k2_2 = TtnnC3k2(device, parameters.conv_args[4], parameters.model[4], is_bk_enabled=False)
@@ -49,19 +66,24 @@ class TtnnYoloV11:
     def __call__(self, input, min_channels=8):
         n, c, h, w = input.shape
         channel_padding_needed = min_channels - c
-        x = ttnn.pad(input, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
+        input_interleaved = ttnn.to_memory_config(input, ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.pad(input_interleaved, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
+        ttnn.deallocate(input_interleaved)
         ttnn.deallocate(input)
         x = ttnn.permute(x, (0, 2, 3, 1))
         x = ttnn.reshape(x, (1, 1, n * h * w, min_channels))
         x = self.conv1(self.device, x)
         x = self.conv2(self.device, x)
         x = self.c3k2_1(self.device, x)
+        x = untilize_tile_for_conv2d_dram(x)
         x = self.conv3(self.device, x)
         x = self.c3k2_2(self.device, x)
         x4 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        x = untilize_tile_for_conv2d_dram(x)
         x = self.conv5(self.device, x)
         x = self.c3k2_3(self.device, x)
         x6 = x
+        x = untilize_tile_for_conv2d_dram(x)
         x = self.conv6(self.device, x)
         x = self.c3k2_4(self.device, x)
         x = self.sppf(self.device, x)
@@ -104,11 +126,13 @@ class TtnnYoloV11:
         ttnn.deallocate(x4)
         x = self.c3k2_6(self.device, x)
         x16 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        x = untilize_tile_for_conv2d_dram(x)
         x = self.conv7(self.device, x)
         x = sharded_concat_2(x, x13)
         ttnn.deallocate(x13)
         x = self.c3k2_7(self.device, x)
         x19 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        x = untilize_tile_for_conv2d_dram(x)
         x = self.conv8(self.device, x)
         x = sharded_concat_2(x, x10)
         ttnn.deallocate(x10)
