@@ -44,7 +44,7 @@ constexpr uint32_t DATA_FORMATS[] = {
     static_cast<uint32_t>(DataFormat::Bfp8_b),
     static_cast<uint32_t>(DataFormat::Bfp4_b),
     static_cast<uint32_t>(DataFormat::Bfp2_b),
-    static_cast<uint32_t>(DataFormat::Bfp2_b),
+    0,  // bfp0: unused
 };
 
 // Assignment packing constants
