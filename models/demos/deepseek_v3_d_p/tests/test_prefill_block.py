@@ -14,6 +14,7 @@ extracts those weights into our TT state_dict format, and compares forward passe
 import pytest
 import torch
 from loguru import logger
+from transformers import DynamicCache
 
 import ttnn
 from models.common.utility_functions import profiler
@@ -22,11 +23,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block import TtPrefillBlock
-from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
-    compute_reference_kvpe,
-    create_hf_model,
-    extract_layer_state_dict,
-)
+from models.demos.deepseek_v3_d_p.utils.transformer_helpers import create_hf_model, extract_layer_state_dict
 from tests.ttnn.utils_for_testing import comp_pcc
 
 PCC_THRESHOLD_DENSE = 0.999
@@ -120,14 +117,18 @@ def test_prefill_block(
         logger.info("Running torch reference forward...")
         position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
         attention_mask = torch.zeros(1, 1, isl_total, isl_total, dtype=torch.bfloat16)
+        ref_cache = DynamicCache() if return_kv_cache else None
         with torch.no_grad():
-            if return_kv_cache:
-                attn_input = hf_model.layers[layer_idx].input_layernorm(torch_input)
-                ref_kvpe = compute_reference_kvpe(hf_model.layers[layer_idx].self_attn, attn_input, position_ids)
             layer_out = hf_model.layers[layer_idx](
-                torch_input, attention_mask=attention_mask, position_ids=position_ids
+                torch_input,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_value=ref_cache,
+                use_cache=return_kv_cache,
             )
             torch_output = layer_out[0]
+        if ref_cache is not None:
+            ref_kvpe = ref_cache.key_cache[0]
         logger.info(f"Torch reference output shape: {torch_output.shape}")
         if ref_kvpe is not None:
             logger.info(f"Reference KVPE shape: {ref_kvpe.shape}")
