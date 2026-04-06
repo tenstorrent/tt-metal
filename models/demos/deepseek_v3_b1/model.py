@@ -67,6 +67,7 @@ class InputField:
     TOKEN_ID = 7
     POSITION_ID = 8
     PREFILL_TOKEN_ID = 9
+    TOKEN0_POSITION_ID = 2
 
 
 class TokenType:
@@ -111,6 +112,7 @@ def to_spec_input(
     torch_padded[0, InputField.TOKEN_TYPE] = token_type
     torch_padded[0, InputField.USER_ID] = user_id
     torch_padded[0, InputField.POSITION_ID] = position_id
+    torch_padded[0, InputField.TOKEN0_POSITION_ID] = position_id
     return ttnn.from_torch(torch_padded, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 

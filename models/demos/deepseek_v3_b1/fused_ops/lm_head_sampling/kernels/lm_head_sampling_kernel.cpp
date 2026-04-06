@@ -843,7 +843,7 @@ void kernel_main() {
             invalidate_l1_cache();
             uint32_t base_token_type = metadata_ptr->tok0_type;
             uint32_t base_token_pos = metadata_ptr->position_id;
-            uint32_t input_pos_id = metadata_ptr->tok0_pos;
+            uint32_t input_pos_id = metadata_ptr->tok0_pos + 1;
             uint32_t slot_id = metadata_ptr->slot_id;
 
             constexpr uint32_t eh_gather_dst_cb = get_named_compile_time_arg_val("gather_dst_cb");
@@ -900,7 +900,7 @@ void kernel_main() {
             uint32_t slot_id = metadata_ptr->slot_id;
             uint32_t spec_token_type = TOKEN_TYPE_SPEC;
             uint32_t spec_token_pos = metadata_ptr->tok0_pos + 2;
-            uint32_t input_pos_id = metadata_ptr->position_id + 1;
+            uint32_t input_pos_id = metadata_ptr->position_id;
             cb_pop_front(argmax_socket_cb, 1);
 
             // Push the base and speculative tokens to the argmax socket CB that will be written to the socket later
