@@ -46,10 +46,12 @@ EXIT_SUCCESS = 0  # All ranks completed successfully
 EXIT_APP_ERROR = 1  # Application/test error (assertion failed, all ranks alive)
 EXIT_RANK_FAILURE = 2  # Rank failure — at least one rank died (infrastructure error)
 EXIT_RECOVERY_FAILED = 3  # Rank failure — recovery attempted but failed
-EXIT_ULFM_FAST_FAIL = 70  # ULFM fast-fail: _exit(70) from C++ handler or Python mpi_fault.py
+EXIT_ULFM_FAST_FAIL = 70  # ULFM fast-fail / finalize watchdog: _exit(70) from C++ or Python handlers
 EXIT_TIMEOUT = 124  # Wall-clock timeout (same convention as Unix `timeout`)
 EXIT_SIGINT = 130  # 128 + SIGINT (2)
 EXIT_SIGKILL = 137  # 128 + SIGKILL (9) — typically OOM killer
+PRTE_ABORT_ON_NON_ZERO_EXIT_PARAM = "state_base_error_non_zero_exit"
+ORTE_ABORT_ON_NON_ZERO_STATUS_PARAM = "orte_abort_on_non_zero_status"
 
 
 class ExitCategory(enum.Enum):
@@ -57,9 +59,8 @@ class ExitCategory(enum.Enum):
 
     SUCCESS = "success"
     APP_ERROR = "app_error"  # Test/application logic failure
-    ULFM_FAST_FAIL = "ulfm_fast_fail"  # ULFM detected rank failure, exited 70
-    RANK_SIGNAL = "rank_signal"  # Rank killed by signal (SIGKILL, SIGSEGV, etc.)
-    FINALIZE_TIMEOUT = "finalize_timeout"  # MPI_Finalize watchdog triggered (exit 70 + SIGALRM)
+    ULFM_FAST_FAIL = "ulfm_fast_fail"  # ULFM fast-fail / finalize watchdog exit (70)
+    RANK_SIGNAL = "rank_signal"  # Best-effort signal heuristic (common 128+N / -N conventions)
     TIMEOUT = "timeout"  # tt-run wall-clock timeout
     INTERRUPTED = "interrupted"  # User interrupt (SIGINT/SIGTERM)
     INFRA_ERROR = "infra_error"  # Reserved: MPI launcher / PRRTE infrastructure failure
@@ -96,14 +97,20 @@ class ExitCodeInterpretation:
 
 
 def interpret_exit_code(returncode: int) -> ExitCodeInterpretation:
-    """Interpret an mpirun process return code into a structured result.
+    """Interpret an MPI launcher return code into a structured result.
 
-    MPI launchers encode exit information in the return code:
+    Open MPI does not document a universal ``128+signal`` launcher contract;
+    ``mpirun(1)`` primarily documents returning the lowest non-zero rank exit
+    status. This helper therefore treats negative subprocess return codes and
+    common ``128+N`` shell conventions as best-effort heuristics, while
+    preserving the explicit branch-owned exit codes ``70`` and ``124``:
+
     - 0: all ranks exited successfully
     - 1-127: application-level exit code from a rank
-    - 128+N: rank killed by signal N (e.g., 137 = 128+9 = SIGKILL)
-    - Negative values (from subprocess.Popen): killed by signal abs(returncode)
-    - 70: ULFM fast-fail (_exit(70) from C++ handler or Python mpi_fault.py)
+    - Negative values: local subprocess terminated by signal ``abs(returncode)``
+    - 70: ULFM fast-fail or MPI_Finalize watchdog path
+    - 124: tt-run wall-clock timeout
+    - 128+N: common Unix wrapper convention for termination by signal ``N``
 
     Returns:
         ExitCodeInterpretation with category, signal info, and CI exit code.
@@ -140,17 +147,16 @@ def interpret_exit_code(returncode: int) -> ExitCodeInterpretation:
             ci_exit_code=EXIT_RANK_FAILURE,
         )
 
-    # Exit code 70: ULFM fast-fail path
-    # The C++ handler (_exit(70)) and Python mpi_fault.py (os._exit(70)) both
-    # use 70 (EX_SOFTWARE) to signal "rank failure detected via ULFM".
-    # This also covers MPI_Finalize watchdog timeout (SIGALRM -> _exit(70)).
+    # Exit code 70 is branch-owned: the C++ handler, Python mpi_fault.py, and
+    # the MPI_Finalize watchdog all use EX_SOFTWARE to force a clean, distinct
+    # CI-visible shutdown.
     if returncode == EXIT_ULFM_FAST_FAIL:
         return ExitCodeInterpretation(
             raw_code=70,
             category=ExitCategory.ULFM_FAST_FAIL,
             signal_num=None,
             signal_name=None,
-            summary="ULFM fast-fail: rank failure detected (exit 70)",
+            summary="ULFM fast-fail / finalize watchdog exit (70)",
             ci_exit_code=EXIT_RANK_FAILURE,
         )
 
@@ -165,21 +171,11 @@ def interpret_exit_code(returncode: int) -> ExitCodeInterpretation:
             ci_exit_code=EXIT_TIMEOUT,
         )
 
-    # Exit code 128+N: rank killed by signal N
+    # Exit code 128+N: common Unix / shell convention for termination by signal N.
+    # Treat this as heuristic triage, not an Open MPI-specific contract.
     if returncode > 128:
         sig = returncode - 128
         sig_name = _SIGNAL_NAMES.get(sig, f"SIG{sig}")
-
-        # SIGALRM (14) with exit 142 (128+14) may indicate MPI_Finalize watchdog
-        if sig == signal.SIGALRM:
-            return ExitCodeInterpretation(
-                raw_code=returncode,
-                category=ExitCategory.FINALIZE_TIMEOUT,
-                signal_num=sig,
-                signal_name="SIGALRM",
-                summary="MPI_Finalize watchdog timeout (SIGALRM)",
-                ci_exit_code=EXIT_RANK_FAILURE,
-            )
 
         # SIGINT -> user interrupt
         if sig == signal.SIGINT:
@@ -294,13 +290,10 @@ def validate_network_interface(interface: str, verbose: bool = False) -> None:
 
 @functools.lru_cache(maxsize=1)
 def _detect_openmpi_major_version() -> int | None:
-    """Detect the major version of the installed OpenMPI by parsing mpirun --version.
+    """Detect the major version of the installed Open MPI launcher.
 
-    The result is cached via lru_cache so subprocess is only invoked once per process.
-    Call ``_detect_openmpi_major_version.cache_clear()`` in tests to reset the cache.
-
-    Returns:
-        The major version number (e.g. 4 or 5), or None if detection fails.
+    The result is cached so subprocess is only invoked once per process.
+    Call ``_detect_openmpi_major_version.cache_clear()`` in tests to reset it.
     """
     try:
         result = subprocess.run(
@@ -309,44 +302,52 @@ def _detect_openmpi_major_version() -> int | None:
             text=True,
             timeout=5,
         )
-        # OpenMPI output looks like: "mpirun (Open MPI) 5.0.3" or similar
         for line in result.stdout.splitlines():
             if "Open MPI" in line:
-                # Extract version string after "Open MPI) "
-                # e.g. "mpirun (Open MPI) 5.0.7" -> "5.0.7"
                 parts = line.split(")")
                 if len(parts) >= 2:
                     version_str = parts[-1].strip()
-                    major = int(version_str.split(".")[0])
-                    return major
+                    return int(version_str.split(".")[0])
     except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, IndexError) as exc:
-        # Best-effort detection: failures are expected on systems without mpirun
-        # or when the output format changes. Log at debug and fall back to None.
-        logger.debug(f"{TT_RUN_PREFIX} Failed to detect OpenMPI version: {exc}")
+        logger.debug(f"{TT_RUN_PREFIX} Failed to detect Open MPI version: {exc}")
 
     return None
 
 
 @functools.lru_cache(maxsize=1)
 def _get_abort_on_failure_mca_param() -> str:
-    """Return the MCA param name for 'abort all ranks on non-zero exit'.
+    """Return the runtime parameter name for abort-on-non-zero.
 
-    OpenMPI 5.x replaced the ORTE runtime layer with PRRTE and renamed many
-    MCA parameters. ``orte_abort_on_non_zero_status`` still works as an alias
-    in 5.x, but the canonical name is ``prte_abort_on_non_zero_status``.
-
-    We detect the OpenMPI major version from ``mpirun --version`` and return
-    the correct parameter name. If detection fails, we default to the orte_
-    variant which is accepted (with a deprecation warning) on both 4.x and 5.x.
-
-    We officially target ompi v5, but some clusters are still running ompi v4.
-    This is a fallback.
+    Open MPI 5.x uses the PRTE control ``state_base_error_non_zero_exit``.
+    Open MPI 4.x and unknown versions fall back to the ORTE-compatible
+    ``orte_abort_on_non_zero_status`` knob for older clusters.
     """
     major = _detect_openmpi_major_version()
     if major is not None and major >= 5:
-        return "prte_abort_on_non_zero_status"
-    # Safe default: works on 4.x natively and on 5.x via alias
-    return "orte_abort_on_non_zero_status"
+        return PRTE_ABORT_ON_NON_ZERO_EXIT_PARAM
+    return ORTE_ABORT_ON_NON_ZERO_STATUS_PARAM
+
+
+def _get_abort_on_failure_runtime_args() -> list[str]:
+    """Return launcher args for aborting the job on a non-zero rank exit."""
+    param_name = _get_abort_on_failure_mca_param()
+    major = _detect_openmpi_major_version()
+    if major is not None and major >= 5:
+        return ["--prtemca", param_name, "1"]
+    return ["--mca", param_name, "1"]
+
+
+def _should_auto_enable_ulfm_runtime(mpi_launcher: str) -> bool:
+    """Return True when tt-run should auto-add ``--with-ft ulfm``.
+
+    Open MPI 5 requires explicit ULFM runtime activation even for plain
+    ``mpirun``. For older or unknown versions, keep the conservative behavior
+    and only auto-enable when using an ``mpirun-ulfm`` style launcher.
+    """
+    major = _detect_openmpi_major_version()
+    if major is not None and major >= 5:
+        return True
+    return "ulfm" in os.path.basename(mpi_launcher)
 
 
 class RankBinding(BaseModel):
@@ -1058,30 +1059,57 @@ def has_host_selection_args(mpi_args: List[str]) -> bool:
     return False
 
 
-def has_mca_param(mpi_args: List[str], param_name: str) -> bool:
-    """Return True if --mca/-mca specifies a given MCA parameter."""
+def has_cli_option(mpi_args: List[str], option_name: str) -> bool:
+    """Return True if a long-form CLI option is present."""
+    return any(arg == option_name or arg.startswith(f"{option_name}=") for arg in mpi_args)
+
+
+def has_param_via_options(mpi_args: List[str], param_name: str, option_names: tuple[str, ...]) -> bool:
+    """Return True if any key/value CLI option specifies *param_name*."""
     i = 0
     while i < len(mpi_args):
         arg = mpi_args[i]
 
-        if arg in ("--mca", "-mca"):
+        if arg in option_names:
             if i + 1 < len(mpi_args):
-                mca_key = mpi_args[i + 1]
-                if mca_key == param_name or mca_key.startswith(f"{param_name}="):
+                option_key = mpi_args[i + 1]
+                if option_key == param_name or option_key.startswith(f"{param_name}="):
                     return True
                 i += 3
                 continue
             i += 1
             continue
 
-        if arg.startswith("--mca=") or arg.startswith("-mca="):
-            mca_key = arg.split("=", 1)[1]
-            if mca_key == param_name or mca_key.startswith(f"{param_name}="):
-                return True
+        for option_name in option_names:
+            if arg.startswith(f"{option_name}="):
+                option_key = arg.split("=", 1)[1]
+                if option_key == param_name or option_key.startswith(f"{param_name}="):
+                    return True
 
         i += 1
 
     return False
+
+
+def has_mca_param(mpi_args: List[str], param_name: str) -> bool:
+    """Return True if --mca/-mca specifies a given MCA parameter."""
+    return has_param_via_options(mpi_args, param_name, ("--mca", "-mca"))
+
+
+def has_prte_param(mpi_args: List[str], param_name: str) -> bool:
+    """Return True if PRTE runtime configuration already specifies *param_name*.
+
+    We check both the upstream-documented ``--prtemca`` spelling and generic
+    ``--mca`` to avoid duplicating a user-supplied override.
+    """
+    return has_param_via_options(mpi_args, param_name, ("--prtemca", "-prtemca", "--mca", "-mca"))
+
+
+def has_abort_on_failure_param(mpi_args: List[str]) -> bool:
+    """Return True if either the PRTE or ORTE abort-on-non-zero knob is set."""
+    return has_prte_param(mpi_args, PRTE_ABORT_ON_NON_ZERO_EXIT_PARAM) or has_mca_param(
+        mpi_args, ORTE_ABORT_ON_NON_ZERO_STATUS_PARAM
+    )
 
 
 def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
@@ -1201,8 +1229,11 @@ def build_mpi_command(
 
     cmd = [mpi_launcher]
 
-    # Enable ULFM fault-tolerance mode when using mpirun-ulfm
-    if mpi_launcher and "ulfm" in os.path.basename(mpi_launcher):
+    # Open MPI 5.x requires explicit runtime activation for ULFM even when
+    # using the plain mpirun binary. For older / unknown versions, preserve the
+    # conservative compatibility behavior and only auto-enable through an
+    # mpirun-ulfm style launcher unless the user passed --with-ft explicitly.
+    if _should_auto_enable_ulfm_runtime(mpi_launcher) and not has_cli_option(effective_mpi_args, "--with-ft"):
         cmd.extend(["--with-ft", "ulfm"])
 
     # Check if --bind-to is already specified in mpi_args
@@ -1497,15 +1528,23 @@ def main(
 
     \b
     Multi-Host MPI Settings (default):
-        tt-run applies recommended MPI settings for multi-host clusters by default:
+        tt-run applies recommended multi-host settings with an Open MPI version carveout:
 
-        - --mca btl self,tcp: Use TCP byte transfer layer for inter-node communication
-        - --mca btl_tcp_if_exclude docker0,lo: Exclude Docker bridge and loopback interfaces
+        - Open MPI 5.x / PRRTE:
+          - --with-ft ulfm: Enable ULFM at runtime (even for plain mpirun)
+          - --prtemca state_base_error_non_zero_exit 1: Abort the job when a rank exits non-zero
+        - Open MPI 4.x / ORTE fallback:
+          - Keep the older launcher behavior for ULFM auto-enablement
+          - --mca orte_abort_on_non_zero_status 1: Abort the job when a rank exits non-zero
+        - All versions:
+          - --mca btl self,tcp: Use TCP byte transfer layer for inter-node communication
+          - --mca btl_tcp_if_exclude docker0,lo: Exclude Docker bridge and loopback interfaces
 
         If --tcp-interface is specified (e.g., --tcp-interface cnx1), it uses btl_tcp_if_include
         instead to explicitly select the network interface.
 
-        Use --bare to disable these settings (e.g., single-host or special setups).
+        Use --bare to disable the default transport/interface and abort-on-non-zero bundle.
+        User-provided --mpi-args still take precedence over tt-run defaults.
 
         These settings help avoid common MPI issues in multi-host environments:
         - Stale process connections from other nodes
@@ -1638,13 +1677,13 @@ def main(
         validate_network_interface(tcp_interface, verbose=verbose)
 
     effective_mpi_args = list(mpi_args) if mpi_args else []
-    abort_param = _get_abort_on_failure_mca_param()
+    abort_args = _get_abort_on_failure_runtime_args()
 
     if not bare:
         user_has_btl_setting = has_mca_param(effective_mpi_args, "btl")
         user_has_tcp_include = has_mca_param(effective_mpi_args, "btl_tcp_if_include")
         user_has_tcp_exclude = has_mca_param(effective_mpi_args, "btl_tcp_if_exclude")
-        user_has_abort_param = has_mca_param(effective_mpi_args, abort_param)
+        user_has_abort_param = has_abort_on_failure_param(effective_mpi_args)
 
         # Recommended MPI settings for multi-host clusters:
         # - Use TCP for byte transfer layer (reliable for multi-host)
@@ -1670,7 +1709,7 @@ def main(
             multihost_args.extend(["--mca", "btl_tcp_if_exclude", "docker0,lo"])
 
         if not user_has_abort_param:
-            multihost_args.extend(["--mca", abort_param, "1"])
+            multihost_args.extend(abort_args)
 
         # Prepend multihost args so user-provided --mpi-args can override if needed
         effective_mpi_args = multihost_args + effective_mpi_args

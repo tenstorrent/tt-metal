@@ -11,6 +11,7 @@
 
 #include <csignal>
 #include <cstdlib>
+#include <pthread.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -22,9 +23,11 @@ using tt::tt_metal::distributed::multihost::DistributedContext;
 using tt::tt_metal::distributed::multihost::DistributedException;
 using tt::tt_metal::distributed::multihost::FailurePolicy;
 using tt::tt_metal::distributed::multihost::Key;
+using tt::tt_metal::distributed::multihost::MPIContext;
 using tt::tt_metal::distributed::multihost::MPIRankFailureException;
 using tt::tt_metal::distributed::multihost::Rank;
 using tt::tt_metal::distributed::multihost::Tag;
+namespace multihost_detail = tt::tt_metal::distributed::multihost::detail;
 
 // NOTE: Tests that kill ranks or call revoke_and_shrink() mutate the shared
 // world communicator.  This creates an ordering dependency: tests that shrink
@@ -375,13 +378,14 @@ TEST(FaultTolerance, FastFailEmitsRankFailureDiagnostics) {
 
 TEST(FaultTolerance, FinalizeWatchdogPath) {
     //----------------------------------------------------------------------
-    // Verify that the MPI_Finalize watchdog infrastructure is installed.
+    // Verify that the MPI_Finalize watchdog is scoped to the finalize call.
     //
     // We cannot directly test that MPI_Finalize hangs (that would hang
     // the test), but we CAN verify:
-    // 1. SIGALRM handler is installed (registered in init_env() after MPI_Init;
-    //    atexit only arms alarm() before MPI_Finalize)
-    // 2. The handler calls _exit(70)
+    // 1. SIGALRM is NOT installed process-wide during normal execution
+    // 2. Entering the scoped watchdog installs the handler
+    // 3. Leaving the scope restores the previous SIGALRM disposition
+    // 4. Non-success MPI_Finalize return codes are treated as fatal
     //
     // The actual MPI_Finalize hang scenario is tested by the shell-level
     // test in run_single_node_ulfm_tests.sh which runs a purpose-built
@@ -390,16 +394,58 @@ TEST(FaultTolerance, FinalizeWatchdogPath) {
     const auto& ctx = DistributedContext::get_current_world();
     SKIP_IF_NO_ULFM(ctx);
 
-    // Check that we have a SIGALRM handler installed (not SIG_DFL/SIG_IGN)
-    struct sigaction sa;
-    sigaction(SIGALRM, nullptr, &sa);
+    EXPECT_FALSE(multihost_detail::is_finalize_alarm_handler_installed_for_testing())
+        << "SIGALRM finalize watchdog should not be installed outside MPI_Finalize";
+    EXPECT_FALSE(multihost_detail::finalize_is_in_progress())
+        << "Finalize should not be marked in progress outside MPI_Finalize";
 
-    // The handler should be set (either sa_handler or sa_sigaction, not SIG_DFL)
-    bool has_handler = (sa.sa_handler != SIG_DFL && sa.sa_handler != SIG_IGN) || (sa.sa_flags & SA_SIGINFO);
-    EXPECT_TRUE(has_handler) << "SIGALRM handler should be installed for MPI_Finalize watchdog";
+    struct ScopedSignalMaskRestore {
+        sigset_t old_mask{};
+        bool active{false};
 
-    // Verify all ranks see the same state
-    EXPECT_EQ_ALL_RANKS(static_cast<int>(has_handler), ctx);
+        ~ScopedSignalMaskRestore() {
+            if (active) {
+                [[maybe_unused]] const int restore_rc = pthread_sigmask(SIG_SETMASK, &old_mask, nullptr);
+            }
+        }
+    } signal_mask_restore;
+    sigset_t block_mask;
+    sigemptyset(&block_mask);
+    sigaddset(&block_mask, SIGALRM);
+    ASSERT_EQ(pthread_sigmask(SIG_BLOCK, &block_mask, &signal_mask_restore.old_mask), 0);
+    signal_mask_restore.active = true;
+    EXPECT_FALSE(multihost_detail::is_sigalrm_unblocked_for_testing())
+        << "Test precondition: SIGALRM should be blocked before entering the scoped watchdog";
+
+    multihost_detail::clear_finalize_unsafe();
+    EXPECT_FALSE(multihost_detail::finalize_is_unsafe());
+    multihost_detail::mark_finalize_unsafe();
+    EXPECT_TRUE(multihost_detail::finalize_is_unsafe());
+    multihost_detail::clear_finalize_unsafe();
+    EXPECT_FALSE(multihost_detail::finalize_is_unsafe());
+
+    {
+        multihost_detail::ScopedFinalizeAlarmHandler guard(30);
+        ASSERT_TRUE(guard.armed()) << "Scoped finalize watchdog should install SIGALRM handler";
+        EXPECT_TRUE(multihost_detail::is_finalize_alarm_handler_installed_for_testing())
+            << "SIGALRM finalize watchdog should be installed inside the scope";
+        EXPECT_TRUE(multihost_detail::is_sigalrm_unblocked_for_testing())
+            << "Scoped finalize watchdog should temporarily unblock SIGALRM in the finalizing thread";
+        EXPECT_TRUE(multihost_detail::finalize_is_in_progress())
+            << "Finalize should be marked in progress while the watchdog scope is active";
+    }
+
+    EXPECT_FALSE(multihost_detail::is_finalize_alarm_handler_installed_for_testing())
+        << "SIGALRM finalize watchdog should be restored after leaving the scope";
+    EXPECT_FALSE(multihost_detail::is_sigalrm_unblocked_for_testing())
+        << "Scoped finalize watchdog should restore the prior blocked SIGALRM mask";
+    EXPECT_FALSE(multihost_detail::finalize_is_in_progress())
+        << "Finalize in-progress marker should be cleared after leaving the scope";
+
+    EXPECT_TRUE(multihost_detail::finalize_return_is_nonfatal(MPI_SUCCESS));
+    EXPECT_FALSE(multihost_detail::finalize_return_is_nonfatal(MPI_ERR_COMM));
+
+    EXPECT_EQ_ALL_RANKS(1, ctx);
 
     ctx->barrier();
 }
@@ -422,6 +468,23 @@ TEST(FaultTolerance, TerminateHandlerInstalled) {
     // All ranks should agree
     int has_handler = (handler != nullptr) ? 1 : 0;
     EXPECT_EQ_ALL_RANKS(has_handler, ctx);
+
+    ctx->barrier();
+}
+
+TEST(FaultTolerance, TerminateHandlerRevokeResultClassification) {
+    //----------------------------------------------------------------------
+    // The std::terminate handler relies on integer MPI return codes from
+    // MPIX_Comm_revoke, not C++ exceptions. Success and "already revoked"
+    // are the expected outcomes; anything else is still tolerated because the
+    // handler must continue to _exit(70).
+    //----------------------------------------------------------------------
+    const auto& ctx = DistributedContext::get_current_world();
+    SKIP_IF_NO_ULFM(ctx);
+
+    EXPECT_TRUE(multihost_detail::terminate_revoke_result_is_nonfatal(MPI_SUCCESS));
+    EXPECT_TRUE(multihost_detail::terminate_revoke_result_is_nonfatal(MPIX_ERR_REVOKED));
+    EXPECT_FALSE(multihost_detail::terminate_revoke_result_is_nonfatal(MPI_ERR_COMM));
 
     ctx->barrier();
 }
@@ -1022,6 +1085,51 @@ TEST(FaultTolerance, FailureDuringNonBlockingOps) {
     }
 
     ctx->barrier();
+}
+
+TEST(FaultTolerance, RequestWaitCompletesAfterOwnerExpires) {
+    //----------------------------------------------------------------------
+    // Exercise the MPIRequest fallback path where owner_.lock() fails.
+    // Using MPI_COMM_WORLD keeps the communicator valid after the temporary
+    // MPIContext is released, while the request itself outlives that owner.
+    //----------------------------------------------------------------------
+    const auto& world_ctx = DistributedContext::get_current_world();
+
+    const int world = *world_ctx->size();
+    const int rank = *world_ctx->rank();
+    if (world < 2) {
+        GTEST_SKIP() << "Need at least 2 ranks for owner-expired request test";
+    }
+
+    auto temp_ctx = std::make_shared<MPIContext>(MPI_COMM_WORLD);
+    constexpr int TAG_VAL = 314;
+    constexpr int EXPECTED_VALUE = 0x1234;
+
+    if (rank == 0) {
+        int recv_buf = 0;
+        auto req = temp_ctx->irecv(
+            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&recv_buf), sizeof(recv_buf)), Rank{1}, Tag{TAG_VAL});
+        temp_ctx.reset();
+
+        ASSERT_NE(req, nullptr);
+        EXPECT_TRUE(req->active());
+
+        const auto status = req->wait();
+        EXPECT_FALSE(req->active());
+        EXPECT_EQ(recv_buf, EXPECTED_VALUE);
+        EXPECT_EQ(*status.source, 1);
+        EXPECT_EQ(*status.tag, TAG_VAL);
+        EXPECT_EQ(status.count, static_cast<int>(sizeof(recv_buf)));
+    } else if (rank == 1) {
+        int send_buf = EXPECTED_VALUE;
+        temp_ctx->send(
+            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&send_buf), sizeof(send_buf)), Rank{0}, Tag{TAG_VAL});
+        temp_ctx.reset();
+    } else {
+        temp_ctx.reset();
+    }
+
+    world_ctx->barrier();
 }
 
 // Split-brain test reference (requires network partition capability)

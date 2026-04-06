@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Comprehensive tests for ttrun.py exit code interpretation and PRRTE version detection.
+"""Comprehensive tests for ttrun.py exit code interpretation and launcher defaults.
 
 Tests the ExitCategory enum, interpret_exit_code() function, and
-_detect_openmpi_major_version() / _get_abort_on_failure_mca_param() helpers.
+Open MPI version / launcher default helpers.
 
 These run without MPI — they test pure Python logic used by tt-run for
 CI triage of mpirun exit codes.
@@ -56,6 +56,7 @@ from ttnn.distributed.ttrun import (
     _SIGNAL_NAMES,
     _detect_openmpi_major_version,
     _get_abort_on_failure_mca_param,
+    _get_abort_on_failure_runtime_args,
     _log_exit_interpretation,
     interpret_exit_code,
 )
@@ -74,7 +75,6 @@ class TestExitCategoryEnum:
             "APP_ERROR",
             "ULFM_FAST_FAIL",
             "RANK_SIGNAL",
-            "FINALIZE_TIMEOUT",
             "TIMEOUT",
             "INTERRUPTED",
             "INFRA_ERROR",
@@ -137,7 +137,7 @@ class TestInterpretExitCodeHappyPaths:
         assert "oom" in interp.summary.lower() or "SIGKILL" in interp.summary
 
     def test_sigint_exit_130(self):
-        """130 = 128 + SIGINT(2)."""
+        """130 follows the common 128+signal shell convention for SIGINT."""
         interp = interpret_exit_code(130)
         assert interp.category == ExitCategory.INTERRUPTED
         assert interp.signal_num == 2
@@ -145,9 +145,9 @@ class TestInterpretExitCodeHappyPaths:
         assert interp.ci_exit_code == EXIT_SIGINT
 
     def test_sigalrm_exit_142(self):
-        """142 = 128 + SIGALRM(14) — MPI_Finalize watchdog."""
+        """142 follows the common 128+signal shell convention for SIGALRM."""
         interp = interpret_exit_code(142)
-        assert interp.category == ExitCategory.FINALIZE_TIMEOUT
+        assert interp.category == ExitCategory.RANK_SIGNAL
         assert interp.signal_num == 14
         assert interp.signal_name == "SIGALRM"
         assert interp.ci_exit_code == EXIT_RANK_FAILURE
@@ -257,7 +257,7 @@ class TestCINormalization:
     def test_sigkill_normalizes_to_2(self):
         assert interpret_exit_code(137).ci_exit_code == EXIT_RANK_FAILURE
 
-    def test_finalize_watchdog_normalizes_to_2(self):
+    def test_sigalrm_heuristic_normalizes_to_2(self):
         assert interpret_exit_code(142).ci_exit_code == EXIT_RANK_FAILURE
 
     def test_timeout_normalizes_to_124(self):
@@ -300,9 +300,9 @@ class TestLogExitInterpretation:
         assert interp.signal_name == "SIGKILL"
         assert interp.signal_num == 9
 
-    def test_finalize_timeout_mentions_watchdog(self):
+    def test_sigalrm_summary_mentions_signal(self):
         interp = interpret_exit_code(142)
-        assert "watchdog" in interp.summary.lower() or "finalize" in interp.summary.lower()
+        assert "sigalrm" in interp.summary.lower()
 
     def test_oom_hint_in_sigkill_summary(self):
         interp = interpret_exit_code(137)
@@ -310,104 +310,96 @@ class TestLogExitInterpretation:
 
 
 # =====================================================================
-# PRRTE / ORTE version detection
+# Open MPI version handling
 # =====================================================================
 
 
-class TestPRRTEDetection:
-    """Test _detect_openmpi_major_version and _get_abort_on_failure_mca_param."""
+class TestOpenMPIVersionHandling:
+    """Test Open MPI version detection and v4/v5 launcher fallbacks."""
 
     def setup_method(self):
-        """Reset cached version and derived MCA param between tests."""
         _ttrun_mod._detect_openmpi_major_version.cache_clear()
         _ttrun_mod._get_abort_on_failure_mca_param.cache_clear()
 
     def test_detect_openmpi_5(self):
-        """Standard OpenMPI 5.x output."""
         mock_result = MagicMock()
         mock_result.stdout = "mpirun (Open MPI) 5.0.3\nReport bugs to ...\n"
         with patch("subprocess.run", return_value=mock_result):
-            v = _detect_openmpi_major_version()
-        assert v == 5
+            assert _detect_openmpi_major_version() == 5
 
     def test_detect_openmpi_4(self):
-        """Standard OpenMPI 4.x output."""
         mock_result = MagicMock()
         mock_result.stdout = "mpirun (Open MPI) 4.1.6\nReport bugs to ...\n"
         with patch("subprocess.run", return_value=mock_result):
-            v = _detect_openmpi_major_version()
-        assert v == 4
+            assert _detect_openmpi_major_version() == 4
 
     def test_detect_mpirun_not_found(self):
-        """mpirun not installed — should return None gracefully."""
         with patch("subprocess.run", side_effect=FileNotFoundError("mpirun not found")):
-            v = _detect_openmpi_major_version()
-        assert v is None
+            assert _detect_openmpi_major_version() is None
 
     def test_detect_mpirun_timeout(self):
-        """mpirun --version hangs — should return None after timeout."""
         import subprocess
 
         with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("mpirun", 5)):
-            v = _detect_openmpi_major_version()
-        assert v is None
+            assert _detect_openmpi_major_version() is None
 
     def test_detect_malformed_output(self):
-        """mpirun --version returns unexpected output format."""
         mock_result = MagicMock()
         mock_result.stdout = "something completely different\n"
         with patch("subprocess.run", return_value=mock_result):
-            v = _detect_openmpi_major_version()
-        assert v is None
+            assert _detect_openmpi_major_version() is None
 
     def test_detect_empty_output(self):
-        """mpirun --version returns nothing."""
         mock_result = MagicMock()
         mock_result.stdout = ""
         with patch("subprocess.run", return_value=mock_result):
-            v = _detect_openmpi_major_version()
-        assert v is None
+            assert _detect_openmpi_major_version() is None
 
     def test_detect_prrte_version_string(self):
-        """Some PRRTE builds have different format — should still work if 'Open MPI' present."""
         mock_result = MagicMock()
         mock_result.stdout = "prterun (PRRTE) 3.0.0\nmpirun (Open MPI) 5.0.0\n"
         with patch("subprocess.run", return_value=mock_result):
-            v = _detect_openmpi_major_version()
-        assert v == 5
+            assert _detect_openmpi_major_version() == 5
 
     def test_abort_param_openmpi_5(self):
-        """OpenMPI 5+ should use prte_ prefix."""
         mock_result = MagicMock()
         mock_result.stdout = "mpirun (Open MPI) 5.0.3\n"
         with patch("subprocess.run", return_value=mock_result):
-            param = _get_abort_on_failure_mca_param()
-        assert param == "prte_abort_on_non_zero_status"
+            assert _get_abort_on_failure_mca_param() == "state_base_error_non_zero_exit"
 
     def test_abort_param_openmpi_4(self):
-        """OpenMPI 4 should use orte_ prefix."""
         mock_result = MagicMock()
         mock_result.stdout = "mpirun (Open MPI) 4.1.6\n"
         with patch("subprocess.run", return_value=mock_result):
-            param = _get_abort_on_failure_mca_param()
-        assert param == "orte_abort_on_non_zero_status"
+            assert _get_abort_on_failure_mca_param() == "orte_abort_on_non_zero_status"
 
     def test_abort_param_unknown_version(self):
-        """Unknown version defaults to orte_ (safe fallback)."""
         with patch("subprocess.run", side_effect=FileNotFoundError):
-            param = _get_abort_on_failure_mca_param()
-        assert param == "orte_abort_on_non_zero_status"
+            assert _get_abort_on_failure_mca_param() == "orte_abort_on_non_zero_status"
+
+    def test_abort_args_match_openmpi_5_docs(self):
+        mock_result = MagicMock()
+        mock_result.stdout = "mpirun (Open MPI) 5.0.3\n"
+        with patch("subprocess.run", return_value=mock_result):
+            assert _get_abort_on_failure_runtime_args() == ["--prtemca", "state_base_error_non_zero_exit", "1"]
+
+    def test_abort_args_fall_back_to_orte_on_openmpi_4(self):
+        mock_result = MagicMock()
+        mock_result.stdout = "mpirun (Open MPI) 4.1.6\n"
+        with patch("subprocess.run", return_value=mock_result):
+            assert _get_abort_on_failure_runtime_args() == ["--mca", "orte_abort_on_non_zero_status", "1"]
+
+    def test_abort_args_fall_back_to_orte_when_version_unknown(self):
+        with patch("subprocess.run", side_effect=FileNotFoundError):
+            assert _get_abort_on_failure_runtime_args() == ["--mca", "orte_abort_on_non_zero_status", "1"]
 
     def test_cached_version_reused(self):
-        """Second call should use cached value, not re-run subprocess."""
         _ttrun_mod._detect_openmpi_major_version.cache_clear()
         mock_result = MagicMock()
         mock_result.stdout = "mpirun (Open MPI) 5.0.0\n"
         with patch("subprocess.run", return_value=mock_result) as mock_run:
-            v1 = _detect_openmpi_major_version()
-            v2 = _detect_openmpi_major_version()
-        assert v1 == v2 == 5
-        # Should only call subprocess.run once due to caching
+            assert _detect_openmpi_major_version() == 5
+            assert _detect_openmpi_major_version() == 5
         assert mock_run.call_count == 1
 
 

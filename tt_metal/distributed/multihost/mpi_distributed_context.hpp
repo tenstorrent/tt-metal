@@ -5,6 +5,8 @@
 #pragma once
 
 #include <atomic>
+#include <csignal>
+#include <cstdint>
 #include <mpi.h>
 #include <memory>
 #include <mutex>
@@ -88,6 +90,61 @@ struct MPIRequestCommSnapshot {
     int rank{0};
     std::vector<std::string> rank_hostnames;
 };
+
+namespace detail {
+
+// std::terminate() uses MPIX_Comm_revoke as a best-effort wakeup for blocked
+// peers. Success and "already revoked" are the expected outcomes; any other
+// MPI error still leads to the same process-local _exit(70) fallback.
+[[nodiscard]] bool terminate_revoke_result_is_nonfatal(int rc) noexcept;
+
+// MPI_Finalize should only be treated as clean when it returns MPI_SUCCESS.
+// Any non-success return is surfaced in diagnostics and converted into the
+// same fast-fail exit path used by the watchdog.
+[[nodiscard]] bool finalize_return_is_nonfatal(int rc) noexcept;
+
+// Tracks whether teardown should skip MPI_Finalize entirely because the process
+// is already known to be in an unsafe state (e.g. a revoked communicator that
+// was never recovered).
+void mark_finalize_unsafe() noexcept;
+void clear_finalize_unsafe() noexcept;
+[[nodiscard]] bool finalize_is_unsafe() noexcept;
+
+// Tracks whether a process-wide MPI teardown is in progress so new MPI entry
+// points can fail closed instead of entering collectives during finalization.
+[[nodiscard]] bool finalize_is_in_progress() noexcept;
+
+// Arms the SIGALRM-based finalize watchdog only for a lexical scope, temporarily
+// unmasks SIGALRM in the current thread, starts a detached backup watchdog
+// thread, and restores prior process/thread state on normal return.
+class ScopedFinalizeAlarmHandler {
+public:
+    explicit ScopedFinalizeAlarmHandler(unsigned secs) noexcept;
+    ~ScopedFinalizeAlarmHandler() noexcept;
+
+    ScopedFinalizeAlarmHandler(const ScopedFinalizeAlarmHandler&) = delete;
+    ScopedFinalizeAlarmHandler& operator=(const ScopedFinalizeAlarmHandler&) = delete;
+    ScopedFinalizeAlarmHandler(ScopedFinalizeAlarmHandler&&) = delete;
+    ScopedFinalizeAlarmHandler& operator=(ScopedFinalizeAlarmHandler&&) = delete;
+
+    [[nodiscard]] bool armed() const noexcept { return armed_; }
+
+private:
+    struct sigaction old_sigalrm_action_{};
+    sigset_t old_sigmask_{};
+    unsigned old_alarm_secs_{0};
+    std::uint64_t watchdog_generation_{0};
+    bool finalize_scope_owner_{false};
+    bool sigalrm_unmasked_{false};
+    bool armed_{false};
+};
+
+// Test helper: verify that the scoped watchdog has installed its SIGALRM
+// handler at the current instant.
+[[nodiscard]] bool is_finalize_alarm_handler_installed_for_testing() noexcept;
+[[nodiscard]] bool is_sigalrm_unblocked_for_testing() noexcept;
+
+}  // namespace detail
 
 // ---------------------------------------------------------------------
 //                       Main distributed context

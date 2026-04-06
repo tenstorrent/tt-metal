@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -20,10 +21,12 @@
 #include <mutex>
 #include <numeric>
 #include <optional>
+#include <pthread.h>
 #include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <unistd.h>
 #include <vector>
@@ -257,6 +260,20 @@ template <std::size_t N, typename... Args>
     }
 }
 
+// Seconds to wait for MPI_Finalize before assuming a remote rank is dead.
+// Chosen to be well under a typical CI step timeout but long enough for
+// legitimate slow-finalize scenarios (large communicator teardown).
+static constexpr unsigned MPI_FINALIZE_TIMEOUT_SECS = 30;
+
+namespace {
+
+std::atomic_flag g_finalize_unsafe = {};
+std::atomic_flag g_finalize_in_progress = {};
+std::atomic<std::uint64_t> g_finalize_watchdog_generation{0};
+std::atomic<std::uint64_t> g_finalize_watchdog_armed_generation{0};
+
+}  // namespace
+
 static void handle_rank_failure(
     MPI_Comm comm,
     int cached_rank,
@@ -298,6 +315,7 @@ static void handle_rank_failure(
     if (revoked_flag) {
         revoked_flag->test_and_set(std::memory_order_release);
     }
+    detail::mark_finalize_unsafe();
 
     // Revoke so all survivors unblock. Ignore return -- another rank may have revoked first.
     MPIX_Comm_revoke(comm);
@@ -431,6 +449,7 @@ std::shared_ptr<MPIContext::CommunicatorState> MPIContext::build_state(MPI_Comm 
 
 std::shared_ptr<MPIContext::CommunicatorState> MPIContext::snapshot_state() const {
     std::lock_guard lock(comm_mutex_);
+    TT_FATAL(!detail::finalize_is_in_progress(), "MPIContext cannot service new MPI calls during process finalization");
     TT_FATAL(state_ != nullptr, "MPIContext has no active communicator state");
     return state_;
 }
@@ -576,11 +595,6 @@ bool MPIRequest::active() const { return !done_; }
 // (e.g. blocked in Python teardown while holding an MPI_Finalize call).
 // ---------------------------------------------------------------------------
 
-// Seconds to wait for MPI_Finalize before assuming a remote rank is dead.
-// Chosen to be well under a typical CI step timeout but long enough for
-// legitimate slow-finalize scenarios (large communicator teardown).
-static constexpr unsigned MPI_FINALIZE_TIMEOUT_SECS = 30;
-
 // SIGALRM handler: MPI_Finalize watchdog fired — another rank is dead/stuck.
 // async-signal-safe: only write() and _exit() are called.
 static void mpi_finalize_alarm_handler(int /*sig*/) noexcept {
@@ -597,6 +611,110 @@ static void mpi_finalize_alarm_handler(int /*sig*/) noexcept {
     // _exit skips all atexit handlers (including the MPI_Finalize atexit),
     // avoiding a second hang.
     _exit(k_mpi_ulfm_fast_fail_exit_code);
+}
+
+bool detail::terminate_revoke_result_is_nonfatal(int rc) noexcept {
+#if OMPI_HAS_ULFM
+    return rc == MPI_SUCCESS || rc == MPIX_ERR_REVOKED;
+#else
+    return rc == MPI_SUCCESS;
+#endif
+}
+
+bool detail::finalize_return_is_nonfatal(int rc) noexcept { return rc == MPI_SUCCESS; }
+
+void detail::mark_finalize_unsafe() noexcept { g_finalize_unsafe.test_and_set(std::memory_order_release); }
+
+void detail::clear_finalize_unsafe() noexcept { g_finalize_unsafe.clear(std::memory_order_release); }
+
+bool detail::finalize_is_unsafe() noexcept { return g_finalize_unsafe.test(std::memory_order_acquire); }
+
+bool detail::finalize_is_in_progress() noexcept { return g_finalize_in_progress.test(std::memory_order_acquire); }
+
+detail::ScopedFinalizeAlarmHandler::ScopedFinalizeAlarmHandler(unsigned secs) noexcept {
+    finalize_scope_owner_ = !g_finalize_in_progress.test_and_set(std::memory_order_release);
+    if (!finalize_scope_owner_) {
+        return;
+    }
+
+    sigset_t unblock_mask;
+    sigemptyset(&unblock_mask);
+    sigaddset(&unblock_mask, SIGALRM);
+    if (pthread_sigmask(SIG_UNBLOCK, &unblock_mask, &old_sigmask_) == 0) {
+        sigalrm_unmasked_ = true;
+    }
+
+    watchdog_generation_ = g_finalize_watchdog_generation.fetch_add(1, std::memory_order_relaxed) + 1;
+    g_finalize_watchdog_armed_generation.store(watchdog_generation_, std::memory_order_release);
+    try {
+        std::thread([secs, watchdog_generation = watchdog_generation_]() {
+            std::this_thread::sleep_for(std::chrono::seconds(secs));
+            if (g_finalize_watchdog_armed_generation.load(std::memory_order_acquire) != watchdog_generation) {
+                return;
+            }
+            emit_finalize_timeout_watchdog_diagnostic(secs, "finalize_timeout_backup_thread");
+            _exit(k_mpi_ulfm_fast_fail_exit_code);
+        }).detach();
+    } catch (...) {
+        g_finalize_watchdog_armed_generation.store(0, std::memory_order_release);
+        watchdog_generation_ = 0;
+    }
+
+    struct sigaction sa = {};
+    sa.sa_handler = mpi_finalize_alarm_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESETHAND;
+    if (sigaction(SIGALRM, &sa, &old_sigalrm_action_) != 0) {
+        return;
+    }
+
+    old_alarm_secs_ = alarm(secs);
+    armed_ = true;
+}
+
+detail::ScopedFinalizeAlarmHandler::~ScopedFinalizeAlarmHandler() noexcept {
+    if (!finalize_scope_owner_) {
+        return;
+    }
+
+    if (watchdog_generation_ != 0 &&
+        g_finalize_watchdog_armed_generation.load(std::memory_order_acquire) == watchdog_generation_) {
+        g_finalize_watchdog_armed_generation.store(0, std::memory_order_release);
+    }
+
+    if (!armed_) {
+        if (sigalrm_unmasked_) {
+            [[maybe_unused]] const int restore_mask_rc = pthread_sigmask(SIG_SETMASK, &old_sigmask_, nullptr);
+        }
+        g_finalize_in_progress.clear(std::memory_order_release);
+        return;
+    }
+
+    alarm(0);
+    [[maybe_unused]] const auto restore_rc = sigaction(SIGALRM, &old_sigalrm_action_, nullptr);
+    if (old_alarm_secs_ != 0) {
+        alarm(old_alarm_secs_);
+    }
+    if (sigalrm_unmasked_) {
+        [[maybe_unused]] const int restore_mask_rc = pthread_sigmask(SIG_SETMASK, &old_sigmask_, nullptr);
+    }
+    g_finalize_in_progress.clear(std::memory_order_release);
+}
+
+bool detail::is_finalize_alarm_handler_installed_for_testing() noexcept {
+    struct sigaction current = {};
+    if (sigaction(SIGALRM, nullptr, &current) != 0) {
+        return false;
+    }
+    return current.sa_handler == mpi_finalize_alarm_handler;
+}
+
+bool detail::is_sigalrm_unblocked_for_testing() noexcept {
+    sigset_t current_mask;
+    if (pthread_sigmask(SIG_SETMASK, nullptr, &current_mask) != 0) {
+        return false;
+    }
+    return sigismember(&current_mask, SIGALRM) == 0;
 }
 
 // std::terminate handler: catches uncaught C++ exceptions and explicit
@@ -624,16 +742,11 @@ static void mpi_terminate_handler() noexcept {
 #if OMPI_HAS_ULFM
     // Revoke so that any rank blocked in a collective receives ERR_REVOKED
     // and our MPI_CHECK_CTX macro triggers the FailurePolicy dispatch.
-    // This is best-effort: MPI_COMM_WORLD may already be revoked or
-    // MPI may not be initialized yet.  We swallow any exception (or error
-    // return) so that _exit(k_mpi_ulfm_fast_fail_exit_code) below is always reached — an
-    // already-revoked communicator or torn-down MPI runtime must not
-    // prevent the process from terminating.
-    try {
-        MPIX_Comm_revoke(MPI_COMM_WORLD);
-    } catch (...) {
-        // Intentionally ignored — see comment above.
-    }
+    // This is best-effort: MPIX_Comm_revoke reports failures via integer
+    // return codes, not C++ exceptions. Treat success and "already revoked"
+    // as expected, and ignore any other error so _exit(70) below still runs.
+    [[maybe_unused]] const bool revoke_nonfatal =
+        detail::terminate_revoke_result_is_nonfatal(MPIX_Comm_revoke(MPI_COMM_WORLD));
 #endif
 
     // Structured line for GHA / grep (same keys as emit_rank_failure_diagnostics).
@@ -688,19 +801,6 @@ inline void init_env(int& argc, char**& argv) {
         // letting the process hang in teardown.
         std::set_terminate(mpi_terminate_handler);
 
-        // Install the finalize watchdog handler once at init. The atexit path
-        // only arms alarm(2) before MPI_Finalize; tests (e.g. FinalizeWatchdogPath)
-        // expect sigaction(SIGALRM) to show a custom handler while the process runs.
-        // SA_RESETHAND: one-shot — kernel resets to SIG_DFL after first delivery,
-        // so a second SIGALRM (e.g. from a spurious alarm) takes the default action
-        // rather than re-invoking the handler.  sigaction() is preferred over
-        // signal() for portable, well-defined handler persistence semantics.
-        struct sigaction sa = {};
-        sa.sa_handler = mpi_finalize_alarm_handler;
-        sigemptyset(&sa.sa_mask);
-        sa.sa_flags = SA_RESETHAND;
-        sigaction(SIGALRM, &sa, nullptr);
-
         // Ensure MPI_Finalize is called when the program exits.
         // Guard with a watchdog: if MPI_Finalize does not return within
         // MPI_FINALIZE_TIMEOUT_SECS, another rank is presumed dead/stuck
@@ -712,27 +812,43 @@ inline void init_env(int& argc, char**& argv) {
         // For now, the watchdog is the pragmatic solution.
         std::atexit([] {
             int finalized = 0;
-            MPI_Finalized(&finalized);
+            const int finalized_rc = MPI_Finalized(&finalized);
+            if (finalized_rc != MPI_SUCCESS) {
+                detail::mark_finalize_unsafe();
+                emit_finalize_skipped_diagnostic("mpi_finalized_probe_failed");
+                _exit(k_mpi_ulfm_fast_fail_exit_code);
+            }
             if (finalized) {
                 return;  // already called (e.g. explicit finalize earlier)
             }
-            // RAII guard: arm the watchdog on construction, disarm on destruction.
-            // Ensures alarm(0) is called even if future code between here and
-            // MPI_Finalize is restructured (MPI_Finalize itself does not throw,
-            // but defensive RAII is idiomatic C++).
-            struct AlarmGuard {
-                explicit AlarmGuard(unsigned secs) { alarm(secs); }
-                ~AlarmGuard() { alarm(0); }
-                AlarmGuard(const AlarmGuard&) = delete;
-                AlarmGuard& operator=(const AlarmGuard&) = delete;
-                AlarmGuard(AlarmGuard&&) = delete;
-                AlarmGuard& operator=(AlarmGuard&&) = delete;
-            } guard(MPI_FINALIZE_TIMEOUT_SECS);
-            MPI_Finalize();
-            // alarm(0) is called by ~AlarmGuard above.
-            // Do NOT call signal(SIGALRM, SIG_DFL) here: calling signal() inside
-            // an atexit handler is unnecessary (the process is exiting) and
-            // potentially hazardous if other atexit handlers interact with SIGALRM.
+            if (detail::finalize_is_unsafe()) {
+                emit_finalize_skipped_diagnostic("unsafe_finalize_state");
+                _exit(k_mpi_ulfm_fast_fail_exit_code);
+            }
+            std::array<char, MPI_MAX_PROCESSOR_NAME> processor_name_buffer{};
+            const std::string_view detecting_hostname = best_effort_local_rank_hostname_view(processor_name_buffer);
+            const std::string_view detecting_hostname_sv =
+                detecting_hostname.empty() ? k_mpi_unknown_hostname_sv : detecting_hostname;
+            const int local_rank = best_effort_local_world_rank();
+            const std::string detecting_rank_name =
+                (local_rank >= 0) ? format_world_rank_name(local_rank) : std::string{k_mpi_unknown_world_rank_name};
+            // Scope the SIGALRM handler to MPI_Finalize itself so other code in
+            // the process can use SIGALRM without being mistaken for a finalize
+            // timeout. The guard restores the prior SIGALRM disposition and
+            // pending alarm state if MPI_Finalize returns normally.
+            detail::ScopedFinalizeAlarmHandler guard(MPI_FINALIZE_TIMEOUT_SECS);
+            if (!guard.armed()) {
+                static constexpr std::string_view kFinalizeWatchdogInstallFailed =
+                    "[ULFM] Failed to install scoped SIGALRM watchdog around MPI_Finalize. "
+                    "Continuing with any remaining finalize-timeout protection that could be installed.\n";
+                [[maybe_unused]] const auto ignored =
+                    write(STDERR_FILENO, kFinalizeWatchdogInstallFailed.data(), kFinalizeWatchdogInstallFailed.size());
+            }
+            const int finalize_rc = MPI_Finalize();
+            if (!detail::finalize_return_is_nonfatal(finalize_rc)) {
+                emit_finalize_return_failure_diagnostic(finalize_rc, detecting_rank_name, detecting_hostname_sv);
+                _exit(k_mpi_ulfm_fast_fail_exit_code);
+            }
         });
     });
 }
@@ -1156,6 +1272,7 @@ void MPIContext::revoke_and_shrink() {
     }
 
     revoked_.clear(std::memory_order_release);  // cleared: new communicator is healthy
+    detail::clear_finalize_unsafe();
     {
         std::lock_guard cache_lock(failed_ranks_cache_mutex_);
         cached_failed_ranks_.clear();  // new comm has no known failures

@@ -57,4 +57,11 @@ void capture_terminate_reason(char* buf, std::size_t buf_cap) noexcept;
 void emit_local_mpi_process_fatal_diagnostic(
     int world_rank, std::string_view hostname, std::string_view operation, const char* reason_cstr) noexcept;
 
+void emit_finalize_timeout_watchdog_diagnostic(unsigned timeout_secs, std::string_view reason) noexcept;
+
+void emit_finalize_skipped_diagnostic(std::string_view reason) noexcept;
+
+void emit_finalize_return_failure_diagnostic(
+    int error_code, std::string_view detecting_rank_name, std::string_view detecting_hostname) noexcept;
+
 }  // namespace tt::tt_metal::distributed::multihost

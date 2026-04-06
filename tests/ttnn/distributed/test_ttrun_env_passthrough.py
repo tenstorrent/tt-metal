@@ -185,6 +185,7 @@ FORCE_NAME_ONLY_MPI_EXPORT_VARS = ttrun.FORCE_NAME_ONLY_MPI_EXPORT_VARS
 RankBinding = ttrun.RankBinding
 TTRunConfig = ttrun.TTRunConfig
 apply_rank_scoped_paths = ttrun.apply_rank_scoped_paths
+build_mpi_command = ttrun.build_mpi_command
 build_rank_environment_args = ttrun.build_rank_environment_args
 classify_mpi_env_exports = ttrun.classify_mpi_env_exports
 get_launcher_environment = ttrun.get_launcher_environment
@@ -816,6 +817,268 @@ def test_cli_wraps_popen_failures_in_click_exception(monkeypatch, tmp_path):
 
     assert result.exit_code != 0
     assert "Error launching mpirun: launcher unavailable" in result.output
+
+
+@pytest.mark.unit
+def test_build_mpi_command_enables_ulfm_with_plain_mpirun_fallback(monkeypatch, tmp_path):
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    monkeypatch.delenv("SLURM_STEP_ID", raising=False)
+    monkeypatch.setattr(ttrun.shutil, "which", lambda name: None)
+    monkeypatch.setattr(ttrun, "_detect_openmpi_major_version", lambda: 5)
+
+    binding = RankBinding(rank=0, mesh_id=0, mesh_host_rank=0)
+    config = _build_config(tmp_path, binding)
+
+    cmd = build_mpi_command(config, ["fake_program"], launcher_env={})
+
+    assert cmd[0] == "mpirun"
+    assert cmd.count("--with-ft") == 1
+    assert cmd[cmd.index("--with-ft") + 1] == "ulfm"
+
+
+@pytest.mark.unit
+def test_build_mpi_command_skips_plain_mpirun_ulfm_auto_enable_on_openmpi_4(monkeypatch, tmp_path):
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    monkeypatch.delenv("SLURM_STEP_ID", raising=False)
+    monkeypatch.setattr(ttrun.shutil, "which", lambda name: None)
+    monkeypatch.setattr(ttrun, "_detect_openmpi_major_version", lambda: 4)
+
+    binding = RankBinding(rank=0, mesh_id=0, mesh_host_rank=0)
+    config = _build_config(tmp_path, binding)
+
+    cmd = build_mpi_command(config, ["fake_program"], launcher_env={})
+
+    assert cmd[0] == "mpirun"
+    assert "--with-ft" not in cmd
+
+
+@pytest.mark.unit
+def test_build_mpi_command_enables_ulfm_with_mpirun_ulfm(monkeypatch, tmp_path):
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    monkeypatch.delenv("SLURM_STEP_ID", raising=False)
+    monkeypatch.setattr(ttrun.shutil, "which", lambda name: "/opt/bin/mpirun-ulfm" if name == "mpirun-ulfm" else None)
+    monkeypatch.setattr(ttrun, "_detect_openmpi_major_version", lambda: 4)
+
+    binding = RankBinding(rank=0, mesh_id=0, mesh_host_rank=0)
+    config = _build_config(tmp_path, binding)
+
+    cmd = build_mpi_command(config, ["fake_program"], launcher_env={})
+
+    assert cmd[0] == "/opt/bin/mpirun-ulfm"
+    assert cmd.count("--with-ft") == 1
+    assert cmd[cmd.index("--with-ft") + 1] == "ulfm"
+
+
+@pytest.mark.unit
+def test_build_mpi_command_respects_user_supplied_with_ft(monkeypatch, tmp_path):
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    monkeypatch.delenv("SLURM_STEP_ID", raising=False)
+    monkeypatch.setattr(ttrun.shutil, "which", lambda name: None)
+    monkeypatch.setattr(ttrun, "_detect_openmpi_major_version", lambda: 5)
+
+    binding = RankBinding(rank=0, mesh_id=0, mesh_host_rank=0)
+    config = _build_config(tmp_path, binding)
+
+    cmd = build_mpi_command(config, ["fake_program"], mpi_args=["--with-ft", "mpi"], launcher_env={})
+
+    assert cmd.count("--with-ft") == 1
+    assert cmd[cmd.index("--with-ft") + 1] == "mpi"
+
+
+@pytest.mark.unit
+def test_cli_adds_prtemca_abort_on_non_zero_default(monkeypatch, tmp_path):
+    rank_binding = tmp_path / "rank_binding.yaml"
+    rank_binding.write_text("rank_bindings: []\n")
+
+    monkeypatch.setattr(
+        ttrun,
+        "parse_binding_config",
+        lambda *_args, **_kwargs: SimpleNamespace(rank_bindings=[], mesh_graph_desc_path=Path("/tmp/mesh")),
+    )
+    monkeypatch.setattr(ttrun, "get_launcher_environment", lambda: {})
+    monkeypatch.setattr(ttrun, "_detect_openmpi_major_version", lambda: 5)
+    ttrun._get_abort_on_failure_mca_param.cache_clear()
+
+    captured: dict[str, list[str] | None] = {"mpi_args": None}
+
+    def fake_build(_config, _program, mpi_args=None, **_kwargs):
+        captured["mpi_args"] = mpi_args
+        return ["mpirun", "fake_program"]
+
+    class FakeProc:
+        pid = 2468
+        returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(ttrun, "build_mpi_command", fake_build)
+    monkeypatch.setattr(ttrun.subprocess, "Popen", lambda *_args, **_kwargs: FakeProc())
+    monkeypatch.setattr(ttrun.atexit, "register", lambda _fn: None)
+    monkeypatch.setattr(ttrun.signal, "signal", lambda *_args, **_kwargs: None)
+
+    result = CliRunner().invoke(main, ["--rank-binding", str(rank_binding), "--skip-executable-check", "fake_program"])
+
+    assert result.exit_code == 0
+    assert captured["mpi_args"] is not None
+    assert captured["mpi_args"].count("--prtemca") == 1
+    idx = captured["mpi_args"].index("--prtemca")
+    assert captured["mpi_args"][idx : idx + 3] == ["--prtemca", "state_base_error_non_zero_exit", "1"]
+
+
+@pytest.mark.unit
+def test_cli_adds_orte_abort_on_non_zero_default_for_openmpi_4(monkeypatch, tmp_path):
+    rank_binding = tmp_path / "rank_binding.yaml"
+    rank_binding.write_text("rank_bindings: []\n")
+
+    monkeypatch.setattr(
+        ttrun,
+        "parse_binding_config",
+        lambda *_args, **_kwargs: SimpleNamespace(rank_bindings=[], mesh_graph_desc_path=Path("/tmp/mesh")),
+    )
+    monkeypatch.setattr(ttrun, "get_launcher_environment", lambda: {})
+    monkeypatch.setattr(ttrun, "_detect_openmpi_major_version", lambda: 4)
+    ttrun._get_abort_on_failure_mca_param.cache_clear()
+
+    captured: dict[str, list[str] | None] = {"mpi_args": None}
+
+    def fake_build(_config, _program, mpi_args=None, **_kwargs):
+        captured["mpi_args"] = mpi_args
+        return ["mpirun", "fake_program"]
+
+    class FakeProc:
+        pid = 1357
+        returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(ttrun, "build_mpi_command", fake_build)
+    monkeypatch.setattr(ttrun.subprocess, "Popen", lambda *_args, **_kwargs: FakeProc())
+    monkeypatch.setattr(ttrun.atexit, "register", lambda _fn: None)
+    monkeypatch.setattr(ttrun.signal, "signal", lambda *_args, **_kwargs: None)
+
+    result = CliRunner().invoke(main, ["--rank-binding", str(rank_binding), "--skip-executable-check", "fake_program"])
+
+    assert result.exit_code == 0
+    assert captured["mpi_args"] is not None
+    assert ["--mca", "orte_abort_on_non_zero_status", "1"] in [
+        captured["mpi_args"][i : i + 3] for i, arg in enumerate(captured["mpi_args"]) if arg == "--mca"
+    ]
+
+
+@pytest.mark.unit
+def test_cli_respects_user_supplied_prtemca_abort_override(monkeypatch, tmp_path):
+    rank_binding = tmp_path / "rank_binding.yaml"
+    rank_binding.write_text("rank_bindings: []\n")
+
+    monkeypatch.setattr(
+        ttrun,
+        "parse_binding_config",
+        lambda *_args, **_kwargs: SimpleNamespace(rank_bindings=[], mesh_graph_desc_path=Path("/tmp/mesh")),
+    )
+    monkeypatch.setattr(ttrun, "get_launcher_environment", lambda: {})
+    monkeypatch.setattr(ttrun, "_detect_openmpi_major_version", lambda: 5)
+    ttrun._get_abort_on_failure_mca_param.cache_clear()
+
+    captured: dict[str, list[str] | None] = {"mpi_args": None}
+
+    def fake_build(_config, _program, mpi_args=None, **_kwargs):
+        captured["mpi_args"] = mpi_args
+        return ["mpirun", "fake_program"]
+
+    class FakeProc:
+        pid = 8642
+        returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(ttrun, "build_mpi_command", fake_build)
+    monkeypatch.setattr(ttrun.subprocess, "Popen", lambda *_args, **_kwargs: FakeProc())
+    monkeypatch.setattr(ttrun.atexit, "register", lambda _fn: None)
+    monkeypatch.setattr(ttrun.signal, "signal", lambda *_args, **_kwargs: None)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--rank-binding",
+            str(rank_binding),
+            "--mpi-args",
+            "--prtemca state_base_error_non_zero_exit 0",
+            "--skip-executable-check",
+            "fake_program",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["mpi_args"] is not None
+    assert captured["mpi_args"].count("--prtemca") == 1
+    idx = captured["mpi_args"].index("--prtemca")
+    assert captured["mpi_args"][idx : idx + 3] == ["--prtemca", "state_base_error_non_zero_exit", "0"]
+
+
+@pytest.mark.unit
+def test_cli_respects_user_supplied_orte_abort_override(monkeypatch, tmp_path):
+    rank_binding = tmp_path / "rank_binding.yaml"
+    rank_binding.write_text("rank_bindings: []\n")
+
+    monkeypatch.setattr(
+        ttrun,
+        "parse_binding_config",
+        lambda *_args, **_kwargs: SimpleNamespace(rank_bindings=[], mesh_graph_desc_path=Path("/tmp/mesh")),
+    )
+    monkeypatch.setattr(ttrun, "get_launcher_environment", lambda: {})
+    monkeypatch.setattr(ttrun, "_detect_openmpi_major_version", lambda: 4)
+    ttrun._get_abort_on_failure_mca_param.cache_clear()
+
+    captured: dict[str, list[str] | None] = {"mpi_args": None}
+
+    def fake_build(_config, _program, mpi_args=None, **_kwargs):
+        captured["mpi_args"] = mpi_args
+        return ["mpirun", "fake_program"]
+
+    class FakeProc:
+        pid = 9753
+        returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(ttrun, "build_mpi_command", fake_build)
+    monkeypatch.setattr(ttrun.subprocess, "Popen", lambda *_args, **_kwargs: FakeProc())
+    monkeypatch.setattr(ttrun.atexit, "register", lambda _fn: None)
+    monkeypatch.setattr(ttrun.signal, "signal", lambda *_args, **_kwargs: None)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--rank-binding",
+            str(rank_binding),
+            "--mpi-args",
+            "--mca orte_abort_on_non_zero_status 0",
+            "--skip-executable-check",
+            "fake_program",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["mpi_args"] is not None
+    assert ["--mca", "orte_abort_on_non_zero_status", "0"] in [
+        captured["mpi_args"][i : i + 3] for i, arg in enumerate(captured["mpi_args"]) if arg == "--mca"
+    ]
 
 
 @pytest.mark.unit

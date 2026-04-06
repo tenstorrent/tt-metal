@@ -10,6 +10,7 @@
 #include <exception>
 #include <numeric>
 #include <span>
+#include <utility>
 #include <unistd.h>
 
 #include <fmt/format.h>
@@ -101,6 +102,20 @@ void copy_literal_to_buffer(char* buf, std::size_t buf_cap, std::string_view lit
         literal.copy(buf, n);
     }
     buf[n] = '\0';
+}
+
+template <std::size_t N, typename... Args>
+void write_formatted_stderr(fmt::format_string<Args...> format_string, Args&&... args) noexcept {
+    static_assert(N > 0);
+    try {
+        std::array<char, N> buffer{};
+        const auto result = fmt::format_to_n(buffer.data(), N - 1, format_string, std::forward<Args>(args)...);
+        const auto written = std::min<std::size_t>(result.size, N - 1);
+        buffer[written] = '\0';
+        [[maybe_unused]] const auto ignored = write(STDERR_FILENO, buffer.data(), written);
+    } catch (...) {
+        // Fatal-path diagnostics must never throw.
+    }
 }
 
 }  // namespace
@@ -350,6 +365,59 @@ void emit_local_mpi_process_fatal_diagnostic(
     } catch (...) {
         // std::terminate path: never propagate.
     }
+}
+
+void emit_finalize_timeout_watchdog_diagnostic(unsigned timeout_secs, std::string_view reason) noexcept {
+    write_formatted_stderr<512>(
+        FMT_STRING("  ULFM finalize watchdog fired; failed_rank_name=unknown; failed_hostname=unknown; "
+                   "failed_ranks=unknown; detecting_rank_name=unknown; detecting_hostname=unknown; "
+                   "operation=MPI_Finalize; error_code={}; policy=fast_fail; reason={}\n"),
+        k_mpi_ulfm_fast_fail_exit_code,
+        reason);
+    write_formatted_stderr<512>(
+        FMT_STRING("[ULFM] MPI_Finalize exceeded {} seconds (reason={}). Exiting with code {} "
+                   "to avoid teardown hang.\n"),
+        timeout_secs,
+        reason,
+        k_mpi_ulfm_fast_fail_exit_code);
+}
+
+void emit_finalize_skipped_diagnostic(std::string_view reason) noexcept {
+    write_formatted_stderr<1024>(
+        FMT_STRING("  ULFM finalize watchdog skipped MPI_Finalize; failed_rank_name=unknown; "
+                   "failed_hostname=unknown; failed_ranks=unknown; detecting_rank_name={}; "
+                   "detecting_hostname={}; operation=MPI_Finalize_preflight; error_code={}; "
+                   "policy=fast_fail; reason={}\n"),
+        k_mpi_unknown_world_rank_name,
+        k_mpi_unknown_hostname_sv,
+        k_mpi_ulfm_fast_fail_exit_code,
+        reason);
+    write_formatted_stderr<512>(
+        FMT_STRING("[ULFM] Skipping MPI_Finalize because teardown is already unsafe (reason={}). "
+                   "Exiting with code {} instead of risking a collective hang.\n"),
+        reason,
+        k_mpi_ulfm_fast_fail_exit_code);
+}
+
+void emit_finalize_return_failure_diagnostic(
+    int error_code, std::string_view detecting_rank_name, std::string_view detecting_hostname) noexcept {
+    const std::string_view rank_name_sv =
+        detecting_rank_name.empty() ? k_mpi_unknown_world_rank_name : detecting_rank_name;
+    const std::string_view host_sv = detecting_hostname.empty() ? k_mpi_unknown_hostname_sv : detecting_hostname;
+    write_formatted_stderr<1024>(
+        FMT_STRING("  ULFM finalize watchdog observed MPI_Finalize return; failed_rank_name={}; failed_hostname={}; "
+                   "failed_ranks=unknown; detecting_rank_name={}; detecting_hostname={}; operation=MPI_Finalize; "
+                   "error_code={}; policy=fast_fail; reason=finalize_return_error\n"),
+        k_mpi_unknown_world_rank_name,
+        k_mpi_unknown_hostname_sv,
+        rank_name_sv,
+        host_sv,
+        error_code);
+    write_formatted_stderr<512>(
+        FMT_STRING("[ULFM] MPI_Finalize returned error code {}. Exiting with code {} (EX_SOFTWARE) "
+                   "so teardown failures are not silently ignored.\n"),
+        error_code,
+        k_mpi_ulfm_fast_fail_exit_code);
 }
 
 }  // namespace tt::tt_metal::distributed::multihost

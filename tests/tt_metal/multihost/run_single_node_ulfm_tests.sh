@@ -10,8 +10,10 @@
 #   - FAST_FAIL stderr rank-failure diagnostics (key=value fields)
 #   - MPI_Finalize watchdog (SIGALRM) path
 #   - std::set_terminate handler
+#   - std::terminate revoke result classification
 #   - MPIX_Comm_agree consensus
 #   - FailurePolicy switching
+#   - owner-expired MPIRequest completion fallback
 #
 # Run with: mpirun-ulfm --with-ft ulfm -np 2 (single host, no hostfile)
 # GHA ULFM annotations: see ulfm_github_workflow_wrappers.sh (sourced below).
@@ -125,47 +127,55 @@ timeout 120 "$MPIRUN" --with-ft ulfm -np 2 "$TEST_BIN" --gtest_filter=FaultToler
 echo "--- TerminateHandlerInstalled (-np 2) ---"
 timeout 120 "$MPIRUN" --with-ft ulfm -np 2 "$TEST_BIN" --gtest_filter=FaultTolerance.TerminateHandlerInstalled || fail=$((fail + 1))
 
-# ── 6. failed_ranks() before any failure (no rank death) ─────────────
+# ── 6. Terminate handler revoke result classification ────────────────
+echo "--- TerminateHandlerRevokeResultClassification (-np 2) ---"
+timeout 120 "$MPIRUN" --with-ft ulfm -np 2 "$TEST_BIN" --gtest_filter=FaultTolerance.TerminateHandlerRevokeResultClassification || fail=$((fail + 1))
+
+# ── 7. owner-expired request completion fallback ─────────────────────
+echo "--- RequestWaitCompletesAfterOwnerExpires (-np 2) ---"
+timeout 120 "$MPIRUN" --with-ft ulfm -np 2 "$TEST_BIN" --gtest_filter=FaultTolerance.RequestWaitCompletesAfterOwnerExpires || fail=$((fail + 1))
+
+# ── 8. failed_ranks() before any failure (no rank death) ─────────────
 echo "--- FailedRanksBeforeAnyFailure (-np 4) ---"
 timeout 120 "$MPIRUN" --with-ft ulfm -np 4 "$TEST_BIN" --gtest_filter=FaultTolerance.FailedRanksBeforeAnyFailure || fail=$((fail + 1))
 
-# ── 7. is_revoked() on healthy communicator ──────────────────────────
+# ── 9. is_revoked() on healthy communicator ──────────────────────────
 echo "--- IsRevokedFalseBeforeFailure (-np 2) ---"
 timeout 120 "$MPIRUN" --with-ft ulfm -np 2 "$TEST_BIN" --gtest_filter=FaultTolerance.IsRevokedFalseBeforeFailure || fail=$((fail + 1))
 
-# ── 8. is_revoked() after failure detection (before shrink) ──────────
+# ── 10. is_revoked() after failure detection (before shrink) ─────────
 echo "--- IsRevokedTrueAfterDetectionBeforeShrink (-np 4) ---"
 timeout 120 "$MPIRUN" --with-ft ulfm -np 4 "$TEST_BIN" --gtest_filter=FaultTolerance.IsRevokedTrueAfterDetectionBeforeShrink || fail=$((fail + 1))
 
-# ── 9. supports_fault_tolerance() consistency ────────────────────────
+# ── 11. supports_fault_tolerance() consistency ───────────────────────
 echo "--- SupportsFaultToleranceReported (-np 2) ---"
 timeout 120 "$MPIRUN" --with-ft ulfm -np 2 "$TEST_BIN" --gtest_filter=FaultTolerance.SupportsFaultToleranceReported || fail=$((fail + 1))
 
-# ── 10. set_failure_policy idempotency ───────────────────────────────
+# ── 12. set_failure_policy idempotency ───────────────────────────────
 echo "--- SetFailurePolicyIsIdempotent (-np 2) ---"
 timeout 120 "$MPIRUN" --with-ft ulfm -np 2 "$TEST_BIN" --gtest_filter=FaultTolerance.SetFailurePolicyIsIdempotent || fail=$((fail + 1))
 
-# ── 11. Success path no error output ─────────────────────────────────
+# ── 13. Success path no error output ─────────────────────────────────
 echo "--- SuccessPathNoErrorOutput (-np 4) ---"
 timeout 120 "$MPIRUN" --with-ft ulfm -np 4 "$TEST_BIN" --gtest_filter=FaultTolerance.SuccessPathNoErrorOutput || fail=$((fail + 1))
 
-# ── 12. agree() on single-rank sub-communicator ──────────────────────
+# ── 14. agree() on single-rank sub-communicator ──────────────────────
 echo "--- AgreeMixedVotesSingleRank (-np 4) ---"
 timeout 120 "$MPIRUN" --with-ft ulfm -np 4 "$TEST_BIN" --gtest_filter=FaultTolerance.AgreeMixedVotesSingleRank || fail=$((fail + 1))
 
-# ── 13. Double revoke guard (rank kill + recovery) ───────────────────
+# ── 15. Double revoke guard (rank kill + recovery) ───────────────────
 echo "--- DoubleRevokeGuard (-np 4) ---"
 timeout 120 "$MPIRUN" --with-ft ulfm -np 4 "$TEST_BIN" --gtest_filter=FaultTolerance.DoubleRevokeGuard || fail=$((fail + 1))
 
-# ── 14. agree() after revoke_and_shrink (rank kill + recovery) ───────
+# ── 16. agree() after revoke_and_shrink (rank kill + recovery) ───────
 echo "--- AgreeAfterRevokeAndShrink (-np 4) ---"
 timeout 120 "$MPIRUN" --with-ft ulfm -np 4 "$TEST_BIN" --gtest_filter=FaultTolerance.AgreeAfterRevokeAndShrink || fail=$((fail + 1))
 
-# ── 15. MPIRankFailureException diagnostic context ───────────────────
+# ── 17. MPIRankFailureException diagnostic context ───────────────────
 echo "--- MPIRankFailureExceptionCarriesContext (-np 4) ---"
 timeout 120 "$MPIRUN" --with-ft ulfm -np 4 "$TEST_BIN" --gtest_filter=FaultTolerance.MPIRankFailureExceptionCarriesContext || fail=$((fail + 1))
 
-# ── 16. failed_ranks() after detection (rank kill + recovery) ────────
+# ── 18. failed_ranks() after detection (rank kill + recovery) ────────
 echo "--- FailedRanksAfterDetection (-np 4) ---"
 timeout 120 "$MPIRUN" --with-ft ulfm -np 4 "$TEST_BIN" --gtest_filter=FaultTolerance.FailedRanksAfterDetection || fail=$((fail + 1))
 
