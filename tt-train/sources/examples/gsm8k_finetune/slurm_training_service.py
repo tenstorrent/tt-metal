@@ -747,6 +747,56 @@ def _slurm_available() -> bool:
     return shutil.which("squeue") is not None
 
 
+@app.get("/v1/trainers/<trainer_id>/models")
+def get_trainer_models(trainer_id):
+    """Return models supported by the specified trainer (no auth required, mirrors catalog contract)."""
+    supported_trainers = get_supported_trainers()
+    if trainer_id not in supported_trainers:
+        return (
+            jsonify(
+                {
+                    "error": {
+                        "message": f"Unknown trainer: '{trainer_id}'. Supported: {sorted(supported_trainers)}",
+                        "code": "trainer_not_found",
+                    }
+                }
+            ),
+            404,
+        )
+
+    model_ids = get_supported_models(trainer_id)
+
+    model_display_names = {
+        "tinyllama": "TinyLlama 1.1B",
+        "gpt2": "GPT-2",
+        "llama8b": "Llama 3.1 8B",
+        "llama70b": "Llama 3.1 70B",
+        "llama405b": "Llama 3.1 405B",
+        "qwen3_0_6b": "Qwen3 0.6B",
+        "qwen3_1_7b": "Qwen3 1.7B",
+    }
+
+    models = []
+    for model_id in sorted(model_ids):
+        full_config_path = get_model_config_path(model_id)
+        relative_config_path = (
+            full_config_path.split("/configs/")[-1]
+            if "/configs/" in full_config_path
+            else f"model_configs/{model_id}.yaml"
+        )
+        is_supported = model_id in {"tinyllama", "gpt2", "llama8b", "llama70b", "llama405b", "qwen3_0_6b", "qwen3_1_7b"}
+        models.append(
+            {
+                "id": model_id,
+                "display_name": model_display_names.get(model_id, model_id.title()),
+                "model_config": f"configs/{relative_config_path}",
+                "supported": is_supported,
+            }
+        )
+
+    return jsonify({"models": models})
+
+
 @app.get("/v1/jobs")
 @require_auth
 def list_jobs():
