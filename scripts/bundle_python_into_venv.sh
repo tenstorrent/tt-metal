@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 #
 # NOTE: If this script is moved, update tests/scripts/multihost/setup_shared_venv.sh
