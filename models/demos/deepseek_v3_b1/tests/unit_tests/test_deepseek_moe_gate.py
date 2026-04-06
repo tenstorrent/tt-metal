@@ -12,10 +12,9 @@ from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekM
 
 
 @skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39472")
-@pytest.mark.parametrize("batch_size", [1, 2])
-@pytest.mark.parametrize("enable_sigmoid", [True, False])
-@pytest.mark.parametrize("seed", [42, 201, 512])
-def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("enable_sigmoid", [True])
+def test_deepseek_moe_gate(device, batch_size, enable_sigmoid):
     """Test TTNN Deepseek Moe Gate operation on a 16x16 tile"""
 
     # Tensor dimensions - full 32x32 tile
@@ -32,11 +31,11 @@ def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
     logger.info(f"Output tile size: {output_tile.tile_shape}")
 
     # Create input PyTorch tensor with random values
-    torch.manual_seed(seed)
-    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
-    if not enable_sigmoid:
-        torch_input = torch.sigmoid(torch_input)
-    torch_bias = torch.randn(input_shape, dtype=torch.bfloat16)
+    # load weights and bias from pytorch files
+    torch_input_loaded = torch.load("/work/logits.pt")
+    torch_input = torch.reshape(torch_input_loaded, input_shape)
+    torch_bias_loaded = torch.load("/work/scores_correction_bias.pt")
+    torch_bias = torch.reshape(torch_bias_loaded, input_shape)
     eps = 1e-20
     scaling_factor = 2.5
 

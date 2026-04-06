@@ -39,6 +39,7 @@ class DeepseekMoeGateSingleCore:
         """
         row_offsets = torch.arange(input_tensor.shape[-2]) * input_tensor.shape[-1]
         batch_idx = torch.arange(input_tensor.shape[0]).unsqueeze(-1)
+        breakpoint()
 
         scores = torch.sigmoid(input_tensor) if enable_sigmoid else input_tensor
         bias_scores = scores + bias_tensor

@@ -8,6 +8,7 @@ import pytest
 import torch
 import ttnn
 from loguru import logger
+import torch.nn.functional as F
 
 from models.common.utility_functions import comp_pcc, comp_allclose
 
@@ -36,8 +37,12 @@ def create_torch_input(L, in0_num_cores, M, K):
     Returns:
         torch_input: Tensor of shape (L, in0_num_cores, M, K)
     """
-    torch_input = torch.rand((L, 1, M, K), dtype=torch.bfloat16) - 0.5
+    # torch_input = torch.rand((L, 1, M, K), dtype=torch.bfloat16) - 0.5
+    torch_input = torch.load("/work/x.pt")
+    torch_input = torch_input.to(torch.bfloat16)
+    torch_input = torch_input.reshape(L, 1, M, K)
     torch_input = torch_input.repeat(1, in0_num_cores, 1, 1)
+    # torch_input = torch.rand((L, 1, M, K), dtype=torch.bfloat16) - 0.5
     return torch_input
 
 
@@ -53,7 +58,11 @@ def create_torch_w(L, K, N):
     Returns:
         torch_w: Tensor of shape (L, K, N)
     """
-    torch_w = torch.rand((L, K, N), dtype=torch.bfloat16) - 0.5
+    # torch_w = torch.rand((L, K, N), dtype=torch.bfloat16) - 0.5
+    torch_w = torch.load("/work/weight.pt")
+    torch_w = torch_w.to(torch.bfloat16)
+    torch_w = torch.transpose(torch_w, -2, -1)
+    # torch_w = torch.rand((L, K, N), dtype=torch.bfloat16) - 0.5
     return torch_w
 
 
@@ -68,7 +77,11 @@ def create_torch_bias(L, N):
     Returns:
         torch_bias: Tensor of shape (L, N)
     """
-    torch_bias = torch.rand((L, N), dtype=torch.bfloat16)
+    # torch_bias = torch.rand((L, N), dtype=torch.bfloat16)
+    torch_bias = torch.load("/work/scores_correction_bias.pt")
+    torch_bias = torch_bias.to(torch.bfloat16)
+    torch_bias = torch_bias.reshape(L, N)
+    # torch_bias = torch.rand((L, N), dtype=torch.bfloat16)
     return torch_bias
 
 
@@ -359,6 +372,7 @@ def run_test_moe_mm(device, M, K, N, L, C, check_accuracy, dump_outputs):
 
     if check_accuracy:
         with torch.no_grad():
+            breakpoint()
             # Reference calculation to match TT output shape (2*M, N) = (E*M, N)
             # Use first 2*M rows of input (one copy of the original replicated input)
             torch_input_ref = torch_input[:, 0, ...]
@@ -366,6 +380,7 @@ def run_test_moe_mm(device, M, K, N, L, C, check_accuracy, dump_outputs):
             # 1. Linear projection: scores = x @ weight
             # (L, M, K) @ (L, K, N) -> (L, M, N)
             torch_mm_out = torch_input_ref @ torch_w
+            torch_mm_out = F.linear(torch_input_ref.type(torch.float32), torch_w.T.type(torch.float32), None)
 
             # 2. Sigmoid activation: scores = sigmoid(scores)
             torch_sigmoid_out = torch.nn.functional.sigmoid(torch_mm_out)
@@ -421,13 +436,13 @@ def run_test_moe_mm(device, M, K, N, L, C, check_accuracy, dump_outputs):
                 masked_bits = torch.where(mask, bit_values, 0)
                 # OR reduction along N dimension
                 torch_bitmask[:, :, i] = masked_bits.sum(dim=2)
-
         # Calculate accuracy metrics for each layer
         for layer_id, column_id in itertools.product(range(L), range(C)):
             torch_layer_values = torch_top8_values[layer_id, :, :]
             torch_layer_indices = torch_top8_indices[layer_id, :, :]
             tt_layer_output = tt_to_torch_outputs[C * layer_id + column_id, :, :]
             tt_values, tt_indices = prepare_output_tensor(tt_layer_output, ring2cores)
+            breakpoint()
             layer_metrics = get_accuracy_metrics(torch_layer_values, tt_values)
             all_accuracy_metrics[layer_id] = layer_metrics
 

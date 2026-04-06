@@ -454,6 +454,7 @@ class MoEGate(nn.Module):
         bsz, seq_len, h = hidden_states.shape
         ### compute gating score
         hidden_states = hidden_states.view(-1, h)
+        breakpoint()
         logits = F.linear(hidden_states.type(torch.float32), self.weight.type(torch.float32), None)
         if self.scoring_func == "sigmoid":
             scores = logits.sigmoid()
@@ -489,7 +490,7 @@ class MoEGate(nn.Module):
             denominator = topk_weight.sum(dim=-1, keepdim=True) + 1e-20
             topk_weight = topk_weight / denominator
         topk_weight = topk_weight * self.routed_scaling_factor  # must multiply the scaling factor
-
+        breakpoint()
         return topk_idx, topk_weight
 
     def grouped_forward(self, hidden_states):
