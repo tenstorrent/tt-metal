@@ -276,17 +276,17 @@ sequenceDiagram
     Ctx->>MPI: MPIX_Comm_ack_failed(comm)
     Ctx->>Ctx: identify_failed_ranks() via MPIX_Comm_get_failed
     Ctx->>MPI: MPIX_Comm_revoke(comm)
-    Note over Ctx,MPI: non-collective; skip if ERR_REVOKED (already revoked by peer)
+    Note over Ctx,MPI: non-collective - skip if ERR_REVOKED (already revoked by peer)
     Ctx-->>App: throw MPIRankFailureException
     App->>Ctx: revoke_and_shrink()
-    Note over App,MPI: collective — all surviving ranks must call concurrently
+    Note over App,MPI: collective - all surviving ranks must call concurrently
     Ctx->>MPI: MPIX_Comm_shrink(old_comm)
     MPI-->>Ctx: new_comm (rank numbers reassigned)
     Ctx->>Ctx: swap state_
     Ctx-->>App: return
     App->>Ctx: agree(local_ready) on new comm
     Ctx->>MPI: MPIX_Comm_agree(new_comm, &flag)
-    Note over MPI: bitwise AND across survivors; never raises MPIX_ERR_REVOKED
+    Note over MPI: bitwise AND across survivors - never raises MPIX_ERR_REVOKED
     Ctx-->>App: optional<bool>
     App->>Ctx: barrier() on new comm
 ```
