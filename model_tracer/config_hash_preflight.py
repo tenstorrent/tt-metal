@@ -20,7 +20,7 @@ independent algorithm in this script. In other words, this preflight compares:
 Usage:
     python model_tracer/config_hash_preflight.py <master.json>
     python model_tracer/config_hash_preflight.py <master.json> --allow-partial
-    python model_tracer/config_hash_preflight.py <master.json> --report report.txt
+    python model_tracer/config_hash_preflight.py <master.json> --report report.md
 
 Exit codes:
     0  All hashes match, or any hash changes with --allow-partial
@@ -115,6 +115,46 @@ def format_report(json_path, total, changed_entries, decision, allow_partial):
     return "\n".join(lines) + "\n"
 
 
+def format_markdown_report(json_path, total, changed_entries, decision, allow_partial):
+    """Format a markdown report suitable for GitHub step summary output."""
+    changed = len(changed_entries)
+    pct = (changed / total * 100.0) if total else 0.0
+    changed_by_operation = Counter(entry["operation"] for entry in changed_entries)
+
+    lines = [
+        "## Config Hash Preflight",
+        "",
+        "| Field | Value |",
+        "|---|---|",
+        f"| Hash source | `model_tracer.generic_ops_tracer.recompute_config_hashes()` |",
+        "| Hash method | `_compute_config_hash()` |",
+        f"| JSON | `{json_path}` |",
+        f"| Configs | {total} |",
+        f"| Changed | {changed} ({pct:.1f}%) |",
+        f"| Allow partial | `{allow_partial}` |",
+        f"| Decision | `{decision}` |",
+        "",
+    ]
+
+    if changed_by_operation:
+        lines.extend(
+            [
+                f"<details><summary>Changed hashes by operation ({len(changed_by_operation)} ops)</summary>",
+                "",
+                "| Operation | Changed hashes |",
+                "|---|---:|",
+            ]
+        )
+        for operation, count in sorted(changed_by_operation.items()):
+            lines.append(f"| `{operation}` | {count} |")
+        lines.extend(["", "</details>", ""])
+    else:
+        lines.append("No changed hashes detected.")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -122,7 +162,7 @@ def main():
     )
     parser.add_argument("json_path", type=Path, help="Reconstructed master JSON to check")
     parser.add_argument("--allow-partial", action="store_true", help="Continue when some (but not all) hashes changed")
-    parser.add_argument("--report", type=Path, help="Write report to file (in addition to stdout)")
+    parser.add_argument("--report", type=Path, help="Write markdown report to file (in addition to stdout)")
     args = parser.parse_args()
 
     if not args.json_path.exists():
@@ -131,10 +171,11 @@ def main():
 
     total, changed_entries, decision = run_preflight(args.json_path, args.allow_partial)
     report = format_report(args.json_path, total, changed_entries, decision, args.allow_partial)
+    markdown_report = format_markdown_report(args.json_path, total, changed_entries, decision, args.allow_partial)
 
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)
-        args.report.write_text(report, encoding="utf-8")
+        args.report.write_text(markdown_report, encoding="utf-8")
 
     print("")
     print("=" * 60)

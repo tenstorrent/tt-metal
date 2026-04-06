@@ -103,16 +103,12 @@ jobs:
           python3 model_tracer/config_hash_preflight.py \
             model_tracer/traced_operations/ttnn_operations_master.json \
             ${{ inputs.allow-partial-hash-changes && '--allow-partial' || '' }} \
-            --report validation_artifacts/config_hash_preflight.txt
+            --report validation_artifacts/config_hash_preflight.md
 
       - name: Publish preflight to summary
         run: |
-          if [[ -f validation_artifacts/config_hash_preflight.txt ]]; then
-            echo '## Config Hash Preflight' >> "$GITHUB_STEP_SUMMARY"
-            echo '' >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            cat validation_artifacts/config_hash_preflight.txt >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f validation_artifacts/config_hash_preflight.md ]]; then
+            cat validation_artifacts/config_hash_preflight.md >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload master JSON artifact
@@ -128,7 +124,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: validation-preflight
-          path: validation_artifacts/config_hash_preflight.txt
+          path: validation_artifacts/config_hash_preflight.md
           retention-days: 1
 
   generate-sweeps:
@@ -301,14 +297,6 @@ jobs:
           echo "::group::Validation execution matrix"
           jq . tests/sweep_framework/framework/validation_matrix.json
           echo "::endgroup::"
-
-          {
-            echo "### Validation execution matrix"
-            echo
-            echo '```json'
-            jq . tests/sweep_framework/framework/validation_matrix.json
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
 
   run-sweeps-with-tracer:
     name: ${{ matrix.batch_display }}
