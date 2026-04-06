@@ -301,14 +301,14 @@ jobs:
         # with the models chart in models/README.md
         python .github/scripts/utils/model-charts-sync.py
 
-  # A lightweight ClangTidy scan.  It does not detect all issues, but is cheap
-  # enough to run during PRs without bringing infra to a grinding halt.
-  # A proper scan is run in Merge Gate to ensure only clean code lands.
+  # Incremental clang-tidy scan on PR diffs — same checks enforced at merge gate.
+  # Blocking: violations here are exactly what would cause a merge queue eviction.
+  # Posts inline PR comments so developers can fix issues before the merge queue.
   clang-tidy-light:
     needs: [build-docker-images]
     if: github.event_name == 'pull_request' && !github.event.pull_request.draft
-    timeout-minutes: 140
-    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    runs-on: tt-ubuntu-2204-large-stable
     container: ${{ needs.build-docker-images.outputs.ci-build-tag }}
     permissions:
       pull-requests: write
@@ -340,19 +340,8 @@ jobs:
           clang-tidy-20 python3.11 python3.11-venv python3.11-dev
         sudo ln -s $(which clang-tidy-20) /usr/local/bin/clang-tidy
         uv pip install pyyaml  # Needed for clang-tidy-diff-20.py
-    - name: Prepare .clang-tidy with extra checks
-      run: |
-        if [ -f .clang-tidy-light ]; then
-          grep -v -F -f .clang-tidy-light .clang-tidy > .clang-tidy-new
-          mv .clang-tidy-new .clang-tidy
-        fi
-        cat .clang-tidy
-    - name: CMake configure
-      # CPM downloads third-party packages from the internet; give a generous
-      # timeout to accommodate slow network days.
-      # Note: actions/cache doesn't work with containerized jobs (post-step
-      # runs after the container is removed, hashFiles fails). Dropped for now.
-      timeout-minutes: 25
+    - name: Prepare compile_commands.json
+      timeout-minutes: 10
       run: |
         cmake -B build \
           -DCMAKE_BUILD_TYPE=Debug \
@@ -405,12 +394,13 @@ jobs:
           -export-fixes clang-tidy-result/fixes.yml \
           -j$(nproc) < filtered_changes.diff
 
-        # TODO: Find a way to fail THIS step if there's some USEFUL issues
-        # detected. For now disable it b/c it fails if it finds things in
-        # non-user code and/or NOLINT's.
-        # # Draw attention to this step (make it an error) if there are fixes
-        # # to be addressed.
-        # [[ -s clang-tidy-result/fixes.yml ]] && exit 42
+        # Fail if clang-tidy found fixable violations in the diff.
+        # These are the same checks enforced at merge gate — catching them here
+        # avoids a merge queue eviction later.
+        if [[ -s clang-tidy-result/fixes.yml ]]; then
+          echo "::error::clang-tidy found violations. See inline PR comments for details."
+          exit 1
+        fi
     - name: Run clang-tidy-pr-comments action
       if: ${{ !cancelled() && github.event.pull_request.head.repo.fork == false }}
       # v1.8.0
@@ -418,7 +408,7 @@ jobs:
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         clang_tidy_fixes: clang-tidy-result/fixes.yml
-        request_changes: false  # TODO: consider enabling this?
+        request_changes: false
         suggestions_per_comment: 10  # arbitrary limit to avoid GH API timeouts
         # Pip fails if the action attempts to install its own Python; Sidestep that
         python_path: python3
@@ -512,7 +502,7 @@ jobs:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
-          required-jobs: "asan-build, build"
+          required-jobs: "asan-build, build, clang-tidy-light"
           optional-jobs: >-
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
             model-charts-sync, build-docs,
