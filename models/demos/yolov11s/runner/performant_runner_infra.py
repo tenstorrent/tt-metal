@@ -27,11 +27,17 @@ class YOLOv11sPerformanceRunnerInfra:
         inputs_mesh_mapper=None,
         weights_mesh_mapper=None,
         outputs_mesh_composer=None,
+        compute_torch_reference: bool = False,
     ):
         torch.manual_seed(0)
         self.resolution = resolution
+        self.compute_torch_reference = compute_torch_reference
         self.pcc_passed = False
-        self.pcc_message = "Did you forget to call validate()?"
+        self.pcc_message = (
+            "Did you forget to call validate()?"
+            if compute_torch_reference
+            else "PCC skipped (compute_torch_reference=False; use tests for torch comparison)."
+        )
 
         self.device = device
         self.num_devices = self.device.get_num_devices()
@@ -60,8 +66,10 @@ class YOLOv11sPerformanceRunnerInfra:
 
         self.ttnn_yolov11s_model = ttnn_yolov11s.TtnnYoloV11s(self.device, self.parameters)
 
-        with torch.no_grad():
-            self.torch_output_tensor = self.torch_model(self.torch_input_tensor)
+        self.torch_output_tensor = None
+        if self.compute_torch_reference:
+            with torch.no_grad():
+                self.torch_output_tensor = self.torch_model(self.torch_input_tensor)
 
     def _setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=16):
         if not is_wormhole_b0():
@@ -127,11 +135,19 @@ class YOLOv11sPerformanceRunnerInfra:
     def run(self):
         self.output_tensor = self.ttnn_yolov11s_model(self.input_tensor)
 
-    def validate(self, output_tensor=None, torch_output_tensor=None):
-        ttnn_output_tensor = self.output_tensor if output_tensor is None else output_tensor
-        torch_output_tensor = self.torch_output_tensor if torch_output_tensor is None else torch_output_tensor
-        output_tensor = ttnn.to_torch(ttnn_output_tensor, mesh_composer=self.mesh_composer)
-        self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor, output_tensor, pcc=0.99)
+    def validate(self, output_tensor=None, golden_torch_tensor=None):
+        if self.torch_output_tensor is None and golden_torch_tensor is None:
+            logger.warning(
+                "Skipping validate(): no torch reference. "
+                "Pass compute_torch_reference=True to runner infra or supply golden_torch_tensor."
+            )
+            self.pcc_message = "skipped (no torch reference)"
+            return
+
+        ttnn_out = self.output_tensor if output_tensor is None else output_tensor
+        golden = self.torch_output_tensor if golden_torch_tensor is None else golden_torch_tensor
+        actual_torch = ttnn.to_torch(ttnn_out, mesh_composer=self.mesh_composer)
+        self.pcc_passed, self.pcc_message = assert_with_pcc(golden, actual_torch, pcc=0.99)
 
         logger.info(
             f"Yolov11s - batch_size={self.batch_size}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, PCC={self.pcc_message}"

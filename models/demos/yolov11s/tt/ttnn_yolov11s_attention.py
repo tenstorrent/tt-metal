@@ -15,31 +15,44 @@ class TtnnAttention:
         self.head_dim = 64
         self.num_heads = dim // self.head_dim
         self.key_dim = self.head_dim // 2
+        # self.key_dim = int(self.head_dim * 0.5)
         self.scale = self.key_dim**-0.5
 
     def __call__(self, device, x, batch_size=1):
-        qkv = self.qkv(device, x)
-        qkv = ttnn.sharded_to_interleaved(qkv, memory_config=ttnn.L1_MEMORY_CONFIG)
-        qkv = ttnn.permute(qkv, (0, 3, 1, 2))
-        qkv = ttnn.reshape(qkv, (batch_size, self.num_heads, self.key_dim * 2 + self.head_dim, qkv.shape[-1]))
-        q, k, v = (
-            qkv[:, :, : self.key_dim, :],
-            qkv[:, :, self.key_dim : 2 * self.key_dim, :],
-            qkv[:, :, 2 * self.key_dim :, :],
+        _l1 = ttnn.L1_MEMORY_CONFIG
+        qkv = self.qkv(device, x, to_interleaved=True)
+        qkv = ttnn.permute(qkv, (0, 1, 3, 2))
+        qkv = ttnn.reshape(
+            qkv,
+            (batch_size, self.num_heads, self.key_dim * 2 + self.head_dim, qkv.shape[-1]),
+            memory_config=_l1,
         )
-        q_permuted = ttnn.permute(q, (0, 1, 3, 2))
-        attn = ttnn.matmul(q_permuted, k, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        q, k, v = ttnn.split(
+            qkv,
+            [self.key_dim, self.key_dim, self.head_dim],
+            dim=2,
+            memory_config=_l1,
+        )
+        attn = ttnn.matmul(q, k, transpose_a=True, memory_config=_l1)
         attn = ttnn.multiply(attn, self.scale)
-        attn = ttnn.softmax_in_place(attn, dim=-1, numeric_stable=False)
-        attn = ttnn.permute(attn, (0, 1, 3, 2))
-        x1 = ttnn.matmul(v, attn, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x1 = ttnn.reshape(x1, (1, 1, (x1.shape[0] * x1.shape[1] * x1.shape[2]), x1.shape[3]))
+        attn = ttnn.softmax_in_place(attn, dim=-1, numeric_stable=True)
+        x1 = ttnn.matmul(v, attn, transpose_b=True, memory_config=_l1)
+        x1 = ttnn.reshape(
+            x1,
+            (1, 1, x1.shape[0] * x1.shape[1] * x1.shape[2], x1.shape[3]),
+            memory_config=_l1,
+        )
         x1 = ttnn.permute(x1, (0, 1, 3, 2))
-        v = ttnn.reshape(v, (1, 1, (v.shape[0] * v.shape[1] * v.shape[2]), v.shape[3]))
+        v = ttnn.reshape(
+            v,
+            (1, 1, v.shape[0] * v.shape[1] * v.shape[2], v.shape[3]),
+            memory_config=_l1,
+        )
         v = ttnn.permute(v, (0, 1, 3, 2))
         x2 = self.pe(device=device, x=v)
         x = ttnn.add(x1, x2, memory_config=x1.memory_config())
         x = self.proj(device=device, x=x)
-        deallocate_tensors(x1, qkv, q_permuted, attn, q, k, v, x2)
+        deallocate_tensors(x1, qkv, attn, q, k, v, x2)
 
         return x
