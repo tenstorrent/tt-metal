@@ -2,13 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the content-addressed TensorCache (standalone tensors).
+"""Tests for the content-addressed TensorCache.
 
-- Fingerprint determinism and sensitivity (no device needed).
-- CAS directory layout after store.
-- Cache round-trip: miss -> store -> hit -> load.
-- Content hash verification.
-- Corrupt entry recovery.
+Covers standalone tensors (`TensorTarget`) and fusion groups
+(`FusionGroupSpec`): fingerprint determinism and sensitivity, CAS layout,
+miss/hit round-trips (including fused artifacts and corrupt recovery),
+content hash in metadata, and `CacheContext` helpers.
 """
 
 from __future__ import annotations

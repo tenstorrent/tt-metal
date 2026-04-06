@@ -602,11 +602,6 @@ class DOWN_PROJ_SingleDeviceSpec:
 
 DOWN_PROJ_SINGLE_DEVICE_SPEC = DOWN_PROJ_SingleDeviceSpec()
 
-
-# --- Content-addressed cache: FusionGroupSpec templates (tensor_cache Phase 2) ---
-# mesh_mapper_config matches BlitzDecodeWeights for 4x2 mesh (mla_tp/moe_tp > 1).
-# For single-device caches, build a copy with ReplicateMeshMapper().
-
 _QAB_SPEC = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
 Q_AB_KV_A_SPEC = FusionGroupSpec(
     name="q_ab_kv_a",

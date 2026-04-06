@@ -250,9 +250,6 @@ class DeepSeekV3MTPWeights:
     eh_projection: ttnn.Tensor  # model.layers.61.eh_proj.weight
 
 
-# Constants for kv_b_proj split (HF stores one matrix; we split into kv_b1 and kv_b2).
-_NUM_HEADS = 64
-
 # MoE routed experts (DeepSeek V3 config: n_routed_experts=256).
 NUM_ROUTED_EXPERTS = D.GATE_NUM_INDICES
 _ROUTED_GATE_UP_K = D.HIDDEN_SIZE  # 7168
@@ -269,14 +266,12 @@ _Q_HEAD_DIM = _QK_NOPE_HEAD_DIM + _QK_ROPE_HEAD_DIM  # 192
 # MTP layer constants
 _MTP_LAYER_IDX = 61
 _MTP_NUM_DRAM_BANKS = 8
-_MTP_B_TILE = ttnn.Tile([32, 32])
 
 _GATE_BIAS_SENDER_CORE = ttnn.CoreCoord(MOE_SENDER_GRID_SIZE[0] - 1, MOE_SENDER_GRID_SIZE[1] - 1)
 _GATE_BIAS_SENDER_CORE_GRID = ttnn.CoreRangeSet([ttnn.CoreRange(_GATE_BIAS_SENDER_CORE, _GATE_BIAS_SENDER_CORE)])
 
 _LM_HEAD_K = D.HIDDEN_SIZE
 _LM_HEAD_VOCAB_SIZE = D.VOCAB_SIZE
-_LM_HEAD_NUM_MATMUL_CORES = 101
 _LM_HEAD_MATMUL_CORE_GRID = ttnn.CoreRangeSet(
     [
         ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 9)),
@@ -440,23 +435,6 @@ def _dense_routed_stacked_tensor_target(name: str, K: int, N: int, device) -> Te
     )
 
 
-def _dense_mlp_routed_experts_torch(
-    mlp_gate: torch.Tensor,
-    mlp_up: torch.Tensor,
-    mlp_down: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Same stacked expert tensors as ``get_tt_mlp_routed_expert_weights`` before ``upload``."""
-    shared_n = D.MOE_INTERMEDIATE_SIZE
-    num_routed = (D.INTERMEDIATE_SIZE - D.MOE_INTERMEDIATE_SIZE) // D.MOE_INTERMEDIATE_SIZE
-    expert_n = D.MOE_INTERMEDIATE_SIZE
-    K_gate = mlp_gate.shape[0]
-    N_down = mlp_down.shape[1]
-    gate_experts = mlp_gate[:, shared_n:].reshape(K_gate, num_routed, expert_n).permute(1, 0, 2).contiguous()
-    up_experts = mlp_up[:, shared_n:].reshape(K_gate, num_routed, expert_n).permute(1, 0, 2).contiguous()
-    down_experts = mlp_down[shared_n:, :].reshape(num_routed, expert_n, N_down).contiguous()
-    return gate_experts, up_experts, down_experts
-
-
 def deinterleave_q_b_proj(q_b_proj: torch.Tensor, num_heads: int | None = None) -> torch.Tensor:
     """Convert q_b_proj.weight from HF interleaved to [ALL_NOPE | ALL_ROPE] layout.
 
@@ -468,8 +446,9 @@ def deinterleave_q_b_proj(q_b_proj: torch.Tensor, num_heads: int | None = None) 
     [h0_nope|h1_nope|...|hN_nope|h0_rope|h1_rope|...|hN_rope].
 
     Args:
-        q_b_transposed: q_b_proj.weight.T with shape (K, num_heads * q_head_dim).
-        num_heads: Number of attention heads.  If None, inferred from the width.
+        q_b_proj: HF ``self_attn.q_b_proj.weight`` with shape ``(out_features, in_features)``;
+            columns are interleaved per head before ``.T`` inside this function.
+        num_heads: Number of attention heads. If None, inferred from the width after transpose.
 
     Returns:
         Tensor of the same shape with columns reordered to [ALL_NOPE | ALL_ROPE].
@@ -541,57 +520,6 @@ _MLA_TP1_KV_B2_WIDTH = 8192
 # Per-TP shared expert dimensions (gate/up (7168, 256), down (256, 7168) for moe_tp=1)
 _MOE_TP1_SHARED_GATE_UP_N = 256
 _MOE_TP1_SHARED_DOWN_K = 256
-
-
-def _slice_attention_weights_for_mla_tp(
-    q_b: torch.Tensor,
-    o_proj: torch.Tensor,
-    kv_b1: torch.Tensor,
-    kv_b2: torch.Tensor,
-    mla_tp: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """When state dict has full (2-TP) logical shapes and mla_tp==1, slice to single-TP.
-
-    Single-device tests use mla_tp=1; the reference state dict uses full logical
-    shapes (24576 q_b, 16384 o_proj, etc.). Slice to per-TP so BlitzDecodeWeights
-    receives the shapes it expects.
-    """
-    if mla_tp > 1:
-        return q_b, o_proj, kv_b1, kv_b2
-    # Full logical: q_b (1536, 24576), o_proj (16384, 7168), kv_b1 (16384, 512), kv_b2 (512, 16384)
-    if q_b.shape[1] == _MLA_TP1_Q_B_WIDTH * 2:
-        q_b = q_b[:, :_MLA_TP1_Q_B_WIDTH].contiguous()
-    if o_proj.shape[0] == _MLA_TP1_O_PROJ_HEIGHT * 2:
-        o_proj = o_proj[:_MLA_TP1_O_PROJ_HEIGHT, :].contiguous()
-    if kv_b1.shape[0] == _MLA_TP1_KV_B1_HEIGHT * 2:
-        kv_b1 = kv_b1[:_MLA_TP1_KV_B1_HEIGHT, :].contiguous()
-    if kv_b2.shape[1] == _MLA_TP1_KV_B2_WIDTH * 2:
-        kv_b2 = kv_b2[:, :_MLA_TP1_KV_B2_WIDTH].contiguous()
-    return q_b, o_proj, kv_b1, kv_b2
-
-
-def _slice_shared_expert_weights_for_moe_tp(
-    shared_gate: torch.Tensor,
-    shared_up: torch.Tensor,
-    shared_down: torch.Tensor,
-    moe_tp: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """When state dict has full (8-TP) logical shapes and moe_tp==1, slice to single-TP.
-
-    Single-device tests use moe_tp=1; the reference state dict uses full logical
-    shapes (gate/up width 2048, down height 2048). Slice to per-TP so BlitzDecodeWeights
-    receives (7168, 256) and (256, 7168).
-    """
-    if moe_tp > 1:
-        return shared_gate, shared_up, shared_down
-    full_n = _MOE_TP1_SHARED_GATE_UP_N * 8  # 2048
-    if shared_gate.shape[1] == full_n:
-        shared_gate = shared_gate[:, :_MOE_TP1_SHARED_GATE_UP_N].contiguous()
-    if shared_up.shape[1] == full_n:
-        shared_up = shared_up[:, :_MOE_TP1_SHARED_GATE_UP_N].contiguous()
-    if shared_down.shape[0] == full_n:
-        shared_down = shared_down[:_MOE_TP1_SHARED_DOWN_K, :].contiguous()
-    return shared_gate, shared_up, shared_down
 
 
 def get_layer_raw_tensors(
@@ -1277,18 +1205,6 @@ def prepare_moe_layer_weights(
     return result
 
 
-def _to_tt_embedding(embedding_torch: torch.Tensor, device, *, move_to_device: bool = False) -> ttnn.Tensor:
-    """Convert a torch embedding tensor to TT (DRAM, ROW_MAJOR, ReplicateTensorToMesh). Shared by prepare and synthetic."""
-    return ttnn.from_torch(
-        embedding_torch.contiguous(),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device if move_to_device else None,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-    )
-
-
 def prepare_embedding_weights(
     state_dict: dict[str, torch.Tensor],
     device,
@@ -1321,50 +1237,6 @@ def prepare_embedding_weights(
         raw_tensors=lambda: {_src_key: state_dict[_src_key]},
     )
     return DeepSeekV3EmbeddingLayerWeights(embedding=embedding_tt)
-
-
-def _to_tt_lm_head_matrix(
-    lm_head_torch: torch.Tensor, device, *, mesh_mapper, move_to_device: bool = False
-) -> ttnn.Tensor:
-    """Convert (K, N) lm_head torch tensor to TT (WIDTH_SHARDED 101 cores, L1). Shared by prepare and synthetic."""
-    lm_head_shard_shape = (_LM_HEAD_K, _LM_HEAD_N_PER_CORE)
-    lm_head_shard_spec = ttnn.ShardSpec(
-        _LM_HEAD_MATMUL_CORE_GRID,
-        lm_head_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    lm_head_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        lm_head_shard_spec,
-    )
-    return ttnn.from_torch(
-        lm_head_torch.contiguous(),
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=device if move_to_device else None,
-        memory_config=lm_head_mem_config,
-        mesh_mapper=mesh_mapper,
-        tile=_LM_HEAD_B_TILE,
-    )
-
-
-def _to_tt_lm_head_final_norm(norm_torch: torch.Tensor, device, *, move_to_device: bool = False) -> ttnn.Tensor:
-    """Convert (1, K) final norm torch tensor to TT (HEIGHT_SHARDED on mcast core). Shared by prepare and synthetic."""
-    norm_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(_LM_HEAD_MCAST_CORE_GRID, (1, _LM_HEAD_K), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    return ttnn.from_torch(
-        norm_torch.contiguous(),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        tile=_LM_HEAD_A_TILE,
-        device=device if move_to_device else None,
-        memory_config=norm_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-    )
 
 
 def prepare_lm_head_weights(
@@ -1434,41 +1306,6 @@ def _transform_eh_proj(eh_proj_weight_T: torch.Tensor) -> torch.Tensor:
     eh_padded = torch.zeros((K, padded_N), dtype=eh_proj_weight_T.dtype)
     eh_padded[:, :N] = eh_proj_weight_T
     return BlitzDecodeWeights._shuffle_dram_tiles(eh_padded, 32, _MTP_NUM_DRAM_BANKS).contiguous()
-
-
-def _to_tt_mtp_eh_proj(eh_proj_torch: torch.Tensor, device, *, move_to_device: bool = False) -> ttnn.Tensor:
-    """Convert transposed eh_proj (K+embedding_dim, hidden) to TT WIDTH_SHARDED DRAM with tile shuffle.
-
-    eh_proj_torch: already transposed to (K, N) = (14336, 7168).
-    Pads N to align with _MTP_NUM_DRAM_BANKS, shuffles tiles for DRAM streaming,
-    and creates a WIDTH_SHARDED DRAM tensor.
-    """
-    K, N = eh_proj_torch.shape
-    n_per_bank = N // _MTP_NUM_DRAM_BANKS
-    eh_shuffled = _transform_eh_proj(eh_proj_torch)
-
-    eh_shard_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(_MTP_NUM_DRAM_BANKS - 1, 0),
-            )
-        }
-    )
-    eh_proj_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.DRAM,
-        ttnn.ShardSpec(eh_shard_grid, (K, n_per_bank), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    return ttnn.from_torch(
-        eh_shuffled,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=device if move_to_device else None,
-        memory_config=eh_proj_mem_config,
-        tile=_MTP_B_TILE,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-    )
 
 
 def _mtp_eh_proj_preprocess(raw: dict[str, torch.Tensor], src_key: str, target_name: str) -> dict[str, torch.Tensor]:
