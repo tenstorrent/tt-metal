@@ -5,7 +5,7 @@
 import time
 from typing import Sequence, Iterator
 
-from utils.setup import InferenceCtx, setup_inference, setup_grpo_config
+from utils.setup import InferenceCtx, setup_inference, setup_grpo_config, get_training_config
 from utils.gsm8k import extract_hash_answer, get_gsm8k
 from utils.boolq import get_boolq
 from utils.inference import generate_answers_multiple_prompts
@@ -97,6 +97,7 @@ if __name__ == "__main__":
         checkpoint_path=accuracy_args.checkpoint_path,
     )
     grpo_cfg = setup_grpo_config(yaml_config_path)
+    completions_batch_size = int(get_training_config(yaml_config_path).get("batch_size", 4))
 
     if accuracy_args.dataset == "boolq":
         split = "validation"
@@ -118,7 +119,7 @@ if __name__ == "__main__":
     for i, prompt, completion in iter_generated_completions(
         ctx,
         prompts[:prompts_to_test],
-        batch_size=grpo_cfg.completions_batch_size,
+        batch_size=completions_batch_size,
     ):
         run.logger.info(f"--- Question {i} ---")
         run.logger.info(f"{prompt=}")
