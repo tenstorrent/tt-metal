@@ -1204,7 +1204,6 @@ def ttnn_graph_report(request):
             if not ttnn.distributed_context_is_initialized() or int(ttnn.distributed_context_get_rank()) == 0:
                 from ttnn.graph_report import import_report
 
-                # Merge all ``graph_capture_*_of_*.json`` files under report_path into one DB.
                 import_report(report_path, report_path)
 
             config_path = report_path / "config.json"

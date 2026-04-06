@@ -46,7 +46,9 @@ def _make_report(
     metadata=None,
 ):
     """Build a complete JSON report dict matching C++ output format."""
-    report = {"version": 1, "graph": graph, "devices": devices or [], "metadata": metadata or {}}
+    md = dict(metadata) if metadata is not None else {}
+    md.setdefault("rank", 0)
+    report = {"version": 1, "graph": graph, "devices": devices or [], "metadata": md}
     if per_operation_buffers is not None:
         report["per_operation_buffers"] = per_operation_buffers
     if python_io is not None:

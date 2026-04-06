@@ -11,11 +11,7 @@ No database operations happen during model execution - everything is offline.
 Workflow:
     1. C++ captures graph to JSON: ttnn::graph::end_graph_capture_to_file("report.json")
     2. Later, import to SQLite: python -m ttnn.graph_report report.json ./visualizer_db/
-       (pass a directory to merge multiple captures, e.g. multi-host ``graph_capture_<rank>_of_<N>.json``)
     3. Open ttnn-visualizer pointing to ./visualizer_db/
-
-Each imported row includes a ``rank`` column (SPMD / process index) so tensor_id and ops from
-different hosts stay distinguishable in one database.
 
 This replaces the invasive approach where decorators.py inserted into SQLite during execution.
 
@@ -38,19 +34,17 @@ SUPPORTED_REPORT_VERSION = 1
 DATABASE_SCHEMA_VERSION = 3
 
 
-def _parse_rank_from_filename(path: Path) -> int:
-    """Parse rank from ``graph_capture_<rank>_of_<world>.json``; default 0."""
-    m = re.match(r"^graph_capture_(\d+)_of_(\d+)\.json$", path.name, re.IGNORECASE)
-    return int(m.group(1)) if m else 0
-
-
 def _report_rank(report, path: Path) -> int:
-    """Rank from JSON ``rank`` field (if top-level object is a dict), else from capture filename."""
-    if isinstance(report, dict):
-        r = report.get("rank")
-        if r is not None:
-            return int(r)
-    return _parse_rank_from_filename(path)
+    """Distributed rank from ``metadata.rank`` (same as C++ ``GraphProcessor::get_report()``)."""
+    if not isinstance(report, dict):
+        raise ValueError(f"Graph report must be a JSON object: {path}")
+    meta = report.get("metadata")
+    if not isinstance(meta, dict):
+        raise ValueError(f"Graph report missing metadata object: {path}")
+    r = meta.get("rank")
+    if r is None:
+        raise ValueError(f"Graph report metadata missing required field rank: {path}")
+    return int(r)
 
 
 def _discover_report_json_files(report_path: Path) -> list[Path]:
@@ -122,7 +116,7 @@ def _tid_int(tid):
 def create_database_schema(cursor: sqlite3.Cursor) -> None:
     """Create the full ttnn-visualizer SQLite database schema."""
 
-    # Devices table (rank = distributed / SPMD process index for multi-host reports)
+    # Devices table
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS devices (
@@ -173,7 +167,7 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
     """
     )
 
-    # Tensors table (tensor_id may repeat across ranks; uniqueness is per rank)
+    # Tensors table
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS tensors (
@@ -450,7 +444,7 @@ def _validate_graph_integrity(
     device_ids = {dev.get("device_id", 0) for dev in devices} if devices else set()
 
     # input_tensors.tensor_id must reference a known tensor
-    for op_id, idx, tid, _rk in input_tensors_batch:
+    for op_id, idx, tid, _ in input_tensors_batch:
         tid_int = _tid_int(tid)
         if tid_int not in tensor_ids:
             warnings.append(
@@ -460,7 +454,7 @@ def _validate_graph_integrity(
             )
 
     # output_tensors.tensor_id must reference a known tensor
-    for op_id, idx, tid, _rk in output_tensors_batch:
+    for op_id, idx, tid, _ in output_tensors_batch:
         tid_int = _tid_int(tid)
         if tid_int not in tensor_ids:
             warnings.append(
