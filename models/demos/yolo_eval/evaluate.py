@@ -18,6 +18,7 @@ import ttnn
 from models.common.utility_functions import disable_persistent_kernel_cache
 from models.demos.utils.common_demo_utils import LoadImages, postprocess, preprocess, save_yolo_predictions_by_model
 from models.demos.yolov4.post_processing import gen_yolov4_boxes_confs
+from models.demos.yolov11s.common import YOLOV11S_L1_SMALL_SIZE
 
 
 def iou(pred_box, gt_box):
@@ -99,7 +100,7 @@ def evaluation(
     num_iterations = 500
 
     if model_type == "torch_model":
-        if model_name in ["YOLOv10", "YOLOv11n", "YOLOv8s"]:
+        if model_name in ["YOLOv10", "YOLOv11n", "YOLOv11s", "YOLOv8s"]:
             num_iterations = 105
         elif model_name in ["YOLOv9c", "YOLOv7", "YOLOv6l"]:
             num_iterations = 20
@@ -164,7 +165,16 @@ def evaluation(
             img = torch.autograd.Variable(img)
             n, c, h, w = input_shape
             ttnn_im = ttnn.from_torch(img, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        elif model_name in ["YOLOv8s", "YOLOv8s_World", "YOLOv8x", "YOLOv11n", "YOLOv9c", "YOLOv7", "YOLOv6l"]:
+        elif model_name in [
+            "YOLOv8s",
+            "YOLOv8s_World",
+            "YOLOv8x",
+            "YOLOv11n",
+            "YOLOv11s",
+            "YOLOv9c",
+            "YOLOv7",
+            "YOLOv6l",
+        ]:
             ttnn_im = im.clone()
         else:
             ttnn_im = im.permute((0, 2, 3, 1))
@@ -184,6 +194,7 @@ def evaluation(
             "YOLOv8s",
             "YOLOv8x",
             "YOLOv11n",
+            "YOLOv11s",
             "YOLOv7",
             "YOLOv12x",
             "YOLOv6l",
@@ -216,7 +227,7 @@ def evaluation(
             if model_name in ["YOLOv11"]:
                 preds = model(ttnn_im)
                 preds = ttnn.to_torch(preds, dtype=torch.float32)
-            elif model_name in ["YOLOv11n", "YOLOv8x", "YOLOv7", "YOLOv6l"]:
+            elif model_name in ["YOLOv11n", "YOLOv11s", "YOLOv8x", "YOLOv7", "YOLOv6l"]:
                 preds = model.run(ttnn_im)
                 preds = ttnn.to_torch(preds, dtype=torch.float32)
             elif model_name in ["YOLOv10"]:
@@ -302,7 +313,16 @@ def evaluation(
     if model_type == "tt_metal":
         if model_name in ["YOLOv8x"]:
             model.release_yolov8x_trace_2cqs_inference()
-        elif model_name in ["YOLOv10", "YOLOv9c", "YOLOv8s_World", "YOLOv8s", "YOLOv11n", "YOLOv7", "YOLOv6l"]:
+        elif model_name in [
+            "YOLOv10",
+            "YOLOv9c",
+            "YOLOv8s_World",
+            "YOLOv8s",
+            "YOLOv11n",
+            "YOLOv11s",
+            "YOLOv7",
+            "YOLOv6l",
+        ]:
             model.release()
     ground_truth = []
     for i in dataset:
@@ -627,6 +647,48 @@ def test_yolov11n(device, model_type, res, reset_seeds, model_location_generator
         input_layout=input_layout,
         save_dir=save_dir,
         model_name="YOLOv11n",
+    )
+
+
+@pytest.mark.parametrize(
+    "model_type",
+    [("tt_model"), ("torch_model")],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": YOLOV11S_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
+)
+@pytest.mark.parametrize("res", [(640, 640)])
+def test_yolov11s(device, model_type, res, reset_seeds, model_location_generator):
+    from models.demos.yolov11s.common import load_torch_model
+    from models.demos.yolov11s.runner.performant_runner import YOLOv11sPerformantRunner
+
+    if model_type == "torch_model":
+        model = load_torch_model(model_location_generator=model_location_generator)
+    else:
+        model = YOLOv11sPerformantRunner(
+            device,
+            act_dtype=ttnn.bfloat8_b,
+            weight_dtype=ttnn.bfloat8_b,
+            model_location_generator=model_location_generator,
+        )
+        logger.info("Inferencing using ttnn Model")
+
+    save_dir = "models/demos/yolov11s/demo/runs"
+
+    input_dtype = ttnn.bfloat16
+    input_layout = ttnn.ROW_MAJOR_LAYOUT
+
+    evaluation(
+        device=device,
+        res=res,
+        model_type=model_type,
+        model=model,
+        input_dtype=input_dtype,
+        input_layout=input_layout,
+        save_dir=save_dir,
+        model_name="YOLOv11s",
     )
 
 
