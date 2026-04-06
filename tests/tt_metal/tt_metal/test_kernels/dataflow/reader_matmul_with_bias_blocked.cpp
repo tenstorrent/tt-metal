@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -40,8 +40,10 @@ void kernel_main() {
     }
 
 #ifdef ARCH_QUASAR
-    experimental::DataflowBuffer dfb_in0(0);
-    experimental::DataflowBuffer dfb_in1(1);
+    constexpr uint32_t dfb_in0_id = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_in1_id = get_compile_time_arg_val(1);
+    experimental::DataflowBuffer dfb_in0(dfb_in0_id);
+    experimental::DataflowBuffer dfb_in1(dfb_in1_id);
     experimental::Noc noc;
     experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram;
 #else

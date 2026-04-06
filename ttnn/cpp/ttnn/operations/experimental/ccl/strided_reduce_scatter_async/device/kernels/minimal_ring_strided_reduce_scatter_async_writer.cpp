@@ -1,6 +1,25 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
+/**
+ * Strided reduce-scatter WRITER kernel.
+ *
+ * Consumes tiles produced by the reader (step 0) or compute (steps 1+) and
+ * dispatches them according to the current ring step:
+ *
+ *   Steps i=0 .. ring_size-2: reads from reader_output_cb (i=0) or
+ *     output_cb (i>0), writes tiles to the intermediate buffer on the
+ *     neighboring device via fabric unicast, then signals the neighbor's
+ *     reader by incrementing its "intermediate ready" semaphore.
+ *
+ *   Step i=ring_size-1 (final): reads from output_cb and writes the
+ *     fully reduced tiles to the local output tensor in DRAM.
+ *
+ * After all chunks within a batch are processed, a batch-level barrier
+ * ensures all devices have finished before any device reuses its
+ * single-batch intermediate buffer.
+ */
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
@@ -33,6 +52,10 @@ constexpr uint32_t tile_granularity = get_compile_time_arg_val(4);
 constexpr uint32_t page_size = get_compile_time_arg_val(5);
 constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(6);
 constexpr uint32_t output_batch_num_pages = get_compile_time_arg_val(7);
+[[maybe_unused]] constexpr uint32_t input_channel_num_pages =
+    get_compile_time_arg_val(8);  // C=1 is validated on host; reserved for future C>1 support
+[[maybe_unused]] constexpr uint32_t output_channel_num_pages =
+    get_compile_time_arg_val(9);  // C=1 is validated on host; reserved for future C>1 support
 constexpr uint32_t input_tensor_B = get_compile_time_arg_val(10);
 constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(11);
 constexpr uint32_t slice_C = get_compile_time_arg_val(12);
@@ -243,6 +266,10 @@ void kernel_main() {
                     const uint32_t effective_subchunk_size = current_mm_block_ht * effective_chunk_width_in_tiles;
                     int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
+                    // Ring reduce-scatter loop for this chunk.
+                    // i=0: consume reader_output_cb, send to neighbor's intermediate buffer.
+                    // i=1..R-2: consume output_cb (from compute), send to neighbor's intermediate.
+                    // i=R-1: consume output_cb, write final reduced tiles to local output.
                     for (uint32_t i = 0; i < ring_size; i++) {
                         const uint32_t actual_slice_idx = wrap_slice_idx(slice_idx, direction, ring_size);
                         const uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
@@ -424,8 +451,8 @@ void kernel_main() {
                 }
             }
 
-            // Signal batch done and wait for all other chips to finish before next batch.
-            // This is needed to avoid race conditions in the intermediate buffer.
+            // Batch barrier: the intermediate buffer holds only one batch element, so all
+            // devices must finish the current batch before any starts the next one.
             const uint64_t batch_ready_sem_noc_addr_in_pkt =
                 safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, batch_ready_sem, 0);
             fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(

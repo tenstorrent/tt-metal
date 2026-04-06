@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -79,6 +79,22 @@ void StridedReduceScatterAsyncDeviceOperation::validate_on_program_cache_miss(
                 "DRAM block sharding not supported for intermediate tensor");
         }
     }
+
+    // The reader/writer kernels assert dim==3 (W); reject any other dim at host to produce a clear error.
+    TT_FATAL(
+        operation_attributes.dim == 3,
+        "strided_reduce_scatter_async only supports dim=3 (W), but got dim={}",
+        operation_attributes.dim);
+
+    // The ring scatter kernel does not loop over the C dimension, so C must be 1
+    TT_FATAL(
+        input_tensor.logical_shape().rank() == 4 && input_tensor.logical_shape()[1] == 1,
+        "strided_reduce_scatter_async requires a 4D tensor with C=1, but got shape {}",
+        input_tensor.logical_shape());
+
+    // mm_block_ht and mm_block_wt are used as divisors in the program factory
+    TT_FATAL(operation_attributes.mm_block_ht > 0, "mm_block_ht must be > 0, got {}", operation_attributes.mm_block_ht);
+    TT_FATAL(operation_attributes.mm_block_wt > 0, "mm_block_wt must be > 0, got {}", operation_attributes.mm_block_wt);
 
     // Validate semaphore count
     constexpr auto num_expected_semaphores = 3;

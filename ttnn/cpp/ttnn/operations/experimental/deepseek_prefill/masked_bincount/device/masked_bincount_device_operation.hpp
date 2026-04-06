@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,9 +6,6 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "masked_bincount_program_factory.hpp"
-
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 #include "masked_bincount_device_operation_types.hpp"
 
@@ -30,5 +27,6 @@ struct MaskedBincountDeviceOperation {
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
-Tensor masked_bincount(const Tensor& input_tensor, const Tensor& expert_mask, uint32_t n_routed_experts);
+Tensor masked_bincount(
+    const Tensor& input_tensor, const Tensor& expert_mask, uint32_t n_routed_experts, uint32_t num_experts_per_token);
 }  // namespace ttnn::prim

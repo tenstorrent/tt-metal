@@ -1,12 +1,15 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/fmt.hpp>
+#include <tt_stl/reflection.hpp>
 #include "data.hpp"
+#include <cstdlib>
+#include <iterator>
 #include <stdexcept>
 #include "rpc_server_controller.hpp"
 #include "logger.hpp"
+#include <tt-metalium/experimental/inspector_config.hpp>
 #include "context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "distributed/mesh_workload_impl.hpp"
@@ -15,8 +18,26 @@
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 
+#include <fmt/format.h>
+
 namespace tt::tt_metal::inspector {
 
+std::string stringify_tensor_specs(const std::vector<TensorSpec>& tensor_specs) {
+    if (tensor_specs.empty()) {
+        return "Not captured";
+    }
+
+    constexpr size_t TENSOR_ARGS_BUFFER_SIZE = 4096;
+    fmt::memory_buffer buf;
+    buf.reserve(TENSOR_ARGS_BUFFER_SIZE);
+    for (size_t i = 0; i < tensor_specs.size(); ++i) {
+        if (i > 0) {
+            fmt::format_to(std::back_inserter(buf), ", ");
+        }
+        fmt::format_to(std::back_inserter(buf), "[{}]: {}", i, tensor_specs[i]);
+    }
+    return std::string(buf.data(), buf.size());
+}
 
 Data::Data()
     : logger(MetalContext::instance().rtoptions().get_inspector_log_path()) {
@@ -32,8 +53,8 @@ Data::Data()
             get_rpc_server().setGetProgramsCallback([this](auto result) { this->rpc_get_programs(result); });
             get_rpc_server().setGetMeshDevicesCallback([this](auto result) { this->rpc_get_mesh_devices(result); });
             get_rpc_server().setGetMeshWorkloadsCallback([this](auto result) { this->rpc_get_mesh_workloads(result); });
-            get_rpc_server().setGetMeshWorkloadsRuntimeIdsCallback(
-                [this](auto result) { this->rpc_get_mesh_workloads_runtime_ids(result); });
+            get_rpc_server().setGetMeshWorkloadRuntimeEntriesCallback(
+                [this](auto result) { this->rpc_get_mesh_workload_runtime_entries(result); });
             get_rpc_server().setGetDevicesInUseCallback([this](auto result) { this->rpc_get_devices_in_use(result); });
             get_rpc_server().setGetKernelCallback(
                 [this](auto params, auto result) { this->rpc_get_kernel(params, result); });
@@ -43,6 +64,7 @@ Data::Data()
             get_rpc_server().setGetBlocksByTypeCallback([this](auto result) { this->rpc_get_blocks_by_type(result); });
             get_rpc_server().setGetMetalDeviceIdMappingsCallback(
                 [this](auto result) { this->rpc_get_metal_device_id_mappings(result); });
+            get_rpc_server().setGetConfigurationCallback([this](auto result) { this->rpc_get_configuration(result); });
         } catch (const std::exception& e) {
             TT_INSPECTOR_THROW("Failed to start Inspector RPC server: {}", e.what());
         }
@@ -132,8 +154,6 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
     for (const auto& [mesh_workload_id, mesh_workload_data] : mesh_workloads_data) {
         auto mesh_workload = mesh_workloads[i++];
         mesh_workload.setMeshWorkloadId(mesh_workload_id);
-        mesh_workload.setName(mesh_workload_data.name);
-        mesh_workload.setParameters(mesh_workload_data.parameters);
 
         const auto& programs = mesh_workload_data.mesh_workload->get_programs();
         auto programs_data = mesh_workload.initPrograms(programs.size());
@@ -153,7 +173,8 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
             }
         }
 
-        auto binary_status_list = mesh_workload.initBinaryStatusPerMeshDevice(mesh_workload_data.binary_status_per_device.size());
+        auto binary_status_list =
+            mesh_workload.initBinaryStatusPerMeshDevice(mesh_workload_data.binary_status_per_device.size());
         j = 0;
         for (const auto& [mesh_id, status] : mesh_workload_data.binary_status_per_device) {
             auto binary_status = binary_status_list[j++];
@@ -163,13 +184,21 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
     }
 }
 
-void Data::rpc_get_mesh_workloads_runtime_ids(rpc::Inspector::GetMeshWorkloadsRuntimeIdsResults::Builder& results) {
-    std::lock_guard<std::mutex> lock(runtime_ids_mutex);
-    auto all_runtime_ids = results.initRuntimeIds(runtime_ids.size());
-    for (size_t i = 0; i < runtime_ids.size(); ++i) {
-        auto entry = all_runtime_ids[i];
-        entry.setWorkloadId(runtime_ids[i].workload_id);
-        entry.setRuntimeId(runtime_ids[i].runtime_id);
+void Data::rpc_get_mesh_workload_runtime_entries(
+    rpc::Inspector::GetMeshWorkloadRuntimeEntriesResults::Builder& results) {
+    std::lock_guard<std::mutex> lock(runtime_entries_mutex);
+    auto write_pos = runtime_entries_write_pos;
+    size_t count = std::min(write_pos, kRuntimeEntriesCapacity);
+    size_t start = write_pos - count;
+
+    auto all_runtime_entries = results.initRuntimeEntries(count);
+    for (size_t i = 0; i < count; ++i) {
+        const auto& re = runtime_entries[(start + i) % kRuntimeEntriesCapacity];
+        auto entry = all_runtime_entries[i];
+        entry.setWorkloadId(re.workload_id);
+        entry.setRuntimeId(re.runtime_id);
+        entry.setOperationName(std::string(re.operation_name));
+        entry.setOperationParameters(stringify_tensor_specs(re.tensor_specs));
     }
 }
 
@@ -232,6 +261,10 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
         build_info.setBuildKey(build_env.build_key);
         build_info.setFirmwarePath(build_env.firmware_root_path);
         build_info.setFwCompileHash(fw_compile_hash);
+        // Surface whether DRAM programmable RISC cores are enabled (Blackhole only)
+        // This reflects the runtime option used when initializing HAL on silicon.
+        build_info.setDramProgrammableCoresEnabled(
+            tt::tt_metal::MetalContext::instance().rtoptions().get_enable_blackhole_dram_programmable_cores());
     }
 }
 
@@ -405,6 +438,259 @@ void Data::populate_core_entries_by_category(
         // Populate the core entry with the key, info, and event id
         auto entry = entries[i++];
         Data::populate_core_entry(entry, k, info, event_id);
+    }
+}
+
+static std::vector<ConfigCallback>& get_config_callbacks() {
+    static std::vector<ConfigCallback> callbacks;
+    return callbacks;
+}
+
+void add_config_callback(ConfigCallback callback) { get_config_callbacks().push_back(std::move(callback)); }
+
+template <typename T>
+void add_rt_entry(std::vector<ConfigurationEntry>& entries, std::string name, const T& value) {
+    entries.push_back({std::move(name), fmt::format("{}", value), ConfigScope::RtOptions});
+}
+
+template <typename T>
+void add_rt_entry(std::vector<ConfigurationEntry>& entries, std::string name, const std::optional<T>& value) {
+    entries.push_back(
+        {std::move(name), value.has_value() ? fmt::format("{}", value.value()) : "(unset)", ConfigScope::RtOptions});
+}
+
+#define RT(x) add_rt_entry(entries, #x, rt.get_##x())
+#define RT_CUSTOM(name_str, expr) add_rt_entry(entries, name_str, expr)
+#define RT_GUARDED(x, check)                  \
+    if (check) {                              \
+        RT(x);                                \
+    } else {                                  \
+        add_rt_entry(entries, #x, "(unset)"); \
+    }
+
+void collect_environment_entries(std::vector<ConfigurationEntry>& entries) {
+    for (char** env = environ; *env != nullptr; ++env) {
+        std::string_view entry(*env);
+        auto eq = entry.find('=');
+        if (eq == std::string_view::npos) {
+            continue;
+        }
+        auto name = entry.substr(0, eq);
+        if (name.starts_with("TT_") || name.starts_with("TTNN_")) {
+            entries.push_back({std::string(name), std::string(entry.substr(eq + 1)), ConfigScope::Environment});
+        }
+    }
+}
+
+void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const tt::llrt::RunTimeOptions& rt) {
+    // clang-format off
+    // Path configuration
+    RT(root_dir);
+    // These getters TT_THROW (which logs a critical message) when unset, so guard them
+    RT_GUARDED(cache_dir, rt.is_cache_dir_specified());
+    RT(logs_dir);
+    RT_GUARDED(kernel_dir, rt.is_kernel_dir_specified());
+    RT(system_kernel_dir);
+    RT_GUARDED(core_grid_override_todeprecate, rt.is_core_grid_override_todeprecate());
+
+    // General
+    RT(build_map_enabled);
+    RT(fast_dispatch);
+    RT(num_hw_cqs);
+    RT(dram_backed_cq);
+    RT(numa_based_affinity);
+    RT_CUSTOM("target_device", static_cast<int>(rt.get_target_device()));
+    RT(simulator_enabled);
+    RT_CUSTOM("simulator_path", rt.get_simulator_path().string());
+    RT(mock_enabled);
+    RT(mock_cluster_desc_path);
+    RT(visible_devices);
+    RT(arch_name);
+
+    // Kernel execution
+    RT(kernels_nullified);
+    RT(kernels_early_return);
+    RT(skip_loading_fw);
+    RT(disable_precompiled_fw);
+    RT(force_jit_compile);
+    RT(force_context_reinit);
+    RT(log_kernels_compilation_commands);
+    RT(dump_build_commands);
+    RT(compile_hash_string);
+    RT(erisc_iram_enabled);
+
+    // Memory
+    RT(clear_l1);
+    RT(clear_dram);
+
+    // Hardware
+    RT(hw_cache_invalidation_enabled);
+    RT(relaxed_memory_ordering_disabled);
+    RT(gathering_enabled);
+    RT(enable_2_erisc_mode);
+    RT(disable_fabric_2_erisc_mode);
+    RT(disable_dma_ops);
+    RT(disable_sfploadmacro);
+    RT(disable_xip_dump);
+    RT(skip_eth_cores_with_retrain);
+    RT(use_mesh_graph_descriptor_2_0);
+    RT(custom_fabric_mesh_graph_desc_path);
+    RT(arc_debug_buffer_size);
+    RT(validate_kernel_binaries);
+    RT(record_noc_transfers);
+    RT(use_device_print);
+
+    // Timeouts
+    RT_CUSTOM("timeout_duration_for_operations", fmt::format("{}s", rt.get_timeout_duration_for_operations().count()));
+    RT(dispatch_timeout_command_to_execute);
+    RT(dispatch_progress_update_ms);
+
+    // Fabric
+    RT(enable_fabric_telemetry);
+    RT(enable_fabric_bw_telemetry);
+    RT(enable_fabric_code_profiling_rx_ch_fwd);
+    RT(enable_channel_trimming_capture);
+    RT(fabric_trimming_profile_path);
+    RT(fabric_trimming_override_path);
+    RT(enable_fabric_vc2);
+    RT(fabric_router_sync_timeout_ms);
+    RT(fabric_kernel_opt_level);
+    RT(reliability_mode);
+
+    // Profiler
+    RT(profiler_enabled);
+    RT(profiler_do_dispatch_cores);
+    RT(profiler_sync_enabled);
+    RT(profiler_trace_only);
+    RT(profiler_trace_tracking);
+    RT(profiler_mid_run_dump);
+    RT(profiler_cpp_post_process);
+    RT(profiler_sum);
+    RT(profiler_program_support_count);
+    RT(profiler_buffer_usage_enabled);
+    RT(profiler_noc_events_enabled);
+    RT(profiler_perf_counter_mode);
+    RT(profiler_noc_events_report_path);
+    RT(profiler_disable_dump_to_files);
+    RT(profiler_disable_push_to_tracy);
+    RT(experimental_noc_debug_dump_enabled);
+    RT(tracy_mid_run_push);
+
+    // Watcher
+    RT(watcher_enabled);
+    RT(watcher_hash);
+    RT(watcher_interval);
+    RT(watcher_dump_all);
+    RT(watcher_append);
+    RT(watcher_auto_unpause);
+    RT(watcher_noinline);
+    RT(watcher_phys_coords);
+    RT(watcher_text_start);
+    RT(watcher_skip_logging);
+    RT(watcher_noc_sanitize_linked_transaction);
+    RT(watcher_debug_delay);
+    {
+        const auto& disabled = rt.get_watcher_disabled_features();
+        std::string joined;
+        for (const auto& s : disabled) {
+            if (!joined.empty()) {
+                joined += ", ";
+            }
+            joined += s;
+        }
+        RT_CUSTOM("watcher_disabled_features", joined.empty() ? "(empty)" : joined);
+    }
+
+    // Inspector
+    RT(inspector_enabled);
+    RT(inspector_initialization_is_important);
+    RT(inspector_warn_on_write_exceptions);
+    RT(inspector_rpc_server_enabled);
+    RT(inspector_rpc_server_host);
+    RT(inspector_rpc_server_port);
+    RT(inspector_rpc_server_address);
+    RT(inspector_capture_tensor_specs);
+    RT(inspector_log_runtime_entries);
+    RT_CUSTOM("inspector_log_path", rt.get_inspector_log_path().string());
+    RT(serialize_inspector_on_dispatch_timeout);
+    RT(riscv_debug_info_enabled);
+    RT(jit_analytics_enabled);
+    RT(lightweight_kernel_asserts);
+    RT(llk_asserts);
+
+    // Dispatch data / testing
+    RT(dispatch_data_collection_enabled);
+    RT(test_mode_enabled);
+
+    // DispatchCoreConfig
+    {
+        static const char* dispatch_core_types[] = {"WORKER", "ETH"};
+        static const char* dispatch_core_axes[] = {"ROW", "COL"};
+        auto config = rt.get_dispatch_core_config();
+        auto type_idx = static_cast<int>(config.get_dispatch_core_type());
+        auto axis_idx = static_cast<int>(config.get_dispatch_core_axis());
+        RT_CUSTOM("dispatch_core_config_type", (type_idx < 2) ? dispatch_core_types[type_idx] : fmt::format("{}", type_idx));
+        RT_CUSTOM("dispatch_core_config_axis", (axis_idx < 2) ? dispatch_core_axes[axis_idx] : fmt::format("{}", axis_idx));
+    }
+
+    // FabricTelemetrySettings
+    {
+        const auto& fts = rt.get_fabric_telemetry_settings();
+        RT_CUSTOM("fabric_telemetry_enabled", fts.enabled);
+        RT_CUSTOM("fabric_telemetry_chips_monitor_all", fts.chips.monitor_all);
+        RT_CUSTOM("fabric_telemetry_channels_monitor_all", fts.channels.monitor_all);
+        RT_CUSTOM("fabric_telemetry_eriscs_monitor_all", fts.eriscs.monitor_all);
+        RT_CUSTOM("fabric_telemetry_stats_mask", fts.stats_mask);
+    }
+
+    // Per-feature debug settings
+    {
+        for (int i = 0; i < tt::llrt::RunTimeDebugFeatureCount; ++i) {
+            auto feature = static_cast<tt::llrt::RunTimeDebugFeatures>(i);
+            const char* fname = tt::llrt::RunTimeDebugFeatureNames[i];
+            RT_CUSTOM(fmt::format("feature_{}_enabled", fname), rt.get_feature_enabled(feature));
+            RT_CUSTOM(fmt::format("feature_{}_file_name", fname), rt.get_feature_file_name(feature));
+            RT_CUSTOM(fmt::format("feature_{}_one_file_per_risc", fname), rt.get_feature_one_file_per_risc(feature));
+            RT_CUSTOM(fmt::format("feature_{}_prepend_device_core_risc", fname), rt.get_feature_prepend_device_core_risc(feature));
+            RT_CUSTOM(fmt::format("feature_{}_all_chips", fname), rt.get_feature_all_chips(feature));
+        }
+    }
+    // clang-format on
+}
+
+#undef RT
+#undef RT_CUSTOM
+#undef RT_GUARDED
+
+void Data::rpc_get_configuration(rpc::Inspector::GetConfigurationResults::Builder& results) {
+    std::vector<ConfigurationEntry> all_entries;
+
+    // 1. Environment variables
+    collect_environment_entries(all_entries);
+
+    // 2. RtOptions
+    const auto& rt = MetalContext::instance().rtoptions();
+    collect_rtoptions_entries(all_entries, rt);
+
+    // 3. External config providers (e.g. TTNN, registered at library load time)
+    for (const auto& cb : get_config_callbacks()) {
+        auto cb_entries = cb();
+        all_entries.insert(
+            all_entries.end(), std::make_move_iterator(cb_entries.begin()), std::make_move_iterator(cb_entries.end()));
+    }
+
+    // Serialize into Cap'n Proto
+    auto entries = results.initEntries(all_entries.size());
+    for (size_t i = 0; i < all_entries.size(); ++i) {
+        auto entry = entries[i];
+        entry.setName(all_entries[i].name);
+        entry.setValue(all_entries[i].value);
+
+        switch (all_entries[i].scope) {
+            case ConfigScope::Environment: entry.setScope(rpc::ConfigurationScope::ENVIRONMENT); break;
+            case ConfigScope::RtOptions: entry.setScope(rpc::ConfigurationScope::RT_OPTIONS); break;
+            case ConfigScope::TtnnConfig: entry.setScope(rpc::ConfigurationScope::TTNN_CONFIG); break;
+        }
     }
 }
 

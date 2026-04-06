@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -236,7 +236,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     // When fusing with strided reduce scatter, transposing is disabled because the RS iteration
     // structure requires mm_N_block_wt <= slice_Wt. Transposing puts N on fewer cores (grid_size.y),
     // which can make mm_N_block_wt > slice_Wt and violate this constraint.
-    bool transpose_core_grid = M > N && !srs_fused_op_signaler.has_value();
+    const bool fuse_srs = srs_fused_op_signaler.has_value();
+    bool transpose_core_grid = M > N && !fuse_srs;
 
     auto in0_noc = transpose_core_grid ? large_input_noc : small_input_noc;
     auto in0_risc = transpose_core_grid ? large_input_risc : small_input_risc;
@@ -403,7 +404,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         }
     }
 
-    bool fuse_srs = srs_fused_op_signaler.has_value();
     uint32_t srs_fuse_signaler_sync_semaphore_id = 0;
     if (fuse_srs) {
         defines["SRS_FUSE_OP_SIGNALER"] = "1";

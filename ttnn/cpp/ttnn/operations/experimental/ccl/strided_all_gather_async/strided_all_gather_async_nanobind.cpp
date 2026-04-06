@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -74,4 +74,4 @@ void bind_strided_all_gather_async(nb::module_& mod) {
         nb::arg("mm_block_wt") = nb::none());
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace

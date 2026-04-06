@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "allocator.hpp"
+#include "common/env_lib.hpp"
 #include <tt_stl/assert.hpp>
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
@@ -152,6 +153,8 @@ std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
         trace_region_size,
         worker_l1_unreserved_start,
         {l1_bank_remap.begin(), l1_bank_remap.end()});
+    config.allocator_mode =
+        tt::parse_env("TT_METAL_ALLOCATOR_MODE_HYBRID", false) ? AllocatorMode::HYBRID : AllocatorMode::LOCKSTEP;
 
     for (const tt::umd::CoreCoord& core : soc_desc.get_cores(CoreType::ETH, CoordSystem::LOGICAL)) {
         this->ethernet_cores_.insert({core.x, core.y});
@@ -197,25 +200,30 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
                 // Reset the host manager's pointer for this command queue
                 this->sysmem_manager_->reset(cq_id);
 
-                pointers[host_issue_q_rd_ptr / sizeof(uint32_t)] =
-                    (cq_start + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
-                pointers[host_issue_q_wr_ptr / sizeof(uint32_t)] =
-                    (cq_start + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
-                pointers[host_completion_q_wr_ptr / sizeof(uint32_t)] =
-                    (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) +
-                     get_absolute_cq_offset(channel, cq_id, cq_size)) >>
-                    4;
-                pointers[host_completion_q_rd_ptr / sizeof(uint32_t)] =
-                    (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) +
-                     get_absolute_cq_offset(channel, cq_id, cq_size)) >>
-                    4;
+                const uint32_t cq_offset =
+                    this->sysmem_manager_->is_dram_backed()
+                        ? get_absolute_cq_offset(
+                              channel, cq_id, cq_size, this->sysmem_manager_->get_dram_region_base_addr())
+                        : get_absolute_cq_offset(channel, cq_id, cq_size);
 
-                MetalEnvAccessor(*env_).impl().get_cluster().write_sysmem(
-                    pointers.data(),
-                    pointers.size() * sizeof(uint32_t),
-                    get_absolute_cq_offset(channel, cq_id, cq_size),
-                    mmio_device_id,
-                    get_umd_channel(channel));
+                pointers[host_issue_q_rd_ptr / sizeof(uint32_t)] = (cq_start + cq_offset) >> 4;
+                pointers[host_issue_q_wr_ptr / sizeof(uint32_t)] = (cq_start + cq_offset) >> 4;
+                pointers[host_completion_q_wr_ptr / sizeof(uint32_t)] =
+                    (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + cq_offset) >> 4;
+                pointers[host_completion_q_rd_ptr / sizeof(uint32_t)] =
+                    (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + cq_offset) >> 4;
+
+                if (this->sysmem_manager_->is_dram_backed()) {
+                    MetalEnvAccessor(*env_).impl().get_cluster().write_dram_vec(
+                        pointers.data(), pointers.size() * sizeof(uint32_t), this->id(), 0, cq_offset);
+                } else {
+                    MetalEnvAccessor(*env_).impl().get_cluster().write_sysmem(
+                        pointers.data(),
+                        pointers.size() * sizeof(uint32_t),
+                        cq_offset,
+                        mmio_device_id,
+                        get_umd_channel(channel));
+                }
             }
         }
     }
@@ -259,22 +267,26 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
 
     // Write 0 to all workers launch message read pointer. Need to do this since dispatch cores are written new on each
     // Device init. TODO: remove this once dispatch init moves to one-shot.
+    auto reset_launch_message_rd_ptr_virtual = [&](const CoreCoord& virtual_core,
+                                                   HalProgrammableCoreType programmable_core_type) {
+        uint64_t launch_msg_buffer_read_ptr_addr =
+            hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
+        uint32_t zero = 0;
+        cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), launch_msg_buffer_read_ptr_addr);
+    };
     auto reset_launch_message_rd_ptr = [&](const CoreCoord& logical_core, const CoreType& core_type) {
         CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(id_, logical_core, core_type);
         auto programmable_core_type = get_programmable_core_type(virtual_core);
-        uint64_t launch_msg_buffer_read_ptr_addr =
-            hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
-        uint32_t zero = 0;
-        cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), launch_msg_buffer_read_ptr_addr);
+        reset_launch_message_rd_ptr_virtual(virtual_core, programmable_core_type);
     };
     auto reset_go_message_index = [&](const CoreCoord& logical_core, const CoreType& core_type) {
         CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(id_, logical_core, core_type);
         auto programmable_core_type = get_programmable_core_type(virtual_core);
-        uint32_t go_message_addr = hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
+        uint64_t go_message_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
         uint32_t zero = 0;
         cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_addr);
         cluster.l1_barrier(id_);
-        uint32_t go_message_index_addr = hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
+        uint64_t go_message_index_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
         cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_index_addr);
     };
     std::optional<std::unique_lock<std::mutex>> watcher_lock;
@@ -299,6 +311,11 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
             continue;
         }
         reset_launch_message_rd_ptr(logical_core, CoreType::ETH);
+    }
+    if (hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        for (const auto& dram_core : cluster.get_soc_desc(id_).get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
+            reset_launch_message_rd_ptr_virtual({dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM);
+        }
     }
     if (watcher_lock) {
         watcher_lock.value().unlock();

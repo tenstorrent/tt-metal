@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@ import torch
 
 import ttnn
 
-from ..utils.tensor import bf16_tensor
+from ..utils.tensor import bf16_tensor, local_device_to_torch
 
 
 class CCLManager:
@@ -527,4 +527,4 @@ class CCLManager:
                     use_hyperparams=True,
                     use_persistent_buffer=use_persistent_buffer,
                 )
-        return ttnn.to_torch(ttnn.get_device_tensors(device_tensor)[0])
+        return local_device_to_torch(device_tensor)

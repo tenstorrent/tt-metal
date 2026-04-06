@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -270,6 +270,9 @@ void kernel_main() {
                 }
 #ifdef SRS_FUSE_OP_SIGNALER
                 if constexpr (is_output_writer) {
+                    // Synchronize and signal strided reduce scatter readers after
+                    // previous block has been produced and any data from this core has been written to NOC afterwards,
+                    // at the moment all cores are expected to be done writing their corresponding blocks.
                     if (not_first_block && k_block_iter == max_defer_write_k_block) {
                         noc_async_write_barrier();
                         srs_fuse_signaler.synchronize_workers_and_signal_op(0);

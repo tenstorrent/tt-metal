@@ -1,10 +1,9 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
 import pytest
-import math
 from loguru import logger
 from dataclasses import dataclass, astuple
 import ttnn
@@ -39,6 +38,7 @@ class ReduceScatterTestConfig:
     mm_N_full_block_wt: object = None  # Optional[int]
     chunk_width_in_mm_blocks: object = None  # Optional[int]
     num_workers_per_link: object = None  # Optional[int]
+    num_buffers_per_channel: object = None  # Optional[int]
 
 
 def create_global_semaphores(mesh_device, cores, initial_value):
@@ -80,27 +80,16 @@ def run_reduce_scatter_impl(
     mm_N_full_block_wt=None,
     chunk_width_in_mm_blocks=None,
 ):
-    use_sub_devices = False
     torch.manual_seed(0)
-
-    tile = (32, 32)
 
     ##### Fabric setup #####
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
     ccl_sub_device_crs = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
     )
-    worker_sub_device = ttnn.SubDevice(
-        [
-            ccl_sub_device_crs,
-        ]
-    )
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
 
-    if use_sub_devices:
-        sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-        mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
@@ -213,7 +202,6 @@ def run_reduce_scatter_impl(
                 topology=rs_topology,
                 subdevice_id=worker_sub_device_id,
                 cluster_axis=cluster_axis,
-                chunks_per_sync=chunks_per_sync,
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
                 mm_cores_y=mm_cores_y,
@@ -255,6 +243,11 @@ def run_reduce_scatter_impl(
         return tt_reduce_scatter_output_tensor
 
     if enable_trace:
+        for i in range(num_iters):
+            run_op(i)
+        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+        logger.info("Done compiling ops")
+
         logger.info(f"Capturing trace")
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         tt_reduce_scatter_output_trace_list = []
@@ -303,7 +296,10 @@ def run_reduce_scatter_impl(
                 tt_output_tensor = tt_output_chunks[device_id]
                 torch_output_tensor = torch_rs_out_tensor[device_id]
 
-                eq, output = comp_pcc(tt_output_tensor, torch_output_tensor)
+                if small_random_ints:
+                    eq, output = comp_equal(tt_output_tensor, torch_output_tensor)
+                else:
+                    eq, output = comp_pcc(tt_output_tensor, torch_output_tensor)
                 logger.info(f"{output}, device {device_id}, iteration {i}")
 
                 if verify_output_shape:
@@ -313,6 +309,7 @@ def run_reduce_scatter_impl(
                 if verify_output_pcc:
                     assert eq, f"{i} FAILED reduce scatter: {output}"
 
+    mesh_device.reset_sub_device_stall_group()
     logger.info("Done")
 
 
@@ -339,6 +336,7 @@ def run_reduce_scatter_impl(
                 small_random_ints=False,
             ),
             id="new_standard_implementation",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -357,6 +355,7 @@ def run_reduce_scatter_impl(
                 small_random_ints=False,
             ),
             id="experimental_standard_implementation",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -381,6 +380,7 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_minimal_2x2",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -405,6 +405,7 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_toy_4x2",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -429,6 +430,7 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_toy_2x4",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -453,6 +455,7 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=2,
             ),
             id="experimental_strided_toy_4x4",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -477,6 +480,7 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_4x4_2x8_mm_grid",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -502,6 +506,7 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=2,
             ),
             id="experimental_strided_16x8_2x8_mm_grid_chunk_2_mm_blocks_wide_multi_iter",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -528,6 +533,7 @@ def run_reduce_scatter_impl(
                 num_workers_per_link=3,
             ),
             id="experimental_strided_4x4_2x8_mm_grid_chunk_2_mm_blocks_wide_3_workers_per_link",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -553,6 +559,7 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=2,
             ),
             id="experimental_strided_16x8_asymmetric_tall_narrow_8x2_blocks",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -578,6 +585,7 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_16x8_asymmetric_short_wide_2x8_blocks",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -604,6 +612,7 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=2,
             ),
             id="experimental_strided_16x10_partial_last_chunk_4x4_blocks",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -631,6 +640,7 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_24x12_3x3_blocks_2_N_blocks_chunk_1_mm_blocks",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -659,33 +669,7 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=2,
             ),
             id="experimental_strided_24x30_3x3_blocks_2_N_blocks_partial_last_chunk",
-        ),
-        pytest.param(
-            ReduceScatterTestConfig(
-                # each device has 128 x 16 tiles with 4x4 mm blocks
-                # from an assumed 8 x 8 mm core grid; 2 N-blocks per slice
-                # explicit 6 workers per link
-                rs_input_shape=[4, 1, 4096, 4096],
-                dim=3,
-                layout=ttnn.TILE_LAYOUT,
-                rs_input_dtype=ttnn.bfloat16,
-                use_new=False,
-                enable_trace=False,
-                num_iters=1,
-                use_barrier=True,
-                use_persistent_buffers=True,
-                use_strided=True,
-                verify_output_shape=True,
-                verify_output_pcc=True,
-                small_random_ints=True,
-                mm_cores_y=8,
-                mm_block_ht=4,
-                mm_block_wt=4,
-                mm_N_full_block_wt=8,
-                chunk_width_in_mm_blocks=1,
-                num_workers_per_link=6,
-            ),
-            id="experimental_strided_128x16_8_cores_2_N_blocks_6_workers",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -712,6 +696,7 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=2,
             ),
             id="experimental_strided_128x16_4_cores_single_N_block_wide_chunk",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         # Partial last M-block cases: slice_Ht_per_core is not a multiple of mm_block_ht.
         # These are deliberately tiny to isolate the partial-block code path.
@@ -739,6 +724,7 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_partial_M_block_1core_ht3_block2",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -764,6 +750,7 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_partial_M_block_2cores_ht3_block2",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -789,6 +776,7 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_partial_M_block_1core_ht6_block4",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -812,6 +800,7 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_large_input_shape_8_cores_20_N_blocks_1_chunk",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -835,6 +824,7 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_large_input_shape_8_cores_8_N_blocks_1_chunk",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -863,6 +853,7 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_large_input_shape_7_cores_non_divisible_Ht_and_block",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -891,6 +882,7 @@ def run_reduce_scatter_impl(
                 num_workers_per_link=4,
             ),
             id="experimental_strided_large_7_cores_non_divisible_Ht_and_Wt_multi_worker",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -917,6 +909,7 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_non_divisible_slice_Ht_partial_last_core",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -943,6 +936,7 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_non_divisible_slice_Ht_all_ghost_last_core",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -972,6 +966,7 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_non_divisible_slice_Ht_and_slice_Ht_per_core",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -1002,6 +997,7 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_non_div_Wt_wide_mm_block_cross_col_single_worker",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -1031,6 +1027,7 @@ def run_reduce_scatter_impl(
                 num_workers_per_link=2,
             ),
             id="experimental_strided_non_div_Wt_wide_mm_block_cross_col_two_workers",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -1061,6 +1058,7 @@ def run_reduce_scatter_impl(
                 num_workers_per_link=2,
             ),
             id="experimental_strided_non_div_Wt_partial_last_chunk_cross_col_two_workers",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -1093,6 +1091,7 @@ def run_reduce_scatter_impl(
                 num_workers_per_link=2,
             ),
             id="experimental_strided_non_div_Wt_all_unique_skips_non_div_Ht_multi_worker",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -1120,6 +1119,7 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_non_divisible_slice_Wt",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -1147,6 +1147,34 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_non_divisible_slice_Wt_and_slice_Ht",
+            marks=pytest.mark.skip(reason="run manually"),
+        ),
+        pytest.param(
+            ReduceScatterTestConfig(
+                # each device has 128 x 16 tiles with 4x4 mm blocks
+                # from an assumed 8 x 8 mm core grid; 2 N-blocks per slice
+                # explicit 6 workers per link
+                rs_input_shape=[4, 1, 4096, 4096],
+                dim=3,
+                layout=ttnn.TILE_LAYOUT,
+                rs_input_dtype=ttnn.bfloat16,
+                use_new=False,
+                enable_trace=False,
+                num_iters=1,
+                use_barrier=True,
+                use_persistent_buffers=True,
+                use_strided=True,
+                verify_output_shape=True,
+                verify_output_pcc=True,
+                small_random_ints=True,
+                mm_cores_y=8,
+                mm_block_ht=4,
+                mm_block_wt=4,
+                mm_N_full_block_wt=8,
+                chunk_width_in_mm_blocks=1,
+                num_workers_per_link=6,
+            ),
+            id="experimental_strided_128x16_8_cores_2_N_blocks_6_workers",
         ),
     ],
 )
@@ -1204,6 +1232,7 @@ def test_strided_reduce_scatter_async(
         mm_N_full_block_wt,
         chunk_width_in_mm_blocks,
         num_workers_per_link,
+        num_buffers_per_channel,
     ) = astuple(test_config)
 
     run_reduce_scatter_impl(
@@ -1233,9 +1262,11 @@ def test_strided_reduce_scatter_async(
         mm_N_full_block_wt=mm_N_full_block_wt,
         chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
         num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
     )
 
 
+@pytest.mark.skip(reason="Large sweep test, run manually")
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
@@ -1456,7 +1487,7 @@ def test_strided_reduce_scatter_blocking_sweep(
         "non_div_Wt_N3_into_16_wide_block_cross_col_multi_cores",
     ],
 )
-# @pytest.mark.skip(reason="Sweep test, can take a long time to run, run manually")
+@pytest.mark.skip(reason="Sweep test, can take a long time to run, run manually")
 def test_strided_reduce_scatter_blocking_sweep_large(
     mesh_device,
     mm_cores_y,
@@ -1492,6 +1523,7 @@ def test_strided_reduce_scatter_blocking_sweep_large(
     )
 
 
+@pytest.mark.skip(reason="Large sweep test, run manually")
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(

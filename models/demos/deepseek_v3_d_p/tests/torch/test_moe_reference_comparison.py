@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -17,17 +17,16 @@ No TTNN, no device code - pure PyTorch comparison.
 import sys
 from unittest.mock import MagicMock
 
-# Mock the kernel module before importing reference.model
+# Mock the kernel module before importing reference model
 # (the kernel functions are only used for fp8 quantization, not needed for bf16 testing)
-sys.modules["kernel"] = MagicMock()
+sys.modules["models.demos.deepseek_v3.reference.deepseek.kernel"] = MagicMock()
 
-import pytest
 import torch
 import torch.nn as nn
 from loguru import logger
 
 # Import reference modules from model.py
-from models.demos.deepseek_v3_d_p.reference.model import MLP, Expert, Gate, Linear, ModelArgs
+from models.demos.deepseek_v3.reference.deepseek.model import MLP, Expert, Gate, Linear, ModelArgs
 
 # Set Linear dtype to float32 for testing (default is bfloat16)
 Linear.dtype = torch.float32
@@ -105,7 +104,6 @@ def create_shared_weights(
     hidden_dim: int,
     n_routed_experts: int,
     n_shared_experts: int,
-    seed: int,
 ) -> tuple[list[dict], dict]:
     """
     Create random weights compatible with both implementations.
@@ -119,7 +117,6 @@ def create_shared_weights(
         routed_weights: List of dicts with gate_proj, up_proj, down_proj per expert
         shared_weights: Dict with gate_proj, up_proj, down_proj for shared expert
     """
-    torch.manual_seed(seed)
 
     routed_weights = []
     for _ in range(n_routed_experts):
@@ -202,8 +199,7 @@ def create_gate(emb_dim: int, n_routed_experts: int, num_experts_per_tok: int) -
     return gate
 
 
-@pytest.mark.parametrize("seed", [42])
-def test_moe_reference_pcc(seed: int):
+def test_moe_reference_pcc():
     """
     Compare tt_ref_moe vs ds_ref_moe (without gate).
 
@@ -211,8 +207,10 @@ def test_moe_reference_pcc(seed: int):
     - emb_dim: 7168 / 32 = 224
     - hidden_dim: 2048 / 32 = 64
     - ISL: 1024
-    - 256 routed experts, top-8 routing
+    - 256 routed experts, top-8 routing (topk=8 is gate constraint)
     """
+    torch.manual_seed(42)
+
     # Test configuration (scaled down from 671B)
     seq_len = 1024
     emb_dim = 224  # 7168 / 32
@@ -224,8 +222,8 @@ def test_moe_reference_pcc(seed: int):
     dispatch_group_size = 1  # Single "chip" for host-side test
     capacity_factor = 2.0
 
-    logger.info(f"Test config: seed={seed}, seq_len={seq_len}, emb_dim={emb_dim}, hidden_dim={hidden_dim}")
-    logger.info(f"  n_routed_experts={n_routed_experts}, num_experts_per_tok={num_experts_per_tok}")
+    logger.debug(f"Test config: seq_len={seq_len}, emb_dim={emb_dim}, hidden_dim={hidden_dim}")
+    logger.debug(f"  n_routed_experts={n_routed_experts}, num_experts_per_tok={num_experts_per_tok}")
 
     # Create shared weights for both implementations
     routed_weights, shared_weights = create_shared_weights(
@@ -233,11 +231,10 @@ def test_moe_reference_pcc(seed: int):
         hidden_dim=hidden_dim,
         n_routed_experts=n_routed_experts,
         n_shared_experts=n_shared_experts,
-        seed=seed,
     )
 
     # 1. Create ds_ref_moe using reference/model.py Expert and MLP
-    logger.info("Creating ds_ref_moe (using reference/model.py Expert, MLP)...")
+    logger.debug("Creating ds_ref_moe (using reference/model.py Expert, MLP)...")
     ds_moe = initialize_ds_ref_moe(
         emb_dim=emb_dim,
         hidden_dim=hidden_dim,
@@ -248,7 +245,7 @@ def test_moe_reference_pcc(seed: int):
     )
 
     # 2. Create gate using reference/model.py Gate
-    logger.info("Creating gate (using reference/model.py Gate)...")
+    logger.debug("Creating gate (using reference/model.py Gate)...")
     gate = create_gate(
         emb_dim=emb_dim,
         n_routed_experts=n_routed_experts,
@@ -273,7 +270,7 @@ def test_moe_reference_pcc(seed: int):
     )
 
     # 3. Create tt_ref_moe with same weights
-    logger.info("Creating tt_ref_moe...")
+    logger.debug("Creating tt_ref_moe...")
     tt_moe = TorchMoe(
         dispatch_group_size=dispatch_group_size,
         experts_per_chip=experts_per_chip,
@@ -283,27 +280,27 @@ def test_moe_reference_pcc(seed: int):
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
         seq_len_per_chip=seq_len,
         emb_dim=emb_dim,
+        hidden_dim=hidden_dim,
         expert_dispatch_table=expert_dispatch_table,
         routed_expert_weights=routed_weights,
         shared_expert_weights=shared_weights,
     )
 
     # 4. Generate test input
-    torch.manual_seed(seed + 1000)  # Different seed for input
     x = torch.randn(batch_size, seq_len, emb_dim, dtype=torch.float32)
-    logger.info(f"Input shape: {x.shape}")
+    logger.debug(f"Input shape: {x.shape}")
 
     # 5. Get gate outputs using reference/model.py Gate
     with torch.no_grad():
         x_flat = x.view(-1, emb_dim)
         weights, indices = gate(x_flat)
-    logger.info(f"Gate outputs: weights={weights.shape}, indices={indices.shape}")
+    logger.debug(f"Gate outputs: weights={weights.shape}, indices={indices.shape}")
 
     # 6. Run ds_ref_moe
-    logger.info("Running ds_ref_moe...")
+    logger.debug("Running ds_ref_moe...")
     with torch.no_grad():
         ds_output = ds_moe(x, weights, indices)
-    logger.info(f"ds_ref_moe output shape: {ds_output.shape}")
+    logger.debug(f"ds_ref_moe output shape: {ds_output.shape}")
 
     # 7. Prepare inputs for tt_ref_moe
     # tt_ref_moe expects shape (dispatch_group_size, seq_len, emb_dim)
@@ -321,10 +318,11 @@ def test_moe_reference_pcc(seed: int):
         experts_per_chip=experts_per_chip,
         seq_len_per_chip=seq_len,
         num_experts_per_tok=num_experts_per_tok,
+        expert_dispatch_table=expert_dispatch_table,
     )
 
     # 8. Run tt_ref_moe
-    logger.info("Running tt_ref_moe...")
+    logger.debug("Running tt_ref_moe...")
     with torch.no_grad():
         tt_output, _ = tt_moe(
             x_tt,
@@ -334,18 +332,18 @@ def test_moe_reference_pcc(seed: int):
             expert_token_counts,
             return_intermediates=False,
         )
-    logger.info(f"tt_ref_moe output shape: {tt_output.shape}")
+    logger.debug(f"tt_ref_moe output shape: {tt_output.shape}")
 
     # 9. Reshape tt_output to match ds_output
     tt_output_reshaped = tt_output.view(batch_size, seq_len, emb_dim)
 
     # 10. Compare with PCC
     pcc = compute_pcc(ds_output, tt_output_reshaped)
-    logger.info(f"PCC: {pcc:.6f}")
+    logger.debug(f"PCC: {pcc:.6f}")
 
     # Log some statistics
-    logger.info(f"ds_output: min={ds_output.min():.4f}, max={ds_output.max():.4f}, mean={ds_output.mean():.4f}")
-    logger.info(
+    logger.debug(f"ds_output: min={ds_output.min():.4f}, max={ds_output.max():.4f}, mean={ds_output.mean():.4f}")
+    logger.debug(
         f"tt_output: min={tt_output_reshaped.min():.4f}, max={tt_output_reshaped.max():.4f}, mean={tt_output_reshaped.mean():.4f}"
     )
 
@@ -358,6 +356,6 @@ def test_moe_reference_pcc(seed: int):
     # Assert PCC threshold
     assert pcc >= 0.99, f"PCC {pcc:.6f} below threshold 0.99"
 
-    logger.info("=" * 60)
-    logger.info("TEST PASSED!")
-    logger.info("=" * 60)
+    logger.debug("=" * 60)
+    logger.debug("TEST PASSED!")
+    logger.debug("=" * 60)

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,33 +7,33 @@
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteStridedReduceScatterAsync::invoke(
+ttnn::Tensor strided_reduce_scatter_async(
     const ttnn::Tensor& input_tensor,
     const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    uint32_t mm_block_ht,
-    uint32_t mm_block_wt,
+    const uint32_t mm_block_ht,
+    const uint32_t mm_block_wt,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::MemoryConfig>& intermediate_memory_config,
     const ttnn::ccl::Topology topology,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    std::optional<uint32_t> cluster_axis,
-    std::optional<uint32_t> chunks_per_sync,
-    std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel,
-    std::optional<uint32_t> mm_cores_y,
-    std::optional<uint32_t> mm_N_full_block_wt,
-    std::optional<uint32_t> chunk_width_in_mm_blocks) {
-    int32_t rank = input_tensor.logical_shape().rank();
-    int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
+    const std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    const std::optional<uint32_t> cluster_axis,
+    const std::optional<uint32_t> chunks_per_sync,
+    const std::optional<uint32_t> num_workers_per_link,
+    const std::optional<uint32_t> num_buffers_per_channel,
+    const std::optional<uint32_t> mm_cores_y,
+    const std::optional<uint32_t> mm_N_full_block_wt,
+    const std::optional<uint32_t> chunk_width_in_mm_blocks) {
+    const int32_t rank = input_tensor.logical_shape().rank();
+    const int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
     // Calculate ring size based on cluster_axis
-    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
+    const uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     TT_FATAL(
         num_devices > 1, "strided_reduce_scatter_async op will only work for num_devices > 1, but has {}", num_devices);
 
@@ -43,7 +43,7 @@ ttnn::Tensor ExecuteStridedReduceScatterAsync::invoke(
 
     log_debug(tt::LogOp, "strided_reduce_scatter_async: num_devices = {}, topology = Ring", num_devices);
 
-    bool using_persistent_buffers = persistent_output_buffers.has_value();
+    const bool using_persistent_buffers = persistent_output_buffers.has_value();
 
     std::optional<ttnn::Tensor> optional_intermediate_tensor = std::nullopt;
     std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt;
@@ -87,4 +87,4 @@ ttnn::Tensor ExecuteStridedReduceScatterAsync::invoke(
     return result.at(1);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

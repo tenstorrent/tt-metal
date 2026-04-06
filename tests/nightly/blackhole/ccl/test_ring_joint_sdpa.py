@@ -1,13 +1,20 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Ring Joint Attention SDPA Tests for Video Generation Models on Blackhole
+Ring Joint Attention SDPA Tests for Video Generation and MLA Models on Blackhole
 
-Tests Ring Joint Attention accuracy and determinism using video generation model shapes
-on BH multi-chip setups (single ring 1xN or Galaxy 4x8 mesh).
+Tests Ring Joint Attention accuracy and determinism using:
+- WAN 2.2 model shapes: standard attention with non-causal, non-balanced mode
+- DeepSeek MLA (Multi-Latent Attention): causal attention with balanced zigzag work distribution
+
+Runs on BH multi-chip setups (single ring 1xN or Galaxy 4x8 mesh).
 Perf tests are included but skipped on CI.
+
+Model Configurations:
+- WAN: nhq == nhk == nhv, d_q == d_k == d_v == 128, bfloat16 for all tensors
+- MLA: nhk == 1, d_q == d_k == 576, d_v == 128, bfloat16 for Q, bfloat8_b for K/V
 
 BH adaptation: uses init_device_compute_kernel_config instead of WormholeComputeKernelConfig.
 """
@@ -16,6 +23,7 @@ import math
 import torch
 from dataclasses import dataclass, field
 from itertools import product
+from typing import ClassVar, List, Tuple, Dict
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
@@ -24,35 +32,12 @@ from ttnn.operations.ccl import Topology
 from loguru import logger
 import pytest
 
-
 # ============================================================================
 # CONFIGURATION CONSTANTS
 # ============================================================================
+from tests.nightly.sdpa_perf_utils import MeshConfig
 
-# Hardware-specific constants
-# These are hardcoded to handle firmware differences across versions
-GALAXY_GRID_COLS = 12
-GALAXY_GRID_ROWS = 10
-NON_GALAXY_GRID_COLS = 11
-NON_GALAXY_GRID_ROWS = 10
-
-# Derived hardware constants
-GALAXY_TOTAL_CORES = GALAXY_GRID_COLS * GALAXY_GRID_ROWS  # 120 cores
-NON_GALAXY_TOTAL_CORES = NON_GALAXY_GRID_COLS * NON_GALAXY_GRID_ROWS  # 110 cores
-
-# CCL allocation: last column reserved for CCL operations
-GALAXY_CCL_COLUMN = GALAXY_GRID_COLS - 1  # Column 11
-GALAXY_SDPA_COLS = GALAXY_CCL_COLUMN  # Columns 0-10
-GALAXY_SDPA_CORES = GALAXY_SDPA_COLS * GALAXY_GRID_ROWS  # 110 cores
-
-NON_GALAXY_CCL_COLUMN = NON_GALAXY_GRID_COLS - 1  # Column 10
-NON_GALAXY_SDPA_COLS = NON_GALAXY_CCL_COLUMN  # Columns 0-9
-NON_GALAXY_SDPA_CORES = NON_GALAXY_SDPA_COLS * NON_GALAXY_GRID_ROWS  # 100 cores
-
-# Galaxy mesh configuration constants
-GALAXY_DEVICE_COUNT = 32
-GALAXY_TP_SIZE = 4
-GALAXY_SP_SIZE = 8
+MESH_CONFIG = MeshConfig.detect()
 
 # ============================================================================
 # MODEL CONFIGURATIONS
@@ -67,60 +52,202 @@ BATCH_SIZE = 1
 
 @dataclass
 class ModelConfig:
-    """Benchmark configuration for a video generation model."""
+    """Benchmark configuration for a video generation or MLA model."""
 
-    galaxy_seq_per_device: int
-    non_galaxy_seq_per_device: int
-    heads_per_device: int  # After TP split (same for both platforms)
-    head_dim: int
-    q_chunk_sizes: list = field(default_factory=list)
-    k_chunk_sizes: list = field(default_factory=list)
+    # Fixed model parameters
+    name: str
+    nhq: int  # Can be hardware-dependent to keep per-core work balanced between Galaxy and Quiet Box
+    nhk: int
+    nhv: int  # Can be hardware-dependent to keep per-core work balanced between Galaxy and Quiet Box
+    d_q: int
+    d_k: int
+    d_v: int
+    is_causal: bool
+    is_balanced: bool
+
+    # Dtypes
+    q_dtype: ttnn.DataType
+    kv_dtype: ttnn.DataType
+
+    # Sweep parameters (chunk sizes to test)
+    q_chunk_sizes: List[int]
+    k_chunk_sizes: List[int]
+
+    # Can be hardware-dependent to keep per-core work balanced between Galaxy and Quiet Box
+    seq_len: int
 
 
-MODEL_CONFIGS = {
+def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
+    """Generate model configurations for WAN and MLA based on mesh configuration."""
+    configs = []
+
     # WAN 2.2 — 1×Galaxy deployment (32 chips, ~75K total tokens at 720p)
-    "wan2_2_1xGLX": ModelConfig(
-        galaxy_seq_per_device=9472,
-        non_galaxy_seq_per_device=8544,
-        heads_per_device=10,
-        head_dim=128,
-        q_chunk_sizes=[224, 256, 288],
-        k_chunk_sizes=[128, 256, 512],
-    ),
+
+    configs.append(
+        ModelConfig(
+            name="wan2_2_1xGLX",
+            nhq=10,
+            nhk=10,
+            nhv=10,
+            d_q=128,
+            d_k=128,
+            d_v=128,
+            is_causal=False,
+            is_balanced=False,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat16,
+            q_chunk_sizes=[224, 256, 288],
+            k_chunk_sizes=[128, 256, 512],
+            seq_len=9472 if mesh_config.is_galaxy else 8544,  # Tuned for each platform to match per-core work
+        )
+    )
+
     # WAN 2.2 — 4×Galaxy deployment (128 chips, 720p split across 4 Galaxies)
-    "wan2_2_4xGLX": ModelConfig(
-        galaxy_seq_per_device=2368,
-        non_galaxy_seq_per_device=2240,
-        heads_per_device=10,
-        head_dim=128,
-        q_chunk_sizes=[224, 256, 288],
-        k_chunk_sizes=[128, 256, 512],
-    ),
-    # VideogenModel1 — 1×Galaxy deployment (115,200 total tokens)
+    configs.append(
+        ModelConfig(
+            name="wan2_2_4xGLX",
+            nhq=10,
+            nhk=10,
+            nhv=10,
+            d_q=128,
+            d_k=128,
+            d_v=128,
+            is_causal=False,
+            is_balanced=False,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat16,
+            q_chunk_sizes=[224, 256, 288],
+            k_chunk_sizes=[128, 256, 512],
+            seq_len=2368 if mesh_config.is_galaxy else 2240,  # Tuned for each platform to match per-core work
+        )
+    )
+
+    # VideogenModel1 720p — 1×Galaxy deployment (115,200 total tokens)
     # Single benchmark config: Sq_chunk_t=7 (q=224), k=512
-    "videogen_model1": ModelConfig(
-        galaxy_seq_per_device=14400,
-        non_galaxy_seq_per_device=13440,
-        heads_per_device=10,
-        head_dim=128,
-        q_chunk_sizes=[224],
-        k_chunk_sizes=[512],
-    ),
-}
+    # Galaxy: 14400/dev, q_per_core=6. QB: 13440/dev, q_per_core=6.
+    configs.append(
+        ModelConfig(
+            name="videogen_model1_720p",
+            nhq=10,
+            nhk=10,
+            nhv=10,
+            d_q=128,
+            d_k=128,
+            d_v=128,
+            is_causal=False,
+            is_balanced=False,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat16,
+            q_chunk_sizes=[224],
+            k_chunk_sizes=[512],
+            seq_len=14400 if mesh_config.is_galaxy else 13440,  # Tuned for each platform to match per-core work
+        )
+    )
+
+    # VideogenModel1 480p — 1×Galaxy deployment (49,920 total tokens)
+    # q288 chosen for zero slot waste on Galaxy (22 chunks / 11 cores = 2 each).
+    # Galaxy: 6240/dev, q_per_core=2. QB: 5760/dev, q_per_core=2.
+    configs.append(
+        ModelConfig(
+            name="videogen_model1_480p",
+            nhq=10,
+            nhk=10,
+            nhv=10,
+            d_q=128,
+            d_k=128,
+            d_v=128,
+            is_causal=False,
+            is_balanced=False,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat16,
+            q_chunk_sizes=[288],
+            k_chunk_sizes=[512],
+            seq_len=6240 if mesh_config.is_galaxy else 5760,  # Tuned for each platform to match per-core work
+        )
+    )
+
+    # VideogenModel1 768×512 — 1×Galaxy deployment (49,152 total tokens)
+    # q288 chosen for zero slot waste on Galaxy (22 chunks / 11 cores = 2 each).
+    # Zero K pad waste (6144 = 12×512 exactly).
+    # Galaxy: 6144/dev, q_per_core=2. QB: 5760/dev, q_per_core=2.
+    configs.append(
+        ModelConfig(
+            name="videogen_model1_768x512",
+            nhq=10,
+            nhk=10,
+            nhv=10,
+            d_q=128,
+            d_k=128,
+            d_v=128,
+            is_causal=False,
+            is_balanced=False,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat16,
+            q_chunk_sizes=[288],
+            k_chunk_sizes=[512],
+            seq_len=6144 if mesh_config.is_galaxy else 5760,  # Tuned for each platform to match per-core work
+        )
+    )
+
+    # DeepSeek MLA configuration
+    mla_nhq = 32 if mesh_config.is_galaxy else 29  # Tuned for each platform to match per-core work
+
+    configs.append(
+        ModelConfig(
+            name="mla_100k",
+            nhq=mla_nhq,
+            nhk=1,
+            nhv=mla_nhq,
+            d_q=576,
+            d_k=576,
+            d_v=128,
+            is_causal=True,
+            is_balanced=True,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat8_b,
+            q_chunk_sizes=[160],  # Tuned for each sequence length
+            k_chunk_sizes=[160],
+            seq_len=3200,
+        )
+    )
+
+    configs.append(
+        ModelConfig(
+            name="mla_128k",
+            nhq=mla_nhq,
+            nhk=1,
+            nhv=mla_nhq,
+            d_q=576,
+            d_k=576,
+            d_v=128,
+            is_causal=True,
+            is_balanced=True,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat8_b,
+            q_chunk_sizes=[128],
+            k_chunk_sizes=[128],
+            seq_len=4096,
+        )
+    )
+
+    return {config.name: config for config in configs}
+
+
+MODEL_CONFIGS = generate_model_configs(MESH_CONFIG)
+
 
 # Accuracy threshold constants
 DEFAULT_PCC_THRESHOLD = 0.994
 DEFAULT_RMSE_THRESHOLD = 0.05
 
-# Performance calculation constants
-BLACKHOLE_CLOCK_GHZ = 1.35  # Blackhole clock frequency in GHz
-MM_FLOPS_PER_CYCLE_PER_CORE = 2048  # Matrix multiply FLOPs per cycle per core
-
-
 from tests.nightly.sdpa_perf_utils import (
     post_process_ops_log,
+    compute_sdpa_flops,
     compute_cores_used as compute_ring_joint_cores_used,
     compute_math_utilization as compute_ring_joint_utilization,
+    create_balanced_chunk_order,
+    reorder_tensor_chunks,
+    reverse_reorder_tensor_chunks,
 )
 
 
@@ -134,13 +261,18 @@ def fa_rand(*shape):
     return normal_1 + normal_2 * bernoulli
 
 
-def torch_joint_sdpa_reference(q, k, v, joint_q, joint_k, joint_v):
+def torch_joint_sdpa_reference(q, k, v, joint_q, joint_k, joint_v, is_causal=False):
     """
     PyTorch reference implementation for ring joint attention with dummy joint tensors.
 
-    Simulates the ring joint attention computation (WAN 2.2 compatible):
+    Simulates the ring joint attention computation:
     1. Each device processes local Q attending to all K/V (via ring rotation)
-    2. Joint tensors are dummy/empty (seq_len=0) like WAN 2.2
+    2. Joint tensors are dummy/empty (seq_len=0) for WAN 2.2
+
+    Args:
+        q, k, v: Main attention tensors
+        joint_q, joint_k, joint_v: Joint tensors (can be empty)
+        is_causal: Whether to use causal attention mask
     """
     local_seq_len = q.size(2)
 
@@ -151,7 +283,7 @@ def torch_joint_sdpa_reference(q, k, v, joint_q, joint_k, joint_v):
     combined_v = torch.cat([v, joint_v], dim=2)
 
     # Compute attention for local portion (simulating one device)
-    attn_out = torch.nn.functional.scaled_dot_product_attention(combined_q, combined_k, combined_v, is_causal=False)
+    attn_out = torch.nn.functional.scaled_dot_product_attention(combined_q, combined_k, combined_v, is_causal=is_causal)
 
     # Split outputs back into main and joint parts
     main_out = attn_out[:, :, :local_seq_len, :]
@@ -160,93 +292,55 @@ def torch_joint_sdpa_reference(q, k, v, joint_q, joint_k, joint_v):
     return main_out, joint_out
 
 
-def detect_devices_without_opening():
+# ============================================================================
+# TEST CASE GENERATION
+# ============================================================================
+
+
+def get_test_case_id(config: ModelConfig, q_chunk_size: int, k_chunk_size: int) -> str:
+    """Generate a unique test case ID based on model config and chunk sizes."""
+    return f"{config.name}-q{q_chunk_size}-k{k_chunk_size}"
+
+
+def generate_test_configs(mesh_config: MeshConfig, model_configs: Dict[str, ModelConfig]):
     """
-    Detect the number of available TT devices WITHOUT opening them.
-    Uses /dev/tenstorrent/* device files to avoid holding device locks.
-    This is required for performance tests that use run_device_profiler().
-    """
-    import glob
-
-    device_files = glob.glob("/dev/tenstorrent/*")
-    return len(device_files)
-
-
-def calculate_mesh_config(num_devices):
-    """
-    Calculate mesh configuration based on available devices.
-
-    Returns:
-        sp_size: Sequence parallel size (devices per ring)
-        tp_size: Tensor parallel size (number of rings)
-        arch_type: Architecture type string
-    """
-    if num_devices == GALAXY_DEVICE_COUNT:
-        sp_size = GALAXY_SP_SIZE
-        tp_size = GALAXY_TP_SIZE
-        arch_type = "galaxy_4x8"
-    else:
-        sp_size = num_devices
-        tp_size = 1
-        arch_type = f"single_ring_{num_devices}x1"
-
-    return sp_size, tp_size, arch_type
-
-
-def generate_test_configs():
-    """
-    Generate (b, nh, s, d, q_chunk, k_chunk) tuples for all model configs.
+    Generate (b, sq, nhq, nhk, nhv, d_q, d_k, d_v, q_chunk_size, k_chunk_size, is_causal, is_balanced, q_dtype, kv_dtype) tuples for all model configs.
 
     Each model defines its own Q/K chunk sizes, so the cross-product is per-model.
 
     NOTE: Uses detect_devices_without_opening() to avoid holding device locks
     during pytest collection, which would block subprocess profiling.
     """
-    num_devices = detect_devices_without_opening()
-    if num_devices < 2:
+    if mesh_config.num_devices < 2:
         return [], []
-
-    sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
-    is_galaxy = arch_type.startswith("galaxy")
 
     configs = []
     config_ids = []
 
-    for model_name, model in MODEL_CONFIGS.items():
-        seq_per_device = model.galaxy_seq_per_device if is_galaxy else model.non_galaxy_seq_per_device
-        total_seq = seq_per_device * sp_size
-        total_heads = model.heads_per_device * tp_size
-
+    for _, model in model_configs.items():
         for q_chunk, k_chunk in product(model.q_chunk_sizes, model.k_chunk_sizes):
-            configs.append((BATCH_SIZE, total_heads, total_seq, model.head_dim, q_chunk, k_chunk))
-            config_ids.append(f"{model_name}-{seq_per_device}x{sp_size}_h{total_heads}-k{k_chunk}-q{q_chunk}")
-
-    return configs, config_ids
-
-
-def generate_perf_table_configs():
-    """
-    Generate (model_name, b, nh, s, d) tuples for perf table tests.
-
-    One entry per model — the perf table sweeps Q/K chunk sizes internally.
-    """
-    num_devices = detect_devices_without_opening()
-    if num_devices < 2:
-        return [], []
-
-    sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
-    is_galaxy = arch_type.startswith("galaxy")
-
-    configs = []
-    config_ids = []
-
-    for model_name, model in MODEL_CONFIGS.items():
-        seq_per_device = model.galaxy_seq_per_device if is_galaxy else model.non_galaxy_seq_per_device
-        total_seq = seq_per_device * sp_size
-        total_heads = model.heads_per_device * tp_size
-
-        configs.append((model_name, BATCH_SIZE, total_heads, total_seq, model.head_dim))
-        config_ids.append(f"{model_name}_{seq_per_device}x{sp_size}_h{total_heads}")
+            configs.append(
+                (
+                    BATCH_SIZE,
+                    model.seq_len * mesh_config.sp_size,  # Global sequence length across all devices in the ring
+                    model.nhq * mesh_config.tp_size,  # Total query heads across all TP shards
+                    model.nhk
+                    * (
+                        mesh_config.tp_size if model.nhk != 1 else 1
+                    ),  # Total key heads across all TP shards (handle nhk=1 case for MLA)
+                    model.nhv * mesh_config.tp_size,  # Total value heads across all TP shards
+                    model.d_q,
+                    model.d_k,
+                    model.d_v,
+                    q_chunk,
+                    k_chunk,
+                    model.is_causal,
+                    model.is_balanced,
+                    model.q_dtype,
+                    model.kv_dtype,
+                )
+            )
+            config_ids.append(get_test_case_id(model, q_chunk, k_chunk))
 
     return configs, config_ids
 
@@ -257,14 +351,22 @@ def create_global_semaphores(mesh_device, cores, initial_value):
 
 
 def run_ring_joint_sdpa(
+    mesh_config,
     b,
-    nh,
-    nkv,
+    nhq,
+    nhk,
     sq,
-    d,
+    d_q,
     q_chunk_size,
     k_chunk_size,
-    dtype,
+    q_dtype,
+    *,
+    nhv=None,
+    d_k=None,
+    d_v=None,
+    kv_dtype=None,
+    is_causal=False,
+    is_balanced=False,
     pcc_threshold=DEFAULT_PCC_THRESHOLD,
     rmse_threshold=None,
     do_check=True,
@@ -275,30 +377,57 @@ def run_ring_joint_sdpa(
 
     Args:
         b: Batch size (typically 1)
-        nh: Number of attention heads
-        nkv: Number of key/value heads (must equal nh for joint attention)
+        nhq: Number of query heads
+        nhk: Number of key heads (can be 1 for MLA)
         sq: Base sequence length (will be distributed across ring)
-        d: Head dimension
+        d_q: Query head dimension
         q_chunk_size: Query chunk size for tiling
         k_chunk_size: Key chunk size for tiling
-        dtype: Data type (ttnn.bfloat16)
-        sk: Key sequence length (defaults to sq if None)
+        q_dtype: Data type for Q tensor (e.g., ttnn.bfloat16)
+        nhv: Number of value heads (defaults to nhq)
+        d_k: Key head dimension (defaults to d_q)
+        d_v: Value head dimension (defaults to d_q)
+        kv_dtype: Data type for K/V tensors (defaults to q_dtype, can be ttnn.bfloat8_b for MLA)
+        is_causal: Whether to use causal attention mask
+        is_balanced: Whether to use balanced zigzag work distribution (for causal attention)
         pcc_threshold: Pearson correlation threshold for accuracy
         rmse_threshold: Root mean square error threshold
         do_check: Whether to verify accuracy against PyTorch reference
         num_iterations: Number of times to run the op (>1 for determinism testing)
     """
+    # Apply defaults for optional parameters
+    if nhv is None:
+        nhv = nhq
+    if d_k is None:
+        d_k = d_q
+    if d_v is None:
+        d_v = d_q
+    if kv_dtype is None:
+        kv_dtype = q_dtype
+
+    logger.debug(
+        f"run_ring_joint_sdpa params: b={b}, nhq={nhq}, nhk={nhk}, nhv={nhv}, "
+        f"sq={sq}, d_q={d_q}, d_k={d_k}, d_v={d_v}, "
+        f"q_chunk={q_chunk_size}, k_chunk={k_chunk_size}, "
+        f"q_dtype={q_dtype}, kv_dtype={kv_dtype}, "
+        f"is_causal={is_causal}, is_balanced={is_balanced}, "
+        f"pcc_threshold={pcc_threshold}, rmse_threshold={rmse_threshold}, "
+        f"do_check={do_check}, num_iterations={num_iterations}"
+    )
+
     # Ensure reproducible results
     torch.manual_seed(1234)
-    if nh != nkv:
-        pytest.skip(f"Ring joint attention currently requires nh == nkv, got nh={nh}, nkv={nkv}")
+
+    # Validate head count constraints
+    # For WAN: nhq == nhk == nhv (standard attention)
+    # For MLA: nhk == 1, nhq == nhv (multi-latent attention with single K head)
+    if nhk != 1 and nhq != nhk:
+        pytest.skip(f"Ring joint attention requires nhq == nhk or nhk == 1, got nhq={nhq}, nhk={nhk}")
 
     # Auto-detect mesh configuration based on available devices
-    num_devices = detect_devices_without_opening()
-    sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
 
     # Ring topology requires >2 devices; fall back to linear for <=2
-    use_ring = sp_size > 2
+    use_ring = mesh_config.sp_size > 2
     fabric_config = ttnn.FabricConfig.FABRIC_1D_RING if use_ring else ttnn.FabricConfig.FABRIC_1D
     topology = Topology.Ring if use_ring else Topology.Linear
 
@@ -318,26 +447,23 @@ def run_ring_joint_sdpa(
 
     joint_seq_len = 0  # Use empty joint sequence (WAN 2.2 compatible)
 
-    if sp_size < 2:
-        pytest.skip(f"Ring joint attention requires at least 2 devices in ring, got SP={sp_size}")
+    if mesh_config.sp_size < 2:
+        pytest.skip(f"Ring joint attention requires at least 2 devices in ring, got SP={mesh_config.sp_size}")
 
     # Open mesh device based on calculated configuration
-    mesh_shape = ttnn.MeshShape(tp_size, sp_size)
+    mesh_shape = ttnn.MeshShape(mesh_config.tp_size, mesh_config.sp_size)
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
     num_links = 2
 
     try:
-        if tp_size > 1 and nh % tp_size != 0:
-            pytest.skip(f"num_heads ({nh}) must be divisible by TP size ({tp_size}) for multi-ring architecture")
+        if mesh_config.tp_size > 1 and nhq % mesh_config.tp_size != 0:
+            pytest.skip(
+                f"num_heads ({nhq}) must be divisible by TP size ({mesh_config.tp_size}) for multi-ring architecture"
+            )
 
-        # Configure compute grid and CCL coordination - USING HARDCODED GRIDS
-        # Use hardcoded grid sizes to handle firmware differences across versions
-        if arch_type.startswith("galaxy"):
-            sdpa_compute_grid = (GALAXY_SDPA_COLS, GALAXY_GRID_ROWS)  # 11x10 for SDPA
-            ccl_column = GALAXY_CCL_COLUMN  # Column 11 for CCL
-        else:
-            sdpa_compute_grid = (NON_GALAXY_SDPA_COLS, NON_GALAXY_GRID_ROWS)  # 10x10 for SDPA
-            ccl_column = NON_GALAXY_CCL_COLUMN  # Column 10 for CCL
+        # Configure compute grid and CCL coordination
+        sdpa_compute_grid = (mesh_config.sdpa_cols, mesh_config.grid_rows)
+        ccl_column = mesh_config.ccl_column
 
         # Get actual device grid for sub-device creation
         full_compute_grid = mesh_device.compute_with_storage_grid_size()
@@ -361,33 +487,58 @@ def run_ring_joint_sdpa(
 
         ccl_semaphore_handles = create_global_semaphores(mesh_device, ccl_sub_device_crs, 0)
 
-        # Create tensors with same full sequence length (following DIT model pattern)
-        Q = fa_rand(b, nh, sq, d)
-        K = fa_rand(b, nh, sq, d)
-        V = fa_rand(b, nh, sq, d)
+        # Create tensors with appropriate shapes
+        # Q: [b, nhq, sq, d_q]
+        # K: [b, nhk, sq, d_k] - nhk can be 1 for MLA (broadcast to all Q heads)
+        # V: [b, nhv, sq, d_v] - nhv typically equals nhq
+        Q = fa_rand(b, nhq, sq, d_q)
+        K = fa_rand(b, nhk, sq, d_k)
+        V = fa_rand(b, nhv, sq, d_v)
 
-        # Joint tensors - Use dummy tensors like wan2.2 (empty sequence, zero-filled)
-        joint_Q = torch.zeros((b, nh, joint_seq_len, d), dtype=torch.bfloat16)
-        joint_K = torch.zeros((b, nh, joint_seq_len, d), dtype=torch.bfloat16)
-        joint_V = torch.zeros((b, nh, joint_seq_len, d), dtype=torch.bfloat16)
+        # Joint tensors - Use dummy tensors like WAN 2.2 (empty sequence, zero-filled)
+        joint_Q = torch.zeros((b, nhq, joint_seq_len, d_q), dtype=torch.bfloat16)
+        joint_K = torch.zeros((b, nhk, joint_seq_len, d_k), dtype=torch.bfloat16)
+        joint_V = torch.zeros((b, nhv, joint_seq_len, d_v), dtype=torch.bfloat16)
+
+        # Keep original tensors for reference comparison (before any reordering)
+        Q_original, K_original, V_original = Q, K, V
+
+        # Apply balanced reordering if enabled (for causal attention workload balancing)
+        chunk_order = None
+        if is_balanced:
+            chunk_order = create_balanced_chunk_order(mesh_config.sp_size)
+            Q = reorder_tensor_chunks(Q, chunk_order)
+            K = reorder_tensor_chunks(K, chunk_order)
+            V = reorder_tensor_chunks(V, chunk_order)
 
         # Create persistent output buffers
         kv_shard_dims = [None, None]
         kv_shard_dims[sp_axis] = None
-        if tp_size > 1:
+        if mesh_config.tp_size > 1:
             kv_shard_dims[tp_axis] = 1
 
+        # Persistent K output buffer uses nhk and d_k dimensions
+        # Persistent V output buffer uses nhv and d_v dimensions
         expected_output_seq_len = sq
+
+        # For K buffer: handle nhk=1 case (MLA) - may need different sharding
+        persistent_k_shard_dims = [None, None]
+        persistent_k_shard_dims[sp_axis] = None
+        if mesh_config.tp_size > 1 and nhk != 1:
+            persistent_k_shard_dims[tp_axis] = 1
+
         persistent_output_buffer_k = ttnn.from_torch(
-            torch.zeros(b, nh, expected_output_seq_len, d),
-            dtype=dtype,
+            torch.zeros(b, nhk, expected_output_seq_len, d_k),
+            dtype=kv_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_shard_dims),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_k_shard_dims
+            ),
         )
         persistent_output_buffer_v = ttnn.from_torch(
-            torch.zeros(b, nh, expected_output_seq_len, d),
-            dtype=dtype,
+            torch.zeros(b, nhv, expected_output_seq_len, d_v),
+            dtype=kv_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_shard_dims),
@@ -413,34 +564,46 @@ def run_ring_joint_sdpa(
         # Convert to TT tensors with appropriate mesh sharding
         sdpa_input_shard_dims = [None, None]
         sdpa_input_shard_dims[sp_axis] = 2
-        if tp_size > 1:
+        if mesh_config.tp_size > 1:
             sdpa_input_shard_dims[tp_axis] = 1
 
+        # K tensor may have nhk=1 (MLA), different sharding
+        sdpa_k_shard_dims = [None, None]
+        sdpa_k_shard_dims[sp_axis] = 2
+        if mesh_config.tp_size > 1 and nhk != 1:
+            sdpa_k_shard_dims[tp_axis] = 1
+
         sdpa_joint_shard_dims = [None, None]
-        if tp_size > 1:
+        if mesh_config.tp_size > 1:
             sdpa_joint_shard_dims[tp_axis] = 1
 
+        sdpa_joint_k_shard_dims = [None, None]
+        if mesh_config.tp_size > 1 and nhk != 1:
+            sdpa_joint_k_shard_dims[tp_axis] = 1
+
+        # Q tensor uses q_dtype
         tt_Q = ttnn.from_torch(
             Q,
-            dtype=dtype,
+            dtype=q_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
             ),
         )
+        # K, V tensors use kv_dtype (can be bfloat8_b for MLA)
         tt_K = ttnn.from_torch(
             K,
-            dtype=dtype,
+            dtype=kv_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_k_shard_dims
             ),
         )
         tt_V = ttnn.from_torch(
             V,
-            dtype=dtype,
+            dtype=kv_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(
@@ -449,7 +612,7 @@ def run_ring_joint_sdpa(
         )
         tt_joint_Q = ttnn.from_torch(
             joint_Q,
-            dtype=dtype,
+            dtype=q_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(
@@ -458,16 +621,16 @@ def run_ring_joint_sdpa(
         )
         tt_joint_K = ttnn.from_torch(
             joint_K,
-            dtype=dtype,
+            dtype=kv_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_joint_shard_dims
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_joint_k_shard_dims
             ),
         )
         tt_joint_V = ttnn.from_torch(
             joint_V,
-            dtype=dtype,
+            dtype=kv_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(
@@ -496,6 +659,8 @@ def run_ring_joint_sdpa(
                 persistent_output_buffer_v=persistent_output_buffer_v,
                 joint_strategy="rear",
                 logical_n=corrected_logical_n,
+                is_causal=is_causal,
+                is_balanced=is_balanced,
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
                 dim=2,
@@ -517,6 +682,10 @@ def run_ring_joint_sdpa(
                 ),
             )
             tt_out_torch = tt_out_torch[:, :, :sq, :]
+
+            # Reverse balanced reordering if enabled (restore original sequence order)
+            if is_balanced and chunk_order is not None:
+                tt_out_torch = reverse_reorder_tensor_chunks(tt_out_torch, chunk_order)
 
             # Determinism mode: compare each output to the first
             if num_iterations > 1:
@@ -540,7 +709,7 @@ def run_ring_joint_sdpa(
 
         # Convert and verify joint output (only if joint_seq_len > 0)
         if joint_seq_len > 0:
-            if arch_type.startswith("galaxy"):
+            if mesh_config.arch_type.startswith("galaxy"):
                 joint_row_dim = sdpa_joint_shard_dims[0] if sdpa_joint_shard_dims[0] is not None else -1
                 joint_col_dim = sdpa_joint_shard_dims[1] if sdpa_joint_shard_dims[1] is not None else -1
                 tt_joint_out_torch = ttnn.to_torch(
@@ -555,16 +724,18 @@ def run_ring_joint_sdpa(
                     mesh_composer=ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(1, -1)),
                 )
 
-            if tt_joint_out_torch.shape[3] != d:
-                tt_joint_out_torch = tt_joint_out_torch[:, :, :, :d]
+            if tt_joint_out_torch.shape[3] != d_v:
+                tt_joint_out_torch = tt_joint_out_torch[:, :, :, :d_v]
             if tt_joint_out_torch.shape[0] > 1:
                 tt_joint_out_torch = tt_joint_out_torch[0:1, :, :, :]
             tt_joint_out_torch = tt_joint_out_torch[:, :, :joint_seq_len, :]
         else:
             logger.info("Joint output - Dummy tensors (seq_len=0), skipping accuracy check (wan2.2 compatible)")
 
-        # Compute PyTorch reference using ring size (SP dimension)
-        gt_main, gt_joint = torch_joint_sdpa_reference(Q, K, V, joint_Q, joint_K, joint_V)
+        # Compute PyTorch reference on ORIGINAL data (before balanced reordering)
+        gt_main, gt_joint = torch_joint_sdpa_reference(
+            Q_original, K_original, V_original, joint_Q, joint_K, joint_V, is_causal=is_causal
+        )
 
         # Verify accuracy for main output
         out_pass_main, out_pcc_main = comp_pcc(gt_main, tt_out_torch, pcc_threshold)
@@ -592,37 +763,73 @@ def run_ring_joint_sdpa(
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
-# Generate test parameters dynamically based on detected hardware
-TEST_CONFIGS, TEST_CONFIG_IDS = generate_test_configs()
-PERF_TABLE_CONFIGS, PERF_TABLE_CONFIG_IDS = generate_perf_table_configs()
+# Generate test parameters dynamically based on detected hardware for different models (WAN, MLA, VideGen...)
+TEST_CONFIGS, TEST_CONFIG_IDS = generate_test_configs(MESH_CONFIG, MODEL_CONFIGS)
+TEST_CONFIG_MODELS = list(MODEL_CONFIGS.keys())
 
 
 # === TEST 1: PERFORMANCE SWEEP (skipped on CI) ===
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize(
-    "b, nh, s, d, q_chunk_size, k_chunk_size",
+    "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype",
     TEST_CONFIGS,
     ids=TEST_CONFIG_IDS,
 )
-def test_ring_joint_attention_sdpa_sweep_perf_impl(b, nh, s, d, q_chunk_size, k_chunk_size, dtype):
+def test_ring_joint_attention_sdpa_sweep_perf_impl(
+    b, sq, nhq, nhk, nhv, d_q, d_k, d_v, q_chunk_size, k_chunk_size, is_causal, is_balanced, q_dtype, kv_dtype
+):
     """
     Performance sweep test for ring joint attention SDPA.
     Skipped on CI - run locally for performance measurement.
+    Supports both WAN and MLA configurations.
     """
-    run_ring_joint_sdpa(b, nh, nh, s, d, q_chunk_size, k_chunk_size, dtype, do_check=False)
+    mesh_config = MESH_CONFIG
+
+    run_ring_joint_sdpa(
+        mesh_config,
+        b,
+        nhq,
+        nhk,
+        sq,
+        d_q,
+        q_chunk_size,
+        k_chunk_size,
+        q_dtype,
+        nhv=nhv,
+        d_k=d_k,
+        d_v=d_v,
+        kv_dtype=kv_dtype,
+        is_causal=is_causal,
+        is_balanced=is_balanced,
+        do_check=False,
+    )
 
 
 # === TEST 2: ACCURACY VERIFICATION ===
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize(
-    "b, nh, s, d, q_chunk_size, k_chunk_size",
+    "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype",
     TEST_CONFIGS,
     ids=TEST_CONFIG_IDS,
 )
-def test_ring_joint_attention_sdpa_accuracy(b, nh, s, d, q_chunk_size, k_chunk_size, dtype):
+def test_ring_joint_attention_sdpa_accuracy(
+    b,
+    sq,
+    nhq,
+    nhk,
+    nhv,
+    d_q,
+    d_k,
+    d_v,
+    q_chunk_size,
+    k_chunk_size,
+    is_causal,
+    is_balanced,
+    q_dtype,
+    kv_dtype,
+):
     """
     Accuracy verification test for ring joint attention SDPA.
+    Supports both WAN and MLA configurations.
 
     ACCURACY METRICS:
     - PCC (Pearson Correlation Coefficient): Measures linear correlation
@@ -631,73 +838,113 @@ def test_ring_joint_attention_sdpa_accuracy(b, nh, s, d, q_chunk_size, k_chunk_s
     THRESHOLD RATIONALE:
     - PCC = 0.994: Relaxed for joint attention complexity
     """
+    mesh_config = MESH_CONFIG
+
     pcc_threshold = DEFAULT_PCC_THRESHOLD
     rmse_threshold = DEFAULT_RMSE_THRESHOLD
     run_ring_joint_sdpa(
+        mesh_config,
         b,
-        nh,
-        nh,
-        s,
-        d,
+        nhq,
+        nhk,
+        sq,
+        d_q,
         q_chunk_size,
         k_chunk_size,
-        dtype,
+        q_dtype,
+        nhv=nhv,
+        d_k=d_k,
+        d_v=d_v,
+        kv_dtype=kv_dtype,
+        is_causal=is_causal,
+        is_balanced=is_balanced,
         pcc_threshold=pcc_threshold,
         rmse_threshold=rmse_threshold,
     )
 
 
 # === TEST 3: DETERMINISM VERIFICATION ===
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize(
-    "b, nh, s, d, q_chunk_size, k_chunk_size",
+    "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype",
     TEST_CONFIGS,
     ids=TEST_CONFIG_IDS,
 )
-def test_ring_joint_attention_sdpa_determinism(b, nh, s, d, q_chunk_size, k_chunk_size, dtype):
+def test_ring_joint_attention_sdpa_determinism(
+    b,
+    sq,
+    nhq,
+    nhk,
+    nhv,
+    d_q,
+    d_k,
+    d_v,
+    q_chunk_size,
+    k_chunk_size,
+    is_causal,
+    is_balanced,
+    q_dtype,
+    kv_dtype,
+):
     """
     Test ring joint attention SDPA determinism: run 10 times with same inputs and verify outputs match exactly.
     """
+    mesh_config = MESH_CONFIG
+
     num_iterations = 10
-    run_ring_joint_sdpa(b, nh, nh, s, d, q_chunk_size, k_chunk_size, dtype, num_iterations=num_iterations)
+    run_ring_joint_sdpa(
+        mesh_config,
+        b,
+        nhq,
+        nhk,
+        sq,
+        d_q,
+        q_chunk_size,
+        k_chunk_size,
+        q_dtype,
+        nhv=nhv,
+        d_k=d_k,
+        d_v=d_v,
+        kv_dtype=kv_dtype,
+        is_causal=is_causal,
+        is_balanced=is_balanced,
+        num_iterations=num_iterations,
+    )
 
 
 # === TEST 4: PERFORMANCE TABLE GENERATOR (skipped on CI) ===
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 @pytest.mark.timeout(1000)
-@pytest.mark.parametrize(
-    "model_name, b, nh, s, d",
-    PERF_TABLE_CONFIGS,
-    ids=PERF_TABLE_CONFIG_IDS,
-)
-def test_ring_joint_attention_create_perf_table(model_name, b, nh, s, d):
+@pytest.mark.parametrize("model_name", TEST_CONFIG_MODELS)
+def test_ring_joint_attention_create_perf_table(model_name):
     """
     Sweep chunk sizes for ring joint attention SDPA and print a performance table.
     Skipped on CI - run locally with tracy profiler.
     """
     from tracy.process_model_log import run_device_profiler
 
-    model = MODEL_CONFIGS[model_name]
+    mesh_config = MESH_CONFIG
+    model_configs = MODEL_CONFIGS
 
-    num_devices = detect_devices_without_opening()
-    sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
-    ring_size = sp_size
-    is_galaxy = arch_type.startswith("galaxy")
-    seq_per_device = model.galaxy_seq_per_device if is_galaxy else model.non_galaxy_seq_per_device
-    total_heads = model.heads_per_device * tp_size
+    ring_size = mesh_config.sp_size
 
     if ring_size < 2:
         pytest.skip(f"Ring joint attention requires at least 2 devices, got {ring_size}")
 
-    # Use hardcoded grid constants (cannot query device due to TLB conflicts with subprocess tests)
-    if is_galaxy:
-        full_grid_rows = GALAXY_GRID_ROWS
-        total_compute_cores = GALAXY_SDPA_CORES
-        total_cores = GALAXY_TOTAL_CORES
-    else:
-        full_grid_rows = NON_GALAXY_GRID_ROWS
-        total_compute_cores = NON_GALAXY_SDPA_CORES
-        total_cores = NON_GALAXY_TOTAL_CORES
+    # Generate test configs for this model
+    test_configs, test_config_ids = generate_test_configs(mesh_config, model_configs)
+    sweep_configs = [
+        (config, config_id)
+        for config, config_id in zip(test_configs, test_config_ids)
+        if config_id.startswith(model_name)
+    ]
+
+    # Look up model configuration
+    model = model_configs[model_name]
+
+    # Use hardware config values (cannot query device due to TLB conflicts with subprocess tests)
+    full_grid_rows = mesh_config.grid_rows
+    total_compute_cores = mesh_config.sdpa_cores
+    total_cores = mesh_config.total_cores
 
     ccl_cores = full_grid_rows  # Full column height for CCL
     ccl_overhead_pct = (ccl_cores * 100.0) / total_cores
@@ -705,17 +952,41 @@ def test_ring_joint_attention_create_perf_table(model_name, b, nh, s, d):
     subdir = "ttnn_ring_joint_sdpa_performance"
     perf_results = []
 
-    for q_chunk_size, k_chunk_size in product(model.q_chunk_sizes, model.k_chunk_sizes):
-        float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
+    for config, config_id in sweep_configs:
+        float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]", "PM FPU UTIL (%)"]
         cols = ["ATTRIBUTES"]
 
-        config_id = f"{model_name}-{seq_per_device}x{sp_size}_h{total_heads}-k{k_chunk_size}-q{q_chunk_size}"
         command = (
             f"pytest tests/nightly/blackhole/ccl/"
             f"test_ring_joint_sdpa.py::"
             f"test_ring_joint_attention_sdpa_sweep_perf_impl"
-            f"[{config_id}-bf16]"
+            f"[{config_id}]"
         )
+
+        (
+            b,
+            sq,
+            nhq,
+            nhk,
+            nhv,
+            d_q,
+            d_k,
+            d_v,
+            q_chunk_size,
+            k_chunk_size,
+            is_causal,
+            is_balanced,
+            q_dtype,
+            kv_dtype,
+        ) = config
+
+        # Config now contains global (TP/SP-scaled) values
+        # Convert to local (per-device) values for performance calculations
+        s = sq  # sq is already global sequence length
+        local_seq_len = sq // ring_size
+        local_nhq = nhq // mesh_config.tp_size
+        local_nhk = nhk // mesh_config.tp_size if nhk != 1 else 1  # MLA case: nhk=1 (not sharded)
+        local_nhv = nhv // mesh_config.tp_size
 
         try:
             run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
@@ -727,15 +998,16 @@ def test_ring_joint_attention_create_perf_table(model_name, b, nh, s, d):
             duration_ns = (
                 int(r["DEVICE KERNEL DURATION [ns]"].max()) if len(r["DEVICE KERNEL DURATION [ns]"]) > 0 else 0
             )
+            fpu_util_col = r.get("PM FPU UTIL (%)", [])
+            fpu_util_min = float(fpu_util_col.min()) if len(fpu_util_col) > 0 else 0.0
+            fpu_util_max = float(fpu_util_col.max()) if len(fpu_util_col) > 0 else 0.0
 
-            local_seq_len = s // ring_size
-
-            B = BATCH_SIZE
+            B = b
             batch_parallel = min(B, total_compute_cores)
-            nh_parallel = min(total_compute_cores // batch_parallel, nh)
+            nh_parallel = min(total_compute_cores // batch_parallel, local_nhq)
             max_q_parallel = total_compute_cores // (batch_parallel * nh_parallel)
 
-            cores_used = compute_ring_joint_cores_used(s, q_chunk_size, total_compute_cores, nh, ring_size)
+            cores_used = compute_ring_joint_cores_used(s, q_chunk_size, total_compute_cores, local_nhq, ring_size, b)
             cores_idle = total_compute_cores - cores_used
             compute_util_pct = (cores_used * 100.0) / total_compute_cores
 
@@ -761,9 +1033,9 @@ def test_ring_joint_attention_create_perf_table(model_name, b, nh, s, d):
 
             # Math utilization
             effective_cores = measured_core_count - measured_core_count % 10
-            heads_per_device = nh / tp_size
+            heads_per_device = local_nhq
             utilization = compute_ring_joint_utilization(
-                local_seq_len, s, d, heads_per_device, duration_ns, effective_cores
+                local_seq_len, s, d_q, d_v, heads_per_device, duration_ns, effective_cores, is_causal
             )
 
             ring_efficiency = (cores_used * 100.0) / total_cores
@@ -785,6 +1057,8 @@ def test_ring_joint_attention_create_perf_table(model_name, b, nh, s, d):
                     "duration_ns": duration_ns,
                     "duration_ms": duration_ns / 1e6,
                     "utilization": utilization,
+                    "fpu_util_min": fpu_util_min,
+                    "fpu_util_max": fpu_util_max,
                 }
             )
             logger.info(
@@ -811,27 +1085,30 @@ def test_ring_joint_attention_create_perf_table(model_name, b, nh, s, d):
     valid_results = [r for r in perf_results if r["duration_ns"] is not None]
     valid_results.sort(key=lambda x: x["duration_ns"])
 
-    mm_flops = 4 * s * s * d * nh
+    mm_flops = compute_sdpa_flops(s, s, d_q, d_v, nhq, is_causal)
 
     # Print summary table
     print(f"\n{'='*190}")
-    print(f"Ring Joint Attention Performance Sweep: {model_name} — b={b}, nh={nh}, s={s}, d={d}")
-    print(f"Architecture: {arch_type}, Ring size: {ring_size} devices")
+    print(
+        f"Ring Joint Attention Performance Sweep ({model_name.upper()}): b={b}, nh={nhq} (global), s={s}, d_q={d_q}, d_v={d_v}, causal={is_causal}"
+    )
+    print(f"Architecture: {mesh_config.arch_type}, Ring size: {ring_size} devices, TP size: {mesh_config.tp_size}")
     print(f"Total MM FLOPs (all devices): {mm_flops:,} ({mm_flops/1e9:.2f} GFLOPs)")
-    print(f"Per-device workload: Q={s // ring_size} tokens, K/V={s} tokens (via ring), {nh} heads")
+    print(f"Per-device workload: Q={s // ring_size} tokens, K/V={s} tokens (via ring), {local_nhq} heads")
     print(f"Core Allocation: {total_compute_cores} compute + {ccl_cores} CCL = {total_cores} total cores")
     print(f"{'='*190}")
-    header = "| Rank | q_chunk | k_chunk | Duration (ms) | Compute Used | Compute Idle | Compute Util | CCL Cores | Ring Eff | Iters/Core | Pad Waste | Slot Waste | Math Util |"
-    sep = "|------|---------|---------|---------------|--------------|--------------|--------------|-----------|----------|------------|-----------|------------|-----------|"
+    header = "| Rank | q_chunk | k_chunk | Duration (ms) | Compute Used | Compute Idle | Compute Util | CCL Cores | Ring Eff | Iters/Core | Pad Waste | Slot Waste | FPU Util (%)  | Math Util |"
+    sep = "|------|---------|---------|---------------|--------------|--------------|--------------|-----------|----------|------------|-----------|------------|---------------|-----------|"
     print(header)
     print(sep)
 
     for rank, result in enumerate(valid_results, 1):
+        fpu_range = f"{result['fpu_util_min']:.1f}-{result['fpu_util_max']:.1f}"
         print(
             f"| {rank:4d} | {result['q_chunk_size']:7d} | {result['k_chunk_size']:7d} | {result['duration_ms']:13.3f} | "
             f"{result['cores_used']:12d} | {result['cores_idle']:12d} | {result['compute_util_pct']:11.0f}% | "
             f"{result['ccl_cores']:9d} | {result['ring_efficiency']:7.0f}% | {result['iters_per_core']:10d} | "
-            f"{result['total_waste_pct']:8.1f}% | {result['slot_waste_pct']:9.1f}% | {result['utilization']:8.1f}% |"
+            f"{result['total_waste_pct']:8.1f}% | {result['slot_waste_pct']:9.1f}% | {fpu_range:>13} | {result['utilization']:8.1f}% |"
         )
 
     failed_results = [r for r in perf_results if r["duration_ns"] is None]

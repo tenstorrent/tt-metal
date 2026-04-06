@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -25,7 +25,7 @@ from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatch
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe_intermediates import MoEIntermediates
 from models.demos.deepseek_v3_d_p.reference.tt.moe.reduce import TorchReduceModule
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_gate_outputs
 from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
 
 
@@ -100,6 +100,7 @@ class TorchMoe(nn.Module):
         num_dispatch_groups: int = 1,
         routed_expert_weights: list = None,
         shared_expert_weights: dict = None,
+        gate_weights: dict = None,
     ):
         """
         Initialize MinimalMoE with configuration parameters.
@@ -122,12 +123,41 @@ class TorchMoe(nn.Module):
             num_dispatch_groups: Number of dispatch groups (default: 1)
             routed_expert_weights: Optional list of dicts with gate_proj, up_proj, down_proj per expert
             shared_expert_weights: Optional dict with gate_proj, up_proj, down_proj for shared expert
+            gate_weights: Optional dict with "weight" and "e_score_correction_bias" keys for gate
         """
         super().__init__()
+
+        # Build gate internally from gate_weights
+        if gate_weights is not None:
+            from types import SimpleNamespace
+
+            from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
+            from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+
+            ref_config = SimpleNamespace(
+                num_experts_per_tok=num_experts_per_tok,
+                n_routed_experts=num_routed_experts,
+                routed_scaling_factor=DeepSeekV3Config.ROUTE_SCALE,
+                scoring_func="sigmoid",
+                topk_method="noaux_tc",
+                n_group=DeepSeekV3Config.NUM_EXPERT_GROUPS,
+                topk_group=DeepSeekV3Config.NUM_LIMITED_GROUPS,
+                norm_topk_prob=True,
+                hidden_size=emb_dim,
+            )
+            self.gate = ReferenceMoEGate(ref_config, use_bitonic_sort=False)
+            self.gate.weight.data = gate_weights["weight"]
+            self.gate.e_score_correction_bias.data = gate_weights["e_score_correction_bias"]
+        else:
+            self.gate = None
         self.dispatch_group_size = dispatch_group_size
         self.experts_per_chip = experts_per_chip
         self.num_routed_experts = num_routed_experts
+        self.num_experts_per_tok = num_experts_per_tok
         self.num_dispatch_groups = num_dispatch_groups
+        self.seq_len_per_chip = seq_len_per_chip
+        self.emb_dim = emb_dim
+        self.expert_dispatch_table = expert_dispatch_table
 
         # Create dispatch module
         self.dispatch_module = TorchDispatchModule(
@@ -183,10 +213,10 @@ class TorchMoe(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        weights: torch.Tensor,
-        indices: torch.Tensor,
-        expert_offsets: torch.Tensor,
-        expert_token_counts: torch.Tensor,
+        weights: torch.Tensor = None,
+        indices: torch.Tensor = None,
+        expert_offsets: torch.Tensor = None,
+        expert_token_counts: torch.Tensor = None,
         return_intermediates: bool = False,
     ) -> tuple[torch.Tensor, Optional[MoEIntermediates]]:
         """
@@ -194,16 +224,54 @@ class TorchMoe(nn.Module):
 
         Args:
             x: Input tensor (dispatch_group_size, seq_len_per_chip, emb_dim)
-            weights: Gate weights (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
-            indices: Expert indices (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
-            expert_offsets: Base offset for each expert from each chip
-            expert_token_counts: Token counts per expert per chip
+            weights: Gate weights (dispatch_group_size, seq_len_per_chip, num_experts_per_tok).
+                    Optional if gate is set — will be computed internally.
+            indices: Expert indices (dispatch_group_size, seq_len_per_chip, num_experts_per_tok).
+                    Optional if gate is set — will be computed internally.
+            expert_offsets: Base offset for each expert from each chip.
+                    Optional if gate is set — will be computed internally.
+            expert_token_counts: Token counts per expert per chip.
+                    Optional if gate is set — will be computed internally.
             return_intermediates: If True, return intermediate values for debugging
 
         Returns:
             final_output: MoE output (dispatch_group_size, seq_len_per_chip, emb_dim)
             intermediates: Optional MoEIntermediates if return_intermediates=True
         """
+        gate_scores = None
+        gate_indices = None
+        gate_logits = None
+
+        # Gate path: compute weights/indices internally
+        if self.gate is not None and weights is None:
+            x_flat = x.view(-1, self.emb_dim)
+            # doing it manually because we dont want to change reference module at the moemnt; this is without activation function;
+            gate_logits = x_flat @ self.gate.weight.T  # (total_tokens, n_routed_experts)
+            with torch.no_grad():
+                # ReferenceMoEGate returns (topk_idx, topk_weight) — indices first, weights second
+                indices, weights = self.gate(x_flat.unsqueeze(0))
+            # Reshape to (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
+            weights = weights.view(self.dispatch_group_size, self.seq_len_per_chip, self.num_experts_per_tok)
+            indices = indices.view(self.dispatch_group_size, self.seq_len_per_chip, self.num_experts_per_tok).to(
+                torch.int32
+            )
+            gate_scores = weights
+            gate_indices = indices
+
+            # Compute expert_offsets and expert_token_counts from indices
+            expert_offsets, expert_token_counts, _ = get_gate_outputs(
+                indices,
+                self.dispatch_group_size,
+                self.num_routed_experts,
+                self.experts_per_chip,
+                self.seq_len_per_chip,
+                self.num_experts_per_tok,
+                expert_dispatch_table=self.expert_dispatch_table,
+            )
+        else:
+            assert weights is not None and indices is not None
+            assert expert_offsets is not None and expert_token_counts is not None
+
         # Step 1: Run shared expert on original input
         with torch.no_grad():
             shared_output = self.shared_expert(x.float())
@@ -226,7 +294,7 @@ class TorchMoe(nn.Module):
                         self.num_dispatch_groups,
                         is_col_major=True,
                     )
-                    token_count = expert_token_counts[group, chip, local_expert].item()
+                    token_count = expert_token_counts[group, 0, global_expert].item()
 
                     if token_count > 0:
                         expert_input = dispatched_buffer[group, chip, local_expert, :token_count, :]
@@ -251,12 +319,16 @@ class TorchMoe(nn.Module):
         intermediates = None
         if return_intermediates:
             intermediates = MoEIntermediates(
+                gate_scores=gate_scores,
+                gate_indices=gate_indices,
+                gate_logits=gate_logits,
                 dispatched_buffer=dispatched_buffer,
                 metadata=metadata,
                 expert_outputs=expert_outputs,
                 shared_output=shared_output,
                 combined_output=combined_output,
                 routed_output=routed_output,
+                expert_token_counts=expert_token_counts,
             )
 
         return final_output, intermediates

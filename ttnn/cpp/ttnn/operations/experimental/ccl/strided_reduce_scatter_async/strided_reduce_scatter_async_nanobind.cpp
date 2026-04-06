@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,6 +32,8 @@ void bind_strided_reduce_scatter_async(nb::module_& mod) {
             dim (int): Dimension to scatter.
             multi_device_global_semaphore (List[GlobalSemaphore]): Semaphores for synchronization.
 
+        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
+
         Keyword Args:
             persistent_output_buffers (Optional[List[ttnn.Tensor]]): Pre-allocated output buffers.
             barrier_semaphore (Optional[GlobalSemaphore]): Barrier semaphore for synchronization.
@@ -45,15 +47,18 @@ void bind_strided_reduce_scatter_async(nb::module_& mod) {
             num_workers_per_link (Optional[int]): Number of workers per link.
             num_buffers_per_channel (Optional[int]): Number of buffers per channel.
             mm_cores_y (Optional[int]): Number of cores in Y direction for matmul output layout.
-            mm_block_ht (int): Matmul block height in tiles.
-            mm_block_wt (int): Matmul block width in tiles.
+            mm_block_ht (int): Matmul unit block height in tiles.
+            mm_block_wt (int): Matmul unit block width in tiles.
             mm_N_full_block_wt (Optional[int]): Matmul N block width in tiles.
-            chunk_width_in_mm_blocks (Optional[int]): Chunk width in matmul blocks.
+            chunk_width_in_mm_blocks (Optional[int]): Chunk width in unit matmul blocks.
 
         Returns:
             ttnn.Tensor: the output tensor.
+
+        Example:
+
         )doc",
-        &ExecuteStridedReduceScatterAsync::invoke,
+        &ttnn::experimental::strided_reduce_scatter_async,
         nb::arg("input_tensor"),
         nb::arg("persistent_output_buffers") = nb::none(),
         nb::arg("dim"),

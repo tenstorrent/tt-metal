@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -55,7 +55,7 @@ namespace ttnn::prim {
 std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    const uint32_t dim,
+    uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     CoreCoord reduce_scatter_core_grid_offset,
     uint32_t num_links,
@@ -67,7 +67,7 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
     const std::optional<const Tensor>& bias,
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
     std::optional<const ttnn::experimental::prim::MinimalMatmulConfig> config,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     bool using_persistent_buffers,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,

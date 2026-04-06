@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,7 +19,7 @@ struct MinimalMatmulStridedReduceScatterAsyncParams {
     /* Matmul Params */
     const MinimalMatmulParams matmul_struct;
 
-    /* Fused addcmul params (applied to MM output before RS) */
+    /* Fused addcmul params (applied at the RS final write step, not in the MM kernel) */
     const std::optional<float> fused_ternary_scalar = std::nullopt;
 
     /* Reduce Scatter Params */

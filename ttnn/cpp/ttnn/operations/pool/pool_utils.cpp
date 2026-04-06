@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pool_utils.hpp"
@@ -189,7 +189,126 @@ FactoryParameters get_factory_parameters(
     };
 }
 
-uint32_t calculate_L1_usage(
+uint32_t PoolCBSizes::local_cb_total() const {
+    uint32_t total = scalar_cb_pagesize * scalar_cb_npages;
+    if (has_second_scalar_cb) {
+        total += scalar_cb_pagesize * scalar_cb_npages;
+    }
+    total += clear_value_cb_size;
+    total += in_cb_pagesize * in_cb_npages;
+    if (has_split_reader) {
+        total += in_cb_pagesize * in_cb_npages;
+    }
+    total += mpwi_total_size;
+    total += pre_tilize_cb_pagesize * pre_tilize_cb_npages;
+    total += config_tensor_l1_size;
+    return total;
+}
+
+uint32_t PoolCBSizes::global_cb_total() const {
+    uint32_t total = sliding_window::align_buffer(out_cb_pagesize * out_cb_npages);
+    if (has_out_idx) {
+        total += sliding_window::align_buffer(out_idx_cb_pagesize * out_idx_cb_npages);
+    }
+    return total;
+}
+
+uint32_t PoolCBSizes::total() const { return local_cb_total() + global_cb_total(); }
+
+PoolCBSizes calculate_pool_cb_sizes(
+    const FactoryParameters& params,
+    bool one_scalar_per_core,
+    bool return_indices,
+    const Layout& output_layout,
+    const DataType& output_dtype,
+    const std::array<uint32_t, 2>& output_shard_shape,
+    bool config_tensor_in_dram) {
+    PoolCBSizes sizes;
+    const bool is_output_tiled = output_layout == Layout::TILE;
+
+    // Scalar CB (coefficient of reduce)
+    sizes.scalar_cb_pagesize = tt::tile_size(params.data_format);
+    sizes.scalar_cb_npages = params.multi_buffering_factor;
+    sizes.has_second_scalar_cb = params.is_avg_pool && params.split_reader && !one_scalar_per_core;
+
+    // Clear value CB (-inf for maxpool, 0 for avgpool)
+    sizes.clear_value_cb_size = tt::tile_size(params.data_format);
+
+    // Input CB
+    uint32_t in_cb_sz = 0;
+    if (return_indices || params.is_wide_reduction) {
+        uint32_t height_multiplier = return_indices ? tt::constants::TILE_HEIGHT : params.num_tilized_rows;
+        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * height_multiplier;
+    } else {
+        in_cb_sz = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.num_tilized_rows;
+    }
+    sizes.in_cb_raw_size = in_cb_sz;
+    uint32_t in_cb_page_padded = tt::round_up(in_cb_sz, tt::constants::TILE_HW);
+    sizes.in_cb_pagesize = params.nbytes * in_cb_page_padded;
+    sizes.in_cb_npages = params.multi_buffering_factor;
+    sizes.has_split_reader = params.split_reader;
+
+    // MPWI CBs (return_indices temporaries)
+    sizes.mpwi_total_size = 0;
+    if (return_indices) {
+        uint32_t tile_elems = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
+        uint32_t idx_tile_size = params.index_nbytes * tile_elems;
+        uint32_t data_tile_size = params.nbytes * tile_elems;
+        // 1 data tile (pack_tmp_cb) + 6 index tiles (in_idx, pack_idx_tmp, right_inc,
+        // down_left_wrap_inc, up_left_wrap_inc, compute_idx_tmp)
+        sizes.mpwi_total_size = (6 * idx_tile_size) + data_tile_size;
+        if (params.is_large_kernel) {
+            // additional index tiles (intra_kernel_right_inc, intra_kernel_down_left_wrap_inc)
+            sizes.mpwi_total_size += 2 * idx_tile_size;
+        }
+    }
+
+    // Pre-tilize CB (only for tiled output)
+    sizes.has_pre_tilize = is_output_tiled;
+    if (is_output_tiled) {
+        sizes.pre_tilize_cb_pagesize = tt::constants::TILE_WIDTH * params.nbytes;
+        sizes.pre_tilize_cb_npages = tt::constants::TILE_HEIGHT * params.in_ntiles_c;
+    } else {
+        sizes.pre_tilize_cb_pagesize = 0;
+        sizes.pre_tilize_cb_npages = 0;
+    }
+
+    // Output CB (globally allocated, backed by output tensor buffer)
+    if (is_output_tiled) {
+        sizes.out_cb_pagesize = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype));
+        sizes.out_cb_npages = output_shard_shape[0] * output_shard_shape[1] / tt::constants::TILE_HW;
+    } else {
+        sizes.out_cb_pagesize =
+            std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), output_shard_shape[1]) * params.nbytes;
+        sizes.out_cb_npages = output_shard_shape[0] * params.out_ntiles_c;
+    }
+
+    // Output index CB (globally allocated, backed by output index tensor buffer)
+    sizes.has_out_idx = return_indices;
+    if (return_indices) {
+        sizes.out_idx_cb_pagesize =
+            std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), output_shard_shape[1]) * params.index_nbytes;
+        sizes.out_idx_cb_npages = sizes.out_cb_npages;
+    } else {
+        sizes.out_idx_cb_pagesize = 0;
+        sizes.out_idx_cb_npages = 0;
+    }
+
+    // Config tensor L1 CB (for DRAM-based config tensors)
+    sizes.config_tensor_l1_size = 0;
+    if (config_tensor_in_dram) {
+        sizes.config_tensor_l1_size =
+            (output_shard_shape[0] * 6) + 2;  // Worst case of 6 Bytes per output elem for reader indices
+        if (!one_scalar_per_core) {
+            sizes.config_tensor_l1_size +=
+                output_shard_shape[0] * 6;  // Additional 6 Bytes per output elem for avg pool scalar config tensor
+        }
+    }
+
+    return sizes;
+}
+
+pool_op_l1_usage calculate_L1_usage(
     DataType input_dtype,
     uint32_t in_h,
     uint32_t in_w,
@@ -238,112 +357,24 @@ uint32_t calculate_L1_usage(
     bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
 
-    // scalar CB as coefficient of reduce
-    uint32_t in_scalar_cb_pagesize = tt::constants::TILE_HW * params.nbytes;
-    uint32_t in_scalar_cb_npages = params.multi_buffering_factor;
-    uint32_t in_scalar_cb_size_0 = in_scalar_cb_npages * in_scalar_cb_pagesize;
-    uint32_t in_scalar_cb_size_1 = 0;
+    auto output_shard_shape = output_memory.shard_spec().value().shape;
+    PoolCBSizes sizes = calculate_pool_cb_sizes(
+        params,
+        one_scalar_per_core,
+        return_indices,
+        output_layout,
+        output_dtype,
+        {output_shard_shape[0], output_shard_shape[1]},
+        config_tensor_in_dram);
 
-    if (pool_type == Pool2DType::AVG_POOL2D && params.split_reader && !one_scalar_per_core) {
-        in_scalar_cb_size_1 = in_scalar_cb_npages * in_scalar_cb_pagesize;
-    }
-
-    uint32_t clear_value_cb_size = tt::constants::TILE_HW * params.nbytes;
-
-    uint32_t in_cb_sz = 0;
-    if (return_indices || params.is_wide_reduction) {
-        uint32_t height_multiplier = return_indices ? tt::constants::TILE_HEIGHT : params.num_tilized_rows;
-        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * height_multiplier;
-    } else {
-        in_cb_sz = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.num_tilized_rows;
-    }
-
-    uint32_t in_cb_page_padded = tt::round_up(in_cb_sz, tt::constants::TILE_HW);
-    uint32_t in_cb_pagesize = params.nbytes * in_cb_page_padded;
-    uint32_t in_cb_npages = params.multi_buffering_factor;
-    uint32_t in_cb_config_0_size = in_cb_npages * in_cb_pagesize;
-    uint32_t in_cb_config_1_size = 0;
-
-    if (params.split_reader) {
-        in_cb_config_1_size = in_cb_npages * in_cb_pagesize;
-    }
-
-    uint32_t total_mpwi_cb_size = 0;
-    if (return_indices) {
-        // Add tile temporary CBs for return_indices
-        uint32_t tile_elems = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
-        uint32_t idx_tile_size = params.index_nbytes * tile_elems * 1;  // 1 page
-        uint32_t data_tile_size = params.nbytes * tile_elems * 1;       // 1 page
-        // 1 data sized tile (pack_tmp_cb) and 6 index sized tiles (in_idx, pack_idx_tmp, right_inc, down_left_wrap_inc,
-        // up_left_wrap_inc, compute_idx_tmp)
-        total_mpwi_cb_size = (6 * idx_tile_size) + data_tile_size;
-        if (params.is_large_kernel) {
-            // additional temp data tile for large kernel (intra_kernel_right_inc, intra_kernel_down_left_wrap_inc)
-            total_mpwi_cb_size += 2 * idx_tile_size;
-        }
-    }
-
-    uint32_t out_cb_pagesize;
-    uint32_t out_cb_npages;
-    const bool is_output_tiled = output_layout == Layout::TILE;
-
-    if (is_output_tiled) {
-        out_cb_pagesize = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype));
-        out_cb_npages = output_memory.shard_spec().value().shape[0] * output_memory.shard_spec().value().shape[1] /
-                        tt::constants::TILE_HW;
-    } else {
-        out_cb_pagesize =
-            std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), output_memory.shard_spec().value().shape[1]) *
-            params.nbytes;
-        out_cb_npages = output_memory.shard_spec().value().shape[0] * params.out_ntiles_c;
-    }
-    uint32_t out_cb_config_size = out_cb_npages * out_cb_pagesize;
-
-    uint32_t pre_tilize_cb_size = 0;
-
-    if (is_output_tiled) {
-        const uint32_t pre_tilize_cb_pagesize = params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;
-        const uint32_t pre_tilize_cb_npages = 1;
-        pre_tilize_cb_size = pre_tilize_cb_pagesize * pre_tilize_cb_npages;
-    }
-
-    uint32_t out_idx_cb_config_size = 0;
-    if (return_indices) {
-        uint32_t out_idx_cb_pagesize =
-            std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), output_memory.shard_spec().value().shape[1]) *
-            params.index_nbytes;
-        out_idx_cb_config_size = out_cb_npages * out_idx_cb_pagesize;
-    }
-    uint32_t config_tensor_l1_CB_size = 0;
-    if (config_tensor_in_dram) {
-        auto output_shard_shape = output_memory.shard_spec().value().shape;
-        config_tensor_l1_CB_size =
-            (output_shard_shape[0] * 6) + 2;  // Worst case of 6 Bytes per output elem for reader indices
-        if (!one_scalar_per_core) {
-            config_tensor_l1_CB_size +=
-                output_shard_shape[0] * 6;  // Additional 6 Bytes per output elem for avg pool scalar config tensor
-        }
-    }
     log_trace(
         tt::LogOp,
-        "L1 Usage Breakdown: in_scalar_cb_size_0 = {}, in_scalar_cb_size_1 = {}, clear_value_cb_size = {}, "
-        "in_cb_config_0_size = {}, in_cb_config_1_size = {}, total_mpwi_cb_size = {}, pre_tilize_cb_size = {}, "
-        "config_tensor_l1_CB_size = {} "
-        "out_cb_config_size = {}, out_idx_cb_config_size = {}",
-        in_scalar_cb_size_0,
-        in_scalar_cb_size_1,
-        clear_value_cb_size,
-        in_cb_config_0_size,
-        in_cb_config_1_size,
-        total_mpwi_cb_size,
-        pre_tilize_cb_size,
-        config_tensor_l1_CB_size,
-        sliding_window::align_buffer(out_cb_config_size),
-        sliding_window::align_buffer(out_idx_cb_config_size));
+        "L1 Usage Breakdown: local_cb_size = {}, global_cb_size = {}, total = {}",
+        sizes.local_cb_total(),
+        sizes.global_cb_total(),
+        sizes.total());
 
-    return in_scalar_cb_size_0 + in_scalar_cb_size_1 + clear_value_cb_size + in_cb_config_0_size + in_cb_config_1_size +
-           total_mpwi_cb_size + pre_tilize_cb_size + config_tensor_l1_CB_size +
-           sliding_window::align_buffer(out_cb_config_size) + sliding_window::align_buffer(out_idx_cb_config_size);
+    return pool_op_l1_usage{.local_cb_size = sizes.local_cb_total(), .global_cb_size = sizes.global_cb_total()};
 }
 
 std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
@@ -363,7 +394,7 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     auto output_shape = sliding_window_config.get_output_shape();
 
     struct l1_usage_config {
-        uint32_t l1_usage{};
+        pool_op_l1_usage l1_usage{};
         std::optional<ParallelConfig> config;
     };
 
@@ -393,9 +424,13 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             0);
 
         if (!input_parallel_config.has_value()) {
-            return {std::numeric_limits<uint32_t>::max(), input_parallel_config};
+            return {
+                pool_op_l1_usage{
+                    .local_cb_size = std::numeric_limits<uint32_t>::max(),
+                    .global_cb_size = std::numeric_limits<uint32_t>::max()},
+                input_parallel_config};
         }
-        uint32_t l1_usage = calculate_L1_usage(
+        pool_op_l1_usage l1_usage = calculate_L1_usage(
             input_dtype,
             sliding_window_config.input_hw.first,
             sliding_window_config.input_hw.second,
@@ -424,9 +459,9 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     auto l1_config_width = calc_l1_usage_inner(TensorMemoryLayout::WIDTH_SHARDED, ShardOrientation::ROW_MAJOR);
     auto l1_config_block = calc_l1_usage_inner(TensorMemoryLayout::BLOCK_SHARDED, ShardOrientation::ROW_MAJOR);
 
-    uint32_t l1_usage_height = l1_config_height.l1_usage;
-    uint32_t l1_usage_width = l1_config_width.l1_usage;
-    uint32_t l1_usage_block = l1_config_block.l1_usage;
+    uint32_t l1_usage_height = l1_config_height.l1_usage.total();
+    uint32_t l1_usage_width = l1_config_width.l1_usage.total();
+    uint32_t l1_usage_block = l1_config_block.l1_usage.total();
 
     if (l1_usage_height > l1_usage_width) {
         if (l1_usage_width > l1_usage_block) {
@@ -676,7 +711,7 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
     auto output_memory_config = tt::tt_metal::MemoryConfig(
         input_memory_config.memory_layout(), input_memory_config.buffer_type(), output_shard_spec);
 
-    uint32_t pool_cb_usage = calculate_L1_usage(
+    pool_op_l1_usage pool_l1 = calculate_L1_usage(
         dtype,
         sliding_window_config.input_hw.first,
         sliding_window_config.input_hw.second,
@@ -697,6 +732,7 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
         output_layout,
         dtype,
         config_tensor_in_dram);
+    uint32_t pool_cb_usage = pool_l1.total();
 
     // Calculate actual pool output tensor size for memory tracking
     // Pool output has same dtype as pool input (halo output), which is BFLOAT16/FLOAT32

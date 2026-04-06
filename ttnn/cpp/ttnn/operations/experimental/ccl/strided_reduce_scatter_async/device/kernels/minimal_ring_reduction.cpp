@@ -1,6 +1,21 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
+/**
+ * Strided reduce-scatter COMPUTE kernel.
+ *
+ * Active only during ring steps 1 .. ring_size-1 (skips step 0, where the
+ * reader sends tiles directly to the writer via reader_output_cb).
+ *
+ * Normal reduction (steps 1 .. ring_size-2, and ring_size-1 without addcmul):
+ *   Waits for input_cb and intermediate_cb from the reader, performs element-wise
+ *   addition (acc = input + intermediate), and pushes the result to output_cb
+ *   for the writer to forward or write.
+ *
+ * When FUSE_RS_ADDCMUL is enabled, the final ring step (i = ring_size-1) fuses
+ * an addcmul operation: output = a + scalar * (input + intermediate) * b.
+ */
 
 #include <cstdint>
 #include "api/compute/eltwise_binary.h"

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -115,15 +115,20 @@ class DecoderBlock:
         return full_q, new_kv, attn_output, moe_scores, moe_indices, moe_output
 
     @staticmethod
-    def get_num_semaphores(num_links=1):
-        return AttentionBlock.get_num_semaphores(num_links=num_links) + MoeSem.NUM_SEMAPHORES
+    def get_num_semaphores(num_links_bcast=1, num_links_allreduce=1):
+        return (
+            AttentionBlock.get_num_semaphores(num_links_bcast=num_links_bcast, num_links_allreduce=num_links_allreduce)
+            + MoeSem.NUM_SEMAPHORES
+        )
 
     @staticmethod
-    def create_semaphores(mesh_device, num_links=1):
-        return AttentionBlock.create_semaphores(mesh_device, num_links=num_links) + MoeOp.create_semaphores(mesh_device)
+    def create_semaphores(mesh_device, num_links_bcast=1, num_links_allreduce=1):
+        return AttentionBlock.create_semaphores(
+            mesh_device, num_links_bcast=num_links_bcast, num_links_allreduce=num_links_allreduce
+        ) + MoeOp.create_semaphores(mesh_device)
 
     @staticmethod
-    def op(
+    def get_program_context(
         # AttentionBlock parameters
         input_tensor_mesh,
         gamma_tensor,
@@ -156,7 +161,8 @@ class DecoderBlock:
         attention_block_semaphores=None,
         reduce_cluster_axis=1,
         sdpa_cluster_axis=0,
-        num_links=1,
+        num_links_bcast=1,
+        num_links_allreduce=1,
         # MoE parameters
         shared_residual_mcast_src_tensor=None,
         gate_mm_weights_tensor=None,
@@ -195,6 +201,11 @@ class DecoderBlock:
         persistent_mode=False,
         is_torus=True,
     ):
+        """Build io_tensors and mesh_program_descriptor without executing.
+
+        Returns (io_tensors, mesh_program_descriptor, attention_block_output_tensor)
+        so callers can later run ``DecoderBlock.execute(...)`` at their convenience.
+        """
         cb_id_manager = CircularBufferIdManager()
         mla_cb_id_context = cb_id_manager.create_context()
         moe_cb_id_context = cb_id_manager.create_context()
@@ -233,7 +244,8 @@ class DecoderBlock:
             attention_block_semaphores,
             reduce_cluster_axis,
             sdpa_cluster_axis,
-            num_links,
+            num_links_bcast,
+            num_links_allreduce,
             epsilon,
             fp32_dest_acc_en,
             skip_ccl,
@@ -290,7 +302,6 @@ class DecoderBlock:
         io_tensors.append(reconfig_tensor)
         cbs_list = cb_id_manager.build_dummy_cb_descriptors(full_device_grid)
 
-        # TODO: Passing the address here as a named compile time arg is not ideal. Done for simplicity.
         additional_named_compile_time_args = [
             ("mla_reconfig_cb_config_l1_addr", reconfig_tensor.buffer_address()),
             ("num_iterations", num_iterations),
@@ -358,11 +369,6 @@ class DecoderBlock:
                 attn_brisc_prefix_len_by_core[core_key] = attn_brisc_prefix_len_by_core.get(core_key, 0) + len(args)
             moe_per_core_brisc = moe.device_rt_args_desc.brisc_args if moe.device_rt_args_desc else []
 
-            # Compute the correct bases and patch directly into moe_brisc_ct.
-            # Both worker and fabric cores start reading their moe per-core args immediately after
-            # the attn per-core args, so both bases equal attn_base. All reduce cores (worker and
-            # fabric) must have the same attn_base since attn assigns the same per-core args to
-            # every core on the device.
             if moe_per_core_brisc:
                 attn_bases = {attn_brisc_prefix_len_by_core.get((c.x, c.y), 0) for c, _ in moe_per_core_brisc}
                 assert (
@@ -510,43 +516,62 @@ class DecoderBlock:
                 ccl = ctx["ccl"]
                 ccl_sender_core = ctx["ccl_sender_core"]
                 gather_core = ctx["gather_core"]
+                allreduce_config = ccl["allreduce_config"]
+                coord = ccl["mesh_coord"]
 
-                ccl_sender_group = kernel_result.get_group_by_arg("is_ccl_sender_core", 1)
-                ccl_receiver_group = kernel_result.get_group_by_arg("is_ccl_receiver_core", 1)
+                sender_group = kernel_result.get_group_by_arg("is_allreduce_sender_core", 1)
+                receiver_group = kernel_result.get_group_by_arg("is_allreduce_receiver_core", 1)
 
-                sender_brisc_kernel_idx = ccl_sender_group.brisc_kernel_index
-
-                ccl_sender_ncrisc_rt_args_ref = program.kernels[ccl_sender_group.ncrisc_kernel_index].runtime_args[
+                # Sender NCRISC: common RT args + per-core fabric args
+                ccl_sender_ncrisc_rt = program.kernels[sender_group.ncrisc_kernel_index].runtime_args[
                     ccl_sender_core.x
                 ][ccl_sender_core.y]
-                ccl_sender_ncrisc_rt_args_ref.extend(ccl["sender_ncrisc_common_rt_args"])
-                ccl_sender_brisc_rt_args_ref = program.kernels[ccl_sender_group.brisc_kernel_index].runtime_args[
-                    ccl_sender_core.x
-                ][ccl_sender_core.y]
-                ccl_sender_brisc_rt_args_ref.extend(ccl["sender_brisc_common_rt_args"])
-                ccl_receiver_ncrisc_rt_args_ref = program.kernels[ccl_receiver_group.ncrisc_kernel_index].runtime_args[
-                    gather_core.x
-                ][gather_core.y]
-                ccl_receiver_ncrisc_rt_args_ref.extend(ccl["receiver_ncrisc_common_rt_args"])
+                ccl_sender_ncrisc_rt.extend(ccl["sender_ncrisc_common_rt_args"])
+                ccl_sender_ncrisc_rt.extend(
+                    allreduce_config.get_ncrisc_per_core_rt_args(coord, program, ccl_sender_core)
+                )
 
-                fabric_node_id = ccl["fabric_node_id"]
-                neighbor_fabric_node_id = ccl["neighbor_fabric_node_id"]
-
-                sender_brisc_rt_args_ref = program.kernels[sender_brisc_kernel_idx].runtime_args[ccl_sender_core.x][
+                # Sender BRISC: common RT args + per-core fabric args
+                ccl_sender_brisc_rt = program.kernels[sender_group.brisc_kernel_index].runtime_args[ccl_sender_core.x][
                     ccl_sender_core.y
                 ]
-                sender_fabric_args = ttnn.setup_routing_plane_connection(
-                    fabric_node_id,
-                    [neighbor_fabric_node_id],
-                    [ccl["sender_link"]],
-                    program,
-                    sender_brisc_kernel_idx,
-                    ccl_sender_core,
-                )
-                extend_fabric_args(sender_brisc_rt_args_ref, sender_fabric_args)
+                ccl_sender_brisc_rt.extend(ccl["sender_brisc_common_rt_args"])
+                ccl_sender_brisc_rt.extend(allreduce_config.get_brisc_per_core_rt_args(coord, program, ccl_sender_core))
+
+                # Receiver NCRISC: common RT args only (reader uses semaphores, no fabric)
+                ccl_receiver_ncrisc_rt = program.kernels[receiver_group.ncrisc_kernel_index].runtime_args[
+                    gather_core.x
+                ][gather_core.y]
+                ccl_receiver_ncrisc_rt.extend(ccl["receiver_ncrisc_common_rt_args"])
 
             # MoE fabric connections (reduce-to-one)
             moe._setup_fabric_connections(mesh_coord, row, col, reduce_root_coord, kernel_result, program)
             mesh_program_descriptor[ttnn.MeshCoordinateRange(mesh_coord, mesh_coord)] = program
+
+        return io_tensors, mesh_program_descriptor, attention_block_output_tensor
+
+    @staticmethod
+    def execute(io_tensors, mesh_program_descriptor, attention_block_output_tensor):
+        """Run a previously built decoder block program.
+
+        Args:
+            io_tensors: List of IO tensors from ``get_program_context``.
+            mesh_program_descriptor: MeshProgramDescriptor from ``get_program_context``.
+            attention_block_output_tensor: The attention output tensor from ``get_program_context``.
+
+        Returns:
+            Tuple of (moe_result, attention_block_output_tensor).
+        """
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
         return result, attention_block_output_tensor
+
+    @staticmethod
+    def op(*args, **kwargs):
+        """Convenience wrapper: builds the program and executes it immediately.
+
+        Accepts the same arguments as ``get_program_context``.
+        """
+        io_tensors, mesh_program_descriptor, attention_block_output_tensor = DecoderBlock.get_program_context(
+            *args, **kwargs
+        )
+        return DecoderBlock.execute(io_tensors, mesh_program_descriptor, attention_block_output_tensor)

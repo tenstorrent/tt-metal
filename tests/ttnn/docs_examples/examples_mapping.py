@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -45,6 +45,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.full": tensor_creation.test_full,
     "ttnn.full_like": tensor_creation.test_full_like,
     "ttnn.rand": tensor_creation.test_rand,
+    "ttnn.randn": tensor_creation.test_randn,
     "ttnn.from_buffer": tensor_creation.test_from_buffer,
     "ttnn.bernoulli": tensor_creation.test_bernoulli,
     "ttnn.complex_tensor": tensor_creation.test_complex_tensor,
@@ -390,6 +391,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.indexed_fill": data_movement.test_indexed_fill,
     "ttnn.gather": data_movement.test_gather,
     "ttnn.sort": data_movement.test_sort,
+    "ttnn.narrow": data_movement.test_narrow,
     # Normalization
     "ttnn.group_norm": normalization.test_group_norm,
     "ttnn.layer_norm": normalization.test_layer_norm,

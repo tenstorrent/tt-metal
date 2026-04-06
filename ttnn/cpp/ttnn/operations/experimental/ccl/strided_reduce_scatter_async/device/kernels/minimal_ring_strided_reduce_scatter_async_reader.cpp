@@ -1,6 +1,29 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
+/**
+ * Strided reduce-scatter READER kernel.
+ *
+ * For each chunk, iterates over ring_size ring steps (i = 0 .. ring_size-1):
+ *
+ *   Step i=0: loads tiles from the input tensor into reader_output_cb, which
+ *             the writer sends directly to the neighboring device (no reduction).
+ *
+ *   Steps i>0: waits for the "intermediate ready" semaphore from the previous
+ *              device, then loads the local input slice into input_cb and the
+ *              intermediate buffer into intermediate_cb. The compute kernel
+ *              reduces these and the writer forwards or writes the result.
+ *
+ * Tiles are assigned to workers in interleaved row-major order within the chunk's
+ * strided layout. Forward and backward workers share the tile space by offsetting
+ * their starting positions (effective_worker_id) and striding by
+ * effective_advance_by_tiles = 2 * num_workers.
+ *
+ * Note: strided reduce-scatter only supports scattering on dim 3
+ * Also, only one channel is supported for now.
+ * This can be relaxed if needed but is omitted to avoid nested loops.
+ */
 
 #include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
@@ -26,6 +49,8 @@ constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(4);
 constexpr uint32_t tile_granularity = get_compile_time_arg_val(5);
 constexpr uint32_t page_size = get_compile_time_arg_val(6);
 constexpr uint32_t input_batch_num_pages = get_compile_time_arg_val(7);
+[[maybe_unused]] constexpr uint32_t input_channel_num_pages =
+    get_compile_time_arg_val(8);  // C=1 is validated on host; reserved for future C>1 support
 constexpr uint32_t input_tensor_B = get_compile_time_arg_val(9);
 constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(10);
 constexpr uint32_t slice_C = get_compile_time_arg_val(11);
@@ -172,7 +197,9 @@ void kernel_main() {
                 mm_sem_target += sem_increment;
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), mm_sem_target);
 #endif
-                // Run a full ring reduce-scatter for the current chunk.
+                // Run a full bidirectional ring reduce-scatter for the current chunk.
+                // i=0: read input -> reader_output_cb (writer forwards to neighbor, no compute).
+                // i>0: read input -> input_cb, read intermediate -> intermediate_cb (compute reduces).
                 for (uint32_t i = 0; i < ring_size; i++) {
                     const bool do_reduce = i != 0;
                     const uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
@@ -186,8 +213,8 @@ void kernel_main() {
 
                     const auto [mm_N_full_blocks_per_slice, cols_before_actual_slice] =
                         get_slice_N_block_info(actual_slice_idx, slice_Wt, mm_N_full_block_wt);
-                    // Wait for all chunk_piece_idx tiles for this ring iteration to be written by the neighboring
-                    // device
+                    // Wait for the neighboring device's writer to signal that it has finished
+                    // writing this chunk's tiles into our intermediate buffer.
                     if (do_reduce) {
                         noc_semaphore_wait_min(
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), out_ready_sem_target + 1);

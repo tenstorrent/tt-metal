@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,8 +32,9 @@ void bind_unsqueeze(nb::module_& mod) {
     ttnn::bind_function<"unsqueeze">(
         mod,
         doc,
-        ttnn::overload_t(
-            nb::overload_cast<const ttnn::Tensor&, int>(&ttnn::unsqueeze), nb::arg("input_tensor"), nb::arg("dim")));
+        nb::overload_cast<const ttnn::Tensor&, int>(&ttnn::unsqueeze),
+        nb::arg("input_tensor"),
+        nb::arg("dim"));
 }
 
 }  // namespace ttnn::operations::data_movement

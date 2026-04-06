@@ -1,18 +1,19 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_reduce_scatter_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/minimal_matmul_strided_reduce_scatter_async.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-std::vector<ttnn::Tensor> ExecuteMinimalMatmulStridedReduceScatterAsync::invoke(
+std::vector<ttnn::Tensor> minimal_matmul_strided_reduce_scatter_async(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const CoreCoord reduce_scatter_core_grid_offset,
+    const DeviceComputeKernelConfig& compute_kernel_config,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config_mm,
     const std::optional<ttnn::MemoryConfig>& rs_output_mem_config,
@@ -22,7 +23,6 @@ std::vector<ttnn::Tensor> ExecuteMinimalMatmulStridedReduceScatterAsync::invoke(
     const std::optional<const Tensor>& bias,
     const std::optional<operations::unary::UnaryWithParam>& fused_activation,
     const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     bool using_persistent_buffers,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
@@ -35,7 +35,7 @@ std::vector<ttnn::Tensor> ExecuteMinimalMatmulStridedReduceScatterAsync::invoke(
     std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& addcmul_input_tensor1,
     const std::optional<const Tensor>& addcmul_input_tensor2) {
-    return ttnn::prim::minimal_matmul_strided_reduce_scatter_async(
+    auto all_outputs = ttnn::prim::minimal_matmul_strided_reduce_scatter_async(
         input_tensor,
         weight_tensor,
         dim,
@@ -63,6 +63,8 @@ std::vector<ttnn::Tensor> ExecuteMinimalMatmulStridedReduceScatterAsync::invoke(
         fused_ternary_scalar,
         addcmul_input_tensor1,
         addcmul_input_tensor2);
+
+    return {std::move(all_outputs[0]), std::move(all_outputs[2])};
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

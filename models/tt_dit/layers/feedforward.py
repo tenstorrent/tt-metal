@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -120,9 +120,6 @@ class ParallelFeedForward(Module):
         Computes: addcmul_a + scalar * ff2(ff1(x)) * addcmul_b
         Both addcmul_a and addcmul_b are already at their per-TP-device [D/tp] slice —
         no AllGather or scatter matmul is required.
-
-        When parallel_config is provided, ff1 (ColParallelLinear) performs a fused
-        AllGather+matmul internally, so the caller should NOT pre-gather x.
         """
         ff1_out = self.ff1(x, compute_kernel_config=compute_kernel_config, parallel_config=parallel_config)
         return self.ff2.forward_fused_addcmul(
