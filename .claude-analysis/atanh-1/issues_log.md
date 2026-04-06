@@ -14,8 +14,8 @@
 | 2 | Reference Analysis | ok | ~1094s | rpow/hardtanh committed by orchestrator |
 | 3 | Implementation | ok | ~869s | none |
 | 4 | Testing & Debugging | ok | ~120s | adjusted tolerances for polynomial precision |
-| 5 | Documentation | pending | - | - |
-| 6 | Self-Reflection | pending | - | - |
+| 5 | Documentation | ok | ~60s | none |
+| 6 | Self-Reflection | ok | ~300s | agent timed out, orchestrator created report |
 
 ## Issues
 
