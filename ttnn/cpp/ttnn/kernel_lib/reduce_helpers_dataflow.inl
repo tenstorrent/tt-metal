@@ -9,7 +9,7 @@
 #include "experimental/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/cb_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
 
 namespace dataflow_kernel_lib {
 
