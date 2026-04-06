@@ -111,11 +111,13 @@ def test_forward_pass(
     )
     model_config = get_model_config(RMSNormClass, mode, hf_config, mesh_device)
     if RMSNormClass is DistributedRMSNorm:
-        # Use create_shared_state to get semaphore and persistent_tensor
-        model_state = RMSNormClass.create_shared_state(hf_config, mesh_device)
+        # Create both shared state (semaphore, persistent_tensor) and regular state (mesh_device, ccl)
+        model_shared_state = RMSNormClass.create_shared_state(hf_config, mesh_device)
+        model_state = RMSNormClass.create_state(hf_config, mesh_device, ccl)
+        run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
     else:
         model_state = RMSNormClass.create_state(hf_config, mesh_device)
-    run_config = create_run_config(model_config, weight_config, model_state)
+        run_config = create_run_config(model_config, weight_config, model_state)
 
     # Convert the input to TTNN tensor
     if RMSNormClass is DistributedRMSNorm:
