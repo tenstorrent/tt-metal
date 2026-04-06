@@ -7,6 +7,13 @@ import math
 import ttnn
 
 
+def untilize_tile_for_conv2d_dram(x):
+    """TILE activations + conv2d_DRAM can hit reshape volume mismatches; ROW_MAJOR avoids it."""
+    if x.get_layout() == ttnn.TILE_LAYOUT:
+        return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    return x
+
+
 class Yolov11Conv2D:
     def __init__(
         self,
@@ -18,11 +25,12 @@ class Yolov11Conv2D:
         activation_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat8_b,
         reshard=False,
-        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        shard_layout=None,
         is_detect=False,
         is_dfl=False,
         config_override=None,
         deallocate_activation=False,
+        slice_config=ttnn.Conv2dL1FullSliceConfig,
     ):
         self.is_detect = is_detect
         self.activation = activation
@@ -37,6 +45,7 @@ class Yolov11Conv2D:
         self.groups = conv.groups
         self.reshard = reshard
         self.deallocate_activation = deallocate_activation
+        self.slice_config = slice_config
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -87,6 +96,21 @@ class Yolov11Conv2D:
             input_height = self.conv.input_height
             input_width = self.conv.input_width
 
+        # Match flattened spatial size to conv2d reshape expectations. TILE activations can report padded sf; trim on
+        # TILE can mismatch conv2d_DRAM — untilize when sf > H*W only. Do not blanket TILE→ROW_MAJOR for every conv:
+        # that breaks SPPF max_pool2d (halo segfault). Use bottleneck untilize and selective calls in ttnn_yolov11.py.
+        if not self.is_detect and not self.is_dfl:
+            sf = x.shape[2]
+            logical_hw = input_height * input_width
+            if sf > logical_hw:
+                if x.get_layout() == ttnn.TILE_LAYOUT:
+                    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+                x = x[:, :, :logical_hw, :]
+                sf = logical_hw
+            s = int(math.sqrt(sf))
+            if s * s == sf:
+                input_height = input_width = s
+
         kernel_size = [self.kernel_size[0], self.kernel_size[1]]
         stride = [self.stride[0], self.stride[1]]
         padding = [self.padding[0], self.padding[1]]
@@ -96,7 +120,7 @@ class Yolov11Conv2D:
             weight_tensor=self.weight,
             bias_tensor=self.bias,
             device=self.device,
-            in_channels=self.in_channels,
+            in_channels=x.shape[-1],
             out_channels=self.out_channels,
             input_height=input_height,
             input_width=input_width,
@@ -110,29 +134,33 @@ class Yolov11Conv2D:
             return_output_dim=True,
             return_weights_and_bias=True,
             dtype=self.activation_dtype,
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
+            slice_config=self.slice_config,
         )
         hw = output_height * output_width
         if x.shape[2] != hw:
-            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+            if x.is_sharded():
+                x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
             x = x[:, :, :hw, :]
         return x
 
 
 def sharded_concat(input_tensors, num_cores=64, dim=3, to_interleaved=True):
+    for i in range(len(input_tensors)):
+        if input_tensors[i].get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            input_tensors[i] = ttnn.to_layout(input_tensors[i], ttnn.ROW_MAJOR_LAYOUT)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
-    in_shard_width = input_tensors[0].shape[-1]
     shard_height = (input_tensors[0].shape[2] + num_cores - 1) // num_cores
-    input_sharded_memory_config = ttnn.create_sharded_memory_config(
-        (shard_height, in_shard_width),
-        core_grid=shard_grid,
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        use_height_and_width_as_shard_shape=True,
-    )
     out_shard_width = 0
     for i in range(len(input_tensors)):
-        out_shard_width += input_tensors[i].shape[-1]
-        input_tensors[i] = ttnn.to_memory_config(input_tensors[i], input_sharded_memory_config)
+        w = input_tensors[i].shape[-1]
+        out_shard_width += w
+        per_tensor_sharded_memory_config = ttnn.create_sharded_memory_config(
+            (shard_height, w),
+            core_grid=shard_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+        input_tensors[i] = ttnn.to_memory_config(input_tensors[i], per_tensor_sharded_memory_config)
     output_sharded_memory_config = ttnn.create_sharded_memory_config(
         (shard_height, out_shard_width),
         core_grid=shard_grid,
@@ -214,7 +242,8 @@ class TtnnConv:
         reshard=False,
         activation="",
         deallocate_activation=False,
-        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        shard_layout=None,
+        slice_config=None,
     ):
         self.enable_act = enable_act
         if self.enable_act:
@@ -228,6 +257,7 @@ class TtnnConv:
             activation=activation,
             deallocate_activation=deallocate_activation,
             shard_layout=shard_layout,
+            slice_config=slice_config,
         )
 
     def __call__(self, device, x):
