@@ -660,19 +660,23 @@ def test_linear(
     "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y, cluster_axis",
     [
         [
-            (2, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
+            (4, 8),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(4096),
+                "trace_region_size": 90112,
+            },
             ttnn.Topology.Ring,
+            2,
+            6,
             1,
-            4,
             0,
-            1,
-            4,
-            4,
-            1,
+            12,
+            9,
+            0,
         ],
     ],
-    ids=["2x4links1"],
+    ids=["bh4x8links2"],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("broadcast_gate", [True, False], ids=["broadcast_gate", "full_gate"])
