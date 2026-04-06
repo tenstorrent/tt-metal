@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import math
 from pathlib import Path
 
 import torch
@@ -83,14 +84,47 @@ class LMHead1D(AbstractModule):
         }
 
     @classmethod
-    def decode_model_config(cls, mesh_device: ttnn.Device) -> ModelDecodeConfig:
+    def decode_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelDecodeConfig:
         """Generate model configuration for this module."""
-        # Construct the config
+        hidden_dim, vocab_size = cls._get_model_dims_from_cfg(hf_config)
+        n_per_device = vocab_size // mesh_device.shape[1]
+
+        tile_size = 32
+        K_tiles = hidden_dim // tile_size
+        N_tiles = n_per_device // tile_size
+
+        # 1D multicast: broadcast small decode activation to all cores,
+        # each core computes a slice of the output columns (N dimension).
+        grid_size = mesh_device.compute_with_storage_grid_size()
+        num_cores = grid_size.x * grid_size.y
+        per_core_N = math.ceil(N_tiles / num_cores)
+
+        in0_block_w = 32
+        while K_tiles % in0_block_w != 0:
+            in0_block_w //= 2
+
+        out_subblock_w = min(per_core_N, 4)
+        while per_core_N % out_subblock_w != 0:
+            out_subblock_w -= 1
+
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid_size.x, grid_size.y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=1,
+            out_subblock_w=out_subblock_w,
+            per_core_M=1,
+            per_core_N=per_core_N,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
         return {
             "linear": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
+                program_config=program_config,
             ),
             "all_gather": AllGatherAsyncConfig(
                 mesh_device=mesh_device,
