@@ -216,6 +216,8 @@ def load_llm(model_dir, device="cpu"):
     print(f"Loading LLM from {model_dir}...")
     tokenizer = build_tokenizer(model_dir)
     model = AutoModelForCausalLM.from_pretrained(model_dir, torch_dtype=torch.bfloat16, device_map=device)
+    model.resize_token_embeddings(len(tokenizer))
+    print(f"  Resized model token embeddings to {len(tokenizer)}")
     model.eval()
     print(f"  Model vocab size: {model.config.vocab_size}, Layers: {model.config.num_hidden_layers}")
     return model, tokenizer
