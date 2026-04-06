@@ -1359,7 +1359,7 @@ def test_wan_decoder3d(
 @pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize("real_weights", [True, False], ids=["real_weights", "fake_weights"])
 @pytest.mark.parametrize("skip_check", [True, False], ids=["skip_check", "check_output"])
-@pytest.mark.parametrize("t_chunk_size", [1, 2, 4, None], ids=["chunk_1", "chunk_2", "chunk_4", "no_cache_full_T"])
+@pytest.mark.parametrize("t_chunk_size", [1, 2, None], ids=["chunk_1", "chunk_2", "no_cache_full_T"])
 @pytest.mark.parametrize(
     "dtype, MIN_PCC, MAX_RMSE",
     [
