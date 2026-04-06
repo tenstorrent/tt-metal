@@ -19,7 +19,7 @@ void kernel_main() {
     const uint32_t start_page = get_arg_val<uint32_t>(0);
     const uint32_t end_page = get_arg_val<uint32_t>(1);
 
-    auto accessor_dst = TensorAccessor(args_dst, bank_base_address_dst, page_size);
+    auto accessor_dst = TensorAccessor(args_dst, bank_base_address_dst);
 
     constexpr uint32_t one_tile = 1;
     uint32_t cb_addr = get_write_ptr(cb_id);
