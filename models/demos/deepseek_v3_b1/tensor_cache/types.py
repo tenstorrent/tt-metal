@@ -94,20 +94,6 @@ class FusionGroupSpec:
     mesh_mapper_config: MeshMapperConfig = field(default_factory=ReplicateMeshMapper)
 
 
-@dataclass(frozen=True)
-class OverlappedViewMeta:
-    """Stored metadata for one sub-tensor view (metadata.json, not hashed in fingerprint)."""
-
-    name: str
-    dtype: str
-    tensor_shape: tuple[int, int]
-    shard_shape: tuple[int, int]
-    tile_shape: tuple[int, int]
-    core_range_set_json: str
-    byte_offset: int
-    total_size: int
-
-
 ArtifactTarget = TensorTarget | FusionGroupSpec
 
 

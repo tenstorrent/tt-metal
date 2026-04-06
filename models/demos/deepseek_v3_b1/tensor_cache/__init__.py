@@ -8,14 +8,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from models.demos.deepseek_v3_b1.tensor_cache.cache import EphemeralTensorCache, TensorCache
+from models.demos.deepseek_v3_b1.tensor_cache.cache import EphemeralTensorCache, TensorCache, TensorCacheProtocol
 from models.demos.deepseek_v3_b1.tensor_cache.types import (
     ArtifactTarget,
     CacheContext,
     Fingerprint,
     FusionGroupSpec,
     MeshMapperConfig,
-    OverlappedViewMeta,
     ReplicateMeshMapper,
     RegionSpec,
     Shard2dMeshMapper,
@@ -39,7 +38,7 @@ def __getattr__(name: str):
 class CacheConfig:
     """Bundles a TensorCache (or EphemeralTensorCache) and its CacheContext for prepare functions."""
 
-    cache: TensorCache | EphemeralTensorCache
+    cache: TensorCacheProtocol
     context: CacheContext
 
     @classmethod
@@ -65,7 +64,6 @@ __all__ = [
     "Fingerprint",
     "FusionGroupSpec",
     "MeshMapperConfig",
-    "OverlappedViewMeta",
     "ReplicateMeshMapper",
     "RegionSpec",
     "Shard2dMeshMapper",
@@ -73,6 +71,7 @@ __all__ = [
     "SourceTensorSelection",
     "SubTensorSpec",
     "TensorCache",
+    "TensorCacheProtocol",
     "TensorTarget",
     "create_overlapped_tensor",
 ]

@@ -20,6 +20,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
 from models.demos.deepseek_v3_b1.tensor_cache.cache import (
     AbsentCacheEntry,
     CorruptCacheEntry,
@@ -27,7 +28,6 @@ from models.demos.deepseek_v3_b1.tensor_cache.cache import (
     TensorCache,
 )
 from models.demos.deepseek_v3_b1.tensor_cache.fingerprint import canonical, compute_artifact_id
-from models.demos.deepseek_v3_b1.tensor_cache.fuse import create_overlapped_tensor
 from models.demos.deepseek_v3_b1.tensor_cache.types import (
     CacheContext,
     Fingerprint,
@@ -240,26 +240,6 @@ class TestCasLayout:
 
         expected_dir = tmp_path / "objects" / artifact_id[:2] / artifact_id
         assert expected_dir.is_dir()
-
-    def test_tmp_empty_after_store(self, tmp_path):
-        """The tmp/ directory should be empty after a successful store."""
-        cache = TensorCache(tmp_path)
-        fingerprint = _make_fingerprint()
-        artifact_id = compute_artifact_id(fingerprint)
-
-        tensor_host = ttnn.from_torch(
-            torch.randn(4, 4, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=None,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            tile=ttnn.Tile((32, 32)),
-        )
-        cache._store(artifact_id, fingerprint, tensor_host)
-
-        tmp_dir = tmp_path / "tmp"
-        if tmp_dir.exists():
-            assert list(tmp_dir.iterdir()) == []
 
     def test_content_hash_matches(self, tmp_path):
         """metadata.json content_hash matches SHA-256 of data.tensorbin."""
@@ -600,6 +580,87 @@ UNITTEST_TOY_FUSION_SPEC = FusionGroupSpec(
 )
 
 
+def _create_unittest_toy(
+    preprocessed: dict[str, torch.Tensor],
+    device,
+    move_to_device: bool,
+) -> tuple[ttnn.Tensor, dict[str, OverlappedTensor]]:
+    """Two 32x32 bfloat16 tiles stacked vertically on one WIDTH_SHARDED core; TILE layout."""
+    for k in ("a", "b"):
+        if k not in preprocessed:
+            raise KeyError("preprocessed must contain 'a' and 'b' for _unittest_toy")
+        t = preprocessed[k]
+        if tuple(t.shape) != (32, 32):
+            raise ValueError(f"_unittest_toy expects (32,32) tensors, got {k}={tuple(t.shape)}")
+
+    a = preprocessed["a"].to(dtype=torch.bfloat16).contiguous()
+    b = preprocessed["b"].to(dtype=torch.bfloat16).contiguous()
+    combined = torch.cat([a, b], dim=0)
+    assert combined.shape == (64, 32)
+
+    crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    shard_spec = ttnn.ShardSpec(crs, (64, 32), ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        shard_spec,
+    )
+    mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+    device_for_torch = device if move_to_device else None
+
+    fused = ttnn.from_torch(
+        combined,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device_for_torch,
+        memory_config=mem_config,
+        mesh_mapper=mesh_mapper,
+        tile=ttnn.Tile((32, 32)),
+    )
+
+    tile = fused.get_tile()
+    ts = tuple(tile.tile_shape)
+    tile_bytes = tile.get_tile_size(ttnn.bfloat16)
+    total_one = tile_bytes
+
+    v_a = OverlappedTensor(
+        fused_tensor=fused,
+        tensor_shape=(32, 32),
+        shard_shape=(32, 32),
+        core_range_set=crs,
+        dtype=ttnn.bfloat16,
+        tile_shape=ts,
+        byte_offset=0,
+        total_size=total_one,
+    )
+    v_b = OverlappedTensor(
+        fused_tensor=fused,
+        tensor_shape=(32, 32),
+        shard_shape=(32, 32),
+        core_range_set=crs,
+        dtype=ttnn.bfloat16,
+        tile_shape=ts,
+        byte_offset=total_one,
+        total_size=total_one,
+    )
+    return fused, {"a": v_a, "b": v_b}
+
+
+def _create_overlapped_tensor_fused_with_toy(
+    spec,
+    preprocessed,
+    device,
+    *,
+    move_to_device=False,
+):
+    """Wrapper that handles _unittest_toy locally, delegates production specs to the library."""
+    if spec.name == "_unittest_toy":
+        return _create_unittest_toy(preprocessed, device, move_to_device)
+    from models.demos.deepseek_v3_b1.tensor_cache.fuse import create_overlapped_tensor
+
+    return create_overlapped_tensor(spec, preprocessed, device, move_to_device=move_to_device)
+
+
 class TestFusionGroupFingerprint:
     def test_fusion_canonical_is_dict(self):
         fp = _make_fingerprint(target=_sample_fusion_group_spec())
@@ -637,12 +698,7 @@ class TestCreateOverlappedTensorUnittestToy:
     def test_toy_produces_views(self, device):
         a = torch.randn(32, 32, dtype=torch.bfloat16)
         b = torch.randn(32, 32, dtype=torch.bfloat16)
-        fused, views = create_overlapped_tensor(
-            UNITTEST_TOY_FUSION_SPEC,
-            {"a": a, "b": b},
-            device,
-            move_to_device=True,
-        )
+        fused, views = _create_unittest_toy({"a": a, "b": b}, device, move_to_device=True)
         assert "a" in views and "b" in views
         assert views["a"].byte_offset == 0
         assert views["b"].byte_offset == views["a"].total_size
@@ -654,6 +710,13 @@ class TestGetOrCreateFused:
     @pytest.fixture()
     def cache_dir(self, tmp_path):
         return tmp_path / "tensor_cache_fused"
+
+    @pytest.fixture(autouse=True)
+    def _patch_fuse(self, monkeypatch):
+        """Route _unittest_toy through the local factory instead of the library fuse module."""
+        import models.demos.deepseek_v3_b1.tensor_cache.cache as _cache_mod
+
+        monkeypatch.setattr(_cache_mod, "_create_overlapped_tensor_fused", _create_overlapped_tensor_fused_with_toy)
 
     def test_miss_then_hit(self, cache_dir, device):
         from models.demos.deepseek_v3_b1.tensor_cache.cache import TensorCache

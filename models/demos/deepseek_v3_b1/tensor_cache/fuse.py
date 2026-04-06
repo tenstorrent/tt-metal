@@ -6,16 +6,74 @@
 
 For production DeepSeek fusion groups, this delegates to :class:`BlitzDecodeWeights`
 so layout matches the existing ``get_tt_*`` implementations.
-
-A small ``_unittest_toy`` fusion group is supported for unit tests without full model shapes.
 """
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING, Callable
 
 import torch
 
 import ttnn
 from models.demos.deepseek_v3_b1.tensor_cache.types import FusionGroupSpec
+
+if TYPE_CHECKING:
+    from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
+
+_FUSION_GROUP_CREATORS: dict[
+    str,
+    Callable[[dict[str, torch.Tensor], object, bool], tuple[ttnn.Tensor, dict[str, "OverlappedTensor"]]],
+] = {}
+
+
+def _register_fusion_group(
+    name: str,
+) -> Callable[
+    [Callable[[dict[str, torch.Tensor], object, bool], tuple[ttnn.Tensor, dict[str, "OverlappedTensor"]]]],
+    Callable[[dict[str, torch.Tensor], object, bool], tuple[ttnn.Tensor, dict[str, "OverlappedTensor"]]],
+]:
+    """Register a FusionGroupSpec.name -> creator function mapping."""
+
+    def decorator(
+        fn: Callable[[dict[str, torch.Tensor], object, bool], tuple[ttnn.Tensor, dict[str, "OverlappedTensor"]]],
+    ) -> Callable[[dict[str, torch.Tensor], object, bool], tuple[ttnn.Tensor, dict[str, "OverlappedTensor"]]]:
+        _FUSION_GROUP_CREATORS[name] = fn
+        return fn
+
+    return decorator
+
+
+def _validate_views_match_spec(spec: FusionGroupSpec, views: dict[str, OverlappedTensor]) -> None:
+    """Assert produced OverlappedTensor views are consistent with the FusionGroupSpec regions.
+
+    Catches drift between BlitzDecodeWeights layout and the FusionGroupSpec used for fingerprinting.
+    Skipped when ``spec.regions`` is empty (e.g. test-only specs).
+    """
+    if not spec.regions:
+        return
+    for region in spec.regions:
+        for st in region.subtensors:
+            view = views.get(st.name)
+            if view is None:
+                raise AssertionError(
+                    f"FusionGroupSpec {spec.name!r} declares subtensor {st.name!r} "
+                    f"but it is missing from produced views (got {sorted(views.keys())})"
+                )
+            if tuple(view.tensor_shape) != tuple(st.tensor_shape):
+                raise AssertionError(
+                    f"FusionGroupSpec {spec.name!r} subtensor {st.name!r}: "
+                    f"tensor_shape mismatch: spec={st.tensor_shape}, view={view.tensor_shape}"
+                )
+            if view.dtype != st.dtype:
+                raise AssertionError(
+                    f"FusionGroupSpec {spec.name!r} subtensor {st.name!r}: "
+                    f"dtype mismatch: spec={st.dtype}, view={view.dtype}"
+                )
+            if tuple(view.tile_shape) != tuple(st.tile_shape):
+                raise AssertionError(
+                    f"FusionGroupSpec {spec.name!r} subtensor {st.name!r}: "
+                    f"tile_shape mismatch: spec={st.tile_shape}, view={view.tile_shape}"
+                )
 
 
 def create_overlapped_tensor(
@@ -25,11 +83,11 @@ def create_overlapped_tensor(
     *,
     mesh_mapper=None,
     move_to_device: bool = True,
-) -> tuple[ttnn.Tensor, dict[str, "OverlappedTensor"]]:
+) -> tuple[ttnn.Tensor, dict[str, OverlappedTensor]]:
     """Pack preprocessed tensors into one fused buffer and logical views per ``spec``.
 
     Args:
-        spec: Fusion layout (name must be a supported DeepSeek group or ``_unittest_toy``).
+        spec: Fusion layout (name must be a supported DeepSeek group).
         preprocessed: Mapping from sub-tensor name to 2-D torch tensor (already transformed).
         device: Mesh or single device (used for placement and TP inference).
         mesh_mapper: Reserved for future generic paths; DeepSeek delegates ignore this
@@ -43,18 +101,14 @@ def create_overlapped_tensor(
     del mesh_mapper  # DeepSeek path uses BlitzDecodeWeights internal mappers
 
     name = spec.name
-    if name == "q_ab_kv_a":
-        return _create_q_ab_kv_a(preprocessed, device, move_to_device)
-    if name == "o_proj_gate_mm_norms":
-        return _create_o_proj_gate_mm_norms(preprocessed, device, move_to_device)
-    if name == "kv_b12":
-        return _create_kv_b12(preprocessed, device, move_to_device)
-    if name == "gate_up":
-        return _create_gate_up(preprocessed, device, move_to_device)
-    if name == "_unittest_toy":
-        return _create_unittest_toy(preprocessed, device, move_to_device)
+    creator = _FUSION_GROUP_CREATORS.get(name)
+    if creator is None:
+        supported = ", ".join(sorted(_FUSION_GROUP_CREATORS))
+        raise ValueError(f"Unsupported FusionGroupSpec.name: {name!r}. Supported names: {supported}")
+    fused, views = creator(preprocessed, device, move_to_device)
 
-    raise ValueError(f"Unsupported FusionGroupSpec.name: {name!r}")
+    _validate_views_match_spec(spec, views)
+    return fused, views
 
 
 def _fused_and_dict(ots: list, keys: list[str]) -> tuple[ttnn.Tensor, dict]:
@@ -62,6 +116,7 @@ def _fused_and_dict(ots: list, keys: list[str]) -> tuple[ttnn.Tensor, dict]:
     return fused, {k: v for k, v in zip(keys, ots, strict=True)}
 
 
+@_register_fusion_group("q_ab_kv_a")
 def _create_q_ab_kv_a(
     preprocessed: dict[str, torch.Tensor],
     device,
@@ -82,6 +137,7 @@ def _create_q_ab_kv_a(
     return _fused_and_dict(ots, ["q_a_proj", "q_b_proj", "kv_a_proj"])
 
 
+@_register_fusion_group("o_proj_gate_mm_norms")
 def _create_o_proj_gate_mm_norms(
     preprocessed: dict[str, torch.Tensor],
     device,
@@ -106,6 +162,7 @@ def _create_o_proj_gate_mm_norms(
     return _fused_and_dict(ots, list(keys))
 
 
+@_register_fusion_group("kv_b12")
 def _create_kv_b12(
     preprocessed: dict[str, torch.Tensor],
     device,
@@ -125,6 +182,7 @@ def _create_kv_b12(
     return _fused_and_dict(ots, ["kv_b1_proj", "kv_b2_proj"])
 
 
+@_register_fusion_group("gate_up")
 def _create_gate_up(
     preprocessed: dict[str, torch.Tensor],
     device,
@@ -139,6 +197,10 @@ def _create_gate_up(
     moe_tp = bw.moe_tp
     k_down = 256 * moe_tp
     n_down = 7168
+    # TODO: Refactor BlitzDecodeWeights.get_tt_moe_shared_expert_weights to accept gate+up
+    # without requiring down_proj, so this dummy tensor is unnecessary. The dummy zeros are safe
+    # today only because down_proj is independently sharded (not fused with gate/up in the same
+    # OverlappedTensor) — its values do not affect gate/up layout or shard placement.
     dummy_down = torch.zeros((k_down, n_down), dtype=torch.bfloat16)
     gate_ov, up_ov, _down = bw.get_tt_moe_shared_expert_weights(
         preprocessed["shared_gate_proj"],
@@ -149,72 +211,3 @@ def _create_gate_up(
     del _down
     fused = gate_ov.fused_tensor
     return fused, {"shared_gate_proj": gate_ov, "shared_up_proj": up_ov}
-
-
-def _create_unittest_toy(
-    preprocessed: dict[str, torch.Tensor],
-    device,
-    move_to_device: bool,
-) -> tuple[ttnn.Tensor, dict[str, "OverlappedTensor"]]:
-    """Two 32×32 bfloat16 tiles stacked vertically on one WIDTH_SHARDED core; TILE layout."""
-    from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
-
-    for k in ("a", "b"):
-        if k not in preprocessed:
-            raise KeyError("preprocessed must contain 'a' and 'b' for _unittest_toy")
-        t = preprocessed[k]
-        if tuple(t.shape) != (32, 32):
-            raise ValueError(f"_unittest_toy expects (32,32) tensors, got {k}={tuple(t.shape)}")
-
-    a = preprocessed["a"].to(dtype=torch.bfloat16).contiguous()
-    b = preprocessed["b"].to(dtype=torch.bfloat16).contiguous()
-    combined = torch.cat([a, b], dim=0)
-    assert combined.shape == (64, 32)
-
-    crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
-    shard_spec = ttnn.ShardSpec(crs, (64, 32), ttnn.ShardOrientation.ROW_MAJOR)
-    mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        shard_spec,
-    )
-    mesh_mapper = ttnn.ReplicateTensorToMesh(device)
-    device_for_torch = device if move_to_device else None
-
-    fused = ttnn.from_torch(
-        combined,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device_for_torch,
-        memory_config=mem_config,
-        mesh_mapper=mesh_mapper,
-        tile=ttnn.Tile((32, 32)),
-    )
-
-    tile = fused.get_tile()
-    ts = tuple(tile.tile_shape)
-    tile_bytes = tile.get_tile_size(ttnn.bfloat16)
-    total_one = tile_bytes  # one tile per subtensor
-
-    crs_set = crs
-    v_a = OverlappedTensor(
-        fused_tensor=fused,
-        tensor_shape=(32, 32),
-        shard_shape=(32, 32),
-        core_range_set=crs_set,
-        dtype=ttnn.bfloat16,
-        tile_shape=ts,
-        byte_offset=0,
-        total_size=total_one,
-    )
-    v_b = OverlappedTensor(
-        fused_tensor=fused,
-        tensor_shape=(32, 32),
-        shard_shape=(32, 32),
-        core_range_set=crs_set,
-        dtype=ttnn.bfloat16,
-        tile_shape=ts,
-        byte_offset=total_one,
-        total_size=total_one,
-    )
-    return fused, {"a": v_a, "b": v_b}

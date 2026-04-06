@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Union
+from typing import TYPE_CHECKING, Callable, Protocol, Union, runtime_checkable
 
 if TYPE_CHECKING:
     from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
@@ -78,6 +78,21 @@ class CorruptCacheEntry:
 CacheEntry = Union[AbsentCacheEntry, PresentCacheEntry, CorruptCacheEntry]
 
 
+@runtime_checkable
+class TensorCacheProtocol(Protocol):
+    """Structural interface shared by :class:`TensorCache` and :class:`EphemeralTensorCache`."""
+
+    def get_or_create(
+        self,
+        fingerprint: Fingerprint,
+        device,
+        *,
+        preprocess: Callable[[dict[str, torch.Tensor]], dict[str, torch.Tensor]],
+        raw_tensors: Callable[[], dict[str, torch.Tensor]] | dict[str, torch.Tensor],
+    ) -> ttnn.Tensor | dict[str, OverlappedTensor]:
+        ...
+
+
 def build_mesh_mapper_for_target(target: TensorTarget, device):
     """Reconstruct the runtime mesh_mapper from the declarative config + device."""
     mapper_config = target.mesh_mapper_config
@@ -104,13 +119,8 @@ def _create_overlapped_tensor_fused(
     return create_overlapped_tensor(spec, preprocessed, device, move_to_device=move_to_device)
 
 
-def _logical_name_from_fingerprint(fingerprint: Fingerprint) -> str | None:
-    t = fingerprint.target
-    if isinstance(t, TensorTarget):
-        return t.name
-    if isinstance(t, FusionGroupSpec):
-        return t.name
-    return None
+def _logical_name_from_fingerprint(fingerprint: Fingerprint) -> str:
+    return fingerprint.target.name
 
 
 def _sha256_file(path: Path, chunk_size: int = 1 << 20) -> str:
@@ -136,15 +146,15 @@ class TensorCache:
             manifest.json
             metadata.json
             data.tensorbin
-          tmp/
-            {id}_{pid}/
+
+    Note: current implementation writes directly into the final object directory
+    (no separate staging directory yet).
     """
 
     def __init__(self, local_root: Path):
         self.local_root = Path(local_root)
         self.local_root.mkdir(parents=True, exist_ok=True)
         self._objects_dir = self.local_root / "objects"
-        self._tmp_dir = self.local_root / "tmp"
 
     def _content_addressed_paths(self, artifact_id: str) -> ContentAddressedStoragePaths:
         object_dir = self._objects_dir / artifact_id[:2] / artifact_id
@@ -158,12 +168,18 @@ class TensorCache:
             return PresentCacheEntry(artifact_id=artifact_id, paths=paths)
         return CorruptCacheEntry(artifact_id=artifact_id, paths=paths)
 
-    def _store(
+    def _write_artifact_blob_and_manifest(
         self,
         artifact_id: str,
         fingerprint: Fingerprint,
         tensor_host: ttnn.Tensor,
-    ) -> ContentAddressedStoragePaths:
+    ) -> tuple[ContentAddressedStoragePaths, str, int]:
+        """Write ``data.tensorbin`` and ``manifest.json``; return paths and stats for ``metadata.json``.
+
+        TODO: Publish atomically (stage under a unique temporary directory, then rename
+        into ``objects/``) for crash safety and to avoid concurrent writers corrupting
+        the same artifact.
+        """
         dest = self._content_addressed_paths(artifact_id)
         dest.object_dir.mkdir(parents=True, exist_ok=True)
 
@@ -180,6 +196,15 @@ class TensorCache:
         with open(dest.object_dir / "manifest.json", "w") as f:
             json.dump(manifest_dict, f, indent=2, sort_keys=True)
 
+        return dest, content_hash, size_bytes
+
+    def _store(
+        self,
+        artifact_id: str,
+        fingerprint: Fingerprint,
+        tensor_host: ttnn.Tensor,
+    ) -> ContentAddressedStoragePaths:
+        dest, content_hash, size_bytes = self._write_artifact_blob_and_manifest(artifact_id, fingerprint, tensor_host)
         metadata_dict = {
             "artifact_id": artifact_id,
             "content_hash": content_hash,
@@ -201,22 +226,7 @@ class TensorCache:
         views: dict[str, OverlappedTensor],
     ) -> ContentAddressedStoragePaths:
         """Persist fused host tensor and per-view metadata (OverlappedTensor, without device)."""
-        dest = self._content_addressed_paths(artifact_id)
-        dest.object_dir.mkdir(parents=True, exist_ok=True)
-
-        data_path = dest.object_dir / "data.tensorbin"
-        ttnn.dump_tensor(data_path, fused_host, mode=ttnn.DumpTensorMode.LOCAL)
-
-        content_hash = _sha256_file(data_path)
-        size_bytes = data_path.stat().st_size
-
-        manifest_dict = {
-            "fingerprint": canonical(fingerprint),
-            "logical_name": _logical_name_from_fingerprint(fingerprint),
-        }
-        with open(dest.object_dir / "manifest.json", "w") as f:
-            json.dump(manifest_dict, f, indent=2, sort_keys=True)
-
+        dest, content_hash, size_bytes = self._write_artifact_blob_and_manifest(artifact_id, fingerprint, fused_host)
         metadata_dict = {
             "artifact_id": artifact_id,
             "artifact_kind": "fusion_group",
@@ -229,10 +239,17 @@ class TensorCache:
             json.dump(metadata_dict, f, indent=2, sort_keys=True)
         return dest
 
-    def _load_fused(self, paths: ContentAddressedStoragePaths, device) -> dict[str, OverlappedTensor]:
+    def _load_fused(
+        self,
+        paths: ContentAddressedStoragePaths,
+        device,
+        *,
+        meta: dict | None = None,
+    ) -> dict[str, OverlappedTensor]:
         fused = ttnn.load_tensor(paths.data_path, device=device)
-        with open(paths.object_dir / "metadata.json") as f:
-            meta = json.load(f)
+        if meta is None:
+            with open(paths.object_dir / "metadata.json") as f:
+                meta = json.load(f)
         views_raw = meta.get("views")
         if not views_raw:
             raise ValueError(f"Missing views in metadata for fusion artifact: {paths.object_dir}")
@@ -260,7 +277,7 @@ class TensorCache:
         ``metadata.json``.
 
         On miss: ``raw_tensors()`` (optional lazy) → ``preprocess()`` → build host tensor(s),
-        atomic store, load to device.
+        persist to disk, load to device.
 
         ``raw_tensors`` may be a callable so HF weights are not read on a warm cache.
         """
@@ -272,19 +289,17 @@ class TensorCache:
 
         artifact_id = compute_artifact_id(fingerprint)
         entry = self._lookup(artifact_id)
-        logical = _logical_name_from_fingerprint(fingerprint) or ""
+        logical = _logical_name_from_fingerprint(fingerprint)
 
         if isinstance(entry, PresentCacheEntry):
             if isinstance(target, TensorTarget):
-                # logger.debug("Cache hit for {} ({})", logical, artifact_id[:12])
                 return self._load(entry.paths, device)
             meta_path = entry.paths.object_dir / "metadata.json"
             if meta_path.is_file():
                 with open(meta_path) as f:
                     meta = json.load(f)
                 if meta.get("views"):
-                    # logger.debug("Cache hit (fused) for {} ({})", logical, artifact_id[:12])
-                    return self._load_fused(entry.paths, device)
+                    return self._load_fused(entry.paths, device, meta=meta)
             logger.warning(
                 "Present cache entry for fused {} ({}) missing fusion metadata; rebuilding",
                 logical,
@@ -332,7 +347,7 @@ class TensorCache:
             elapsed,
             artifact_id[:12],
         )
-        return self._load_fused(paths, device)
+        return self._load_fused(paths, device, meta={"views": views_dict_from_overlapped(views)})
 
 
 class EphemeralTensorCache:

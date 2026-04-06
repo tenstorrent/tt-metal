@@ -22,7 +22,11 @@ _STR_TO_DTYPE: dict[str, ttnn.DataType] = {v: k for k, v in _DTYPE_TO_STR.items(
 
 
 def core_range_set_to_list(crs: ttnn.CoreRangeSet) -> list[list[list[int]]]:
-    """Serialize CoreRangeSet to JSON-serializable list of [[sx, sy], [ex, ey]]."""
+    """Serialize CoreRangeSet to JSON-serializable list of [[sx, sy], [ex, ey]].
+
+    Range order follows ``crs.ranges()`` (not sorted). Fingerprint canonicalization sorts ranges
+    for deterministic hashing; here we preserve spec order for round-trip view metadata.
+    """
     result = []
     for r in crs.ranges():
         start, end = r.start, r.end

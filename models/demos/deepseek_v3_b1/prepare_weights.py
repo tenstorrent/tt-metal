@@ -255,6 +255,10 @@ _NUM_HEADS = 64
 
 # MoE routed experts (DeepSeek V3 config: n_routed_experts=256).
 NUM_ROUTED_EXPERTS = D.GATE_NUM_INDICES
+_ROUTED_GATE_UP_K = D.HIDDEN_SIZE  # 7168
+_ROUTED_GATE_UP_N = D.MOE_INTERMEDIATE_SIZE  # 2048
+_ROUTED_DOWN_K = D.MOE_INTERMEDIATE_SIZE  # 2048
+_ROUTED_DOWN_N = D.HIDDEN_SIZE  # 7168
 _QK_NOPE_HEAD_DIM = 128
 _QK_ROPE_HEAD_DIM = 64
 _V_HEAD_DIM = 128
@@ -442,9 +446,9 @@ def _dense_mlp_routed_experts_torch(
     mlp_down: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Same stacked expert tensors as ``get_tt_mlp_routed_expert_weights`` before ``upload``."""
-    shared_n = 2048
-    num_routed = 8
-    expert_n = 2048
+    shared_n = D.MOE_INTERMEDIATE_SIZE
+    num_routed = (D.INTERMEDIATE_SIZE - D.MOE_INTERMEDIATE_SIZE) // D.MOE_INTERMEDIATE_SIZE
+    expert_n = D.MOE_INTERMEDIATE_SIZE
     K_gate = mlp_gate.shape[0]
     N_down = mlp_down.shape[1]
     gate_experts = mlp_gate[:, shared_n:].reshape(K_gate, num_routed, expert_n).permute(1, 0, 2).contiguous()
@@ -852,6 +856,8 @@ def prepare_attention_weights(
         }
 
     o_src_dense = (o_proj_key, attn_norm_key, q_norm_key, kv_norm_key, ffn_norm_key)
+    # Dense and MoE intentionally share the same fused layout target for o_proj+norms.
+    # Dense uses a synthetic zero gate_mm in preprocess so the packed format remains identical.
     o_fp_dense = cache_config.context.fingerprint(
         source=SourceTensorSelection(names=o_src_dense),
         target=O_PROJ_GATE_MM_NORMS_SPEC,
@@ -960,7 +966,7 @@ def prepare_shared_expert_weights(
         gate_k = _key(layer_idx, "mlp.gate_proj.weight")
         up_k = _key(layer_idx, "mlp.up_proj.weight")
         down_k = _key(layer_idx, "mlp.down_proj.weight")
-        shared_n = 2048
+        shared_n = D.MOE_INTERMEDIATE_SIZE
 
         def _preprocess_gate_up_dense(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
             gate = t[gate_k].T.contiguous()
@@ -1026,15 +1032,9 @@ def prepare_routed_expert_weights(
         cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
     device = bdw._device
     if is_moe:
-        g0 = state_dict[_key(layer_idx, "mlp.experts.0.gate_proj.weight")].T.contiguous()
-        u0 = state_dict[_key(layer_idx, "mlp.experts.0.up_proj.weight")].T.contiguous()
-        d0 = state_dict[_key(layer_idx, "mlp.experts.0.down_proj.weight")].T.contiguous()
-        Kg, Ng = g0.shape
-        Ku, Nu = u0.shape
-        Kd, Nd = d0.shape
-        tgt_gate = _moe_routed_expert_tensor_target("routed_gate_proj", Kg, Ng, device)
-        tgt_up = _moe_routed_expert_tensor_target("routed_up_proj", Ku, Nu, device)
-        tgt_down = _moe_routed_expert_tensor_target("routed_down_proj", Kd, Nd, device)
+        tgt_gate = _moe_routed_expert_tensor_target("routed_gate_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, device)
+        tgt_up = _moe_routed_expert_tensor_target("routed_up_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, device)
+        tgt_down = _moe_routed_expert_tensor_target("routed_down_proj", _ROUTED_DOWN_K, _ROUTED_DOWN_N, device)
         routed_gate_proj: list[ttnn.Tensor] = []
         routed_up_proj: list[ttnn.Tensor] = []
         routed_down_proj: list[ttnn.Tensor] = []
@@ -1101,24 +1101,22 @@ def prepare_routed_expert_weights(
         gate_k = _key(layer_idx, "mlp.gate_proj.weight")
         up_k = _key(layer_idx, "mlp.up_proj.weight")
         down_k = _key(layer_idx, "mlp.down_proj.weight")
-        mlp_gate = state_dict[gate_k].T.contiguous()
-        mlp_up = state_dict[up_k].T.contiguous()
-        mlp_down = state_dict[down_k].T.contiguous()
-        gate_experts, up_experts, down_experts = _dense_mlp_routed_experts_torch(mlp_gate, mlp_up, mlp_down)
-        K, N = gate_experts.shape[1], gate_experts.shape[2]
-        Kd, Nd = down_experts.shape[1], down_experts.shape[2]
-        tgt_g = _dense_routed_stacked_tensor_target("routed_gate_proj", K, N, device)
-        tgt_u = _dense_routed_stacked_tensor_target("routed_up_proj", K, N, device)
-        tgt_d = _dense_routed_stacked_tensor_target("routed_down_proj", Kd, Nd, device)
+        tgt_g = _dense_routed_stacked_tensor_target("routed_gate_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, device)
+        tgt_u = _dense_routed_stacked_tensor_target("routed_up_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, device)
+        tgt_d = _dense_routed_stacked_tensor_target("routed_down_proj", _ROUTED_DOWN_K, _ROUTED_DOWN_N, device)
 
         fp_g = cache_config.context.fingerprint(
             source=SourceTensorSelection(names=(gate_k,)),
             target=tgt_g,
         )
 
+        _dn_shared = D.MOE_INTERMEDIATE_SIZE
+        _dn_num_routed = (D.INTERMEDIATE_SIZE - D.MOE_INTERMEDIATE_SIZE) // D.MOE_INTERMEDIATE_SIZE
+        _dn_expert_n = D.MOE_INTERMEDIATE_SIZE
+
         def _pre_routed_gate(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
             mg = t[gate_k].T.contiguous()
-            ge = mg[:, 2048:].reshape(mg.shape[0], 8, 2048).permute(1, 0, 2).contiguous()
+            ge = mg[:, _dn_shared:].reshape(mg.shape[0], _dn_num_routed, _dn_expert_n).permute(1, 0, 2).contiguous()
             return {"routed_gate_proj": bdw.mlp_routed_dense_stacked_torch_for_cache(ge)}
 
         fp_u = cache_config.context.fingerprint(
@@ -1128,7 +1126,7 @@ def prepare_routed_expert_weights(
 
         def _pre_routed_up(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
             mu = t[up_k].T.contiguous()
-            ue = mu[:, 2048:].reshape(mu.shape[0], 8, 2048).permute(1, 0, 2).contiguous()
+            ue = mu[:, _dn_shared:].reshape(mu.shape[0], _dn_num_routed, _dn_expert_n).permute(1, 0, 2).contiguous()
             return {"routed_up_proj": bdw.mlp_routed_dense_stacked_torch_for_cache(ue)}
 
         fp_d = cache_config.context.fingerprint(
@@ -1138,7 +1136,7 @@ def prepare_routed_expert_weights(
 
         def _pre_routed_down(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
             md = t[down_k].T.contiguous()
-            de = md[2048:, :].reshape(8, 2048, md.shape[1]).contiguous()
+            de = md[_dn_shared:, :].reshape(_dn_num_routed, _dn_expert_n, md.shape[1]).contiguous()
             return {"routed_down_proj": bdw.mlp_routed_dense_stacked_torch_for_cache(de)}
 
         routed_gate_proj = cache_config.cache.get_or_create(
