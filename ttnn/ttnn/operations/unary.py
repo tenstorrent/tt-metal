@@ -38,33 +38,6 @@ for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
     register_ttnn_cpp_unary_function(unary_function)
 
 
-def _golden_function_sinh(input_tensor_a, *args, **kwargs):
-    import torch
-
-    return torch.sinh(input_tensor_a)
-
-
-ttnn.attach_golden_function(ttnn.sinh, golden_function=_golden_function_sinh)
-
-
-def _golden_function_swish(input_tensor_a, *args, **kwargs):
-    import torch
-
-    return torch.nn.functional.silu(input_tensor_a)
-
-
-ttnn.attach_golden_function(ttnn.swish, golden_function=_golden_function_swish)
-
-
-def _golden_function_frac(input_tensor_a, *args, **kwargs):
-    import torch
-
-    return torch.frac(input_tensor_a)
-
-
-ttnn.attach_golden_function(ttnn.frac, golden_function=_golden_function_frac)
-
-
 try:
     SigmoidMode = ttnn._ttnn.operations.unary.SigmoidMode
 except AttributeError:

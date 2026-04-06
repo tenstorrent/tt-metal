@@ -17,10 +17,6 @@ namespace {
 
 std::string get_macro_definition(UnaryOpType op_type) {
     switch (op_type) {
-        case UnaryOpType::FRAC: return "SFPU_OP_FRAC_INCLUDE";
-        case UnaryOpType::SWISH: return "SFPU_OP_SWISH_INCLUDE";
-        case UnaryOpType::ATANH: return "SFPU_OP_ATANH_INCLUDE";
-        case UnaryOpType::SINH: return "SFPU_OP_SINH_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -46,10 +42,6 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
 std::pair<std::string, std::string> get_op_init_and_func_default(
     UnaryOpType op_type, std::string idst, [[maybe_unused]] std::optional<DataType> input_dtype) {
     switch (op_type) {
-        case UnaryOpType::FRAC: return {"frac_tile_init();", fmt::format("frac_tile({});", idst)};
-        case UnaryOpType::SWISH: return {"swish_tile_init();", fmt::format("swish_tile({});", idst)};
-        case UnaryOpType::ATANH: return {"atanh_tile_init();", fmt::format("atanh_tile({});", idst)};
-        case UnaryOpType::SINH: return {"sinh_tile_init();", fmt::format("sinh_tile({});", idst)};
         default: TT_THROW("unexpected op type {}", op_type);
     };
 }
@@ -76,12 +68,7 @@ bool get_op_approx_mode(UnaryOpType op_type) {
     }
 }
 
-UnaryWithParam string_to_unary_with_param(const std::string& name) {
-    if (name == "sinh") {
-        return UnaryWithParam(UnaryOpType::SINH);
-    }
-    TT_THROW("Unknown unary op: {}", name);
-}
+UnaryWithParam string_to_unary_with_param(const std::string& name) { TT_THROW("Unknown unary op: {}", name); }
 
 template <typename T>
 std::map<std::string, std::string> get_defines(

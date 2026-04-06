@@ -6,8 +6,4 @@
 
 enum class SfpuType {
     unused = 0,
-    frac,
-    swish,
-    atanh,
-    sinh,
 };
