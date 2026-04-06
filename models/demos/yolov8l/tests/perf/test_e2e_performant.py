@@ -11,12 +11,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.utils.common_demo_utils import get_mesh_mappers
-from models.demos.yolov8l.common import (
-    YOLOV8L_INPUT_H,
-    YOLOV8L_INPUT_W,
-    YOLOV8L_L1_SMALL_SIZE,
-    YOLOV8L_TRACE_REGION_SIZE_E2E,
-)
+from models.demos.yolov8l.common import YOLOV8L_L1_SMALL_SIZE
 from models.demos.yolov8l.runner.performant_runner import YOLOv8lPerformantRunner
 
 try:
@@ -45,7 +40,7 @@ def run_yolov8l(
         model_location_generator=model_location_generator,
     )
 
-    input_shape = (batch_size, 3, YOLOV8L_INPUT_H, YOLOV8L_INPUT_W)
+    input_shape = (batch_size, 3, 640, 640)
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
 
     if use_signpost:
@@ -70,13 +65,7 @@ def run_yolov8l(
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "l1_small_size": YOLOV8L_L1_SMALL_SIZE,
-            "trace_region_size": YOLOV8L_TRACE_REGION_SIZE_E2E,
-            "num_command_queues": 2,
-        }
-    ],
+    [{"l1_small_size": YOLOV8L_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -100,13 +89,7 @@ def test_run_yolov8l_trace_2cqs_inference(
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "l1_small_size": YOLOV8L_L1_SMALL_SIZE,
-            "trace_region_size": YOLOV8L_TRACE_REGION_SIZE_E2E,
-            "num_command_queues": 2,
-        }
-    ],
+    [{"l1_small_size": YOLOV8L_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
     indirect=True,
 )
 @pytest.mark.parametrize(

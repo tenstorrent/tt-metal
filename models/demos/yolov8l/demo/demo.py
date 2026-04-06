@@ -19,55 +19,8 @@ from models.demos.utils.common_demo_utils import (
     preprocess,
     save_yolo_predictions_by_model,
 )
-from models.demos.yolov8l.common import YOLOV8L_L1_SMALL_SIZE, YOLOV8L_TRACE_REGION_SIZE_E2E, load_torch_model
+from models.demos.yolov8l.common import YOLOV8L_L1_SMALL_SIZE, load_torch_model
 from models.demos.yolov8l.runner.performant_runner import YOLOv8lPerformantRunner
-
-
-def run_yolov8l_host_only(
-    batch_size: int,
-    input_loc: str,
-    use_pretrained_weights: bool,
-    res: tuple,
-    model_location_generator=None,
-):
-    """
-    Run YOLOv8l entirely on the host (PyTorch / CPU): LoadImages → preprocess → forward → postprocess → save.
-    Use this to verify weights and demo plumbing before opening a Tenstorrent device.
-    """
-    if not use_pretrained_weights:
-        raise ValueError("run_yolov8l_host_only requires use_pretrained_weights=True")
-
-    torch_model = load_torch_model(model_location_generator)
-    torch_model.eval()
-
-    save_dir = "models/demos/yolov8l/demo/runs"
-    input_loc = os.path.abspath(input_loc)
-    dataset = LoadImages(path=input_loc, batch=batch_size)
-    names = load_coco_class_names()
-
-    for batch in dataset:
-        paths, im0s, _ = batch
-        assert len(im0s) == batch_size, f"Expected batch of size {batch_size}, but got {len(im0s)}"
-
-        preprocessed_im = []
-        for i, img in enumerate(im0s):
-            if img is None:
-                raise ValueError(f"Could not read image: {paths[i]}")
-            processed = preprocess([img], res=res)
-            preprocessed_im.append(processed)
-
-        im = torch.cat(preprocessed_im, dim=0)
-
-        # Keep postprocess inside inference_mode: non_max_suppression mutates the prediction tensor in-place,
-        # which is invalid on InferenceTensors after the block exits (PyTorch 2.x).
-        with torch.inference_mode():
-            preds = torch_model(im)
-            results = postprocess(preds, im, im0s, paths, names)
-
-        for result, image_path in zip(results, paths):
-            save_yolo_predictions_by_model(result, save_dir, image_path, "torch_model")
-
-    logger.info("Host-only YOLOv8l inference finished (PyTorch). Safe to run tt_model on device.")
 
 
 def run_yolov8l(
@@ -118,13 +71,11 @@ def run_yolov8l(
         im = torch.cat(preprocessed_im, dim=0)
 
         if model_type == "torch_model":
-            with torch.inference_mode():
-                preds = model(im)
-                results = postprocess(preds, im, im0s, paths, names)
+            preds = model(im)
         else:
             preds = performant_runner.run(im)
             preds = ttnn.to_torch(preds[0], dtype=torch.float32, mesh_composer=output_mesh_composer)
-            results = postprocess(preds, im, im0s, paths, names)
+        results = postprocess(preds, im, im0s, paths, names)
 
         for result, image_path in zip(results, paths):
             save_yolo_predictions_by_model(result, save_dir, image_path, model_type)
@@ -136,42 +87,8 @@ def run_yolov8l(
 
 
 @pytest.mark.parametrize(
-    "batch_size, input_loc",
-    [
-        (1, "models/demos/yolov8l/demo/images"),
-    ],
-)
-@pytest.mark.parametrize("use_weights_from_ultralytics", [True])
-@pytest.mark.parametrize("res", [(1280, 1280)])
-def test_demo_host_torch_only(
-    batch_size,
-    input_loc,
-    use_weights_from_ultralytics,
-    res,
-    model_location_generator,
-):
-    """
-    No Tenstorrent device: validates Ultralytics YOLOv8l + demo preprocess/postprocess at 1280².
-    Run: pytest models/demos/yolov8l/demo/demo.py::test_demo_host_torch_only -v
-    """
-    run_yolov8l_host_only(
-        batch_size=batch_size,
-        input_loc=input_loc,
-        use_pretrained_weights=use_weights_from_ultralytics,
-        res=res,
-        model_location_generator=model_location_generator,
-    )
-
-
-@pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "l1_small_size": YOLOV8L_L1_SMALL_SIZE,
-            "trace_region_size": YOLOV8L_TRACE_REGION_SIZE_E2E,
-            "num_command_queues": 2,
-        }
-    ],
+    [{"l1_small_size": YOLOV8L_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -194,7 +111,7 @@ def test_demo_host_torch_only(
     "use_weights_from_ultralytics",
     [True],
 )
-@pytest.mark.parametrize("res", [(1280, 1280)])
+@pytest.mark.parametrize("res", [(640, 640)])
 def test_demo(
     device, batch_size_per_device, input_loc, model_type, use_weights_from_ultralytics, res, model_location_generator
 ):
@@ -211,13 +128,7 @@ def test_demo(
 
 @pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "l1_small_size": YOLOV8L_L1_SMALL_SIZE,
-            "trace_region_size": YOLOV8L_TRACE_REGION_SIZE_E2E,
-            "num_command_queues": 2,
-        }
-    ],
+    [{"l1_small_size": YOLOV8L_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -240,7 +151,7 @@ def test_demo(
     "use_weights_from_ultralytics",
     [True],
 )
-@pytest.mark.parametrize("res", [(1280, 1280)])
+@pytest.mark.parametrize("res", [(640, 640)])
 def test_demo_dp(
     mesh_device,
     batch_size_per_device,

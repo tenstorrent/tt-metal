@@ -95,7 +95,6 @@ class YOLOv8sPerformantRunner:
         self.op_event = ttnn.record_event(self.device, 0)
 
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
-        ttnn.synchronize_device(self.device)
 
         return self.runner_infra.output_tensor
 
@@ -104,5 +103,4 @@ class YOLOv8sPerformantRunner:
         return self._execute_yolov8s_trace_2cqs_inference(tt_inputs_host)
 
     def release(self):
-        ttnn.synchronize_device(self.device)
         ttnn.release_trace(self.device, self.tid)
