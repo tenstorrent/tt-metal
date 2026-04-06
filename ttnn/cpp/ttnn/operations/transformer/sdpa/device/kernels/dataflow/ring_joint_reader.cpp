@@ -360,7 +360,7 @@ void kernel_main() {
                 // Forward K chunk via K chain (batch-level, for MLA mode)
                 // Compute should_forward_k here since it depends on k_total_reads
                 const bool should_forward_k = k_is_chain_participant && !k_is_sink && (nb == k_chain_batch) &&
-                                              (k_total_reads < k_next_core_total_reads);
+                                              (q_iter_local < k_next_core_total_reads);
                 if (should_forward_k) {
                     noc_semaphore_wait(k_sender_semaphore_addr_ptr, 1);
                     noc_semaphore_set(k_sender_semaphore_addr_ptr, 0);

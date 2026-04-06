@@ -775,7 +775,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         uint32_t batch = 0;
         CoreCoord prev_physical = CoreCoord{0, 0};
         CoreCoord next_physical = CoreCoord{0, 0};
-        uint32_t next_core_total_k_reads = 0;
+        uint32_t next_core_q_chunks = 0;
     };
 
     std::vector<CoreWork> core_work(num_cores);
@@ -1315,13 +1315,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // Build K chains: one chain per batch when NHK < NH (MLA case)
     // K is shared across all heads, so we build a single chain spanning all cores per batch
     if (NHK < NH) {
-        // Helper: count total K reads for a core (conservative upper bound)
-        const uint32_t total_kv_chunks = num_local_k_chunks + num_joint_k_chunks;
-        const uint32_t ring_size = args.all_gather_operation_attributes.ring_size;
-        auto count_total_k_reads = [total_kv_chunks, ring_size](const CoreWork& work) -> uint32_t {
-            return work.global_q_count * total_kv_chunks * ring_size;
-        };
-
         // Group active cores by batch
         std::map<uint32_t, std::vector<uint32_t>> batch_to_cores;
         for (uint32_t i = 0; i < num_cores; ++i) {
@@ -1373,7 +1366,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                 if (idx + 1 < core_indices.size()) {
                     uint32_t next_ci = core_indices[idx + 1];
                     kc.next_physical = core_work[next_ci].physical_core;
-                    kc.next_core_total_k_reads = count_total_k_reads(core_work[next_ci]);
+                    kc.next_core_q_chunks = core_work[next_ci].global_q_count;
                 }
             }
 
@@ -1489,7 +1482,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         reader_args.push_back(static_cast<uint32_t>(k_chain.prev_physical.y));
         reader_args.push_back(static_cast<uint32_t>(k_chain.next_physical.x));
         reader_args.push_back(static_cast<uint32_t>(k_chain.next_physical.y));
-        reader_args.push_back(k_chain.next_core_total_k_reads);
+        reader_args.push_back(k_chain.next_core_q_chunks);
 
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_args);
