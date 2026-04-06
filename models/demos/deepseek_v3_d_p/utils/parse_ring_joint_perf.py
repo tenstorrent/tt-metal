@@ -48,6 +48,12 @@ FIDELITY_CYCLES = {
     "LoFi": 16,
 }
 
+# Clock frequency in GHz per architecture
+ARCH_CLOCK_GHZ = {
+    "wormhole_b0": 1.0,
+    "blackhole": 1.35,
+}
+
 
 def load_single_host(csv_paths):
     """Load one or more CSV files from a single host (device IDs are globally unique)."""
@@ -141,7 +147,13 @@ def extract_hw_info(ops, rp_factor, up_factor):
     """
     row = ops.iloc[0]
     fidelity = row["MATH FIDELITY"]
+    arch = row["DEVICE ARCH"]
     num_devices = ops["DEVICE ID"].nunique() * ops["rank"].nunique()
+
+    clock_ghz = ARCH_CLOCK_GHZ.get(arch)
+    if clock_ghz is None:
+        print(f"WARNING: Unknown arch '{arch}', defaulting to 1.0 GHz", file=sys.stderr)
+        clock_ghz = 1.0
 
     # Parse actual SDPA compute cores from attributes (excludes CCL cores)
     sdpa_cores = _parse_sdpa_core_count(row.get("ATTRIBUTES", ""))
@@ -165,6 +177,8 @@ def extract_hw_info(ops, rp_factor, up_factor):
 
     return {
         "fidelity": fidelity,
+        "arch": arch,
+        "clock_ghz": clock_ghz,
         "core_count": sdpa_cores,
         "num_devices": num_devices,
         "b": b,
@@ -208,7 +222,7 @@ def compute_theoretical_ms(hw_info):
     av_cycles = av_tiles * fidelity_cycles
 
     total_cycles = qkt_cycles + av_cycles
-    theoretical_ns = total_cycles / total_cores
+    theoretical_ns = total_cycles / total_cores / hw_info["clock_ghz"]
     return theoretical_ns / 1e6  # ms
 
 
@@ -437,8 +451,9 @@ def main():
         theoretical_ms = compute_theoretical_ms(hw_info)
         if theoretical_ms is not None:
             print(
-                f"HW: {hw_info['fidelity']}, {hw_info['core_count']} cores/device, "
-                f"{hw_info['num_devices']} devices, mesh {rp_factor}x{up_factor}"
+                f"HW: {hw_info['arch']}, {hw_info['fidelity']}, {hw_info['clock_ghz']} GHz, "
+                f"{hw_info['core_count']} cores/device, {hw_info['num_devices']} devices, "
+                f"mesh {rp_factor}x{up_factor}"
             )
             print(
                 f"Op: B={hw_info['b']}, nhq={hw_info['nhq']}, seq_len={hw_info['seq_len']}, "
