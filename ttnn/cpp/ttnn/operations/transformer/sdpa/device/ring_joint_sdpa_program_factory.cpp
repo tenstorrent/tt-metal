@@ -810,8 +810,21 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                 continue;
             }
 
+            // Determine role tag from V chain info
+            std::string role_tag;
+            const auto& chain = core_chain_info[i];
+            if (chain.participates) {
+                if (chain.is_injector) {
+                    role_tag = "[INJ]";
+                } else if (chain.is_sink) {
+                    role_tag = "[SNK]";
+                } else {
+                    role_tag = "[RCV]";
+                }
+            }
+
             std::string line = "Core " + std::to_string(i) + " (" + std::to_string(work.logical_core.x) + "," +
-                               std::to_string(work.logical_core.y) + "): ";
+                               std::to_string(work.logical_core.y) + ")" + role_tag + ": ";
 
             for (const auto& hw : work.head_work) {
                 uint32_t light_cnt = 0, heavy_cnt = 0;
