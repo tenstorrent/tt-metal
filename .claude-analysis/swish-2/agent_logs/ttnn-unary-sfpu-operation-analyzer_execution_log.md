@@ -117,3 +117,35 @@
 - Start: Analysis session start
 - End: Analysis session end
 - Total: Single pass, no retries needed
+
+---
+
+## Operation: rpow
+
+### Summary
+- **Status**: SUCCESS
+- **Output**: `.claude-analysis/swish-2/rpow_analysis.md`
+- **Key Finding**: The rpow SFPU kernel implements `base^x = 2^(x * log2(base))` using the exp_21f algorithm from Moroz et al. 2022. It precomputes `log2(base)` as scalar RISC-V math, then vectorizes the 2^z computation on SFPU. The operation is work-in-progress: `SfpuType::rpow` is missing from the enum, `_float_to_int32_positive_()` is undefined, and RPOW is not in `is_parametrized_type()`. APPROXIMATION_MODE template parameter is declared but unused (no code path divergence). WH and BH implementations are identical.
+
+### Analysis Steps
+1. Confirmed `RPOW` exists in `UnaryOpType` enum (line 128 of `unary_op_types.hpp`)
+2. Found RPOW registered as `REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(rpow, RPOW)` in `unary.hpp` (takes a base parameter)
+3. Discovered RPOW is NOT in `is_parametrized_type()` or `get_op_init_and_func_parameterized()` — integration gap
+4. Read API header `rpow.h` — defines `rpow_tile_init()` and `rpow_tile(idst, base_val)` taking base as IEEE 754 uint32_t
+5. Read LLK dispatch (both WH and BH) — identical, uses `_llk_math_eltwise_unary_sfpu_params_` with `calculate_rpow<APPROXIMATE, ITERATIONS>` and `base_val` forwarded as extra arg
+6. Read core SFPU kernel (both WH and BH) — identical SFPI-style kernel implementing exp_21f algorithm
+7. Identified `_float_to_int32_positive_()` is called but never defined anywhere in the codebase — compilation gap
+8. Read `SfpuType` enum — `rpow` not present (only unused, hardsigmoid, hardtanh, hardswish, softshrink)
+9. Read params dispatch from tt_llk submodule (parent repo) — standard 4-face RC dispatch with forwarded base_val arg
+10. Read SFPI library functions — mapped all intrinsics (addexp→SFPDIVP2, exexp→SFPEXEXP, exman9→SFPEXMAN, setexp→SFPSETEXP, setsgn→SFPSETSGN, int32_to_float→SFPCAST, float_to_fp16b/float_to_int16→SFP_STOCH_RND)
+11. Verified all function names and file paths exist in codebase
+12. Wrote analysis file to `.claude-analysis/swish-2/rpow_analysis.md`
+
+### Challenges
+- Multiple integration gaps: SfpuType enum missing rpow, _float_to_int32_positive_ undefined, is_parametrized_type doesn't include RPOW
+- The `tt_llk` submodule is empty in the worktree. Had to read params dispatch and init files from the parent repo.
+
+### Timing
+- Start: Analysis session start
+- End: Analysis session end
+- Total: Single pass, no retries needed
