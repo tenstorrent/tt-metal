@@ -1,20 +1,10 @@
 training_config:
   batch_size: 256
   num_epochs: 1
-  model_config: "model_configs/llama3_2_1B.yaml"
-
-  optimizer:
-    type: MorehAdamW
-    lr: 0.0003
-    beta1: 0.9
-    beta2: 0.999
-    epsilon: 1.0e-8
-    weight_decay: 0.01
-    amsgrad: false
-    kahan_summation: false
+  model_config: "model_configs/llama3_2_1B_boolq.yaml"
 
 grpo_config:
-  max_tokens_to_complete: 512
+  max_tokens_to_complete: 256
   group_size: 1
 
 eval_config:
