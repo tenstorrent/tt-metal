@@ -24,8 +24,8 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
-COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.LoFi,
+COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
     math_approx_mode=False,
     fp32_dest_acc_en=False,
     packer_l1_acc=True,
@@ -62,7 +62,7 @@ class TtRoutedExpert(LightweightModule):
         torch_weights: list[dict] = None,
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
-        compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_LOFI,
+        compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_HIFI2,
     ):
         """
         Initialize TtRoutedExpert module.
