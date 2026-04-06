@@ -14,14 +14,18 @@ from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeCode2WavAttention,
     Qwen3OmniMoeCode2WavRMSNorm,
     Qwen3OmniMoeRMSNorm,
+    Qwen3OmniMoeRotaryEmbedding,
     Qwen3OmniMoeTalkerResizeMLP,
+    Qwen3OmniMoeTalkerRotaryEmbedding,
     Qwen3OmniMoeTalkerTextSparseMoeBlock,
     Qwen3OmniMoeTextRMSNorm,
     Qwen3OmniMoeThinkerTextAttention,
     Qwen3OmniMoeThinkerTextRMSNorm,
+    Qwen3OmniMoeThinkerTextRotaryEmbedding,
     Qwen3OmniMoeThinkerTextSparseMoeBlock,
     Qwen3OmniMoeVisionMLP,
     Qwen3OmniMoeVisionAttention,
+    Qwen3OmniMoeVisionRotaryEmbedding,
     Qwen3OmniMoeTalkerCodePredictorAttention,
 )
 from qwen_omni_utils import process_mm_info
@@ -41,6 +45,12 @@ from models.experimental.tt_symbiote.modules.linear import (
     TTNNQwen3OmniVisionMLP,
 )
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
+from models.experimental.tt_symbiote.modules.qwen_omni_rotary import (
+    TTNNQwen3OmniMoeRotaryEmbedding,
+    TTNNQwen3OmniMoeTalkerRotaryEmbedding,
+    TTNNQwen3OmniMoeThinkerTextRotaryEmbedding,
+    TTNNQwen3OmniMoeVisionRotaryEmbedding,
+)
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 
@@ -56,6 +66,8 @@ NN_TO_TTNN_THINKER = {
     Qwen3OmniMoeVisionAttention: TTNNQwen3VLMoeVisionAttention,
     Qwen3OmniMoeVisionMLP: TTNNQwen3OmniVisionMLP,
     Qwen3OmniMoeAudioAttention: TTNNQwenAudioAttention,
+    Qwen3OmniMoeThinkerTextRotaryEmbedding: TTNNQwen3OmniMoeThinkerTextRotaryEmbedding,
+    Qwen3OmniMoeVisionRotaryEmbedding: TTNNQwen3OmniMoeVisionRotaryEmbedding,
 }
 NN_TO_TTNN_CODE2WAV = {
     Qwen3OmniMoeCode2WavAttention: TTNNQwen3OmniMoeCode2WavAttention,
@@ -67,6 +79,12 @@ NN_TO_TTNN_TALKER = {
     Qwen3OmniMoeTalkerCodePredictorAttention: TTNNQwen3Attention,
     Qwen3OmniMoeTalkerResizeMLP: TTNNQwen3OmniTalkerResizeMLP,
     Qwen3OmniMoeRMSNorm: TTNNDistributedRMSNorm,
+    Qwen3OmniMoeTalkerRotaryEmbedding: TTNNQwen3OmniMoeTalkerRotaryEmbedding,
+}
+
+NN_TO_TTNN_CODE_PREDICTOR = {
+    **NN_TO_TTNN_TALKER,
+    Qwen3OmniMoeRotaryEmbedding: TTNNQwen3OmniMoeRotaryEmbedding,
 }
 
 MODEL_NAME = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
@@ -116,7 +134,7 @@ def _register_code_predictor_nn_to_ttnn(model) -> dict:
     cp = getattr(talker, "code_predictor", None) if talker is not None else None
     if cp is None:
         return {}
-    return register_module_replacement_dict(cp, NN_TO_TTNN_TALKER, model_config=None)
+    return register_module_replacement_dict(cp, NN_TO_TTNN_CODE_PREDICTOR, model_config=None)
 
 
 def _restore_torch_rmsnorm_in_code_predictor(model) -> None:
