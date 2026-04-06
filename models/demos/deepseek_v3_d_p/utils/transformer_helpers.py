@@ -24,7 +24,7 @@ from transformers.modeling_utils import no_init_weights
 import ttnn
 from models.common.utility_functions import profiler
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
-from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Model, DeepseekV3MoE
+from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Model, DeepseekV3MoE, apply_rotary_pos_emb
 
 # --- Constants ---
 
@@ -245,6 +245,21 @@ def tokenize_infinitebench_to_isl(tokenizer, prompt_text, isl_total, sp_factor):
     return torch.tensor(all_tokens, dtype=torch.int64).unsqueeze(0)  # [1, isl_total]
 
 
+# --- Reference KVPE computation ---
+
+
+def compute_reference_kvpe(self_attn, hidden_states, position_ids):
+    """Compute reference KVPE [batch, 1, seq, kv_lora_rank + qk_rope_head_dim] from HF attention weights."""
+    bsz, q_len, _ = hidden_states.size()
+    compressed_kv = self_attn.kv_a_proj_with_mqa(hidden_states)
+    compressed_kv, k_pe = torch.split(compressed_kv, [self_attn.kv_lora_rank, self_attn.qk_rope_head_dim], dim=-1)
+    k_pe = k_pe.view(bsz, 1, q_len, self_attn.qk_rope_head_dim)
+    k_nope = self_attn.kv_a_layernorm(compressed_kv).view(bsz, 1, q_len, self_attn.kv_lora_rank)
+    cos, sin = self_attn.rotary_emb(k_nope, seq_len=q_len, meta_style=True)
+    _, k_pe = apply_rotary_pos_emb(k_pe, k_pe, cos, sin, position_ids, meta_style=True)
+    return torch.cat([k_nope, k_pe], dim=-1)
+
+
 # --- Host reference caching ---
 
 
@@ -256,13 +271,15 @@ def get_or_compute_host_reference(
     is_ci,
 ):
     """
-    Get host reference snapshots, using file cache if available.
+    Get host reference snapshots and per-layer KVPE, using file cache if available.
 
     Follows the caching pattern from test_mla.py: first run computes and saves,
     subsequent runs load from cache. CI environments must use pre-computed cache.
 
     Returns:
-        List of ref_snapshot tensors: [embed_out, layer0_out, ..., layerN_out, norm_out]
+        Tuple of (ref_snapshots, ref_kvpe_list) where:
+        - ref_snapshots: [embed_out, layer0_out, ..., layerN_out, norm_out]
+        - ref_kvpe_list: [layer0_kvpe, ..., layerN_kvpe] each [batch, 1, seq, kv_lora_rank + qk_rope_head_dim]
     """
     cache_dir = Path(os.environ.get("TT_DS_PREFILL_HOST_REF_CACHE", "/tmp/deepseek_v3_transformer_ref_cache"))
     cache_path = cache_dir / f"{cache_key}.pt"
@@ -271,8 +288,9 @@ def get_or_compute_host_reference(
         logger.info(f"Loading cached reference results from {cache_path}")
         cached = torch.load(cache_path, weights_only=True)
         ref_snapshots = cached["ref_snapshots"]
-        logger.info(f"Loaded {len(ref_snapshots)} cached reference snapshots")
-        return ref_snapshots
+        ref_kvpe_list = cached["ref_kvpe_list"]
+        logger.info(f"Loaded {len(ref_snapshots)} cached reference snapshots and {len(ref_kvpe_list)} KVPE tensors")
+        return ref_snapshots, ref_kvpe_list
 
     assert not is_ci, (
         f"Host reference cache missing in CI: {cache_path}. " "Run the test locally first to generate the cache."
@@ -288,9 +306,12 @@ def get_or_compute_host_reference(
     with torch.no_grad():
         h_ref = hf_model.embed_tokens(token_ids).to(torch.bfloat16)
     ref_snapshots = [h_ref]
+    ref_kvpe_list = []
 
     for i in range(num_layers):
         with torch.no_grad():
+            attn_input = hf_model.layers[i].input_layernorm(h_ref)
+            ref_kvpe_list.append(compute_reference_kvpe(hf_model.layers[i].self_attn, attn_input, position_ids))
             layer_out = hf_model.layers[i](h_ref, attention_mask=attention_mask, position_ids=position_ids)
             h_ref = layer_out[0]
         ref_snapshots.append(h_ref)
@@ -303,10 +324,10 @@ def get_or_compute_host_reference(
 
     # Save to cache
     cache_dir.mkdir(parents=True, exist_ok=True)
-    torch.save({"ref_snapshots": ref_snapshots}, cache_path)
-    logger.info(f"Saved reference results to {cache_path} ({len(ref_snapshots)} snapshots)")
+    torch.save({"ref_snapshots": ref_snapshots, "ref_kvpe_list": ref_kvpe_list}, cache_path)
+    logger.info(f"Saved reference results to {cache_path} ({len(ref_snapshots)} snapshots, {len(ref_kvpe_list)} KVPE)")
 
-    return ref_snapshots
+    return ref_snapshots, ref_kvpe_list
 
 
 # --- InfiniteBench download ---

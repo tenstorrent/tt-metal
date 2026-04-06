@@ -49,6 +49,7 @@ PCC_THRESHOLD = 0.99
 INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"}
 
 
+@pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize(
     "input_source",
@@ -109,6 +110,7 @@ def test_prefill_transformer(
     pcc_validation,
     input_source,
     use_pretrained,
+    return_kv_cache,
     weight_cache_path,
     is_ci_env,
     is_ci_v2_env,
@@ -225,13 +227,17 @@ def test_prefill_transformer(
     # --- Forward ---
     profiler.start("tt_forward")
     logger.info("Running TtPrefillTransformer forward...")
-    result = transformer(tt_tokens, return_intermediates=pcc_validation)
+    do_return_kv = pcc_validation and return_kv_cache
+    result = transformer(tt_tokens, return_intermediates=pcc_validation, return_kv_cache=do_return_kv)
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_forward")
     logger.info("Forward pass completed successfully")
 
     if pcc_validation:
-        tt_output, tt_snapshots = result
+        if do_return_kv:
+            tt_output, tt_snapshots, tt_kv_caches = result
+        else:
+            tt_output, tt_snapshots = result
     else:
         tt_output = result
 
@@ -254,21 +260,41 @@ def test_prefill_transformer(
             threshold = 0.985
         else:
             threshold = PCC_THRESHOLD  # 0.99
+        logger.info(f"PCC threshold: {threshold}")
 
         cache_key = f"{weight_type}_{input_source}_isl{isl_total}" f"_layers{num_layers}_experts{n_routed_experts}"
         is_ci = is_ci_env or is_ci_v2_env
-        ref_snapshots = get_or_compute_host_reference(hf_model, token_ids, num_layers, cache_key, is_ci)
+        ref_snapshots, ref_kvpe_list = get_or_compute_host_reference(hf_model, token_ids, num_layers, cache_key, is_ci)
 
         # Per-stage PCC comparison
         pcc_results = []
         for (label, tt_host), ref_host in zip(tt_snapshots, ref_snapshots):
             try:
                 _, pcc = comp_pcc(ref_host.float(), tt_host.float())
-                logger.info(f"{label:<20s}  PCC = {pcc:.6f}")
+                logger.debug(f"{label:<20s}  PCC = {pcc:.6f}")
                 pcc_results.append((label, pcc))
             except Exception as e:
                 logger.error(f"{label:<20s}  PCC comparison failed: {e}")
                 pcc_results.append((label, -1.0))
+
+        # Per-layer KVPE PCC comparison
+        if do_return_kv:
+            kv_lora_rank = config.kv_lora_rank
+            for (label, tt_kvpe), ref_kvpe in zip(tt_kv_caches, ref_kvpe_list):
+                try:
+                    _, kv_pcc = comp_pcc(
+                        ref_kvpe[:, :, :, :kv_lora_rank].float(), tt_kvpe[:, :, :, :kv_lora_rank].float()
+                    )
+                    _, pe_pcc = comp_pcc(
+                        ref_kvpe[:, :, :, kv_lora_rank:].float(), tt_kvpe[:, :, :, kv_lora_rank:].float()
+                    )
+                    logger.info(f"{label:<20s}  KV PCC = {kv_pcc:.6f}, PE PCC = {pe_pcc:.6f}")
+                    pcc_results.append((f"{label}_kv", kv_pcc))
+                    pcc_results.append((f"{label}_pe", pe_pcc))
+                except Exception as e:
+                    logger.error(f"{label:<20s}  KVPE PCC comparison failed: {e}")
+                    pcc_results.append((f"{label}_kv", -1.0))
+                    pcc_results.append((f"{label}_pe", -1.0))
 
         profiler.end("pcc_validation")
 

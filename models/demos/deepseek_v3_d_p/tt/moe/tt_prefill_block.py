@@ -184,14 +184,15 @@ class TtPrefillBlock(LightweightModule):
             layer_idx=layer_idx,
         )
 
-    def forward(self, x: ttnn.Tensor, rope_tensors: dict) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, rope_tensors: dict, return_kv_cache: bool = False):
         """
         Args:
             x: [1, 1, seq_len_local, emb_dim_per_tp] TILE_LAYOUT, TP-sharded
             rope_tensors: dict with keys "cos_matrix", "sin_matrix", "trans_matrix"
+            return_kv_cache: if True, also return KVPE cache from MLA
 
         Returns:
-            [1, 1, seq_len_local, emb_dim_per_tp] TILE_LAYOUT, TP-sharded
+            (output_tensor, kv_cache) where kv_cache is a host tensor or None
         """
         # --- Attention ---
         attn_norm_out = self.attn_norm(x)
@@ -212,7 +213,8 @@ class TtPrefillBlock(LightweightModule):
         x = ttnn.add(x, ffn_out)
         ttnn.deallocate(ffn_out)
 
-        return x
+        kv_cache = self.mla.kv_cache_to_host() if return_kv_cache else None
+        return x, kv_cache
 
     def _moe_path(self, ffn_norm_out: ttnn.Tensor) -> ttnn.Tensor:
         """MoE FFN path: 4D TILE → 3D ROW_MAJOR → MoE → 3D TILE → 4D TILE."""

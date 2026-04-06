@@ -132,23 +132,28 @@ class TtPrefillTransformer(LightweightModule):
             host = host.squeeze(0)
         return host
 
-    def forward(self, token_ids: ttnn.Tensor, return_intermediates: bool = False):
+    def forward(self, token_ids: ttnn.Tensor, return_intermediates: bool = False, return_kv_cache: bool = False):
         """
         Forward pass: embed -> [block x N] -> norm.
 
         Args:
             token_ids: [1, 1, seq_len_per_chip] uint32, SP-sharded
             return_intermediates: if True, sync + snapshot to host after each stage
+            return_kv_cache: if True, collect per-layer KVPE caches
 
         Returns:
-            If return_intermediates=False:
+            If return_intermediates=False and return_kv_cache=False:
                 tt_output: [1, 1, seq_per_chip, emb_dim/tp] TILE_LAYOUT
-            If return_intermediates=True:
-                (tt_output, intermediates) where intermediates is list of
-                (label, host_tensor) tuples with host_tensor [1, seq, emb] bfloat16
+            If return_intermediates=True and return_kv_cache=False:
+                (tt_output, intermediates)
+            If return_intermediates=True and return_kv_cache=True:
+                (tt_output, intermediates, kv_caches)
+            If return_intermediates=False and return_kv_cache=True:
+                (tt_output, kv_caches)
         """
         rope_tensors = self.rope_setup.get_rope_tensors(self.seq_len)
         intermediates = [] if return_intermediates else None
+        kv_caches = [] if return_kv_cache else None
 
         h = self.embed(token_ids)  # [1, seq_per_chip, emb_dim/tp]
         h = ttnn.unsqueeze_to_4D(h)  # [1, 1, seq_per_chip, emb_dim/tp]
@@ -159,17 +164,23 @@ class TtPrefillTransformer(LightweightModule):
 
         for i, layer in enumerate(self.layers):
             signpost(f"forward_layer_{i}_start")
-            h = layer(h, rope_tensors)
+            h, layer_kv_cache = layer(h, rope_tensors, return_kv_cache=return_kv_cache)
             signpost(f"forward_layer_{i}_end")
-            if return_intermediates:
+            if return_intermediates or return_kv_cache:
                 ttnn.synchronize_device(self.mesh_device)
+            if return_intermediates:
                 intermediates.append((f"layer_{i}", self._to_host(h)))
+            if return_kv_cache:
+                kv_caches.append((f"layer_{i}_kvpe", layer_kv_cache))
 
         h = self.norm(h)
 
         if return_intermediates:
             ttnn.synchronize_device(self.mesh_device)
             intermediates.append(("norm", self._to_host(h)))
+            if return_kv_cache:
+                return h, intermediates, kv_caches
             return h, intermediates
-
+        if return_kv_cache:
+            return h, kv_caches
         return h

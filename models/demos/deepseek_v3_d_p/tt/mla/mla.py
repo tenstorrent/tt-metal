@@ -302,6 +302,22 @@ class ttMLA:
 
         logger.info(f"✓ Loaded {len(state_dict)} weights in MLA layer {self.layer_idx} to TT device")
 
+    def kv_cache_to_host(self):
+        """Read KVPE cache from device to host tensor [1, 1, seq_total, kv_lora_rank + qk_rope_head_dim]."""
+        return ttnn.to_torch(
+            self.kvpe_cache,
+            mesh_composer=ttnn.create_mesh_composer(
+                self.mesh_device,
+                config=ttnn.MeshComposerConfig(
+                    dims=(2, -1),
+                    mesh_shape_override=ttnn.MeshShape(
+                        self.mesh_device.shape[self.sp_axis],  # concat SP shards
+                        1,  # collapse TP replicas
+                    ),
+                ),
+            ),
+        ).to(torch.bfloat16)
+
     def get_weight_shapes(self) -> dict[str, tuple]:
         return {
             "q_a_proj.weight": tuple(self.q_a_proj_weight.shape),
