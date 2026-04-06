@@ -9,10 +9,61 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_wormhole_b0
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.yolov11s.common import YOLOV11_L1_SMALL_SIZE
 from models.demos.yolov11s.runner.performant_runner import YOLOv11PerformantRunner
+from models.demos.yolov11s.runner.performant_runner_infra import YOLOv11PerformanceRunnerInfra
+
+_skip_e2e_on_unsupported_arch = not (is_wormhole_b0() or is_blackhole())
+
+# Blackhole often needs more L1 / trace than Wormhole for the same traced YOLOv11s graph.
+_E2E_L1_SMALL = 24576 if is_blackhole() else YOLOV11_L1_SMALL_SIZE
+_E2E_TRACE_SINGLE = 23887872 if is_blackhole() else 6434816
+_E2E_TRACE_DP = 23887872
+
+_yolov11_e2e_l1_shard_patch_applied = False
+
+
+def _apply_yolov11_e2e_wormhole_or_blackhole_sharding():
+    """E2E tests only: allow Blackhole in L1 height-shard setup (matches WH 8x8) without relying on demo.py."""
+
+    global _yolov11_e2e_l1_shard_patch_applied
+    if _yolov11_e2e_l1_shard_patch_applied:
+        return
+
+    def _setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=16):
+        if is_wormhole_b0() or is_blackhole():
+            core_grid = ttnn.CoreGrid(y=8, x=8)
+        else:
+            raise RuntimeError("Unsupported device: YOLOv11 e2e performant supports Wormhole B0 and Blackhole only.")
+
+        torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
+
+        n, c, h, w = torch_input_tensor.shape
+        if c < min_channels:
+            c = min_channels
+        elif c % min_channels != 0:
+            c = ((c // min_channels) + 1) * min_channels
+
+        n = n // self.num_devices if n // self.num_devices != 0 else n
+        input_mem_config = ttnn.create_sharded_memory_config(
+            [n, c, h, w],
+            core_grid,
+            ttnn.ShardStrategy.HEIGHT,
+        )
+        assert torch_input_tensor.ndim == 4, "Expected input tensor to have shape (BS, C, H, W)"
+
+        input_tensor = [torch_input_tensor[i].unsqueeze(0) for i in range(torch_input_tensor.shape[0])]
+        tt_inputs_host = ttnn.from_host_shards(
+            [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for t in input_tensor],
+            device.shape,
+        )
+        return tt_inputs_host, input_mem_config
+
+    YOLOv11PerformanceRunnerInfra._setup_l1_sharded_input = _setup_l1_sharded_input
+    _yolov11_e2e_l1_shard_patch_applied = True
+
 
 try:
     from tracy import signpost
@@ -30,6 +81,7 @@ def run_yolov11_inference(
     model_location_generator,
     resolution,
 ):
+    _apply_yolov11_e2e_wormhole_or_blackhole_sharding()
     inputs_mesh_mapper, weights_mesh_mapper, outputs_mesh_composer = get_mesh_mappers(device)
 
     num_devices = device.get_num_devices()
@@ -75,10 +127,13 @@ def run_yolov11_inference(
         (640, 640),
     ],
 )
-@run_for_wormhole_b0()
+@pytest.mark.skipif(
+    _skip_e2e_on_unsupported_arch,
+    reason="YOLOv11 e2e performant runs on Wormhole B0 or Blackhole only.",
+)
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": YOLOV11_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    [{"l1_small_size": _E2E_L1_SMALL, "trace_region_size": _E2E_TRACE_SINGLE, "num_command_queues": 2}],
     indirect=True,
 )
 def test_e2e_performant(
@@ -112,10 +167,13 @@ def test_e2e_performant(
 )
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
-@run_for_wormhole_b0()
+@pytest.mark.skipif(
+    _skip_e2e_on_unsupported_arch,
+    reason="YOLOv11 e2e performant runs on Wormhole B0 or Blackhole only.",
+)
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": YOLOV11_L1_SMALL_SIZE, "trace_region_size": 23887872, "num_command_queues": 2}],
+    [{"l1_small_size": _E2E_L1_SMALL, "trace_region_size": _E2E_TRACE_DP, "num_command_queues": 2}],
     indirect=True,
 )
 def test_e2e_performant_dp(

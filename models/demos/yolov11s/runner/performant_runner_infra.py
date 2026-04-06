@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import divup, is_wormhole_b0
+from models.common.utility_functions import divup, is_blackhole, is_wormhole_b0
 from models.demos.yolov11s.common import load_torch_model
 from models.demos.yolov11s.tt import ttnn_yolov11s
 from models.demos.yolov11s.tt.model_preprocessing import create_yolov11_model_parameters
@@ -62,8 +62,10 @@ class YOLOv11PerformanceRunnerInfra:
     def _setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=16):
         if is_wormhole_b0():
             core_grid = ttnn.CoreGrid(y=8, x=8)
+        elif is_blackhole():
+            core_grid = ttnn.CoreGrid(y=8, x=8)
         else:
-            exit("Unsupported device")
+            raise RuntimeError("Unsupported device: YOLOv11 performant runner supports Wormhole B0 and Blackhole only.")
 
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
 
@@ -76,7 +78,7 @@ class YOLOv11PerformanceRunnerInfra:
         n = n // self.num_devices if n // self.num_devices != 0 else n
         input_mem_config = ttnn.create_sharded_memory_config(
             [n, c, h, w],
-            ttnn.CoreGrid(x=8, y=8),
+            core_grid,
             ttnn.ShardStrategy.HEIGHT,
         )
         assert torch_input_tensor.ndim == 4, "Expected input tensor to have shape (BS, C, H, W)"
