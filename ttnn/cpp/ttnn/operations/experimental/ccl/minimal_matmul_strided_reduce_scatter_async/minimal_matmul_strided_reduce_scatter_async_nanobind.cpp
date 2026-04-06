@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,6 @@
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::ccl {
-
 
 void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
     ttnn::bind_function<"minimal_matmul_strided_reduce_scatter_async", "ttnn.experimental.">(
@@ -66,7 +65,7 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
             * :attr:`addcmul_input_tensor2` (Optional[ttnn.Tensor]): Second additional input tensor for fused addcmul (gate/multiplier).
 
         )doc",
-        &ttnn::operations::experimental::ccl::ExecuteMinimalMatmulStridedReduceScatterAsync::invoke,
+        &ttnn::experimental::minimal_matmul_strided_reduce_scatter_async,
         nb::arg("input_tensor"),
         nb::arg("weight_tensor"),
         nb::arg("dim"),

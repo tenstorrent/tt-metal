@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,13 +7,13 @@
 #include <optional>
 #include <variant>
 
-#include "ttnn/decorators.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 #include "split_query_key_value_and_split_heads_device_operation_types.hpp"
 #include "split_query_key_value_and_split_heads_program_factory.hpp"
 #include "split_query_key_value_and_split_heads_sharded_program_factory.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::experimental::prim {
 

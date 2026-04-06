@@ -59,7 +59,7 @@ jobs:
             matchLabels:
               exabox.tenstorrent.com/purpose: ci-metal
             topologyKeys:
-              - exabox.tenstorrent.com/quad-id
+              - exabox.tenstorrent.com/quad
             mgd: |-
               ${{ steps.mgd.outputs.mgd }}
 

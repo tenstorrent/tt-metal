@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -23,9 +23,10 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights, OverlappedTensor
-from models.demos.deepseek_v3_b1.demo.weight_provider import LogicalModelDimensions
+from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
 from models.demos.deepseek_v3_b1.prepare_weights import (
     _MTP_LAYER_IDX,
+    CURRENT_TRANSFORM_VERSION,
     AttentionWeights,
     DeepSeekV3DenseLayerWeights,
     DeepSeekV3EmbeddingLayerWeights,
@@ -56,6 +57,7 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     save_routed_expert_weights,
     save_shared_expert_weights,
 )
+from models.demos.deepseek_v3_b1.tensor_cache import CacheConfig, CacheContext, TensorCache
 
 
 def _deallocate_layer(layer: DeepSeekV3DenseLayerWeights | DeepSeekV3MoELayerWeights) -> None:
@@ -140,6 +142,16 @@ def _skip_unless_4x2_mesh(bh_2d_mesh_device):
         pytest.skip("Test requires 8 devices (4x2 mesh)")
 
 
+def _test_cache_context(mesh_shape: tuple[int, int] = (4, 2)) -> CacheContext:
+    return CacheContext(
+        schema_version=1,
+        hf_model_id="test-model",
+        hf_revision="test-rev",
+        transform_version=CURRENT_TRANSFORM_VERSION,
+        mesh_shape=mesh_shape,
+    )
+
+
 # Expected placements for 4x2 mesh (mla_tp=2, moe_tp=8)
 _PLACEMENTS_SHARD_NONE_1 = [ttnn.PlacementReplicate(), ttnn.PlacementShard(1)]
 _PLACEMENTS_SHARD_NONE_0 = [ttnn.PlacementReplicate(), ttnn.PlacementShard(0)]
@@ -212,10 +224,10 @@ def _assert_layer_on_device_with_topology(
 
 
 # HF state dict shapes (out_features, in_features) for linears; full logical for 4x2 mesh. See DEEPSEEK_PREPARE_WEIGHTS_DESIGN_DOC.md §5.
-HF_Q_B_FULL_LOGICAL = (24576, 1536)
-HF_O_PROJ_FULL_LOGICAL = (7168, 16384)
-HF_KV_B_FULL_LOGICAL = (32768, 512)
-HF_SHARED_GATE_UP_FULL_LOGICAL = (2048, 7168)
+HF_Q_B_FULL_LOGICAL = (LogicalModelDimensions.Q_B_OUT, LogicalModelDimensions.Q_A_DIM)
+HF_O_PROJ_FULL_LOGICAL = (LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.O_PROJ_OUT)
+HF_KV_B_FULL_LOGICAL = (LogicalModelDimensions.KV_B_PROJ_OUT, LogicalModelDimensions.KV_B_LORA_RANK)
+HF_SHARED_GATE_UP_FULL_LOGICAL = (LogicalModelDimensions.MOE_INTERMEDIATE_SIZE, LogicalModelDimensions.HIDDEN_SIZE)
 
 # Don't use all the experts in tests to avoid taking too long
 NUM_ROUTED_EXPERTS_FOR_TESTS = 4
@@ -239,31 +251,38 @@ def _layer_state_dict(
 
     state = {
         f"model.layers.{layer_idx}.self_attn.q_a_proj.weight": torch.randn(
-            1536, 7168, generator=g, dtype=torch.bfloat16
+            LogicalModelDimensions.Q_A_DIM, LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=torch.bfloat16
         ),
         f"model.layers.{layer_idx}.self_attn.q_b_proj.weight": torch.randn(*q_b_hf, generator=g, dtype=torch.bfloat16),
         f"model.layers.{layer_idx}.self_attn.kv_a_proj_with_mqa.weight": torch.randn(
-            576, 7168, generator=g, dtype=torch.bfloat16
+            LogicalModelDimensions.KV_A_DIM, LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=torch.bfloat16
         ),
         f"model.layers.{layer_idx}.self_attn.kv_b_proj.weight": torch.randn(
             *kv_b_hf, generator=g, dtype=torch.bfloat16
         ),
         f"model.layers.{layer_idx}.self_attn.o_proj.weight": torch.randn(*o_proj_hf, generator=g, dtype=torch.bfloat16),
-        f"model.layers.{layer_idx}.input_layernorm.weight": torch.randn(7168, generator=g, dtype=torch.bfloat16),
+        f"model.layers.{layer_idx}.input_layernorm.weight": torch.randn(
+            LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=torch.bfloat16
+        ),
         f"model.layers.{layer_idx}.self_attn.q_a_layernorm.weight": torch.randn(
-            1536, generator=g, dtype=torch.bfloat16
+            LogicalModelDimensions.Q_A_DIM, generator=g, dtype=torch.bfloat16
         ),
         f"model.layers.{layer_idx}.self_attn.kv_a_layernorm.weight": torch.randn(
-            512, generator=g, dtype=torch.bfloat16
+            LogicalModelDimensions.KV_B_LORA_RANK, generator=g, dtype=torch.bfloat16
         ),
         f"model.layers.{layer_idx}.post_attention_layernorm.weight": torch.randn(
-            7168, generator=g, dtype=torch.bfloat16
+            LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=torch.bfloat16
         ),
     }
     if is_moe:
-        state[f"model.layers.{layer_idx}.mlp.gate.weight"] = torch.randn(256, 7168, generator=g, dtype=torch.bfloat16)
+        state[f"model.layers.{layer_idx}.mlp.gate.weight"] = torch.randn(
+            LogicalModelDimensions.GATE_NUM_INDICES,
+            LogicalModelDimensions.HIDDEN_SIZE,
+            generator=g,
+            dtype=torch.bfloat16,
+        )
         state[f"model.layers.{layer_idx}.mlp.gate.e_score_correction_bias"] = torch.randn(
-            256, generator=g, dtype=torch.bfloat16
+            LogicalModelDimensions.GATE_NUM_INDICES, generator=g, dtype=torch.bfloat16
         )
         state[f"model.layers.{layer_idx}.mlp.shared_experts.gate_proj.weight"] = torch.randn(
             *shared_hf, generator=g, dtype=torch.bfloat16
@@ -271,32 +290,50 @@ def _layer_state_dict(
         state[f"model.layers.{layer_idx}.mlp.shared_experts.up_proj.weight"] = torch.randn(
             *shared_hf, generator=g, dtype=torch.bfloat16
         )
-        # shared down: HF (7168, 2048*tp) full logical
-        shared_down_rows = 7168
+        # shared down: HF (HIDDEN_SIZE, MOE_INTERMEDIATE_SIZE*tp) full logical
+        shared_down_rows = LogicalModelDimensions.HIDDEN_SIZE
         shared_down_cols = shared_hf[0]  # 2048 for 4x2
         state[f"model.layers.{layer_idx}.mlp.shared_experts.down_proj.weight"] = torch.randn(
             shared_down_rows, shared_down_cols, generator=g, dtype=torch.bfloat16
         )
         for e in range(NUM_ROUTED_EXPERTS_FOR_TESTS):
             state[f"model.layers.{layer_idx}.mlp.experts.{e}.gate_proj.weight"] = torch.randn(
-                2048, 7168, generator=g, dtype=torch.bfloat16
+                LogicalModelDimensions.MOE_INTERMEDIATE_SIZE,
+                LogicalModelDimensions.HIDDEN_SIZE,
+                generator=g,
+                dtype=torch.bfloat16,
             )
             state[f"model.layers.{layer_idx}.mlp.experts.{e}.up_proj.weight"] = torch.randn(
-                2048, 7168, generator=g, dtype=torch.bfloat16
+                LogicalModelDimensions.MOE_INTERMEDIATE_SIZE,
+                LogicalModelDimensions.HIDDEN_SIZE,
+                generator=g,
+                dtype=torch.bfloat16,
             )
             state[f"model.layers.{layer_idx}.mlp.experts.{e}.down_proj.weight"] = torch.randn(
-                7168, 2048, generator=g, dtype=torch.bfloat16
+                LogicalModelDimensions.HIDDEN_SIZE,
+                LogicalModelDimensions.MOE_INTERMEDIATE_SIZE,
+                generator=g,
+                dtype=torch.bfloat16,
             )
     else:
-        # Dense MLP: HF (out, in) gate/up (18432, 7168), down (7168, 18432)
+        # Dense MLP: HF (out, in) gate/up (INTERMEDIATE_SIZE, HIDDEN_SIZE), down (HIDDEN_SIZE, INTERMEDIATE_SIZE)
         state[f"model.layers.{layer_idx}.mlp.gate_proj.weight"] = torch.randn(
-            18432, 7168, generator=g, dtype=torch.bfloat16
+            LogicalModelDimensions.INTERMEDIATE_SIZE,
+            LogicalModelDimensions.HIDDEN_SIZE,
+            generator=g,
+            dtype=torch.bfloat16,
         )
         state[f"model.layers.{layer_idx}.mlp.up_proj.weight"] = torch.randn(
-            18432, 7168, generator=g, dtype=torch.bfloat16
+            LogicalModelDimensions.INTERMEDIATE_SIZE,
+            LogicalModelDimensions.HIDDEN_SIZE,
+            generator=g,
+            dtype=torch.bfloat16,
         )
         state[f"model.layers.{layer_idx}.mlp.down_proj.weight"] = torch.randn(
-            7168, 18432, generator=g, dtype=torch.bfloat16
+            LogicalModelDimensions.HIDDEN_SIZE,
+            LogicalModelDimensions.INTERMEDIATE_SIZE,
+            generator=g,
+            dtype=torch.bfloat16,
         )
     return state
 
@@ -304,9 +341,13 @@ def _layer_state_dict(
 def _add_global_weights(state: dict[str, torch.Tensor], seed: int = 42) -> None:
     """Add embedding, final norm, and lm_head to state (in place)."""
     g = torch.Generator().manual_seed(seed)
-    state["model.embed_tokens.weight"] = torch.randn(129280, 7168, generator=g, dtype=torch.bfloat16)
-    state["model.norm.weight"] = torch.randn(7168, generator=g, dtype=torch.bfloat16)
-    state["lm_head.weight"] = torch.randn(129280, 7168, generator=g, dtype=torch.bfloat16)
+    state["model.embed_tokens.weight"] = torch.randn(
+        LogicalModelDimensions.VOCAB_SIZE, LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=torch.bfloat16
+    )
+    state["model.norm.weight"] = torch.randn(LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=torch.bfloat16)
+    state["lm_head.weight"] = torch.randn(
+        LogicalModelDimensions.VOCAB_SIZE, LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=torch.bfloat16
+    )
 
 
 @pytest.mark.parametrize(
@@ -323,12 +364,12 @@ def test_prepare_attention_weights_dense_4x2(bh_2d_mesh_device):
     attn = prepare_attention_weights(bdw, state, 0, is_moe=False)
     assert attn.gate_mm is None
     assert attn.q_a_proj.tensor_shape == (3584, 3072)
-    assert attn.q_b_proj.tensor_shape == (1536, 12288)
-    assert attn.kv_a_proj.tensor_shape == (7168, 576)
-    assert attn.o_proj.tensor_shape == (8192, 7168)
-    assert attn.attn_norm.tensor_shape == (1, 7168)
-    assert attn.kv_b1_proj.tensor_shape == (8192, 512)
-    assert attn.kv_b2_proj.tensor_shape == (512, 8192)
+    assert attn.q_b_proj.tensor_shape == (LogicalModelDimensions.Q_A_DIM, 12288)
+    assert attn.kv_a_proj.tensor_shape == (LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.KV_A_DIM)
+    assert attn.o_proj.tensor_shape == (8192, LogicalModelDimensions.HIDDEN_SIZE)
+    assert attn.attn_norm.tensor_shape == (1, LogicalModelDimensions.HIDDEN_SIZE)
+    assert attn.kv_b1_proj.tensor_shape == (8192, LogicalModelDimensions.KV_B_LORA_RANK)
+    assert attn.kv_b2_proj.tensor_shape == (LogicalModelDimensions.KV_B_LORA_RANK, 8192)
 
 
 @pytest.mark.parametrize(
@@ -344,11 +385,11 @@ def test_prepare_attention_weights_moe_4x2(bh_2d_mesh_device):
     bdw = BlitzDecodeWeights(submesh)
     attn = prepare_attention_weights(bdw, state, 0, is_moe=True)
     assert attn.gate_mm is not None
-    assert attn.gate_mm.tensor_shape == (7168, 256)
+    assert attn.gate_mm.tensor_shape == (LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.GATE_NUM_INDICES)
     assert attn.gate_bias is not None
     assert attn.gate_bias.shape == (16, 16)
     assert attn.q_a_proj.tensor_shape == (3584, 3072)
-    assert attn.o_proj.tensor_shape == (8192, 7168)
+    assert attn.o_proj.tensor_shape == (8192, LogicalModelDimensions.HIDDEN_SIZE)
 
 
 @pytest.mark.parametrize(
@@ -380,8 +421,14 @@ def test_prepare_shared_expert_weights_moe_4x2(bh_2d_mesh_device):
     state = _layer_state_dict(0, is_moe=True, seed=43)
     bdw = BlitzDecodeWeights(submesh)
     shared = prepare_shared_expert_weights(bdw, state, 0, is_moe=True)
-    assert shared.shared_gate_proj.tensor_shape == (7168, 256)
-    assert shared.shared_up_proj.tensor_shape == (7168, 256)
+    assert shared.shared_gate_proj.tensor_shape == (
+        LogicalModelDimensions.HIDDEN_SIZE,
+        LogicalModelDimensions.GATE_NUM_INDICES,
+    )
+    assert shared.shared_up_proj.tensor_shape == (
+        LogicalModelDimensions.HIDDEN_SIZE,
+        LogicalModelDimensions.GATE_NUM_INDICES,
+    )
     assert shared.shared_down_proj.shape is not None
 
 
@@ -548,10 +595,28 @@ def test_incremental_save_load_moe_4x2(bh_2d_mesh_device, tmp_path):
 def _moe_routed_expert_stacked_tensors(seed: int = 43):
     """Build (num_experts, K, N) stacked gate/up and (num_experts, K_down, N_down) down for get_tt_moe_routed_expert_weights."""
     g = torch.Generator().manual_seed(seed)
-    # MoE expert shapes: gate/up (K=7168, N=2048), down (2048, 7168)
-    gate_stacked = torch.randn(NUM_ROUTED_EXPERTS_FOR_TESTS, 7168, 2048, generator=g, dtype=torch.bfloat16)
-    up_stacked = torch.randn(NUM_ROUTED_EXPERTS_FOR_TESTS, 7168, 2048, generator=g, dtype=torch.bfloat16)
-    down_stacked = torch.randn(NUM_ROUTED_EXPERTS_FOR_TESTS, 2048, 7168, generator=g, dtype=torch.bfloat16)
+    # MoE expert shapes: gate/up (K=HIDDEN_SIZE, N=MOE_INTERMEDIATE_SIZE), down (MOE_INTERMEDIATE_SIZE, HIDDEN_SIZE)
+    gate_stacked = torch.randn(
+        NUM_ROUTED_EXPERTS_FOR_TESTS,
+        LogicalModelDimensions.HIDDEN_SIZE,
+        LogicalModelDimensions.MOE_INTERMEDIATE_SIZE,
+        generator=g,
+        dtype=torch.bfloat16,
+    )
+    up_stacked = torch.randn(
+        NUM_ROUTED_EXPERTS_FOR_TESTS,
+        LogicalModelDimensions.HIDDEN_SIZE,
+        LogicalModelDimensions.MOE_INTERMEDIATE_SIZE,
+        generator=g,
+        dtype=torch.bfloat16,
+    )
+    down_stacked = torch.randn(
+        NUM_ROUTED_EXPERTS_FOR_TESTS,
+        LogicalModelDimensions.MOE_INTERMEDIATE_SIZE,
+        LogicalModelDimensions.HIDDEN_SIZE,
+        generator=g,
+        dtype=torch.bfloat16,
+    )
     return gate_stacked, up_stacked, down_stacked
 
 
@@ -651,15 +716,15 @@ def test_prepare_dense_layer_single_layer_4x2(bh_2d_mesh_device):
     logger.info("prepare_dense_layer_weights (1 dense layer, 4x2 mesh): {:.3f} s", elapsed)
     assert isinstance(layer, DeepSeekV3DenseLayerWeights)
     assert layer.q_a_proj.tensor_shape == (3584, 3072)
-    assert layer.q_b_proj.tensor_shape == (1536, 12288)
-    assert layer.kv_a_proj.tensor_shape == (7168, 576)
-    assert layer.o_proj.tensor_shape == (8192, 7168)
-    assert layer.attn_norm.tensor_shape == (1, 7168)
-    assert layer.q_norm.tensor_shape == (1, 1536)
-    assert layer.kv_norm.tensor_shape == (1, 512)
-    assert layer.ffn_norm.tensor_shape == (1, 7168)
-    assert layer.kv_b1_proj.tensor_shape == (8192, 512)
-    assert layer.kv_b2_proj.tensor_shape == (512, 8192)
+    assert layer.q_b_proj.tensor_shape == (LogicalModelDimensions.Q_A_DIM, 12288)
+    assert layer.kv_a_proj.tensor_shape == (LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.KV_A_DIM)
+    assert layer.o_proj.tensor_shape == (8192, LogicalModelDimensions.HIDDEN_SIZE)
+    assert layer.attn_norm.tensor_shape == (1, LogicalModelDimensions.HIDDEN_SIZE)
+    assert layer.q_norm.tensor_shape == (1, LogicalModelDimensions.Q_A_DIM)
+    assert layer.kv_norm.tensor_shape == (1, LogicalModelDimensions.KV_B_LORA_RANK)
+    assert layer.ffn_norm.tensor_shape == (1, LogicalModelDimensions.HIDDEN_SIZE)
+    assert layer.kv_b1_proj.tensor_shape == (8192, LogicalModelDimensions.KV_B_LORA_RANK)
+    assert layer.kv_b2_proj.tensor_shape == (LogicalModelDimensions.KV_B_LORA_RANK, 8192)
     assert hasattr(layer, "shared_gate_proj") and layer.shared_gate_proj is not None
     assert hasattr(layer, "shared_up_proj") and layer.shared_up_proj is not None
     assert hasattr(layer, "routed_gate_proj") and layer.routed_gate_proj is not None
@@ -687,15 +752,15 @@ def test_save_load_dense_layer_single_layer_4x2(bh_2d_mesh_device, tmp_path):
     logger.info("prepare_dense_layer_weights (1 dense layer, 4x2 mesh): {:.3f} s", elapsed)
     assert isinstance(orig, DeepSeekV3DenseLayerWeights)
     assert orig.q_a_proj.tensor_shape == (3584, 3072)
-    assert orig.q_b_proj.tensor_shape == (1536, 12288)
-    assert orig.kv_a_proj.tensor_shape == (7168, 576)
-    assert orig.o_proj.tensor_shape == (8192, 7168)
-    assert orig.attn_norm.tensor_shape == (1, 7168)
-    assert orig.q_norm.tensor_shape == (1, 1536)
-    assert orig.kv_norm.tensor_shape == (1, 512)
-    assert orig.ffn_norm.tensor_shape == (1, 7168)
-    assert orig.kv_b1_proj.tensor_shape == (8192, 512)
-    assert orig.kv_b2_proj.tensor_shape == (512, 8192)
+    assert orig.q_b_proj.tensor_shape == (LogicalModelDimensions.Q_A_DIM, 12288)
+    assert orig.kv_a_proj.tensor_shape == (LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.KV_A_DIM)
+    assert orig.o_proj.tensor_shape == (8192, LogicalModelDimensions.HIDDEN_SIZE)
+    assert orig.attn_norm.tensor_shape == (1, LogicalModelDimensions.HIDDEN_SIZE)
+    assert orig.q_norm.tensor_shape == (1, LogicalModelDimensions.Q_A_DIM)
+    assert orig.kv_norm.tensor_shape == (1, LogicalModelDimensions.KV_B_LORA_RANK)
+    assert orig.ffn_norm.tensor_shape == (1, LogicalModelDimensions.HIDDEN_SIZE)
+    assert orig.kv_b1_proj.tensor_shape == (8192, LogicalModelDimensions.KV_B_LORA_RANK)
+    assert orig.kv_b2_proj.tensor_shape == (LogicalModelDimensions.KV_B_LORA_RANK, 8192)
     assert hasattr(orig, "shared_gate_proj") and orig.shared_gate_proj is not None
     assert hasattr(orig, "shared_up_proj") and orig.shared_up_proj is not None
     assert hasattr(orig, "routed_gate_proj") and orig.routed_gate_proj is not None
@@ -776,19 +841,25 @@ def test_prepare_moe_layer_single_layer_4x2(bh_2d_mesh_device):
     logger.info("prepare_moe_layer_weights (1 MoE layer, 4x2 mesh): {:.3f} s", elapsed)
     assert isinstance(layer, DeepSeekV3MoELayerWeights)
     assert layer.q_a_proj.tensor_shape == (3584, 3072)
-    assert layer.q_b_proj.tensor_shape == (1536, 12288)
-    assert layer.kv_a_proj.tensor_shape == (7168, 576)
-    assert layer.o_proj.tensor_shape == (8192, 7168)
-    assert layer.gate_mm.tensor_shape == (7168, 256)
+    assert layer.q_b_proj.tensor_shape == (LogicalModelDimensions.Q_A_DIM, 12288)
+    assert layer.kv_a_proj.tensor_shape == (LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.KV_A_DIM)
+    assert layer.o_proj.tensor_shape == (8192, LogicalModelDimensions.HIDDEN_SIZE)
+    assert layer.gate_mm.tensor_shape == (LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.GATE_NUM_INDICES)
     assert layer.gate_bias.shape == (16, 16)
-    assert layer.attn_norm.tensor_shape == (1, 7168)
-    assert layer.q_norm.tensor_shape == (1, 1536)
-    assert layer.kv_norm.tensor_shape == (1, 512)
-    assert layer.ffn_norm.tensor_shape == (1, 7168)
-    assert layer.kv_b1_proj.tensor_shape == (8192, 512)
-    assert layer.kv_b2_proj.tensor_shape == (512, 8192)
-    assert layer.shared_gate_proj.tensor_shape == (7168, 256)
-    assert layer.shared_up_proj.tensor_shape == (7168, 256)
+    assert layer.attn_norm.tensor_shape == (1, LogicalModelDimensions.HIDDEN_SIZE)
+    assert layer.q_norm.tensor_shape == (1, LogicalModelDimensions.Q_A_DIM)
+    assert layer.kv_norm.tensor_shape == (1, LogicalModelDimensions.KV_B_LORA_RANK)
+    assert layer.ffn_norm.tensor_shape == (1, LogicalModelDimensions.HIDDEN_SIZE)
+    assert layer.kv_b1_proj.tensor_shape == (8192, LogicalModelDimensions.KV_B_LORA_RANK)
+    assert layer.kv_b2_proj.tensor_shape == (LogicalModelDimensions.KV_B_LORA_RANK, 8192)
+    assert layer.shared_gate_proj.tensor_shape == (
+        LogicalModelDimensions.HIDDEN_SIZE,
+        LogicalModelDimensions.GATE_NUM_INDICES,
+    )
+    assert layer.shared_up_proj.tensor_shape == (
+        LogicalModelDimensions.HIDDEN_SIZE,
+        LogicalModelDimensions.GATE_NUM_INDICES,
+    )
     assert hasattr(layer, "shared_down_proj")
     assert len(layer.routed_gate_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
     assert len(layer.routed_up_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
@@ -815,19 +886,25 @@ def test_save_load_moe_layer_single_layer_4x2(bh_2d_mesh_device, tmp_path):
     logger.info("prepare_moe_layer_weights (1 MoE layer, 4x2 mesh): {:.3f} s", elapsed)
     assert isinstance(orig, DeepSeekV3MoELayerWeights)
     assert orig.q_a_proj.tensor_shape == (3584, 3072)
-    assert orig.q_b_proj.tensor_shape == (1536, 12288)
-    assert orig.kv_a_proj.tensor_shape == (7168, 576)
-    assert orig.o_proj.tensor_shape == (8192, 7168)
-    assert orig.gate_mm.tensor_shape == (7168, 256)
+    assert orig.q_b_proj.tensor_shape == (LogicalModelDimensions.Q_A_DIM, 12288)
+    assert orig.kv_a_proj.tensor_shape == (LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.KV_A_DIM)
+    assert orig.o_proj.tensor_shape == (8192, LogicalModelDimensions.HIDDEN_SIZE)
+    assert orig.gate_mm.tensor_shape == (LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.GATE_NUM_INDICES)
     assert orig.gate_bias.shape == (16, 16)
-    assert orig.attn_norm.tensor_shape == (1, 7168)
-    assert orig.q_norm.tensor_shape == (1, 1536)
-    assert orig.kv_norm.tensor_shape == (1, 512)
-    assert orig.ffn_norm.tensor_shape == (1, 7168)
-    assert orig.kv_b1_proj.tensor_shape == (8192, 512)
-    assert orig.kv_b2_proj.tensor_shape == (512, 8192)
-    assert orig.shared_gate_proj.tensor_shape == (7168, 256)
-    assert orig.shared_up_proj.tensor_shape == (7168, 256)
+    assert orig.attn_norm.tensor_shape == (1, LogicalModelDimensions.HIDDEN_SIZE)
+    assert orig.q_norm.tensor_shape == (1, LogicalModelDimensions.Q_A_DIM)
+    assert orig.kv_norm.tensor_shape == (1, LogicalModelDimensions.KV_B_LORA_RANK)
+    assert orig.ffn_norm.tensor_shape == (1, LogicalModelDimensions.HIDDEN_SIZE)
+    assert orig.kv_b1_proj.tensor_shape == (8192, LogicalModelDimensions.KV_B_LORA_RANK)
+    assert orig.kv_b2_proj.tensor_shape == (LogicalModelDimensions.KV_B_LORA_RANK, 8192)
+    assert orig.shared_gate_proj.tensor_shape == (
+        LogicalModelDimensions.HIDDEN_SIZE,
+        LogicalModelDimensions.GATE_NUM_INDICES,
+    )
+    assert orig.shared_up_proj.tensor_shape == (
+        LogicalModelDimensions.HIDDEN_SIZE,
+        LogicalModelDimensions.GATE_NUM_INDICES,
+    )
     assert hasattr(orig, "shared_down_proj")
     assert len(orig.routed_gate_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
     assert len(orig.routed_up_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
@@ -921,14 +998,20 @@ def test_load_moe_decoder_layer_4x2(bh_2d_mesh_device, tmp_path):
     layer = load_moe_decoder_layer(tmp_path, submesh, 0)
     assert isinstance(layer, DeepSeekV3MoELayerWeights)
     assert layer.q_a_proj.tensor_shape == (3584, 3072)
-    assert layer.q_b_proj.tensor_shape == (1536, 12288)
-    assert layer.kv_a_proj.tensor_shape == (7168, 576)
-    assert layer.o_proj.tensor_shape == (8192, 7168)
-    assert layer.gate_mm.tensor_shape == (7168, 256)
+    assert layer.q_b_proj.tensor_shape == (LogicalModelDimensions.Q_A_DIM, 12288)
+    assert layer.kv_a_proj.tensor_shape == (LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.KV_A_DIM)
+    assert layer.o_proj.tensor_shape == (8192, LogicalModelDimensions.HIDDEN_SIZE)
+    assert layer.gate_mm.tensor_shape == (LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.GATE_NUM_INDICES)
     assert layer.gate_bias.shape == (16, 16)
-    assert layer.attn_norm.tensor_shape == (1, 7168)
-    assert layer.shared_gate_proj.tensor_shape == (7168, 256)
-    assert layer.shared_up_proj.tensor_shape == (7168, 256)
+    assert layer.attn_norm.tensor_shape == (1, LogicalModelDimensions.HIDDEN_SIZE)
+    assert layer.shared_gate_proj.tensor_shape == (
+        LogicalModelDimensions.HIDDEN_SIZE,
+        LogicalModelDimensions.GATE_NUM_INDICES,
+    )
+    assert layer.shared_up_proj.tensor_shape == (
+        LogicalModelDimensions.HIDDEN_SIZE,
+        LogicalModelDimensions.GATE_NUM_INDICES,
+    )
     assert len(layer.routed_gate_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
     assert len(layer.routed_up_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
     assert len(layer.routed_down_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
@@ -954,9 +1037,9 @@ def test_prepare_embedding_weights_4x2(bh_2d_mesh_device):
     assert isinstance(weights, DeepSeekV3EmbeddingLayerWeights)
     assert weights.embedding.shape is not None
     assert weights.embedding.shape == (
-        129280,
-        7168,
-    ), f"Expected embedding shape (129280, 7168), got {weights.embedding.shape}"
+        LogicalModelDimensions.VOCAB_SIZE,
+        LogicalModelDimensions.HIDDEN_SIZE,
+    ), f"Expected embedding shape ({LogicalModelDimensions.VOCAB_SIZE}, {LogicalModelDimensions.HIDDEN_SIZE}), got {weights.embedding.shape}"
 
 
 @pytest.mark.parametrize(
@@ -973,9 +1056,15 @@ def test_prepare_lm_head_weights_4x2(bh_2d_mesh_device):
     weights = prepare_lm_head_weights(state, submesh)
     assert isinstance(weights, DeepSeekV3LMHeadWeights)
     assert weights.lm_head.shape is not None
-    assert weights.lm_head.shape == (7168, 16160), f"Expected lm_head shape (7168, 16160), got {weights.lm_head.shape}"
+    assert weights.lm_head.shape == (
+        LogicalModelDimensions.HIDDEN_SIZE,
+        16160,
+    ), f"Expected lm_head shape ({LogicalModelDimensions.HIDDEN_SIZE}, 16160), got {weights.lm_head.shape}"
     assert weights.final_norm.shape is not None
-    assert weights.final_norm.shape == (1, 7168), f"Expected final_norm shape (1, 7168), got {weights.final_norm.shape}"
+    assert weights.final_norm.shape == (
+        1,
+        LogicalModelDimensions.HIDDEN_SIZE,
+    ), f"Expected final_norm shape (1, {LogicalModelDimensions.HIDDEN_SIZE}), got {weights.final_norm.shape}"
 
 
 @pytest.mark.parametrize(
@@ -1104,3 +1193,154 @@ def test_save_load_mtp_weights_4x2(bh_2d_mesh_device, tmp_path):
     _assert_on_device(loaded.h_gamma)
     _assert_on_device(loaded.e_gamma)
     _assert_on_device(loaded.eh_projection)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_prepare_embedding_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
+    """Prepare embedding weights via TensorCache on 4x2 mesh: cold miss then warm hit."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    cache_config = CacheConfig(cache=TensorCache(tmp_path), context=_test_cache_context())
+
+    state = {}
+    _add_global_weights(state)
+
+    weights = prepare_embedding_weights(state, submesh, cache_config=cache_config)
+    assert isinstance(weights, DeepSeekV3EmbeddingLayerWeights)
+    expected_shape = (LogicalModelDimensions.VOCAB_SIZE, LogicalModelDimensions.HIDDEN_SIZE)
+    assert weights.embedding.shape == expected_shape, f"Expected {expected_shape}, got {weights.embedding.shape}"
+
+    ttnn.deallocate(weights.embedding, force=True)
+
+    weights_hit = prepare_embedding_weights(state, submesh, cache_config=cache_config)
+    assert weights_hit.embedding.shape == expected_shape
+
+    objects_dir = cache_config.cache.local_root / "objects"
+    assert objects_dir.exists()
+    artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
+    assert len(artifact_dirs) >= 1, f"Expected at least 1 cached artifact, found {len(artifact_dirs)}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_prepare_lm_head_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
+    """Prepare LM head + final norm via TensorCache on 4x2 mesh: cold miss then warm hit."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    cache_config = CacheConfig(cache=TensorCache(tmp_path), context=_test_cache_context())
+
+    state = {}
+    _add_global_weights(state)
+
+    weights = prepare_lm_head_weights(state, submesh, cache_config=cache_config)
+    assert isinstance(weights, DeepSeekV3LMHeadWeights)
+    expected_lm = (LogicalModelDimensions.HIDDEN_SIZE, 16160)
+    expected_norm = (1, LogicalModelDimensions.HIDDEN_SIZE)
+    assert weights.lm_head.shape == expected_lm, f"Expected lm_head {expected_lm}, got {weights.lm_head.shape}"
+    assert (
+        weights.final_norm.shape == expected_norm
+    ), f"Expected final_norm {expected_norm}, got {weights.final_norm.shape}"
+
+    ttnn.deallocate(weights.lm_head, force=True)
+    ttnn.deallocate(weights.final_norm, force=True)
+
+    weights_hit = prepare_lm_head_weights(state, submesh, cache_config=cache_config)
+    assert weights_hit.lm_head.shape == expected_lm
+    assert weights_hit.final_norm.shape == expected_norm
+
+    objects_dir = cache_config.cache.local_root / "objects"
+    artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
+    assert len(artifact_dirs) >= 2, f"Expected at least 2 cached artifacts (lm_head + norm), found {len(artifact_dirs)}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_prepare_moe_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
+    """Prepare MoE layer via TensorCache on 4x2 mesh: verifies gate_bias caching (cold miss then warm hit)."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    cache_config = CacheConfig(cache=TensorCache(tmp_path), context=_test_cache_context())
+
+    layer_idx = 3
+    state = _layer_state_dict(layer_idx, is_moe=True)
+    bdw = BlitzDecodeWeights(submesh)
+
+    weights = prepare_moe_layer_weights(
+        bdw,
+        state,
+        layer_idx,
+        num_routed_experts=NUM_ROUTED_EXPERTS_FOR_TESTS,
+        cache_config=cache_config,
+    )
+    assert isinstance(weights, DeepSeekV3MoELayerWeights)
+    expected_gate_bias = (16, 16)
+    assert (
+        weights.gate_bias.shape == expected_gate_bias
+    ), f"Expected gate_bias {expected_gate_bias}, got {weights.gate_bias.shape}"
+
+    _deallocate_layer(weights)
+
+    weights_hit = prepare_moe_layer_weights(
+        bdw,
+        state,
+        layer_idx,
+        num_routed_experts=NUM_ROUTED_EXPERTS_FOR_TESTS,
+        cache_config=cache_config,
+    )
+    assert weights_hit.gate_bias.shape == expected_gate_bias
+
+    objects_dir = cache_config.cache.local_root / "objects"
+    artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
+    assert len(artifact_dirs) >= 1, f"Expected at least 1 cached artifact (gate_bias), found {len(artifact_dirs)}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_prepare_mtp_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
+    """Prepare MTP weights via TensorCache on 4x2 mesh: cold miss then warm hit for h/e gamma, eh_proj."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    cache_config = CacheConfig(cache=TensorCache(tmp_path), context=_test_cache_context())
+
+    state = _mtp_state_dict()
+    H = LogicalModelDimensions.HIDDEN_SIZE
+
+    weights = prepare_mtp_weights(state, submesh, cache_config=cache_config)
+    assert isinstance(weights, DeepSeekV3MTPWeights)
+    assert weights.h_gamma.shape == (1, H)
+    assert weights.e_gamma.shape == (1, H)
+    assert weights.eh_projection.shape == (2 * H, H)
+
+    expected_shapes = {
+        "h_gamma": weights.h_gamma.shape,
+        "e_gamma": weights.e_gamma.shape,
+        "eh_projection": weights.eh_projection.shape,
+    }
+
+    ttnn.deallocate(weights.h_gamma, force=True)
+    ttnn.deallocate(weights.e_gamma, force=True)
+    ttnn.deallocate(weights.eh_projection, force=True)
+
+    weights_hit = prepare_mtp_weights(state, submesh, cache_config=cache_config)
+    assert weights_hit.h_gamma.shape == expected_shapes["h_gamma"]
+    assert weights_hit.e_gamma.shape == expected_shapes["e_gamma"]
+    assert weights_hit.eh_projection.shape == expected_shapes["eh_projection"]
+
+    objects_dir = cache_config.cache.local_root / "objects"
+    artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
+    assert (
+        len(artifact_dirs) >= 3
+    ), f"Expected at least 3 cached artifacts (h/e gamma, eh_proj), found {len(artifact_dirs)}"

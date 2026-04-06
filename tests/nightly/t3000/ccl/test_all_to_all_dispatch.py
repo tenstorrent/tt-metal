@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -364,6 +364,9 @@ def run_all_to_all_dispatch_test(
     random.seed(2005)
     mesh_device.enable_program_cache()
     devices = mesh_shape[0] * mesh_shape[1]
+    from tests.tests_common.cache_entries_counter import CacheEntriesCounter
+
+    mesh_device.cache_entries_counter = CacheEntriesCounter(mesh_device)
 
     # input, output, interm core range set
     compute_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)

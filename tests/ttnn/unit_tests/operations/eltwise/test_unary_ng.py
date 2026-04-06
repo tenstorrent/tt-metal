@@ -1,17 +1,11 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import pytest
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_ulp
-from models.common.utility_functions import is_wormhole_b0
-
-
-def is_simulator():
-    return os.environ.get("TT_METAL_SIMULATOR") is not None
 
 
 height_sharded_memory_config = ttnn.create_sharded_memory_config(
@@ -69,22 +63,8 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
     "ttnn_op, torch_dtype, ttnn_dtype",
     [
         (ttnn.relu, torch.bfloat16, ttnn.bfloat16),
-        pytest.param(
-            ttnn.square,
-            torch.float32,
-            ttnn.float32,
-            marks=pytest.mark.skipif(
-                is_simulator() and is_wormhole_b0(), reason="tt-sim + Wormhole float32 failure #39185"
-            ),
-        ),
-        pytest.param(
-            ttnn.abs,
-            torch.int32,
-            ttnn.int32,
-            marks=pytest.mark.skipif(
-                is_simulator() and is_wormhole_b0(), reason="tt-sim + Wormhole float32 failure #39185"
-            ),
-        ),
+        (ttnn.square, torch.float32, ttnn.float32),
+        (ttnn.abs, torch.int32, ttnn.int32),
     ],
 )
 def test_unary_sharded_interleaved(input_shape, input_config, out_config, ttnn_op, torch_dtype, ttnn_dtype, device):
@@ -241,13 +221,7 @@ def test_unary_ng_uneven_sharding_fallback(ttnn_op, device):
     "torch_dtype, ttnn_dtype",
     [
         (torch.bfloat16, ttnn.bfloat16),
-        pytest.param(
-            torch.float32,
-            ttnn.float32,
-            marks=pytest.mark.skipif(
-                is_simulator() and is_wormhole_b0(), reason="tt-sim + Wormhole float32 failure #39185"
-            ),
-        ),
+        (torch.float32, ttnn.float32),
     ],
 )
 def test_unary_ng_row_major_sharded(input_shape, shard_shape, core_grid, strategy, device, torch_dtype, ttnn_dtype):
@@ -429,3 +403,37 @@ def test_unary_ng_reshard(device):
 
     ttnn_output = ttnn.to_torch(ttnn.relu(ttnn_input, memory_config=output_shard_config))
     assert torch.equal(ttnn_output, torch_output)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        # Wide rows (row_width > tile_size): chunked across width
+        (1, 1032),
+        (1, 2048),
+        (2, 3000),
+        (1, 1, 1024, 3000),
+        # Narrow rows (row_width < tile_size): multiple rows packed per tile
+        (1024, 16),
+        (512, 32),
+        (100, 64),
+        (33, 128),
+        (1, 1, 64, 128),
+        (2, 3, 16, 64),
+        (1, 1, 1, 1),
+        (1, 1, 1, 512),
+    ],
+)
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.float32, ttnn.float32)])
+def test_unary_ng_rm_interleaved(device, shape, torch_dtype, ttnn_dtype):
+    """Test that unary_ng correctly handles ROW_MAJOR interleaved tensors.
+
+    Wide rows (row_width > tile_size) are chunked across the width.
+    Narrow rows (row_width < tile_size) are packed multiple-per-tile to amortize CB overhead.
+    Partial last blocks (non-tile-aligned row counts) are also covered.
+    """
+    torch_input = torch.randn(shape, dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn_dtype, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_output = ttnn.to_torch(ttnn.abs(ttnn_input))
+    golden_output = torch.abs(torch_input)
+    assert torch.equal(ttnn_output, golden_output)

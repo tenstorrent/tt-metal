@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,9 +11,6 @@
 #include "nlp_create_qkv_heads_decode_interleaved_program_factory.hpp"
 #include "nlp_create_qkv_heads_decode_sharded_program_factory.hpp"
 #include "nlp_create_qkv_heads_decode_sharded_subcoregrid_program_factory.hpp"
-
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 namespace ttnn::experimental::prim {
 

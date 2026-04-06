@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,9 +7,9 @@
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteStridedReduceScatterAsync::invoke(
+ttnn::Tensor strided_reduce_scatter_async(
     const ttnn::Tensor& input_tensor,
     const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
     const int32_t dim,
@@ -85,4 +85,4 @@ ttnn::Tensor ExecuteStridedReduceScatterAsync::invoke(
     return result.at(1);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

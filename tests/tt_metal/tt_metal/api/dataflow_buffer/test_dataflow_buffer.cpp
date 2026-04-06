@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <tuple>
 #include <vector>
 
@@ -93,7 +94,8 @@ void run_single_dfb_program(
     experimental::dfb::DataflowBufferConfig& dfb_config,
     DFBPorCType producer_type,
     DFBPorCType consumer_type,
-    const CoreRangeSet& core_range_set = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)))) {
+    const CoreRangeSet& core_range_set = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0))),
+    std::optional<uint32_t> num_entries_in_buffer = std::nullopt) {
 
     TT_FATAL(
         !(producer_type == DFBPorCType::TENSIX && consumer_type == DFBPorCType::TENSIX),
@@ -107,11 +109,9 @@ void run_single_dfb_program(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
 
     const uint32_t num_cores = core_range_set.num_cores();
-    const uint32_t entries_per_core = dfb_config.num_entries;
+    const uint32_t entries_per_core = num_entries_in_buffer.has_value() ? num_entries_in_buffer.value() : dfb_config.num_entries;
     const uint32_t entry_size = dfb_config.entry_size;
-    // page_size = entry_size makes every entry independently addressable by
-    // page_id.  For single-core this is equivalent to page_size = buffer_size
-    // because chunk_offset = 0 and page_ids 0..num_entries-1 stay in range.
+    // page_size = entry_size makes every entry independently addressable by page_id.
     const uint32_t total_buffer_size = num_cores * entries_per_core * entry_size;
     distributed::DeviceLocalBufferConfig local_buffer_config{.page_size = entry_size, .buffer_type = BufferType::DRAM};
     distributed::ReplicatedBufferConfig buffer_config{.size = total_buffer_size};
@@ -146,7 +146,6 @@ void run_single_dfb_program(
             experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = dfb_config.num_producers, .compile_args = producer_cta});
     }
 
-    // is_blocked is already defined above
     uint32_t num_entries_per_consumer = is_blocked ? entries_per_core : entries_per_core / dfb_config.num_consumers;
     std::vector<uint32_t> consumer_cta = {
         (uint32_t)out_buffer->address(),
@@ -284,7 +283,12 @@ void run_in_dfb_out_dfb_program(
     CoreCoord logical_core = CoreCoord(0, 0);
 
     uint32_t num_entries_per_producer = dm2tensix_config.num_entries / dm2tensix_config.num_producers;
-    std::vector<uint32_t> producer_cta = {(uint32_t)in_buffer->address(), num_entries_per_producer};
+    const bool in_is_blocked = (dm2tensix_config.cap == dfb::AccessPattern::BLOCKED);
+    std::vector<uint32_t> producer_cta = {
+        (uint32_t)in_buffer->address(),
+        num_entries_per_producer,
+        0 /*implicit_sync=false*/,
+        (uint32_t)in_is_blocked};
     tt::tt_metal::TensorAccessorArgs(in_buffer).append_to(producer_cta);
 
     auto producer_kernel = experimental::quasar::CreateKernel(
@@ -305,8 +309,13 @@ void run_in_dfb_out_dfb_program(
         logical_core,
         experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 1, .compile_args = compute_cta});
 
-    uint32_t num_entries_per_consumer = tensix2dm_config.num_entries / tensix2dm_config.num_consumers;
-    std::vector<uint32_t> consumer_cta = {(uint32_t)out_buffer->address(), num_entries_per_consumer, (uint32_t)tensix2dm_config.cap == dfb::AccessPattern::BLOCKED};
+    const bool out_is_blocked = (tensix2dm_config.cap == dfb::AccessPattern::BLOCKED);
+    uint32_t num_entries_per_consumer = out_is_blocked ? tensix2dm_config.num_entries : tensix2dm_config.num_entries / tensix2dm_config.num_consumers;
+    std::vector<uint32_t> consumer_cta = {
+        (uint32_t)out_buffer->address(),
+        num_entries_per_consumer,
+        (uint32_t)out_is_blocked,
+        0 /*implicit_sync=false*/};
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(consumer_cta);
     auto consumer_kernel = experimental::quasar::CreateKernel(
         program,
@@ -349,7 +358,8 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB1Sx1S) {
         .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
 
-    run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
+    uint32_t num_entries_in_buffer = 18;
+    run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, {}, num_entries_in_buffer);
 }
 
 TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB1Sx1S) {
@@ -564,7 +574,8 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB4Sx4S) {
         .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
 
-    run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
+    uint32_t num_entries_in_buffer = 29;
+    run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, {}, num_entries_in_buffer);
 }
 
 TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx4S) {
@@ -611,7 +622,8 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB2Sx4S) {
         .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
 
-    run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
+    uint32_t num_entries_in_buffer = 21;
+    run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, {}, num_entries_in_buffer);
 }
 
 TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB2Sx4S) {

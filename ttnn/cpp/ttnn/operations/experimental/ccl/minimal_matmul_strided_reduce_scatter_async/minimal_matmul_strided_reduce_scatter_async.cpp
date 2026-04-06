@@ -1,13 +1,13 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_reduce_scatter_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/minimal_matmul_strided_reduce_scatter_async.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-std::vector<ttnn::Tensor> ExecuteMinimalMatmulStridedReduceScatterAsync::invoke(
+std::vector<ttnn::Tensor> minimal_matmul_strided_reduce_scatter_async(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const uint32_t dim,
@@ -64,4 +64,4 @@ std::vector<ttnn::Tensor> ExecuteMinimalMatmulStridedReduceScatterAsync::invoke(
     return {std::move(all_outputs[0]), std::move(all_outputs[2])};
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

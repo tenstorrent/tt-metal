@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -114,6 +114,9 @@ void RunTest(
                 logical_core,
                 EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0});
             break;
+        case HalProgrammableCoreType::DRAM:
+            log_info(LogTest, "Skipping: DRAM cores do not support watcher ring buffer tests.");
+            GTEST_SKIP();
         case HalProgrammableCoreType::COUNT: TT_THROW("Unsupported core type");
     }
     log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, virtual_core);

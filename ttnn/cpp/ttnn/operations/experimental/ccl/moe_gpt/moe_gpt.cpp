@@ -1,13 +1,13 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moe_gpt.hpp"
 #include "device/moe_gpt_device_operation.hpp"
 
-namespace ttnn::operations::experimental::moe_gpt {
+namespace ttnn::experimental {
 
-std::vector<ttnn::Tensor> ExecuteMoEGPT::invoke(
+std::vector<ttnn::Tensor> moe_gpt(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_indices,
     const ttnn::Tensor& expert_scores,
@@ -31,4 +31,4 @@ std::vector<ttnn::Tensor> ExecuteMoEGPT::invoke(
         cluster_axis);
 }
 
-}  // namespace ttnn::operations::experimental::moe_gpt
+}  // namespace ttnn::experimental

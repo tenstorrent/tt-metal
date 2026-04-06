@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,7 +22,7 @@ void kernel_main() {
     // single-tile ublocks
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
 
-    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     const uint32_t padded_width_diff = (block_width_tiles - unpadded_block_width_tiles) * tile_bytes;
 

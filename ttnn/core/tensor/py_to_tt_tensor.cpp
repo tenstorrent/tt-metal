@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "ttnn/tensor/py_to_tt_tensor.hpp"
@@ -39,44 +39,61 @@ bool can_construct_on_device(
     const ttnn::Shape& tensor_shape,
     DataType src_dtype,
     DataType dst_dtype,
-    const MemoryConfig& memory_config,
     const std::optional<Tile>& optional_tile,
     bool enable_device_typecast,
     bool preserve_nan_values) {
-    if (device != nullptr && device->is_remote_only()) {
-        return false;
-    }
-    bool res = device != nullptr &&
-               // When on-device strategy is used, tensor spec needs a default alignment based on the target layout.
-               // Otherwise, the tensor loses the data in the `to_layout` conversion and type conversion. But, if the
-               // default alignment is used, the tensors of rank 5 and above are squeezed down to the rank 4 in
-               // `build_ndiml_tilize`, which causes the padding loss, and subqequently the failure to validate
-               // tilize operation, which requires `physical_volume() % tt::constants::TILE_HW == 0`
-               tensor_shape.rank() <= 4 && tensor_shape.volume() > 0 && can_exec_ops_on_device(src_dtype) &&
-               can_exec_ops_on_device(dst_dtype) &&
-               // If the memory config is sharded, the tensor must be constructed on the host. Even if we can borrow the
-               // buffer, the sharding spec may require padding, including cases where the shard dimension is larger
-               // than the shape dimension.
-               !memory_config.is_sharded() && enable_device_typecast &&
+    bool res = device != nullptr && !device->is_remote_only() && (device->num_sub_devices() == 0) &&
+               tensor_shape.volume() > 0 && can_exec_ops_on_device(src_dtype) && can_exec_ops_on_device(dst_dtype) &&
+               enable_device_typecast &&
                // TODO: Remove preserve_nan_values check after
                // https://github.com/tenstorrent/tt-metal/issues/31406
-               !preserve_nan_values &&
-               // Logical shape must match physical shape for the tensor to be constructed on the device(no padding
-               // required). TensorSpec creation must follow after memory_config.is_sharded() check to avoid fatal error
-               tt::tt_metal::logical_matches_physical(TensorSpec(
-                   tensor_shape, TensorLayout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config)));
+               !preserve_nan_values;
 
     if (optional_tile.has_value()) {
         // on-device tiling operation expects tiles to be divisible by 32x32.
         res &= ((optional_tile->get_width() % tt::constants::TILE_WIDTH) == 0) &&
                ((optional_tile->get_height() % tt::constants::TILE_HEIGHT) == 0);
     }
+
     return res;
 }
 
-// Estimates peak per-bank memory during the on-device conversion path (borrow → to_device →
-// tilize → typecast) and returns true when it fits within the bank capacity. During tilize and
-// typecast the input and output buffers coexist, so peak memory is the sum of both.
+bool can_construct_on_single_device(
+    const ttnn::Shape& tensor_shape, const TensorLayout& src_tensor_layout, const MemoryConfig& memory_config) {
+    // If the memory config is sharded, the tensor must be constructed on the host. Even if we can borrow the
+    // buffer, the sharding spec may require padding, including cases where the shard dimension is larger
+    // than the shape dimension.
+    if (memory_config.is_sharded()) {
+        return false;
+    }
+
+    // Logical shape must match physical shape for the tensor to be constructed on the device(no padding
+    // required). TensorSpec creation must follow after memory_config.is_sharded() check to avoid fatal error
+    if (!tt::tt_metal::logical_matches_physical(TensorSpec(tensor_shape, src_tensor_layout))) {
+        return false;
+    }
+
+    // When on-device strategy is used, tensor spec needs a default alignment based on the target layout.
+    // Otherwise, the tensor loses the data in the `to_layout` conversion and type conversion. But, if the
+    // default alignment is used, the tensors of rank 5 and above are squeezed down to the rank 4 in
+    // `build_ndiml_tilize`, which causes the padding loss, and subqequently the failure to validate
+    // tilize operation, which requires `physical_volume() % tt::constants::TILE_HW == 0`
+    if (tensor_shape.rank() > 4) {
+        return false;
+    }
+
+    return true;
+}
+
+// Estimates peak per-bank memory during the on-device conversion path and returns true when it
+// fits within the bank capacity. During each stage the input and output buffers coexist, so peak
+// memory is the sum of both.
+//
+// Possible on-device paths (see convert_python_tensor_to_tt_tensor):
+//   target TILE, same dtype:  RM(src) → tilize → TILE(src)
+//   target TILE, diff dtype:  RM(src) → tilize → TILE(src) → typecast → TILE(dst)
+//   target RM,   diff dtype:  RM(src) → tilize → TILE(src) → typecast → TILE(dst) → untilize → RM(dst)
+//   target RM,   same dtype:  RM(src)  (no conversion needed)
 bool has_sufficient_device_memory(
     ttnn::distributed::MeshDevice* device,
     const ttnn::Shape& tensor_shape,
@@ -102,28 +119,69 @@ bool has_sufficient_device_memory(
 
     size_t peak_per_bank = src_rm_per_bank;
 
-    if (target_layout == Layout::TILE) {
-        // Tilize: input (src_dtype, RM) + output (src_dtype, TILE) coexist.
+    if (src_dtype != dst_dtype) {
+        // Typecast requires TILE layout, so the path always goes through tilize → typecast,
+        // regardless of the target layout.
+        TensorSpec src_tile_spec(
+            tensor_shape, TensorLayout(src_dtype, PageConfig(Layout::TILE, optional_tile), memory_config));
+        auto src_tile_per_bank = src_tile_spec.compute_consumed_memory_bytes_per_bank(alignment, num_banks);
+
+        TensorSpec dst_tile_spec(
+            tensor_shape, TensorLayout(dst_dtype, PageConfig(Layout::TILE, optional_tile), memory_config));
+        auto dst_tile_per_bank = dst_tile_spec.compute_consumed_memory_bytes_per_bank(alignment, num_banks);
+
+        // Tilize: RM(src) + TILE(src) coexist.
+        // Typecast: TILE(src) + TILE(dst) coexist.
+        peak_per_bank = std::max(src_rm_per_bank + src_tile_per_bank, src_tile_per_bank + dst_tile_per_bank);
+
+        if (target_layout == Layout::ROW_MAJOR) {
+            // Untilize: TILE(dst) + RM(dst) coexist.
+            TensorSpec dst_rm_spec(tensor_shape, TensorLayout(dst_dtype, PageConfig(Layout::ROW_MAJOR), memory_config));
+            auto dst_rm_per_bank = dst_rm_spec.compute_consumed_memory_bytes_per_bank(alignment, num_banks);
+            peak_per_bank = std::max(peak_per_bank, dst_tile_per_bank + dst_rm_per_bank);
+        }
+    } else if (target_layout == Layout::TILE) {
+        // Same dtype, target TILE: only tilize needed.
+        // Tilize: RM(src) + TILE(src) coexist.
         TensorSpec src_tile_spec(
             tensor_shape, TensorLayout(src_dtype, PageConfig(Layout::TILE, optional_tile), memory_config));
         auto src_tile_per_bank = src_tile_spec.compute_consumed_memory_bytes_per_bank(alignment, num_banks);
         peak_per_bank = src_rm_per_bank + src_tile_per_bank;
-
-        if (src_dtype != dst_dtype) {
-            // Typecast follows tilize: input (src_dtype, TILE) + output (dst_dtype, TILE) coexist.
-            TensorSpec dst_tile_spec(
-                tensor_shape, TensorLayout(dst_dtype, PageConfig(Layout::TILE, optional_tile), memory_config));
-            auto dst_tile_per_bank = dst_tile_spec.compute_consumed_memory_bytes_per_bank(alignment, num_banks);
-            peak_per_bank = std::max(peak_per_bank, src_tile_per_bank + dst_tile_per_bank);
-        }
-    } else if (src_dtype != dst_dtype) {
-        // Typecast in ROW_MAJOR: input + output coexist.
-        TensorSpec dst_rm_spec(tensor_shape, TensorLayout(dst_dtype, PageConfig(Layout::ROW_MAJOR), memory_config));
-        auto dst_rm_per_bank = dst_rm_spec.compute_consumed_memory_bytes_per_bank(alignment, num_banks);
-        peak_per_bank = src_rm_per_bank + dst_rm_per_bank;
     }
 
     return peak_per_bank <= bank_size;
+}
+
+// Estimates the largest per-device shard shape from the mesh mapper configuration.
+// For Shard placements the tensor dimension is ceiling-divided by the mesh dimension size;
+// Replicate placements leave the dimension unchanged. Returns an upper bound suitable for memory checks.
+ttnn::Shape estimate_per_device_shard_shape(
+    const ttnn::Shape& global_shape,
+    const ttnn::distributed::MeshMapperConfig& config,
+    ttnn::distributed::MeshDevice* device) {
+    if (device == nullptr) {
+        return global_shape;
+    }
+
+    const auto distribution_shape = config.mesh_shape_override.value_or(device->shape());
+
+    auto rank = global_shape.rank();
+    std::vector<uint32_t> dims;
+    dims.reserve(rank);
+    for (size_t i = 0; i < rank; ++i) {
+        dims.push_back(global_shape[i]);
+    }
+
+    for (size_t mesh_dim = 0; mesh_dim < distribution_shape.dims(); ++mesh_dim) {
+        using Shard = ttnn::distributed::MeshMapperConfig::Shard;
+        if (const auto* shard = std::get_if<Shard>(&config.placements[mesh_dim])) {
+            auto tensor_dim = shard->dim < 0 ? shard->dim + static_cast<int>(rank) : shard->dim;
+            auto num_chunks = distribution_shape[mesh_dim];
+            dims[tensor_dim] = (dims[tensor_dim] + num_chunks - 1) / num_chunks;
+        }
+    }
+
+    return ttnn::Shape(ttsl::Span<const uint32_t>(dims.data(), dims.size()));
 }
 
 Tensor create_tt_tensor_from_host_data(
@@ -148,31 +206,28 @@ Tensor create_tt_tensor_from_host_data(
 
     using namespace tt::tt_metal;
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
+        TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
         TensorLayout dst_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
-        if (mesh_mapper != nullptr) {
-            TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
 
-            const bool construct_on_device = device != nullptr && !device->is_remote_only() && enable_device_typecast &&
-                                             !preserve_nan_values && tensor_shape.volume() > 0;
+        const bool construct_on_device = can_construct_on_device(
+            device, tensor_shape, src_dtype, dst_dtype, optional_tile, enable_device_typecast, preserve_nan_values);
+
+        if (mesh_mapper != nullptr) {
+            const auto shard_shape = estimate_per_device_shard_shape(tensor_shape, mesh_mapper->config(), device);
+            const bool construct_on_mesh_device =
+                construct_on_device &&
+                has_sufficient_device_memory(
+                    device, shard_shape, src_dtype, dst_dtype, layout, memory_config, optional_tile);
             return ttnn::distributed::create_distributed_tensor(
                 host_buffer.view_as<T>(),
                 tensor_shape,
                 host_buffer.pin(),
-                construct_on_device ? src_tensor_layout : dst_tensor_layout,
+                construct_on_mesh_device ? src_tensor_layout : dst_tensor_layout,
                 *mesh_mapper,
                 device != nullptr ? std::make_optional(std::ref(*device)) : std::nullopt,
                 cq_id,
                 static_cast<T>(pad_value));
         }
-        const bool construct_on_device = can_construct_on_device(
-            device,
-            tensor_shape,
-            src_dtype,
-            dst_dtype,
-            memory_config,
-            optional_tile,
-            enable_device_typecast,
-            preserve_nan_values);
 
         // TODO: #https://github.com/tenstorrent/tt-metal/issues/40850
         // For single-device tensors, we cannot enable layout/data type changes due to tt-sim CI failures
@@ -190,9 +245,11 @@ Tensor create_tt_tensor_from_host_data(
         // Example: src_dtype = FLOAT32, dst_dtype = BFLOAT16.
         // The f32 tensor does not fit in L1, but bf16 does, so the typecast is performed on the host.
         const bool can_borrow = src_dtype == convert_to_data_type<T>() && construct_on_device &&
+                                !is_data_transformation_required &&
+                                can_construct_on_single_device(tensor_shape, src_tensor_layout, memory_config) &&
                                 has_sufficient_device_memory(
-                                    device, tensor_shape, src_dtype, dst_dtype, layout, memory_config, optional_tile) &&
-                                !is_data_transformation_required;
+                                    device, tensor_shape, src_dtype, dst_dtype, layout, memory_config, optional_tile);
+
         if (can_borrow) {
             return Tensor::from_borrowed_data(host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile);
         }
