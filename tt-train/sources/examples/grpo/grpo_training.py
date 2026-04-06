@@ -5,6 +5,7 @@
 
 from typing import List, Sequence, Iterator
 
+import numpy as np
 import ttnn
 import ttml
 import time
@@ -12,9 +13,9 @@ import argparse
 from ttml.common.utils import no_grad
 
 from utils.setup import InferenceCtx, setup_inference, setup_grpo_config, setup_training_optimizer
-from utils.boolq import get_boolq
+from utils.boolq import get_boolq, compute_rewards_advantages
 from utils.inference import completion_batched_multiple_prompts, deallocate_tensors
-from utils.loss import compute_nlog_probs, compute_grpo_loss, compute_rewards_advantages
+from utils.loss import compute_nlog_probs, compute_grpo_loss
 from utils.bookkeeping import RunContext, TrainingMetricsTracker, setup_training_run
 
 
@@ -52,7 +53,7 @@ def train_grpo(run, yaml_config_path, checkpoint_interval, start_checkpoint_path
     metrics = TrainingMetricsTracker(run.output_dir)
 
     ctx = setup_inference(
-        yaml_config_path, hf_model_id="unsloth/Llama-3.2-1B-Instruct", checkpoint_path=start_checkpoint_path
+        yaml_config_path, hf_model_id="meta-llama/Llama-3.2-1B-Instruct", checkpoint_path=start_checkpoint_path
     )
     grpo_cfg = setup_grpo_config(yaml_config_path)
     optimizer = setup_training_optimizer(yaml_config_path, ctx.tt_model)
@@ -65,6 +66,8 @@ def train_grpo(run, yaml_config_path, checkpoint_interval, start_checkpoint_path
     num_steps = 0
     accum_count = 0
     grad_accum = grpo_cfg.gradient_accumulation_steps
+    accum_rewards = []
+    accum_completion_lens = []
 
     expected_steps = (
         grpo_cfg.prompts_to_train // grpo_cfg.completions_batch_size * grpo_cfg.num_mini_epochs // grad_accum
@@ -80,6 +83,8 @@ def train_grpo(run, yaml_config_path, checkpoint_interval, start_checkpoint_path
         num_batches += 1
 
         rewards_np, advantages_np = compute_rewards_advantages(ctx, answers_batch, completions_batch)
+        accum_rewards.append(rewards_np)
+        accum_completion_lens.extend(len(c) for c in completions_batch)
 
         probs_old_list = []
         ctx.tt_model.eval()
@@ -128,7 +133,7 @@ def train_grpo(run, yaml_config_path, checkpoint_interval, start_checkpoint_path
             accum_count += 1
 
             if accum_count == grad_accum:
-                warmup_factor = min(1.0, (num_steps + 1) / grpo_cfg.warmup_steps)
+                warmup_factor = 1.0 if grpo_cfg.warmup_steps == 0 else min(1.0, (num_steps + 1) / grpo_cfg.warmup_steps)
                 optimizer.set_lr(grpo_cfg.base_lr * warmup_factor)
 
                 run.logger.info("synchronizing gradients")
@@ -141,17 +146,23 @@ def train_grpo(run, yaml_config_path, checkpoint_interval, start_checkpoint_path
                 accum_count = 0
 
                 num_steps += 1
-                run.logger.info(f"optimizer.step() done, {num_steps=}")
+                all_rewards = np.concatenate(accum_rewards)
+                mean_reward = float(all_rewards.mean())
+                mean_completion_len = sum(accum_completion_lens) / max(len(accum_completion_lens), 1)
+                run.logger.info(f"Step {num_steps} | Reward: {mean_reward:.4f} | Len: {mean_completion_len:.2f} tokens")
 
                 metrics.log_step(
                     step=num_steps,
                     batch=num_batches,
                     mini_epoch=mini_epoch,
-                    reward_mean=float(rewards_np.mean()),
-                    reward_std=float(rewards_np.std()),
+                    reward_mean=mean_reward,
+                    reward_std=float(all_rewards.std()),
+                    mean_completion_len=mean_completion_len,
                     batch_elapsed_s=time.perf_counter() - batch_time_start,
                     lr=grpo_cfg.base_lr * warmup_factor,
                 )
+                accum_rewards.clear()
+                accum_completion_lens.clear()
 
                 if num_steps % checkpoint_interval == 1:
                     run.save_checkpoint(ctx.tt_model, step=num_steps, dp_composer=ctx.dp_composer)

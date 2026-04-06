@@ -142,6 +142,7 @@ class TrainingMetricsTracker:
                 "step",
                 "batch",
                 "mini_epoch",
+                "mean_completion_len",
                 "reward_mean",
                 "reward_std",
                 "batch_elapsed_s",
