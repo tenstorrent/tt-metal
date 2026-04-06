@@ -151,6 +151,10 @@ class TextRotarySetup(LightweightModule):
         self._transformation_mat_decode = None
         self._transformation_mat_prefill = None
 
+        # Track last decode cos/sin for cleanup
+        self._decode_rot_cos_last = None
+        self._decode_rot_sin_last = None
+
     def get_transformation_mats(self) -> dict:
         """
         Return placeholder dict for API compatibility. Half-span RoPE does not use transformation matrices.
@@ -325,21 +329,44 @@ class TextRotarySetup(LightweightModule):
         rot_idxs: ttnn.Tensor,
     ) -> List[ttnn.Tensor]:
         """
-        Get rotation matrices for decode mode.
+        Get cos/sin for decode via on-device embedding lookup into the RoPE table.
 
-        Returns the FULL cos/sin cache matrices for use with ttnn.experimental.rotary_embedding,
-        which performs position slicing internally using the token_index parameter.
+        rotary_embedding is then called without token_index (prefill-style), so no host read
+        of current_pos is needed during trace capture.
 
         Args:
-            rot_idxs: Pre-allocated position index tensor (not used, kept for API compatibility)
+            rot_idxs: Device tensor [1, batch_padded] of sequence positions (uint32), same layout
+                as allocate_decode_rot_idxs.
 
         Returns:
-            List of [cos, sin] tensors (full cache) for ttnn.experimental.rotary_embedding
+            List of [cos, sin] tensors shaped [1, 1, batch_padded, head_dim]
         """
-        # Return the full cos/sin cache matrices directly
-        # ttnn.experimental.rotary_embedding expects the full cache and uses token_index
-        # to slice internally
-        return [self.cos_matrix, self.sin_matrix]
+        # Clean up previous tensors
+        if self._decode_rot_cos_last is not None:
+            ttnn.deallocate(self._decode_rot_cos_last)
+            ttnn.deallocate(self._decode_rot_sin_last)
+            self._decode_rot_cos_last = None
+            self._decode_rot_sin_last = None
+
+        # Use embedding lookup to get position-specific cos/sin
+        cos = ttnn.embedding(
+            rot_idxs,
+            self.cos_matrix_prefill,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        sin = ttnn.embedding(
+            rot_idxs,
+            self.sin_matrix_prefill,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        cos = ttnn.unsqueeze_to_4D(cos)
+        sin = ttnn.unsqueeze_to_4D(sin)
+
+        self._decode_rot_cos_last = cos
+        self._decode_rot_sin_last = sin
+        return [cos, sin]
 
     def allocate_decode_rot_idxs(self, initial_pos: int = 0) -> ttnn.Tensor:
         """

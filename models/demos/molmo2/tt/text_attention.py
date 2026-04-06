@@ -585,20 +585,18 @@ class TextAttention(LightweightModule):
             q = apply_rope_batched(q, cos, sin)
             k = apply_rope_batched(k, cos, sin)
         else:
-            # Traced path (batch=1): Use rotary_embedding with position 0
-            # rot_mats is full cache, position already set in traced tensors
+            # Traced path (batch=1): rot_mats already contain position-specific cos/sin
+            # (via embedding lookup in get_rot_mats_decode_traced), so no position param needed
             q = ttnn.experimental.rotary_embedding(
                 q,
-                cos,  # cos cache
-                sin,  # sin cache
-                0,  # Position (uses traced current_pos internally)
+                cos,  # position-specific cos
+                sin,  # position-specific sin
             )
 
             k = ttnn.experimental.rotary_embedding(
                 k,
-                cos,  # cos cache
-                sin,  # sin cache
-                0,  # Position (uses traced current_pos internally)
+                cos,  # position-specific cos
+                sin,  # position-specific sin
             )
 
         logger.debug(f"After RoPE: q.shape={q.shape}, k.shape={k.shape}")

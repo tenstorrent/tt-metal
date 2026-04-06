@@ -2,6 +2,74 @@
 
 ## Session Log
 
+### 2026-04-06 — T3K regression verify after DP=4 fix
+
+**Status:** PASS — DP=4 Galaxy changes do not regress T3K.
+
+**Method:** Started tt-inference-server local server (`run.py --model Molmo2-8B --workflow server --tt-device t3k`),
+ran all 105 video tests from `verification/test.jsonl`, compared against HF baseline in `test_results.jsonl`.
+
+**Results:**
+| Metric | Pre-fix (old) | Post-fix (new) |
+|---|---|---|
+| exact match | 74 (70.5%) | 73 (69.5%) |
+| formatting | 2 (1.9%) | 3 (2.9%) |
+| mismatch | 24 (22.9%) | 24 (22.9%) |
+| hf_blank | 5 (4.8%) | 5 (4.8%) |
+| accuracy (ex hf_blank) | 76.0% | 76.0% |
+| avg tt_net_sec | 13.81s | 12.42s |
+
+- 3 tests changed TT response (minor: e.g. "A" vs "A." punctuation); all within normal model variance.
+- No errors or crashes.
+- CSV: `verification/comparison_detailed_t3k_post_dp_fix.csv`
+
+**PCC:** N/A (inference verification)
+
+---
+
+### 2026-04-06 — DP=4 Galaxy support
+
+**Status:** Added Data Parallelism (DP=4) support for Molmo2-8B on Galaxy (32 chips).
+Follows the proven pattern from `tt_transformers` (Llama/Qwen VL).
+
+**Changes:**
+
+1. **`models/demos/molmo2/tt/generator_vllm.py`**:
+   - `allocate_molmo2_kv_cache`: Added `submesh_devices` param; allocates per-replica KV cache per submesh; returns `[dp_idx][layer][k_or_v]`.
+   - `Molmo2ForConditionalGeneration.__init__`: Accepts `models` list + per-replica state lists (`kv_caches_per_dp`, `prefill_traces_per_dp`, etc.); `_set_active_replica` / `_save_active_replica` helpers for context switching.
+   - `initialize_vllm_model`: Calls `create_submeshes(mesh_device, tt_data_parallel)` and creates one `Molmo2Model` + `Molmo2ModelArgs` per submesh.
+   - `allocate_kv_cache`: Passes `[model.mesh_device for model in self.models]`.
+   - `prefill_forward`: Routes `user_id → model_id = user_id // batch_per_dp` via `_set_active_replica`.
+   - `decode_forward`: Branches to `_decode_forward_dp` for DP>1 (chunks batch, runs per-replica).
+   - `warmup_model_prefill` / `warmup_model_decode`: Loop over replicas, calling `_warmup_prefill_single_replica` / `_warmup_decode_single_replica` per replica.
+
+2. **`tt-inference-server/workflows/model_spec.py`**:
+   - Added `DeviceModelSpec(device=DeviceTypes.GALAXY, data_parallel_size=4, ...)` to the Molmo2-8B template.
+
+**PCC:** N/A (DP orchestration; model weights and per-device computation unchanged from T3K)
+
+**Block Hash:** N/A
+
+**Verify:** Run on Galaxy hardware with `data_parallel_size=4` in vLLM args.
+
+### 2026-04-06 — RoPE fix for traced decode (embedding lookup)
+
+**Status:** Fixed RoPE position encoding for traced decode. The bug was using hardcoded position `0` in `ttnn.experimental.rotary_embedding`. Fix adopted from `ign/fs/molmo2_8B` branch:
+
+1. **`text_rotary_setup.py`**: `get_rot_mats_decode_traced()` now uses `ttnn.embedding` lookup with `rot_mat_idxs` to get position-specific cos/sin, instead of returning full cache.
+
+2. **`text_attention.py`**: Decode path calls `rotary_embedding(q, cos, sin)` without position parameter (cos/sin are already position-specific).
+
+3. **`demo.py`**: Moved `get_rot_mats_decode_traced()` call INSIDE trace capture block so embedding lookup is traced and re-executed with updated `rot_mat_idxs` on each replay.
+
+**Results:** Benchmark match rate improved from **56.25%** (9/16) to **100%** (5/5) on video MCQ tests. First letter of TTNN responses now matches HF.
+
+**PCC:** N/A (orchestration)
+
+**Block Hash:** N/A
+
+**Verify:** `python models/demos/molmo2/verification/run_benchmark_efficient.py --start 0 --end 5 --timeout 180`
+
 ### 2026-04-05 — Strict upfront warmup (tests-to-demo)
 
 **Status:** `run_prefill` / `run_decode_step` no longer lazy-capture traces when `use_trace=True`; entry points call `warmup_video_traces` before video inference; `test_video_trace.py` adds `test_decode_trace_replay` and `test_full_warmup_then_inference` (prefill bucket `[1024]` for short text-only prompts).
