@@ -267,12 +267,14 @@ class Gemma4DecoderLayer:
         # Per-layer input embeddings (E2B/E4B feature)
         if self.hidden_size_per_layer_input and per_layer_input is not None and hasattr(self, "per_layer_input_gate"):
             residual_pli = hidden_states
-            # gate(x) → act → multiply by per_layer_input → project → norm → residual
             gated = ttnn.linear(hidden_states, self.per_layer_input_gate)
             gated = ttnn.gelu(gated, fast_and_approximate_mode=True)
             gated = ttnn.mul(gated, per_layer_input)
             projected = ttnn.linear(gated, self.per_layer_projection)
             normed_pli = self.post_per_layer_input_norm.forward(projected)
             hidden_states = ttnn.add(residual_pli, normed_pli)
+            # Ensure output stays 4D (some ops may add dimensions)
+            if len(hidden_states.shape) > 4:
+                hidden_states = ttnn.reshape(hidden_states, (1, 1, hidden_states.shape[-2], self.hidden_size))
 
         return hidden_states
