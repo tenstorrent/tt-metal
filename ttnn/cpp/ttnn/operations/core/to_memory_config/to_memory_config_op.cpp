@@ -45,10 +45,11 @@ bool can_use_sharded_to_interleaved(
                                         : shard_spec.shape[1] * tt::datum_size(output_cb_df);
 
         uint32_t num_units_per_shard_height = (input_tensor.layout() == Layout::TILE)
-                                                  ? shard_spec.shape[0] / tt::constants::TILE_HEIGHT
+                                                  ? shard_spec.shape[0] / input_tensor.tensor_spec().tile().get_height()
                                                   : shard_spec.shape[0];
-        uint32_t num_units_per_shard_width =
-            (input_tensor.layout() == Layout::TILE) ? shard_spec.shape[1] / tt::constants::TILE_WIDTH : 1;
+        uint32_t num_units_per_shard_width = (input_tensor.layout() == Layout::TILE)
+                                                 ? shard_spec.shape[1] / input_tensor.tensor_spec().tile().get_width()
+                                                 : 1;
         uint32_t num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
 
         IDevice* device = input_tensor.device();
@@ -103,8 +104,8 @@ bool can_use_interleaved_to_sharded(
     if (input_tensor.layout() == Layout::TILE) {
         input_unit_size = tt::tile_size(input_cb_df);
         output_unit_size = tt::tile_size(output_cb_df);
-        num_units_per_shard =
-            (shard_spec.shape[0] / tt::constants::TILE_HEIGHT) * (shard_spec.shape[1] / tt::constants::TILE_WIDTH);
+        num_units_per_shard = (shard_spec.shape[0] / input_tensor.tensor_spec().tile().get_height()) *
+                              (shard_spec.shape[1] / input_tensor.tensor_spec().tile().get_width());
     } else {
         input_unit_size = shard_spec.shape[1] * input_tensor.element_size();
         output_unit_size = shard_spec.shape[1] * tt::datum_size(output_cb_df);
@@ -200,8 +201,8 @@ bool can_use_reshard(
         uint32_t remote_units_per_shard;
         if (input_tensor.layout() == Layout::TILE) {
             unit_size = tt::tile_size(data_format);
-            remote_units_per_shard =
-                remote_shard_spec_ref.numel() / (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+            remote_units_per_shard = remote_shard_spec_ref.numel() / (input_tensor.tensor_spec().tile().get_height() *
+                                                                      input_tensor.tensor_spec().tile().get_width());
         } else {
             unit_size = inp_shard_spec.shape[1] * input_tensor.element_size();
             remote_units_per_shard = remote_shard_spec_ref.shape[0];
