@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
 // TopK SFPU Test - Bitonic Merge-Based Iterative TopK Algorithm

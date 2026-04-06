@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import fcntl
@@ -875,7 +875,7 @@ class TestConfig:
 
     def generate_build_header(self) -> str:
         header_content: list[str] = [
-            "// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.",
+            "// SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.",
             "//",
             "// SPDX-License-Identifier: Apache-2.0",
             "// AUTO-GENERATED CONFIGURATION HEADER. DO NOT EDIT MANUALLY!",

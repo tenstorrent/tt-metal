@@ -1,5 +1,5 @@
 #!/bin/sh
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Patch the activate script for POSIX sh compatibility.

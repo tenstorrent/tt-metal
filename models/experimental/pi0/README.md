@@ -332,5 +332,5 @@ python models/experimental/pi0/tests/download_pretrained_weights.py
 
 ## License
 
-SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
 SPDX-License-Identifier: Apache-2.0

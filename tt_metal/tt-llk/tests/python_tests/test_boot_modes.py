@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from conftest import skip_for_blackhole, skip_for_wormhole

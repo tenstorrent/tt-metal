@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 Custom copyright validation script for Tenstorrent.
 
 This script validates that copyright headers in source files follow the expected format:
-- SPDX-FileCopyrightText: © YEAR Copyright Holder
+- SPDX-FileCopyrightText: YEAR Copyright Holder
 - SPDX-License-Identifier: Apache-2.0
 
 Logic for new files (untracked or added but not committed):
@@ -382,14 +382,14 @@ class CopyrightValidator:
             ]
         elif comment_style == "python":
             return [
-                f"# SPDX-FileCopyrightText: © {year} {self.EXPECTED_COMPANY}",
+                f"# SPDX-FileCopyrightText: {year} {self.EXPECTED_COMPANY}",
                 "#",
                 f"# SPDX-License-Identifier: {self.EXPECTED_LICENSE}",
                 "",
             ]
         else:  # cpp style
             return [
-                f"// SPDX-FileCopyrightText: © {year} {self.EXPECTED_COMPANY}",
+                f"// SPDX-FileCopyrightText: {year} {self.EXPECTED_COMPANY}",
                 "//",
                 f"// SPDX-License-Identifier: {self.EXPECTED_LICENSE}",
                 "",
@@ -429,9 +429,9 @@ class CopyrightValidator:
         if comment_style == "c_block":
             return f" * SPDX-FileCopyrightText: (c) {year} {self.EXPECTED_COMPANY}"
         elif comment_style == "python":
-            return f"# SPDX-FileCopyrightText: © {year} {self.EXPECTED_COMPANY}"
+            return f"# SPDX-FileCopyrightText: {year} {self.EXPECTED_COMPANY}"
         else:  # cpp style
-            return f"// SPDX-FileCopyrightText: © {year} {self.EXPECTED_COMPANY}"
+            return f"// SPDX-FileCopyrightText: {year} {self.EXPECTED_COMPANY}"
 
     def _find_tenstorrent_copyright_insert_position(
         self, lines: List[str], comment_style: str

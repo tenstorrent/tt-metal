@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: Apache-2.0
 #
-# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: 2024 Tenstorrent USA, Inc.
 #
 # Purpose: Setup and deploy Llama 3.1 70B Instruct model with dependencies.
 
