@@ -13,4 +13,5 @@ enum class SfpuType {
     swish,
     frac,
     atanh,
+    sinh,
 };

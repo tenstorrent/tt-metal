@@ -42,6 +42,7 @@ def register_ttnn_cpp_unary_function(unary_function):
             "ceil": torch.ceil,
             "trunc": torch.trunc,
             "frac": torch.frac,
+            "sinh": torch.sinh,
         }
 
         golden_keys = set(name_to_golden_function.keys())
@@ -63,6 +64,7 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.ceil,
     ttnn.trunc,
     ttnn.frac,
+    ttnn.sinh,
 ]
 for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
     register_ttnn_cpp_unary_function(unary_function)
