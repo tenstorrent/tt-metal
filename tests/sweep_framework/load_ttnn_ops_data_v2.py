@@ -1253,7 +1253,7 @@ def reconstruct_from_db(output_path=None, schema=DEFAULT_SCHEMA, model_filter=No
 
     if output_path:
         with open(output_path, "w") as f:
-            json.dump(result, f, indent=2)
+            json.dump(result, f, indent=2, sort_keys=True)
         print(f"Saved to {output_path}")
 
     return result
@@ -1446,7 +1446,7 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
 
     if output_path:
         with open(output_path, "w") as f:
-            json.dump(result, f, indent=2)
+            json.dump(result, f, indent=2, sort_keys=True)
         print(f"Saved to {output_path}")
 
     return result
@@ -1762,7 +1762,7 @@ def reconstruct_from_manifest(manifest_path=None, output_path=None, scope=None, 
 
     if output_path:
         with open(output_path, "w") as f:
-            json.dump(merged, f, indent=2)
+            json.dump(merged, f, indent=2, sort_keys=True)
         print(f"Saved to {output_path}")
 
     return merged
@@ -1891,7 +1891,7 @@ def reconstruct_single_operation(operation_name, output_path=None, schema=DEFAUL
 
     if output_path:
         with open(output_path, "w") as f:
-            json.dump(result, f, indent=2)
+            json.dump(result, f, indent=2, sort_keys=True)
         print(f"Saved to {output_path}")
 
     return result

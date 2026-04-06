@@ -655,6 +655,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
             test_vector.pop("validity")
 
             try:
+                os.environ["TTNN_SWEEP_SOURCE_HASH"] = input_hash
                 result = _execute_vector_with_retry(
                     test_vector,
                     module_name,
@@ -700,6 +701,8 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                 result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
                 result["exception"] = str(e)
                 result["e2e_perf"] = None
+            finally:
+                os.environ.pop("TTNN_SWEEP_SOURCE_HASH", None)
 
         # Add the original test vector data to the result
         result["original_vector_data"] = original_vector_data

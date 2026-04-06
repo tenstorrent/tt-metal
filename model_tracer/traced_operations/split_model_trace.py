@@ -77,7 +77,7 @@ def split_model_trace(input_path: str, output_dir: str | None = None) -> None:
 
         out_file = op_dir / "ttnn_operations_master.json"
         with open(out_file, "w") as f:
-            json.dump(per_op, f, indent=2)
+            json.dump(per_op, f, indent=2, sort_keys=True)
 
         print(f"  {op_name:<55} {num_configs:>4} configs -> {out_file}")
 

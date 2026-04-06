@@ -422,6 +422,11 @@ def serialize_operation_parameters(
             "kwargs": serialized_kwargs,
         }
 
+        # Propagate sweep source hash if set by the sweep runner
+        sweep_source_hash = os.environ.get("TTNN_SWEEP_SOURCE_HASH")
+        if sweep_source_hash:
+            operation_data["sweep_source_hash"] = sweep_source_hash
+
         # Add return value if available
         if serialized_return_value is not None:
             operation_data["return_value"] = serialized_return_value
