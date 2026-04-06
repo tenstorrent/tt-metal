@@ -13,6 +13,7 @@
 #elif defined(COMPILE_FOR_TRISC)
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/matmul.h"
+#include "../../../kernel_includes/tt_metal/include/compute_kernel_api/pmp.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
 #include "api/compute/tile_move_copy.h"
 #ifdef TRISC_PACK
@@ -181,7 +182,21 @@ struct Matmul {
                 // Batch processing - all tiles at once
                 tile_regs_acquire();
 
-                custom_mm_block<finalize, read_transposed>(args.in0, args.in1, 0, 0, 0, args.k_num_tiles, out_w);
+                pmp_run(
+                    [args, out_w] {
+                        custom_mm_block<finalize, read_transposed>(
+                            args.in0, args.in1, 0, 0, 0, args.k_num_tiles, out_w);
+                    },
+                    [args, out_w] {
+#if defined(DEBUG_PRINT_ENABLED)
+                        DEVICE_PRINT_UNPACK(
+                            "Case: M={} K={} N={} DF={}\n",
+                            get_operand_face_r_dim(args.in0),
+                            args.k_num_tiles,
+                            out_w,
+                            unpack_src_format[args.in1]);
+#endif
+                    });
 
                 tile_regs_commit();
 

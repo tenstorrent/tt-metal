@@ -34,38 +34,7 @@ from models.common.utility_functions import comp_pcc, skip_with_llk_assert
 from models.demos.deepseek_v3_b1.micro_ops.matmul.op import Matmul
 
 
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39472")
-@pytest.mark.parametrize(
-    "M, K, N, in0_dtype, in1_dtype, transpose, fused_activation, fp32_dest_acc_en",
-    [
-        # Before SDPA (bfloat16 srcB/in0, bfloat8_b srcA/in1)
-        (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # Q down + K down
-        (1, 3584, 32, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # Q down with split inner dim
-        (1, 1536, 128, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # Q up
-        (1, 128, 512, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # Q nope
-        # SDPA (bfloat16 srcB/in0, bfloat8_b srcA/in1)
-        (8, 576, 256, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # SDPA Q @ K.T (KV_chunk_size=256)
-        (8, 576, 512, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # SDPA Q @ K.T (KV_chunk_size=512)
-        (8, 576, 256, ttnn.bfloat16, ttnn.bfloat8_b, True, None, False),  # SDPA Q @ K.T transposed (KV_chunk_size=256)
-        (8, 576, 512, ttnn.bfloat16, ttnn.bfloat8_b, True, None, False),  # SDPA Q @ K.T transposed (KV_chunk_size=512)
-        (8, 256, 512, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # SDPA S @ V (KV_chunk_size=256)
-        (8, 512, 512, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # SDPA S @ V (KV_chunk_size=512)
-        # After SDPA (bfloat16 srcB/in0, bfloat8_b srcA/in1)
-        (1, 512, 128, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # V out
-        (1, 8192, 64, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # Out
-        # MoE (bfloat16 srcB/in0, bfloat8_b srcA/in1 - potentially bfloat4_b if accurate enough)
-        (1, 7168, 64, ttnn.bfloat16, ttnn.bfloat4_b, False, None, False),  # Dense MLP: W_up (out_w=2)
-        (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat4_b, False, None, False),  # Gate proj + up proj
-        (1, 2048, 32, ttnn.bfloat16, ttnn.bfloat4_b, False, None, False),  # Down proj
-        # MoE router gate with sigmoid: [1, 7168] x [7168, 32] per core (8 cores total = 256 outputs)
-        (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat16, False, "sigmoid", True),  # Router gate + sigmoid with FP32 acc
-        # SiLU activation test (similar to MoE gate projection)
-        (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat4_b, False, "silu", False),  # Gate proj + silu
-        # Tail MMs
-        (1, 7168, 160, ttnn.bfloat16, ttnn.bfloat4_b, False, None, False),  # LM Head
-    ],
-)
-def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, transpose, fused_activation, fp32_dest_acc_en):
+def _run_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, transpose, fused_activation, fp32_dest_acc_en):
     """Test single-core matmul operation with fully sharded inputs"""
 
     # Use fused_activation directly (no special suffixes needed now)
@@ -206,6 +175,77 @@ def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, transpose, fu
     assert passing, pcc_message
 
     logger.info(f"✓ Single-core matmul{activation_str}{fp32_str} test passed!")
+
+
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39472")
+@pytest.mark.parametrize(
+    "M, K, N, in0_dtype, in1_dtype, transpose, fused_activation, fp32_dest_acc_en",
+    [
+        # Before SDPA (bfloat16 srcB/in0, bfloat8_b srcA/in1)
+        (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # Q down + K down
+        (1, 3584, 32, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # Q down with split inner dim
+        (1, 1536, 128, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # Q up
+        (1, 128, 512, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # Q nope
+        # SDPA (bfloat16 srcB/in0, bfloat8_b srcA/in1)
+        (8, 576, 256, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # SDPA Q @ K.T (KV_chunk_size=256)
+        (8, 576, 512, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # SDPA Q @ K.T (KV_chunk_size=512)
+        (8, 576, 256, ttnn.bfloat16, ttnn.bfloat8_b, True, None, False),  # SDPA Q @ K.T transposed (KV_chunk_size=256)
+        (8, 576, 512, ttnn.bfloat16, ttnn.bfloat8_b, True, None, False),  # SDPA Q @ K.T transposed (KV_chunk_size=512)
+        (8, 256, 512, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # SDPA S @ V (KV_chunk_size=256)
+        (8, 512, 512, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # SDPA S @ V (KV_chunk_size=512)
+        # After SDPA (bfloat16 srcB/in0, bfloat8_b srcA/in1)
+        (1, 512, 128, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # V out
+        (1, 8192, 64, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # Out
+        # MoE (bfloat16 srcB/in0, bfloat8_b srcA/in1 - potentially bfloat4_b if accurate enough)
+        (1, 7168, 64, ttnn.bfloat16, ttnn.bfloat4_b, False, None, False),  # Dense MLP: W_up (out_w=2)
+        (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat4_b, False, None, False),  # Gate proj + up proj
+        (1, 2048, 32, ttnn.bfloat16, ttnn.bfloat4_b, False, None, False),  # Down proj
+        # MoE router gate with sigmoid: [1, 7168] x [7168, 32] per core (8 cores total = 256 outputs)
+        (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat16, False, "sigmoid", True),  # Router gate + sigmoid with FP32 acc
+        # SiLU activation test (similar to MoE gate projection)
+        (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat4_b, False, "silu", False),  # Gate proj + silu
+        # Tail MMs
+        (1, 7168, 160, ttnn.bfloat16, ttnn.bfloat4_b, False, None, False),  # LM Head
+    ],
+)
+def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, transpose, fused_activation, fp32_dest_acc_en):
+    _run_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, transpose, fused_activation, fp32_dest_acc_en)
+
+
+@pytest.mark.parametrize(
+    "M, K, N",
+    [
+        (1, 64, 32),
+        (1, 64, 64),
+        # (1,  128, 512),
+        (1, 256, 32),
+        (1, 256, 128),
+        (1, 512, 128),
+        (1, 512, 256),
+        (1, 1536, 128),
+        (1, 2048, 32),
+        (1, 3584, 32),
+        (1, 7168, 32),
+        (1, 7168, 64),
+        # (1, 7168, 160),
+        # (1, 7168, 256),
+        (1, 8192, 64),
+        # (8,  256, 512),
+        # (8,  512, 512),
+        (8, 576, 256),
+        # (8,  576, 512),
+    ],
+)
+@pytest.mark.parametrize(
+    "in1_dtype",
+    [
+        ttnn.bfloat8_b,
+        ttnn.bfloat4_b,
+    ],
+)
+# Does not provide meaningful additional coverage, used only for collecting more detailed performance data
+def test_matmul_single_core_benchmark(device, M, K, N, in1_dtype):
+    _run_matmul_single_core(device, M, K, N, ttnn.bfloat16, in1_dtype, False, None, False)
 
 
 @skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39472")
