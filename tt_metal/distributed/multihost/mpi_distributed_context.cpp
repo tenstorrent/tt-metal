@@ -133,13 +133,19 @@ struct MpiGroupGuard {
 };
 
 static std::string identify_failed_ranks(MPI_Comm comm) {
-    // Try to ack pending failures. On a revoked communicator this may return
-    // MPIX_ERR_REVOKED; in that case we still try get_acked below because
-    // prior acks from earlier operations may have recorded failure information
-    // that we can retrieve.
-    // Acknowledge all pending failures (best-effort). num_to_ack=INT_MAX acks
-    // every pending failure in one call. num_acked is intentionally discarded;
-    // we only care that failures are acked so get_failed() can see them.
+    // Acknowledge all locally-known pending failures (best-effort).
+    // Per the OpenMPI 5 spec, num_to_ack is the *maximum* number of failures
+    // to acknowledge; the spec recommends "the group size" to ack everything,
+    // but INT_MAX is an equivalent shortcut since the implementation clamps to
+    // the actual failure count.  num_acked returns the *total* acknowledged
+    // count on this communicator (cumulative across calls), so it can exceed
+    // num_to_ack when prior calls already acked some failures.
+    // We discard num_acked because we only need the side-effect: once failures
+    // are acked, MPIX_Comm_get_failed() below can report them, and unmatched
+    // MPI_ANY_SOURCE receives stop raising MPIX_ERR_PROC_FAILED_PENDING.
+    // On a revoked communicator this returns MPIX_ERR_REVOKED, which we
+    // silently ignore; MPIX_Comm_get_failed() may still return previously-
+    // acked failures from earlier calls.
     int num_acked = 0;
     (void)MPIX_Comm_ack_failed(comm, std::numeric_limits<int>::max(), &num_acked);
     MpiGroupGuard failed_guard;
@@ -261,7 +267,7 @@ static void handle_rank_failure(
     std::vector<Rank>* failed_ranks_cache,
     std::mutex* failed_ranks_cache_mutex,
     std::atomic_flag* revoked_flag) {
-    // Identify who died before revoking (failure_get_acked requires pre-revoke comm).
+    // Identify who died before revoking (MPIX_Comm_get_failed requires pre-revoke comm).
     // Always attempt identify_failed_ranks() regardless of error code — even for
     // MPIX_ERR_REVOKED.  On a revoked comm, MPIX_Comm_ack_failed() may still succeed
     // (the ack is local state); if it does, subsequent calls to failed_ranks() will
@@ -1209,16 +1215,21 @@ std::vector<Rank> MPIContext::failed_ranks() const {
     // Query ULFM for currently-acked failed ranks on this communicator.
     //
     // Attempt MPIX_Comm_ack_failed() first (best-effort, ignore return code).
+    // Per the OpenMPI 5 spec, num_to_ack is the maximum number of failures to
+    // acknowledge; INT_MAX acks all known failures (the spec suggests using the
+    // group size, but INT_MAX is equivalent since the impl clamps internally).
+    // num_acked returns the cumulative total of acked failures on this comm,
+    // which can exceed num_to_ack when prior calls already acked some.
     // On a non-revoked comm this records any pending failures; on an already-
     // revoked comm it returns MPIX_ERR_REVOKED, which we silently ignore.
-    // Then call MPIX_Comm_get_failed() to retrieve the acked group.
+    // Then call MPIX_Comm_get_failed() to retrieve the failed group.
     //
     // POTENTIAL FAILURE CASE — REVOKED-path ranks:
     //   A rank that sees MPIX_ERR_REVOKED (77) receives a communicator that was
     //   revoked by a peer *before* this rank processed the failure.  By the time
     //   this method runs, MPIX_Comm_ack_failed() returns MPIX_ERR_REVOKED, so
     //   MPIX_Comm_get_failed() sees no acked failures and returns an empty
-    //   group → failed_size == 0 → we fall through to cached_failed_ranks_.
+    //   group -> failed_size == 0 -> we fall through to cached_failed_ranks_.
     //
     //   cached_failed_ranks_ was populated by handle_rank_failure() before
     //   MPIX_Comm_revoke() propagated — so for ranks where identify_failed_ranks()
@@ -1230,7 +1241,7 @@ std::vector<Rank> MPIContext::failed_ranks() const {
     //   When reliable failed-rank identification is required, compare communicator
     //   size before vs. after revoke_and_shrink() — the delta is always accurate.
     // Acknowledge all pending failures (best-effort); see identify_failed_ranks()
-    // for rationale on num_to_ack=INT_MAX and discarding num_acked.
+    // for detailed rationale.
     int num_acked = 0;
     (void)MPIX_Comm_ack_failed(state->comm, std::numeric_limits<int>::max(), &num_acked);
     MPI_Group failed_group = MPI_GROUP_NULL;
