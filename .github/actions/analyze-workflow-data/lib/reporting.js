@@ -447,8 +447,11 @@ async function buildAlertMessage(filteredGrouped, failedWorkflows, alertAll, err
   }
 
   if (failingItems.length) {
+    // Start with @BrAIn so the message triggers the BrAIn bot's keyword detection.
+    // BrAIn responds to messages that begin with its trigger word; mentions buried
+    // mid-message are ignored when the bot is in trigger-word-only mode.
     return [
-      '*Alerts: failing workflows on main*',
+      `<@U0AK48VCFM0> *Alerts: failing workflows on main*`,
       ...failingItems
     ].join('\n');
   }
