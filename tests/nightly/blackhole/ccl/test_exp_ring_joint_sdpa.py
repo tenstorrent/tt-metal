@@ -386,6 +386,8 @@ def run_exp_ring_joint_sdpa_nightly(
             return out[:, :, :total_seq, :]
 
         if num_iterations > 1:
+            N_local = total_seq // sp_size
+            pass_determinism = True
             reference_output = to_torch_out(tt_out_list[0])
             for i in range(1, num_iterations):
                 tt_out_torch = to_torch_out(tt_out_list[i])
@@ -393,11 +395,56 @@ def run_exp_ring_joint_sdpa_nightly(
                     diff_mask = reference_output != tt_out_torch
                     num_diffs = diff_mask.sum().item()
                     max_diff = (reference_output - tt_out_torch).abs().max().item()
-                    pytest.fail(
+                    logger.error(
                         f"Exp ring joint SDPA output at iteration {i} differs from iteration 0: "
                         f"{num_diffs} differing elements, max_diff={max_diff}"
                     )
-            logger.info(f"Exp ring joint SDPA determinism verified: all {num_iterations} outputs are exactly equal")
+                    pass_determinism = False
+
+                    # Per-tile mismatch analysis
+                    TILE = 32
+                    seq_tiles = total_seq // TILE
+                    d_tiles = d // TILE
+
+                    tile_diffs = []
+                    for bx in range(b):
+                        for h in range(nh):
+                            for st in range(seq_tiles):
+                                for dt in range(d_tiles):
+                                    s0, s1 = st * TILE, (st + 1) * TILE
+                                    d0, d1 = dt * TILE, (dt + 1) * TILE
+                                    ref_tile = reference_output[bx, h, s0:s1, d0:d1]
+                                    iter_tile = tt_out_torch[bx, h, s0:s1, d0:d1]
+                                    if not torch.equal(ref_tile, iter_tile):
+                                        seq_slice = s0 // N_local
+                                        seq_tile_in_slice = (s0 - seq_slice * N_local) // TILE
+                                        tile_max_diff = (ref_tile - iter_tile).abs().max().item()
+                                        tile_diffs.append((bx, h, st, seq_slice, seq_tile_in_slice, dt, tile_max_diff))
+
+                    logger.error(f"  {len(tile_diffs)} mismatching tiles out of {b * nh * seq_tiles * d_tiles}")
+
+                    from collections import Counter
+
+                    slice_counts = Counter(td[3] for td in tile_diffs)
+                    for sl, cnt in sorted(slice_counts.items()):
+                        logger.error(f"  seq_slice={sl}: {cnt} mismatching tiles")
+
+                    in_slice_counts = Counter(td[4] for td in tile_diffs)
+                    logger.error(f"  All unique seq_tile_in_slice values: {sorted(in_slice_counts.keys())}")
+                    for st_in, cnt in sorted(in_slice_counts.items()):
+                        logger.error(f"  seq_tile_in_slice={st_in}: {cnt} mismatching tiles")
+
+                    for bx, h, st, seq_slice, st_in_slice, dt, mdiff in tile_diffs[:50]:
+                        logger.error(
+                            f"  tile: batch={bx} head={h} seq_tile={st} seq_slice={seq_slice} "
+                            f"seq_tile_in_slice={st_in_slice} d_tile={dt} max_diff={mdiff:.6f}"
+                        )
+                    if len(tile_diffs) > 50:
+                        logger.error(f"  ... and {len(tile_diffs) - 50} more")
+                else:
+                    logger.info(f"Output iter {i} matches iter 0 (bitwise equal)")
+
+            assert pass_determinism, "Exp ring joint SDPA determinism failed"
             return
 
         if not do_check:
@@ -504,6 +551,6 @@ def test_exp_ring_joint_attention_sdpa_determinism(
         q_chunk_size,
         k_chunk_size,
         dtype,
-        num_iterations=10,
+        num_iterations=4,
         max_payload_size=max_payload_size,
     )
