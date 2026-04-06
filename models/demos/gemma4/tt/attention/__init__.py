@@ -40,8 +40,10 @@ class Gemma4AttentionConfig:
             self.rope_theta = hf_config.rope_theta
             self.partial_rotary_factor = 1.0
         else:
-            self.num_key_value_heads = hf_config.num_global_key_value_heads
-            self.head_dim = hf_config.global_head_dim
+            # Global KV heads: use num_global_key_value_heads if set, else fall back to sliding
+            global_kv = getattr(hf_config, "num_global_key_value_heads", None)
+            self.num_key_value_heads = global_kv if global_kv else hf_config.num_key_value_heads
+            self.head_dim = getattr(hf_config, "global_head_dim", hf_config.head_dim)
             self.sliding_window = None
             self.rope_theta = hf_config.global_rope_theta
             self.partial_rotary_factor = hf_config.partial_rotary_factor

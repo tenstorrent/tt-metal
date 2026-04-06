@@ -47,6 +47,7 @@ from models.demos.gemma4.tt.gemma4_attention_config import get_attention_program
 from models.demos.gemma4.tt.moe import MoEBlock
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.tt.shared_mlp import SharedMLP
+from models.demos.gemma4.utils.general_utils import get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
 
 
@@ -70,6 +71,7 @@ class Gemma4DecoderLayer:
         self.hidden_size = hf_config.hidden_size
         self.layer_type = hf_config.layer_types[layer_idx]
         self.enable_moe_block = hf_config.enable_moe_block
+        self.hidden_size_per_layer_input = getattr(hf_config, "hidden_size_per_layer_input", 0) or 0
 
         # Try both key formats (HF uses "model.language_model.layers", tests use "model.layers")
         layer_state = {}
@@ -143,6 +145,35 @@ class Gemma4DecoderLayer:
                 tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/moe" if tensor_cache_path else None,
             )
 
+        # Per-layer input embeddings (E2B/E4B feature)
+        if self.hidden_size_per_layer_input:
+            pli_prefix = f"{tensor_cache_path}/layer_{layer_idx}" if tensor_cache_path else None
+
+            if layer_state and "per_layer_input_gate.weight" in layer_state:
+                gate_w = layer_state["per_layer_input_gate.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
+                proj_w = layer_state["per_layer_projection.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
+            else:
+                gate_w = None
+                proj_w = None
+
+            self.per_layer_input_gate = ttnn.as_tensor(
+                gate_w,
+                device=mesh_device,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                cache_file_name=get_cache_file_name(pli_prefix, "per_layer_input_gate"),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self.per_layer_projection = ttnn.as_tensor(
+                proj_w,
+                device=mesh_device,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                cache_file_name=get_cache_file_name(pli_prefix, "per_layer_projection"),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self.post_per_layer_input_norm = _norm("post_per_layer_input_norm")
+
     def __call__(self, hidden_states, rope_mats, position_idx, page_table, kv_cache, is_decode, token_index=None):
         """
         Decoder layer forward pass.
@@ -171,7 +202,6 @@ class Gemma4DecoderLayer:
             token_index=token_index,
         )
 
-        # attn_output is placeholder (torch tensor) until attention is implemented
         if isinstance(attn_output, torch.Tensor):
             hidden_states = residual
         else:
@@ -223,5 +253,13 @@ class Gemma4DecoderLayer:
             combined.deallocate(True)
         else:
             hidden_states = combined
+
+        # Per-layer input embeddings (E2B/E4B feature)
+        # hidden_states += act(gate(x)) * per_layer_input; projected + normed
+        if self.hidden_size_per_layer_input and hasattr(self, "per_layer_input_gate"):
+            # TODO: per_layer_input tensor needs to be passed from the model
+            # This requires embedding lookup per layer from vocab_size_per_layer_input
+            # For now, skip if per_layer_input is not provided
+            pass
 
         return hidden_states

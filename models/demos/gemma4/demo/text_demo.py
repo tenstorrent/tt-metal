@@ -87,6 +87,8 @@ def run_generation(
         logger.info("Prefilling...")
         t_prefill = time.time()
 
+        import traceback as tb
+
         tokens_tt = ttnn.from_torch(
             input_ids_padded.unsqueeze(0).to(torch.int32),
             device=mesh_device,
@@ -100,12 +102,17 @@ def run_generation(
 
         # Get last token tile for first decode token
         get_last_token = ((prompt_len - 1) // 32) * 32
-        logits = model.ttnn_prefill_forward(
-            embeds,
-            page_table=None,
-            kv_cache=tt_kv_cache,
-            get_last_token=get_last_token,
-        )
+        try:
+            logits = model.ttnn_prefill_forward(
+                embeds,
+                page_table=None,
+                kv_cache=tt_kv_cache,
+                get_last_token=get_last_token,
+            )
+        except Exception as e:
+            logger.error(f"Prefill failed: {e}")
+            tb.print_exc()
+            raise
 
         # Sample first token (argmax from last position)
         if is_mesh:
@@ -189,14 +196,16 @@ def run_generation(
 
 @pytest.fixture
 def model_path():
-    return os.getenv("GEMMA4_MODEL_PATH", "/proj_sw/user_dev/gemma4/gemma-4-26B-A4B-it")
+    return os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", "/proj_sw/user_dev/gemma4/gemma-4-26B-A4B-it")
 
 
-def test_demo_single_layer(device, model_path):
-    """Quick demo with 1 layer — verifies the pipeline works."""
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+def test_demo_single_layer(mesh_device, device_params, model_path):
+    """Quick demo with 1 layer on N300 (TP=2) — verifies the pipeline works."""
     prompts = ["The capital of France is"]
     results = run_generation(
-        mesh_device=device,
+        mesh_device=mesh_device,
         model_path=model_path,
         prompts=prompts,
         max_new_tokens=8,
@@ -206,11 +215,13 @@ def test_demo_single_layer(device, model_path):
     assert len(results[0]) > len(prompts[0])  # Generated something
 
 
-def test_demo_full_model(device, model_path):
-    """Full model demo — requires sufficient DRAM for all 30 layers."""
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+def test_demo_full_model(mesh_device, device_params, model_path):
+    """Full model demo on N300 (TP=2) — requires sufficient DRAM for all 30 layers."""
     prompts = ["Explain quantum computing in simple terms:"]
     results = run_generation(
-        mesh_device=device,
+        mesh_device=mesh_device,
         model_path=model_path,
         prompts=prompts,
         max_new_tokens=64,

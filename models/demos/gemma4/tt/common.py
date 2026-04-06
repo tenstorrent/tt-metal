@@ -23,7 +23,7 @@ def create_tt_model(
     mesh_device,
     max_batch_size=1,
     max_seq_len=8192,
-    dtype=ttnn.bfloat16,
+    dtype=ttnn.bfloat8_b,
     state_dict=None,
     num_layers=None,
     mesh_config=None,
@@ -37,7 +37,11 @@ def create_tt_model(
     Returns:
         (model_args, model, tt_kv_cache, state_dict)
     """
-    model_path = model_path or os.getenv("GEMMA4_MODEL_PATH", "/proj_sw/user_dev/gemma4/gemma-4-26B-A4B-it")
+    model_path = (
+        model_path
+        or os.getenv("HF_MODEL")
+        or os.getenv("GEMMA4_MODEL_PATH", "/proj_sw/user_dev/gemma4/gemma-4-26B-A4B-it")
+    )
 
     hf_config = Gemma4ModelArgs.load_hf_config(model_path)
     model_args = Gemma4ModelArgs.from_hf_config(hf_config)
@@ -50,7 +54,8 @@ def create_tt_model(
 
     if mesh_config is None:
         is_mesh = hasattr(mesh_device, "shape")
-        if is_mesh:
+        num_devices = mesh_device.get_num_devices() if is_mesh else 1
+        if is_mesh and num_devices > 1:
             mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1]))
         else:
             mesh_config = MeshConfig((1, 1), decode=ModeConfig(tp=1))
