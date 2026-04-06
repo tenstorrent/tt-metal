@@ -9,7 +9,7 @@ import torch.nn.functional as F
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import torch_random, skip_with_llk_assert
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
@@ -525,6 +525,7 @@ def test_softmax_accuracy(device, shape, fp32_acc_en, math_approx_mode, expected
     assert_with_ulp(torch_output, output_torch, expected_ulp)
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41020")
 @pytest.mark.parametrize(
     "Wt",
     [
@@ -558,6 +559,7 @@ def test_softmax_large_kernel_block_size(device, Wt):
     assert_with_pcc(torch_output, ttnn_output, 0.997)
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41020")
 def test_softmax_4096x4096_fp32(device):
     torch.manual_seed(0)
     torch_input_tensor = torch.rand((1, 1, 4096, 4096), dtype=torch.float32)

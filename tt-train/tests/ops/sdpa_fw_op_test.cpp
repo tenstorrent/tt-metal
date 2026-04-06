@@ -605,6 +605,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_SmallBatch) {
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_SingleHead) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     SDPATestConfig config{
         .batch_size = 1U,
         .sequence_length = 128U,

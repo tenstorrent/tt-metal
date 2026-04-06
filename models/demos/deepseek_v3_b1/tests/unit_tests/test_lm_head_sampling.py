@@ -22,7 +22,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.common.utility_functions import is_slow_dispatch
+from models.common.utility_functions import is_slow_dispatch, skip_with_llk_assert
 from models.demos.deepseek_v3_b1.demo.pipeline import PipelineConfiguration, create_single_galaxy_pipeline_configuration
 from models.demos.deepseek_v3_b1.demo.stage import (
     TOKEN_PAGE_SIZE_BYTES,
@@ -309,6 +309,7 @@ def _is_persistent_mode_enabled():
     ],
     indirect=True,
 )
+@skip_with_llk_assert("Skip perf tests with LLK asserts enabled.")
 def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warmup_iters, device_params):
     mesh_rows, mesh_cols = 4, 2
     num_devices = mesh_rows * mesh_cols
@@ -580,6 +581,7 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
 
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize("seed", [123, 1337, 52098])
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 def test_single_device(
     bh_2d_mesh_device,
     use_fp32,
@@ -732,6 +734,7 @@ def test_single_device(
 
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize("seed", [1337])
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 def test_single_device_d2h(
     bh_2d_mesh_device,
     use_fp32,
@@ -921,6 +924,7 @@ def test_single_device_d2h(
         ((3, 0), (2, 0), 4242),
     ],
 )
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 def test_multidevice(
     bh_2d_mesh_device,
     use_fp32,
@@ -1132,6 +1136,7 @@ def test_multidevice(
     ],
     indirect=True,
 )
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 def test_d2h(
     bh_2d_mesh_device,
     use_fp32,
@@ -1361,6 +1366,7 @@ def test_d2h(
     ],
     indirect=True,
 )
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 def test_d2d_to_d2h_pipeline(
     bh_2d_mesh_device,
     use_fp32,
@@ -1666,6 +1672,7 @@ def test_d2d_to_d2h_pipeline(
     ],
     indirect=True,
 )
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 def test_4stage_galaxy_1_iteration(
     bh_2d_mesh_device,
     use_fp32,
@@ -1999,6 +2006,7 @@ def test_4stage_galaxy_1_iteration(
     ],
     indirect=True,
 )
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 def test_pipline_block_4stage_galaxy_1_iteration(mesh_device, use_fp32, device_params):
     """
     4-stage 4x2 single-galaxy pipeline:
@@ -2133,6 +2141,7 @@ def test_persistent_mode(mesh_device, use_fp32, device_params):
     ],
     indirect=True,
 )
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 def test_persistent_mode_real_weights(mesh_device, use_fp32, hf_model_path, hf_state_dict):
     """
     Same as test_persistent_mode but uses real HF weights (DEEPSEEK_V3_HF_MODEL) via StateDictWeightProvider.
@@ -2235,6 +2244,7 @@ def test_persistent_mode_real_weights(mesh_device, use_fp32, hf_model_path, hf_s
     ],
     indirect=True,
 )
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 def test_persistent_mode_pod(mesh_device, use_fp32, device_params):
     """
     16-stage 4x2 pod pipeline (4 galaxies):
