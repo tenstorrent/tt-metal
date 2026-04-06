@@ -1534,8 +1534,8 @@ def test_wan_decoder(
         ((4, 8), 0, 1, 2),
     ],
     ids=[
-        "t3k_2x4_h0_w1",
-        "bh_glx_4x8_h0_w1",
+        "2x4_h0_w1",
+        "bh_4x8_h0_w1",
     ],
     indirect=["mesh_device"],
 )
@@ -1553,9 +1553,7 @@ def test_wan_decoder_chunked_consistency(
     dtype,
 ):
     """
-    Verify that chunked VAE decoding (t_chunk_size=1,2,4,8,16) produces the
-    same output as the full-T uncached baseline (t_chunk_size=None).
-    No torch reference model is needed — this is a self-consistency check.
+    Verify that VAE decoding with t_chunk_size=(2, 4, 8, 16, T) produces the same output as with t_chunk_size=1
     """
     from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan as TorchAutoencoderKLWan
 
@@ -1633,7 +1631,7 @@ def test_wan_decoder_chunked_consistency(
     logger.info(f"Baseline output shape: {baseline.shape}")
 
     # Compare each chunk size against the baseline
-    for t_chunk_size in [2, 4, 8, 16]:
+    for t_chunk_size in [2, 4, 8, 16, T]:
         if t_chunk_size > T:
             continue
         logger.info(f"Running t_chunk_size={t_chunk_size} (T={T})")
