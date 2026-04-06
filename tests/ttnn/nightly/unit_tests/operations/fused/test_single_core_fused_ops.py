@@ -16,7 +16,12 @@ from models.common.utility_functions import comp_pcc, pad_by_zero
 
 TEST_PADDING_VALUE = -42
 
-shapes = [[1, 1, 32, 32], [1, 1, 32, 128], [1, 2, 128, 128]]
+shapes = [
+    [1, 1, 32, 32],
+    [1, 1, 32, 128],
+    [1, 2, 128, 128],
+    [1, 1, 32, 33],
+]  # [1, 1, 32, 33] Implicit padding case - softmax handles padding correctly #31984
 
 
 @pytest.mark.parametrize("shape", shapes)

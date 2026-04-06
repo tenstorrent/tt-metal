@@ -26,7 +26,7 @@ def ref_rmsnorm(x, gamma, beta, eps):
 def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_config, out_mem_config, device):
     epsf = 1e-2
 
-    test_dims = ((1, 9, 384, 1024),)
+    test_dims = ((1, 9, 384, 1024),)  # (1, 9, 384, 1025),) Implicit padding case - passes, padding handled correctly
     for test_shape in test_dims:
         in0 = torch.rand(test_shape) * 2 - 0.95
         in0_t = torch2tt_tensor(in0, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
