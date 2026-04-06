@@ -54,6 +54,7 @@ def run_group_norm_DRAM(
     )
     input_tensor_row_major = ttnn.fill_implicit_tile_padding(input_tensor_row_major, TEST_PADDING_VALUE)
     input_tensor_tilized = ttnn.tilize_with_zero_padding(input_tensor_row_major, use_multicore=True)
+    input_tensor_tilized = ttnn.fill_implicit_tile_padding(input_tensor_tilized, TEST_PADDING_VALUE)
 
     # Create dram group norm params
     [gamma_t, beta_t], input_mask_tensor = ttnn.dram_group_norm_params_from_torch(
@@ -365,6 +366,7 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
     input_tensor_tilized = ttnn.tilize_with_val_padding(
         input_tensor_row_major, output_tensor_shape=out_shape, pad_value=0, use_multicore=True
     )
+    input_tensor_tilized = ttnn.fill_implicit_tile_padding(input_tensor_tilized, TEST_PADDING_VALUE)
 
     input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y, ttnn.DataType.BFLOAT16)
     input_mask_tensor = ttnn.to_device(input_mask_tensor, device)

@@ -19,6 +19,8 @@ from tt_lib.utils import (
 from models.common.utility_functions import is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+TEST_PADDING_VALUE = -42
+
 
 def rmsnorm(x, gamma, beta, eps):
     return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * gamma + beta
@@ -74,6 +76,7 @@ def run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
             dev,
             in0_mem_config,
         )
+        ttx = ttnn.fill_implicit_tile_padding(ttx, TEST_PADDING_VALUE)
 
         if test_id == 0:
             logger.info("Running RMSN_NOGB")
@@ -152,6 +155,7 @@ def test_llama_4D_rms_norm(device, h, w):
     torch_output_tensor = golden_function(torch_input_tensor, torch_weight)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     weight = ttnn.from_torch(torch_weight.reshape(1, 1, w // 32, 32), device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.rms_norm(input_tensor, weight=weight)
     output_tensor = ttnn.from_device(output_tensor)
@@ -180,6 +184,7 @@ def test_large_tensor_rms_norm(device, batch_size, w):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
         weight = ttnn.from_torch(
             torch_weight,
             device=device,

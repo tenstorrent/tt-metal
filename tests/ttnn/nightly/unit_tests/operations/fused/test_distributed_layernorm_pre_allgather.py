@@ -12,6 +12,8 @@ import ttnn
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc
 
+TEST_PADDING_VALUE = -42
+
 
 def reference(x, n_devices, is_rmsnorm):
     S = x[0].shape[2]
@@ -110,6 +112,7 @@ def run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
                 tt_memory_config=dram_memcfg,
             )
         )
+        tt_inp[d] = ttnn.fill_implicit_tile_padding(tt_inp[d], TEST_PADDING_VALUE)
 
     # LN pre all gather OP
     kernel_config = ttnn.init_device_compute_kernel_config(

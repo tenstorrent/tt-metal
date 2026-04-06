@@ -18,6 +18,8 @@ from tt_lib.utils import (
 from models.common.utility_functions import print_diff_argmax, comp_pcc
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
 
+TEST_PADDING_VALUE = -42
+
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize(
@@ -54,17 +56,20 @@ def test_softmax_causal_mask(device, in_dtype, in0_mem_config):
     attention_mask = torch.rand(batch, 1, 384, 768)
     attention_mask = (attention_mask > 0.5).float()
     attention_mask_t = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    attention_mask_t = ttnn.fill_implicit_tile_padding(attention_mask_t, TEST_PADDING_VALUE)
 
     input_tensor = torch.randn(input_shape).bfloat16().float()
     in1_t = ttnn.from_torch(
         input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in0_mem_config
     )
+    in1_t = ttnn.fill_implicit_tile_padding(in1_t, TEST_PADDING_VALUE)
     grid_coord = ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
     shard_shape = [fuse_head * 384, 768]
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
     sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
     in1_t_shard = ttnn.to_memory_config(in1_t, sharded_mem_config)
+    in1_t_shard = ttnn.fill_implicit_tile_padding(in1_t_shard, TEST_PADDING_VALUE)
 
     program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,
@@ -138,21 +143,25 @@ def test_softmax(device, in_dtype, in0_mem_config, causal_mask):
         attention_mask = (attention_mask > 0.5).float()
         attention_mask32 = pad_weight(attention_mask)
         attention_mask_t = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        attention_mask_t = ttnn.fill_implicit_tile_padding(attention_mask_t, TEST_PADDING_VALUE)
     else:
         attention_mask = torch.rand(batch, 1, 384, 384)
         attention_mask = (attention_mask > 0.5).float()
         attention_mask_t = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        attention_mask_t = ttnn.fill_implicit_tile_padding(attention_mask_t, TEST_PADDING_VALUE)
 
     input_tensor = torch.randn(input_shape).bfloat16().float()
     in1_t = ttnn.from_torch(
         input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in0_mem_config
     )
+    in1_t = ttnn.fill_implicit_tile_padding(in1_t, TEST_PADDING_VALUE)
     grid_coord = ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
     shard_shape = [fuse_head * 384, 384]
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
     sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
     in1_t_shard = ttnn.to_memory_config(in1_t, sharded_mem_config)
+    in1_t_shard = ttnn.fill_implicit_tile_padding(in1_t_shard, TEST_PADDING_VALUE)
 
     program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,
@@ -231,22 +240,26 @@ def test_scale_mask_softmax_rm(device, in_dtype, in0_mem_config, causal_mask):
         attention_mask_t = ttnn.from_torch(
             attention_mask, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
         )
+        attention_mask_t = ttnn.fill_implicit_tile_padding(attention_mask_t, TEST_PADDING_VALUE)
     else:
         # attention_mask = torch.zeros(batch, 1, 384, 384)
         attention_mask = torch.rand(batch, 1, 384, 384)
         attention_mask = (attention_mask > 0.5).float()
         attention_mask_t = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        attention_mask_t = ttnn.fill_implicit_tile_padding(attention_mask_t, TEST_PADDING_VALUE)
 
     input_tensor = torch.randn(input_shape).bfloat16().float()
     in1_t = ttnn.from_torch(
         input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in0_mem_config
     )
+    in1_t = ttnn.fill_implicit_tile_padding(in1_t, TEST_PADDING_VALUE)
     grid_coord = ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
     shard_shape = [fuse_head * 384, 384]
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
     in1_t_shard = ttnn.to_memory_config(in1_t, sharded_mem_config)
+    in1_t_shard = ttnn.fill_implicit_tile_padding(in1_t_shard, TEST_PADDING_VALUE)
 
     program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,
@@ -315,18 +328,22 @@ def test_softmax_with_sharded_mask(device, in_dtype, in0_mem_config, shard_orien
     attention_mask_t = ttnn.from_torch(
         attention_mask, dtype=mask_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in0_mem_config
     )
+    attention_mask_t = ttnn.fill_implicit_tile_padding(attention_mask_t, TEST_PADDING_VALUE)
     grid_coord = ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
     shard_shape = [M, K]
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orient)
     sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
     attention_mask_t_shard = ttnn.to_memory_config(attention_mask_t, sharded_mem_config)
+    attention_mask_t_shard = ttnn.fill_implicit_tile_padding(attention_mask_t_shard, TEST_PADDING_VALUE)
 
     input_tensor = torch.randn(input_shape).bfloat16().float()
     in1_t = ttnn.from_torch(
         input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in0_mem_config
     )
+    in1_t = ttnn.fill_implicit_tile_padding(in1_t, TEST_PADDING_VALUE)
     in1_t_shard = ttnn.to_memory_config(in1_t, sharded_mem_config)
+    in1_t_shard = ttnn.fill_implicit_tile_padding(in1_t_shard, TEST_PADDING_VALUE)
 
     program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,

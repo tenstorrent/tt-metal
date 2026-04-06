@@ -13,6 +13,8 @@ from models.common.utility_functions import tt2torch_tensor, torch2tt_tensor
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
+TEST_PADDING_VALUE = -42
+
 
 def reference_layernorm(x, gamma, beta, epsilon, is_rmsnorm):
     if is_rmsnorm:
@@ -72,6 +74,7 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
             tt_layout=ttnn.TILE_LAYOUT,
             tt_memory_config=dram_memcfg,
         )
+        tt_inp = ttnn.fill_implicit_tile_padding(tt_inp, TEST_PADDING_VALUE)
         tt_gamma = torch2tt_tensor(
             gamma_chunked[d].reshape(1, 1, -1, 32),
             tt_dtype=ttnn.bfloat16,
@@ -93,6 +96,7 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
             tt_layout=ttnn.TILE_LAYOUT,
             tt_memory_config=dram_memcfg,
         )
+        tt_stats = ttnn.fill_implicit_tile_padding(tt_stats, TEST_PADDING_VALUE)
 
         if is_rmsnorm:
             tt_lnp2_out = ttnn.rms_norm_post_all_gather(

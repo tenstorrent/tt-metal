@@ -7,6 +7,8 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+TEST_PADDING_VALUE = -42
+
 
 def test_group_norm_large_ex_external_cb(device):
     torch.manual_seed(0)
@@ -28,6 +30,7 @@ def test_group_norm_large_ex_external_cb(device):
     ).permute(0, 2, 3, 1)
 
     input_tensor_tt = ttnn.from_torch(input_tensor, device=device, layout=ttnn.TILE_LAYOUT)
+    ttnn.fill_implicit_tile_padding(input_tensor_tt, TEST_PADDING_VALUE)
     w_tt = ttnn.from_torch(weight_4d, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
     b_tt = ttnn.from_torch(bias_4d, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
 
