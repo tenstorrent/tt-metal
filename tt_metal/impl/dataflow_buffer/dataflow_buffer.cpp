@@ -7,6 +7,7 @@
 
 #include <algorithm>
 
+#include "impl/context/metal_context.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
@@ -42,6 +43,7 @@ void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_
     TT_FATAL(producer_kernel != nullptr, "Producer kernel not found");
     TT_FATAL(consumer_kernel != nullptr, "Consumer kernel not found");
 
+    // --- producer ---
     if (auto compute_producer = std::dynamic_pointer_cast<experimental::quasar::QuasarComputeKernel>(producer_kernel)) {
         TT_FATAL(
             dfb->config.num_producers >= 1 && dfb->config.num_producers <= 4,
@@ -58,10 +60,18 @@ void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_
         for (DataMovementProcessor dm : producer_dm_riscvs) {
             dfb->config.producer_risc_mask |= (1u << static_cast<std::underlying_type_t<DataMovementProcessor>>(dm));
         }
+    } else if (auto gen1_dm_producer = std::dynamic_pointer_cast<DataMovementKernel>(producer_kernel)) {
+        // WH/BH DataMovementKernel: RISCV_0 = BRISC (bit 0), RISCV_1 = NCRISC (bit 1)
+        const DataMovementConfig dm_config = std::get<DataMovementConfig>(gen1_dm_producer->config());
+        dfb->config.producer_risc_mask |= (1u << static_cast<std::underlying_type_t<DataMovementProcessor>>(dm_config.processor));
+    } else if (std::dynamic_pointer_cast<ComputeKernel>(producer_kernel)) {
+        // WH/BH ComputeKernel: bit 2 = Tensix
+        dfb->config.producer_risc_mask |= (1u << 2);
     } else {
-        TT_FATAL(false, "Unsupported kernel type");
+        TT_FATAL(false, "Unsupported kernel type for DFB producer");
     }
 
+    // --- consumer ---
     if (auto compute_consumer = std::dynamic_pointer_cast<experimental::quasar::QuasarComputeKernel>(consumer_kernel)) {
         TT_FATAL(
             dfb->config.num_consumers >= 1 && dfb->config.num_consumers <= 4,
@@ -78,10 +88,16 @@ void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_
         for (DataMovementProcessor dm : consumer_dm_riscvs) {
             dfb->config.consumer_risc_mask |= (1u << static_cast<std::underlying_type_t<DataMovementProcessor>>(dm));
         }
+    } else if (auto gen1_dm_consumer = std::dynamic_pointer_cast<DataMovementKernel>(consumer_kernel)) {
+        // WH/BH DataMovementKernel: RISCV_0 = BRISC (bit 0), RISCV_1 = NCRISC (bit 1)
+        const DataMovementConfig dm_config = std::get<DataMovementConfig>(gen1_dm_consumer->config());
+        dfb->config.consumer_risc_mask |= (1u << static_cast<std::underlying_type_t<DataMovementProcessor>>(dm_config.processor));
+    } else if (std::dynamic_pointer_cast<ComputeKernel>(consumer_kernel)) {
+        // WH/BH ComputeKernel: bit 2 = Tensix
+        dfb->config.consumer_risc_mask |= (1u << 2);
     } else {
-        TT_FATAL(false, "Unsupported kernel type");
+        TT_FATAL(false, "Unsupported kernel type for DFB consumer");
     }
-
 }
 
 namespace detail {
@@ -275,7 +291,11 @@ struct TileCounterGroup {
 };
 
 uint32_t DataflowBufferImpl::serialized_size() const {
-    // One dfb_initializer_t + one dfb_initializer_per_risc_t per risc.
+    // On WH/BH: one 4-word CB-format config entry per DFB (identical to a circular buffer config)
+    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
+        return 4 * sizeof(uint32_t);
+    }
+    // On Quasar: one dfb_initializer_t + one dfb_initializer_per_risc_t per risc.
     // All groups have the same number of RISC configs
     TT_FATAL(!groups.empty(), "DFB {} has no groups (configs not finalized?)", id);
     return sizeof(dfb_initializer_t) +
@@ -284,6 +304,28 @@ uint32_t DataflowBufferImpl::serialized_size() const {
 
 std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& core) const {
     TT_FATAL(this->configs_finalized, "DFB {} configs not finalized before serialization", this->id);
+
+    // On WH/BH: emit the same 4-word format used for circular buffers so the existing
+    // setup_local_cb_read_write_interfaces firmware path can initialise the DFB slot.
+    // Layout: [base_addr, total_size_bytes, num_pages, page_size_bytes]
+    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
+        auto it = this->core_lookup_.find(core);
+        TT_FATAL(
+            it != this->core_lookup_.end(), "DFB {} has no config for core ({}, {})", this->id, core.x, core.y);
+        const uint32_t alloc_addr = it->second.second;
+
+        std::vector<uint8_t> data;
+        data.reserve(4 * sizeof(uint32_t));
+        const uint32_t words[4] = {
+            alloc_addr,                                     // fifo_addr (base)
+            this->config.entry_size * this->config.num_entries,  // fifo_size
+            this->config.num_entries,                       // fifo_num_pages
+            this->config.entry_size,                        // fifo_page_size
+        };
+        const auto* bytes = reinterpret_cast<const uint8_t*>(words);
+        data.insert(data.end(), bytes, bytes + sizeof(words));
+        return data;
+    }
 
     auto it = this->core_lookup_.find(core);
     TT_FATAL(it != this->core_lookup_.end(), "DFB {} has no config for core ({}, {})", this->id, core.x, core.y);
@@ -469,29 +511,19 @@ uint32_t finalize_dfbs(
         auto kernel_config = kg->launch_msg.view().kernel_config();
         kernel_config.local_cb_offset() = base_offset;
 
-        // Calculate total DFB size for this kernel group
         uint32_t kg_dfb_size = 0;
         for (const auto& dfb : dataflow_buffers) {
             TT_ASSERT(dfb->configs_finalized, "DFB {} configs not finalized before serialization", dfb->id);
-            // Check if this DFB overlaps with any core in the kernel group
-            bool dfb_on_kg = false;
             for (const CoreRange& kg_range : kg->core_ranges.ranges()) {
                 if (dfb->core_ranges.intersects(kg_range)) {
-                    dfb_on_kg = true;
+                    kg_dfb_size += dfb->serialized_size();
                     break;
                 }
             }
-            if (dfb_on_kg) {
-                kg_dfb_size += dfb->serialized_size();
-            }
         }
 
-        // Track max across all kernel groups
         dfb_size = std::max(dfb_size, kg_dfb_size);
     }
-
-    dfb_size = tt::align(
-        dfb_size, 64);  // workaround where non-64 byte aligned writes on sim seem to get zero padded to 64 bytes
 
     log_info(
         tt::LogMetal,
@@ -530,6 +562,17 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     auto dfb = std::make_shared<DataflowBufferImpl>();
 
     dfb->id = static_cast<uint32_t>(this->dataflow_buffers_.size());
+
+    // DFB IDs are auto-assigned contiguously from 0, so enforce the limit here.
+    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
+        uint32_t max_dfb_id = MetalContext::instance().hal().get_arch_num_circular_buffers();
+        TT_FATAL(
+            dfb->id < max_dfb_id,
+            "Cannot create DFB {}: WH/BH supports at most {} dataflow buffers",
+            dfb->id,
+            max_dfb_id);
+    }
+
     dfb->core_ranges = core_range_set.merge_ranges();
     dfb->config = config;
 
@@ -599,6 +642,31 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
 // Allocates TCs and remapper indices, per (dfb, core).
 void ProgramImpl::finalize_dataflow_buffer_configs() {
     if (this->dataflow_buffers_.empty()) {
+        return;
+    }
+
+    // On WH/BH there are no tile counters or remapper hardware.
+    // Mark configs finalized and create a single dummy group per DFB so allocate_dataflow_buffers() can fill in the L1
+    // address.
+    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
+        for (auto& dfb : this->dataflow_buffers_) {
+            if (dfb->configs_finalized) {
+                continue;
+            }
+            dfb->risc_mask = dfb->config.producer_risc_mask | dfb->config.consumer_risc_mask;
+
+            DfbGroup group;
+            for (const CoreRange& cr : dfb->core_ranges.ranges()) {
+                for (auto x = cr.start_coord.x; x <= cr.end_coord.x; x++) {
+                    for (auto y = cr.start_coord.y; y <= cr.end_coord.y; y++) {
+                        group.l1_by_core.emplace_back(CoreCoord(x, y), 0u);
+                    }
+                }
+            }
+            group.core_ranges = dfb->core_ranges;
+            dfb->groups.push_back(std::move(group));
+            dfb->configs_finalized = true;
+        }
         return;
     }
 
@@ -1205,6 +1273,59 @@ std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBuf
         }
     }
     return dfbs_on_core;
+}
+
+std::vector<CoreRange> ProgramImpl::dataflow_buffers_unique_coreranges() const {
+    std::vector<CoreRange> core_ranges;
+    for (const auto& dfb : dataflow_buffers_) {
+        for (const CoreRange& core_range : dfb->core_ranges.ranges()) {
+            if (std::find(core_ranges.begin(), core_ranges.end(), core_range) == core_ranges.end()) {
+                core_ranges.push_back(core_range);
+            }
+        }
+    }
+
+    // Fast path: if no ranges overlap, return as-is.
+    bool has_overlap = false;
+    for (size_t i = 0; i < core_ranges.size() && !has_overlap; ++i) {
+        for (size_t j = i + 1; j < core_ranges.size(); ++j) {
+            if (core_ranges[i].intersects(core_ranges[j])) {
+                has_overlap = true;
+                break;
+            }
+        }
+    }
+    if (!has_overlap) {
+        return core_ranges;
+    }
+
+    // Make ranges non-overlapping so each core is targeted by exactly one multicast
+    // during DFB config dispatch.  Same A\B / A∩B / B\A splitting as CBs.
+    std::vector<CoreRange> result = std::move(core_ranges);
+    size_t i = 0;
+    while (i < result.size()) {
+        size_t j = i + 1;
+        for (; j < result.size(); ++j) {
+            if (result[i].intersects(result[j])) {
+                break;
+            }
+        }
+        if (j == result.size()) {
+            ++i;
+            continue;
+        }
+        CoreRangeSet a_set(result[i]), b_set(result[j]);
+        result.erase(result.begin() + j);
+        result.erase(result.begin() + i);
+        auto a_only = a_set.subtract(b_set);
+        auto b_only = b_set.subtract(a_set);
+        auto common = a_set.intersection(b_set);
+        result.insert(result.end(), a_only.ranges().begin(), a_only.ranges().end());
+        result.insert(result.end(), b_only.ranges().begin(), b_only.ranges().end());
+        result.insert(result.end(), common.ranges().begin(), common.ranges().end());
+        i = 0;
+    }
+    return result;
 }
 
 void ProgramImpl::set_dfb_data_fmt(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {

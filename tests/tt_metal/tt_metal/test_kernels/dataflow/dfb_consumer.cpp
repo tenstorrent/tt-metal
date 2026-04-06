@@ -45,7 +45,9 @@ void kernel_main() {
         DPRINT << "consumer tile id " << tile_id << " page id " << page_id << ENDL();
         DEVICE_PRINT("consumer tile id {} page id {}\n", tile_id, page_id);
         if constexpr (implicit_sync) {
+#ifdef ARCH_QUASAR
             dfb.write_out(noc, tensor_accessor, {.page_id = page_id});
+#endif
         } else {
             dfb.wait_front(1);
             noc.async_write(dfb, tensor_accessor, entry_size, {}, {.page_id = page_id});
