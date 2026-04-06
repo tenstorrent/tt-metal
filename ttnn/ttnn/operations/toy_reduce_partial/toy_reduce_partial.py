@@ -17,14 +17,16 @@ def toy_reduce_partial(
     input_tensor: ttnn.Tensor,
     dim: int,
     *,
+    pool_type: str = "max",
     memory_config: ttnn.MemoryConfig = None,
 ) -> ttnn.Tensor:
     """
-    Sum-reduce over dim with partial-scaler tile-padding avoidance.
+    Reduce over dim with partial-scaler tile-padding avoidance.
 
     Args:
         input_tensor: Input tensor on device (TILE_LAYOUT, bfloat16).
         dim: Reduction dimension. -1 or 3 for W (REDUCE_ROW), -2 or 2 for H (REDUCE_COL).
+        pool_type: "max" or "sum" (default: "max").
         memory_config: Output memory config (default: DRAM interleaved).
     """
     ndim = len(input_tensor.shape)
@@ -51,5 +53,7 @@ def toy_reduce_partial(
     )
 
     reduce_row = dim == ndim - 1
-    program_descriptor = create_program_descriptor(input_tensor, output_tensor, reduce_row=reduce_row)
+    program_descriptor = create_program_descriptor(
+        input_tensor, output_tensor, reduce_row=reduce_row, pool_type=pool_type
+    )
     return ttnn.generic_op([input_tensor, output_tensor], program_descriptor)

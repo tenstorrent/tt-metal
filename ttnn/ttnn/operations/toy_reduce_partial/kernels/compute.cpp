@@ -4,7 +4,8 @@
 // Unified compute kernel for toy_reduce_partial.
 //
 // Handles both REDUCE_ROW (W) and REDUCE_COL (H) via REDUCE_ROW_MODE
-// compile-time arg. The partial scaler mechanism works identically for both:
+// compile-time arg. Supports MAX and SUM pool types via POOL_TYPE_SUM arg.
+// The partial scaler mechanism works identically for both:
 // the reduce helper selects scaler tile 1 for the last tile in the reduced
 // dimension (last W tile for REDUCE_ROW, last H tile for REDUCE_COL).
 
@@ -19,6 +20,7 @@ void kernel_main() {
     constexpr uint32_t NC = get_compile_time_arg_val(2);
     constexpr uint32_t has_partial = get_compile_time_arg_val(3);
     constexpr uint32_t reduce_row_mode = get_compile_time_arg_val(4);
+    constexpr uint32_t pool_type_sum = get_compile_time_arg_val(5);
 
     constexpr uint32_t cb_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
@@ -31,34 +33,66 @@ void kernel_main() {
 
     constexpr auto block_shape = compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC);
 
-    if constexpr (reduce_row_mode) {
-        compute_kernel_lib::reduce<
-            PoolType::MAX,
-            ReduceDim::REDUCE_ROW,
-            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-            compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-            cb_in,
-            cb_scaler,
-            cb_out,
-            block_shape,
-            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::NoAccumulation{},
-            compute_kernel_lib::NoOp{},
-            partial_scaler);
+    if constexpr (pool_type_sum) {
+        if constexpr (reduce_row_mode) {
+            compute_kernel_lib::reduce<
+                PoolType::SUM,
+                ReduceDim::REDUCE_ROW,
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                cb_in,
+                cb_scaler,
+                cb_out,
+                block_shape,
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::NoAccumulation{},
+                compute_kernel_lib::NoOp{},
+                partial_scaler);
+        } else {
+            compute_kernel_lib::reduce<
+                PoolType::SUM,
+                ReduceDim::REDUCE_COL,
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                cb_in,
+                cb_scaler,
+                cb_out,
+                block_shape,
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::NoAccumulation{},
+                compute_kernel_lib::NoOp{},
+                partial_scaler);
+        }
     } else {
-        compute_kernel_lib::reduce<
-            PoolType::MAX,
-            ReduceDim::REDUCE_COL,
-            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-            compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-            cb_in,
-            cb_scaler,
-            cb_out,
-            block_shape,
-            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::NoAccumulation{},
-            compute_kernel_lib::NoOp{},
-            partial_scaler);
+        if constexpr (reduce_row_mode) {
+            compute_kernel_lib::reduce<
+                PoolType::MAX,
+                ReduceDim::REDUCE_ROW,
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                cb_in,
+                cb_scaler,
+                cb_out,
+                block_shape,
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::NoAccumulation{},
+                compute_kernel_lib::NoOp{},
+                partial_scaler);
+        } else {
+            compute_kernel_lib::reduce<
+                PoolType::MAX,
+                ReduceDim::REDUCE_COL,
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                cb_in,
+                cb_scaler,
+                cb_out,
+                block_shape,
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::NoAccumulation{},
+                compute_kernel_lib::NoOp{},
+                partial_scaler);
+        }
     }
 
     constexpr uint32_t num_scaler_tiles = has_partial ? 2 : 1;

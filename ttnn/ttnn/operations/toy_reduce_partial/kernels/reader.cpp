@@ -3,9 +3,9 @@
 
 // Unified reader for toy_reduce_partial.
 //
-// Generates scaler tile(s) and reads input tiles. Uses the dimension-aware
+// Generates scaler tile(s) and reads input tiles. Uses pool-type-aware
 // prepare_partial_reduce_scalers overload which automatically selects the
-// correct axis fill based on ReduceDim.
+// correct scaler layout (col-0 for matmul path, row-0 for reduce_tile path).
 
 #include <stdint.h>
 
@@ -21,7 +21,8 @@ void kernel_main() {
     constexpr uint32_t has_partial = get_compile_time_arg_val(2);
     constexpr uint32_t partial_dim = get_compile_time_arg_val(3);  // partial_w or partial_h
     constexpr uint32_t reduce_row_mode = get_compile_time_arg_val(4);
-    constexpr auto src_args = TensorAccessorArgs<5>();
+    constexpr uint32_t pool_type_sum = get_compile_time_arg_val(5);
+    constexpr auto src_args = TensorAccessorArgs<6>();
 
     constexpr uint32_t cb_in = 0;
     constexpr uint32_t cb_scaler = 2;
@@ -30,12 +31,21 @@ void kernel_main() {
 
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
 
-    if constexpr (has_partial) {
-        // Dimension-aware: dispatches to correct axis fill automatically
-        dataflow_kernel_lib::prepare_partial_reduce_scalers<cb_scaler, reduce_dim, partial_dim>(scaler_f);
+    if constexpr (pool_type_sum) {
+        // Pool-type-aware: auto-dispatches to col-0 fill for SUM REDUCE_ROW (matmul path)
+        if constexpr (has_partial) {
+            dataflow_kernel_lib::
+                prepare_partial_reduce_scalers<cb_scaler, ckernel::PoolType::SUM, reduce_dim, partial_dim>(scaler_f);
+        } else {
+            dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, reduce_dim>(scaler_f);
+        }
     } else {
-        // Full scaler — same for both dimensions
-        dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler>(scaler_f);
+        // MAX always uses reduce_tile layout — dimension-aware overload handles axis dispatch
+        if constexpr (has_partial) {
+            dataflow_kernel_lib::prepare_partial_reduce_scalers<cb_scaler, reduce_dim, partial_dim>(scaler_f);
+        } else {
+            dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler>(scaler_f);
+        }
     }
 
     // Stream input tiles

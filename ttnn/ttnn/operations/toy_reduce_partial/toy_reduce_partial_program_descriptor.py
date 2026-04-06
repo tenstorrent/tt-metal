@@ -24,6 +24,7 @@ def create_program_descriptor(
     output_tensor: ttnn.Tensor,
     *,
     reduce_row: bool,
+    pool_type: str = "max",
 ) -> ttnn.ProgramDescriptor:
     input_shape = list(input_tensor.shape)
     origin_W = input_shape[-1]
@@ -88,6 +89,7 @@ def create_program_descriptor(
     scaler_float_bits = struct.unpack("I", struct.pack("f", 1.0))[0]
 
     reduce_row_mode = 1 if reduce_row else 0
+    pool_type_sum = 1 if pool_type == "sum" else 0
 
     reader_ct_args = [
         input_num_pages,
@@ -95,6 +97,7 @@ def create_program_descriptor(
         has_partial,
         partial if has_partial else TILE_DIM,
         reduce_row_mode,
+        pool_type_sum,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -125,7 +128,7 @@ def create_program_descriptor(
     )
 
     # --- Compute ---
-    compute_ct_args = [Ht, Wt, NC, has_partial, reduce_row_mode]
+    compute_ct_args = [Ht, Wt, NC, has_partial, reduce_row_mode, pool_type_sum]
 
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "compute.cpp"),

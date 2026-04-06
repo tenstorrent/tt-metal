@@ -6,6 +6,7 @@
 #include <type_traits>
 
 #include "api/compute/reduce.h"
+#include "api/compute/matmul.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
@@ -13,6 +14,7 @@
 #include "tt-metalium/circular_buffer_constants.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/common_types.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_common.hpp"
 /**
  * @file reduce_helpers_compute.hpp
  * @brief Single unified reduce function with automatic dispatch
@@ -362,7 +364,12 @@ ALWI constexpr uint32_t get_dst_index(const AccumulateT& accumulate);
  * @tparam AccumulateT Either Accumulate (enables accumulation) or NoAccumulation (zero overhead)
  * @tparam enforce_fp32_accumulation Whether to enforce FP32 accumulation
  */
-template <PoolType reduce_type, ReduceDim reduce_dim, typename AccumulateT, bool enforce_fp32_accumulation>
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    typename AccumulateT,
+    bool enforce_fp32_accumulation,
+    bool use_matmul = false>
 ALWI void reload_accumulator_if_needed(uint32_t input_cb, uint32_t scaler_cb, const AccumulateT& accumulate);
 
 // =============================================================================
