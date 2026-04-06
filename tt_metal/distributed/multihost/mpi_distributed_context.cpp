@@ -136,10 +136,10 @@ static std::string identify_failed_ranks(MPI_Comm comm) {
     // Acknowledge all locally-known pending failures (best-effort).
     // Per the OpenMPI 5 spec, num_to_ack is the *maximum* number of failures
     // to acknowledge; the spec recommends "the group size" to ack everything,
-    // but INT_MAX is an equivalent shortcut since the implementation clamps to
-    // the actual failure count.  num_acked returns the *total* acknowledged
-    // count on this communicator (cumulative across calls), so it can exceed
-    // num_to_ack when prior calls already acked some failures.
+    // but std::numeric_limits<int>::max() is an equivalent shortcut since the
+    // implementation clamps to the actual failure count.  num_acked returns the
+    // *total* acknowledged count on this communicator (cumulative across calls),
+    // so it can exceed num_to_ack when prior calls already acked some failures.
     // We discard num_acked because we only need the side-effect: once failures
     // are acked, MPIX_Comm_get_failed() below can report them, and unmatched
     // MPI_ANY_SOURCE receives stop raising MPIX_ERR_PROC_FAILED_PENDING.
@@ -147,7 +147,7 @@ static std::string identify_failed_ranks(MPI_Comm comm) {
     // silently ignore; MPIX_Comm_get_failed() may still return previously-
     // acked failures from earlier calls.
     int num_acked = 0;
-    (void)MPIX_Comm_ack_failed(comm, std::numeric_limits<int>::max(), &num_acked);
+    [[maybe_unused]] auto rc_ack = MPIX_Comm_ack_failed(comm, std::numeric_limits<int>::max(), &num_acked);
     MpiGroupGuard failed_guard;
     if (MPIX_Comm_get_failed(comm, &failed_guard.g) != MPI_SUCCESS) {
         return "unknown";
@@ -1216,8 +1216,9 @@ std::vector<Rank> MPIContext::failed_ranks() const {
     //
     // Attempt MPIX_Comm_ack_failed() first (best-effort, ignore return code).
     // Per the OpenMPI 5 spec, num_to_ack is the maximum number of failures to
-    // acknowledge; INT_MAX acks all known failures (the spec suggests using the
-    // group size, but INT_MAX is equivalent since the impl clamps internally).
+    // acknowledge; std::numeric_limits<int>::max() acks all known failures (the
+    // spec suggests using the group size, but max() is equivalent since the impl
+    // clamps internally).
     // num_acked returns the cumulative total of acked failures on this comm,
     // which can exceed num_to_ack when prior calls already acked some.
     // On a non-revoked comm this records any pending failures; on an already-
@@ -1243,7 +1244,7 @@ std::vector<Rank> MPIContext::failed_ranks() const {
     // Acknowledge all pending failures (best-effort); see identify_failed_ranks()
     // for detailed rationale.
     int num_acked = 0;
-    (void)MPIX_Comm_ack_failed(state->comm, std::numeric_limits<int>::max(), &num_acked);
+    [[maybe_unused]] auto rc_ack = MPIX_Comm_ack_failed(state->comm, std::numeric_limits<int>::max(), &num_acked);
     MPI_Group failed_group = MPI_GROUP_NULL;
     if (MPIX_Comm_get_failed(state->comm, &failed_group) != MPI_SUCCESS) {
         std::lock_guard cache_lock(failed_ranks_cache_mutex_);
