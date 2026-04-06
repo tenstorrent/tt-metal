@@ -1093,9 +1093,13 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                 const CoreCoord rect_start = CoreCoord{min_x, injector_y};
                 const CoreCoord rect_end = CoreCoord{max_x, injector_y};
 
-                const uint32_t injector_x = core_work[injector_idx].physical_core.x;
-                const bool injector_inside_rect = (injector_x > min_x && injector_x < max_x);
-                const uint32_t mcast_num_dests = injector_inside_rect ? chain_size : num_receivers;
+                // const uint32_t injector_x = core_work[injector_idx].physical_core.x;
+                // const bool injector_inside_rect = (injector_x > min_x && injector_x < max_x);
+                // noc_async_write_multicast (non-loopback) never writes to self, so the
+                // hardware generates num_receivers acks regardless of injector position.
+                // Using chain_size when injector is inside the rect would over-count by 1,
+                // causing noc_async_write_barrier to hang on the missing ack.
+                const uint32_t mcast_num_dests = num_receivers;
 
                 auto& injector_chain = core_chain_info[injector_idx];
                 injector_chain.prev_physical = rect_start;
