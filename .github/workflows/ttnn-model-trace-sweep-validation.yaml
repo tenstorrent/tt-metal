@@ -1,9 +1,7 @@
 name: "ttnn - model trace sweep validation"
 
 run-name: >-
-  ttnn - sweep validation (${{
-    github.ref_name
-  }})
+  ttnn - model trace sweep validation
 
 on:
   workflow_dispatch:
@@ -20,7 +18,7 @@ permissions:
 
 jobs:
   display-manifest-options:
-    name: Display manifest configuration
+    name: Display trace manifest configuration
     runs-on: ubuntu-latest
     outputs:
       manifest-path: ${{ steps.parse-manifest.outputs.manifest_path }}
@@ -42,7 +40,7 @@ jobs:
           import os
           import yaml
 
-          manifest_path = "model_tracer/sweep_manifest.yaml"
+          manifest_path = "model_tracer/trace_selection_registry.yaml"
           with open(manifest_path, "r", encoding="utf-8") as f:
               manifest = yaml.safe_load(f)
 
@@ -97,6 +95,7 @@ jobs:
           echo "::endgroup::"
 
   validate-model-traces:
+    name:
     needs: display-manifest-options
     uses: ./.github/workflows/ttnn-model-trace-sweep-validation-impl.yaml
     secrets: inherit

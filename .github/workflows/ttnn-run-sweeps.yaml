@@ -826,7 +826,7 @@ jobs:
           TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
         run: |
           python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
-            model_tracer/sweep_manifest.yaml \
+            model_tracer/trace_selection_registry.yaml \
             model_tracer/traced_operations/ttnn_operations_master.json \
             lead_models
       - name: Generate JSON for model_traced run
@@ -835,7 +835,7 @@ jobs:
           TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
         run: |
           python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
-            model_tracer/sweep_manifest.yaml \
+            model_tracer/trace_selection_registry.yaml \
             model_tracer/traced_operations/ttnn_operations_master.json \
             model_traced
       - name: Upload master JSON artifact

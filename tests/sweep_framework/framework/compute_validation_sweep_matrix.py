@@ -213,7 +213,7 @@ def compute_combined_validation_matrix(
 def main():
     """Parse arguments and print the matrix JSON to stdout."""
     parser = argparse.ArgumentParser(description="Compute model trace validation sweep matrix.")
-    parser.add_argument("--manifest-path", required=True, help="Path to model_tracer/sweep_manifest.yaml")
+    parser.add_argument("--manifest-path", required=True, help="Path to model_tracer/trace_selection_registry.yaml")
     parser.add_argument("--master-json-path", required=True, help="Path to reconstructed ttnn_operations_master.json")
     parser.add_argument("--vectors-dir", required=False, help="Directory containing generated vector JSON files")
     parser.add_argument(

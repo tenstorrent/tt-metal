@@ -27,7 +27,7 @@ except ImportError:
 from model_tracer.mesh_metadata import normalize_machine_info
 
 # Default manifest path (relative to repo root)
-_DEFAULT_MANIFEST = "model_tracer/sweep_manifest.yaml"
+_DEFAULT_MANIFEST = "model_tracer/trace_selection_registry.yaml"
 
 
 def _get_manifest_path(manifest_path=None):
@@ -1523,7 +1523,7 @@ def resolve_manifest(manifest_path=None, scope=None):
                              exactly matches a model_name in the registry models list
 
     Args:
-        manifest_path: Path to sweep_manifest.yaml (optional).
+        manifest_path: Path to trace_selection_registry.yaml (optional).
         scope: Which group to resolve.
             - 'lead_models'  : only the lead_models group
             - 'model_traced' : only the model_traced group
@@ -1687,7 +1687,7 @@ def reconstruct_from_manifest(manifest_path=None, output_path=None, scope=None, 
     filtered to the specified models, then merges configs deduplicated by config_hash.
 
     Args:
-        manifest_path: Path to sweep_manifest.yaml (optional).
+        manifest_path: Path to trace_selection_registry.yaml (optional).
         output_path: Path to write the merged JSON (optional).
         scope: 'lead_models' or 'model_traced' (None = all targets).
         schema: Database schema to read from (default: "ttnn_ops_v6").

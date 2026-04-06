@@ -41,7 +41,7 @@ Without a master JSON at the expected path (and without `--master-trace`), the l
 
 ### Lead Models
 
-Lead models are prioritized models whose traced configurations get dedicated CI treatment, including automatic routing to multi-chip runners. They are defined in `model_tracer/sweep_manifest.yaml` (with a fallback in `framework/constants.py`).
+Lead models are prioritized models whose traced configurations get dedicated CI treatment, including automatic routing to multi-chip runners. They are defined in `model_tracer/trace_selection_registry.yaml` (with a fallback in `framework/constants.py`).
 
 Generate vectors for lead models only:
 
