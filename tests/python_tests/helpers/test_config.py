@@ -6,6 +6,7 @@ import glob
 import os
 import shutil
 import struct
+import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, fields
@@ -147,6 +148,7 @@ class TestConfig:
     GXX: ClassVar[str]
     OBJDUMP: ClassVar[str]
     OBJCOPY: ClassVar[str]
+    ELF_SIZE: ClassVar[str]
     GCOV: ClassVar[str]
     GCOV_TOOL: ClassVar[str]
 
@@ -281,6 +283,9 @@ class TestConfig:
         )
         TestConfig.OBJCOPY = str(
             (TestConfig.TOOL_PATH / "riscv-tt-elf-objcopy").absolute()
+        )
+        TestConfig.ELF_SIZE = str(
+            (TestConfig.TOOL_PATH / "riscv-tt-elf-size").absolute()
         )
         TestConfig.GCOV = str((TestConfig.TOOL_PATH / "riscv-tt-elf-gcov").absolute())
         TestConfig.GCOV_TOOL = str(
@@ -938,6 +943,34 @@ class TestConfig:
             header_content.extend(self.runtime_arguments_struct)
 
         return "\n".join(header_content)
+
+    @staticmethod
+    def get_elf_text_size(elf_path: Path) -> int:
+        """Returns the text section size (code+rodata) of an ELF in bytes."""
+        result = subprocess.run(
+            [TestConfig.ELF_SIZE, str(elf_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"riscv-tt-elf-size failed on {elf_path}:\n{result.stderr}"
+            )
+        # BSD format: header line + data line
+        #    text    data     bss     dec     hex filename
+        #    4096      32       0    4128    1020 unpack.elf
+        lines = result.stdout.strip().splitlines()
+        if len(lines) < 2:
+            raise RuntimeError(
+                f"Unexpected riscv-tt-elf-size output for {elf_path}:\n{result.stdout}"
+            )
+        try:
+            return int(lines[1].split()[0])
+        except (IndexError, ValueError) as e:
+            raise RuntimeError(
+                f"Failed to parse text size from riscv-tt-elf-size output for {elf_path}:\n{result.stdout}"
+            ) from e
 
     def build_elfs(self):
 
