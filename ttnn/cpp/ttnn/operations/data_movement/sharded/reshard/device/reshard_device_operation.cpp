@@ -8,6 +8,8 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include <enchantum/enchantum.hpp>
@@ -158,6 +160,50 @@ std::pair<bool, std::string> ReshardDeviceOperation::validate_inputs(
                                      : args.output_mem_config;
     if (!out_mem_config.is_sharded()) {
         return {false, "output must be sharded"};
+    }
+
+    // ReshardSameWidthFactory (height↔height) has explicit unaligned handling,
+    // but all other legacy and ND factories require L1-aligned shard widths for correct NOC transfers.
+    if (input_tensor.layout() == Layout::ROW_MAJOR) {
+        bool is_height_to_height = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+                                   out_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+
+        if (!is_height_to_height) {
+            const uint32_t alignment = hal::get_l1_alignment();
+
+            uint32_t input_page_size = input_tensor.buffer()->page_size();
+            uint32_t input_aligned_page_size = input_tensor.buffer()->aligned_page_size();
+            if (input_page_size != input_aligned_page_size) {
+                return {
+                    false,
+                    fmt::format(
+                        "Input row-major shard width {} with data type {} gives page size {} bytes, "
+                        "which must be aligned to {} bytes for reshard",
+                        input_tensor.memory_config().shard_spec().has_value()
+                            ? input_tensor.memory_config().shard_spec().value().shape[1]
+                            : 0,
+                        input_tensor.dtype(),
+                        input_page_size,
+                        alignment)};
+            }
+
+            uint32_t output_shard_width = out_mem_config.shard_spec().has_value()
+                                              ? out_mem_config.shard_spec().value().shape[1]
+                                              : out_mem_config.nd_shard_spec().value().shard_shape[-1];
+            uint32_t output_page_size = output_shard_width * input_tensor.element_size();
+            uint32_t output_aligned_page_size = tt::align(output_page_size, alignment);
+            if (output_page_size != output_aligned_page_size) {
+                return {
+                    false,
+                    fmt::format(
+                        "Output row-major shard width {} with data type {} gives page size {} bytes, "
+                        "which must be aligned to {} bytes for reshard",
+                        output_shard_width,
+                        input_tensor.dtype(),
+                        output_page_size,
+                        alignment)};
+            }
+        }
     }
 
     auto output_tensor_spec = compute_output_specs(args, tensor_args);
