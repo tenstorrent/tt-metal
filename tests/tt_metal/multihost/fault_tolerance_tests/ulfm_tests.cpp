@@ -1010,7 +1010,7 @@ TEST(FaultTolerance, FailureDuringNonBlockingOps) {
     ctx->barrier();
 }
 
-// TODO: Split-brain test (requires network partition capability)
+// Split-brain test reference (requires network partition capability)
 //
 // A split-brain scenario occurs when two disjoint groups of ranks each believe
 // the other group has failed.  This is the most dangerous failure mode for
@@ -1046,4 +1046,3 @@ TEST(FaultTolerance, FailureDuringNonBlockingOps) {
 //   - Alternatively, use a custom MPI transport layer that supports
 //     fault injection at the message level.
 //
-// Track as: https://github.com/tenstorrent/tt-metal/issues/XXXXX
