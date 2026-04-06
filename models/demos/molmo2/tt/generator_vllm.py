@@ -25,7 +25,7 @@ from vllm.model_executor.models.interfaces import SupportsMultiModal
 from vllm.model_executor.models.molmo import MolmoProcessingInfo, get_patches_grid_size, select_tiling
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.multimodal.inputs import MultiModalFieldConfig, MultiModalKwargsItems
-from vllm.multimodal.parse import MultiModalDataItems
+from vllm.multimodal.parse import MultiModalDataItems, MultiModalDataParser
 from vllm.multimodal.processing import BaseMultiModalProcessor, PromptReplacement, PromptUpdate
 
 # BaseDummyInputsBuilder location varies between vLLM versions
@@ -256,11 +256,16 @@ class Molmo2ProcessorWrapper:
     - image_token_length_w, image_token_length_h, vocab
     """
 
+    # Molmo2 native video sampling parameters (from video_processing_molmo2.py)
+    _MAX_FPS = 2
+    _MAX_FRAMES = 384
+
     def __init__(self, processor):
         self.processor = processor
         # Forward key attributes
         self.tokenizer = processor.tokenizer
         self.image_processor = processor.image_processor
+        self.video_processor = getattr(processor, "video_processor", None)
 
         # Add Molmo1-compatible attributes to the image_processor
         ip = self.image_processor
@@ -327,6 +332,74 @@ class Molmo2ProcessorWrapper:
     def get_video_string(self, video_grid, timestamps):
         """Delegate to underlying processor's get_video_string method."""
         return self.processor.get_video_string(video_grid, timestamps)
+
+    def _adaptive_sample_frames(self, frames: "np.ndarray", metadata: "dict | None") -> "tuple[np.ndarray, np.ndarray]":
+        """
+        Replicate Molmo2's native video sampling inside the wrapper.
+
+        Molmo2's HF ``video_processing_molmo2.Molmo2VideoProcessor`` uses:
+          - ``frame_sample_mode = "uniform_last_frame"``
+          - ``max_fps = 2``
+          - ``num_frames = 384``  (hard cap)
+
+        When ``vllm_metadata`` is available (fps, total_num_frames from vLLM's
+        OpenCV decoder) we call the real HF ``sample_frames()`` and then
+        index into ``frames``.  When metadata is absent we fall back to the
+        same ``arange``-based formula.
+
+        Returns:
+            (sampled_frames, timestamps) — timestamps in seconds.
+        """
+        import numpy as np
+
+        total_decoded = frames.shape[0]  # frames vLLM actually decoded
+        max_fps = self._MAX_FPS  # 2
+        num_frames_cap = self._MAX_FRAMES  # 384
+
+        # --- path 1: real HF sampling when we have full metadata ---
+        if (
+            metadata is not None
+            and isinstance(metadata, dict)
+            and "fps" in metadata
+            and "total_num_frames" in metadata
+            and self.video_processor is not None
+        ):
+            try:
+                from transformers.video_utils import VideoMetadata
+
+                vp = self.video_processor
+                meta_obj = VideoMetadata(
+                    total_num_frames=int(metadata["total_num_frames"]),
+                    fps=float(metadata["fps"]),
+                )
+                # sample_frames works on the *original* frame space
+                raw_indices = vp.sample_frames(
+                    meta_obj,
+                    frame_sample_mode=vp.frame_sample_mode,
+                    num_frames=num_frames_cap,
+                    max_fps=max_fps,
+                )
+                # Map original indices → decoded frame positions
+                # vLLM decoded a subset; ``metadata["frames_indices"]`` holds which
+                # raw frames it kept.  Map each raw target index to the closest one.
+                decoded_raw = np.array(metadata.get("frames_indices", list(range(total_decoded))))
+                mapped = np.searchsorted(decoded_raw, raw_indices)
+                mapped = np.clip(mapped, 0, total_decoded - 1)
+                mapped = np.unique(mapped)
+                sampled = frames[mapped]
+                timestamps = decoded_raw[mapped] / float(metadata["fps"])
+                return sampled, timestamps
+            except Exception:
+                pass  # fall through to heuristic path
+
+        # --- path 2: heuristic when metadata is absent (vLLM stripped it) ---
+        # vLLM default decodes 32 frames; with media_io_kwargs fps=2 it already
+        # gives the right count.  Just cap at num_frames_cap and compute timestamps.
+        if total_decoded > num_frames_cap:
+            indices = np.linspace(0, total_decoded - 1, num_frames_cap, dtype=int)
+            frames = frames[indices]
+        timestamps = np.arange(frames.shape[0], dtype=float) / max_fps
+        return frames, timestamps
 
     @property
     def max_crops(self) -> int:
@@ -448,14 +521,24 @@ class Molmo2ProcessorWrapper:
             self._is_video_input = True
 
             if isinstance(videos, list) and len(videos) > 0:
-                video_frames = videos[0]  # Take first video
-                if isinstance(video_frames, np.ndarray):
-                    # video_frames shape: [num_frames, H, W, C]
-                    logger.info(f"    Video frames shape: {video_frames.shape}")
+                video_item = videos[0]  # Take first video
 
-                    # Use all frames from the video (no artificial limit)
+                # vLLM may pass (frames, metadata) tuple when video_needs_metadata=True,
+                # or a plain ndarray when metadata is stripped (default).
+                if isinstance(video_item, tuple) and len(video_item) == 2:
+                    video_frames, vllm_metadata = video_item
+                else:
+                    video_frames, vllm_metadata = video_item, None
+
+                if isinstance(video_frames, np.ndarray):
+                    # video_frames shape: [raw_frames, H, W, C] — may be many frames
+                    logger.info(f"    Video frames shape: {video_frames.shape}, metadata={vllm_metadata is not None}")
+
+                    # --- Adaptive FPS-based sampling matching Molmo2's native behavior ---
+                    # Molmo2 uses: max_fps=2, frame_sample_mode="uniform_last_frame", num_frames=384
+                    video_frames, timestamps = self._adaptive_sample_frames(video_frames, vllm_metadata)
                     num_frames = video_frames.shape[0]
-                    logger.info(f"    Processing all {num_frames} frames")
+                    logger.info(f"    After adaptive sampling: {num_frames} frames, timestamps[0:3]={timestamps[:3]}")
 
                     # Process frames using demo approach (resize, normalize, stack)
                     # Using imports from top of file: resize_image, normalize_image,
@@ -463,7 +546,7 @@ class Molmo2ProcessorWrapper:
 
                     base_size = 378
                     patch_size = 14
-                    pool_h, pool_w = 2, 2
+                    pool_h, pool_w = 3, 3  # Video uses 3x3 pooling (k_pool=9), images use 2x2 (k_pool=4)
                     crop_patches = base_size // patch_size  # 27
 
                     # Process each frame
@@ -498,10 +581,6 @@ class Molmo2ProcessorWrapper:
                     # Stack into combined tensors (demo format)
                     pixel_values = torch.stack(all_crops, dim=0)  # [n_frames, 3, H, W]
                     image_token_pooling = torch.from_numpy(np.stack(all_pooling_idx, axis=0)).long()
-
-                    # Generate timestamps (evenly spaced)
-                    # Assume ~2 FPS sampling, so timestamps are 0.0, 0.5, 1.0, ...
-                    timestamps = np.arange(num_frames, dtype=float) * 0.5
 
                     logger.info(
                         f"    Processed {num_frames} frames: pixel_values={pixel_values.shape}, pooling={image_token_pooling.shape}"
@@ -695,6 +774,13 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
 
     This class overrides the necessary methods to handle Molmo2's output format.
     """
+
+    def _get_data_parser(self) -> MultiModalDataParser:
+        # video_needs_metadata=True keeps the (frames, metadata) tuple that
+        # vLLM's OpenCV backend attaches (fps, total_num_frames, frames_indices).
+        # Molmo2ProcessorWrapper._adaptive_sample_frames uses this to call
+        # the real HF sample_frames() for exact Molmo2-native sampling.
+        return MultiModalDataParser(video_needs_metadata=True)
 
     def _hf_processor_applies_updates(
         self,
@@ -1412,6 +1498,106 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             mesh_mapper=mm,
         )
 
+    # Maximum tokens processed in a single prefill forward pass.
+    # Sequences longer than this are processed via chunked prefill.
+    # 4096 is the largest trace-captured bucket size and stays within T3K DRAM limits.
+    _MAX_PREFILL_CHUNK_SIZE = 4096
+
+    # KV cache block size (must match model_spec.py "block_size": "64")
+    _BLOCK_SIZE = 64
+
+    def _run_chunked_prefill_vllm(
+        self,
+        hidden_states_ttnn: "ttnn.Tensor",
+        actual_seq_len: int,
+        page_table_torch: torch.Tensor,
+        page_table_tt: Optional["ttnn.Tensor"],
+        user_id: int,
+    ) -> "ttnn.Tensor":
+        """
+        Run prefill in chunks to avoid OOM for long sequences on T3K.
+
+        Splits hidden states into _MAX_PREFILL_CHUNK_SIZE-token chunks and
+        processes each with chunked_scaled_dot_product_attention (reads
+        previous KV from paged cache).  Only logits from the last token
+        of the last chunk are retained.
+
+        Mirrors demo.py Molmo2Generator._run_chunked_prefill().
+        """
+        chunk_size = self._MAX_PREFILL_CHUNK_SIZE
+        block_size = self._BLOCK_SIZE
+        mm = ttnn.ReplicateTensorToMesh(self.mesh_device)
+
+        # Clamp to KV cache capacity (max_gen_len = max_seq_len - 1) so we
+        # never try to write KV blocks beyond what was allocated.
+        max_kv_tokens = self.max_gen_len  # e.g. 8191 for max_seq_len=8192
+        if actual_seq_len > max_kv_tokens:
+            logger.warning(
+                f"Chunked prefill: seq_len={actual_seq_len} > max_kv_tokens={max_kv_tokens};"
+                " truncating to KV cache capacity"
+            )
+            actual_seq_len = max_kv_tokens
+
+        num_chunks = (actual_seq_len + chunk_size - 1) // chunk_size
+        logger.info(f"Chunked prefill: seq_len={actual_seq_len}, {num_chunks} chunks of {chunk_size}")
+
+        logits = None
+        for chunk_idx in range(num_chunks):
+            chunk_start = chunk_idx * chunk_size
+            chunk_end = min(chunk_start + chunk_size, actual_seq_len)
+            actual_chunk_size = chunk_end - chunk_start
+
+            logger.info(
+                f"  Chunk {chunk_idx + 1}/{num_chunks}: positions {chunk_start}-{chunk_end}, size={actual_chunk_size}"
+            )
+
+            # Slice hidden states for this chunk [1, 1, chunk_size, hidden_dim]
+            chunk_hidden = ttnn.slice(
+                hidden_states_ttnn,
+                (0, 0, chunk_start, 0),
+                (1, 1, chunk_end, 4096),
+            )
+
+            # Rotation matrices for this chunk's positions
+            rot_mats = self.model.text_model.rotary_setup.get_rot_mats_prefill(actual_chunk_size, start_pos=chunk_start)
+
+            # Chunk page table (blocks covered by this chunk)
+            chunk_start_block = chunk_start // block_size
+            chunk_end_block = (chunk_end + block_size - 1) // block_size
+            chunk_pt_torch = page_table_torch[:1, chunk_start_block:chunk_end_block]
+            chunk_pt_tt = ttnn.from_torch(
+                chunk_pt_torch,
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mm,
+            )
+
+            chunk_logits, _ = self.model.text_model.forward(
+                hidden_states=chunk_hidden,
+                start_pos=chunk_start,
+                attn_mask=None,
+                kv_caches=self.kv_caches,
+                rot_mats=rot_mats,
+                page_table=page_table_tt,  # full table for reading previous KV
+                user_id=user_id,
+                chunk_page_table=chunk_pt_tt,  # chunk table for writing new KV
+                chunk_start_idx=chunk_start,  # enables chunked SDPA
+            )
+
+            ttnn.deallocate(chunk_hidden)
+            ttnn.deallocate(chunk_pt_tt)
+            ttnn.deallocate(rot_mats[0])
+            ttnn.deallocate(rot_mats[1])
+
+            if chunk_idx == num_chunks - 1:
+                logits = chunk_logits
+            else:
+                ttnn.deallocate(chunk_logits)
+
+        return logits
+
     def _run_prefill(
         self,
         input_ids: torch.Tensor,
@@ -1421,6 +1607,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         use_vision_trace: bool = False,
         use_unified_trace: bool = False,
         page_table: Optional["ttnn.Tensor"] = None,
+        page_table_torch: Optional[torch.Tensor] = None,
         user_id: int = 0,
         attn_mask: Optional["ttnn.Tensor"] = None,
     ) -> Tuple["ttnn.Tensor", dict]:
@@ -1480,11 +1667,56 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
 
         logger.info(f"_run_prefill: seq_len {actual_seq_len} -> padded {padded_seq_len} (has_vision={has_vision})")
 
-        # Step 4: Get rotation matrices for the correct bucket size
-        rot_mats = self.model.text_model.rotary_setup.get_rot_mats_prefill(padded_seq_len, start_pos=0)
-
         # Use vLLM's paged KV cache if available
         prefill_kv_cache = self.kv_caches
+
+        # --- Chunked prefill for sequences > _MAX_PREFILL_CHUNK_SIZE ---
+        # Avoids full [heads, seq_len, seq_len] attention matrix which OOMs on T3K
+        # for sequences > 4096 tokens (e.g. 30-frame video → 6570 tokens).
+        # Uses chunked_scaled_dot_product_attention (reads from paged KV cache).
+        # Requires page_table_torch for per-chunk block-table slicing.
+        # NOTE: multimodal attention mask is silently dropped for chunked path
+        # (same trade-off as demo.py warning for seq_len > max_prefill_chunk_size).
+        if actual_seq_len > self._MAX_PREFILL_CHUNK_SIZE and page_table_torch is not None and page_table is not None:
+            if attn_mask is not None:
+                logger.warning(
+                    f"_run_prefill: seq_len={actual_seq_len} > {self._MAX_PREFILL_CHUNK_SIZE}:"
+                    " dropping multimodal attn_mask for chunked prefill (mask not supported in this path)"
+                )
+                ttnn.deallocate(attn_mask)
+            logger.info(f"_run_prefill: seq_len={actual_seq_len} > {self._MAX_PREFILL_CHUNK_SIZE} → chunked prefill")
+            ttnn.deallocate(hidden_states_ttnn)  # will be re-sliced inside chunked path
+
+            # Re-build hidden states without seq padding (chunked path handles its own sizing)
+            hidden_states_ttnn = self._prepare_text_inputs(input_ids, pixel_values, pooled_patches_idx)
+
+            # effective_seq_len may be clamped inside _run_chunked_prefill_vllm
+            effective_seq_len = min(actual_seq_len, self.max_gen_len)
+            logits_ttnn = self._run_chunked_prefill_vllm(
+                hidden_states_ttnn=hidden_states_ttnn,
+                actual_seq_len=actual_seq_len,
+                page_table_torch=page_table_torch,
+                page_table_tt=page_table,
+                user_id=user_id,
+            )
+            ttnn.deallocate(hidden_states_ttnn)
+
+            logger.info("_run_prefill: Syncing device after chunked prefill...")
+            ttnn.synchronize_device(self.mesh_device)
+
+            self._reset_kv_cache(effective_seq_len)
+            chunk_size = self._MAX_PREFILL_CHUNK_SIZE
+            last_chunk_start = ((effective_seq_len - 1) // chunk_size) * chunk_size
+            return logits_ttnn, {
+                "original_seq_len": effective_seq_len,
+                "padded_seq_len": effective_seq_len,
+                "chunked_prefill": True,
+                "last_chunk_start": last_chunk_start,
+            }
+
+        # --- Standard path ---
+        # Step 4: Get rotation matrices for the correct bucket size
+        rot_mats = self.model.text_model.rotary_setup.get_rot_mats_prefill(padded_seq_len, start_pos=0)
 
         # Check for pre-captured trace (text-only path)
         if use_trace and padded_seq_len in self.prefill_traces:
@@ -1512,8 +1744,6 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             # Direct model forward (no trace) - used for vision input
             logger.info(f"_run_prefill: Non-traced forward for seq_len={padded_seq_len}")
 
-            # All buckets should be compiled during warmup
-            # Just run the forward pass directly
             logits_ttnn, _ = self.model.text_model.forward(
                 hidden_states=hidden_states_ttnn,
                 start_pos=0,
@@ -1524,12 +1754,10 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 user_id=user_id,
             )
 
-            # Clean up
             ttnn.deallocate(rot_mats[0])
             ttnn.deallocate(rot_mats[1])
             ttnn.deallocate(hidden_states_ttnn)
 
-            # DEBUG: Force synchronization after non-traced forward to ensure cleanup
             logger.info("_run_prefill: Syncing device after non-traced forward...")
             ttnn.synchronize_device(self.mesh_device)
             logger.info("_run_prefill: Device sync complete")
@@ -1903,11 +2131,13 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                     if pooling is not None:
                         logger.info(f"    video_token_pooling shape: {pooling.shape}")
 
-                    # Reshape pooling from [n_frames, N_out, K_pool] to [batch, n_frames*N_out, K_pool]
-                    if pooling.dim() == 3:
-                        n_frames_p, n_out, k_pool = pooling.shape
-                        pooling = pooling.reshape(n_frames_p * n_out, k_pool).unsqueeze(0)
-                        logger.info(f"    Reshaped pooling for prefill: {pooling.shape}")
+                    # Keep pooling as [n_frames, N_out, K_pool] for multi-frame videos.
+                    # embed_image routes batch_size>1 to _embed_image_data_parallel which
+                    # processes frames in chunks (max_frames_per_pool_chunk=1) to avoid OOM.
+                    # Do NOT flatten to [1, n_frames*N_out, K_pool]: that causes batch_size=1
+                    # routing to forward_ttnn which processes all pooling positions at once,
+                    # requiring huge (447MB+) allocations for long videos.
+                    logger.info(f"    Pooling shape for prefill: {pooling.shape}")
 
                 if pooling is None:
                     # Generate default pooling for video frames
@@ -1951,6 +2181,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                     use_trace=False,  # DISABLED for video
                     use_vision_trace=False,
                     page_table=page_table_tt,
+                    page_table_torch=page_table,  # CPU tensor for chunked prefill block slicing
                     user_id=user_id,
                     attn_mask=user_attn_mask,
                 )
@@ -1966,8 +2197,12 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
 
                 # Extract last token's logits
                 original_seq_len = prefill_timing.get("original_seq_len", user_prompt_len)
+                last_chunk_start = prefill_timing.get("last_chunk_start", 0)
                 if logits_torch.dim() == 2:
-                    last_token_logits = logits_torch[original_seq_len - 1, :]  # [vocab_size]
+                    # For chunked prefill, logits_torch is [last_chunk_size, vocab]; index within chunk.
+                    # For standard prefill, logits_torch is [seq_len, vocab]; index is original_seq_len-1.
+                    last_token_idx = original_seq_len - 1 - last_chunk_start
+                    last_token_logits = logits_torch[last_token_idx, :]
                 else:
                     last_token_logits = logits_torch  # Already [vocab_size]
 
@@ -2187,10 +2422,11 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 ttnn.deallocate(logits_ttnn)
 
             # Extract last token's logits - shape: [vocab_size]
-            # Use original_seq_len - 1 to index correctly (accounting for padding)
-            # logits_torch is [seq_len, vocab_size] or [vocab_size]
+            # For chunked prefill, logits_torch is only the last chunk; use last_chunk_start offset.
+            last_chunk_start = prefill_timing.get("last_chunk_start", 0)
             if logits_torch.dim() == 2:
-                last_token_logits = logits_torch[original_seq_len - 1, :]  # [vocab_size]
+                last_token_idx = original_seq_len - 1 - last_chunk_start
+                last_token_logits = logits_torch[last_token_idx, :]
             else:
                 last_token_logits = logits_torch  # Already [vocab_size]
 
@@ -2636,7 +2872,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         )
 
         # Capture prefill traces for multiple bucket sizes
-        # Include 2048 and 4096 for video requests (video with 8 frames can exceed 4000 tokens)
+        # Include 2048 and 4096 for video requests (video with HF adaptive sampling can exceed 4000 tokens)
         warmup_bucket_sizes = [128, 256, 512, 1024, 2048, 4096]
         hidden_dim = 4096
 
@@ -2783,6 +3019,44 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         except Exception as e:
             logger.warning(f"Warmup vision: Vision encoder compile failed: {e}")
 
+        # ========== PHASE 1b: Compile video ViT + pooling for all chunk sizes ==========
+        # Two sources of cold compilation for video requests:
+        #   1. ViT chunks: max_frames_per_chunk=8, so last chunk c = batch_size % 8 ∈ {1..8}
+        #      Each unique c produces a unique TTNN input shape [c*729, 1152].
+        #   2. Pooling chunks: max_frames_per_pool_chunk=16, so last pool chunk
+        #      p = batch_size % 16 ∈ {1..16} produces unique output shapes.
+        #
+        # Running embed_image_chunked with batch_size = 1..16 covers every possible
+        # (ViT last-chunk size, pool last-chunk size) combination, eliminating all
+        # cold compiles during inference.
+        logger.info("Warmup vision: Phase 1b - Compiling video ViT+pool for batch_sizes 1-16 (k_pool=9)...")
+        max_vit_chunk = 8  # max_frames_per_chunk default in _embed_image_chunked
+        max_pool_chunk = 16  # max_frames_per_pool_chunk default in pool_and_project_chunked_ttnn
+        pool_h_vid, pool_w_vid = 3, 3  # video uses 3x3 pooling (k_pool=9)
+        patches_per_side = 27
+        n_out_vid = (patches_per_side // pool_h_vid) * (patches_per_side // pool_w_vid)  # 81
+        k_pool_vid = pool_h_vid * pool_w_vid  # 9
+
+        for b in range(1, max_pool_chunk + 1):
+            try:
+                compile_start = time.time()
+                dummy_vid_frames = torch.zeros((b, 3, 378, 378), dtype=torch.float32)
+                # Zero pooled_patches_idx - indices are clamped inside the model so zeros are safe
+                dummy_vid_pooling = torch.zeros((b, n_out_vid, k_pool_vid), dtype=torch.long)
+
+                vis_emb, _ = self.model._embed_image_chunked(
+                    pixel_values=dummy_vid_frames,
+                    pooled_patches_idx=dummy_vid_pooling,
+                    max_frames_per_chunk=max_vit_chunk,
+                )
+                if vis_emb is not None:
+                    ttnn.deallocate(vis_emb)
+                ttnn.synchronize_device(self.mesh_device)
+                compile_time = (time.time() - compile_start) * 1000
+                logger.info(f"Warmup vision: Video batch_size={b} compiled in {compile_time:.2f}ms")
+            except Exception as e:
+                logger.warning(f"Warmup vision: Video batch_size={b} compile failed: {e}")
+
         # ========== PHASE 2: Compile text_model.forward for ALL bucket sizes ==========
         logger.info("Warmup vision: Phase 2 - Compiling text model for all buckets...")
         warmup_bucket_sizes = [128, 256, 512, 1024, 2048, 4096]
@@ -2832,6 +3106,65 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
 
             except Exception as e:
                 logger.warning(f"Warmup vision: Failed to compile bucket {bucket_size}: {e}")
+
+        # ========== PHASE 3: Compile chunked prefill path (chunk_start_idx != None) ==========
+        # This compiles chunked_scaled_dot_product_attention used for sequences > _MAX_PREFILL_CHUNK_SIZE.
+        # Compile one pass: chunk_size = _MAX_PREFILL_CHUNK_SIZE tokens, chunk_start_idx=0.
+        chunk_size = self._MAX_PREFILL_CHUNK_SIZE
+        block_size = self._BLOCK_SIZE
+        blocks_per_chunk = chunk_size // block_size  # 4096 // 64 = 64 blocks
+        if chunk_size in warmup_bucket_sizes:
+            logger.info("Warmup vision: Phase 3 - Compiling chunked prefill path (chunk_start_idx=0)...")
+            try:
+                compile_start = time.time()
+                chunk_hidden = torch.zeros((1, chunk_size, 4096), dtype=torch.bfloat16)
+                chunk_hidden_ttnn = ttnn.from_torch(
+                    chunk_hidden,
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+                rot_mats_chunk = self.model.text_model.rotary_setup.get_rot_mats_prefill(chunk_size, start_pos=0)
+                # Full page table (for reading prev KV) — reuse warmup_page_table shape
+                full_pt = ttnn.from_torch(
+                    torch.arange(num_blocks, dtype=torch.int32).unsqueeze(0),
+                    device=self.mesh_device,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+                # Chunk page table (for writing new KV for this chunk)
+                chunk_pt = ttnn.from_torch(
+                    torch.arange(blocks_per_chunk, dtype=torch.int32).unsqueeze(0),
+                    device=self.mesh_device,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+                _, _ = self.model.text_model.forward(
+                    hidden_states=chunk_hidden_ttnn,
+                    start_pos=0,
+                    attn_mask=None,
+                    kv_caches=warmup_kv_cache,
+                    rot_mats=rot_mats_chunk,
+                    page_table=full_pt,
+                    chunk_page_table=chunk_pt,
+                    chunk_start_idx=0,
+                )
+                ttnn.synchronize_device(self.mesh_device)
+                ttnn.deallocate(rot_mats_chunk[0])
+                ttnn.deallocate(rot_mats_chunk[1])
+                ttnn.deallocate(chunk_hidden_ttnn)
+                ttnn.deallocate(full_pt)
+                ttnn.deallocate(chunk_pt)
+                compile_time = (time.time() - compile_start) * 1000
+                logger.info(f"Warmup vision: Chunked prefill path compiled in {compile_time:.2f}ms")
+            except Exception as e:
+                logger.warning(f"Warmup vision: Failed to compile chunked prefill path: {e}")
 
         # Cleanup
         ttnn.deallocate(warmup_page_table)
