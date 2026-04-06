@@ -612,6 +612,8 @@
 
 - name: Galaxy Qwen3-32B demo tests
   cmd: |
+    # Clear kernel cache to prevent stale/corrupted kernel compilation artifacts
+    rm -rf ~/.cache/tt-metal-cache-*
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B MESH_DEVICE=TG
     pytest models/demos/llama3_70b_galaxy/demo/demo_qwen_decode.py -k "full" --timeout 1000
     pytest models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "batch-32" --timeout 1000
@@ -625,6 +627,8 @@
 
 - name: Galaxy Qwen3-32B long context demo tests
   cmd: |
+    # Clear kernel cache to prevent stale/corrupted kernel compilation artifacts
+    rm -rf ~/.cache/tt-metal-cache-*
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B MESH_DEVICE=TG
     pytest models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-8k-b1" --timeout 1000
     pytest models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-32k-b1" --timeout 1000
