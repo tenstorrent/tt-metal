@@ -32,3 +32,4 @@
 {"event":"complete","operation":"rpow","final_status":"SUCCESS","output_file":".claude-analysis/atanh-1/rpow_analysis.md","commit":"pending","ts":"2026-04-06T09:44:30+00:00"}
 {"event":"analysis_written","operation":"hardtanh","output_file":".claude-analysis/atanh-1/hardtanh_analysis.md","sections":["dispatch_summary","approx_mode_resolution","abstraction_layers","call_chain","params_dispatch_summary","annotated_source","instruction_table","register_usage","addr_mod_config","local_knowledge_sources"],"ts":"2026-04-06T09:44:30+00:00"}
 {"event":"complete","operation":"cbrt","final_status":"SUCCESS","output_file":".claude-analysis/atanh-1/cbrt_analysis.md","commit":"f0a8ab2510","ts":"2026-04-06T09:44:51+00:00"}
+{"event":"complete","operation":"hardtanh","final_status":"SUCCESS","output_file":".claude-analysis/atanh-1/hardtanh_analysis.md","commit":"pending","ts":"2026-04-06T09:47:14+00:00"}
