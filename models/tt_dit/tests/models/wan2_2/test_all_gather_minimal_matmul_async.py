@@ -278,10 +278,10 @@ def run_test_linear_impl(
             else:
                 concat_dims = [tp_axis + 2, sp_axis + 2]
         else:
-            if cluster_axis == 0:
-                concat_dims = [sp_axis, tp_axis]
-            else:
-                concat_dims = [tp_axis, sp_axis]
+            # Fused AGMM output: M on non-cluster axis, N on cluster axis
+            concat_dims = [0, 0]
+            concat_dims[1 - cluster_axis] = 0  # M gathered on non-cluster axis
+            concat_dims[cluster_axis] = 1  # N on cluster axis
 
         check_result = []
         for c in range(chunks):
@@ -385,16 +385,16 @@ def run_test_linear(
         torch_addcmul_b = None
 
     # Prepare TT tensors
-    if sp_axis == 1:
-        if use_non_fused:
+    if use_non_fused:
+        if sp_axis == 1:
             shard_dims = [sp_axis + 2, tp_axis + 2]
         else:
-            shard_dims = [sp_axis, tp_axis]
-    else:
-        if use_non_fused:
             shard_dims = [tp_axis + 2, sp_axis + 2]
-        else:
-            shard_dims = [tp_axis, sp_axis]
+    else:
+        # Fused AGMM gathers K (last dim) across cluster_axis
+        shard_dims = [0, 0]
+        shard_dims[cluster_axis] = 1  # K on cluster_axis
+        shard_dims[1 - cluster_axis] = 0  # M on the other axis
     tt_input = ttnn.from_torch(
         torch_input,
         dtype=dtype,
