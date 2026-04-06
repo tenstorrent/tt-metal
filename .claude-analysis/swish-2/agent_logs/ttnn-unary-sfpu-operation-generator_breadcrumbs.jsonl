@@ -1,0 +1,12 @@
+{"ts":"2026-04-06T09:20:46+00:00","event":"start","agent":"ttnn-unary-sfpu-operation-generator","operation":"swish","input_files":[]}
+{"event":"pipeline_start","op_name":"swish","math_definition":"x / (1 + exp(-x))","output_folder":".claude-analysis/swish-2","ts":"2026-04-06T09:20:50+00:00"}
+{"event":"phase_start","phase":1,"phase_name":"Reference Discovery","ts":"2026-04-06T09:21:02+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-reference-discoverer","phase":1,"ts":"2026-04-06T09:21:06+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-reference-discoverer","status":"ok","ts":"2026-04-06T09:27:48+00:00"}
+{"event":"phase_complete","phase":1,"phase_name":"Reference Discovery","status":"ok","references":["hardswish","hardsigmoid","rpow","softsign","cbrt"],"ts":"2026-04-06T09:27:52+00:00"}
+{"event":"phase_start","phase":2,"phase_name":"Reference Analysis","analyzer_count":5,"ts":"2026-04-06T09:28:02+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"hardswish","background":true,"ts":"2026-04-06T09:28:09+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"hardsigmoid","background":true,"ts":"2026-04-06T09:28:09+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"rpow","background":true,"ts":"2026-04-06T09:28:09+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"softsign","background":true,"ts":"2026-04-06T09:28:09+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"cbrt","background":true,"ts":"2026-04-06T09:28:09+00:00"}
