@@ -2094,8 +2094,8 @@ def test_non_contiguous_core_grid_fused(device, perf_mode):
 
         ref = ttnn.to_torch(t_in)
         [out_a, out_b] = seq.run(results=[op_a, op_b])
-        assert_numeric_metrics(ref, ttnn.to_torch(out_a), pcc=0.999, check_allclose=False, check_frobenius=False, check_ulp=False)
-        assert_numeric_metrics(ref, ttnn.to_torch(out_b), pcc=0.999, check_allclose=False, check_frobenius=False, check_ulp=False)
+        assert_numeric_metrics(ref, ttnn.to_torch(out_a), pcc_threshold=0.999, check_allclose=False, check_frobenius=False, check_ulp=False)
+        assert_numeric_metrics(ref, ttnn.to_torch(out_b), pcc_threshold=0.999, check_allclose=False, check_frobenius=False, check_ulp=False)
 
 
 # -----------------------------------------------------------------
