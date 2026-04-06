@@ -33,7 +33,6 @@ constexpr auto kGloballyAllocated = "globally_allocated";
 constexpr auto kDeviceId = "device_id";
 constexpr auto kDurationNs = "duration_ns";
 constexpr auto kMaxSizePerBank = "max_size_per_bank";
-constexpr auto kExactBufferType = "exact_buffer_type";
 
 // node names
 constexpr auto kNodeBuffer = "buffer";

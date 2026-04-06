@@ -869,9 +869,8 @@ TEST_F(TestScopedGraphCapture, ExactBufferTypeAndMaxSizePerBankTest) {
             found_buffer_allocate = true;
             const auto& params = node.at(ttnn::graph::kParams);
 
-            ASSERT_TRUE(params.contains(ttnn::graph::kExactBufferType))
-                << "buffer_allocate should contain exact_buffer_type";
-            EXPECT_TRUE(params.at(ttnn::graph::kExactBufferType).is_number_integer());
+            ASSERT_TRUE(params.contains(ttnn::graph::kBufferType)) << "buffer_allocate should contain buffer_type";
+            EXPECT_TRUE(params.at(ttnn::graph::kBufferType).is_number_integer());
 
             ASSERT_TRUE(params.contains(ttnn::graph::kMaxSizePerBank))
                 << "buffer_allocate should contain max_size_per_bank";
@@ -926,7 +925,7 @@ TEST_F(TestScopedGraphCapture, PerOperationBuffersInReportTest) {
     }
 }
 
-TEST_F(TestScopedGraphCapture, DeallocateContainsExactBufferTypeTest) {
+TEST_F(TestScopedGraphCapture, DeallocateContainsBufferTypeTest) {
     tt::tt_metal::IDevice* device = device_;
 
     nlohmann::json trace;
@@ -948,22 +947,21 @@ TEST_F(TestScopedGraphCapture, DeallocateContainsExactBufferTypeTest) {
     for (const auto& node : trace) {
         if (node.at(ttnn::graph::kNodeType) == ttnn::graph::kNodeBufferDeallocate) {
             const auto& params = node.at(ttnn::graph::kParams);
-            EXPECT_TRUE(params.contains(ttnn::graph::kExactBufferType))
-                << "buffer_deallocate should contain exact_buffer_type";
-            if (params.contains(ttnn::graph::kExactBufferType)) {
-                EXPECT_TRUE(params.at(ttnn::graph::kExactBufferType).is_number_integer());
+            EXPECT_TRUE(params.contains(ttnn::graph::kBufferType)) << "buffer_deallocate should contain buffer_type";
+            if (params.contains(ttnn::graph::kBufferType)) {
+                EXPECT_TRUE(params.at(ttnn::graph::kBufferType).is_number_integer());
             }
             EXPECT_TRUE(params.contains(ttnn::graph::kAddress)) << "buffer_deallocate should contain address";
         }
     }
 
-    // Verify buffer_allocate events also carry exact_buffer_type (stronger check)
+    // Verify buffer_allocate events also carry buffer_type (stronger check)
     bool found_alloc = false;
     for (const auto& node : trace) {
         if (node.at(ttnn::graph::kNodeType) == ttnn::graph::kNodeBufferAllocate) {
             found_alloc = true;
             const auto& params = node.at(ttnn::graph::kParams);
-            ASSERT_TRUE(params.contains(ttnn::graph::kExactBufferType));
+            ASSERT_TRUE(params.contains(ttnn::graph::kBufferType));
             ASSERT_TRUE(params.contains(ttnn::graph::kAddress));
         }
     }
