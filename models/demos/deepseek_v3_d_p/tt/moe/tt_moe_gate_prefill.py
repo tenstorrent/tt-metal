@@ -143,7 +143,7 @@ class TtMoEGatePrefill(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
-            cache_file_name=_cache_name("bias"),
+            cache_file_name=_cache_name(f"bias_sp{config.sp_dim}"),
         )
 
         self.routing_setup = TtMoERoutingSetup(mesh_device, dispatch_table, num_links=config.ccl_config["NUM_LINKS"])
@@ -291,6 +291,7 @@ class TtMoEGatePrefill(LightweightModule):
 
     def _device_grouped_gate(self, logits: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run deepseek_grouped_gate on device."""
+        logger.debug(f"[MoeGate] _device_grouped_gate: logits.shape={logits.shape}, bias.shape={self.bias.shape}")
         return ttnn.experimental.deepseek_grouped_gate(
             logits,
             self.bias,
