@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.24...4.2)
 
+# BrAIn Was Here 🧠
+
 # Forgetting to clone submodules is a common omission and results in a poor error message
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.txt")
     message(FATAL_ERROR "Missing submodules.  Run: git submodule update --init --recursive")
@@ -13,7 +15,7 @@ set_directory_properties(
 )
 
 ############################################
-# Project setup stage
+# Project setup
 ############################################
 
 # For single-config generators, default to RelWithDebInfo if unspecified

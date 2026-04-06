@@ -1,0 +1,27 @@
+**/build/**
+**/__pycache__/**
+**/.venv/**
+.idea/
+.cpmcache/
+compile_commands.json
+*.code-workspace
+*.o
+*.elf
+*.d/
+.cache/**
+.envrc
+.vscode/
+perf_data/
+*.log
+*.csv
+*.whl
+**/hw_specific/**
+
+# Ignore generated build.h
+tests/helpers/include/build.h
+
+# Ignore generated fused_test.cpp
+**/fused_tests/**
+
+# Ignore generated compile_flags.txt
+compile_flags.txt
