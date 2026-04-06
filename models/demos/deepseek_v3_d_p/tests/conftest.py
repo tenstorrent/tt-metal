@@ -433,6 +433,30 @@ def _check_pretrained_available(model_path: Path = None) -> bool:
     return available
 
 
+@pytest.fixture(scope="session")
+def weight_cache_path(model_path):
+    """
+    Return a directory for caching TTNN weight tensors (.tensorbin files).
+
+    First run: ttnn.as_tensor() dumps converted weights here.
+    Subsequent runs: weights are loaded directly, bypassing torch conversion.
+
+    The path encodes architecture + device count to prevent cross-config clashes.
+    Returns None if pretrained weights are unavailable (random-weight tests skip caching).
+    """
+    if not _check_pretrained_available(model_path):
+        return None
+    arch = "bh" if is_blackhole() else "wh"
+    num_devices = ttnn.get_num_devices()
+    env_cache = os.getenv("TT_DS_PREFILL_TTNN_CACHE")
+    if env_cache:
+        cache_dir = Path(env_cache) / f"deepseek_v3_d_p_{arch}_{num_devices}dev"
+    else:
+        cache_dir = model_path / f"tensor_cache_{arch}_{num_devices}dev"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
 @pytest.fixture
 def pretrained_weights(model_path, hf_config, state_dict):
     """

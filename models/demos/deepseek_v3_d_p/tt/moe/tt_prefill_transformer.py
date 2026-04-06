@@ -13,6 +13,9 @@ but targeting the TT prefill path with SP+TP parallelism.
 No LM head — returns hidden states after final norm.
 """
 
+from pathlib import Path
+from typing import Optional
+
 import torch
 from loguru import logger
 from tracy import signpost
@@ -58,6 +61,7 @@ class TtPrefillTransformer(LightweightModule):
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         activations_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
+        weight_cache_path: Optional[Path] = None,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -73,6 +77,7 @@ class TtPrefillTransformer(LightweightModule):
             torch_weight=state_dict["embed_weight"],
             sp_axis=sp_axis,
             tp_axis=tp_axis,
+            weight_cache_path=weight_cache_path,
         )
 
         # --- Transformer layers ---
@@ -94,6 +99,7 @@ class TtPrefillTransformer(LightweightModule):
                 gate_fallback_mode=gate_fallback_mode,
                 activations_dtype=activations_dtype,
                 weights_dtype=weights_dtype,
+                weight_cache_path=weight_cache_path,
             )
             self.layers.append(layer)
 
@@ -105,6 +111,8 @@ class TtPrefillTransformer(LightweightModule):
             cluster_axis=tp_axis,
             num_links=num_links,
             topology=topology,
+            weight_cache_path=weight_cache_path,
+            cache_name_prefix="norm",
         )
 
         # --- RoPE (computed once, reused across all layers) ---

@@ -18,6 +18,9 @@ Forward:
     Output: embeddings [1, 1, seq_len_per_chip, emb_dim / tp_factor] TILE_LAYOUT
 """
 
+from pathlib import Path
+from typing import Optional
+
 import torch
 from loguru import logger
 
@@ -44,6 +47,7 @@ class TtParallelEmbedding(LightweightModule):
         sp_axis: int = 0,
         tp_axis: int = 1,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        weight_cache_path: Optional[Path] = None,
     ):
         """
         Initialize parallel embedding module.
@@ -73,6 +77,8 @@ class TtParallelEmbedding(LightweightModule):
             f"Initializing TtParallelEmbedding: vocab_size={vocab_size}, emb_dim={emb_dim}, "
             f"mesh_shape={mesh_device.shape}, tp_factor={tp_factor}"
         )
+
+        self.weight_cache_path = weight_cache_path
 
         if torch_weight is not None:
             self.weight = self._create_weight_from_torch(torch_weight)
@@ -105,12 +111,15 @@ class TtParallelEmbedding(LightweightModule):
             dims=tuple(shard_dims),
         )
 
-        tt_weight = ttnn.from_torch(
+        cache_file_name = str(self.weight_cache_path / "embed_weight") if self.weight_cache_path else None
+        tt_weight = ttnn.as_tensor(
             torch_weight,
             mesh_mapper=mesh_mapper,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             dtype=self.dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=cache_file_name,
         )
 
         logger.debug(f"Created sharded weight: {tt_weight.shape}")

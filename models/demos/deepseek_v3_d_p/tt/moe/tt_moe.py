@@ -14,6 +14,7 @@ This module assembles the full MoE pipeline:
 6. Final: Add routed output + shared output
 """
 
+from pathlib import Path
 from typing import Optional, Union
 
 import torch
@@ -76,6 +77,8 @@ class TtMoe(LightweightModule):
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
+        weight_cache_path: Optional[Path] = None,
+        layer_idx: int = 0,
     ):
         """
         Initialize TtMoe module.
@@ -147,6 +150,8 @@ class TtMoe(LightweightModule):
             weight=gate_weights["weight"],
             bias=gate_weights["e_score_correction_bias"],
             fallback_mode=gate_fallback_mode,
+            weight_cache_path=weight_cache_path,
+            cache_name_prefix=f"layer_{layer_idx}.gate",
         )
         self.gate_input_mem_config = get_input_mem_config(gate_config, mesh_device.shape)
 
@@ -201,6 +206,8 @@ class TtMoe(LightweightModule):
             torch_weights=routed_expert_weights,
             activations_dtype=activations_dtype,
             weights_dtype=weights_dtype,
+            weight_cache_path=weight_cache_path,
+            cache_name_prefix=f"layer_{layer_idx}.routed_expert",
         )
 
         # Initialize shared expert (col axis: axis 1)
@@ -213,6 +220,8 @@ class TtMoe(LightweightModule):
             topology=self.col_topology,
             activations_dtype=activations_dtype,
             weights_dtype=weights_dtype,
+            weight_cache_path=weight_cache_path,
+            cache_name_prefix=f"layer_{layer_idx}.shared_expert",
         )
 
         # Initialize reduce module for post-combine reduction (col axis: axis 1)

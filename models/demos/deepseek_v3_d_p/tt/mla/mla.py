@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+from pathlib import Path
+from typing import Optional
 
 import torch
 from loguru import logger
@@ -24,11 +26,13 @@ class ttMLA:
         sp_axis: int = 0,
         tp_axis: int = 1,
         is_balanced: bool = False,
+        weight_cache_path: Optional[Path] = None,
     ):
         self.config = config
         self.mesh_device = mesh_device
         self.layer_idx = layer_idx
         self.is_balanced = is_balanced
+        self.weight_cache_path = weight_cache_path
 
         self.sp_axis = sp_axis
         self.tp_axis = tp_axis
@@ -174,6 +178,11 @@ class ttMLA:
         # Load weights to TT device
         self._load_weights(state_dict)
 
+    def _cache_name(self, name: str) -> Optional[str]:
+        if self.weight_cache_path is None:
+            return None
+        return str(self.weight_cache_path / f"layer_{self.layer_idx}.mla.{name}")
+
     def _load_weights(self, state_dict: dict[str, torch.Tensor]):
         """
         Load weights from state dict and convert to TT tensors.
@@ -190,23 +199,25 @@ class ttMLA:
 
         # Mesh Device = (sp x tp)
         q_a_ln_weight = state_dict["q_a_layernorm.weight"].reshape(1, 1, -1, ttnn.TILE_SIZE)
-        self.q_a_layernorm_weight = ttnn.from_torch(
+        self.q_a_layernorm_weight = ttnn.as_tensor(
             q_a_ln_weight,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            cache_file_name=self._cache_name("q_a_layernorm"),
         )
 
         kv_a_ln_weight = state_dict["kv_a_layernorm.weight"].reshape(1, 1, -1, ttnn.TILE_SIZE)
-        self.kv_a_layernorm_weight = ttnn.from_torch(
+        self.kv_a_layernorm_weight = ttnn.as_tensor(
             kv_a_ln_weight,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            cache_file_name=self._cache_name("kv_a_layernorm"),
         )
 
         q_a_proj = state_dict["q_a_proj.weight"]
@@ -217,13 +228,14 @@ class ttMLA:
         mesh_mapper = ttnn.ShardTensor2dMesh(
             self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=shard_dims
         )
-        self.q_a_proj_weight = ttnn.from_torch(
+        self.q_a_proj_weight = ttnn.as_tensor(
             q_a_proj,
             device=self.mesh_device,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper,
+            cache_file_name=self._cache_name("q_a_proj"),
         )
 
         shard_dims[self.tp_axis] = 1
@@ -231,22 +243,24 @@ class ttMLA:
         mesh_mapper_q_b_proj = ttnn.ShardTensor2dMesh(
             self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=shard_dims
         )
-        self.q_b_proj_weight = ttnn.from_torch(
+        self.q_b_proj_weight = ttnn.as_tensor(
             state_dict["q_b_proj.weight"].transpose(-2, -1),
             device=self.mesh_device,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper_q_b_proj,
+            cache_file_name=self._cache_name("q_b_proj"),
         )
 
-        self.kv_a_proj_with_mqa_weight = ttnn.from_torch(
+        self.kv_a_proj_with_mqa_weight = ttnn.as_tensor(
             state_dict["kv_a_proj_with_mqa.weight"].transpose(-2, -1),
             device=self.mesh_device,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper,
+            cache_file_name=self._cache_name("kv_a_proj_with_mqa"),
         )
         kv_b_proj_weights = state_dict["kv_b_proj.weight"].reshape(
             1, self.num_heads, self.qk_nope_head_dim + self.v_head_dim, self.kv_lora_rank
@@ -257,30 +271,33 @@ class ttMLA:
 
         shard_dims[self.tp_axis] = 1
         shard_dims[self.sp_axis] = None
-        self.wkv_b1_weight = ttnn.from_torch(
+        self.wkv_b1_weight = ttnn.as_tensor(
             torch_weights_k.transpose(-2, -1),
             device=self.mesh_device,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper_q_b_proj,
+            cache_file_name=self._cache_name("wkv_b1"),
         )
-        self.wkv_b2_weight = ttnn.from_torch(
+        self.wkv_b2_weight = ttnn.as_tensor(
             torch_weights_v.transpose(-2, -1),
             device=self.mesh_device,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper_q_b_proj,
+            cache_file_name=self._cache_name("wkv_b2"),
         )
 
-        self.o_proj_weight = ttnn.from_torch(
+        self.o_proj_weight = ttnn.as_tensor(
             state_dict["o_proj.weight"].transpose(-2, -1),
             device=self.mesh_device,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper,
+            cache_file_name=self._cache_name("o_proj"),
         )
 
         logger.info(f"✓ Loaded {len(state_dict)} weights in MLA layer {self.layer_idx} to TT device")

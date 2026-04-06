@@ -13,6 +13,9 @@ This module performs distributed RMSNorm across chips using:
 Supports both DRAM interleaved and L1 sharded memory configurations.
 """
 
+from pathlib import Path
+from typing import Optional
+
 import torch
 from loguru import logger
 
@@ -52,6 +55,8 @@ class TtDistributedRmsNorm(LightweightModule):
         input_memcfg: ttnn.MemoryConfig = None,
         sharded_progcfg: ttnn.LayerNormShardedMultiCoreProgramConfig = None,
         stats_memcfg: ttnn.MemoryConfig = None,
+        weight_cache_path: Optional[Path] = None,
+        cache_name_prefix: Optional[str] = None,
     ):
         """
         Initialize TtDistributedRmsNorm module.
@@ -81,6 +86,8 @@ class TtDistributedRmsNorm(LightweightModule):
         self.input_memcfg = input_memcfg
         self.sharded_progcfg = sharded_progcfg
         self.stats_memcfg = stats_memcfg
+        self.weight_cache_path = weight_cache_path
+        self.cache_name_prefix = cache_name_prefix
 
         logger.debug(f"Initializing TtDistributedRmsNorm with emb_dim={emb_dim}, epsilon={epsilon}")
         logger.debug(f"Mesh shape: {mesh_device.shape}, num_devices={self.num_devices}")
@@ -119,12 +126,19 @@ class TtDistributedRmsNorm(LightweightModule):
             dims=(None, 2),
         )
 
-        tt_weight = ttnn.from_torch(
+        cache_file_name = (
+            str(self.weight_cache_path / f"{self.cache_name_prefix}_weight")
+            if self.weight_cache_path and self.cache_name_prefix
+            else None
+        )
+        tt_weight = ttnn.as_tensor(
             torch_weight_reshaped,
             mesh_mapper=mesh_mapper,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=cache_file_name,
         )
 
         logger.debug(f"Created sharded weight: {tt_weight.shape}")

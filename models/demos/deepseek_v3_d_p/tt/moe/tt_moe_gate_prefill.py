@@ -4,7 +4,9 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Optional
 
 import torch
 import torch.nn.functional as F
@@ -96,6 +98,8 @@ class TtMoEGatePrefill(LightweightModule):
         weight: torch.Tensor = None,
         bias: torch.Tensor = None,
         fallback_mode: GateComputeMode = GateComputeMode.DEVICE,
+        weight_cache_path: Optional[Path] = None,
+        cache_name_prefix: Optional[str] = None,
     ):
         """
         Args:
@@ -106,9 +110,14 @@ class TtMoEGatePrefill(LightweightModule):
         self.mesh_device = mesh_device
         self.fallback_mode = fallback_mode
 
+        def _cache_name(name):
+            if weight_cache_path is None or cache_name_prefix is None:
+                return None
+            return str(weight_cache_path / f"{cache_name_prefix}.{name}")
+
         # TTNN matmul needs (dim, n_routed_experts); transpose from HF convention
         weight_for_ttnn = weight.T if weight is not None else torch.zeros([config.dim, config.n_routed_experts])
-        self.weight = ttnn.from_torch(
+        self.weight = ttnn.as_tensor(
             weight_for_ttnn,
             device=mesh_device,
             dtype=ttnn.bfloat16,
@@ -119,19 +128,22 @@ class TtMoEGatePrefill(LightweightModule):
                 dims=(None, 0),
                 mesh_shape=mesh_device.shape,
             ),
+            cache_file_name=_cache_name("weight"),
         )
 
-        self.bias = ttnn.from_torch(
-            # ttnn.experimental.deepseek_grouped_gate() requires bias to be broadcasted already
-            (
-                bias.repeat(config.sp_dim).view(config.sp_dim, -1)
-                if bias is not None
-                else torch.zeros([config.n_routed_experts]).repeat(config.sp_dim).view(config.sp_dim, -1)
-            ),
+        # ttnn.experimental.deepseek_grouped_gate() requires bias to be broadcasted already
+        bias_tensor = (
+            bias.repeat(config.sp_dim).view(config.sp_dim, -1)
+            if bias is not None
+            else torch.zeros([config.n_routed_experts]).repeat(config.sp_dim).view(config.sp_dim, -1)
+        )
+        self.bias = ttnn.as_tensor(
+            bias_tensor,
             device=mesh_device,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
+            cache_file_name=_cache_name("bias"),
         )
 
         self.routing_setup = TtMoERoutingSetup(mesh_device, dispatch_table, num_links=config.ccl_config["NUM_LINKS"])
