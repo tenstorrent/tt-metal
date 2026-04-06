@@ -21,7 +21,6 @@
 #include "api/compute/compute_kernel_api.h"
 #include "../../../kernel_includes/tt_metal/include/compute_kernel_api/compressed_custom_mm.h"
 #include "../../../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
-#include "../../../kernel_includes/tt_metal/include/compute_kernel_api/pmp.h"
 using namespace ckernel;
 #include "../../../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/constexpr_args.h"
 #include "../../../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_custom_mm_compressed_constexpr_compact.h"
@@ -111,31 +110,18 @@ void kernel_main() {
     "Invalid COMPRESSED_MM_IMPL: expected 0 (runtime), 1 (constexpr_compact), 2 (constexpr_unroll), 3 (runtime barrier), 4 (constexpr_compact barrier), 5 (constexpr_unroll barrier), 6 (new)"
 #endif
 
-    pmp_run(
-        [&] {
 #if COMPRESSED_MM_IMPL == 0 || COMPRESSED_MM_IMPL == 3
-            compressed::custom_mm_compressed_block_runtime<num_tiles_k, out_w>(
-                fmt_l1_addr, addr_in0, addr_in1, in0_face_r_dim, 0);
+    compressed::custom_mm_compressed_block_runtime<num_tiles_k, out_w>(
+        fmt_l1_addr, addr_in0, addr_in1, in0_face_r_dim, 0);
 #elif COMPRESSED_MM_IMPL == 1 || COMPRESSED_MM_IMPL == 4
-            compressed::custom_mm_compressed_block_constexpr<num_tiles_k, out_w, num_packed, fmt_packed>(
-                addr_in0, addr_in1, in0_face_r_dim, 0);
+    compressed::custom_mm_compressed_block_constexpr<num_tiles_k, out_w, num_packed, fmt_packed>(
+        addr_in0, addr_in1, in0_face_r_dim, 0);
 #elif COMPRESSED_MM_IMPL == 2 || COMPRESSED_MM_IMPL == 5
-            compressed::custom_mm_compressed_block_compact<num_tiles_k, out_w, num_packed, fmt_packed>(
-                addr_in0, addr_in1, in0_face_r_dim, 0);
+    compressed::custom_mm_compressed_block_compact<num_tiles_k, out_w, num_packed, fmt_packed>(
+        addr_in0, addr_in1, in0_face_r_dim, 0);
 #elif COMPRESSED_MM_IMPL == 6
-            compressed_custom_mm_block<split_acc, clear_src>(cb_in0, cb_in1, fmt_l1_addr, 0, num_tiles_k, out_w);
+    compressed_custom_mm_block<split_acc, clear_src>(cb_in0, cb_in1, fmt_l1_addr, 0, num_tiles_k, out_w);
 #endif
-        },
-        [&] {
-#if defined(DEBUG_PRINT_ENABLED)
-            DEVICE_PRINT_UNPACK(
-                "Case: M={} K={} N={} IMPL={}\n",
-                get_operand_face_r_dim(cb_in0),
-                num_tiles_k,
-                out_w,
-                (uint32_t)COMPRESSED_MM_IMPL);
-#endif
-        });
 
     tile_regs_commit();
     tile_regs_wait();
