@@ -1,0 +1,30 @@
+training_config:
+  batch_size: 16               # 16 prompts * 8 group_size = 128 completions per iter
+  num_epochs: 1
+  model_config: "model_configs/llama3_2_1B.yaml"
+
+  optimizer:
+    type: MorehAdamW
+    lr: 5.0e-6
+    beta1: 0.9
+    beta2: 0.99
+    epsilon: 1.0e-8
+    weight_decay: 0.01
+    amsgrad: false
+    kahan_summation: false
+
+grpo_config:
+  group_size: 8
+  micro_batch_size: 128
+  warmup_steps: 100
+  max_tokens_to_complete: 256
+  prompts_to_train: 1600
+  clip_eps: 0.2
+  gradient_accumulation_steps: 1   # effective batch = 16 * 1 = 16 prompts per step
+
+eval_config:
+  temperature: 1.5
+
+device_config:
+  enable_ddp: true
+  mesh_shape: [1, 8]
