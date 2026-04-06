@@ -485,7 +485,7 @@ std::string to_string_impl(const Tensor& tensor) {
         return to_string_impl<T>(cpu_tensor);
     }
 
-    auto& mesh_device = storage.get_device();
+    auto& mesh_device = storage.get_mesh_tensor().device();
     // TODO: Uncomment after the distributed tensors migration to tt-metal is complete.
     // if (mesh_device->num_devices() == 1) {
     //     return to_string<T>(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
