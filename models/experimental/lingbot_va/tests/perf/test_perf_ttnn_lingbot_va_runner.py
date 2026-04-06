@@ -72,7 +72,6 @@ def _run_lingbot_va_ttnn_forward() -> None:
         checkpoint_path=checkpoint_path,
         num_inference_steps=config.num_inference_steps,
         action_num_inference_steps=config.action_num_inference_steps,
-        frame_chunk_size=config.frame_chunk_size,
     )
 
     assert isinstance(out, dict), "run_inference returns {'action': ndarray}"

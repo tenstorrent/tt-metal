@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 from copy import deepcopy
 from pathlib import Path
-
+import torch
 import ttnn
 import torch
 from loguru import logger
