@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,15 +9,17 @@ Runs in fast dispatch; weights are prepared and saved to disk (no device placeme
 
 Modes:
   dense     - Full dense layer (layers 0-2).
-  moe       - Full MoE layer (layers 3-60): attention + shared experts + routed experts.
+  moe       - Full MoE layer (layers 3-61): attention + shared experts + routed experts.
   embedding - Embedding layer (model.embed_tokens). No --layer-num needed.
   lm_head   - LM head + final RMSNorm. No --layer-num needed.
+  mtp       - MTP (Multi-Token Prediction) lightweight projection/norm weights. No --layer-num needed.
 
 Usage:
   python generate_cache.py --model-path /path/to/DeepSeek-V3 --output-path /path/to/cache --layer-num 0 --type dense
-  python generate_cache.py --model-path /path/to/DeepSeek-V3 --output-path /path/to/cache --layer-num 4 --type moe
+  python generate_cache.py --model-path /path/to/DeepSeek-V3 --output-path /path/to/cache --layer-num 3 4 5 6 61 --type moe
   python generate_cache.py --model-path /path/to/DeepSeek-V3 --output-path /path/to/cache --type embedding
   python generate_cache.py --model-path /path/to/DeepSeek-V3 --output-path /path/to/cache --type lm_head
+  python generate_cache.py --model-path /path/to/DeepSeek-V3 --output-path /path/to/cache --type mtp
 """
 
 from __future__ import annotations
@@ -43,20 +45,24 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     DeepSeekV3EmbeddingLayerWeights,
     DeepSeekV3LMHeadWeights,
     DeepSeekV3MoELayerWeights,
+    DeepSeekV3MTPWeights,
     load_dense_decoder_layer,
     load_embedding_weights,
     load_lm_head_weights,
     load_moe_decoder_layer,
+    load_mtp_weights,
     prepare_dense_layer_weights,
     prepare_embedding_weights,
     prepare_lm_head_weights,
     prepare_moe_layer_weights,
+    prepare_mtp_weights,
     save_decoder_layer,
     save_embedding_weights,
     save_lm_head_weights,
+    save_mtp_weights,
 )
 
-NUM_LAYERS = 61
+NUM_LAYERS = 62
 FIRST_K_DENSE_REPLACE = 3
 DEVICE_MESH_SHAPE = (4, 2)
 MANIFEST_VERSION = 1
@@ -72,7 +78,7 @@ _PLACEMENTS_REPLICATE = [ttnn.PlacementReplicate()]  # MoE routed experts (per e
 
 def _create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Generate weight cache for a single DeepSeek V3 layer from HuggingFace weights.",
+        description="Generate weight cache for one or more DeepSeek V3 layers from HuggingFace weights.",
     )
     parser.add_argument(
         "--model-path",
@@ -89,15 +95,16 @@ def _create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--layer-num",
         type=int,
+        nargs="+",
         default=None,
-        help="Layer index (0-60); required for dense/moe, ignored for embedding/lm_head",
+        help="Layer index(es) (0-61); one or more, required for dense/moe, ignored for embedding/lm_head/mtp",
     )
     parser.add_argument(
         "--type",
         dest="mode",
-        choices=("dense", "moe", "embedding", "lm_head"),
+        choices=("dense", "moe", "embedding", "lm_head", "mtp"),
         required=True,
-        help="Cache type: dense (layers 0-2), moe (full layer for 3-60), embedding, lm_head",
+        help="Cache type: dense (layers 0-2), moe (full layer for 3-61), embedding, lm_head, mtp",
     )
     parser.add_argument(
         "--force",
@@ -114,20 +121,19 @@ def _create_parser() -> argparse.ArgumentParser:
 
 def _validate_args(args: argparse.Namespace) -> None:
     """Validate arguments and exit with message on failure."""
-    layer_num = args.layer_num
+    layer_nums = args.layer_num
     mode = args.mode
     output_path = args.output_path.resolve()
 
-    # Layer-num required and validated only for layer-based modes
     if mode in ("dense", "moe"):
-        if layer_num is None:
+        if not layer_nums:
             logger.error("--layer-num is required for type={}", mode)
             sys.exit(1)
-        if layer_num < 0 or layer_num >= NUM_LAYERS:
-            logger.error("layer-num must be in [0, {}], got {}", NUM_LAYERS - 1, layer_num)
-            sys.exit(1)
-        if mode == "dense":
-            if layer_num >= FIRST_K_DENSE_REPLACE:
+        for layer_num in layer_nums:
+            if layer_num < 0 or layer_num >= NUM_LAYERS:
+                logger.error("layer-num must be in [0, {}], got {}", NUM_LAYERS - 1, layer_num)
+                sys.exit(1)
+            if mode == "dense" and layer_num >= FIRST_K_DENSE_REPLACE:
                 logger.error(
                     "type=dense requires layer-num < {} (dense layers are 0-{}), got {}",
                     FIRST_K_DENSE_REPLACE,
@@ -135,8 +141,7 @@ def _validate_args(args: argparse.Namespace) -> None:
                     layer_num,
                 )
                 sys.exit(1)
-        else:
-            if layer_num < FIRST_K_DENSE_REPLACE:
+            if mode == "moe" and layer_num < FIRST_K_DENSE_REPLACE:
                 logger.error(
                     "type=moe requires layer-num >= {} (MoE layers are {}-{}), got {}",
                     FIRST_K_DENSE_REPLACE,
@@ -147,7 +152,6 @@ def _validate_args(args: argparse.Namespace) -> None:
                 sys.exit(1)
 
     if args.verify:
-        # Verify mode: no model-path; require output_path and cache dir/manifest
         if not output_path.exists():
             logger.error("output-path must exist for verify: {}", output_path)
             sys.exit(1)
@@ -161,18 +165,23 @@ def _validate_args(args: argparse.Namespace) -> None:
             if not manifest_path.is_file():
                 logger.error("lm_head/manifest.json not found for verify: {}", manifest_path)
                 sys.exit(1)
-        else:
-            layer_dir = output_path / f"layer_{layer_num:03d}"
-            if not layer_dir.is_dir():
-                logger.error("Layer directory must exist for verify: {}", layer_dir)
-                sys.exit(1)
-            manifest_path = layer_dir / "manifest.json"
+        elif mode == "mtp":
+            manifest_path = output_path / "mtp" / "manifest.json"
             if not manifest_path.is_file():
-                logger.error("manifest.json not found for verify: {}", manifest_path)
+                logger.error("mtp/manifest.json not found for verify: {}", manifest_path)
                 sys.exit(1)
+        else:
+            for layer_num in layer_nums:
+                layer_dir = output_path / f"layer_{layer_num:03d}"
+                if not layer_dir.is_dir():
+                    logger.error("Layer directory must exist for verify: {}", layer_dir)
+                    sys.exit(1)
+                manifest_path = layer_dir / "manifest.json"
+                if not manifest_path.is_file():
+                    logger.error("manifest.json not found for verify: {}", manifest_path)
+                    sys.exit(1)
         return
 
-    # Generate mode: require model-path and index
     if args.model_path is None:
         logger.error("--model-path is required for generate (omit --verify to generate)")
         sys.exit(1)
@@ -197,15 +206,21 @@ def _validate_args(args: argparse.Namespace) -> None:
             if lm_dir.is_dir() and (lm_dir / "manifest.json").is_file():
                 logger.error("lm_head cache already exists. Use --force to overwrite.")
                 sys.exit(1)
-        else:
-            layer_dir = output_path / f"layer_{layer_num:03d}"
-            manifest = layer_dir / "manifest.json"
-            if manifest.exists():
-                logger.error(
-                    "Layer {} cache already exists (manifest.json). Use --force to overwrite.",
-                    layer_num,
-                )
+        elif mode == "mtp":
+            mtp_dir = output_path / "mtp"
+            if mtp_dir.is_dir() and (mtp_dir / "manifest.json").is_file():
+                logger.error("MTP cache already exists (mtp/). Use --force to overwrite.")
                 sys.exit(1)
+        else:
+            for layer_num in layer_nums:
+                layer_dir = output_path / f"layer_{layer_num:03d}"
+                manifest = layer_dir / "manifest.json"
+                if manifest.exists():
+                    logger.error(
+                        "Layer {} cache already exists (manifest.json). Use --force to overwrite.",
+                        layer_num,
+                    )
+                    sys.exit(1)
 
 
 def _check_file(path: Path, layer_dir: Path) -> bool:
@@ -423,6 +438,59 @@ def _verify_lm_head_cache(output_path: Path) -> bool:
     return True
 
 
+def _verify_mtp_cache(output_path: Path) -> bool:
+    """Verify MTP cache: manifest, file existence, and optionally load to device. Returns True if all checks pass."""
+    mtp_dir = output_path / "mtp"
+    manifest_path = mtp_dir / "manifest.json"
+    logger.info("Verifying MTP cache (mtp/)...")
+
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        logger.error("Failed to load manifest: {}", e)
+        return False
+    version = manifest.get("version", 0)
+    if version > MANIFEST_VERSION:
+        logger.error("Unsupported manifest version {} (max {})", version, MANIFEST_VERSION)
+        return False
+    logger.info("Manifest OK (version={})", version)
+
+    for fname in (
+        "mtp_h_gamma.tensorbin",
+        "mtp_e_gamma.tensorbin",
+        "mtp_eh_projection.tensorbin",
+    ):
+        if not _check_file(Path(fname), mtp_dir):
+            return False
+    logger.info("All MTP files present")
+
+    logger.info("Loading to device for sanity check...")
+    if not os.environ.get("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"):
+        os.environ["TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"] = "30000"
+    device_params = {"fabric_config": ttnn.FabricConfig.FABRIC_2D}
+    try:
+        with bh_2d_mesh_device_context(device_params) as mesh_device:
+            submesh = mesh_device.create_submesh(ttnn.MeshShape(*DEVICE_MESH_SHAPE))
+            loaded = load_mtp_weights(output_path, submesh)
+        if not isinstance(loaded, DeepSeekV3MTPWeights):
+            logger.error("Expected DeepSeekV3MTPWeights, got {}", type(loaded).__name__)
+            return False
+        if not _check_on_device(loaded.h_gamma, "mtp.h_gamma"):
+            return False
+        if not _check_on_device(loaded.e_gamma, "mtp.e_gamma"):
+            return False
+        if not _check_on_device(loaded.eh_projection, "mtp.eh_projection"):
+            return False
+        logger.info("Device load OK (on-device checks passed)")
+    except Exception as e:
+        logger.error("Device load failed: {}", e)
+        return False
+
+    logger.info("Verify OK")
+    return True
+
+
 def _verify_cache(output_path: Path, layer_num: int, mode: str) -> bool:
     """Verify existing cache: manifest, file existence, and optionally load to device. Returns True if all checks pass."""
     layer_dir = output_path / f"layer_{layer_num:03d}"
@@ -564,7 +632,7 @@ def main() -> int:
     args = parser.parse_args()
     _validate_args(args)
 
-    layer_num = args.layer_num
+    layer_nums = args.layer_num or []
     mode = args.mode
     output_path = args.output_path.resolve()
 
@@ -573,8 +641,14 @@ def main() -> int:
             ok = _verify_embedding_cache(output_path)
         elif mode == "lm_head":
             ok = _verify_lm_head_cache(output_path)
+        elif mode == "mtp":
+            ok = _verify_mtp_cache(output_path)
         else:
-            ok = _verify_cache(output_path, layer_num, mode)
+            ok = True
+            for layer_num in layer_nums:
+                if not _verify_cache(output_path, layer_num, mode):
+                    ok = False
+                    break
         return 0 if ok else 1
 
     model_path = args.model_path.resolve()
@@ -583,9 +657,9 @@ def main() -> int:
     total_t0 = time.perf_counter()
 
     logger.info(
-        "Generating cache: mode={}, layer_num={}, model_path={}, output_path={}",
+        "Generating cache: mode={}, layers={}, model_path={}, output_path={}",
         mode,
-        layer_num,
+        layer_nums if layer_nums else "N/A",
         model_path,
         output_path,
     )
@@ -594,7 +668,6 @@ def main() -> int:
     with LazyStateDict(model_path) as state_dict:
         logger.info("LazyStateDict initialized in {:.3f}s", time.perf_counter() - t0)
 
-        # Same initialization as bh_2d_mesh_device fixture (conftest.bh_2d_mesh_device_context).
         if not os.environ.get("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"):
             os.environ["TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"] = "30000"
             logger.info("Set TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=30000 (fabric init may be slow)")
@@ -615,37 +688,43 @@ def main() -> int:
             )
 
             if mode == "dense":
-                logger.info("Preparing dense decoder layer weights...")
-                t0 = time.perf_counter()
-                layer = prepare_dense_layer_weights(bdw, state_dict, layer_num)
-                logger.info("prepare_dense_layer_weights took {:.3f}s", time.perf_counter() - t0)
-                logger.info("Saving dense layer to disk...")
-                t0 = time.perf_counter()
-                save_decoder_layer(
-                    layer,
-                    output_path,
-                    layer_num,
-                    hf_model_name=manifest_kw["hf_model_name"],
-                    hf_state_dict_name=manifest_kw["hf_state_dict_name"],
-                    device_mesh_shape=manifest_kw["device_mesh_shape"],
-                )
-                logger.info("save_decoder_layer took {:.3f}s", time.perf_counter() - t0)
+                for layer_num in layer_nums:
+                    layer_t0 = time.perf_counter()
+                    logger.info("Preparing dense decoder layer {} weights...", layer_num)
+                    t0 = time.perf_counter()
+                    layer = prepare_dense_layer_weights(bdw, state_dict, layer_num)
+                    logger.info("prepare_dense_layer_weights took {:.3f}s", time.perf_counter() - t0)
+                    logger.info("Saving dense layer {} to disk...", layer_num)
+                    t0 = time.perf_counter()
+                    save_decoder_layer(
+                        layer,
+                        output_path,
+                        layer_num,
+                        hf_model_name=manifest_kw["hf_model_name"],
+                        hf_state_dict_name=manifest_kw["hf_state_dict_name"],
+                        device_mesh_shape=manifest_kw["device_mesh_shape"],
+                    )
+                    logger.info("save_decoder_layer took {:.3f}s", time.perf_counter() - t0)
+                    logger.info("Layer {} done in {:.3f}s", layer_num, time.perf_counter() - layer_t0)
             elif mode == "moe":
-                logger.info("Preparing full MoE layer weights...")
-                t0 = time.perf_counter()
-                layer = prepare_moe_layer_weights(bdw, state_dict, layer_num)
-                logger.info("prepare_moe_layer_weights took {:.3f}s", time.perf_counter() - t0)
-                logger.info("Saving MoE layer to disk...")
-                t0 = time.perf_counter()
-                save_decoder_layer(
-                    layer,
-                    output_path,
-                    layer_num,
-                    hf_model_name=manifest_kw["hf_model_name"],
-                    hf_state_dict_name=manifest_kw["hf_state_dict_name"],
-                    device_mesh_shape=manifest_kw["device_mesh_shape"],
-                )
-                logger.info("save_decoder_layer took {:.3f}s", time.perf_counter() - t0)
+                for layer_num in layer_nums:
+                    layer_t0 = time.perf_counter()
+                    logger.info("Preparing full MoE layer {} weights...", layer_num)
+                    t0 = time.perf_counter()
+                    layer = prepare_moe_layer_weights(bdw, state_dict, layer_num)
+                    logger.info("prepare_moe_layer_weights took {:.3f}s", time.perf_counter() - t0)
+                    logger.info("Saving MoE layer {} to disk...", layer_num)
+                    t0 = time.perf_counter()
+                    save_decoder_layer(
+                        layer,
+                        output_path,
+                        layer_num,
+                        hf_model_name=manifest_kw["hf_model_name"],
+                        hf_state_dict_name=manifest_kw["hf_state_dict_name"],
+                        device_mesh_shape=manifest_kw["device_mesh_shape"],
+                    )
+                    logger.info("save_decoder_layer took {:.3f}s", time.perf_counter() - t0)
+                    logger.info("Layer {} done in {:.3f}s", layer_num, time.perf_counter() - layer_t0)
             elif mode == "embedding":
                 logger.info("Preparing embedding weights...")
                 t0 = time.perf_counter()
@@ -664,12 +743,21 @@ def main() -> int:
                 t0 = time.perf_counter()
                 save_lm_head_weights(weights, output_path, **manifest_kw)
                 logger.info("save_lm_head_weights took {:.3f}s", time.perf_counter() - t0)
+            elif mode == "mtp":
+                logger.info("Preparing MTP weights...")
+                t0 = time.perf_counter()
+                weights = prepare_mtp_weights(state_dict, submesh)
+                logger.info("prepare_mtp_weights took {:.3f}s", time.perf_counter() - t0)
+                logger.info("Saving MTP weights...")
+                t0 = time.perf_counter()
+                save_mtp_weights(weights, output_path, **manifest_kw)
+                logger.info("save_mtp_weights took {:.3f}s", time.perf_counter() - t0)
 
     elapsed = time.perf_counter() - total_t0
-    if mode in ("embedding", "lm_head"):
+    if mode in ("embedding", "lm_head", "mtp"):
         logger.info("Cache generation complete (mode={}) in {:.3f}s", mode, elapsed)
     else:
-        logger.info("Cache generation complete for layer {} (mode={}) in {:.3f}s", layer_num, mode, elapsed)
+        logger.info("Cache generation complete for layers {} (mode={}) in {:.3f}s", layer_nums, mode, elapsed)
     return 0
 
 

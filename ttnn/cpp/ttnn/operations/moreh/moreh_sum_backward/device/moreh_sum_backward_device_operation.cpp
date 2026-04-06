@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -126,7 +126,7 @@ namespace ttnn::prim {
 ttnn::operations::moreh::moreh_sum_backward::MorehSumBackwardOperation::tensor_return_value_t moreh_sum_backward(
     const Tensor& output_grad,
     const std::optional<Tensor>& input,
-    tt::stl::Span<const int64_t> dims,
+    ttsl::Span<const int64_t> dims,
     bool keepdim,
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config,

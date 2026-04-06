@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -209,3 +209,140 @@ def test_layernorm_part_2_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
     assert device.num_program_cache_entries() == 1, "Program cache should have only one entry" + str(
         device.num_program_cache_entries()
     )
+
+
+def _layernorm_stats_tiles_single_chunk(canon_inp: torch.Tensor) -> torch.Tensor:
+    """Stats layout for layer_norm post_all_gather with a single full-width chunk (matches run_layernorm_part_2)."""
+    inp_chunked = canon_inp.chunk(1, dim=-1)
+    mean = [x.sum(dim=-1, keepdim=True) for x in inp_chunked]
+    meanx2 = [x.pow(2).sum(dim=-1, keepdim=True) for x in inp_chunked]
+    tile_cols_per_device = 2
+    stats_tiles = torch.zeros(canon_inp.shape[:-1] + (32 * tile_cols_per_device,))
+    for idx, (m, mm) in enumerate(zip(mean, meanx2)):
+        mm_idx = idx * tile_cols_per_device * 32
+        stats_tiles[..., mm_idx : mm_idx + 1] = mm
+        m_idx = mm_idx + 32
+        stats_tiles[..., m_idx : m_idx + 1] = m
+    return stats_tiles
+
+
+def test_layer_norm_post_all_gather_bias_only_matches_torch(device):
+    """Bias without weight: optional args are independent; compare to torch layer_norm."""
+    torch.manual_seed(4401)
+    inp_shape = (1, 1, 32, 128)
+    epsilon = 1e-5
+    dram_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+    canon_inp = torch.randn(inp_shape) * 4 - 1
+    beta = torch.rand(inp_shape[-1]) * 2 - 1
+
+    ref = torch.nn.functional.layer_norm(
+        canon_inp.float(),
+        canon_inp.shape[-1:],
+        weight=None,
+        bias=beta.float(),
+        eps=epsilon,
+    ).to(torch.bfloat16)
+
+    stats_tiles = _layernorm_stats_tiles_single_chunk(canon_inp)
+
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    tt_inp = torch2tt_tensor(
+        canon_inp,
+        tt_dtype=ttnn.bfloat16,
+        tt_device=device,
+        tt_layout=ttnn.TILE_LAYOUT,
+        tt_memory_config=dram_memcfg,
+    )
+    tt_beta = torch2tt_tensor(
+        beta.reshape(1, 1, -1, 32),
+        tt_dtype=ttnn.bfloat16,
+        tt_device=device,
+        tt_layout=ttnn.ROW_MAJOR_LAYOUT,
+        tt_memory_config=dram_memcfg,
+    )
+    tt_stats = torch2tt_tensor(
+        stats_tiles,
+        tt_dtype=ttnn.bfloat16,
+        tt_device=device,
+        tt_layout=ttnn.TILE_LAYOUT,
+        tt_memory_config=dram_memcfg,
+    )
+
+    tt_out = ttnn.layer_norm_post_all_gather(
+        tt_inp,
+        tt_stats,
+        epsilon=epsilon,
+        bias=tt_beta,
+        compute_kernel_config=kernel_config,
+        dtype=ttnn.bfloat16,
+        memory_config=dram_memcfg,
+    )
+    tt_cpu = tt2torch_tensor(tt_out)
+    passing, output_str = comp_allclose(ref, tt_cpu, rtol=1e-1, atol=1e-1)
+    assert passing, output_str
+
+
+def test_layer_norm_post_all_gather_bias_only_rejects_mismatched_beta_row_major(device):
+    """Invalid beta width must fail in validate even when weight is absent.
+
+    ROW_MAJOR bias uses the physical_volume vs input width check (same as gamma). A TILE
+    tensor with smaller logical width can end up with a padded last dim that still matches
+    the input, so the mismatch case here uses ROW_MAJOR with too few 32-wide sticks.
+    """
+    torch.manual_seed(4402)
+    inp_shape = (1, 1, 32, 128)
+    epsilon = 1e-5
+    dram_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+    canon_inp = torch.randn(inp_shape, dtype=torch.bfloat16)
+    stats_tiles = _layernorm_stats_tiles_single_chunk(canon_inp.float())
+
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    tt_inp = torch2tt_tensor(
+        canon_inp,
+        tt_dtype=ttnn.bfloat16,
+        tt_device=device,
+        tt_layout=ttnn.TILE_LAYOUT,
+        tt_memory_config=dram_memcfg,
+    )
+    tt_stats = torch2tt_tensor(
+        stats_tiles,
+        tt_dtype=ttnn.bfloat16,
+        tt_device=device,
+        tt_layout=ttnn.TILE_LAYOUT,
+        tt_memory_config=dram_memcfg,
+    )
+    # Valid layout for bias is (1, 1, n_sticks, 32) with n_sticks == input_width / 32; use half.
+    tt_bad_beta = torch2tt_tensor(
+        torch.randn(1, 1, 2, 32, dtype=torch.bfloat16),
+        tt_dtype=ttnn.bfloat16,
+        tt_device=device,
+        tt_layout=ttnn.ROW_MAJOR_LAYOUT,
+        tt_memory_config=dram_memcfg,
+    )
+
+    with pytest.raises(RuntimeError, match="Beta tensor dimensions must align"):
+        ttnn.layer_norm_post_all_gather(
+            tt_inp,
+            tt_stats,
+            epsilon=epsilon,
+            bias=tt_bad_beta,
+            compute_kernel_config=kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=dram_memcfg,
+        )

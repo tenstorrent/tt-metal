@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,10 +8,9 @@
 #include "moe_compute.hpp"
 #include "device/moe_compute_device_operation.hpp"
 
-namespace ttnn {
-namespace operations::experimental::ccl {
+namespace ttnn::experimental {
 
-std::vector<ttnn::Tensor> ExecuteMoECompute::invoke(
+std::vector<ttnn::Tensor> moe_compute(
     const ttnn::Tensor& tilize_input_tensor,
     const ttnn::Tensor& tilize_expert_indices_tensor,
     const ttnn::Tensor& tilize_expert_scores_tensor,
@@ -35,12 +34,7 @@ std::vector<ttnn::Tensor> ExecuteMoECompute::invoke(
         cluster_axis);
 }
 
-}  // namespace operations::experimental::ccl
-
-namespace experimental {
-
 std::vector<ttnn::CoreCoord> get_moe_combine_cores(ttnn::MeshDevice* mesh_device) {
     return ttnn::prim::get_moe_combine_cores(mesh_device);
 };
-}  // namespace experimental
-}  // namespace ttnn
+}  // namespace ttnn::experimental

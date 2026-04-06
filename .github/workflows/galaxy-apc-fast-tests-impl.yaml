@@ -46,6 +46,7 @@ jobs:
           ]
     runs-on:
       - arch-wormhole_b0
+      - pipeline-perf
       - ${{ inputs.topology }}
       - ${{ inputs.runner-label }}
     container:
@@ -83,17 +84,5 @@ jobs:
         env:
           TEST_CMD: ${{ matrix.test-group.cmd }}
         run: |
-          echo "Running command: $TEST_CMD"
-          # Write command to script file to safely handle quotes and special characters
-          cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
-          #!/bin/bash
-          set -euo pipefail
-          SCRIPT_EOF
-          printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
-          chmod +x /tmp/test_cmd.sh
-          bash /tmp/test_cmd.sh
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
+          echo "Running command: ${{ matrix.test-group.cmd }}"
+          eval "${{ matrix.test-group.cmd }}"

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,6 +27,7 @@ void InterleavedToShardedDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
         TT_FATAL(output_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
         TT_FATAL(output_tensor.device() == input_tensor.device(), "Operands to shard need to be on the same device!");
+        TT_FATAL(output_tensor.layout() == input_tensor.layout(), "Output tensor layout must match input tensor layout");
     }
 
     TT_FATAL(
@@ -58,14 +59,12 @@ InterleavedToShardedDeviceOperation::spec_return_value_t InterleavedToShardedDev
     }
 
     const auto& input_tensor = tensor_args.input_tensor;
-    return tt::tt_metal::TensorSpec(
+    return TensorSpec(
         input_tensor.logical_shape(),
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::TensorLayout(
             operation_attributes.output_dtype,
             tt::tt_metal::PageConfig(input_tensor.layout()),
-            operation_attributes.output_mem_config,
-            input_tensor.logical_shape(),
-            input_tensor.padded_shape()));
+            operation_attributes.output_mem_config));
 }
 
 InterleavedToShardedDeviceOperation::tensor_return_value_t InterleavedToShardedDeviceOperation::create_output_tensors(
@@ -79,7 +78,7 @@ InterleavedToShardedDeviceOperation::tensor_return_value_t InterleavedToShardedD
     return create_device_tensor(spec, input_tensor.device());
 }
 
-tt::stl::hash::hash_t InterleavedToShardedDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t InterleavedToShardedDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     return tt::tt_metal::operation::hash_operation<InterleavedToShardedDeviceOperation>(

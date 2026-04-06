@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,12 @@ NOC_WIDTHS = {
     "wormhole_b0": 32,
     "blackhole": 64,
     # Add other architectures as needed
+}
+
+# NOC clock frequencies in GHz (fallback for tests that don't log the real clock)
+NOC_FREQ_GHZ = {
+    "wormhole_b0": 1.0,
+    "blackhole": 1.35,
 }
 
 # Plot configuration

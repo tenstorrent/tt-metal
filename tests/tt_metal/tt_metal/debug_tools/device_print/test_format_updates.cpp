@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -65,6 +65,16 @@ public:
     }
 };
 
+TEST_F(DevicePrintFormatUpdatesFixture, PrintSimpleString) {
+    std::vector<std::string_view> messages = {
+        "Hello world!\n"sv,
+        "First line.\nSecond line.\n"sv,
+    };
+
+    TestFormatUpdate(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_simple_string.cpp", ttsl::make_span(messages));
+}
+
 TEST_F(DevicePrintFormatUpdatesFixture, PrintSingleUintArg) {
     std::vector<std::string_view> messages = {
         "Printing uint32_t from arg: {0,I}\n"sv,
@@ -72,6 +82,15 @@ TEST_F(DevicePrintFormatUpdatesFixture, PrintSingleUintArg) {
 
     TestFormatUpdate(
         "tests/tt_metal/tt_metal/test_kernels/device_print/print_single_uint_arg.cpp", ttsl::make_span(messages));
+}
+
+TEST_F(DevicePrintFormatUpdatesFixture, PrintFactorial) {
+    std::vector<std::string_view> messages = {
+        "factorial({0,I}) = {1,I}\n"sv,
+    };
+
+    TestFormatUpdate(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_factorial.cpp", ttsl::make_span(messages));
 }
 
 TEST_F(DevicePrintFormatUpdatesFixture, PrintBasicTypes) {
@@ -115,4 +134,84 @@ TEST_F(DevicePrintFormatUpdatesFixture, PrintWithFormatSpecified) {
 
     TestFormatUpdate(
         "tests/tt_metal/tt_metal/test_kernels/device_print/print_with_format_specified.cpp", ttsl::make_span(messages));
+}
+
+TEST_F(DevicePrintFormatUpdatesFixture, PrintAllArgumentSizes) {
+    std::vector<std::string_view> messages = {
+        "No arguments\n"sv,
+        "1 argument: {0,I}\n"sv,
+        "2 arguments: {0,I} {1,I}\n"sv,
+        "3 arguments: {0,I} {1,I} {2,I}\n"sv,
+        "4 arguments: {0,I} {1,I} {2,I} {3,I}\n"sv,
+        "5 arguments: {0,I} {1,I} {2,I} {3,I} {4,I}\n"sv,
+        "6 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I}\n"sv,
+        "7 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I}\n"sv,
+        "8 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I}\n"sv,
+        "9 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I} {8,I}\n"sv,
+        "10 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I} {8,I} {9,I}\n"sv,
+        "11 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I} {8,I} {9,I} {10,I}\n"sv,
+        "12 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I} {8,I} {9,I} {10,I} {11,I}\n"sv,
+        "13 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I} {8,I} {9,I} {10,I} {11,I} {12,I}\n"sv,
+        "14 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I} {8,I} {9,I} {10,I} {11,I} {12,I} {13,I}\n"sv,
+        "15 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I} {8,I} {9,I} {10,I} {11,I} {12,I} {13,I} {14,I}\n"sv,
+        "16 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I} {8,I} {9,I} {10,I} {11,I} {12,I} {13,I} {14,I} {15,I}\n"sv,
+        "17 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I} {8,I} {9,I} {10,I} {11,I} {12,I} {13,I} {14,I} {15,I} {16,I}\n"sv,
+        "18 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I} {8,I} {9,I} {10,I} {11,I} {12,I} {13,I} {14,I} {15,I} {16,I} {17,I}\n"sv,
+        "19 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I} {8,I} {9,I} {10,I} {11,I} {12,I} {13,I} {14,I} {15,I} {16,I} {17,I} {18,I}\n"sv,
+        "20 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I} {8,I} {9,I} {10,I} {11,I} {12,I} {13,I} {14,I} {15,I} {16,I} {17,I} {18,I} {19,I}\n"sv,
+        "21 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I} {8,I} {9,I} {10,I} {11,I} {12,I} {13,I} {14,I} {15,I} {16,I} {17,I} {18,I} {19,I} {20,I}\n"sv,
+        "22 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I} {8,I} {9,I} {10,I} {11,I} {12,I} {13,I} {14,I} {15,I} {16,I} {17,I} {18,I} {19,I} {20,I} {21,I}\n"sv,
+        "23 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I} {8,I} {9,I} {10,I} {11,I} {12,I} {13,I} {14,I} {15,I} {16,I} {17,I} {18,I} {19,I} {20,I} {21,I} {22,I}\n"sv,
+        "24 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I} {8,I} {9,I} {10,I} {11,I} {12,I} {13,I} {14,I} {15,I} {16,I} {17,I} {18,I} {19,I} {20,I} {21,I} {22,I} {23,I}\n"sv,
+        "25 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I} {8,I} {9,I} {10,I} {11,I} {12,I} {13,I} {14,I} {15,I} {16,I} {17,I} {18,I} {19,I} {20,I} {21,I} {22,I} {23,I} {24,I}\n"sv,
+        "26 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I} {8,I} {9,I} {10,I} {11,I} {12,I} {13,I} {14,I} {15,I} {16,I} {17,I} {18,I} {19,I} {20,I} {21,I} {22,I} {23,I} {24,I} {25,I}\n"sv,
+        "27 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I} {8,I} {9,I} {10,I} {11,I} {12,I} {13,I} {14,I} {15,I} {16,I} {17,I} {18,I} {19,I} {20,I} {21,I} {22,I} {23,I} {24,I} {25,I} {26,I}\n"sv,
+        "28 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I} {8,I} {9,I} {10,I} {11,I} {12,I} {13,I} {14,I} {15,I} {16,I} {17,I} {18,I} {19,I} {20,I} {21,I} {22,I} {23,I} {24,I} {25,I} {26,I} {27,I}\n"sv,
+        "29 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I} {8,I} {9,I} {10,I} {11,I} {12,I} {13,I} {14,I} {15,I} {16,I} {17,I} {18,I} {19,I} {20,I} {21,I} {22,I} {23,I} {24,I} {25,I} {26,I} {27,I} {28,I}\n"sv,
+        "30 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I} {8,I} {9,I} {10,I} {11,I} {12,I} {13,I} {14,I} {15,I} {16,I} {17,I} {18,I} {19,I} {20,I} {21,I} {22,I} {23,I} {24,I} {25,I} {26,I} {27,I} {28,I} {29,I}\n"sv,
+        "31 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I} {8,I} {9,I} {10,I} {11,I} {12,I} {13,I} {14,I} {15,I} {16,I} {17,I} {18,I} {19,I} {20,I} {21,I} {22,I} {23,I} {24,I} {25,I} {26,I} {27,I} {28,I} {29,I} {30,I}\n"sv,
+        "32 arguments: {0,I} {1,I} {2,I} {3,I} {4,I} {5,I} {6,I} {7,I} {8,I} {9,I} {10,I} {11,I} {12,I} {13,I} {14,I} {15,I} {16,I} {17,I} {18,I} {19,I} {20,I} {21,I} {22,I} {23,I} {24,I} {25,I} {26,I} {27,I} {28,I} {29,I} {30,I} {31,I}\n"sv,
+    };
+
+    TestFormatUpdate(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_all_argument_sizes.cpp", ttsl::make_span(messages));
+}
+
+// Enum arguments are serialized as their base type on device, with the format string updated to contain
+// /e_<base_type_char>_<fully_qualified_enum_type_name> as the type specifier.
+// The '#' alternate form flag encodes "print full enum type name including value name" on the host side.
+TEST_F(DevicePrintFormatUpdatesFixture, PrintEnumValue) {
+    std::vector<std::string_view> messages = {
+        "Enum1 value: {0,/e_I_test::deep::Enum1}\n"sv,
+        "Enum1 full name value: {0,/e_I_test::deep::Enum1:#}\n"sv,
+        "Enum1 value: {0,/e_I_test::deep::Enum1}\n"sv,
+        "Enum1 full name value: {0,/e_I_test::deep::Enum1:#}\n"sv,
+        "Enum1 unrecognized value: {0,/e_I_test::deep::Enum1}\n"sv,
+        "Enum1 full name unrecognized value: {0,/e_I_test::deep::Enum1:#}\n"sv,
+        "Enum2 value: {0,/e_I_test_shallow::Enum2}\n"sv,
+        "Enum2 full name value: {0,/e_I_test_shallow::Enum2:#}\n"sv,
+        "EnumClass value: {0,/e_B_EnumClass}\n"sv,
+        "EnumClass full name value: {0,/e_B_EnumClass:#}\n"sv,
+        "BitEnum value: {0,/E_I_flags::BitEnum}\n"sv,
+        "BitEnum full name value: {0,/E_I_flags::BitEnum:#}\n"sv,
+    };
+
+    TestFormatUpdate(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_enum_value.cpp", ttsl::make_span(messages));
+}
+
+TEST_F(DevicePrintFormatUpdatesFixture, PrintBuiltinTypes) {
+    std::vector<std::string_view> messages = {
+        "i={0,i}\n"sv,
+        "unknown={0,i}\n"sv,
+        "u={0,I}\n"sv,
+        "ll={0,q}\n"sv,
+        "ull={0,Q}\n"sv,
+        "s={0,h}\n"sv,
+        "us={0,H}\n"sv,
+        "cvllu={0,Q}\n"sv,
+    };
+
+    TestFormatUpdate(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_builtin_types.cpp", ttsl::make_span(messages));
 }

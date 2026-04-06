@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,8 @@ void kernel_main() {
 #if COMPILE_FOR_TRISC == 1  // compute
 #include "pre.inc"
     FAIL_IF(vInt(1) != vInt(1));
-
+    //
+    // Padding line to align with filename expectation
     FAIL_IF(vInt(2) != vInt(1));  // This one, line 16
 
     FAIL_IF(vInt(3) != vInt(1));  // not this one

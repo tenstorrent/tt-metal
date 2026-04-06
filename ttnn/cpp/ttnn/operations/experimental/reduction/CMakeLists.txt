@@ -1,7 +1,7 @@
 add_library(ttnn_op_experimental_reduction ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::Reduction ALIAS ttnn_op_experimental_reduction)
 
-target_precompile_headers(ttnn_op_experimental_reduction REUSE_FROM TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_reduction TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_reduction)
 
 set_target_properties(

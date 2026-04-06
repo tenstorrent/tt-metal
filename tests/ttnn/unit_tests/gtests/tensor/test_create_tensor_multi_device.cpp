@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn_test_fixtures.hpp"
@@ -168,7 +168,7 @@ TEST_F(MultiDeviceTensorCreationTest, Arange) {
 
     Tensor tensor = ttnn::arange(
         /*start=*/0,
-        /*end=*/1024,
+        /*stop=*/1024,
         /*step=*/1,
         ttnn::DataType::FLOAT32,
         std::ref(*mesh_device));

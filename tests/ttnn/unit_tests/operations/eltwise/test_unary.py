@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -347,6 +347,35 @@ def test_cos(device, h, w, layout):
 @pytest.mark.parametrize("w", [128])
 def test_acos(device, h, w, layout):
     run_unary_test(device, h, w, ttnn.acos, layout=layout, pcc=0.999)
+
+
+def run_unary_inverse_trig_bf16_test(device, h, w, ttnn_function, ulp_threshold, layout=ttnn.TILE_LAYOUT):
+    """Explicit bfloat16 I/O and dense samples in [-1, 1] for asin/acos domain coverage."""
+    torch.manual_seed(0)
+    torch_input_tensor = torch.linspace(-1.0, 1.0, steps=h * w, dtype=torch.bfloat16).reshape(h, w)
+    golden_function = ttnn.get_golden_function(ttnn_function)
+    torch_output_tensor = golden_function(torch_input_tensor, device=device)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=layout, device=device)
+    output_tensor = ttnn_function(input_tensor)
+    assert output_tensor.layout == layout, f"Output layout {output_tensor.layout} should match input layout {layout}"
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold)
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_asin_bf16(device, h, w, layout):
+    run_unary_inverse_trig_bf16_test(device, h, w, ttnn.asin, 3, layout=layout)
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_acos_bf16(device, h, w, layout):
+    run_unary_inverse_trig_bf16_test(device, h, w, ttnn.acos, 3, layout=layout)
 
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
@@ -785,9 +814,11 @@ def test_unary_comp_ops(input_shapes, scalar, ttnn_op, use_legacy, device):
     [
         (torch.float32, ttnn.float32, 0.016),
         (torch.bfloat16, ttnn.bfloat16, 0.012),
+        (torch.bfloat16, ttnn.bfloat8_b, 0.24),
     ],
 )
 def test_unary_tanhshrink_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
+    torch.manual_seed(0)
     in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     if ttnn_dtype == ttnn.bfloat8_b:
@@ -798,35 +829,6 @@ def test_unary_tanhshrink_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, devi
     golden_tensor = golden_function(in_data1)
 
     assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=atol)
-    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([3, 128, 32])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize(
-    "torch_dtype, ttnn_dtype",
-    [
-        (torch.float32, ttnn.float32),
-        (torch.bfloat16, ttnn.bfloat16),
-        (torch.bfloat16, ttnn.bfloat8_b),
-    ],
-)
-def test_unary_tanhshrink_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
-    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    if ttnn_dtype == ttnn.bfloat8_b:
-        in_data1 = ttnn.to_torch(input_tensor1, dtype=torch_dtype)
-
-    output_tensor = ttnn.tanhshrink(input_tensor1, fast_and_approximate_mode=True)
-    golden_function = ttnn.get_golden_function(ttnn.tanhshrink)
-    golden_tensor = golden_function(in_data1)
-
-    assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=0.25)
     assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
 
 
@@ -1393,7 +1395,9 @@ def test_unary_signbit_float_edge_case_ttnn(torch_dtype, ttnn_dtype, device):
     in_data = torch.tensor(
         [-0.0, 0.0, +0.0, -float("inf"), +float("inf"), +float("nan"), -float("nan")], dtype=torch_dtype
     )
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(
+        in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True
+    )
 
     output_tensor = ttnn.signbit(input_tensor)
     golden_function = ttnn.get_golden_function(ttnn.signbit)
@@ -1735,7 +1739,9 @@ def test_inf_nan_check(ttnn_op, torch_dtype, ttnn_dtype, device):
         [float("-inf"), float("inf"), float("nan"), 5.0, -5.0, 0.0, -0.0, 1e38, 1e-45, 3.4e38, -3.4e38],
         dtype=torch_dtype,
     )
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(
+        in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True
+    )
 
     output_tensor = ttnn_op(input_tensor)
     golden_function = ttnn.get_golden_function(ttnn_op)

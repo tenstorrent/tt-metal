@@ -90,6 +90,14 @@ on:
         required: false
         type: boolean
         default: true
+      run_compute_fused_tests:
+        required: false
+        type: boolean
+        default: true
+      ttsim-version:
+        required: false
+        type: string
+        default: "v1.4.6"
 
     # This is a fallback timeout for tests that are not marked with pytest.mark.timeout(xxx)
     secrets:
@@ -143,12 +151,6 @@ jobs:
         if: "!cancelled()"
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: failure() && github.event_name == 'schedule'
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U052J2QDDKQ # Pavle Josipovic
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
@@ -195,12 +197,6 @@ jobs:
         if: "!cancelled()"
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: failure() && github.event_name == 'schedule'
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U06Q7ESTFEV # Borys Bradel
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
@@ -245,13 +241,6 @@ jobs:
         if: "!cancelled()"
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: failure() && github.event_name == 'schedule'
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U08DCK9MA1E # Miłosz Gajewski
-
   ttnn-fused-tests:
     if: inputs.run_fused_tests
     container:
@@ -295,12 +284,6 @@ jobs:
         if: "!cancelled()"
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: failure() && github.event_name == 'schedule'
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U06Q7ESTFEV # Borys Bradel
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
@@ -347,12 +330,6 @@ jobs:
         if: "!cancelled()"
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: failure() && github.event_name == 'schedule'
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U06Q7ESTFEV # Borys Bradel
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
@@ -399,12 +376,6 @@ jobs:
         if: "!cancelled()"
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: failure() && github.event_name == 'schedule'
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U03FJB5TM5Y # Colman Glagovich
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
@@ -451,17 +422,11 @@ jobs:
         if: "!cancelled()"
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: failure() && github.event_name == 'schedule'
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U052J2QDDKQ # Pavle Josipovic
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
   ttnn-sdxl-tests:
-    if: inputs.run_sdxl_tests
+    if: ${{ inputs.run_sdxl_tests && inputs.runner-label != 'P100' }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -469,12 +434,14 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
-        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
-        TT_MM_THROTTLE_PERF: 5
+        # Only use MLPerf HF cache on non-CIv2 runners (P150b uses LFC via TT_GH_CI_INFRA)
+        HF_HUB_CACHE: ${{ inputs.runner-label == 'P150b' && '' || '/mnt/MLPerf/huggingface/hub' }}
+        TT_MM_THROTTLE_PERF: ${{ inputs.arch == 'blackhole' && '0' || '5' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent ${{ inputs.runner-label == 'P150b' && '-e TT_GH_CI_INFRA=1' || '' }}"
     defaults:
       run:
         shell: bash
@@ -497,12 +464,19 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: ttnn nightly sdxl tests
+      - name: ttnn nightly sdxl tests (wormhole)
+        if: ${{ inputs.arch == 'wormhole_b0' }}
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout="${TEST_BUDGET_SECONDS}"
-          pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout="${TEST_BUDGET_SECONDS}"
-          pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_rollback.py -xv -m "not disable_fast_runtime_mode" --timeout="${TEST_BUDGET_SECONDS}"
+          pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+          pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+          pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_rollback.py -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+      - name: ttnn nightly sdxl tests (blackhole P150b)
+        if: ${{ inputs.arch == 'blackhole' && inputs.runner-label == 'P150b' }}
+        timeout-minutes: ${{ inputs.timeout }}
+        run: |
+          pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+          pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
       - name: ttnn nightly sdxl demo cfg parallel test (N300 only)
         if: inputs.runner-label == 'N300'
         timeout-minutes: ${{ inputs.timeout }}
@@ -512,12 +486,6 @@ jobs:
         if: "!cancelled()"
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: failure() && github.event_name == 'schedule'
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U07N3CUUN05 # Iva Potkonjak
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
@@ -566,12 +534,6 @@ jobs:
         if: "!cancelled()"
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: failure() && github.event_name == 'schedule'
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U082L4RSULT # Denys Makoviichuk
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   ttnn-sdpa-nightly-tests:
@@ -622,11 +584,6 @@ jobs:
         if: "!cancelled()"
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: failure() && github.event_name == 'schedule'
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U03FJB5TM5Y # Colman Glagovich
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   ttnn-sdpa-stress-tests:
@@ -676,17 +633,15 @@ jobs:
         if: "!cancelled()"
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: failure() && github.event_name == 'schedule'
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U03FJB5TM5Y # Colman Glagovich
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
   ttnn-eltwise-tests:
-    if: inputs.run_eltwise_tests
+    if: ${{ inputs.run_eltwise_tests }}
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2, 3, 4]
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -703,7 +658,7 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    name: ttnn nightly eltwise tests ${{ inputs.arch }} ${{ inputs.runner-label }}
+    name: ttnn nightly eltwise tests group ${{ matrix.group }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
         ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
@@ -721,32 +676,14 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: ttnn nightly eltwise tests group 1
+      - name: ttnn nightly eltwise tests group ${{ matrix.group }}
         timeout-minutes: ${{ inputs.timeout }}
-        run: pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 1  -xv -m "not disable_fast_runtime_mode" --timeout="${TEST_BUDGET_SECONDS}"
-      - name: ttnn nightly eltwise tests group 2
-        if: "!cancelled()"
-        timeout-minutes: ${{ inputs.timeout }}
-        run: pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 2  -xv -m "not disable_fast_runtime_mode" --timeout="${TEST_BUDGET_SECONDS}"
-      - name: ttnn nightly eltwise tests group 3
-        if: "!cancelled()"
-        timeout-minutes: ${{ inputs.timeout }}
-        run: pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 3  -xv -m "not disable_fast_runtime_mode" --timeout="${TEST_BUDGET_SECONDS}"
-      - name: ttnn nightly eltwise tests group 4
-        if: "!cancelled()"
-        timeout-minutes: ${{ inputs.timeout }}
-        run: pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 4  -xv -m "not disable_fast_runtime_mode" --timeout="${TEST_BUDGET_SECONDS}"
+        run: pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group ${{ matrix.group }} -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: "!cancelled()"
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: failure() && github.event_name == 'schedule'
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U07RNEH2NR4 # Wenbin Lyu
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
@@ -794,12 +731,6 @@ jobs:
         if: "!cancelled()"
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: failure() && github.event_name == 'schedule'
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U06UEFWB4P9 # Colman Glagovich
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   ttnn-moreh-tests:
@@ -846,12 +777,6 @@ jobs:
         if: "!cancelled()"
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: failure() && github.event_name == 'schedule'
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U084B1CES7M # Borys Bradel
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   ttnn-data_movement-tests:
@@ -908,12 +833,6 @@ jobs:
         if: "!cancelled()"
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: failure() && github.event_name == 'schedule'
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U084DDYSWCW # Adrian Morrison
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   ttnn-misc-tests:
@@ -961,11 +880,73 @@ jobs:
         if: "!cancelled()"
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: failure() && github.event_name == 'schedule'
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
+
+  ttnn-compute-fused-tests:
+    if: ${{ inputs.run_compute_fused_tests }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        TT_METAL_HOME: /work
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        TT_METAL_SIMULATOR_HOME: /work/sim
+        TT_METAL_SIMULATOR: /work/sim/libttsim.so
+        TT_METAL_SLOW_DISPATCH_MODE: 1
+        TT_METAL_DISABLE_SFPLOADMACRO: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    name: ttnn compute-fused validation tests ${{ inputs.arch }} ${{ inputs.runner-label }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
         with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U084B1CES7M # Borys Bradel
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: Compute ttsim asset name
+        id: ttsim-info
+        run: |
+          case "${{ inputs.arch }}" in
+            wormhole_b0) suffix="wh"; soc="wormhole_b0_80_arch.yaml" ;;
+            blackhole)   suffix="bh"; soc="blackhole_140_arch.yaml" ;;
+            *) echo "::error::Unknown architecture: ${{ inputs.arch }}"; exit 1 ;;
+          esac
+          echo "asset_name=libttsim_${suffix}.so" >> "$GITHUB_OUTPUT"
+          echo "soc_desc=${soc}" >> "$GITHUB_OUTPUT"
+      - name: Download ttsim binary
+        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
+        with:
+          repository: tenstorrent/ttsim
+          tag: ${{ inputs.ttsim-version }}
+          fileName: ${{ steps.ttsim-info.outputs.asset_name }}
+          out-file-path: /tmp/ttsim
+      - name: Install ttsim
+        run: |
+          set -euo pipefail
+          mkdir -p $TT_METAL_SIMULATOR_HOME
+          mv /tmp/ttsim/${{ steps.ttsim-info.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
+          cp /work/tt_metal/soc_descriptors/${{ steps.ttsim-info.outputs.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
+      - name: ttnn compute-fused validation tests
+        timeout-minutes: 20
+        run: pytest tests/ttnn/nightly/unit_tests/operations_compute_only/fused -xv --timeout=${{ env.TEST_BUDGET_SECONDS }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

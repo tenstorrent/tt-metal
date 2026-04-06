@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -67,7 +67,7 @@ struct RMSAllGatherParams {
         use_noc1_only(use_noc1_only) {}
 
     auto attributes() const {
-        using tt::stl::reflection::Attribute;
+        using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
         attrs.emplace_back("eps", eps);
         attrs.emplace_back("subblock_wt", subblock_wt);

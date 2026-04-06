@@ -1,12 +1,12 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "interleaved_to_sharded_partial_op_types.hpp"
 #include "interleaved_to_sharded_partial_program_factory.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 
@@ -25,7 +25,7 @@ struct InterleavedToShardedPartialDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const Tensor& input_tensor);
 
-    static tt::stl::hash::hash_t compute_program_hash(
+    static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const Tensor& input_tensor);
 };
 

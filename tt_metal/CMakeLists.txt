@@ -115,7 +115,7 @@ target_link_libraries(
         Reflect::Reflect
 )
 
-target_precompile_headers(tt_metal REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(tt_metal TT::CommonPCH)
 
 target_include_directories(
     tt_metal

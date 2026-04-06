@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -51,7 +51,8 @@ static void RunTest(
     MeshWatcherFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     HalProcessorIdentifier processor,
-    dev_msgs::debug_assert_type_t assert_type = dev_msgs::DebugAssertTripped) {
+    dev_msgs::debug_assert_type_t assert_type = dev_msgs::DebugAssertTripped,
+    uint32_t hw_assert_cause = 0) {
     // Set up program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -67,7 +68,7 @@ static void RunTest(
     // Depending on riscv type, choose one core to run the test on (since the test hangs the board).
     CoreCoord logical_core, virtual_core;
     // Set up the kernel on the correct risc
-    KernelHandle assert_kernel;
+    KernelHandle assert_kernel = 0;
     auto processor_idx =
         hal.get_processor_index(processor.core_type, processor.processor_class, processor.processor_type);
     std::string risc = hal.get_processor_class_name(processor.core_type, processor_idx, false);
@@ -133,12 +134,15 @@ static void RunTest(
             risc = is_active ? "erisc" : "ierisc";
             break;
         }
+        case HalProgrammableCoreType::DRAM:
+            log_info(LogTest, "Skipping: DRAM cores do not support watcher assert tests.");
+            GTEST_SKIP();
         case HalProgrammableCoreType::COUNT: TT_THROW("Unsupported programmable core type");
     }
     log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, virtual_core);
 
     // Write runtime args that should not trip an assert.
-    const std::vector<uint32_t> safe_args = {3, 4, static_cast<uint32_t>(assert_type)};
+    const std::vector<uint32_t> safe_args = {3, 4, static_cast<uint32_t>(assert_type), hw_assert_cause};
     SetRuntimeArgs(program_, assert_kernel, logical_core, safe_args);
 
     // Run the kernel, don't expect an issue here.
@@ -147,7 +151,7 @@ static void RunTest(
     log_info(LogTest, "Args did not assert!");
 
     // Write runtime args that should trip an assert.
-    const std::vector<uint32_t> unsafe_args = {3, 3, static_cast<uint32_t>(assert_type)};
+    const std::vector<uint32_t> unsafe_args = {3, 3, static_cast<uint32_t>(assert_type), hw_assert_cause};
     SetRuntimeArgs(program_, assert_kernel, logical_core, unsafe_args);
 
     // Run the kernel, expect an exit due to the assert.
@@ -181,7 +185,20 @@ static void RunTest(
     // Don't hardcode line number, the ASSERT location in watcher_asserts.cpp kernel
     // can shift as code changes. Use regex to match any line number for DebugAssertTripped
     // (get_debug_assert_message defaults to line 0, which we replace with \d+ below)
-    const std::string msg = get_debug_assert_message(assert_type);
+    uint64_t hw_fault_info = 0;
+    switch (hw_assert_cause) {
+        case 2: hw_fault_info = 0x0; break;
+        case 4:
+        case 6: hw_fault_info = 0x2; break;
+        case 5:
+        case 7: hw_fault_info = 0xffffffffff000000; break;
+        default: hw_fault_info = 0; break;
+    }
+    const std::string msg = get_debug_assert_message(
+        assert_type,
+        0,
+        // hard code cause/line info for hW faults, as we know them exactly
+        hw_fault_info << 32 | hw_assert_cause);
     ASSERT_FALSE(msg.empty()) << "Unhandled assert type " << static_cast<int>(assert_type);
 
     std::string expected = fmt::format(
@@ -206,6 +223,16 @@ static void RunTest(
         pattern.replace(pos, placeholder.length(), "on line \\d+");
         EXPECT_TRUE(std::regex_match(exception, std::regex(pattern)))
             << "Expected pattern: " << pattern << "\nActual: " << exception;
+    } else if (assert_type == dev_msgs::DebugAssertHwFault) {
+        // Build regex pattern from string expected, replacing PC 0x0 with PC 0x[\da-fA-F]+
+        std::string pattern = regex_escape(expected);
+        const std::string pc_placeholder = "PC 0x0";
+        size_t pos = pattern.find(pc_placeholder);
+        ASSERT_NE(pos, std::string::npos)
+            << "Expected placeholder '" << pc_placeholder << "' not found in escaped pattern: " << pattern;
+        pattern.replace(pos, pc_placeholder.length(), "PC 0x[\\da-fA-F]+");
+        EXPECT_TRUE(std::regex_match(exception, std::regex(pattern)))
+            << "Expected pattern: " << pattern << "\nActual: " << exception;
     } else {
         // Other assert types have fixed messages, exact match
         EXPECT_EQ(expected, exception);
@@ -218,6 +245,7 @@ struct WatcherTestParams {
     std::string test_name;
     HalProcessorIdentifier processor;
     dev_msgs::debug_assert_type_t assert_type = dev_msgs::DebugAssertTripped;
+    uint32_t hw_assert_cause = 0;
 };
 
 class WatcherAssertTest : public MeshWatcherFixture, public ::testing::WithParamInterface<WatcherTestParams> {};
@@ -253,7 +281,7 @@ TEST_P(WatcherAssertTest, TestWatcherAssert) {
     }
     this->RunTestOnDevice(
         [&params](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-            RunTest(fixture, mesh_device, params.processor, params.assert_type);
+            RunTest(fixture, mesh_device, params.processor, params.assert_type, params.hw_assert_cause);
         },
         this->devices_[0]);
 }
@@ -297,6 +325,16 @@ INSTANTIATE_TEST_SUITE_P(
         WatcherTestParams{"DM5", {TENSIX, DM, 5}, dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped},
         WatcherTestParams{"DM6", {TENSIX, DM, 6}, dev_msgs::DebugAssertRtaOutOfBounds},
         WatcherTestParams{"DM7", {TENSIX, DM, 7}, dev_msgs::DebugAssertCrtaOutOfBounds},
+        WatcherTestParams{
+            "HWFault2", {TENSIX, DM, 7}, dev_msgs::DebugAssertHwFault, 2},  //  using DM7 to run only on Quasar
+        WatcherTestParams{
+            "HWFault4", {TENSIX, DM, 7}, dev_msgs::DebugAssertHwFault, 4},  //  using DM7 to run only on Quasar
+        WatcherTestParams{
+            "HWFault5", {TENSIX, DM, 7}, dev_msgs::DebugAssertHwFault, 5},  //  using DM7 to run only on Quasar
+        WatcherTestParams{
+            "HWFault6", {TENSIX, DM, 7}, dev_msgs::DebugAssertHwFault, 6},  //  using DM7 to run only on Quasar
+        WatcherTestParams{
+            "HWFault7", {TENSIX, DM, 7}, dev_msgs::DebugAssertHwFault, 7},  //  using DM7 to run only on Quasar
         WatcherTestParams{"Trisc0", {TENSIX, COMPUTE, 0}, dev_msgs::DebugAssertNCriscNOCNonpostedWritesSentTripped},
         WatcherTestParams{"Trisc1", {TENSIX, COMPUTE, 1}, dev_msgs::DebugAssertNCriscNOCPostedWritesSentTripped},
         WatcherTestParams{"Trisc2", {TENSIX, COMPUTE, 2}, dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped},

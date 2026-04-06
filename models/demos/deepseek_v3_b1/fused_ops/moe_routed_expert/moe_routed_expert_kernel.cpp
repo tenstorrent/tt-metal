@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 // MoE Routed Expert fused kernel
@@ -75,20 +75,24 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     // Gather (sender - compute cores send to sender core)
     // ------------------------------------------------------------------------
-    deepseek_b1_ops::Gather::SenderArgs gather_args{
-        get_named_compile_time_arg_val("gather_dest_noc_x"),
-        get_named_compile_time_arg_val("gather_dest_noc_y"),
-        get_named_compile_time_arg_val("gather_data_size_bytes"),
-        get_semaphore(get_named_compile_time_arg_val("gather_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("gather_src_cb"),
-        get_named_compile_time_arg_val("gather_src_num_pages"),
-        get_named_compile_time_arg_val("gather_sender_grid_start_x"),
-        get_named_compile_time_arg_val("gather_sender_grid_start_y"),
-        get_named_compile_time_arg_val("gather_sender_grid_end_x"),
-        get_named_compile_time_arg_val("gather_sender_grid_end_y"),
-        get_named_compile_time_arg_val("gather_row_major"),
-        get_named_compile_time_arg_val("gather_receiver_data_addr"),
-        0,  // sender_idx (unused when UsePerCoreSenderIdx=false)
+    deepseek_b1_ops::Gather::DMArgs gather_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("gather_dest_noc_x"),
+                get_named_compile_time_arg_val("gather_dest_noc_y"),
+                get_named_compile_time_arg_val("gather_data_size_bytes"),
+                get_semaphore(get_named_compile_time_arg_val("gather_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("gather_src_cb"),
+                get_named_compile_time_arg_val("gather_src_num_pages"),
+                get_named_compile_time_arg_val("gather_sender_grid_start_x"),
+                get_named_compile_time_arg_val("gather_sender_grid_start_y"),
+                get_named_compile_time_arg_val("gather_sender_grid_end_x"),
+                get_named_compile_time_arg_val("gather_sender_grid_end_y"),
+                get_named_compile_time_arg_val("gather_row_major"),
+                get_named_compile_time_arg_val("gather_receiver_data_addr"),
+                0,  // sender_idx (unused when UsePerCoreSenderIdx=false)
+            },
+        .receiver = {},
     };
 
     // ------------------------------------------------------------------------
@@ -164,21 +168,25 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     // down_proj_gather (sender - gate_proj cores send fused output to sender core)
     // ------------------------------------------------------------------------
-    deepseek_b1_ops::Gather::SenderArgs down_proj_gather_args{
-        get_named_compile_time_arg_val("down_proj_gather_dest_noc_x"),
-        get_named_compile_time_arg_val("down_proj_gather_dest_noc_y"),
-        get_named_compile_time_arg_val("down_proj_gather_data_size_bytes"),
-        get_semaphore(get_named_compile_time_arg_val("down_proj_gather_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("down_proj_gather_src_cb"),
-        get_named_compile_time_arg_val("down_proj_gather_src_num_pages"),
-        get_named_compile_time_arg_val("down_proj_gather_sender_grid_start_x"),
-        get_named_compile_time_arg_val("down_proj_gather_sender_grid_start_y"),
-        get_named_compile_time_arg_val("down_proj_gather_sender_grid_end_x"),
-        get_named_compile_time_arg_val("down_proj_gather_sender_grid_end_y"),
-        get_named_compile_time_arg_val("down_proj_gather_row_major"),
-        get_named_compile_time_arg_val("down_proj_gather_receiver_data_addr"),
-        get_named_compile_time_arg_val(
-            "down_proj_gather_sender_idx"),  // Explicit sender index (UsePerCoreSenderIdx=true)
+    deepseek_b1_ops::Gather::DMArgs down_proj_gather_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("down_proj_gather_dest_noc_x"),
+                get_named_compile_time_arg_val("down_proj_gather_dest_noc_y"),
+                get_named_compile_time_arg_val("down_proj_gather_data_size_bytes"),
+                get_semaphore(get_named_compile_time_arg_val("down_proj_gather_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("down_proj_gather_src_cb"),
+                get_named_compile_time_arg_val("down_proj_gather_src_num_pages"),
+                get_named_compile_time_arg_val("down_proj_gather_sender_grid_start_x"),
+                get_named_compile_time_arg_val("down_proj_gather_sender_grid_start_y"),
+                get_named_compile_time_arg_val("down_proj_gather_sender_grid_end_x"),
+                get_named_compile_time_arg_val("down_proj_gather_sender_grid_end_y"),
+                get_named_compile_time_arg_val("down_proj_gather_row_major"),
+                get_named_compile_time_arg_val("down_proj_gather_receiver_data_addr"),
+                get_named_compile_time_arg_val(
+                    "down_proj_gather_sender_idx"),  // Explicit sender index (UsePerCoreSenderIdx=true)
+            },
+        .receiver = {},
     };
 
     // ------------------------------------------------------------------------
@@ -224,9 +232,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("reduce_device_role"),
         get_named_compile_time_arg_val("reduce_num_tiles"),
         get_named_compile_time_arg_val("reduce_local_cb"),
-        get_named_compile_time_arg_val("reduce_received_cb_r1"),
-        get_named_compile_time_arg_val("reduce_received_cb_r2"),
-        get_named_compile_time_arg_val("reduce_received_cb_r3"),
+        get_named_compile_time_arg_val("reduce_received_cb"),
         get_named_compile_time_arg_val("is_reduce_fabric_core")>;
 
     // Reader runtime args
@@ -311,13 +317,17 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     // Gather (receiver - sender core receives from compute cores)
     // ------------------------------------------------------------------------
-    deepseek_b1_ops::Gather::ReceiverArgs gather_args{
-        get_named_compile_time_arg_val("gather_noc0_num_senders"),
-        get_named_compile_time_arg_val("gather_noc1_num_senders"),
-        get_semaphore(get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_id")),
-        get_semaphore(get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("gather_dst_cb"),
-        get_named_compile_time_arg_val("gather_dst_num_pages"),
+    deepseek_b1_ops::Gather::DMArgs gather_args{
+        .sender = {},
+        .receiver =
+            {
+                get_named_compile_time_arg_val("gather_noc0_num_senders"),
+                get_named_compile_time_arg_val("gather_noc1_num_senders"),
+                get_semaphore(get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_id")),
+                get_semaphore(get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("gather_dst_cb"),
+                get_named_compile_time_arg_val("gather_dst_num_pages"),
+            },
     };
 
     // ------------------------------------------------------------------------
@@ -382,13 +392,17 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     // down_proj_gather (receiver - sender core receives fused output from gate_proj cores)
     // ------------------------------------------------------------------------
-    deepseek_b1_ops::Gather::ReceiverArgs down_proj_gather_args{
-        get_named_compile_time_arg_val("down_proj_gather_noc0_num_senders"),
-        get_named_compile_time_arg_val("down_proj_gather_noc1_num_senders"),
-        get_semaphore(get_named_compile_time_arg_val("down_proj_gather_noc0_receiver_semaphore_id")),
-        get_semaphore(get_named_compile_time_arg_val("down_proj_gather_noc1_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("down_proj_gather_dst_cb"),
-        get_named_compile_time_arg_val("down_proj_gather_dst_num_pages"),
+    deepseek_b1_ops::Gather::DMArgs down_proj_gather_args{
+        .sender = {},
+        .receiver =
+            {
+                get_named_compile_time_arg_val("down_proj_gather_noc0_num_senders"),
+                get_named_compile_time_arg_val("down_proj_gather_noc1_num_senders"),
+                get_semaphore(get_named_compile_time_arg_val("down_proj_gather_noc0_receiver_semaphore_id")),
+                get_semaphore(get_named_compile_time_arg_val("down_proj_gather_noc1_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("down_proj_gather_dst_cb"),
+                get_named_compile_time_arg_val("down_proj_gather_dst_num_pages"),
+            },
     };
 
     // ------------------------------------------------------------------------
@@ -429,7 +443,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("reduce_local_cb"),
         get_named_compile_time_arg_val("reduce_scratch_cb"),
         get_named_compile_time_arg_val("reduce_packet_cb"),
-        get_named_compile_time_arg_val("reduce_packet_header_cb"),
         get_named_compile_time_arg_val("reduce_num_hops"),
         get_named_compile_time_arg_val("reduce_dst_fabric_node_chip_id"),
         get_named_compile_time_arg_val("reduce_dst_fabric_node_mesh_id"),
@@ -469,7 +482,8 @@ void kernel_main() {
     using GateMMCTArgs = deepseek_b1_ops::Matmul::ComputeCTArgs<
         get_named_compile_time_arg_val("gate_mm_out_w"),
         false,  // transpose
-        get_named_compile_time_arg_val("gate_mm_fused_activation")>;
+        get_named_compile_time_arg_val("gate_mm_fused_activation"),
+        get_named_compile_time_arg_val("gate_mm_fused_activation_approx_mode")>;
     deepseek_b1_ops::Matmul::ComputeArgs gate_mm_args{
         get_named_compile_time_arg_val("gate_mm_in0"),
         get_named_compile_time_arg_val("gate_mm_in1"),
@@ -598,9 +612,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("reduce_device_role"),
         get_named_compile_time_arg_val("reduce_num_tiles"),
         get_named_compile_time_arg_val("reduce_local_cb"),
-        get_named_compile_time_arg_val("reduce_received_cb_r1"),
-        get_named_compile_time_arg_val("reduce_received_cb_r2"),
-        get_named_compile_time_arg_val("reduce_received_cb_r3"),
+        get_named_compile_time_arg_val("reduce_received_cb"),
         get_named_compile_time_arg_val("reduce_output_cb"),
         get_named_compile_time_arg_val("reduce_scratch_cb"),
         get_named_compile_time_arg_val("is_reduce_fabric_core")>;
@@ -775,7 +787,7 @@ void kernel_main() {
     }
 #endif
     // Only need one teardown since all mcasts reuse the same semaphores
-    mcast.teardown();
+    mcast.teardown(mcast_args);
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
     noc_async_write_barrier();

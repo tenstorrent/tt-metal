@@ -1,77 +1,148 @@
-# Scan the repo for clang-tidy violations
-## Using TT Infra
-This is done automatically in post-commit, or can be run manually via [Code analysis · Workflow runs · tenstorrent/tt-metal](https://github.com/tenstorrent/tt-metal/actions/workflows/code-analysis.yaml)
+# Clang-Tidy in tt-metal
 
-## Local Spot Checks
-The full clang-tidy run takes a while (25 minutes on a good day on our runners), so you may want to do a spot check locally. This is not a comprehensive scan, but can be used to catch several issues locally before committing the resources to the full scan. Sample for convenience:
+tt-metal uses clang-tidy for static analysis. The CI runs it automatically on every PR
+and on `main` daily. This page explains how to run it locally and how to manage checks.
+
+## Running locally (dev container — recommended)
+
+The dev container ships clang-tidy 20 and all required tools. No extra installation needed.
 
 ```sh
-# from your tt-metal checkout directory
-mkdir build
-cd build
-
-# clang-tidy needs the compile_commands.json to get a lay of the land on what to scan
-# PCHs can mess with the scan, so just disable them
-CC=clang-20 CXX=clang++-20 cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -G Ninja ..
-
-# go back up to your top level tt-metal checkout directory
-cd ..
-
-# run clang-tidy using the helper from clang-tools (sometimes called clang-tools-extra in package managers)
-# -jN : run N clang-tidy instances
-# -p ./build : specify the directory compile_commands.json is located
-# -quiet : makes the output less noisy
-# -use-color : makes the output pretty
-# -header-filter "`pwd`" : only scan header files located under the current filetree (suppresses system and other dependency headers located elsewhere)
-# -source-filter "`pwd`" : only scan source files located under the current filetree (suppresses system and other dependency sources located elsewhere)
-# -exclude-header-filter "(.*CPM.*|.*tt-train.*|.*third_party.*)" : don't report on headers from CPM, tt-train, and third_party. Uses regular-expression syntax.
-# -export-fixes fixes.yaml : dump the scan results into a yaml file for use with other tools
-run-clang-tidy -p ./build -quiet -use-color -header-filter "`pwd`" -source-filter "`pwd`" -exclude-header-filter "(.*CPM.*|.*tt-train.*|.*third_party.*)" -export-fixes fixes.yaml ./path/to/file(s)/you/want/to/scan.cpp
+docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-24.04-dev-amd64:latest
+docker run -it --rm -v $(pwd):/work -w /work \
+  ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-24.04-dev-amd64:latest bash
 ```
 
-# Enable a check
-Delete the line from [tt-metal/.clang-tidy](../.clang-tidy) that disables the check.  Check [Clang-Tidy Checks](https://clang.llvm.org/extra/clang-tidy/checks/list.html) and see if another check is an alias for the same.  If so, then delete the other name, too.  Now fix all the diagnostics that are now flagged!
+```sh
+# Configure
+cmake --preset clang-tidy
 
-> We take the approach of “enable everything, then disable specific checks” so that we have a clear TODO list to work on, rather than the opposite that only tells us where we’re currently at.
+# Scan a specific target (e.g. tt_metal, ttnn, tt-train)
+cmake --build --preset clang-tidy --target <target>
 
-# Fix the violations
-## Automatic
-If the check being enabled has FIX-ITs (see [Clang-Tidy Checks](https://clang.llvm.org/extra/clang-tidy/checks/list.html) and note the Offers fixes column), then leverage it by doing the following:
+# Or scan everything
+cmake --build --preset clang-tidy
+```
 
-Prepare a clang-tidy tree
+For a quick spot-check on specific files before committing:
+
+```sh
+# Configure (from repo root, disable PCHs which interfere with clang-tidy)
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+      -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON \
+      -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20
+
+# Scan specific file(s)
+run-clang-tidy -p ./build -quiet -use-color \
+  -header-filter "$(pwd)" \
+  -source-filter "$(pwd)" \
+  -exclude-header-filter "(.*CPM.*|.*tt-train.*|.*third_party.*)" \
+  ./path/to/your/file.cpp
+```
+
+The key flags: `-p ./build` points to `compile_commands.json`; `-header-filter` and
+`-source-filter` restrict scanning to the repo tree; `-exclude-header-filter` skips
+third-party headers.
+
+## Prerequisites (without the dev container)
+
+If you are building outside the dev container, you need:
+
+| Tool | Version | Ubuntu package |
+|------|---------|----------------|
+| clang / clang++ | **20** | `apt install clang-20` |
+| clang-tidy | **20** | `apt install clang-tidy-20` |
+| run-clang-tidy | **20** | `apt install clang-tools-20` |
+| cmake | ≥ 3.22 | `apt install cmake` |
+| ninja | any | `apt install ninja-build` |
+
+> **Version matters.** `apt install clang-tidy` without a version suffix installs an
+> older version on most distros and will produce different results from CI.
+
+## How CI runs clang-tidy
+
+The workflow ([`code-analysis.yaml`](../.github/workflows/code-analysis.yaml)) chooses
+between a full scan and an incremental scan depending on context.
+
+**Full scan** — runs when:
+- A commit lands on `main` (also runs daily at 2 AM UTC)
+- The `.clang-tidy` config changes (even on a PR branch)
+
+Full scan analyzes the entire codebase in a single job (~25 minutes on CI runners).
+
+**Incremental scan** — runs on PR branches when code or CMake files change. Diffs
+against the merge-base and analyzes only files touched by the PR. Split into 4 parallel
+jobs to keep wall-clock time down:
 
 ```
-cmake --preset clang-tidy-fix
-cmake --build --preset clang-tidy-fix --target clean
-cmake --build --preset clang-tidy-fix
+Job             Targets scanned   Prereq targets built first
+─────────────── ───────────────── ──────────────────────────
+Metalium        tt_metal          —
+TTNN            ttnn              tt_metal
+tt-train        tt-train          tt_metal  ttnn
+catchall        (everything else) tt_metal  ttnn
 ```
-Go home for the day.  This will take a long long time if you only have a dozen cores.
 
-When it’s done, review the changes it made and commit.  Re-run the final build step until it reaches the end.
+**Skip** — if no code or CMake files changed, clang-tidy is skipped entirely.
 
-Perform a final clean && build-everything to ensure everything was fixed.  Some checks have automatic fixes only for a subset of what it is able to diagnose.  The remaining diagnostics will need to be addressed manually.
+> We scan during a CMake build rather than pointing `run-clang-tidy` directly at
+> `compile_commands.json`. This lets CMake exclude third-party code that ships its own
+> `.clang-tidy` files we cannot override.
 
-## Manual
-If the check does not have FIX-ITs, then it’s a manual process.  Perform the same steps as above, but after each build, review the log and manually address each diagnostic.
+## Suppressing diagnostics
 
-# FAQ
-## What sorts of things can Clang Tidy detect?
-Many things.  Some categories of checks are performance, security, modernization, readability, recommended practices, and conventions.  For a full list see [Clang-Tidy Checks](https://clang.llvm.org/extra/clang-tidy/checks/list.html).
+Prefer narrow, named suppressions over blanket `NOLINT`:
 
-## Can we turn on ALL the checks?
-No.  Some checks are mutually exclusive.  Generally when a style or opinion is involved.  For example [modernize-use-trailing-return-type](https://clang.llvm.org/extra/clang-tidy/checks/modernize/use-trailing-return-type.html)  helps to use a trailing return type.  While [fuchsia-trailing-return](https://clang.llvm.org/extra/clang-tidy/checks/fuchsia/trailing-return.html)  enforces that such syntax is NOT used.
+```cpp
+some_call();  // NOLINT(check-name)    — suppress on this line
+// NOLINTNEXTLINE(check-name)
+some_call();                           — suppress the following line
+```
 
-## What gotchas are there with the automatic FIX-ITs?
-* When a FIX-IT is attempted on a header file referenced by multiple TUs, the resulting race condition can butcher the header file.  Workaround: git revert the affected file(s) and then run ninja -j1 to build single-threaded for long enough to process the header exactly once before going back to parallel builds.  If this is chronic, then consider running ninja -j1 -k0 and check back after the weekend.
 
-* Some checks have FIX-ITs only for a subset of what it is able to detect.  Just because a check says it has FIX-ITs, don’t assume that it’s able to fix everything.  eg: when fixing performance-unnecessary-value-param, it seemed to not attempt an auto-fix inside templates or lambdas.  Those had to be manually adjusted.
+## Enable a check
 
-* Sometimes the automatic edit can leave the repo in an unbuildable state.  This was encountered when fixing performance-unnecessary-value-param and a function was defined in one TU, and forward declares and invoked in another TU with no shared definition between them.  Clang-tidy diagnosed and fixed the definition, but the forward declaration was untouched, leaving it dangling and causing an undefinted reference at link time.
+1. Remove the `-check-name` line from [`.clang-tidy`](../.clang-tidy). Check the
+   [Clang-Tidy Checks](https://clang.llvm.org/extra/clang-tidy/checks/list.html) list
+   for aliases — if another name refers to the same check, remove that too.
+2. Run a scan locally to count violations. If there are hundreds, consider opening a
+   tracking issue before proceeding.
+3. Fix all violations (see below).
+4. Open a PR with the `.clang-tidy` change and all fixes together.
 
-## Why are we scanning during a build instead of just pointing run-clang-tidy at the compile_commands.json?
-In compile_commands.json, all code is equal.  But in tt-metal, some code is 3rd party that we aren’t interested in scanning.  We are unable to fully control this with judicious use of no-op .clang-tidy files as some 3rd party libs have their own .clang-tidy files.  As a result we need the full control of a build from CMake to scan what we need and not what we don’t need.  With ccache the build overhead is negligible in a clang-tidy scan, so it’s okay.
+> We disable specific checks explicitly (rather than enabling a curated subset) so the
+> disable list is a visible TODO, not a silent omission.
 
-## What else should I know?
-* Some checks have options to tweak the behaviour.  Review the documentation for the check you’re enabling if you feel like it should behave a little differently than it does.
+## Fix violations
 
-* One check in particular *requires* options.  [readability-identifier-naming](https://clang.llvm.org/extra/clang-tidy/checks/readability/identifier-naming.html) has an elaborate set of knobs to define a naming convention and can even adjust existing code to the defined convention, within some constraints.  But without specifying the naming conventions, the check itself will do nothing even if enabled.
+### Automatic (checks with FIX-ITs)
+
+If the check has FIX-ITs (see the "Offers fixes" column on the checks page), use the
+parallel preset: it exports fixes to YAML files first, then applies them all at once
+with `clang-apply-replacements-20`. This avoids the race condition where parallel
+clang-tidy instances corrupt headers that are included by multiple TUs.
+
+```sh
+# Step 1: build and collect fixes (does not modify source yet)
+cmake --preset clang-tidy-fix-parallel
+cmake --build --preset clang-tidy-fix-parallel --target clean
+cmake --build --preset clang-tidy-fix-parallel
+
+# Step 2: apply all collected fixes atomically
+clang-apply-replacements-20 .build/clang-tidy-fix-parallel/fixes
+```
+
+This will take several hours on a 12-core machine. When complete, review the diffs and
+re-run both steps until no new fixes are applied. Then do a final clean build to confirm
+nothing is broken.
+
+**Note:** some checks only fix a subset of what they diagnose (e.g.,
+`performance-unnecessary-value-param` skips templates and lambdas), and some fixes
+leave the repo in an unbuildable state (e.g., fixing a definition without updating a
+forward declaration). Always do a clean build after applying fixes.
+
+### Manual
+
+Same build flow as above (`clang-tidy-fix-parallel` or just `clang-tidy`), but after
+each build review the log and address each diagnostic by hand.

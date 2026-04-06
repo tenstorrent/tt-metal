@@ -26,7 +26,7 @@
 The Models team is focused on developing the following models, optimizing them for performance, accuracy, and compatibility. Follow each model link for more details.
 
 >[!IMPORTANT]
-> For a **full model list** see the **[Model Matrix](https://github.com/tenstorrent/tt-metal/tree/main/models/README.md)**, or visit the **[Developer Hub](https://tenstorrent.com/developers)**.
+> For a **full model list** see the **[Model Matrix](https://github.com/tenstorrent/tt-metal/blob/main/models/README.md)**, or visit the **[Developer Hub](https://tenstorrent.com/developers)**.
 
 >[!NOTE]
 > Performance Metrics:
@@ -198,7 +198,11 @@ Inspector provides insights into host runtime. It logs necessary data for invest
 
 | Release | Release Date | FW Version | KMD Version | SMI Version |
 |:---------:|:--------------:|:------------:|:--------:|:--------:|
-| 0.66.0 | ETA Jan 30, 2026 | 19.2.0 | 2.5.0 | 3.0.38 |
+| 0.68.0 | ETA Apr 30, 2026 | 19.2.0 | 2.5.0 | 3.0.38 |
+| [0.67.4](https://github.com/tenstorrent/tt-metal/releases/tag/v0.67.4) | Mar 30, 2026 | 19.2.0 | 2.5.0 | 3.0.38 |
+| [0.67.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.67.0) | Mar 25, 2026 | 19.2.0 | 2.5.0 | 3.0.38 |
+| [0.66.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.66.0) | Feb 18, 2026 | 19.2.0 | 2.5.0 | 3.0.38 |
+| [0.65.1](https://github.com/tenstorrent/tt-metal/releases/tag/v0.65.1) | Jan 12, 2026 | 19.2.0 | 2.5.0 | 3.0.38 |
 | [0.65.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.65.0) | Dec 15, 2025 | 19.2.0 | 2.5.0 | 3.0.38 |
 | [0.64.5](https://github.com/tenstorrent/tt-metal/releases/tag/v0.64.5) | Dec  1, 2025 | 18.12.0 | 2.4.1 | 3.0.32 |
 | [0.64.4](https://github.com/tenstorrent/tt-metal/releases/tag/v0.64.4) | Nov 24, 2025 | 18.12.0 | 2.4.1 | 3.0.32 |

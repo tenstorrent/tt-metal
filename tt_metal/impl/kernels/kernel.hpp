@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -498,6 +498,8 @@ public:
     std::string_view get_linker_opt_level() const override;
 
     void set_build_options(JitBuildOptions& build_options) const override;
+
+    const std::vector<QuasarComputeProcessor>& get_compute_processors() const { return this->compute_processors_; }
 
 private:
     const QuasarComputeConfig config_;

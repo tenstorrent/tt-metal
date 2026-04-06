@@ -197,21 +197,9 @@ jobs:
           GTEST_FILTER_INPUT: ${{ inputs.gtest_filter }}
           TEST_CMD: ${{ matrix.test-group.cmd }}
         run: |
-          mkdir -p generated/test_reports
-          GTEST_FILTER="$GTEST_FILTER_INPUT"
-          # Write command to script file to safely handle quotes and special characters
-          cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
-          #!/bin/bash
-          set -euo pipefail
-          SCRIPT_EOF
-          printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
-          chmod +x /tmp/test_cmd.sh
-          bash /tmp/test_cmd.sh
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: failure()
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U06CXU895AP # Michael Chiou
+            mkdir -p generated/test_reports
+            GTEST_FILTER="${{inputs.gtest_filter}}"
+            ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: "!cancelled()"

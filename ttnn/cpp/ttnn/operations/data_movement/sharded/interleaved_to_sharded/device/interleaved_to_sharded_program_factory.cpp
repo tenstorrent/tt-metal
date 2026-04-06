@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -74,7 +74,7 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
         num_units_per_row = input.padded_shape()[-1] / TILE_WIDTH;
         num_units_offset = num_units_per_row;
-        uint32_t num_units_height = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT / num_slices;
+        uint32_t num_units_height = (input.physical_volume() / input.padded_shape()[-1])/ TILE_HEIGHT;
         num_units_per_shard_height_last =
             num_units_per_shard_height -
             (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
@@ -88,9 +88,9 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
         num_units_per_shard_height = shard_spec.shape[0];
         num_units_per_shard_width = 1;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
-        num_units_per_row = input.padded_shape()[-1] * input.element_size();
+        num_units_per_row = input.logical_shape()[-1] * input.element_size();
         num_units_offset = 1;
-        uint32_t num_units_height = input.physical_volume() / input.padded_shape()[-1];
+        uint32_t num_units_height = input.logical_volume() / input.logical_shape()[-1];
         num_units_per_shard_height_last =
             num_units_per_shard_height -
             (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
@@ -128,6 +128,7 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
     }
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
     uint32_t dram_alignment = hal::get_dram_alignment();
+    uint32_t l1_alignment = hal::get_l1_alignment();
     uint32_t num_trids = 4;
     if ((src_is_dram && (input_unit_size % dram_alignment != 0)) || is_blackhole || keep_l1_aligned) {
         uint32_t scratch_cb_page_size;
@@ -155,7 +156,7 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
             all_cores,
             tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     } else {
-        std::vector<uint32_t> reader_compile_time_args = {input_cb_index, scratch_cb_index, num_units_per_row, num_trids};
+        std::vector<uint32_t> reader_compile_time_args = {input_cb_index, scratch_cb_index, num_trids};
         tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
         unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -305,13 +306,14 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
                 }
             }
 
-            uint32_t dram_alignment = hal::get_dram_alignment();
-            uint32_t l1_alignment = hal::get_l1_alignment();
-            bool aligned =
-                (src_is_dram ? (curr_idx_w % dram_alignment == 0) && (padded_offset_bytes % dram_alignment == 0)
-                             : true);
-            // for blackhole and keep_l1_aligned cases, always enforce unaligned kernel call
-            aligned = aligned and !(is_blackhole);
+            bool aligned;
+            if (src_is_dram) {
+                aligned = (curr_idx_w % dram_alignment == 0) && (padded_offset_bytes % dram_alignment == 0);
+            } else if (is_blackhole) {
+                aligned = (curr_idx_w % l1_alignment == 0) && (padded_offset_bytes % l1_alignment == 0);
+            } else {
+                aligned = true;
+            }
             uint32_t aligned_width_offset, aligned_shard_width, aligned_offset;
             if (!aligned) {
                 // TODO: is this right, leaving non BH case the same for now, should investigate

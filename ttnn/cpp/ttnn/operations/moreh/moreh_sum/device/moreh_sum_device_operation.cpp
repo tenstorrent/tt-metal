@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,7 @@ namespace ttnn::operations::moreh::moreh_sum {
 MorehSumOperation::program_factory_t MorehSumOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Case for int32
-    const auto input_rank = tensor_args.input.padded_shape().rank();
+    const auto input_rank = tensor_args.input.logical_shape().rank();
 
     if (tensor_args.input.dtype() == DataType::INT32) {
         if (operation_attributes.dim == input_rank - 1) {

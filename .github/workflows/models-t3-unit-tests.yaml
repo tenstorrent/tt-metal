@@ -18,6 +18,7 @@ on:
           - qwen2.5-7b
           - qwen2.5-72b
           - qwen2.5-vl-32b
+          - qwq-32b
           - phi-3-mini
           - phi-4-mini
           - mamba-2.8b

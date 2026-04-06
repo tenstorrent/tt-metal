@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
@@ -20,9 +20,24 @@ from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 # Constants
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
 USERS_PER_ROW = 32
+DEFAULT_MAX_SEQ_LEN = 2048
 SEQ_LEN_CHUNK_SIZE = 1024  # NOTE: should be 512 for blackhole (in case of future bring-up)
 TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
 MAX_TOP_K = 32
+# Default sampling parameters, huggingface recommended values
+DEFAULT_SAMPLING_TEMPERATURE = 0.6
+DEFAULT_SAMPLING_TOP_P = 0.95
+# huggingface recommended value for top-k sampling is zero for DeepSeek-V3 model, but TTNN Op
+# does not support top-k=0. see https://github.com/tenstorrent/tt-metal/issues/40236
+# So, using 32 as default value for top-k when sampling on device. If top-k = 0 is needed, then
+# do sampling on host.
+DEFAULT_SAMPLING_TOP_K = 32
+
+
+def get_fabric_config():
+    return (
+        ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
+    )
 
 
 def make_deepseek_sampling_args(
@@ -77,6 +92,13 @@ COMPUTE_KERNEL_CONFIG_HIFI4 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4,
     math_approx_mode=False,
     fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+)
+
+COMPUTE_KERNEL_CONFIG_HIFI4_NOFP32_ACC = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
+    fp32_dest_acc_en=False,
     packer_l1_acc=True,
 )
 
@@ -769,6 +791,16 @@ def shard_and_save(
                 not remove_dim or tensor.shape[shard_dim] == mesh_dim
             ), f"The removed dim {shard_dim} must be fully sharded"
 
+    cache_path = (
+        path if path.name.endswith(TENSOR_CACHE_EXTENSION) else path.with_name(f"{path.name}{TENSOR_CACHE_EXTENSION}")
+    )
+    if cache_path.exists():
+        logger.info(f"Cache file already exists, skipping shard_and_save: {cache_path}")
+        relative_cache_path = _get_relative_cache_path(cache_path)
+        if relative_cache_path is None:
+            raise ValueError(f"Expected path under a 'mesh_<rows>x<cols>' cache directory: {cache_path}")
+        return SavedWeight(Path(relative_cache_path), memory_config)
+
     if _torch_impl:
         ttnn_tensor = _shard_torch_impl(
             path=path,
@@ -798,8 +830,6 @@ def shard_and_save(
 
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    if path.exists():
-        logger.warning(f"Overwriting existing cache file: {path}")
     record = {
         "event": "deepseek_v3.cache_tensor_spec",
         "pid": os.getpid(),
@@ -1092,19 +1122,15 @@ def _shard_device_impl(
     else:
         mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=shard_dims)
 
-    if memory_config != ttnn.DRAM_MEMORY_CONFIG:
-        ttnn_tensor = ttnn.from_torch(
-            tensor, layout=layout, memory_config=memory_config, mesh_mapper=mesh_mapper, device=mesh_device, dtype=dtype
-        )
-    else:
-        ttnn_tensor = ttnn.from_torch(
-            tensor,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
-        )
-        ttnn_tensor = ttnn.to_dtype(ttnn_tensor, dtype)
-        ttnn_tensor = ttnn_tensor.to(layout)
+    ttnn_tensor = ttnn.from_torch(
+        tensor,
+        layout=layout,
+        memory_config=memory_config,
+        mesh_mapper=mesh_mapper,
+        device=mesh_device,
+        dtype=dtype,
+        enable_bfloat_opt=True,
+    )
 
     assert memory_config == ttnn_tensor.memory_config()
     assert dtype == ttnn_tensor.dtype

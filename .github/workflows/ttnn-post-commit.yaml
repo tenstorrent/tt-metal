@@ -1,4 +1,5 @@
 name: "[internal] ttnn unit tests impl"
+
 on:
   workflow_call:
     inputs:
@@ -63,9 +64,11 @@ jobs:
             .github
             tests/pipeline_reorg
           sparse-checkout-cone-mode: true
+
       - name: Install dependencies
         run: |
           pip3 install PyYAML
+
       - name: Verify test timeouts against budget
         if: inputs.timeout-minutes-override == 0
         run: |
@@ -74,6 +77,7 @@ jobs:
             "${TESTS_YAML_PATH}" \
             ./.github/time_budget.yaml \
             "sanity"
+
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
         env:
@@ -83,6 +87,7 @@ jobs:
             "${TESTS_YAML_PATH}" \
             "$ENABLED_SKUS" \
             ./.github/sku_config.yaml
+
       - name: Filter matrix by merge_gate
         id: filter-matrix
         env:
@@ -100,6 +105,7 @@ jobs:
           echo "matrix<<EOF" >> "$GITHUB_OUTPUT"
           echo "$filtered" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
+
   ttnn:
     needs: load-test-matrix
     strategy:
@@ -147,10 +153,12 @@ jobs:
             }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}|read-only=${{
             vars.REDIS_CCACHE_IS_READONLY }}
           auto-triage: ${{ !inputs.enable-watcher }}
+
       - name: Set ttnn fast runtime if exists in config
         if: matrix.test-group.fast_runtime_mode_off
         run: |
           echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
+
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override
           || matrix.test-group.timeout }}
@@ -171,11 +179,7 @@ jobs:
           echo "::group::CCache Statistics"
           ccache --show-stats || echo "ccache stats not available"
           echo "::endgroup::"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: failure()
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
+
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: "!cancelled()"

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -404,6 +404,16 @@ void exchange_metadata(
     distributed_context->barrier();
 }
 
+bool is_bh_galaxy_rev_c(tt::umd::Cluster& cluster) {
+    auto* cluster_desc = cluster.get_cluster_description();
+    if (cluster_desc->get_board_type(0) != BoardType::UBB_BLACKHOLE) {
+        return false;
+    }
+    uint64_t board_id = cluster_desc->get_board_id_for_chip(0);
+    uint32_t revision_bits = (board_id >> 32) & 0xF;  // bits [35:32]
+    return revision_bits >= 3;
+}
+
 }  // namespace
 
 namespace discovery_impl {
@@ -415,6 +425,9 @@ PhysicalSystemDescriptor run_local_discovery(
     bool run_live_discovery,
     bool all_hostnames_unique) {
     PhysicalSystemDescriptor psd(target_device_type);
+    if (is_bh_galaxy_rev_c(cluster)) {
+        psd.set_is_bh_galaxy_rev_c(true);
+    }
 
     std::unique_ptr<umd::ClusterDescriptor> cluster_desc = nullptr;
     if (!run_live_discovery || target_device_type != TargetDevice::Silicon) {
@@ -452,7 +465,12 @@ PhysicalSystemDescriptor run_local_discovery(
             psd.get_pcie_devices_per_tray()[hostname_key],
             psd.get_pcie_id_to_asic_location()[hostname_key]);
         psd.get_asic_descriptors()[src_unique_id] = ASICDescriptor{
-            TrayID{tray_id}, asic_location, cluster_desc->get_board_type(src_chip_id), src_unique_id, hostname_key};
+            TrayID{tray_id},
+            asic_location,
+            cluster_desc->get_board_type(src_chip_id),
+            src_unique_id,
+            src_chip_id,
+            hostname_key};
     };
 
     for (const auto& [chip_id, unique_id] : chip_unique_ids) {

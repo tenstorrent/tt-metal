@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,6 +16,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/fabric/physical_system_discovery.hpp"
+#include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "distributed_context.hpp"
 #include "impl/context/metal_context.hpp"
@@ -84,6 +85,13 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
         asic_id_to_chip_id[AsicID{asic_id}] = chip_id;
     }
 
+    // Validate UMD unique ID mapping (AsicID -> ChipId)
+    for (auto asic : physical_system_desc.get_asics_connected_to_host(my_host)) {
+        auto expected_chip_id = asic_id_to_chip_id.at(asic);
+        EXPECT_EQ(physical_system_desc.get_umd_unique_id(asic), expected_chip_id)
+            << "get_umd_unique_id(asic_id) should match cluster's ChipId for asic " << *asic;
+    }
+
     // Local Connectivity
     for (auto asic : physical_system_desc.get_asics_connected_to_host(my_host)) {
         auto chip_id = asic_id_to_chip_id.at(asic);
@@ -145,6 +153,34 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
         physical_system_desc.dump_to_yaml();
         log_info(tt::LogTest, "Dumping Physical System Descriptor to Text Proto");
         physical_system_desc.emit_to_text_proto();
+    }
+}
+
+TEST(PhysicalDiscovery, TestUmdUniqueIdSerializationRoundtrip) {
+    using namespace tt::tt_metal::distributed::multihost;
+    auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
+    auto physical_system_desc =
+        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+
+    auto unique_chip_ids = cluster.get_unique_chip_ids();
+    std::unordered_map<AsicID, ChipId> asic_id_to_chip_id;
+    for (const auto& [chip_id, asic_id] : unique_chip_ids) {
+        asic_id_to_chip_id[AsicID{asic_id}] = chip_id;
+    }
+
+    // Serialize and deserialize
+    auto bytes = tt::tt_metal::serialize_physical_system_descriptor_to_bytes(physical_system_desc);
+    auto deserialized = tt::tt_metal::deserialize_physical_system_descriptor_from_bytes(bytes);
+
+    // Verify umd_unique_id is preserved for each local asic
+    auto my_host = physical_system_desc.my_host_name();
+    for (auto asic : physical_system_desc.get_asics_connected_to_host(my_host)) {
+        auto expected_chip_id = asic_id_to_chip_id.at(asic);
+        EXPECT_EQ(deserialized.get_umd_unique_id(asic), expected_chip_id)
+            << "umd_unique_id should be preserved after serialize/deserialize for asic " << *asic;
     }
 }
 
@@ -255,19 +291,21 @@ TEST(PhysicalMappingGeneration, Generate2x4SliceToPCIeDeviceMapping) {
         }
 
         // A Slice is defined as a 2x4 Grid that spans 2 Trays. Each tray contributes a 2x2 Grid to the slice.
-        // Note that this definition corresponds to the tray layout for BH Galaxy Rev A & B
+        bool rev_c = physical_system_desc.is_bh_galaxy_rev_c();
+        uint32_t tray_id_top_right = rev_c ? 2 : 3;
+        uint32_t tray_id_bottom_left = rev_c ? 3 : 2;
         const std::unordered_map<uint32_t, std::unordered_map<TrayID, std::vector<ASICLocation>>> devices_per_slice = {
             {0,
              {{TrayID{1}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}},
-              {TrayID{3}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}}}},
+              {TrayID{tray_id_top_right}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}}}},
             {1,
              {{TrayID{1}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}},
-              {TrayID{3}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}}}},
+              {TrayID{tray_id_top_right}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}}}},
             {2,
-             {{TrayID{2}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}},
+             {{TrayID{tray_id_bottom_left}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}},
               {TrayID{4}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}}}},
             {3,
-             {{TrayID{2}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}},
+             {{TrayID{tray_id_bottom_left}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}},
               {TrayID{4}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}}}}};
         const auto& pcie_id_to_asic_location = physical_system_desc.get_pcie_id_to_asic_location();
         const auto& pcie_devices_per_tray = physical_system_desc.get_pcie_devices_per_tray();

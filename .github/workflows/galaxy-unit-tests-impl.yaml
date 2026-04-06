@@ -189,11 +189,72 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           mkdir -p generated/test_reports
-          TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCard*Fixture.*"
-          TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device --gtest_filter="GalaxyFixture.*:TGFixture.*"
-          ./build/test/tt_metal/unit_tests_device --gtest_filter="GalaxyFixture.*:TGFixture.*"
-          TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshMultiCQMultiDevice*Fixture.*"
-          TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*DispatchContext*"
+          failed=0
+          failed_names=()
+
+          run_gtest() {
+            local name="$1"
+            local xml_name="$2"
+            shift 2
+
+            echo "::group::${name}"
+            if GTEST_OUTPUT="xml:/work/generated/test_reports/${xml_name}" "$@"; then
+              echo "::endgroup::"
+              echo "::notice title=PASS::${name} passed."
+            else
+              local status=$?
+              failed=1
+              failed_names+=("${name} (exit ${status})")
+              echo "::endgroup::"
+              echo "::error title=FAIL::${name} (exit ${status})"
+            fi
+          }
+
+          run_gtest \
+            "Dispatch single-card fixtures" \
+            "unit_tests_dispatch_command_queue_single_card.xml" \
+            env TT_METAL_ENABLE_REMOTE_CHIP=1 \
+            ./build/test/tt_metal/unit_tests_dispatch \
+            --gtest_filter="UnitMeshCQSingleCard*Fixture.*"
+
+          run_gtest \
+            "Galaxy/TG device tests slow dispatch" \
+            "unit_tests_device_galaxy_slow_dispatch.xml" \
+            env TT_METAL_SLOW_DISPATCH_MODE=1 \
+            ./build/test/tt_metal/unit_tests_device \
+            --gtest_filter="GalaxyFixture.*:TGFixture.*"
+
+          run_gtest \
+            "Galaxy/TG device tests fast dispatch" \
+            "unit_tests_device_galaxy_fast_dispatch.xml" \
+            ./build/test/tt_metal/unit_tests_device \
+            --gtest_filter="GalaxyFixture.*:TGFixture.*"
+
+          run_gtest \
+            "Multi-CQ Galaxy dispatch tests" \
+            "unit_tests_dispatch_multicq_galaxy.xml" \
+            env TT_METAL_GTEST_NUM_HW_CQS=2 \
+            ./build/test/tt_metal/unit_tests_dispatch \
+            --gtest_filter="UnitMeshMultiCQMultiDevice*Fixture.*"
+
+          run_gtest \
+            "Distributed DispatchContext tests slow dispatch" \
+            "distributed_unit_tests_dispatch_context_slow_dispatch.xml" \
+            env TT_METAL_SLOW_DISPATCH_MODE=1 \
+            ./build/test/tt_metal/distributed/distributed_unit_tests \
+            --gtest_filter="*DispatchContext*"
+
+          if [[ ${#failed_names[@]} -gt 0 ]]; then
+            {
+              echo "## Galaxy unit test command failures"
+              echo
+              for failed_name in "${failed_names[@]}"; do
+                echo "- ${failed_name}"
+              done
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
       - name: Run fabric tests
         if: ${{ matrix.test-group.model == 'fabric' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
@@ -208,6 +269,7 @@ jobs:
           TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
           ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
           ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric*MuxFixture.*"
+
       - name: Run Multi-Process tests
         if: ${{ matrix.test-group.model == 'multiprocess' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
@@ -221,19 +283,22 @@ jobs:
         run: |
           mkdir -p generated/test_reports
           pytest models/demos/llama3_70b_galaxy/tests/unit_tests
+
       - name: Run prefetcher unit tests
         if: ${{ matrix.test-group.model == 'prefetcher' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           mkdir -p generated/test_reports
           pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_TG.py --timeout 600
+
       - name: Run distributed ops tests
         if: ${{ matrix.test-group.model == 'distributed-ops' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           mkdir -p generated/test_reports
           pytest tests/ttnn/distributed/test_distributed_layernorm_TG.py
-        # GPT-OSS 20B tests are currently commented out to reduce runtime and resource usage
+
+      # GPT-OSS 20B tests are currently commented out to reduce runtime and resource usage
       - name: Run GPT-OSS unit tests
         if: ${{ matrix.test-group.model == 'gpt-oss' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
@@ -246,6 +311,7 @@ jobs:
 
           TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ \
             pytest models/demos/gpt_oss/tests/unit -k "4x8" --timeout 600
+
       - name: Run tttv2 module tests
         if: ${{ matrix.test-group.model == 'tttv2' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
@@ -278,11 +344,7 @@ jobs:
             --cov-config=models/common/tests/setup.cfg || failed=1
 
           exit $failed
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
+
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -291,5 +353,8 @@ jobs:
       - name: Generate gtest annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}
+        with:
+          test-report-path: generated/test_reports/
+
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

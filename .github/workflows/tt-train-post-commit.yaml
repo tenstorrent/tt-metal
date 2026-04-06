@@ -42,9 +42,10 @@ on:
         type: string
         default: ""
         description: "Commit SHA to test (default: HEAD)"
-    secrets:
-      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+      wheel-artifact-name:
         required: false
+        type: string
+
 jobs:
   models:
     strategy:
@@ -52,10 +53,13 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        test-group: [{ name: tt-train, cmd: ctest -E NIGHTLY --no-tests=error --output-on-failure  --output-junit
-                generated/test_reports/ctest_report.xml }]
-    name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label
-      }}
+        test-group: [
+          {name: tt-train, cmd: ctest -E NIGHTLY --no-tests=error --output-on-failure  --output-junit generated/test_reports/ctest_report.xml},
+        ]
+        test-group-py: [
+          {name: tt-train, cmd: python -m pytest tests/python},
+        ]
+    name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     # tt-train in N300 is timing out on CIv2-viommu: https://github.com/tenstorrent/tt-metal/issues/29443
     runs-on: >-
       ${{
@@ -71,6 +75,7 @@ jobs:
         TT_METAL_HOME: /work
         TT_METAL_RUNTIME_ROOT: /work
         LD_LIBRARY_PATH: /work/build/lib
+        PYTHONPATH: /work
         TEST_DATA_DIR: /work/data
         ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
       volumes:
@@ -98,28 +103,34 @@ jobs:
             || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
           auto-triage: ${{ !inputs.enable-watcher }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+
+      - name: Install ttml module
+        timeout-minutes: 10
+        if: ${{ inputs.wheel-artifact-name }}
+        run: |
+          SITE_PACKAGES=$(uv pip show ttnn | sed -n 's/^Location: //p')
+          TTML_SRC_DIR="$TT_METAL_HOME/tt-train/sources/ttml"
+          TTML_BUILD_DIR="$TT_METAL_HOME/build/tt-train/sources/ttml"
+          echo "$TTML_SRC_DIR" > "$SITE_PACKAGES/ttml.pth"
+          echo "$TTML_BUILD_DIR" > "$SITE_PACKAGES/_ttml.pth"
+
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
-        env:
-          TEST_CMD: ${{ matrix.test-group.cmd }}
+        if: ${{ !inputs.wheel-artifact-name }}
         run: |
           cd /work/build/tt-train
           mkdir -p generated/test_reports
           ldd tests/ttml_tests || true
-          # Write command to script file to safely handle quotes and special characters
-          cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
-          #!/bin/bash
-          set -euo pipefail
-          cd /work/build/tt-train
-          SCRIPT_EOF
-          printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
-          chmod +x /tmp/test_cmd.sh
-          bash /tmp/test_cmd.sh
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U07ASPTGJTS # Denys
+          ${{ matrix.test-group.cmd }}
+
+      - name: ${{ matrix.test-group-py.name }} tests
+        timeout-minutes: ${{ inputs.timeout }}
+        if: ${{ inputs.wheel-artifact-name }}
+        run: |
+          cd /work/tt-train
+          ${{ matrix.test-group-py.cmd }}
+
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

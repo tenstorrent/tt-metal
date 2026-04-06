@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,6 +20,7 @@ struct UnifiedSelectReduce {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id;
         tt::tt_metal::KernelHandle writer_kernel_id;
+        tt::tt_metal::CBHandle data_cb_handle;
         std::vector<CoreCoord> cores;
         const GlobalSemaphore init_semaphore;
         const GlobalSemaphore cross_device_semaphore;

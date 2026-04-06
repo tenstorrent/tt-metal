@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -401,7 +401,7 @@ Tensor SdpaDecodeDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.q.device());
 }
 
-tt::stl::hash::hash_t SdpaDecodeDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t SdpaDecodeDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     bool has_cur_pos = tensor_args.cur_pos_tensor.has_value();
     bool has_attn_mask = tensor_args.attn_mask.has_value();

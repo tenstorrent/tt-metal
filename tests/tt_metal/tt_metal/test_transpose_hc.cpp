@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -95,6 +95,9 @@ TEST_F(MeshDeviceSingleCardFixture, TransposeHC) {
             .compile_args = reader_compile_time_args});
 
     std::vector<uint32_t> writer_compile_time_args;
+    if (multibank) {
+        writer_compile_time_args.emplace_back(tt::CBIndex::c_16);
+    }
     TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_time_args);
     auto unary_writer_kernel = CreateKernel(
         program,

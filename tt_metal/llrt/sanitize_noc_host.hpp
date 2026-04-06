@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,8 @@
 namespace tt {
 
 // Host MMIO reads/writes don't have alignment restrictions, so no need to check alignment here.
+// TODO: For Quasar, this range would need to be expanded if we need to write into uncached L1
+// (>= MEM_L1_UNCACHED_BASE) from host, probably by baking the existence of uncached memory into HAL.
 #define DEBUG_VALID_L1_ADDR(a, l) (((a) >= HAL_MEM_L1_BASE) && ((a) + (l) <= HAL_MEM_L1_BASE + HAL_MEM_L1_SIZE))
 
 #define DEBUG_VALID_REG_ADDR(a) tt::tt_metal::MetalContext::instance().hal().valid_reg_addr(a)
@@ -19,6 +21,16 @@ namespace tt {
 
 #define DEBUG_VALID_ETH_ADDR(a, l)                                                        \
     ((((a) >= HAL_MEM_ETH_BASE) && ((a) + (l) <= HAL_MEM_ETH_BASE + HAL_MEM_ETH_SIZE)) || \
+     (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
+
+#define DEBUG_VALID_DRAM_L1_ADDR(a, l)                                                                                \
+    ((tt::tt_metal::MetalContext::instance().hal().has_programmable_core_type(                                        \
+          tt::tt_metal::HalProgrammableCoreType::DRAM) &&                                                             \
+      (((a) >= tt::tt_metal::MetalContext::instance().hal().get_l1_noc_offset(                                        \
+                   tt::tt_metal::HalProgrammableCoreType::DRAM)) &&                                                   \
+       ((a) + (l) <=                                                                                                  \
+        tt::tt_metal::MetalContext::instance().hal().get_l1_noc_offset(tt::tt_metal::HalProgrammableCoreType::DRAM) + \
+            HAL_MEM_DRAM_L1_SIZE))) ||                                                                                \
      (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
 
 static bool coord_found_p(const std::vector<tt::umd::CoreCoord>& coords, CoreCoord core) {
@@ -64,21 +76,39 @@ static void watcher_sanitize_host_noc(
     const std::unordered_set<CoreCoord>& virtual_eth_cores,
     const std::unordered_set<CoreCoord>& virtual_pcie_cores,
     const std::unordered_set<CoreCoord>& virtual_dram_cores,
+    const std::unordered_set<CoreCoord>& virtual_dram_hw_cores,
     const CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const bool dram_l1_available = hal.has_programmable_core_type(tt::tt_metal::HalProgrammableCoreType::DRAM);
+    const uint64_t dram_l1_noc_offset =
+        dram_l1_available ? hal.get_l1_noc_offset(tt::tt_metal::HalProgrammableCoreType::DRAM) : 0;
+
     if (coord_found_p(soc_d.get_cores(CoreType::PCIE, CoordSystem::NOC0), core) ||
         coord_found_p(virtual_pcie_cores, core)) {
         TT_THROW("Host watcher: bad {} NOC coord {}", what, core.str());
     } else if (
         coord_found_p(soc_d.get_cores(CoreType::DRAM, CoordSystem::NOC0), core) ||
         coord_found_p(virtual_dram_cores, core)) {
-        uint64_t dram_addr_base = 0;
-        uint64_t dram_addr_size = soc_d.dram_core_size;
-        uint64_t dram_addr_end = dram_addr_size - dram_addr_base;
-        if (!DEBUG_VALID_DRAM_ADDR(addr, lbytes, dram_addr_base, dram_addr_end)) {
+        if (dram_l1_available && coord_found_p(virtual_dram_hw_cores, core) && addr >= dram_l1_noc_offset) {
+            if (!DEBUG_VALID_DRAM_L1_ADDR(addr, lbytes)) {
+                print_stack_trace();
+                TT_THROW("Host watcher: bad {} dram L1 address {}", what, noc_address(core, addr, lbytes));
+            }
+        } else {
+            uint64_t dram_addr_base = 0;
+            uint64_t dram_addr_size = soc_d.dram_core_size;
+            uint64_t dram_addr_end = dram_addr_size - dram_addr_base;
+            if (!DEBUG_VALID_DRAM_ADDR(addr, lbytes, dram_addr_base, dram_addr_end)) {
+                print_stack_trace();
+                TT_THROW("Host watcher: bad {} dram address {}", what, noc_address(core, addr, lbytes));
+            }
+        }
+    } else if (dram_l1_available && coord_found_p(virtual_dram_hw_cores, core)) {
+        if (!DEBUG_VALID_DRAM_L1_ADDR(addr, lbytes)) {
             print_stack_trace();
-            TT_THROW("Host watcher: bad {} dram address {}", what, noc_address(core, addr, lbytes));
+            TT_THROW("Host watcher: bad {} dram hw core address {}", what, noc_address(core, addr, lbytes));
         }
     } else if (coord_found_p(virtual_eth_cores, core)) {
         if (!DEBUG_VALID_ETH_ADDR(addr, lbytes)) {
@@ -103,6 +133,7 @@ inline void watcher_sanitize_host_noc_read(
     const std::unordered_set<CoreCoord>& virtual_eth_cores,
     const std::unordered_set<CoreCoord>& virtual_pcie_cores,
     const std::unordered_set<CoreCoord>& virtual_dram_cores,
+    const std::unordered_set<CoreCoord>& virtual_dram_hw_cores,
     const CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
@@ -113,6 +144,7 @@ inline void watcher_sanitize_host_noc_read(
         virtual_eth_cores,
         virtual_pcie_cores,
         virtual_dram_cores,
+        virtual_dram_hw_cores,
         core,
         addr,
         lbytes);
@@ -124,6 +156,7 @@ inline void watcher_sanitize_host_noc_write(
     const std::unordered_set<CoreCoord>& virtual_eth_cores,
     const std::unordered_set<CoreCoord>& virtual_pcie_cores,
     const std::unordered_set<CoreCoord>& virtual_dram_cores,
+    const std::unordered_set<CoreCoord>& virtual_dram_hw_cores,
     const CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
@@ -134,6 +167,7 @@ inline void watcher_sanitize_host_noc_write(
         virtual_eth_cores,
         virtual_pcie_cores,
         virtual_dram_cores,
+        virtual_dram_hw_cores,
         core,
         addr,
         lbytes);
