@@ -1815,6 +1815,9 @@ void py_module(nb::module_& mod) {
     bind_unary_operation<"softsign", &ttnn::softsign>(
         mod, R"doc(\text{softsign}(x) = \frac{x}{1 + |x|})doc", "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
+    bind_unary_operation<"swish", &ttnn::swish>(
+        mod, R"doc(\text{swish}(x) = x \cdot \sigma(x) = \frac{x}{1 + e^{-x}})doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
+
     bind_unary_operation<"lgamma", &ttnn::lgamma>(
         mod,
         R"doc(\mathrm{{output\_tensor}}_i = \ln(|\Gamma(\mathrm{{input\_tensor}}_i)|))doc",
