@@ -119,8 +119,8 @@ def test_kv_chunk_address_table(mesh_device):
 
 @pytest.mark.parametrize(
     "mesh_device",
-    [(8, 4)],
-    ids=["8x4"],
+    [(8, 4), (32, 4), (1, 1)],
+    ids=["8x4", "32x4", "1x1"],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -179,6 +179,9 @@ def test_kv_cache_address_table(mesh_device, seq_len):
 
     lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable(config)
 
+    host_name = socket.gethostname()
+    logger.info(f"Host name: {host_name}")
+
     # Create device groups that contain replicated data
     # Data is replicated on each column of the mesh
     device_group_idx_per_row = []
@@ -202,7 +205,6 @@ def test_kv_cache_address_table(mesh_device, seq_len):
         device_group_idx_per_row.append(group_idx)
 
     for fid in all_fabric_node_ids:
-        host_name = socket.gethostname()
         lookup_table.set_fabric_node_host(fid, host_name=host_name)
         logger.info(
             f"Set host name for fabric node id: mesh_id={int(fid.mesh_id)}, chip_id={int(fid.chip_id)} to {host_name}"
@@ -276,3 +278,44 @@ def test_kv_cache_address_table(mesh_device, seq_len):
             f"Retrieved: position={position}, noc_addr=0x{retrieved.noc_addr:X}, "
             f"size={retrieved.size_bytes}, group_idx={int(retrieved.device_group_index)}"
         )
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(8, 4), (32, 4), (1, 2)],
+    ids=["8x4", "32x4", "1x2"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
+def test_fnids(mesh_device):
+    mesh_shape = list(mesh_device.shape)
+
+    host_name = socket.gethostname()
+    logger.info(f"Host name: {host_name}")
+
+    all_fabric_node_ids = []
+    for row in range(mesh_shape[0]):
+        fabric_node_ids = []
+        for col in range(mesh_shape[1]):
+            coord = ttnn.MeshCoordinate(row, col)
+            fabric_node_id = mesh_device.get_fabric_node_id(coord)
+            fabric_node_ids.append(fabric_node_id)
+
+        all_fabric_node_ids.extend(fabric_node_ids)
+        # group_idx = lookup_table.add_device_group(fabric_node_ids)
+        # logger.info(f"Device group {int(group_idx)}: {len(fabric_node_ids)} nodes")
+        for idx, fid in enumerate(fabric_node_ids):
+            mesh_id = int(fid.mesh_id)
+            chip_id = int(fid.chip_id)
+            logger.info(
+                f"  Node {idx} row={row}, col={col}: mesh_id={mesh_id},  chip_id={chip_id} host_name={host_name}"
+            )
+        # device_group_idx_per_row.append(group_idx)
