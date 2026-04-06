@@ -511,10 +511,17 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::bit_cast<uint32_t>(param0),
                     std::bit_cast<uint32_t>(param1))};
         }
-        case UnaryOpType::HARDSHRINK:
-            return {
-                "hardshrink_tile_init();",
-                fmt::format("hardshrink_tile({}, {}u);", idst, std::bit_cast<uint32_t>(param0))};
+        case UnaryOpType::HARDSHRINK: {
+            uint32_t lambda_bits = std::bit_cast<uint32_t>(param0);
+            if (input_dtype.has_value() && *input_dtype == DataType::BFLOAT16) {
+                // For BF16 inputs, pre-round lambda to BF16 precision (RNE) then
+                // re-expand to FP32. This ensures the SFPU's FP32→FP19b truncation
+                // preserves the BF16 value exactly, matching the input's precision.
+                uint32_t bf16 = (lambda_bits + 0x7FFFu + ((lambda_bits >> 16) & 1u)) >> 16;
+                lambda_bits = bf16 << 16;
+            }
+            return {"hardshrink_tile_init();", fmt::format("hardshrink_tile({}, {}u);", idst, lambda_bits)};
+        }
         case UnaryOpType::LOGIT: return {};
         case UnaryOpType::SOFTSHRINK:
             return {
