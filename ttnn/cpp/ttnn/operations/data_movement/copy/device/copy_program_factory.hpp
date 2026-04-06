@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,23 +9,24 @@
 
 namespace ttnn::prim {
 
-struct CopyDefaultTilizedProgramFactory {
-    struct shared_variables_t {
-        tt::tt_metal::KernelHandle reader_kernel_id{};
-        tt::tt_metal::KernelHandle writer_kernel_id{};
-        std::vector<tt::tt_metal::CoreCoord> cores;
-    };
+struct CopySharedVariables {
+    tt::tt_metal::KernelHandle unary_reader_kernel_id{};
+    tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+    std::vector<CoreCoord> cores;
+};
 
+struct CopyProgramFactory {
+    using shared_variables_t = CopySharedVariables;
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const CopyParams& operation_attributes, const CopyInputs& tensor_args, Tensor& output_tensor);
+        const CopyParams& operation_attributes, const CopyInputs& tensor_args, Tensor& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const CopyParams& operation_attributes,
         const CopyInputs& tensor_args,
-        Tensor& output_tensor);
+        Tensor& output);
 };
 
 }  // namespace ttnn::prim

@@ -5,7 +5,7 @@
 #include <cmath>
 
 #include <tt-metalium/work_split.hpp>
-#include "copy_same_memory_config_program_factory.hpp"
+#include "copy_program_factory.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -15,7 +15,7 @@
 
 namespace ttnn::prim {
 
-CopySameMemoryConfigProgramFactory::cached_program_t CopySameMemoryConfigProgramFactory::create(
+CopyProgramFactory::cached_program_t CopyProgramFactory::create(
     const CopyParams& operation_attributes, const CopyInputs& tensor_args, Tensor& output) {
     using namespace tt::constants;
     using namespace tt::tt_metal;
@@ -188,7 +188,7 @@ CopySameMemoryConfigProgramFactory::cached_program_t CopySameMemoryConfigProgram
          .cores = cores}};
 }
 
-void CopySameMemoryConfigProgramFactory::override_runtime_arguments(
+void CopyProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const CopyParams& /*operation_attributes*/,
     const CopyInputs& tensor_args,
