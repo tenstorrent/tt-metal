@@ -20,10 +20,10 @@ using tt::tt_metal::BufferType;
 
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
 constexpr uint32_t ring_size = get_compile_time_arg_val(1);
-constexpr uint32_t cb_input_id = get_compile_time_arg_val(2);
-constexpr uint32_t cb_interm_id = get_compile_time_arg_val(3);
-constexpr uint32_t cb_interm2_id = get_compile_time_arg_val(4);  // TODO call interm2 better, better cb names
-constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(5);
+constexpr uint32_t cb_input_id = get_compile_time_arg_val(2);          // input_tensor from reader -> compute
+constexpr uint32_t cb_interm_id = get_compile_time_arg_val(3);         // intermediate_tensor from reader -> compute
+constexpr uint32_t cb_interm2_id = get_compile_time_arg_val(4);        // output_tensor from reader -> compute
+constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(5);  // input_tensor from reader -> writer
 constexpr uint32_t tile_granularity = get_compile_time_arg_val(6);
 constexpr uint32_t page_size = get_compile_time_arg_val(7);
 constexpr uint32_t input_batch_num_pages = get_compile_time_arg_val(8);
@@ -49,8 +49,7 @@ void kernel_main() {
     address_t interm_tensor_address = get_arg_val<address_t>(arg_idx++);
     address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
-    size_t out2_ready_sem =
-        get_arg_val<uint32_t>(arg_idx++);  // TODO rename out2 and sem2 to opposite_out and opposite_sem
+    size_t out2_ready_sem = get_arg_val<uint32_t>(arg_idx++);  // out_ready_sem from opposite dir
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
     const int32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
@@ -85,52 +84,44 @@ void kernel_main() {
         }
         uint32_t batch_offset = input_batch_num_pages * b;
 
-        // TODO update below description:
-        // Loop over the slices, starting from the furthest, and working backwards until we get to ourselves
-        // Read our local slice at this slice idx into cb_input_id or cb_output_id
-        // If we are not the first slice, then read interm_tensor into the cb_interm_id
-        // Then reduce those two CB's, and push that to cb_output_id
-        // If slices_forwarded in writer is 7, we don't forward anymore and write it to output_buffer
-        // Otherwise, the writer will write cb_output_id to the next chip in the forward direction
+        // Loop over the slices, starting from the chip half-way across the ring, and working backwards
+        // until we get to ourselves.
+        //
+        // In some iters we process a full tensor slice, and sometimes only half slice.
+        // In the 1st iter we don't perform a reduction, in other iters we reduce 2 tensors.
+        // In the last iter we reduce 3 tensors (local + remote from fwd device + remote from bwd device).
+        // In the last iter the writer outputs to local output tensor, in other iters it sends to next chip.
+        // These behaviors are controlled by a "state machine" to avoid code duplication in the loop body.
         int slice_idx = my_chip_id + (ring_size / 2);  // start with slice belonging to device half-way across in ring
         uint32_t num_iters = (ring_size / 2) + 1;
         for (uint32_t i = 0; i < num_iters; ++i) {
             // State machine for control variables
             bool even_chunks, odd_chunks, reduce_even_chunks, reduce_odd_chunks, reduce_output;
-            switch (i) {
-                case 0: {
-                    even_chunks = direction;     // process the even chunks (half the tensor slice)
-                    odd_chunks = !direction;     // process the odd chunks (other half of tensor slice)
-                    reduce_even_chunks = false;  // (input_tensor + interm_tensor) or (input_tensor)
-                    reduce_odd_chunks = false;   // (input_tensor + interm_tensor) or (input_tensor)
-                    reduce_output =
-                        false;  // (input_tensor + interm_tensor + output_tensor) or (input_tensor + interm_tensor)
-                    break;
-                }
-                case (ring_size / 2): {
-                    even_chunks = direction;
-                    odd_chunks = !direction;
-                    reduce_even_chunks = even_chunks;
-                    reduce_odd_chunks = odd_chunks;
-                    reduce_output = true;
-                    break;
-                }
-                case 1: {
-                    even_chunks = true;
-                    odd_chunks = true;
-                    reduce_even_chunks = direction;
-                    reduce_odd_chunks = !direction;
-                    reduce_output = false;
-                    break;
-                }
-                default: {
-                    even_chunks = true;
-                    odd_chunks = true;
-                    reduce_even_chunks = even_chunks;
-                    reduce_odd_chunks = odd_chunks;
-                    reduce_output = false;
-                    break;
-                }
+            if (i == 0) {
+                even_chunks = direction;     // process the even chunks (half the tensor slice)
+                odd_chunks = !direction;     // process the odd chunks (other half of tensor slice)
+                reduce_even_chunks = false;  // (input_tensor + interm_tensor) or (input_tensor)
+                reduce_odd_chunks = false;   // (input_tensor + interm_tensor) or (input_tensor)
+                reduce_output =
+                    false;  // (input_tensor + interm_tensor + output_tensor) or (input_tensor + interm_tensor)
+            } else if (i == (ring_size / 2)) {
+                even_chunks = direction;
+                odd_chunks = !direction;
+                reduce_even_chunks = even_chunks;
+                reduce_odd_chunks = odd_chunks;
+                reduce_output = true;
+            } else if (i == 1) {
+                even_chunks = true;
+                odd_chunks = true;
+                reduce_even_chunks = direction;
+                reduce_odd_chunks = !direction;
+                reduce_output = false;
+            } else {
+                even_chunks = true;
+                odd_chunks = true;
+                reduce_even_chunks = even_chunks;
+                reduce_odd_chunks = odd_chunks;
+                reduce_output = false;
             }
 
             // slice_idx = slice_idx % ring_size

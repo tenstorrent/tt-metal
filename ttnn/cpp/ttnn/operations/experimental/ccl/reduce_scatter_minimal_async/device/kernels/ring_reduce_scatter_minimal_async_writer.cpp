@@ -177,8 +177,7 @@ void kernel_main() {
             static_cast<uint32_t>(1)});  // increment 1
     if (use_barrier_sem) {
         // multicast to entire ring of workers for both this dir and opposite dir
-        ccl_routing_utils::fabric_set_line_multicast_route(
-            pkt_hdr_mcastseminc, multicast_route_info);  // TODO should this be outside the if-statement?
+        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_mcastseminc, multicast_route_info);
 
         uint64_t barrier_sem_noc_addr_in_pkt = safe_get_noc_addr(this_core_x, this_core_y, barrier_sem, 0);
         fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
@@ -217,7 +216,11 @@ void kernel_main() {
             0,                           // ignore
             static_cast<uint32_t>(1)});  // increment 1
 
-    // TODO make this proper, with comments
+    // Relevant for 2nd-last iter:
+    // In 2nd-last iter we send the full tensor slice. But in preparation for the last iter where each dir
+    // processes half tensor slice, in 2nd-last iter we send sem increments to both forward and backward workers.
+    // For example, if we send 2 even chunks and 2 odd chunks, we need to send 2 sem incrs to forward worker
+    // and 2 sem incrs to backward worker.
     uint64_t even_core_sem_noc_addr = direction ? safe_get_noc_addr(this_core_x, this_core_y, out_ready_sem, 0)
                                                 : safe_get_noc_addr(opposite_core_x, opposite_core_y, out_ready_sem, 0);
     uint64_t odd_core_sem_noc_addr = !direction ? safe_get_noc_addr(this_core_x, this_core_y, out_ready_sem, 0)
@@ -230,49 +233,39 @@ void kernel_main() {
             // State machine for control variables
             bool even_chunks, odd_chunks, reduce_even_chunks, reduce_odd_chunks, write_to_remote, write_to_interm,
                 separate_even_odd_sems;
-            switch (i) {
-                case 0: {
-                    even_chunks = direction;     // process the even chunks (half the tensor slice)
-                    odd_chunks = !direction;     // process the odd chunks (other half of tensor slice)
-                    reduce_even_chunks = false;  // grab output from compute or reader
-                    reduce_odd_chunks = false;   // grab output from compute or reader
-                    write_to_remote = true;      // write to remote device or local device
-                    write_to_interm = true;      // write to interm_tensor or output_tensor
-                    separate_even_odd_sems =
-                        false;  // 2nd-last iter: send sem incrs separately for even & odd chunks to diff workers
-                    break;
-                }
-                case (ring_size / 2): {
-                    even_chunks = direction;
-                    odd_chunks = !direction;
-                    reduce_even_chunks = even_chunks;
-                    reduce_odd_chunks = odd_chunks;
-                    write_to_remote = false;
-                    write_to_interm = false;
-                    separate_even_odd_sems = false;
-                    break;
-                }
-                case 1:
-                case (ring_size / 2) - 1: {  // these two cases can coincide (ring_size = 4)
-                    even_chunks = true;
-                    odd_chunks = true;
-                    reduce_even_chunks = (i == 1) ? direction : even_chunks;
-                    reduce_odd_chunks = (i == 1) ? !direction : odd_chunks;
-                    write_to_remote = true;
-                    write_to_interm = (i == (ring_size / 2) - 1) ? direction : true;
-                    separate_even_odd_sems = (i == (ring_size / 2) - 1);
-                    break;
-                }
-                default: {
-                    even_chunks = true;
-                    odd_chunks = true;
-                    reduce_even_chunks = even_chunks;
-                    reduce_odd_chunks = odd_chunks;
-                    write_to_remote = true;
-                    write_to_interm = true;
-                    separate_even_odd_sems = false;
-                    break;
-                }
+            if (i == 0) {
+                even_chunks = direction;     // process the even chunks (half the tensor slice)
+                odd_chunks = !direction;     // process the odd chunks (other half of tensor slice)
+                reduce_even_chunks = false;  // grab output from compute or reader
+                reduce_odd_chunks = false;   // grab output from compute or reader
+                write_to_remote = true;      // write to remote device or local device
+                write_to_interm = true;      // write to interm_tensor or output_tensor
+                separate_even_odd_sems =
+                    false;  // 2nd-last iter: send sem incrs separately for even & odd chunks to diff workers
+            } else if (i == (ring_size / 2)) {
+                even_chunks = direction;
+                odd_chunks = !direction;
+                reduce_even_chunks = even_chunks;
+                reduce_odd_chunks = odd_chunks;
+                write_to_remote = false;
+                write_to_interm = false;
+                separate_even_odd_sems = false;
+            } else if (i == 1 || i == (ring_size / 2) - 1) {  // these two cases can coincide (ring_size = 4)
+                even_chunks = true;
+                odd_chunks = true;
+                reduce_even_chunks = (i == 1) ? direction : even_chunks;
+                reduce_odd_chunks = (i == 1) ? !direction : odd_chunks;
+                write_to_remote = true;
+                write_to_interm = (i == (ring_size / 2) - 1) ? direction : true;
+                separate_even_odd_sems = (i == (ring_size / 2) - 1);
+            } else {
+                even_chunks = true;
+                odd_chunks = true;
+                reduce_even_chunks = even_chunks;
+                reduce_odd_chunks = odd_chunks;
+                write_to_remote = true;
+                write_to_interm = true;
+                separate_even_odd_sems = false;
             }
 
             // slice_idx = slice_idx % ring_size

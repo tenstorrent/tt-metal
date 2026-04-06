@@ -35,40 +35,31 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_iters; ++i) {
             // State machine for control variables
             bool even_chunks, odd_chunks, reduce_even_chunks, reduce_odd_chunks, reduce_output;
-            switch (i) {
-                case 0: {
-                    even_chunks = direction;     // process the even chunks (half the tensor slice)
-                    odd_chunks = !direction;     // process the odd chunks (other half of tensor slice)
-                    reduce_even_chunks = false;  // (input_tensor + interm_tensor) or (input_tensor)
-                    reduce_odd_chunks = false;   // (input_tensor + interm_tensor) or (input_tensor)
-                    reduce_output =
-                        false;  // (input_tensor + interm_tensor + output_tensor) or (input_tensor + interm_tensor)
-                    break;
-                }
-                case (ring_size / 2): {
-                    even_chunks = direction;
-                    odd_chunks = !direction;
-                    reduce_even_chunks = even_chunks;
-                    reduce_odd_chunks = odd_chunks;
-                    reduce_output = true;
-                    break;
-                }
-                case 1: {
-                    even_chunks = true;
-                    odd_chunks = true;
-                    reduce_even_chunks = direction;
-                    reduce_odd_chunks = !direction;
-                    reduce_output = false;
-                    break;
-                }
-                default: {
-                    even_chunks = true;
-                    odd_chunks = true;
-                    reduce_even_chunks = even_chunks;
-                    reduce_odd_chunks = odd_chunks;
-                    reduce_output = false;
-                    break;
-                }
+            if (i == 0) {
+                even_chunks = direction;     // process the even chunks (half the tensor slice)
+                odd_chunks = !direction;     // process the odd chunks (other half of tensor slice)
+                reduce_even_chunks = false;  // (input_tensor + interm_tensor) or (input_tensor)
+                reduce_odd_chunks = false;   // (input_tensor + interm_tensor) or (input_tensor)
+                reduce_output =
+                    false;  // (input_tensor + interm_tensor + output_tensor) or (input_tensor + interm_tensor)
+            } else if (i == (ring_size / 2)) {
+                even_chunks = direction;
+                odd_chunks = !direction;
+                reduce_even_chunks = even_chunks;
+                reduce_odd_chunks = odd_chunks;
+                reduce_output = true;
+            } else if (i == 1) {
+                even_chunks = true;
+                odd_chunks = true;
+                reduce_even_chunks = direction;
+                reduce_odd_chunks = !direction;
+                reduce_output = false;
+            } else {
+                even_chunks = true;
+                odd_chunks = true;
+                reduce_even_chunks = even_chunks;
+                reduce_odd_chunks = odd_chunks;
+                reduce_output = false;
             }
 
             for (uint32_t c = 0; c < slice_C; ++c) {
