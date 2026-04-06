@@ -34,21 +34,23 @@ struct PipelineStageSync {
         uint32_t runStallingLogicOnNCRISC,
         uint32_t runSignallingLogicOnNCRISC,
         uint32_t isIntermediateSignaller,
-        uint32_t stallingDeviceSemaphoreNocXAddr,
-        uint32_t stallingDeviceSemaphoreNocYAddr,
-        uint32_t stallingDeviceSemaphoreL1Addr,
-        uint32_t stallingDeviceChipID,
-        uint32_t stallingDeviceMeshID,
+        uint32_t isSignallingToIntermediateSignaller,
+        uint32_t stallingCoreNocXAddr,
+        uint32_t stallingCoreNocYAddr,
+        uint32_t signallingCoreNocXAddr,
+        uint32_t signallingCoreNocYAddr,
+        uint32_t semaphoreL1Addr,
         uint32_t fabricArgBase>
     struct ReaderCTArgs {
         static constexpr bool run_stalling_logic_on_ncrisc = runStallingLogicOnNCRISC == 1;
         static constexpr bool run_signalling_logic_on_ncrisc = runSignallingLogicOnNCRISC == 1;
         static constexpr bool is_intermediate_signaller = isIntermediateSignaller == 1;
-        static constexpr uint32_t stalling_device_semaphore_noc_x_addr = stallingDeviceSemaphoreNocXAddr;
-        static constexpr uint32_t stalling_device_semaphore_noc_y_addr = stallingDeviceSemaphoreNocYAddr;
-        static constexpr uint32_t stalling_device_semaphore_l1_addr = stallingDeviceSemaphoreL1Addr;
-        static constexpr uint32_t stalling_device_chip_id = stallingDeviceChipID;
-        static constexpr uint32_t stalling_device_mesh_id = stallingDeviceMeshID;
+        static constexpr bool is_signalling_to_intermediate_signaller = isSignallingToIntermediateSignaller == 1;
+        static constexpr uint32_t stalling_core_noc_x_addr = stallingCoreNocXAddr;
+        static constexpr uint32_t stalling_core_noc_y_addr = stallingCoreNocYAddr;
+        static constexpr uint32_t signalling_core_noc_x_addr = signallingCoreNocXAddr;
+        static constexpr uint32_t signalling_core_noc_y_addr = signallingCoreNocYAddr;
+        static constexpr uint32_t semaphore_l1_addr = semaphoreL1Addr;
         static constexpr uint32_t fabric_arg_base = fabricArgBase;
     };
 
@@ -60,21 +62,23 @@ struct PipelineStageSync {
         uint32_t runStallingLogicOnBRISC,
         uint32_t runSignallingLogicOnBRISC,
         uint32_t isIntermediateSignaller,
-        uint32_t stallingDeviceSemaphoreNocXAddr,
-        uint32_t stallingDeviceSemaphoreNocYAddr,
-        uint32_t stallingDeviceSemaphoreL1Addr,
-        uint32_t stallingDeviceChipID,
-        uint32_t stallingDeviceMeshID,
+        uint32_t isSignallingToIntermediateSignaller,
+        uint32_t stallingCoreNocXAddr,
+        uint32_t stallingCoreNocYAddr,
+        uint32_t signallingCoreNocXAddr,
+        uint32_t signallingCoreNocYAddr,
+        uint32_t semaphoreL1Addr,
         uint32_t fabricArgBase>
     struct WriterCTArgs {
         static constexpr bool run_stalling_logic_on_brisc = runStallingLogicOnBRISC == 1;
         static constexpr bool run_signalling_logic_on_brisc = runSignallingLogicOnBRISC == 1;
         static constexpr bool is_intermediate_signaller = isIntermediateSignaller == 1;
-        static constexpr uint32_t stalling_device_semaphore_noc_x_addr = stallingDeviceSemaphoreNocXAddr;
-        static constexpr uint32_t stalling_device_semaphore_noc_y_addr = stallingDeviceSemaphoreNocYAddr;
-        static constexpr uint32_t stalling_device_semaphore_l1_addr = stallingDeviceSemaphoreL1Addr;
-        static constexpr uint32_t stalling_device_chip_id = stallingDeviceChipID;
-        static constexpr uint32_t stalling_device_mesh_id = stallingDeviceMeshID;
+        static constexpr bool is_signalling_to_intermediate_signaller = isSignallingToIntermediateSignaller == 1;
+        static constexpr uint32_t stalling_core_noc_x_addr = stallingCoreNocXAddr;
+        static constexpr uint32_t stalling_core_noc_y_addr = stallingCoreNocYAddr;
+        static constexpr uint32_t signalling_core_noc_x_addr = signallingCoreNocXAddr;
+        static constexpr uint32_t signalling_core_noc_y_addr = signallingCoreNocYAddr;
+        static constexpr uint32_t semaphore_l1_addr = semaphoreL1Addr;
         static constexpr uint32_t fabric_arg_base = fabricArgBase;
     };
 
@@ -104,39 +108,43 @@ struct PipelineStageSync {
 
     private:
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
-        static FORCE_INLINE void stalling_impl(uint32_t stalling_device_semaphore_l1_addr) {
+        static FORCE_INLINE void stalling_impl(uint32_t semaphore_l1_addr) {
             /*
              * - Wait min as multiple signals may have been received before testing semaphore value
              * - Decrement by one (instead of set to 0), so further signals aren't erased
-             * - Invalidate cache to ensure value is decremented before proceeding
+             * - Invalidate cache to ensure value is decremented before proceeding (to prevent wrap around reading same
+             * value)
              */
-            auto stalling_device_semaphore_l1_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stalling_device_semaphore_l1_addr);
-            noc_semaphore_wait_min(stalling_device_semaphore_l1_ptr, 1);
-            unified_kernels::semaphore_dec(stalling_device_semaphore_l1_ptr);
+            auto semaphore_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_l1_addr);
+            noc_semaphore_wait_min(semaphore_l1_ptr, 1);
+            unified_kernels::semaphore_dec(semaphore_l1_ptr);
             invalidate_l1_cache();
         }
 
         static FORCE_INLINE void signalling_impl(
             bool is_intermediate_signaller,
-            uint32_t stalling_device_semaphore_noc_x_addr,
-            uint32_t stalling_device_semaphore_noc_y_addr,
-            uint32_t stalling_device_semaphore_l1_addr,
-            uint32_t stalling_device_chip_id,
-            uint32_t stalling_device_mesh_id,
+            bool is_signalling_to_intermediate_signaller,
+            uint32_t stalling_core_noc_x_addr,
+            uint32_t stalling_core_noc_y_addr,
+            uint32_t signalling_core_noc_x_addr,
+            uint32_t signalling_core_noc_y_addr,
+            uint32_t semaphore_l1_addr,
             size_t fabric_arg_base) {
             if (is_intermediate_signaller) {
-                auto stalling_device_semaphore_l1_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stalling_device_semaphore_l1_addr);
-                noc_semaphore_wait_min(stalling_device_semaphore_l1_ptr, 1);
-                unified_kernels::semaphore_dec(stalling_device_semaphore_l1_ptr);
+                auto semaphore_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_l1_addr);
+                noc_semaphore_wait_min(semaphore_l1_ptr, 1);
+                unified_kernels::semaphore_dec(semaphore_l1_ptr);
                 invalidate_l1_cache();
             }
 
-            const uint64_t stalling_device_semaphore_noc_addr = get_noc_addr(
-                stalling_device_semaphore_noc_x_addr,
-                stalling_device_semaphore_noc_y_addr,
-                stalling_device_semaphore_l1_addr);
+            uint64_t remote_semaphore_noc_addr;
+            if (is_signalling_to_intermediate_signaller) {
+                remote_semaphore_noc_addr =
+                    get_noc_addr(signalling_core_noc_x_addr, signalling_core_noc_y_addr, semaphore_l1_addr);
+            } else {
+                remote_semaphore_noc_addr =
+                    get_noc_addr(stalling_core_noc_x_addr, stalling_core_noc_y_addr, semaphore_l1_addr);
+            }
 
             constexpr uint32_t num_connections = 1;
             tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
@@ -149,13 +157,14 @@ struct PipelineStageSync {
             constexpr uint32_t num_hops = 1;
             packet_header_ptr->to_chip_unicast(num_hops);
             packet_header_ptr->to_noc_unicast_atomic_inc(
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{stalling_device_semaphore_noc_addr, 1});
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_semaphore_noc_addr, 1});
 
             auto& connection = fabric_connection.get(0).sender;
             connection.wait_for_empty_write_slot();
             connection.send_payload_flush_blocking_from_address(
                 (uint32_t)packet_header_ptr, sizeof(PACKET_HEADER_TYPE));
             close_connections(fabric_connection);
+            noc_async_write_barrier();
         }
 #endif
 
@@ -165,15 +174,16 @@ struct PipelineStageSync {
             // NCRISC (Reader)
             // ================================================================
             if constexpr (CTArgs::run_stalling_logic_on_ncrisc) {
-                stalling_impl(CTArgs::stalling_device_semaphore_l1_addr);
+                stalling_impl(CTArgs::semaphore_l1_addr);
             } else if constexpr (CTArgs::run_signalling_logic_on_ncrisc) {
                 signalling_impl(
                     CTArgs::is_intermediate_signaller,
-                    CTArgs::stalling_device_semaphore_noc_x_addr,
-                    CTArgs::stalling_device_semaphore_noc_y_addr,
-                    CTArgs::stalling_device_semaphore_l1_addr,
-                    CTArgs::stalling_device_chip_id,
-                    CTArgs::stalling_device_mesh_id,
+                    CTArgs::is_signalling_to_intermediate_signaller,
+                    CTArgs::stalling_core_noc_x_addr,
+                    CTArgs::stalling_core_noc_y_addr,
+                    CTArgs::signalling_core_noc_x_addr,
+                    CTArgs::signalling_core_noc_y_addr,
+                    CTArgs::semaphore_l1_addr,
                     CTArgs::fabric_arg_base);
             }
 
@@ -187,15 +197,16 @@ struct PipelineStageSync {
             // BRISC (Writer)
             // ================================================================
             if constexpr (CTArgs::run_stalling_logic_on_brisc) {
-                stalling_impl(CTArgs::stalling_device_semaphore_l1_addr);
+                stalling_impl(CTArgs::semaphore_l1_addr);
             } else if constexpr (CTArgs::run_signalling_logic_on_brisc) {
                 signalling_impl(
                     CTArgs::is_intermediate_signaller,
-                    CTArgs::stalling_device_semaphore_noc_x_addr,
-                    CTArgs::stalling_device_semaphore_noc_y_addr,
-                    CTArgs::stalling_device_semaphore_l1_addr,
-                    CTArgs::stalling_device_chip_id,
-                    CTArgs::stalling_device_mesh_id,
+                    CTArgs::is_signalling_to_intermediate_signaller,
+                    CTArgs::stalling_core_noc_x_addr,
+                    CTArgs::stalling_core_noc_y_addr,
+                    CTArgs::signalling_core_noc_x_addr,
+                    CTArgs::signalling_core_noc_y_addr,
+                    CTArgs::semaphore_l1_addr,
                     CTArgs::fabric_arg_base);
             }
 #endif

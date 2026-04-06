@@ -21,11 +21,12 @@ void kernel_main() {
         get_named_compile_time_arg_val("run_stalling_logic_on_ncrisc"),
         get_named_compile_time_arg_val("run_signalling_logic_on_ncrisc"),
         get_named_compile_time_arg_val("is_intermediate_signaller"),
-        get_named_compile_time_arg_val("stalling_device_semaphore_noc_x_addr"),
-        get_named_compile_time_arg_val("stalling_device_semaphore_noc_y_addr"),
-        get_named_compile_time_arg_val("stalling_device_semaphore_l1_addr"),
-        get_named_compile_time_arg_val("stalling_device_chip_id"),
-        get_named_compile_time_arg_val("stalling_device_mesh_id"),
+        get_named_compile_time_arg_val("is_signalling_to_intermediate_signaller"),
+        get_named_compile_time_arg_val("stalling_core_noc_x_addr"),
+        get_named_compile_time_arg_val("stalling_core_noc_y_addr"),
+        get_named_compile_time_arg_val("signalling_core_noc_x_addr"),
+        get_named_compile_time_arg_val("signalling_core_noc_y_addr"),
+        get_named_compile_time_arg_val("semaphore_l1_addr"),
         get_named_compile_time_arg_val("fabric_arg_base")>;
 
     // Reader runtime args
@@ -37,11 +38,12 @@ void kernel_main() {
         get_named_compile_time_arg_val("run_stalling_logic_on_brisc"),
         get_named_compile_time_arg_val("run_signalling_logic_on_brisc"),
         get_named_compile_time_arg_val("is_intermediate_signaller"),
-        get_named_compile_time_arg_val("stalling_device_semaphore_noc_x_addr"),
-        get_named_compile_time_arg_val("stalling_device_semaphore_noc_y_addr"),
-        get_named_compile_time_arg_val("stalling_device_semaphore_l1_addr"),
-        get_named_compile_time_arg_val("stalling_device_chip_id"),
-        get_named_compile_time_arg_val("stalling_device_mesh_id"),
+        get_named_compile_time_arg_val("is_signalling_to_intermediate_signaller"),
+        get_named_compile_time_arg_val("stalling_core_noc_x_addr"),
+        get_named_compile_time_arg_val("stalling_core_noc_y_addr"),
+        get_named_compile_time_arg_val("signalling_core_noc_x_addr"),
+        get_named_compile_time_arg_val("signalling_core_noc_y_addr"),
+        get_named_compile_time_arg_val("semaphore_l1_addr"),
         get_named_compile_time_arg_val("fabric_arg_base")>;
 
     // Writer runtime args

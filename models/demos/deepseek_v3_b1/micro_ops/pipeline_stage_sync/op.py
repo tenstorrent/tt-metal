@@ -67,26 +67,40 @@ class PipelineStageSync:
             stalling_device_mesh_coord == signalling_device_mesh_coord
         ), f"Stalling and signalling device cannot be the same"
 
-        global_semaphore = ttnn.create_global_semaphore(
-            mesh_device, ttnn.CoreRangeSet([ttnn.CoreRange(stalling_core, stalling_core)]), 0
-        )
-        global_semaphore_addr = ttnn.get_global_semaphore_address(global_semaphore)
+        # cores
+        if stalling_core == signalling_core:
+            all_cores_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(stalling_core, stalling_core)])
+        else:
+            all_cores_core_range_set = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(stalling_core, stalling_core),
+                    ttnn.CoreRange(signalling_core, signalling_core),
+                ]
+            )
 
+        # semaphores
+        global_semaphore = ttnn.create_global_semaphore(mesh_device, all_cores_core_range_set, 0)
+        semaphore_l1_addr = ttnn.get_global_semaphore_address(global_semaphore)
+
+        # construct path
         mesh_shape = mesh_device.shape
         mesh_rows = mesh_shape[0]
         mesh_cols = mesh_shape[1]
+
         for row in range(mesh_rows):
             for col in range(mesh_cols):
                 mesh_coord = ttnn.MeshCoordinate(row, col)
-                # device = mesh_device.get_device(row, col)
 
                 # === Compile-time args ===
 
                 # Reader (NCRISC) and Writer (BRISC) compile-time args
                 stalling_core_phys = mesh_device.worker_core_from_logical_core(stalling_core)
-                stalling_device_semaphore_noc_x_addr = stalling_core_phys.x
-                stalling_device_semaphore_noc_y_addr = stalling_core_phys.y
-                stalling_device_semaphore_l1_addr = global_semaphore_addr
+                stalling_core_noc_x_addr = stalling_core_phys.x
+                stalling_core_noc_y_addr = stalling_core_phys.y
+
+                signalling_core_phys = mesh_device.worker_core_from_logical_core(signalling_core)
+                signalling_core_noc_x_addr = signalling_core_phys.x
+                signalling_core_noc_y_addr = signalling_core_phys.y
 
                 stalling_device_fabric_node_id = mesh_device.get_fabric_node_id(stalling_device_mesh_coord)
                 stalling_device_chip_id = int(stalling_device_fabric_node_id.chip_id)
@@ -95,11 +109,12 @@ class PipelineStageSync:
 
                 reader_named_ct_args = [
                     ("is_intermediate_signaller", False),  # TODO: (GR)
-                    ("stalling_device_semaphore_noc_x_addr", stalling_device_semaphore_noc_x_addr),
-                    ("stalling_device_semaphore_noc_y_addr", stalling_device_semaphore_noc_y_addr),
-                    ("stalling_device_semaphore_l1_addr", stalling_device_semaphore_l1_addr),
-                    ("stalling_device_chip_id", stalling_device_chip_id),
-                    ("stalling_device_mesh_id", stalling_device_mesh_id),
+                    ("is_signalling_to_intermediate_signaller", False),  # TODO: (GR)
+                    ("stalling_core_noc_x_addr", stalling_core_noc_x_addr),
+                    ("stalling_core_noc_y_addr", stalling_core_noc_y_addr),
+                    ("signalling_core_noc_x_addr", signalling_core_noc_x_addr),
+                    ("signalling_core_noc_y_addr", signalling_core_noc_y_addr),
+                    ("semaphore_l1_addr", semaphore_l1_addr),
                     ("fabric_arg_base", fabric_arg_base),
                     ("num_iterations", num_iterations),
                 ]
@@ -118,18 +133,9 @@ class PipelineStageSync:
                     mesh_coord == signalling_device_mesh_coord and run_signalling_kernel_on_brisc
                 )
 
-                if stalling_core == signalling_core:
-                    core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(stalling_core, stalling_core)])
-                else:
-                    core_ranges = ttnn.CoreRangeSet(
-                        [
-                            ttnn.CoreRange(stalling_core, stalling_core),
-                            ttnn.CoreRange(signalling_core, signalling_core),
-                        ]
-                    )
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source=kernel_path,
-                    core_ranges=core_ranges,
+                    core_ranges=all_cores_core_range_set,
                     ncrisc_named_compile_time_args=reader_named_ct_args,
                     trisc_named_compile_time_args=compute_name_ct_args,
                     brisc_named_compile_time_args=writer_named_ct_args,
