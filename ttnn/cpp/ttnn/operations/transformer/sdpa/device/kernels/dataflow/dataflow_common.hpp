@@ -939,18 +939,18 @@ void read_block(
     for (uint32_t row = 0; row < src_rows; ++row) {
         uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
         for (uint32_t col = 0; col < src_cols; ++col) {
-            uint32_t did_read = cat_addr_generator.maybe_read_tile(
-                src_slice.d0,
-                src_slice.d1,
-                src_slice.d2_start + row,
-                src_slice.d3_start + col,
-                end_seq_tile,
-                write_ptr);
+            // uint32_t did_read = cat_addr_generator.maybe_read_tile(
+            //     src_slice.d0,
+            //     src_slice.d1,
+            //     src_slice.d2_start + row,
+            //     src_slice.d3_start + col,
+            //     end_seq_tile,
+            //     write_ptr);
 
             write_ptr += inner_ptr_stride;
         }
     }
-    noc_async_read_barrier();
+    // noc_async_read_barrier();
     cb_push_back(cb_id, num_tiles);
 }
 
