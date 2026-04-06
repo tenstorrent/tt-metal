@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "llk_defs.h"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_common.hpp"
 #include <tt-metalium/constants.hpp>
 
 namespace dataflow_kernel_lib {
@@ -211,6 +212,50 @@ FORCE_INLINE void prepare_reduce_scaler_rows(float scaler_f);
  */
 template <uint32_t cb_id, uint32_t partial_tile_rows>
 FORCE_INLINE void prepare_partial_reduce_scalers_rows(float scaler_f);
+
+// =============================================================================
+// Matmul-path scaler helpers (col-0 fill for REDUCE_ROW with SUM/AVG)
+//
+// When compute uses matmul_tiles instead of reduce_tile for REDUCE_ROW,
+// the scaler tile needs column-0 fill instead of row-0 fill.
+// =============================================================================
+
+/**
+ * @brief Prepare a single scaler tile with col-0 fill (matmul layout)
+ */
+template <uint32_t cb_id, uint32_t tile_rows_to_fill = tt::constants::TILE_HEIGHT>
+FORCE_INLINE void prepare_reduce_scaler_col0(float scaler_f);
+
+/**
+ * @brief Generate two scaler tiles (full + partial) with col-0 fill
+ */
+template <uint32_t cb_id, uint32_t partial_tile_rows>
+FORCE_INLINE void prepare_partial_reduce_scalers_col0(float scaler_f);
+
+// =============================================================================
+// Pool-type-aware scaler helpers — auto-dispatch to matmul or reduce_tile layout
+//
+// These overloads use reduce_uses_matmul<pool_type, reduce_dim>() to select
+// the correct scaler tile layout:
+//   SUM/AVG + REDUCE_ROW → col-0 fill (matmul path)
+//   Everything else      → row-0 or row-axis fill (reduce_tile path)
+// =============================================================================
+
+/**
+ * @brief Pool-type-aware: prepares a CB tile with correct layout for the pool/dim combination
+ */
+template <
+    uint32_t cb_id,
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    uint32_t positions_to_fill = tt::constants::TILE_WIDTH>
+FORCE_INLINE void prepare_reduce_scaler(float scaler_f);
+
+/**
+ * @brief Pool-type-aware: generate two scaler tiles (full + partial) with correct layout
+ */
+template <uint32_t cb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t partial_positions>
+FORCE_INLINE void prepare_partial_reduce_scalers(float scaler_f);
 
 }  // namespace dataflow_kernel_lib
 

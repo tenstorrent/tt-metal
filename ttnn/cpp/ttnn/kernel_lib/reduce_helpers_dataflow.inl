@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include "llk_defs.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_common.hpp"
 
 namespace dataflow_kernel_lib {
 
@@ -152,6 +153,154 @@ FORCE_INLINE void fill_row0_partial_rows(volatile tt_l1_ptr uint32_t* ptr, uint3
             }
         }
     }
+}
+
+// =============================================================================
+// Float to col-0 scaler bit conversion (matmul-based reduce)
+//
+// For matmul REDUCE_ROW, the scaler tile is a column vector: values in column 0.
+// In bfloat16, column 0 is the lower 16 bits of the first u32 in each row.
+// =============================================================================
+
+template <DataFormat data_format>
+FORCE_INLINE uint32_t float_to_col0_scaler_bits(float value) {
+    static_assert(
+        data_format == DataFormat::Float16_b || data_format == DataFormat::Float32,
+        "float_to_col0_scaler_bits only supports Float16_b (bfloat16) and Float32 formats");
+
+    union {
+        float f;
+        uint32_t bits;
+    } f32_to_bits;
+    f32_to_bits.f = value;
+
+    if constexpr (data_format == DataFormat::Float32) {
+        return f32_to_bits.bits;
+    } else {
+        // Float16_b (bfloat16): return lower 16 bits only (col 0 in the u32 pair)
+        return static_cast<uint32_t>(static_cast<uint16_t>(f32_to_bits.bits >> 16));
+    }
+}
+
+// =============================================================================
+// Format-aware fill_col0 — fills column 0 of left-side faces (matmul scaler)
+//
+// For matmul REDUCE_ROW, the scaler tile is a column vector. Column 0 maps
+// to the first u32 element of each row in the left-side faces (face & 1 == 0).
+//
+// Face layout:
+//   [Face 0] [Face 1]   ← left/right pair, tile rows 0-15
+//   [Face 2] [Face 3]   ← left/right pair, tile rows 16-31
+// Only faces 0 and 2 (left) receive the scaler value.
+// =============================================================================
+
+template <DataFormat data_format, bool half_tile>
+FORCE_INLINE void fill_col0(volatile tt_l1_ptr uint32_t* ptr, uint32_t scaler) {
+    static_assert(
+        data_format == DataFormat::Float16_b || data_format == DataFormat::Float32,
+        "fill_col0 only supports Float16_b (bfloat16) and Float32 formats");
+
+    constexpr uint32_t num_face_rows = half_tile ? 1 : 2;  // 1 or 2 face-row pairs
+    constexpr uint32_t faces_per_row = half_tile ? 1 : 2;   // left only for half, left+right for full
+    constexpr uint32_t face_size_u32 =
+        (data_format == DataFormat::Float32) ? FACE_SIZE_U32_FP32 : FACE_SIZE_U32;
+    constexpr uint32_t row_size_u32 =
+        (data_format == DataFormat::Float32) ? ROW_SIZE_U32_FP32 : ROW_SIZE_U32;
+    constexpr uint32_t ROWS_PER_FACE = 16;
+
+    for (uint32_t fr = 0; fr < num_face_rows; ++fr) {
+        // Left face in this face-row pair
+        uint32_t face_idx = fr * faces_per_row;
+        volatile tt_l1_ptr uint32_t* face_ptr = ptr + face_idx * face_size_u32;
+        for (uint32_t row = 0; row < ROWS_PER_FACE; ++row) {
+            face_ptr[row * row_size_u32] = scaler;
+        }
+    }
+}
+
+// =============================================================================
+// Format-aware fill_col0_partial — fills column 0 for only valid rows
+//
+// For partial W tiles in matmul REDUCE_ROW: the W elements map to rows of
+// the scaler tile. Only the first tile_rows_to_fill rows get the scaler value.
+// Uses top/bottom face split: face 0 = rows 0-15, face 2 = rows 16-31.
+// =============================================================================
+
+template <DataFormat data_format, bool half_tile, uint32_t tile_rows_to_fill>
+FORCE_INLINE void fill_col0_partial(volatile tt_l1_ptr uint32_t* ptr, uint32_t scaler) {
+    static_assert(
+        data_format == DataFormat::Float16_b || data_format == DataFormat::Float32,
+        "fill_col0_partial only supports Float16_b (bfloat16) and Float32 formats");
+    static_assert(
+        tile_rows_to_fill > 0 && tile_rows_to_fill < tt::constants::TILE_HEIGHT,
+        "tile_rows_to_fill must be in range [1, TILE_HEIGHT-1]");
+
+    constexpr uint32_t num_face_rows = half_tile ? 1 : 2;
+    constexpr uint32_t faces_per_row = half_tile ? 1 : 2;
+    constexpr uint32_t face_size_u32 =
+        (data_format == DataFormat::Float32) ? FACE_SIZE_U32_FP32 : FACE_SIZE_U32;
+    constexpr uint32_t row_size_u32 =
+        (data_format == DataFormat::Float32) ? ROW_SIZE_U32_FP32 : ROW_SIZE_U32;
+    constexpr uint32_t ROWS_PER_FACE = 16;
+    constexpr uint32_t top_rows = tile_rows_to_fill < ROWS_PER_FACE ? tile_rows_to_fill : ROWS_PER_FACE;
+    constexpr uint32_t bottom_rows = tile_rows_to_fill > ROWS_PER_FACE ? tile_rows_to_fill - ROWS_PER_FACE : 0;
+
+    for (uint32_t fr = 0; fr < num_face_rows; ++fr) {
+        uint32_t rows_in_face = (fr == 0) ? top_rows : bottom_rows;
+        uint32_t face_idx = fr * faces_per_row;
+        volatile tt_l1_ptr uint32_t* face_ptr = ptr + face_idx * face_size_u32;
+        for (uint32_t row = 0; row < rows_in_face; ++row) {
+            face_ptr[row * row_size_u32] = scaler;
+        }
+    }
+}
+
+// =============================================================================
+// Matmul-path scaler tile preparation (col-0 fill)
+// =============================================================================
+
+template <uint32_t cb_id, uint32_t tile_rows_to_fill>
+FORCE_INLINE void prepare_reduce_scaler_col0(float scaler_f) {
+    ASSERT(cb_id < NUM_CIRCULAR_BUFFERS);
+    static_assert(
+        tile_rows_to_fill > 0 && tile_rows_to_fill <= tt::constants::TILE_HEIGHT,
+        "tile_rows_to_fill must be in range [1, TILE_HEIGHT]");
+
+    constexpr DataFormat data_format = get_dataformat(cb_id);
+    constexpr bool half_tile = get_tile_num_faces(cb_id) == 2;
+
+    static_assert(
+        data_format == DataFormat::Float16_b || data_format == DataFormat::Float32,
+        "prepare_reduce_scaler_col0 only supports Float16_b (bfloat16) and Float32 formats");
+
+    uint32_t scaler = float_to_col0_scaler_bits<data_format>(scaler_f);
+
+    cb_reserve_back(cb_id, 1);
+    uint32_t write_addr = get_write_ptr(cb_id);
+
+    zero_faces<data_format, half_tile>(write_addr);
+
+    if (scaler != 0) {
+        if constexpr (tile_rows_to_fill == tt::constants::TILE_HEIGHT) {
+            fill_col0<data_format, half_tile>(addr_to_l1_ptr(write_addr), scaler);
+        } else {
+            fill_col0_partial<data_format, half_tile, tile_rows_to_fill>(addr_to_l1_ptr(write_addr), scaler);
+        }
+    }
+
+    cb_push_back(cb_id, 1);
+}
+
+template <uint32_t cb_id, uint32_t partial_tile_rows>
+FORCE_INLINE void prepare_partial_reduce_scalers_col0(float scaler_f) {
+    static_assert(
+        partial_tile_rows > 0 && partial_tile_rows < tt::constants::TILE_HEIGHT,
+        "partial_tile_rows must be in range [1, TILE_HEIGHT-1]");
+
+    // Tile 0: full scaler — all rows of column 0 filled
+    prepare_reduce_scaler_col0<cb_id, tt::constants::TILE_HEIGHT>(scaler_f);
+    // Tile 1: partial scaler — only valid rows of column 0 filled
+    prepare_reduce_scaler_col0<cb_id, partial_tile_rows>(scaler_f);
 }
 
 // =============================================================================
@@ -379,6 +528,87 @@ FORCE_INLINE void prepare_partial_reduce_scalers_rows(float scaler_f) {
     prepare_reduce_scaler<cb_id, tt::constants::TILE_WIDTH>(scaler_f);
     // Tile 1: partial scaler — only valid row positions filled (top/bottom face split)
     prepare_reduce_scaler_rows<cb_id, partial_tile_rows>(scaler_f);
+}
+
+// =============================================================================
+// Pool-type-aware prepare_reduce_scaler — auto-dispatches to matmul (col-0) or reduce_tile (row-0) layout
+// =============================================================================
+
+template <uint32_t cb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t positions_to_fill>
+FORCE_INLINE void prepare_reduce_scaler(float scaler_f) {
+    static_assert(
+        reduce_dim != ReduceDim::REDUCE_SCALAR || positions_to_fill == tt::constants::TILE_WIDTH,
+        "REDUCE_SCALAR does not support partial positions");
+
+    constexpr bool use_matmul = reduce_uses_matmul<pool_type, reduce_dim>();
+
+    if constexpr (use_matmul) {
+        // Matmul path: col-0 fill. W positions map to rows of the scaler tile.
+        prepare_reduce_scaler_col0<cb_id, positions_to_fill>(scaler_f);
+    } else if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
+        prepare_reduce_scaler_rows<cb_id, positions_to_fill>(scaler_f);
+    } else {
+        // REDUCE_ROW (non-matmul, e.g. MAX) or REDUCE_SCALAR: column-axis fill
+        prepare_reduce_scaler<cb_id, positions_to_fill>(scaler_f);
+    }
+}
+
+// =============================================================================
+// Pool-type-aware prepare_partial_reduce_scalers — auto-dispatches layout
+// =============================================================================
+
+template <uint32_t cb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t partial_positions>
+FORCE_INLINE void prepare_partial_reduce_scalers(float scaler_f) {
+    static_assert(
+        reduce_dim != ReduceDim::REDUCE_SCALAR,
+        "Partial scalers are not supported for REDUCE_SCALAR.");
+    static_assert(
+        partial_positions > 0 && partial_positions < tt::constants::TILE_WIDTH,
+        "partial_positions must be in range [1, TILE_WIDTH-1].");
+
+    constexpr bool use_matmul = reduce_uses_matmul<pool_type, reduce_dim>();
+
+    if constexpr (use_matmul) {
+        // Matmul path: col-0 fill. W positions map to rows.
+        prepare_partial_reduce_scalers_col0<cb_id, partial_positions>(scaler_f);
+    } else if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
+        prepare_partial_reduce_scalers_rows<cb_id, partial_positions>(scaler_f);
+    } else {
+        // REDUCE_ROW (non-matmul, e.g. MAX): column-axis fill
+        prepare_partial_reduce_scalers<cb_id, partial_positions>(scaler_f);
+    }
+}
+
+// =============================================================================
+// Pool-type-aware calculate_and_prepare_partial_reduce_scalers
+// =============================================================================
+
+template <
+    uint32_t cb_id,
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    uint32_t partial_positions,
+    uint32_t reduce_factor>
+FORCE_INLINE void calculate_and_prepare_partial_reduce_scalers_poolaware() {
+    static_assert(
+        reduce_dim != ReduceDim::REDUCE_SCALAR,
+        "Partial scalers are not supported for REDUCE_SCALAR.");
+    static_assert(
+        partial_positions > 0 && partial_positions < tt::constants::TILE_WIDTH,
+        "partial_positions must be in range [1, TILE_WIDTH-1].");
+
+    // Compute scaler value
+    float scaler_f;
+    if constexpr (pool_type == PoolType::AVG) {
+        scaler_f = 1.0f / static_cast<float>(reduce_factor);
+    } else {
+        scaler_f = 1.0f;
+    }
+
+    // Tile 0: full scaler
+    prepare_reduce_scaler<cb_id, pool_type, reduce_dim, tt::constants::TILE_WIDTH>(scaler_f);
+    // Tile 1: partial scaler
+    prepare_reduce_scaler<cb_id, pool_type, reduce_dim, partial_positions>(scaler_f);
 }
 
 }  // namespace dataflow_kernel_lib
