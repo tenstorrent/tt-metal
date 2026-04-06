@@ -36,7 +36,7 @@ class TtnnC3K:
             k2 = ttnn.to_layout(k2, ttnn.ROW_MAJOR_LAYOUT)
             x = sharded_concat([k2, x2], to_interleaved=False)
         else:
-            x = ttnn.concat((k2, x2), 3, memory_config=ttnn.L1_MEMORY_CONFIG)
+            x = ttnn.concat((k2, x2), dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = self.cv3(device, x, output_rm_needed=True)
         deallocate_tensors(x1, x2, k1, k2)
         return x

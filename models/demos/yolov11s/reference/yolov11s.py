@@ -292,20 +292,12 @@ class C3k2(nn.Module):
             )
 
     def forward(self, x):
-        if self.is_bk_enabled:
-            x = self.cv1(x)
-            y = list(x.chunk(2, 1))
-            m_out = self.m[0](y[-1])
-            y.append(m_out)
-            x = torch.cat(y, 1)
-            x = self.cv2(x)
-        else:
-            x = self.cv1(x)
-            y = list(x.chunk(2, 1))
-            m_out = self.m[0](y[-1])
-            y.append(m_out)
-            x = torch.cat(y, 1)
-            x = self.cv2(x)
+        x = self.cv1(x)
+        y = list(x.chunk(2, 1))
+        m_out = self.m[0](y[-1])
+        y.append(m_out)
+        x = torch.cat(y, 1)
+        x = self.cv2(x)
         return x
 
 
@@ -722,10 +714,10 @@ class Detect(nn.Module):
         ya = torch.permute(ya, (0, 2, 1, 3))
         ya = f.softmax(ya, dim=1)
         c = self.dfl(ya)
-        c1 = torch.reshape(c, (c.shape[0], c.shape[1] * c.shape[2], c.shape[3]))
-        c2 = c1
-        c1 = c1[:, 0:2, :]
-        c2 = c2[:, 2:4, :]
+        c = torch.reshape(c, (c.shape[0], c.shape[1] * c.shape[2], c.shape[3]))
+        # c2 = c1
+        c1 = c[:, 0:2, :]
+        c2 = c[:, 2:4, :]
         anchor, strides = (y_all.transpose(0, 1) for y_all in make_anchors(y_all, [8, 16, 32], 0.5))
         anchor.unsqueeze(0)
         c1 = anchor - c1

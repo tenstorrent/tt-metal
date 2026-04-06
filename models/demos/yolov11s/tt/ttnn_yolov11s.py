@@ -62,8 +62,11 @@ class TtnnYoloV11s:
         x = self.sppf(self.device, x)
         x = self.c2psa(self.device, x)
         x10 = x
-        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
+        if x.layout != ttnn.ROW_MAJOR_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        flat_hw = int(x.shape[2])
+        spatial = int(math.isqrt(flat_hw))
+        x = ttnn.reshape(x, (x.shape[0], spatial, spatial, x.shape[3]))
         nhw = x.shape[0] * x.shape[1] * x.shape[2]
         num_cores = determine_num_cores(nhw, x.shape[2])
         core_grid = get_core_grid_from_num_cores(num_cores)
@@ -83,20 +86,22 @@ class TtnnYoloV11s:
         x = self.c3k2_5(self.device, x)
         x13 = x
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
+        flat_hw = int(x.shape[2])
+        spatial = int(math.isqrt(flat_hw))
+        x = ttnn.reshape(x, (x.shape[0], spatial, spatial, x.shape[3]))
         nhw = x.shape[0] * x.shape[1] * x.shape[2]
         num_cores = determine_num_cores(nhw, x.shape[2])
         core_grid = get_core_grid_from_num_cores(num_cores)
         shardspec = ttnn.create_sharded_memory_config_(
             x.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
         )
-        if x.is_sharded():
-            x = ttnn.reshard(x, shardspec)
-        else:
-            x = ttnn.interleaved_to_sharded(x, shardspec)
+        # if x.is_sharded():
+        #     x = ttnn.reshard(x, shardspec)s
+        # else:
+        #     x = ttnn.interleaved_to_sharded(x, shardspec)
         x = ttnn.upsample(x, scale_factor=2, memory_config=x.memory_config())
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
-        x4 = ttnn.to_layout(x4, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # x4 = ttnn.to_layout(x4, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = sharded_concat([x, x4], to_interleaved=False)
         ttnn.deallocate(x4)
         x = reshard_if_possible(x)

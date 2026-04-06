@@ -20,6 +20,7 @@ class YOLOv11sPerformantRunner:
         inputs_mesh_mapper=None,
         weights_mesh_mapper=None,
         outputs_mesh_composer=None,
+        compute_torch_reference: bool = False,
     ):
         self.device = device
         self.resolution = resolution
@@ -40,6 +41,7 @@ class YOLOv11sPerformantRunner:
             inputs_mesh_mapper=self.mesh_mapper,
             weights_mesh_mapper=self.weights_mesh_mapper,
             outputs_mesh_composer=self.mesh_composer,
+            compute_torch_reference=compute_torch_reference,
         )
 
         (
@@ -70,7 +72,6 @@ class YOLOv11sPerformantRunner:
         spec = self.runner_infra.input_tensor.spec
         self.op_event = ttnn.record_event(self.device, 0)
         self.runner_infra.run()
-        self.runner_infra.validate()
         self.runner_infra.dealloc_output()
         ttnn.wait_for_event(1, self.op_event)
         ttnn.copy_host_to_device_tensor(self.tt_inputs_host, dram_buf(), 1)
@@ -80,7 +81,6 @@ class YOLOv11sPerformantRunner:
         self._dram_ping ^= 1
         self.op_event = ttnn.record_event(self.device, 0)
         self.runner_infra.run()
-        self.runner_infra.validate()
         ttnn.wait_for_event(1, self.op_event)
         ttnn.copy_host_to_device_tensor(self.tt_inputs_host, dram_buf(), 1)
         self.write_event = ttnn.record_event(self.device, 1)
@@ -111,8 +111,12 @@ class YOLOv11sPerformantRunner:
         return self.runner_infra.output_tensor
 
     def _validate(self, input_tensor, result_output_tensor):
-        torch_output_tensor = self.runner_infra.torch_output_tensor
-        assert_with_pcc(torch_output_tensor, result_output_tensor, 0.99)
+        if self.runner_infra.torch_output_tensor is None:
+            raise RuntimeError(
+                "check_pcc requires compute_torch_reference=True when constructing YOLOv11sPerformantRunner"
+            )
+        actual_torch = ttnn.to_torch(result_output_tensor, mesh_composer=self.mesh_composer)
+        assert_with_pcc(self.runner_infra.torch_output_tensor, actual_torch, 0.99)
 
     def run(self, torch_input_tensor=None, tt_inputs_host=None, check_pcc=False):
         if tt_inputs_host is not None:

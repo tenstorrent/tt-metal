@@ -115,6 +115,55 @@ def test_e2e_performant(
         (640, 640),
     ],
 )
+@run_for_wormhole_b0()
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": YOLOV11S_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
+)
+def test_e2e_performant_trace_matches_torch(
+    device,
+    batch_size_per_device,
+    act_dtype,
+    weight_dtype,
+    model_location_generator,
+    resolution,
+    reset_seeds,
+):
+    """Torch reference + PCC live here only; perf runner defaults skip host golden forward and validate()."""
+    inputs_mesh_mapper, weights_mesh_mapper, outputs_mesh_composer = get_mesh_mappers(device)
+    num_devices = device.get_num_devices()
+    batch_size = batch_size_per_device * num_devices
+    torch_input_tensor = torch.randn((batch_size, 3, *resolution), dtype=torch.float32)
+    runner = YOLOv11sPerformantRunner(
+        device,
+        batch_size_per_device,
+        act_dtype,
+        weight_dtype,
+        resolution=resolution,
+        torch_input_tensor=torch_input_tensor,
+        model_location_generator=model_location_generator,
+        inputs_mesh_mapper=inputs_mesh_mapper,
+        weights_mesh_mapper=weights_mesh_mapper,
+        outputs_mesh_composer=outputs_mesh_composer,
+        compute_torch_reference=True,
+    )
+    try:
+        runner.runner_infra.validate()
+    finally:
+        runner.release()
+
+
+@pytest.mark.parametrize(
+    "batch_size_per_device, act_dtype, weight_dtype",
+    ((1, ttnn.bfloat8_b, ttnn.bfloat8_b),),
+)
+@pytest.mark.parametrize(
+    "resolution",
+    [
+        (640, 640),
+    ],
+)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @run_for_wormhole_b0()

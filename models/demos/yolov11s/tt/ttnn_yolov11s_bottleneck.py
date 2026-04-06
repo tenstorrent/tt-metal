@@ -26,7 +26,7 @@ class TtnnBottleneck:
         else:
             residual = _to_l1_interleaved(residual)
             x = _to_l1_interleaved(x)
-            residual = residual[:, :, :hw, :]
-            x = x[:, :, :hw, :]
+            # residual = residual[:, :, :hw, :]
+            # x = x[:, :, :hw, :]
             x = ttnn.add(residual, x, memory_config=ttnn.L1_MEMORY_CONFIG)
         return x
