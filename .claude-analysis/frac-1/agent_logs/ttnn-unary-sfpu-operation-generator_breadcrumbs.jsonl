@@ -10,3 +10,11 @@
 {"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"hardsigmoid","background":true,"ts":"2026-04-06T09:25:56+00:00"}
 {"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"hardswish","background":true,"ts":"2026-04-06T09:25:56+00:00"}
 {"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"softshrink","background":true,"ts":"2026-04-06T09:25:56+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"hardswish","status":"ok","commit":"c48ffe76c8","ts":"2026-04-06T09:41:59+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"hardsigmoid","status":"ok","commit":"a0788e4da1","ts":"2026-04-06T09:41:59+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"softshrink","status":"ok","commit":"beb7424885","ts":"2026-04-06T09:41:59+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"hardtanh","status":"ok","commit":"93dfe1c099","ts":"2026-04-06T09:41:59+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"cbrt","status":"running","commit":"pending","ts":"2026-04-06T09:41:59+00:00"}
+{"event":"phase_complete","phase":2,"phase_name":"Reference Analysis","status":"ok","analyzers_completed":4,"analyzers_failed":0,"issues":["cbrt analyzer still running, proceeding with 4/5"],"ts":"2026-04-06T09:41:59+00:00"}
+{"event":"phase_start","phase":3,"phase_name":"Implementation","iteration":1,"ts":"2026-04-06T09:42:04+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-implementor","phase":3,"ts":"2026-04-06T09:42:04+00:00"}
