@@ -329,7 +329,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                 normalized_sampling_params, previous_sampling_params
             )
 
-            if self._get_sampling_value(normalized_sampling_params.top_k, 0) == 0 and sample_on_device:
+            if self._get_sampling_value(normalized_sampling_params.top_k, 0) == 0:
                 raise SystemExit(
                     "top-k=0 is not supported when sampling on device. Sampling on host instead. See https://github.com/tenstorrent/tt-metal/issues/40236"
                 )
