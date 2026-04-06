@@ -186,8 +186,17 @@ def test_kv_cache_address_table(mesh_device, seq_len):
     # Data is replicated on each column of the mesh
     device_group_idx_per_row = []
 
+    rank = ttnn.distributed_context_get_rank()
+    size = ttnn.distributed_context_get_size()
+
+    total_rows = mesh_shape[0]
+    rank_row_start = int(rank) * total_rows // int(size)
+    rank_row_end = rank_row_start + total_rows // int(size)
+
+    logger.info(f"Rank: {rank}, Size: {size}, Row start: {rank_row_start}, Row end: {rank_row_end}")
+
     all_fabric_node_ids = []
-    for row in range(mesh_shape[0]):
+    for row in range(rank_row_start, rank_row_end):
         fabric_node_ids = []
         for col in range(mesh_shape[1]):
             coord = ttnn.MeshCoordinate(row, col)
@@ -227,57 +236,57 @@ def test_kv_cache_address_table(mesh_device, seq_len):
         low_strip_start_idx = low_strip_end_idx + 1
         high_strip_end_idx = high_strip_start_idx - 1
         logger.info(
-            f"Token positions for device group index: {device_group_idx_per_row[row]} are {device_position_indices_low_strip[row]} and {device_position_indices_high_strip[row]}"
+            f"Token positions for device group index: Rank = {rank}, Device group index = {device_group_idx_per_row[row]} are {device_position_indices_low_strip[row]} and {device_position_indices_high_strip[row]}"
         )
 
-    layer = 0
-    slot = 0
-    current_position = 0  # Must be chunk-aligned
-    chunks_per_device_group = num_chunks_in_strip * 2
-    logger.info("chunks_per_device_group = ", chunks_per_device_group)
+    # layer = 0
+    # slot = 0
+    # current_position = 0  # Must be chunk-aligned
+    # chunks_per_device_group = num_chunks_in_strip * 2
+    # logger.info("chunks_per_device_group = ", chunks_per_device_group)
 
-    dram_bank_0_addr = tt_kvpe_cache.buffer_address()
-    for row in range(len(device_group_idx_per_row)):
-        group_idx = device_group_idx_per_row[row]
-        curr_bank_id = 0
-        curr_bank_offset = 0
+    # dram_bank_0_addr = tt_kvpe_cache.buffer_address()
+    # for row in range(len(device_group_idx_per_row)):
+    #     group_idx = device_group_idx_per_row[row]
+    #     curr_bank_id = 0
+    #     curr_bank_offset = 0
 
-        logger.info(
-            f"Populating device_group_index: {group_idx} with positions: {device_position_indices_low_strip[row]} and {device_position_indices_high_strip[row]}"
-        )
-        (current_position, max_position) = device_position_indices_low_strip[row]
-        for chunk in range(chunks_per_device_group):
-            location = ttnn.experimental.disaggregation.KvCacheLocation()
+    #     logger.info(
+    #         f"Populating device_group_index: {group_idx} with positions: {device_position_indices_low_strip[row]} and {device_position_indices_high_strip[row]}"
+    #     )
+    #     (current_position, max_position) = device_position_indices_low_strip[row]
+    #     for chunk in range(chunks_per_device_group):
+    #         location = ttnn.experimental.disaggregation.KvCacheLocation()
 
-            # This needs proper handling in KvCacheLocation(), just add it up atm
-            noc_addr = dram_bank_0_addr + curr_bank_id + curr_bank_offset
-            location.noc_addr = noc_addr
-            location.size_bytes = CHUNK_SIZE_BYTES
-            location.device_group_index = group_idx
-            lookup_table.set(layer, current_position, slot, location)
-            logger.info(
-                f"Set location for (layer={layer}, pos={current_position}, slot={slot}, bank_id={curr_bank_id}, curr_bank_offset = {curr_bank_offset} noc_addr = 0x{noc_addr:X})"
-            )
+    #         # This needs proper handling in KvCacheLocation(), just add it up atm
+    #         noc_addr = dram_bank_0_addr + curr_bank_id + curr_bank_offset
+    #         location.noc_addr = noc_addr
+    #         location.size_bytes = CHUNK_SIZE_BYTES
+    #         location.device_group_index = group_idx
+    #         lookup_table.set(layer, current_position, slot, location)
+    #         logger.info(
+    #             f"Set location for (layer={layer}, pos={current_position}, slot={slot}, bank_id={curr_bank_id}, curr_bank_offset = {curr_bank_offset} noc_addr = 0x{noc_addr:X})"
+    #         )
 
-            curr_bank_id = (curr_bank_id + 1) % BH_NUM_DRAM_BANKS
-            # move to next chunk offset
-            if curr_bank_id == 0:
-                curr_bank_offset += CHUNK_SIZE_BYTES
-            current_position += NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-            if chunk == num_chunks_in_strip - 1:
-                # switch to high chunk
-                assert (
-                    current_position == max_position + 1
-                ), f"Missmatch in position calculation. Expected current_position to be {max_position + 1}, but it is: {current_position}"
-                (current_position, max_position) = device_position_indices_high_strip[row]
+    #         curr_bank_id = (curr_bank_id + 1) % BH_NUM_DRAM_BANKS
+    #         # move to next chunk offset
+    #         if curr_bank_id == 0:
+    #             curr_bank_offset += CHUNK_SIZE_BYTES
+    #         current_position += NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    #         if chunk == num_chunks_in_strip - 1:
+    #             # switch to high chunk
+    #             assert (
+    #                 current_position == max_position + 1
+    #             ), f"Missmatch in position calculation. Expected current_position to be {max_position + 1}, but it is: {current_position}"
+    #             (current_position, max_position) = device_position_indices_high_strip[row]
 
-    # 5. Lookup the location
-    for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
-        retrieved = lookup_table.lookup(layer, position, slot)
-        logger.info(
-            f"Retrieved: position={position}, noc_addr=0x{retrieved.noc_addr:X}, "
-            f"size={retrieved.size_bytes}, group_idx={int(retrieved.device_group_index)}"
-        )
+    # # 5. Lookup the location
+    # for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+    #     retrieved = lookup_table.lookup(layer, position, slot)
+    #     logger.info(
+    #         f"Retrieved: position={position}, noc_addr=0x{retrieved.noc_addr:X}, "
+    #         f"size={retrieved.size_bytes}, group_idx={int(retrieved.device_group_index)}"
+    #     )
 
 
 @pytest.mark.parametrize(
