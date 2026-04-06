@@ -524,43 +524,34 @@ static void run_quasar_pack_untilize_test(
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize1x1) {
     run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 1, 1, PackUntilizeMode::BLOCK);
 }
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize1x2) {
-    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 1, 2, PackUntilizeMode::BLOCK);
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize4x12) {
+    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 4, 12, PackUntilizeMode::BLOCK);
 }
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize2x1) {
-    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 2, 1, PackUntilizeMode::BLOCK);
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize8x8) {
+    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 8, 8, PackUntilizeMode::BLOCK);
 }
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize2x2) {
-    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 2, 2, PackUntilizeMode::BLOCK);
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize40x2) {
+    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 40, 2, PackUntilizeMode::BLOCK);
 }
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize4x4) {
-    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 4, 4, PackUntilizeMode::BLOCK);
-}
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize4x8) {
-    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 4, 8, PackUntilizeMode::BLOCK);
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize2x40) {
+    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 2, 40, PackUntilizeMode::BLOCK);
 }
 
 // Pack Untilize Dst (tiles pre-loaded into dest via copy_tile)
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst1x1) {
     run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 1, 1, PackUntilizeMode::DST);
 }
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst1x2) {
-    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 1, 2, PackUntilizeMode::DST);
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst4x12) {
+    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 4, 12, PackUntilizeMode::DST);
 }
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst2x1) {
-    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 2, 1, PackUntilizeMode::DST);
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst8x8) {
+    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 8, 8, PackUntilizeMode::DST);
 }
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst2x2) {
-    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 2, 2, PackUntilizeMode::DST);
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst40x2) {
+    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 40, 2, PackUntilizeMode::DST);
 }
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst4x2) {
-    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 4, 2, PackUntilizeMode::DST);
-}
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst8x2) {
-    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 8, 2, PackUntilizeMode::DST);
-}
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst2x8) {
-    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 2, 8, PackUntilizeMode::DST);
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst2x40) {
+    run_quasar_pack_untilize_test(this->devices_.at(0)->get_devices()[0], 2, 40, PackUntilizeMode::DST);
 }
 
 /**************************************
