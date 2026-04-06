@@ -110,16 +110,18 @@ def test_forward_pass(
         layer_id=reference_layernorm_path if reference_layernorm_path is not None else hf_config_size_attr,
     )
     model_config = get_model_config(RMSNormClass, mode, hf_config, mesh_device)
-    model_state = RMSNormClass.create_state(
-        hf_config, mesh_device, *[ccl for _ in range(1) if RMSNormClass is DistributedRMSNorm]
-    )
+    if RMSNormClass is DistributedRMSNorm:
+        # Use create_shared_state to get semaphore and persistent_tensor
+        model_state = RMSNormClass.create_shared_state(hf_config, mesh_device)
+    else:
+        model_state = RMSNormClass.create_state(hf_config, mesh_device)
     run_config = create_run_config(model_config, weight_config, model_state)
 
     # Convert the input to TTNN tensor
     if RMSNormClass is DistributedRMSNorm:
-        memory_config = run_config["input_memory_config"]
+        input_memory_config = run_config["input_memory_config"]
     else:
-        memory_config = ttnn.L1_MEMORY_CONFIG
+        input_memory_config = ttnn.L1_MEMORY_CONFIG
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
@@ -127,14 +129,20 @@ def test_forward_pass(
             mesh_device, mesh_device.shape, dims=(0, -1 if RMSNormClass is DistributedRMSNorm else None)
         ),
         dtype=ttnn.bfloat16,
-        memory_config=memory_config,
+        memory_config=input_memory_config,
         layout=ttnn.TILE_LAYOUT,
     )
 
     # Run TTNN forward pass
     if mode == "decode":
-        tt_output = RMSNormClass.forward_decode(
-            tt_input, run_config, memory_config=memory_config, output_memory_config=memory_config
+        output_memory_config = input_memory_config
+        tt_output = run_module_forward(
+            RMSNormClass,
+            mode,
+            tt_input,
+            run_config,
+            memory_config=input_memory_config,
+            output_memory_config=output_memory_config,
         )
     else:
         tt_output = run_module_forward(RMSNormClass, mode, tt_input, run_config)
