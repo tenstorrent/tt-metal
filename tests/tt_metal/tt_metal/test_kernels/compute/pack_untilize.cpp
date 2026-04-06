@@ -23,12 +23,12 @@ constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) 
 void kernel_main() {
     constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     constexpr uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
-#ifdef ARCH_QUASAR
-    constexpr uint32_t cb_in0 = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_out0 = get_compile_time_arg_val(3);
-#else
+#ifndef ARCH_QUASAR
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
+#else
+    constexpr uint32_t dfb_in0 = get_compile_time_arg_val(2);
+    constexpr uint32_t dfb_out0 = get_compile_time_arg_val(3);
 #endif
 
     // Compute optimal num_blocks_per_col and block_ct_dim
@@ -36,6 +36,7 @@ void kernel_main() {
     constexpr uint32_t block_ct_dim = per_core_block_tile_cnt / num_blocks_per_col;
     constexpr uint32_t full_ct_dim = per_core_block_tile_cnt;
 
+#ifndef ARCH_QUASAR
     compute_kernel_hw_startup(cb_in0, cb_out0);
     pack_untilize_init<block_ct_dim, full_ct_dim>(cb_in0, cb_out0);
 
@@ -51,4 +52,21 @@ void kernel_main() {
     }
 
     pack_untilize_uninit(cb_out0);
+#else
+    compute_kernel_hw_startup(dfb_in0, dfb_out0);
+    pack_untilize_init<block_ct_dim, full_ct_dim>(dfb_in0, dfb_out0);
+
+    for (uint32_t r = 0; r < per_core_block_cnt; ++r) {
+        cb_reserve_back(dfb_out0, full_ct_dim);
+
+        for (uint32_t b = 0; b < num_blocks_per_col; ++b) {
+            cb_wait_front(dfb_in0, block_ct_dim);
+            pack_untilize_block<block_ct_dim, full_ct_dim>(dfb_in0, 1, dfb_out0, b);
+            cb_pop_front(dfb_in0, block_ct_dim);
+        }
+        cb_push_back(dfb_out0, full_ct_dim);
+    }
+
+    pack_untilize_uninit(dfb_out0);
+#endif
 }
