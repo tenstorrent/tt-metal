@@ -15,6 +15,9 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 )
 from models.common.utility_functions import torch2tt_tensor
 
+# Sharded LN still uses TILE storage per shard; poison implicit tile padding on activations (#31982).
+TEST_PADDING_VALUE = -42
+
 
 def rms_norm(x, dim, gamma, beta, eps):
     return x * torch.rsqrt(x.pow(2).mean([-i for i in range(1, len(dim) + 1)], keepdim=True) + eps) * gamma + beta
@@ -90,6 +93,7 @@ def test_layernorm_sharded_mix_precision_rm(
 
     in0 = torch.rand(in0_shape) * 2 - 0.95
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
+    in0_t = ttnn.fill_implicit_tile_padding(in0_t, TEST_PADDING_VALUE)
     shard_shape = [M // grid_size[0], math.ceil(K / grid_size[1] / 32) * 32]
     in0_t_shard = ttnn.interleaved_to_sharded(
         in0_t,
@@ -98,10 +102,12 @@ def test_layernorm_sharded_mix_precision_rm(
         ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ttnn.ShardOrientation.COL_MAJOR,
     )
+    in0_t_shard = ttnn.fill_implicit_tile_padding(in0_t_shard, TEST_PADDING_VALUE)
 
     if test_id <= 5:
         in1 = torch.rand(in0_shape) * 2 - 0.8
         in1_t = torch2tt_tensor(in1, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
+        in1_t = ttnn.fill_implicit_tile_padding(in1_t, TEST_PADDING_VALUE)
         in1_t_shard = ttnn.interleaved_to_sharded(
             in1_t,
             grid_size,
@@ -109,6 +115,7 @@ def test_layernorm_sharded_mix_precision_rm(
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             ttnn.ShardOrientation.COL_MAJOR,
         )
+        in1_t_shard = ttnn.fill_implicit_tile_padding(in1_t_shard, TEST_PADDING_VALUE)
 
     if test_id % 3 == 0:
         gamma = torch.ones(in0_shape[3])
@@ -360,6 +367,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
 
     in0 = torch.rand(in0_shape) * 2 - 0.95
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
+    in0_t = ttnn.fill_implicit_tile_padding(in0_t, TEST_PADDING_VALUE)
     shard_shape = [M, math.ceil(K / (grid_size[0] * grid_size[1]) / 32) * 32]
     in0_t_shard = ttnn.interleaved_to_sharded(
         in0_t,
@@ -368,10 +376,12 @@ def test_layernorm_1d_sharded_mix_precision_rm(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         shard_orientation,
     )
+    in0_t_shard = ttnn.fill_implicit_tile_padding(in0_t_shard, TEST_PADDING_VALUE)
 
     if test_id <= 5:
         in1 = torch.rand(in0_shape) * 2 - 0.8
         in1_t = torch2tt_tensor(in1, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
+        in1_t = ttnn.fill_implicit_tile_padding(in1_t, TEST_PADDING_VALUE)
         in1_t_shard = ttnn.interleaved_to_sharded(
             in1_t,
             grid_size,
@@ -379,6 +389,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             shard_orientation,
         )
+        in1_t_shard = ttnn.fill_implicit_tile_padding(in1_t_shard, TEST_PADDING_VALUE)
 
     if test_id % 3 == 0:
         gamma = torch.ones(in0_shape[3])
