@@ -4,33 +4,27 @@
 """
 Gemma4 Routed Experts module.
 
-128 experts, top-8 routing, GeGLU activation (no bias).
-moe_intermediate_size = 704 per expert.
-
-HF weight shapes (fused):
-  gate_up_proj: [128, 1408, 2816]  (1408 = 2 * 704, gate and up fused)
-  down_proj: [128, 2816, 704]
-
-Forward per expert:
-  gate, up = linear(x, gate_up_proj[e]).chunk(2)
-  output = linear(gelu(gate) * up, down_proj[e])
+Decode (seq_len=1): on-device via sparse_matmul
+Prefill (seq_len>1): CPU fallback (sparse_matmul only supports batch=1)
 """
 
 import torch
 import torch.nn.functional as F
 
 import ttnn
-from models.demos.gemma4.config import MeshConfig, Mode
+
+from .decode import decode_forward
+from .weights import ExpertWeights, load_expert_weights
 
 
 class Gemma4ExpertConfig:
     """Configuration for the routed experts, derived from HF config."""
 
     def __init__(self, hf_config):
-        self.hidden_size = hf_config.hidden_size  # 2816
-        self.num_experts = hf_config.num_experts  # 128
-        self.top_k = hf_config.top_k_experts  # 8
-        self.moe_intermediate_size = hf_config.moe_intermediate_size  # 704
+        self.hidden_size = hf_config.hidden_size
+        self.num_experts = hf_config.num_experts
+        self.top_k = hf_config.top_k_experts
+        self.moe_intermediate_size = hf_config.moe_intermediate_size
 
 
 class Gemma4Experts:
@@ -50,55 +44,89 @@ class Gemma4Experts:
         self.ccl_manager = ccl_manager
         self.mesh_config = mesh_config
 
-        # Load fused gate_up_proj and down_proj as torch tensors
-        # These are 3D: [num_experts, intermediate, hidden] and [num_experts, hidden, intermediate]
-        # We keep them on CPU and index per-expert during forward
-        if state_dict and "gate_up_proj" in state_dict:
-            self.gate_up_proj = state_dict["gate_up_proj"]  # [128, 1408, 2816]
-            self.down_proj = state_dict["down_proj"]  # [128, 2816, 704]
+        # Load weights to device for sparse_matmul (decode)
+        if mesh_device is not None:
+            self.weights = load_expert_weights(
+                mesh_device=mesh_device,
+                config=config,
+                state_dict=state_dict,
+                weight_dtype=weight_dtype,
+                tensor_cache_path=tensor_cache_path,
+            )
         else:
-            self.gate_up_proj = None
-            self.down_proj = None
+            self.weights = None
 
-    def __call__(self, hidden_states, top_k_indices, top_k_weights):
+        # Keep CPU weights for prefill fallback
+        if state_dict and "gate_up_proj" in state_dict:
+            self.gate_up_proj_cpu = state_dict["gate_up_proj"]
+            self.down_proj_cpu = state_dict["down_proj"]
+        else:
+            self.gate_up_proj_cpu = None
+            self.down_proj_cpu = None
+
+    def __call__(self, hidden_states, dense_routing):
         """
-        Routed expert forward pass (CPU-based for correctness, matching HF reference).
+        Expert forward. Dispatches to on-device (decode) or CPU (prefill).
 
         Args:
-            hidden_states: torch.Tensor [seq_len, hidden_size] (flattened, on CPU)
-            top_k_indices: torch.Tensor [seq_len, top_k] - selected expert indices
-            top_k_weights: torch.Tensor [seq_len, top_k] - routing weights
+            hidden_states: [1, 1, seq_len, hidden_size] on device
+            dense_routing: [1, 1, seq_len, num_experts] on device
 
         Returns:
-            output: torch.Tensor [seq_len, hidden_size]
+            output: [1, 1, seq_len, hidden_size] on device
         """
-        if self.gate_up_proj is None:
-            return torch.zeros_like(hidden_states)
+        seq_len = hidden_states.shape[2]
 
-        final_hidden_states = torch.zeros_like(hidden_states)
+        if seq_len == 1 and self.weights is not None:
+            # Decode: on-device sparse_matmul
+            return decode_forward(
+                hidden_states=hidden_states,
+                routing_weights=dense_routing,
+                weights=self.weights,
+                config=self.config,
+            )
+        else:
+            # Prefill: CPU fallback (sparse_matmul only supports seq_len=1)
+            return self._cpu_forward(hidden_states, dense_routing)
 
-        # Build expert mask to find which experts have tokens
+    def _cpu_forward(self, hidden_states, dense_routing):
+        """CPU expert forward for prefill (seq_len > 1)."""
+        if self.gate_up_proj_cpu is None:
+            return hidden_states
+
+        is_mesh = hasattr(self.mesh_device, "shape")
+        h_cpu = ttnn.get_device_tensors(hidden_states)[0] if is_mesh else hidden_states
+        r_cpu = ttnn.get_device_tensors(dense_routing)[0] if is_mesh else dense_routing
+
+        x_torch = ttnn.to_torch(h_cpu).reshape(-1, self.config.hidden_size)
+        routing_torch = ttnn.to_torch(r_cpu).reshape(-1, self.config.num_experts)
+        seq_len = x_torch.shape[0]
+
+        # Convert dense routing to sparse (indices + weights)
+        top_k_weights, top_k_indices = torch.topk(routing_torch.float(), k=self.config.top_k, dim=-1)
+
+        final = torch.zeros_like(x_torch)
         with torch.no_grad():
-            expert_mask = F.one_hot(top_k_indices, num_classes=self.config.num_experts)
-            # expert_mask: [seq_len, top_k, num_experts] -> [num_experts, top_k, seq_len]
-            expert_mask = expert_mask.permute(2, 1, 0)
+            expert_mask = F.one_hot(top_k_indices.long(), num_classes=self.config.num_experts).permute(2, 1, 0)
             expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
 
-        for expert_idx in expert_hit:
-            expert_idx = expert_idx[0]
-            if expert_idx == self.config.num_experts:
+        for eidx in expert_hit:
+            eidx = eidx[0]
+            if eidx == self.config.num_experts:
                 continue
+            top_k_pos, token_idx = torch.where(expert_mask[eidx])
+            cur = x_torch[token_idx]
+            gate, up = F.linear(cur.float(), self.gate_up_proj_cpu[eidx].float()).chunk(2, dim=-1)
+            out = F.linear(F.gelu(gate, approximate="tanh") * up, self.down_proj_cpu[eidx].float())
+            out = out * top_k_weights[token_idx, top_k_pos, None]
+            final.index_add_(0, token_idx, out.to(final.dtype))
 
-            top_k_pos, token_idx = torch.where(expert_mask[expert_idx])
-            current_state = hidden_states[token_idx]
-
-            # Fused gate+up: [1408, 2816] @ [tokens, 2816].T -> [tokens, 1408] -> chunk into [tokens, 704] x 2
-            gate, up = F.linear(current_state.float(), self.gate_up_proj[expert_idx].float()).chunk(2, dim=-1)
-            current_hidden_states = F.gelu(gate, approximate="tanh") * up
-            current_hidden_states = F.linear(current_hidden_states, self.down_proj[expert_idx].float())
-
-            # Weight by routing weights
-            current_hidden_states = current_hidden_states * top_k_weights[token_idx, top_k_pos, None].float()
-            final_hidden_states.index_add_(0, token_idx, current_hidden_states.to(final_hidden_states.dtype))
-
-        return final_hidden_states
+        result_4d = final.reshape(1, 1, seq_len, self.config.hidden_size)
+        result_tt = ttnn.from_torch(
+            result_4d,
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh else None,
+        )
+        return result_tt

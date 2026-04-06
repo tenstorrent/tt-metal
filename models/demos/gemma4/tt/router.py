@@ -2,12 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Gemma4 Router: RMSNorm -> scale -> linear -> softmax -> topk -> normalize -> per_expert_scale
+Gemma4 Router: RMSNorm -> scale -> linear -> softmax -> topk -> normalize -> per_expert_scale -> scatter
 
+Fully on-device. Returns dense routing weights [1,1,S,E] on device for sparse_matmul.
 Gemma4 uses softmax-THEN-topk (opposite of GPT-OSS).
-
-On-device operations: norm, scale, linear, softmax, topk
-CPU operations: normalize, per_expert_scale (small [seq_len, top_k] tensors)
 """
 
 import torch
@@ -26,7 +24,6 @@ class Gemma4Router:
         self.hidden_size = hf_config.hidden_size
         self.scalar_root_size = self.hidden_size**-0.5
 
-        # RMSNorm with no learned scale (with_scale=False)
         self.norm = RMSNorm(
             mesh_device=mesh_device,
             hf_config=hf_config,
@@ -36,11 +33,8 @@ class Gemma4Router:
         )
 
         if state_dict:
-            # scale: [hidden_size] -> [1, 1, 1, hidden_size] for broadcast multiply
             scale_weight = state_dict["scale"].reshape(1, 1, 1, -1)
-            # proj.weight: [num_experts, hidden_size] -> transpose to [1, 1, hidden_size, num_experts]
             proj_weight = substate(state_dict, "proj")["weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
-            # per_expert_scale: kept on CPU for post-topk indexing
             self.per_expert_scale_torch = state_dict["per_expert_scale"]
         else:
             scale_weight = None
@@ -72,24 +66,23 @@ class Gemma4Router:
 
     def __call__(self, hidden_states):
         """
-        Route tokens to experts.
+        Route tokens to experts. Returns dense routing weights on device.
 
         Args:
-            hidden_states: [1, 1, seq_len, hidden_size] on device, TILE_LAYOUT
+            hidden_states: [1, 1, seq_len, hidden_size] on device
 
         Returns:
-            top_k_weights: [seq_len, top_k] torch tensor (CPU)
-            top_k_indices: [seq_len, top_k] torch tensor (CPU)
+            dense_routing: [1, 1, seq_len, num_experts] on device — weights at selected experts, zeros elsewhere
         """
-        # 1. RMSNorm (no learned weight) — on device
+        # 1. RMSNorm — on device
         normed = self.norm.forward(hidden_states)
 
-        # 2. Scale: normed * scale * scalar_root_size — on device
+        # 2. Scale — on device
         scaled = ttnn.mul(normed, self.scale)
         normed.deallocate(True)
         scaled = ttnn.mul(scaled, self.scalar_root_size)
 
-        # 3. Linear projection -> [1, 1, seq_len, num_experts] — on device
+        # 3. Linear projection → [1, 1, seq_len, num_experts] — on device
         expert_scores = ttnn.linear(scaled, self.proj_weight)
         scaled.deallocate(True)
 
@@ -97,23 +90,52 @@ class Gemma4Router:
         router_probs = ttnn.softmax(expert_scores, dim=-1)
         expert_scores.deallocate(True)
 
-        # 5. TopK — on device
-        top_k_values, top_k_indices_tt = ttnn.topk(router_probs, k=self.top_k, dim=-1)
-        router_probs.deallocate(True)
+        # 5. TopK — on device → values [1,1,S,k], indices [1,1,S,k]
+        top_k_values, top_k_indices = ttnn.topk(router_probs, k=self.top_k, dim=-1)
 
-        # Move small [seq_len, top_k] tensors to CPU for normalize + per_expert_scale
+        # 6-7. Normalize + per_expert_scale — CPU (small [S, top_k] tensors)
+        # Move to CPU for indexing (per_expert_scale[indices])
         if hasattr(self.mesh_device, "shape"):
-            top_k_values = ttnn.get_device_tensors(top_k_values)[0]
-            top_k_indices_tt = ttnn.get_device_tensors(top_k_indices_tt)[0]
+            tkv_cpu = ttnn.get_device_tensors(top_k_values)[0]
+            tki_cpu = ttnn.get_device_tensors(top_k_indices)[0]
+        else:
+            tkv_cpu = top_k_values
+            tki_cpu = top_k_indices
 
-        top_k_weights = ttnn.to_torch(top_k_values).squeeze(0).squeeze(0).float()
-        top_k_indices = ttnn.to_torch(top_k_indices_tt).squeeze(0).squeeze(0).to(torch.int64)
+        weights_torch = ttnn.to_torch(tkv_cpu).float()
+        indices_torch = ttnn.to_torch(tki_cpu).to(torch.int64)
 
-        # 6. Normalize weights to sum to 1 — CPU (small tensor)
-        top_k_weights = top_k_weights / top_k_weights.sum(dim=-1, keepdim=True)
+        # Normalize
+        weights_torch = weights_torch / weights_torch.sum(dim=-1, keepdim=True)
 
-        # 7. Apply per-expert scale — CPU (small tensor, requires indexing)
+        # Per-expert scale
         if self.per_expert_scale_torch is not None:
-            top_k_weights = top_k_weights * self.per_expert_scale_torch[top_k_indices].float()
+            weights_torch = weights_torch * self.per_expert_scale_torch[indices_torch.squeeze(0).squeeze(0)].float()
 
-        return top_k_weights.to(torch.bfloat16), top_k_indices
+        # 8. Scatter into dense [1,1,S,E] — on device
+        # Create zeros and scatter scaled weights at selected expert positions
+        weights_scaled = weights_torch.to(torch.bfloat16)
+        zeros = torch.zeros(
+            router_probs.shape[0],
+            router_probs.shape[1],
+            router_probs.shape[2],
+            self.num_experts,
+            dtype=torch.bfloat16,
+        )
+        # scatter_: put weights at index positions
+        zeros.scatter_(-1, indices_torch.to(torch.int64), weights_scaled)
+
+        is_mesh = hasattr(self.mesh_device, "shape")
+        dense_routing = ttnn.from_torch(
+            zeros,
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh else None,
+        )
+
+        router_probs.deallocate(True)
+        top_k_values.deallocate(True)
+        top_k_indices.deallocate(True)
+
+        return dense_routing

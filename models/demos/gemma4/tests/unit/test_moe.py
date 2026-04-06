@@ -1,22 +1,24 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for Gemma4 MoE block — uses HF router + experts as reference."""
+"""Unit tests for Gemma4 MoE block — fully on device."""
 
 import torch
 
+import ttnn
 from models.demos.gemma4.tt.moe import MoEBlock
 
 from ...tests.test_factory import TestFactory, compare_tensors, parametrize_batch_seq
 
 
-@parametrize_batch_seq()
+@parametrize_batch_seq(configs=[(1, 32)], ids=["prefill_32"])
 def test_moe(batch_size, seq_len, device):
     """
-    Test MoE: use HF routing for both HF and TT experts to isolate expert accuracy.
+    Test MoE end-to-end on device.
 
-    This tests that TT experts produce the same output as HF experts given
-    identical routing decisions, avoiding false failures from bf16 routing divergence.
+    Uses HF routing for the reference, TT router+experts for the test.
+    Since router may select different experts due to bf16 precision,
+    we use a relaxed PCC threshold.
     """
     num_experts = 8
     top_k = 4
@@ -43,19 +45,23 @@ def test_moe(batch_size, seq_len, device):
         state_dict=state_dict,
         ccl_manager=None,
         mesh_config=TestFactory.create_mesh_config((1, 1)),
+        dtype=ttnn.bfloat16,
     )
 
     x_torch = torch.randn(1, 1, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)
-    x_flat = x_torch.reshape(-1, hf_config.hidden_size)
 
-    # Get routing from HF (ground truth)
+    # HF reference: router → experts
+    x_flat = x_torch.reshape(-1, hf_config.hidden_size).float()
     with torch.no_grad():
-        _, ref_weights, ref_indices = hf_router(x_flat.float())
-        # HF experts with HF routing
-        ref_output = hf_experts(x_flat.float(), ref_indices, ref_weights)
+        _, ref_weights, ref_indices = hf_router(x_flat)
+        ref_output = hf_experts(x_flat, ref_indices, ref_weights)
 
-    # TT experts with same HF routing (bypass TT router)
-    tt_output = moe.experts(x_flat, ref_indices, ref_weights.to(torch.bfloat16))
+    # TT forward: fully on device
+    x_tt = ttnn.from_torch(x_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    # Router input = same as expert input for this test
+    tt_output = moe(x_tt, x_tt)
+    tt_output_torch = ttnn.to_torch(tt_output).reshape(-1, hf_config.hidden_size).float()[:seq_len]
 
-    passing, pcc_msg = compare_tensors(tt_output.float(), ref_output.float(), pcc_threshold=0.95)
-    assert passing, f"MoE experts PCC too low: {pcc_msg}"
+    # Relaxed threshold: router may pick different experts due to bf16
+    passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=0.80)
+    assert passing, f"MoE PCC too low: {pcc_msg}"

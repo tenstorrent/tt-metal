@@ -178,34 +178,18 @@ class Gemma4DecoderLayer:
             mlp_normed = self.post_feedforward_layernorm_1.forward(mlp_output)
             mlp_output.deallocate(True)
 
-            # Router input = pre-MLP residual (flattened)
-            # pre_feedforward_layernorm_2 on expert input
-            residual_for_router = residual  # Keep on device for router
+            # Router input = pre-MLP residual, expert input = normed residual
+            # All on device — no CPU round-trip
+            residual_for_router = residual
             expert_input = self.pre_feedforward_layernorm_2.forward(residual_for_router)
 
-            # Move expert input to CPU for expert computation
-            # On mesh devices, extract device 0 (all devices have same replicated data)
-            expert_input_for_cpu = expert_input
-            if hasattr(self.mesh_device, "shape"):
-                expert_input_for_cpu = ttnn.get_device_tensors(expert_input)[0]
-            expert_input_torch = ttnn.to_torch(expert_input_for_cpu).reshape(-1, self.hidden_size)
+            # MoE: router(residual) → dense_routing → experts(normed_input, routing)
+            expert_output = self.moe(residual_for_router, expert_input)
             expert_input.deallocate(True)
 
-            # MoE: router(residual) -> experts(normed_residual)
-            expert_output_torch = self.moe(residual_for_router, expert_input_torch)
-
             # post_feedforward_layernorm_2 on expert output
-            expert_output_4d = expert_output_torch.reshape(1, 1, -1, self.hidden_size)
-            is_mesh = hasattr(self.mesh_device, "shape")
-            expert_output_tt = ttnn.from_torch(
-                expert_output_4d,
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh else None,
-            )
-            expert_normed = self.post_feedforward_layernorm_2.forward(expert_output_tt)
-            expert_output_tt.deallocate(True)
+            expert_normed = self.post_feedforward_layernorm_2.forward(expert_output)
+            expert_output.deallocate(True)
 
             # Combine: mlp_normed + expert_normed
             hidden_states = ttnn.add(mlp_normed, expert_normed)
