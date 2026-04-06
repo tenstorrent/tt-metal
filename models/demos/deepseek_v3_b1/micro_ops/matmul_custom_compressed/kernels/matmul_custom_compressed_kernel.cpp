@@ -19,7 +19,9 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/compute_kernel_api.h"
+#include "../../../kernel_includes/tt_metal/include/compute_kernel_api/compressed_custom_mm.h"
 #include "../../../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
+#include "../../../kernel_includes/tt_metal/include/compute_kernel_api/pmp.h"
 using namespace ckernel;
 #include "../../../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/constexpr_args.h"
 #include "../../../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_custom_mm_compressed_constexpr_compact.h"
@@ -27,8 +29,9 @@ using namespace ckernel;
 #include "../../../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_custom_mm_compressed_runtime.h"
 
 #ifndef COMPRESSED_MM_IMPL
-#define COMPRESSED_MM_IMPL 0
+#define COMPRESSED_MM_IMPL -1
 #endif
+
 #elif defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
 #endif
@@ -72,6 +75,11 @@ void kernel_main() {
         addr_in1 = get_local_cb_interface(in1_id).fifo_rd_ptr - 1;
         in0_face_r_dim = get_operand_face_r_dim(in0_id);
     }));
+    MATH(({
+        uint32_t in0_id = get_operand_id(cb_in0);
+        uint32_t in1_id = get_operand_id(cb_in1);
+        in0_face_r_dim = get_operand_face_r_dim(in0_id);
+    }));
 
     // Reserve output tiles
     cb_reserve_back(cb_out, out_w);
@@ -79,30 +87,55 @@ void kernel_main() {
     tile_regs_acquire();
 
     constexpr uint32_t total_tiles = num_tiles_k * out_w;
+    constexpr bool use_barrier = COMPRESSED_MM_IMPL == 3 || COMPRESSED_MM_IMPL == 4 || COMPRESSED_MM_IMPL == 5;
+    constexpr bool transpose = false;
+    constexpr bool split_acc = true;
+    constexpr bool dense_packing = true;
+    constexpr bool clear_src = true;
 
-#if COMPRESSED_MM_IMPL == 1 || COMPRESSED_MM_IMPL == 2
-    // Constexpr paths: no barrier (RISC-V does format reconfig at sync points)
-    compressed::custom_mm_compressed_block_init_short<false, out_w, true, true>(cb_in0, cb_in1, cb_out);
+#if COMPRESSED_MM_IMPL != 6
+    compressed::custom_mm_compressed_block_init_short<use_barrier, out_w, split_acc, dense_packing>(
+        cb_in0, cb_in1, cb_out);
+#else
+    compressed_custom_mm_block_init_short<transpose, split_acc, dense_packing>(cb_in0, cb_in1, cb_out);
+#endif
+
+#if COMPRESSED_MM_IMPL == 1 || COMPRESSED_MM_IMPL == 2 || COMPRESSED_MM_IMPL == 4 || COMPRESSED_MM_IMPL == 5
     constexpr uint32_t fmt_cta_base = get_named_compile_time_arg_val("fmt_cta_base");
     constexpr uint32_t num_packed = (total_tiles + compressed::TILES_PER_UINT32 - 1) / compressed::TILES_PER_UINT32;
     static constexpr auto fmt_packed = compressed::fill_cta_array<uint32_t, fmt_cta_base, num_packed>();
-#if COMPRESSED_MM_IMPL == 2
-    compressed::custom_mm_compressed_block_constexpr<num_tiles_k, out_w, num_packed, fmt_packed>(
-        addr_in0, addr_in1, in0_face_r_dim, 0);
-#else
-    compressed::custom_mm_compressed_block_compact<num_tiles_k, out_w, num_packed, fmt_packed>(
-        addr_in0, addr_in1, in0_face_r_dim, 0);
-#endif
-#elif COMPRESSED_MM_IMPL == 0
-    // Runtime path: barriers needed (format switching happens inside MOP without RISC-V sync)
-    compressed::custom_mm_compressed_block_init_short<true, out_w, true, true>(cb_in0, cb_in1, cb_out);
-    // Runtime loop: read packed pairs from L1 tensor
+#elif COMPRESSED_MM_IMPL == 0 || COMPRESSED_MM_IMPL == 3 || COMPRESSED_MM_IMPL == 6
     constexpr uint32_t fmt_l1_addr = get_named_compile_time_arg_val("fmt_l1_addr");
-    compressed::custom_mm_compressed_block_runtime<num_tiles_k, out_w>(
-        fmt_l1_addr, addr_in0, addr_in1, in0_face_r_dim, 0);
 #else
-#error "Invalid COMPRESSED_MM_IMPL: expected 0 (runtime), 1 (constexpr_compact), or 2 (constexpr_unroll)"
+#error \
+    "Invalid COMPRESSED_MM_IMPL: expected 0 (runtime), 1 (constexpr_compact), 2 (constexpr_unroll), 3 (runtime barrier), 4 (constexpr_compact barrier), 5 (constexpr_unroll barrier), 6 (new)"
 #endif
+
+    pmp_run(
+        [&] {
+#if COMPRESSED_MM_IMPL == 0 || COMPRESSED_MM_IMPL == 3
+            compressed::custom_mm_compressed_block_runtime<num_tiles_k, out_w>(
+                fmt_l1_addr, addr_in0, addr_in1, in0_face_r_dim, 0);
+#elif COMPRESSED_MM_IMPL == 1 || COMPRESSED_MM_IMPL == 4
+            compressed::custom_mm_compressed_block_constexpr<num_tiles_k, out_w, num_packed, fmt_packed>(
+                addr_in0, addr_in1, in0_face_r_dim, 0);
+#elif COMPRESSED_MM_IMPL == 2 || COMPRESSED_MM_IMPL == 5
+            compressed::custom_mm_compressed_block_compact<num_tiles_k, out_w, num_packed, fmt_packed>(
+                addr_in0, addr_in1, in0_face_r_dim, 0);
+#elif COMPRESSED_MM_IMPL == 6
+            compressed_custom_mm_block<split_acc, clear_src>(cb_in0, cb_in1, fmt_l1_addr, 0, num_tiles_k, out_w);
+#endif
+        },
+        [&] {
+#if defined(DEBUG_PRINT_ENABLED)
+            DEVICE_PRINT_UNPACK(
+                "Case: M={} K={} N={} IMPL={}\n",
+                get_operand_face_r_dim(cb_in0),
+                num_tiles_k,
+                out_w,
+                (uint32_t)COMPRESSED_MM_IMPL);
+#endif
+        });
 
     tile_regs_commit();
     tile_regs_wait();
@@ -111,7 +144,7 @@ void kernel_main() {
     }
     tile_regs_release();
 
-    custom_mm_block_uninit<true>();
+    compressed_custom_mm_block_uninit<dense_packing>();
 
     cb_push_back(cb_out, out_w);
     cb_pop_front(cb_in0, num_tiles_k);
