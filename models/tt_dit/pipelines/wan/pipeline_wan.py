@@ -335,7 +335,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "dynamic_load": False,
                 "topology": ttnn.Topology.Ring,
                 "is_fsdp": False,
-                "vae_t_chunk_size": 1,
+                "vae_t_chunk_size": 11,  # default T = 21 so will use two steps
             }
             device_configs[(4, 32)] = {
                 "sp_axis": 1,
