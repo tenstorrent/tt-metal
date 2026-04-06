@@ -88,7 +88,7 @@ def _check_profiler_env():
     """Raise if the required profiler environment variables are not set."""
     missing = [v for v in _REQUIRED_PROFILER_ENV_VARS if os.environ.get(v) != "1"]
     if missing:
-        pytest.fail(
+        pytest.skip(
             f"Device profiler not configured. Set these env vars before device open: "
             f"{', '.join(f'{v}=1' for v in missing)}"
         )

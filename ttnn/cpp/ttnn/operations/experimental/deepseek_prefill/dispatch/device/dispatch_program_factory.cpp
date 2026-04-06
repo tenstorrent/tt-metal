@@ -149,14 +149,8 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
     auto worker_core_range_set = operation_attributes.worker_core_range_set;
 
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
-    // MAX_BARRIER_CORES: kernel writer_dispatch.cpp sizes its barrier address array to this limit.
     constexpr uint32_t MAX_BARRIER_CORES = 4;
     uint32_t effective_num_links = std::min(num_links, MAX_BARRIER_CORES);
-    TT_FATAL(
-        effective_num_links <= MAX_BARRIER_CORES,
-        "effective_num_links {} exceeds MAX_BARRIER_CORES {} (kernel barrier array limit)",
-        effective_num_links,
-        MAX_BARRIER_CORES);
     TT_FATAL(
         subdevice_cores.size() >= effective_num_links,
         "Not enough cores {} for {} links",
