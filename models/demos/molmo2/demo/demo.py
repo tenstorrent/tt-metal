@@ -586,7 +586,11 @@ class Molmo2Generator:
         self.dp_vit_trace_output = trace_output
         self.dp_vit_frames_per_device = frames_per_device
         self.dp_vit_num_devices = num_devices
-        logger.info("  [ViT trace] Captured")
+
+        # Multi-CQ pipelining: CQ0 for ops, CQ1 for input transfers
+        # Initialize event for synchronization between CQs
+        self.dp_vit_op_event = ttnn.record_event(self.mesh_device, 0)
+        logger.info("  [ViT trace] Captured (multi-CQ pipelining enabled)")
         # Execute the ViT trace once with the dummy data already in trace_input so Metal
         # transitions it out of "active" state before pool trace buffers are allocated.
         # Without this, Metal warns "Allocating device buffers is unsafe due to the
@@ -599,40 +603,57 @@ class Molmo2Generator:
     def _execute_vit_trace_pass(
         self,
         all_patches_torch: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> ttnn.Tensor:
         """
         Execute the pre-captured ViT DP=8 trace for one pass.
+
+        Uses multi-CQ pipelining:
+        - CQ1: Input transfer (async)
+        - CQ0: ViT trace execution
 
         Args:
             all_patches_torch: CPU tensor [num_devices, 1, fpd*729, 588].
 
         Returns:
-            vit_features_torch: CPU tensor [1, 1, num_devices*fpd*729, pool_dim]
-                                 (full pass result, already trimmed to non-padded length
-                                 by the caller).
+            vit_features_ttnn: Device tensor [1, 1, num_devices*fpd*729, pool_dim]
+                               (replicated across mesh, stays on device).
         """
+        CQ_OPS = 0
+        CQ_INPUT_WRITE = 1
+
         shard_mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
-        mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
         pool_dim = self.model.vision_backbone.image_vit.hidden_dim * 2  # 2304
 
-        new_patches_ttnn = ttnn.from_torch(
+        # Create host ttnn tensor (no device transfer yet)
+        host_patches_ttnn = ttnn.from_torch(
             all_patches_torch,
-            device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=shard_mapper,
         )
-        ttnn.copy(new_patches_ttnn, self.dp_vit_trace_input)
-        ttnn.deallocate(new_patches_ttnn)
 
-        ttnn.execute_trace(self.mesh_device, self.dp_vit_trace_id, cq_id=0, blocking=False)
+        # CQ1: Async input transfer - wait for previous ops to complete first
+        ttnn.wait_for_event(CQ_INPUT_WRITE, self.dp_vit_op_event)
+        ttnn.copy_host_to_device_tensor(host_patches_ttnn, self.dp_vit_trace_input, cq_id=CQ_INPUT_WRITE)
+        write_event = ttnn.record_event(self.mesh_device, CQ_INPUT_WRITE)
+
+        # CQ0: Execute trace - wait for input transfer to complete
+        ttnn.wait_for_event(CQ_OPS, write_event)
+        ttnn.execute_trace(self.mesh_device, self.dp_vit_trace_id, cq_id=CQ_OPS, blocking=False)
+        self.dp_vit_op_event = ttnn.record_event(self.mesh_device, CQ_OPS)
+
         ttnn.synchronize_device(self.mesh_device)
 
-        vit_features_torch = ttnn.to_torch(self.dp_vit_trace_output, mesh_composer=mesh_composer)
-        # shape: [num_devices, 1, fpd*729, pool_dim] → [1, 1, num_devices*fpd*729, pool_dim]
-        vit_features_torch = vit_features_torch.reshape(1, 1, -1, pool_dim)
-        return vit_features_torch
+        # All-gather to replicate sharded output across all devices
+        # Input: [num_devices shards of 1, 1, fpd*729, pool_dim]
+        # Output: [1, 1, num_devices*fpd*729, pool_dim] replicated
+        gathered = ttnn.all_gather(
+            self.dp_vit_trace_output,
+            dim=2,
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return gathered
 
     # =========================================================================
     # Pool chunk TRACE (TP=8, video path)
@@ -812,48 +833,72 @@ class Molmo2Generator:
             f"{frames_per_device} fpd, {num_devices} devices, {num_passes} passes"
         )
 
-        # ---- Stage 1: ViT passes (traced) ----
-        all_vit_features: List[torch.Tensor] = []
+        # ---- Stage 1: ViT passes (traced, features stay on device) ----
+        # Detect input format: HF processor gives [n_frames, 729, 588] (pre-unfolded)
+        is_patches_format = pixel_values.dim() == 3 and pixel_values.shape[-1] == patch_features
+
+        # Pre-unfold ALL frames upfront if not already unfolded (avoid per-pass CPU work)
+        if is_patches_format:
+            # Already unfolded: [total_frames, 729, 588]
+            all_patches_cpu = pixel_values.float()
+            logger.info(f"  Using pre-unfolded patches format: {all_patches_cpu.shape}")
+        else:
+            # Raw images [total_frames, C, H, W] - unfold ALL upfront
+            logger.info(f"  Unfolding all {total_frames} frames upfront...")
+            patches_list = []
+            for frame_idx in range(total_frames):
+                frame = pixel_values[frame_idx : frame_idx + 1]  # [1, C, H, W]
+                x = frame.unfold(2, vit.patch_size, vit.patch_size)
+                x = x.unfold(3, vit.patch_size, vit.patch_size)
+                x = x.permute(0, 2, 3, 4, 5, 1).reshape(num_patches_per_frame, patch_features)
+                patches_list.append(x)
+            all_patches_cpu = torch.stack(patches_list, dim=0).float()  # [total_frames, 729, 588]
+            logger.info(f"  Pre-unfolded all frames: {all_patches_cpu.shape}")
+
+        all_vit_features: List[ttnn.Tensor] = []
 
         for pass_idx in range(num_passes):
             pass_start = pass_idx * frames_per_pass
             pass_end = min(pass_start + frames_per_pass, total_frames)
             actual_frames_this_pass = pass_end - pass_start
 
-            pass_pixels = pixel_values[pass_start:pass_end]  # [actual, C, H, W]
+            # Slice pre-unfolded patches (cheap view operation)
+            pass_patches = all_patches_cpu[pass_start:pass_end]  # [actual, 729, 588]
 
             # Pad to full frames_per_pass for uniform sharding
             if actual_frames_this_pass < frames_per_pass:
                 pad_frames = frames_per_pass - actual_frames_this_pass
-                padding = torch.zeros((pad_frames,) + pass_pixels.shape[1:], dtype=pass_pixels.dtype)
-                pass_pixels = torch.cat([pass_pixels, padding], dim=0)
+                padding = torch.zeros((pad_frames, num_patches_per_frame, patch_features), dtype=pass_patches.dtype)
+                pass_patches = torch.cat([pass_patches, padding], dim=0)
 
-            # Reshape → [num_devices, frames_per_device, C, H, W]
-            pass_pixels = pass_pixels.reshape(num_devices, frames_per_device, *pass_pixels.shape[1:])
-
-            # CPU patch unfolding per device
-            device_patches_list = []
-            for dev_idx in range(num_devices):
-                dev_pixels = pass_pixels[dev_idx]  # [fpd, C, H, W]
-                B, C, H, W = dev_pixels.shape
-                x = dev_pixels.unfold(2, vit.patch_size, vit.patch_size)
-                x = x.unfold(3, vit.patch_size, vit.patch_size)
-                x = x.permute(0, 2, 3, 4, 5, 1).reshape(B * num_patches_per_frame, patch_features)
-                device_patches_list.append(x)
-
-            # [num_devices, fpd*729, 588] → [num_devices, 1, fpd*729, 588]
-            all_patches = torch.stack(device_patches_list, dim=0).float().unsqueeze(1)
+            # Reshape for sharding: [frames_per_pass, 729, 588] → [num_devices, 1, fpd*729, 588]
+            pass_patches = pass_patches.reshape(num_devices, frames_per_device, num_patches_per_frame, patch_features)
+            all_patches = pass_patches.reshape(
+                num_devices, 1, frames_per_device * num_patches_per_frame, patch_features
+            )
 
             logger.debug(f"  Pass {pass_idx+1}/{num_passes}: frames {pass_start}-{pass_end}")
-            vit_features_torch = self._execute_vit_trace_pass(all_patches)
+            vit_features_ttnn = self._execute_vit_trace_pass(all_patches)
 
-            # Trim padding
+            # Trim padding on device
             actual_patches = actual_frames_this_pass * num_patches_per_frame
-            vit_features_torch = vit_features_torch[:, :, :actual_patches, :]
-            all_vit_features.append(vit_features_torch)
+            total_patches_this_pass = frames_per_pass * num_patches_per_frame
+            if actual_patches < total_patches_this_pass:
+                vit_features_ttnn = ttnn.slice(
+                    vit_features_ttnn,
+                    [0, 0, 0, 0],
+                    [1, 1, actual_patches, pool_dim],
+                )
+            all_vit_features.append(vit_features_ttnn)
 
-        combined_vit_features = torch.cat(all_vit_features, dim=2)
-        logger.info(f"  Combined ViT features: {combined_vit_features.shape}")
+        # Concatenate on device (no CPU round-trip!)
+        if len(all_vit_features) == 1:
+            combined_vit_features_ttnn = all_vit_features[0]
+        else:
+            combined_vit_features_ttnn = ttnn.concat(all_vit_features, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            for t in all_vit_features:
+                ttnn.deallocate(t)
+        logger.info(f"  Combined ViT features (on device): {combined_vit_features_ttnn.shape}")
 
         # ---- Stage 2: Pooling (traced for all chunks; partial last chunk padded to trace shape) ----
         valid = pooled_patches_idx >= 0
@@ -862,22 +907,14 @@ class Molmo2Generator:
 
         if batch_size <= MAX_FRAMES_FOR_SINGLE_POOL and self.dp_pool_trace_id is None:
             # Single-pass eager path: only when no pool trace is captured
+            # Features already on device from Stage 1 - no CPU round-trip!
             clipped_idx = torch.clip(pooled_patches_idx, min=0)
             flat_idx = clipped_idx.reshape(1, -1).to(torch.int32)
             valid_mask = valid.reshape(1, 1, -1, 1).float()
 
-            combined_features_ttnn = ttnn.from_torch(
-                combined_vit_features,
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=replicate_mapper,
-            )
-            # Reshape to 2D feature table
-            image_features_2d = ttnn.reshape(combined_features_ttnn, [-1, pool_dim])
+            # Reshape to 2D feature table (already on device)
+            image_features_2d = ttnn.reshape(combined_vit_features_ttnn, [-1, pool_dim])
             image_features_2d = ttnn.to_layout(image_features_2d, ttnn.ROW_MAJOR_LAYOUT)
-            ttnn.deallocate(combined_features_ttnn)
 
             idx_ttnn = ttnn.from_torch(
                 flat_idx,
@@ -912,6 +949,9 @@ class Molmo2Generator:
             # Each chunk uploads only its own frames' features (53 MB) instead of the
             # full video feature table (268 MB), avoiding OOM on 12 GB Wormhole devices.
 
+            # Transfer to CPU for chunk slicing (required for memory efficiency)
+            combined_vit_features = ttnn.to_torch(combined_vit_features_ttnn, mesh_composer=mesh_composer)
+            ttnn.deallocate(combined_vit_features_ttnn)
             # Pre-compute 2D CPU feature table for cheap chunk slicing
             logger.info(
                 f"  [pool] flattening ViT features to 2D for chunk upload "
