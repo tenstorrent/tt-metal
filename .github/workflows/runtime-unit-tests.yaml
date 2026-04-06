@@ -82,6 +82,7 @@ jobs:
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      build-wheel: true
       enable-lto: ${{ inputs.enable-lto || false }}
 
   resolve-skus:
@@ -95,7 +96,7 @@ jobs:
       - id: resolve
         run: |
           if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            echo "unit-skus=wh_n150_civ2,bh_p150b_civ2,bh_p150b_civ2_viommu" >> "$GITHUB_OUTPUT"
+            echo "unit-skus=wh_n150_civ2,wh_n300_civ2,bh_p150b_civ2,bh_p100a_civ2_viommu,bh_p150b_civ2_viommu" >> "$GITHUB_OUTPUT"
             echo "perf-skus=wh_n300_civ2,bh_p150_perf" >> "$GITHUB_OUTPUT"
             echo "bh-multicard-skus=bh_quietbox,bh_loudbox" >> "$GITHUB_OUTPUT"
             echo "galaxy-skus=wh_galaxy,bh_galaxy" >> "$GITHUB_OUTPUT"
@@ -105,13 +106,13 @@ jobs:
             bh_mc_skus=""
             galaxy_skus=""
             if [[ "${{ inputs.wormhole }}" == "true" ]]; then
-              unit_skus="wh_n150_civ2"
+              unit_skus="wh_n150_civ2,wh_n300_civ2"
               perf_skus="wh_n300_civ2"
               galaxy_skus="wh_galaxy"
             fi
             if [[ "${{ inputs.blackhole }}" == "true" ]]; then
               [ -n "$unit_skus" ] && unit_skus="${unit_skus},"
-              unit_skus="${unit_skus}bh_p150b_civ2,bh_p150b_civ2_viommu"
+              unit_skus="${unit_skus}bh_p150b_civ2,bh_p100a_civ2_viommu,bh_p150b_civ2_viommu"
               [ -n "$perf_skus" ] && perf_skus="${perf_skus},"
               perf_skus="${perf_skus}bh_p150_perf"
               bh_mc_skus="bh_quietbox,bh_loudbox"

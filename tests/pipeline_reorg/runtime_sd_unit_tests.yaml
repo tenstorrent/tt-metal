@@ -18,7 +18,11 @@
   skus:
     wh_n150_civ2:
       timeout: 15
+    wh_n300_civ2:
+      timeout: 15
     bh_p150b_civ2:
+      timeout: 15
+    bh_p100a_civ2_viommu:
       timeout: 15
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
@@ -29,7 +33,11 @@
   skus:
     wh_n150_civ2:
       timeout: 10
+    wh_n300_civ2:
+      timeout: 10
     bh_p150b_civ2:
+      timeout: 10
+    bh_p100a_civ2_viommu:
       timeout: 10
   owner_id: U099A7FMKL2
   team: runtime
@@ -44,7 +52,11 @@
   skus:
     wh_n150_civ2:
       timeout: 15
+    wh_n300_civ2:
+      timeout: 15
     bh_p150b_civ2:
+      timeout: 15
+    bh_p100a_civ2_viommu:
       timeout: 15
   owner_id: U099A7FMKL2
   team: runtime
@@ -55,7 +67,11 @@
   skus:
     wh_n150_civ2:
       timeout: 10
+    wh_n300_civ2:
+      timeout: 10
     bh_p150b_civ2:
+      timeout: 10
+    bh_p100a_civ2_viommu:
       timeout: 10
   owner_id: U099A7FMKL2
   team: runtime
