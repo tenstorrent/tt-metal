@@ -14,6 +14,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import ttnn
+import torch
 from loguru import logger
 from reference.utils import VA_CONFIGS
 
