@@ -281,8 +281,6 @@ inline void _llk_math_matmul_init_(std::uint8_t ct_dim, std::uint8_t rt_dim)
         _llk_math_matmul_mop_config_<MATH_FIDELITY_TYPE>(ct_dim, rt_dim);
     }
 
-    // Matmul Block, reset the dest addr to 0 for fused kernels
-    _set_dst_write_addr_<DstTileShape::Tile32x32>(0);
     _reset_counters_<p_setrwc::SET_ABD_F>();
 }
 
@@ -316,6 +314,9 @@ inline void _llk_math_matmul_tile_(const std::uint32_t dst_index)
  */
 inline void _llk_math_matmul_block_(std::uint8_t ct_dim, std::uint8_t rt_dim)
 {
+    // Matmul Block, reset the dest addr to 0 for fused kernels
+    _set_dst_write_addr_<DstTileShape::Tile32x32>(0);
+
     const bool reuse_a          = ct_dim >= rt_dim;
     const std::uint32_t t_dim   = reuse_a ? rt_dim : ct_dim;
     const std::uint32_t rut_dim = reuse_a ? ct_dim : rt_dim; // reuse-dim

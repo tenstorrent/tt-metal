@@ -137,7 +137,7 @@ inline void _llk_math_pack_sync_init_()
     {
     };
 
-    _reset_dest_bank_id_();
+    _reset_dest_register_offset_();
     _set_dest_section_base_<TRISC_ID>(_get_dest_buffer_base_());
 
     constexpr std::uint32_t num_sem = (DST == DstSync::SyncFull) ? 1 : 2;
@@ -149,13 +149,13 @@ inline void _llk_math_wait_for_dest_available_()
     TTI_SEMWAIT(p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::STALL_ON_MAX, 0, semaphore::t6_sem(semaphore::MATH_PACK));
 }
 
-template <DstSync DST>
+template <DstSync DST, bool EN_32BIT_DEST>
 inline void _llk_math_dest_section_done_()
 {
     t6_semaphore_post<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::MATH_PACK);
     if constexpr (DST == DstSync::SyncHalf)
     {
-        _update_dest_bank_id_();
+        _update_dest_register_offset_<EN_32BIT_DEST>();
         std::uint32_t base_addr = _get_dest_buffer_base_();
         TTI_STALLWAIT(p_stall::STALL_CFG, 0, p_stall::MATH, p_stall::WAIT_SFPU);
         _set_dest_section_base_<TRISC_ID>(base_addr);
