@@ -3,7 +3,7 @@
 ## Metadata
 | Field | Value |
 |-------|-------|
-| Operation | `hardsigmoid`, `softshrink` |
+| Operation | `hardsigmoid`, `softshrink`, `hardtanh` |
 | Agent | `ttnn-unary-sfpu-operation-analyzer` |
 | Stages | SFPU kernel analysis (single stage per operation) |
 | Input | `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp` |
@@ -80,6 +80,46 @@
 - Uses `ADDR_MOD_7` with zero increments on both architectures
 - The kernel is a clean SFPI implementation with two independent `v_if` conditional blocks
 - Lambda parameter is passed as IEEE 754 bits (uint32_t), reinterpreted via `Converter::as_float()`
+
+---
+
+## Operation: hardtanh
+
+### 1. Input Interpretation
+
+| Field | Value | Confidence | Notes |
+|-------|-------|------------|-------|
+| operation_name | `hardtanh` | HIGH | Explicitly provided in prompt |
+| UnaryOpType | `HARDTANH` | HIGH | Found in `unary_op_types.hpp:120` |
+| compute_kernel | `eltwise_sfpu.cpp` | HIGH | `get_compute_kernel_path()` default case |
+| init_func | `hardtanh_tile_init()` | HIGH | `get_op_init_and_func_parameterized()` line 45 |
+| tile_func | `hardtanh_tile(idst, param0, param1)` | HIGH | `get_op_init_and_func_parameterized()` lines 46-50 |
+| approx_mode | `false` | HIGH | `get_op_approx_mode()` default case |
+| min_val default | `-1.0f` | HIGH | Code: `params.size() > 0 ? param0 : -1.0f` |
+| max_val default | `1.0f` | HIGH | Code: `params.size() > 1 ? params[1] : 1.0f` |
+
+### 2. Execution Timeline
+
+- **Dispatch Tracing**: Found all configuration. HARDTANH is a parameterized type with two params (min_val, max_val). Macro define is `SFPU_OP_HARDTANH_INCLUDE`. Both params are passed as IEEE 754 bitcast uint32_t. PASS.
+- **Kernel Source Read**: Read `ckernel_sfpu_hardtanh.h` for both WH and BH -- identical implementations. Simple clamp logic using SFPI abstractions with two sequential `v_if` blocks. PASS.
+- **Instruction Analysis**: Identified 9 instruction types: SFPLOAD, SFPLOADI, SFPMAD, SFPSETCC, SFPENCC, SFPPUSHC, SFPPOPC, SFPMOV, SFPSTORE. CC pattern: two sequential v_if blocks with CC stack push/pop. PASS.
+- **Identifier Verification**: All function names, file paths, and instruction identifiers verified via grep. PASS.
+- **Analysis Writing**: Wrote to `.claude-analysis/frac-1/hardtanh_analysis.md`. PASS.
+
+### 3. Artifacts
+
+| Path | Purpose |
+|------|---------|
+| `.claude-analysis/frac-1/hardtanh_analysis.md` | Complete SFPU kernel analysis for hardtanh |
+
+### 4. Key Findings
+
+- **APPROXIMATION_MODE** is `false` but irrelevant -- the `calculate_hardtanh` function has no `if constexpr (APPROXIMATION_MODE)` branches
+- WH and BH implementations are identical (byte-for-byte)
+- Uses `ADDR_MOD_7` with zero increments on both architectures
+- The kernel is a clean SFPI implementation with two sequential `v_if` blocks for min/max clamping
+- Both parameters (min_val, max_val) are passed as IEEE 754 bits (uint32_t) and reinterpreted via `Converter::as_float()`
+- Very similar pattern to softshrink but simpler (no arithmetic, just conditional assignment)
 
 ---
 
