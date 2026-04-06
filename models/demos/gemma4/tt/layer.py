@@ -174,7 +174,17 @@ class Gemma4DecoderLayer:
             )
             self.post_per_layer_input_norm = _norm("post_per_layer_input_norm")
 
-    def __call__(self, hidden_states, rope_mats, position_idx, page_table, kv_cache, is_decode, token_index=None):
+    def __call__(
+        self,
+        hidden_states,
+        rope_mats,
+        position_idx,
+        page_table,
+        kv_cache,
+        is_decode,
+        token_index=None,
+        per_layer_input=None,
+    ):
         """
         Decoder layer forward pass.
 
@@ -255,11 +265,14 @@ class Gemma4DecoderLayer:
             hidden_states = combined
 
         # Per-layer input embeddings (E2B/E4B feature)
-        # hidden_states += act(gate(x)) * per_layer_input; projected + normed
-        if self.hidden_size_per_layer_input and hasattr(self, "per_layer_input_gate"):
-            # TODO: per_layer_input tensor needs to be passed from the model
-            # This requires embedding lookup per layer from vocab_size_per_layer_input
-            # For now, skip if per_layer_input is not provided
-            pass
+        if self.hidden_size_per_layer_input and per_layer_input is not None and hasattr(self, "per_layer_input_gate"):
+            residual_pli = hidden_states
+            # gate(x) → act → multiply by per_layer_input → project → norm → residual
+            gated = ttnn.linear(hidden_states, self.per_layer_input_gate)
+            gated = ttnn.gelu(gated, fast_and_approximate_mode=True)
+            gated = ttnn.mul(gated, per_layer_input)
+            projected = ttnn.linear(gated, self.per_layer_projection)
+            normed_pli = self.post_per_layer_input_norm.forward(projected)
+            hidden_states = ttnn.add(residual_pli, normed_pli)
 
         return hidden_states

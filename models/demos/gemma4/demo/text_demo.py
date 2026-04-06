@@ -100,6 +100,20 @@ def run_generation(
         embeds = ttnn.reshape(embeds, (1, 1, padded_len, model_args.hidden_size))
         embeds = ttnn.to_layout(embeds, ttnn.TILE_LAYOUT)
 
+        # CPU tensors for per-layer input computation (E2B/E4B)
+        import torch.nn.functional as F
+
+        embeds_torch = (
+            F.embedding(
+                input_ids_padded.unsqueeze(0).long(),
+                state_dict.get(
+                    "model.language_model.embed_tokens.weight",
+                    state_dict.get("model.embed_tokens.weight", torch.zeros(1)),
+                ),
+            )
+            * model.embed_scale
+        ).float()
+
         # Get last token tile for first decode token
         get_last_token = ((prompt_len - 1) // 32) * 32
         try:
@@ -108,6 +122,8 @@ def run_generation(
                 page_table=None,
                 kv_cache=tt_kv_cache,
                 get_last_token=get_last_token,
+                input_ids_torch=input_ids_padded.unsqueeze(0),
+                embeds_torch=embeds_torch,
             )
         except Exception as e:
             logger.error(f"Prefill failed: {e}")
@@ -161,6 +177,7 @@ def run_generation(
                 token_tt,
                 current_pos=position_tt,
                 kv_cache=tt_kv_cache,
+                input_ids_torch=token_tensor,
             )
 
             if is_mesh:

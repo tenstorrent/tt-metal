@@ -16,6 +16,7 @@ Compatible with tt_transformers Generator interface.
 """
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
@@ -89,6 +90,7 @@ class Gemma4Model:
         self.embed_scale = hf_config.hidden_size**0.5
         self.ccl_manager = ccl_manager
         self.max_seq_len = max_seq_len
+        self.hidden_size_per_layer_input = getattr(hf_config, "hidden_size_per_layer_input", 0) or 0
         n_layers = num_layers or hf_config.num_hidden_layers
 
         # RoPE caches per layer type (sliding vs global)
@@ -137,6 +139,31 @@ class Gemma4Model:
         else:
             self.embedding_weight = None
             self.lm_head_weight = None
+
+        # Per-layer input embeddings (E2B/E4B) — kept as CPU torch tensors for computation
+        # Also store embedding weight reference for decode per-layer input
+        self._embed_weight_cpu = None
+        if embed_key and state_dict:
+            self._embed_weight_cpu = state_dict[embed_key]
+        self.per_layer_input_weights = {}
+        if self.hidden_size_per_layer_input and state_dict:
+            pli_size = self.hidden_size_per_layer_input
+            # Try both key formats
+            for prefix in ["model.language_model.", "model."]:
+                pli_embed_key = f"{prefix}embed_tokens_per_layer.weight"
+                pli_proj_key = f"{prefix}per_layer_model_projection.weight"
+                pli_norm_key = f"{prefix}per_layer_projection_norm.weight"
+                if pli_embed_key in state_dict:
+                    self.per_layer_input_weights = {
+                        "embed_tokens_per_layer": state_dict[pli_embed_key],  # [vocab_pli, n_layers * pli_size]
+                        "per_layer_model_projection": state_dict[pli_proj_key],  # [n_layers * pli_size, hidden]
+                        "per_layer_projection_norm": state_dict[pli_norm_key],  # [pli_size]
+                    }
+                    self.per_layer_input_scale = 2.0**-0.5
+                    self.per_layer_model_projection_scale = hf_config.hidden_size**-0.5
+                    self.per_layer_embed_scale = pli_size**0.5
+                    logger.info(f"Per-layer input embeddings loaded (pli_size={pli_size})")
+                    break
 
         # Decoder layers (each creates its own KV cache if requested)
         self.layers = []
@@ -190,6 +217,44 @@ class Gemma4Model:
             mesh_config=mesh_config,
         )
 
+    def _compute_per_layer_inputs(self, input_ids_torch, embeds_torch):
+        """Compute per-layer input embeddings on CPU (E2B/E4B).
+
+        Returns list of [1, seq_len, pli_size] tensors, one per layer, or None.
+        """
+        if not self.hidden_size_per_layer_input or not self.per_layer_input_weights:
+            return None
+
+        import torch.nn.functional as F
+
+        w = self.per_layer_input_weights
+        pli_size = self.hidden_size_per_layer_input
+        n_layers = len(self.layers)
+
+        # 1. Per-layer token embedding: embed_tokens_per_layer(input_ids)
+        embed_w = w["embed_tokens_per_layer"]  # [vocab_pli, n_layers * pli_size]
+        pli_embed = F.embedding(input_ids_torch.long(), embed_w) * self.per_layer_embed_scale
+        # [batch, seq, n_layers * pli_size] -> [batch, seq, n_layers, pli_size]
+        pli_embed = pli_embed.reshape(*input_ids_torch.shape, n_layers, pli_size)
+
+        # 2. Projection from main embeddings
+        proj_w = w["per_layer_model_projection"]  # [n_layers * pli_size, hidden]
+        pli_proj = F.linear(embeds_torch.float(), proj_w.float()) * self.per_layer_model_projection_scale
+        pli_proj = pli_proj.reshape(*embeds_torch.shape[:-1], n_layers, pli_size)
+
+        # 3. Norm the projection
+        norm_w = w["per_layer_projection_norm"]  # [pli_size]
+        eps = self.hf_config.rms_norm_eps
+        pli_proj_f = pli_proj.float()
+        var = pli_proj_f.pow(2).mean(-1, keepdim=True)
+        pli_proj = (pli_proj_f * torch.rsqrt(var + eps) * norm_w.float()).to(pli_proj.dtype)
+
+        # 4. Combine: (projection + embed) * scale
+        per_layer_inputs = (pli_proj + pli_embed.float()) * self.per_layer_input_scale
+
+        # Return as list of per-layer tensors
+        return [per_layer_inputs[:, :, i, :].to(torch.bfloat16) for i in range(n_layers)]
+
     def _get_rope_mats(self, layer_idx, seq_len=None):
         """Get (cos, sin) for a given layer, optionally sliced to seq_len."""
         layer_type = self.hf_config.layer_types[layer_idx]
@@ -208,6 +273,8 @@ class Gemma4Model:
         kv_caches=None,
         is_decode=True,
         token_index=None,
+        input_ids_torch=None,
+        embeds_torch=None,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -220,9 +287,16 @@ class Gemma4Model:
             kv_caches: list of [k, v] per layer, or None (uses self.tt_kv_cache)
             is_decode: True for decode, False for prefill
             token_index: int for decode RoPE slicing
+            input_ids_torch: CPU tensor of input_ids for per-layer input computation (E2B)
+            embeds_torch: CPU tensor of embeddings for per-layer input projection (E2B)
         """
         seq_len = hidden_states.shape[2]
         caches = kv_caches or self.tt_kv_cache
+
+        # Compute per-layer inputs on CPU (E2B/E4B)
+        per_layer_inputs = self._compute_per_layer_inputs(input_ids_torch, embeds_torch)
+
+        is_mesh = hasattr(self.mesh_device, "shape")
 
         for i, layer in enumerate(self.layers):
             # Per-layer RoPE: sliding and global layers have different cos/sin
@@ -230,6 +304,18 @@ class Gemma4Model:
                 layer_rope = rope_mats  # Override (for backward compat / tests)
             else:
                 layer_rope = self._get_rope_mats(i, seq_len=seq_len if not is_decode else None)
+
+            # Convert per-layer input to device tensor if available
+            pli_tt = None
+            if per_layer_inputs is not None and i < len(per_layer_inputs):
+                pli_4d = per_layer_inputs[i].unsqueeze(0).unsqueeze(0)  # [1, 1, seq, pli_size]
+                pli_tt = ttnn.from_torch(
+                    pli_4d,
+                    device=self.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat16,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh else None,
+                )
 
             kv_cache = caches[i] if caches else None
             hidden_states = layer(
@@ -240,6 +326,7 @@ class Gemma4Model:
                 kv_cache=kv_cache,
                 is_decode=is_decode,
                 token_index=token_index,
+                per_layer_input=pli_tt,
             )
 
         # Final norm
@@ -271,7 +358,17 @@ class Gemma4Model:
 
     # ── Generator-compatible interface ────────────────────────────────────
 
-    def ttnn_prefill_forward(self, x, user_id=0, page_table=None, get_last_token=-1, kv_cache=None, batch_size=1):
+    def ttnn_prefill_forward(
+        self,
+        x,
+        user_id=0,
+        page_table=None,
+        get_last_token=-1,
+        kv_cache=None,
+        batch_size=1,
+        input_ids_torch=None,
+        embeds_torch=None,
+    ):
         """Prefill forward — matches tt_transformers Generator interface."""
         seq_len = x.shape[-2]
         logits = self(
@@ -280,6 +377,8 @@ class Gemma4Model:
             page_table=page_table,
             kv_caches=kv_cache,
             is_decode=False,
+            input_ids_torch=input_ids_torch,
+            embeds_torch=embeds_torch,
         )
 
         # Extract last token tile for next-token prediction
@@ -292,11 +391,28 @@ class Gemma4Model:
 
         return logits
 
-    def ttnn_decode_forward(self, tokens, current_pos, rot_mat_idxs=None, page_table=None, kv_cache=None):
+    def ttnn_decode_forward(
+        self,
+        tokens,
+        current_pos,
+        rot_mat_idxs=None,
+        page_table=None,
+        kv_cache=None,
+        input_ids_torch=None,
+        embeds_torch=None,
+    ):
         """Decode forward — matches tt_transformers Generator interface."""
         input_embeds = self.embed_tokens(tokens)
         input_embeds = ttnn.reshape(input_embeds, (1, 1, tokens.shape[-1], self.hidden_size))
         input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
+
+        # Compute embeds_torch for per-layer input if needed
+        if embeds_torch is None and self.hidden_size_per_layer_input and input_ids_torch is not None:
+            if self._embed_weight_cpu is not None:
+                embeds_torch = (
+                    torch.nn.functional.embedding(input_ids_torch.long(), self._embed_weight_cpu).float()
+                    * self.embed_scale
+                )
 
         # Get position as int for token_index
         if isinstance(current_pos, ttnn.Tensor):
@@ -311,6 +427,8 @@ class Gemma4Model:
             position_idx=current_pos,
             page_table=page_table,
             kv_caches=kv_cache,
+            input_ids_torch=input_ids_torch,
+            embeds_torch=embeds_torch,
             is_decode=True,
             token_index=token_index,
         )
