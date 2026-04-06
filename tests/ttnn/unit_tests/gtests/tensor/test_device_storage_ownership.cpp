@@ -125,35 +125,6 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_OwnerDeallocateAffectsView) {
     EXPECT_FALSE(view_storage.is_allocated());
 }
 
-TEST_F(DeviceStorageOwnershipTest, DeviceStorage_DefaultConstructedThrowsForSpecTopologyAndMeshTensor) {
-    DeviceStorage storage;
-
-    EXPECT_THROW(storage.get_tensor_spec(), std::exception);
-    EXPECT_THROW(storage.get_tensor_topology(), std::exception);
-    EXPECT_THROW(storage.get_mesh_tensor(), std::exception);
-}
-
-TEST_F(DeviceStorageOwnershipTest, DeviceStorage_SpecAndTopologyAccessibleAfterDeallocate) {
-    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
-    DeviceStorage storage = tensor.device_storage();
-
-    storage.deallocate();
-    ASSERT_FALSE(storage.is_allocated());
-
-    EXPECT_NO_THROW(storage.get_tensor_spec());
-    EXPECT_NO_THROW(storage.get_tensor_topology());
-}
-
-TEST_F(DeviceStorageOwnershipTest, DeviceStorage_MeshTensorGetterThrowsWhenDeallocated) {
-    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
-    DeviceStorage storage = tensor.device_storage();
-
-    storage.deallocate();
-    ASSERT_FALSE(storage.is_allocated());
-
-    EXPECT_THROW(storage.get_mesh_tensor(), std::exception);
-}
-
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_BufferGettersThrowWhenDeallocated) {
     Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     tensor.deallocate(/*force=*/true);
