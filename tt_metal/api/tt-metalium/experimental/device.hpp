@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace tt::tt_metal {
 
@@ -14,6 +15,10 @@ enum NOC : uint8_t;
 class IDevice;
 }  // namespace tt::tt_metal
 
+namespace tt::tt_metal::distributed {
+class MeshDevice;
+}
+
 namespace tt::tt_metal::experimental::Device {
 
 // Returns the hop distance between two logical worker coordinates on a given NOC
@@ -21,4 +26,10 @@ namespace tt::tt_metal::experimental::Device {
 uint32_t get_worker_noc_hop_distance(
     IDevice* device, const CoreCoord& logical_src, const CoreCoord& logical_dst, NOC noc);
 
+uint32_t get_worker_noc_hop_distance(
+    distributed::MeshDevice* mesh_device,
+    const distributed::MeshCoordinate& mesh_coord,
+    const CoreCoord& logical_src,
+    const CoreCoord& logical_dst,
+    NOC noc);
 }  // namespace tt::tt_metal::experimental::Device

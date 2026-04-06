@@ -41,4 +41,13 @@ uint32_t get_worker_noc_hop_distance(
     return dist_left + dist_top;
 }
 
+uint32_t get_worker_noc_hop_distance(
+    distributed::MeshDevice* mesh_device,
+    const distributed::MeshCoordinate& mesh_coord,
+    const CoreCoord& logical_src,
+    const CoreCoord& logical_dst,
+    NOC noc) {
+    return get_worker_noc_hop_distance(mesh_device->get_device(mesh_coord), logical_src, logical_dst, noc);
+}
+
 }  // namespace tt::tt_metal::experimental::Device
