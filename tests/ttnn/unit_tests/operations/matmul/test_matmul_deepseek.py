@@ -1341,8 +1341,12 @@ def test_lm_head_decode_linear(device):
     in0: [1, 1, 32, 7168]  BF16  L1 interleaved
     in1: [1, 1, 7168, 16160]  BF8_B  DRAM interleaved
     Uses 1D multicast (mcast_in0=True) to broadcast the small activation across
-    all 64 cores, each handling ceil(505/64)=8 N-tiles.
+    all cores, each handling a slice of N-tiles.
     """
+    device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
+    if device_grid != (7, 10):
+        pytest.skip(f"Test requires 7x10 grid but device has {device_grid[0]}x{device_grid[1]}")
+
     torch.manual_seed(0)
 
     M = 32
@@ -1364,7 +1368,7 @@ def test_lm_head_decode_linear(device):
     num_cores = compute_grid.x * compute_grid.y
 
     per_core_M = M_tiles  # 1
-    per_core_N = math.ceil(N_tiles / num_cores)  # ceil(505/64) = 8
+    per_core_N = math.ceil(N_tiles / num_cores)  # ceil(505/70) = 8
 
     # 224 K-tiles / 32 = 7 inner-loop iterations; aggressive but fits in L1
     # (~720 KB per core for CBs, well within the ~1.2 MB budget)
