@@ -12,7 +12,7 @@
 |-------|-------------|--------|----------|--------|
 | 1 | Reference Discovery | ok | ~320s | none |
 | 2 | Reference Analysis | ok | ~964s | cbrt and hardswish were slow but eventually committed |
-| 3 | Implementation | pending | - | - |
+| 3 | Implementation | ok | ~1198s | none |
 | 4 | Testing & Debugging | pending | - | - |
 | 5 | Documentation | pending | - | - |
 | 6 | Self-Reflection | pending | - | - |

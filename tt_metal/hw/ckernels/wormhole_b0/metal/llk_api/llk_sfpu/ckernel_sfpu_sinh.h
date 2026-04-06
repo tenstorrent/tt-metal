@@ -43,12 +43,18 @@ inline sfpi::vFloat exp_21f(sfpi::vFloat z) {
 
 // sinh(x) = (exp(x) - exp(-x)) / 2
 //         = (2^(x * log2(e)) - 2^(-x * log2(e))) / 2
+//
+// For small |x| (< 0.5), the exp subtraction suffers catastrophic cancellation
+// because exp(x) and exp(-x) are both close to 1.0. In that regime we use the
+// Taylor approximation sinh(x) ≈ x + x³/6, which is accurate to < 1 ULP in
+// bfloat16 for |x| < 0.5.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_sinh() {
     constexpr float log2e = 1.4426950408889634f;
     const sfpi::vFloat v_log2e = log2e;
     const sfpi::vFloat v_half = 0.5f;
     const sfpi::vFloat v_low_threshold = -127.0f;
+    const sfpi::vFloat v_sixth = 0.16666667f;
 
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
@@ -73,8 +79,15 @@ inline void calculate_sinh() {
         sfpi::vFloat exp_neg = exp_21f<APPROXIMATION_MODE>(z_neg);
 
         // sinh(x) = (exp(x) - exp(-x)) / 2
-        // Note: SFPU has no dedicated subtract, so we negate and add
         sfpi::vFloat y = (exp_pos - exp_neg) * v_half;
+
+        // For small |x|, override with Taylor: sinh(x) ≈ x + x³/6
+        sfpi::vFloat abs_x = sfpi::setsgn(x, 0);
+        v_if(abs_x < v_half) {
+            sfpi::vFloat x_sq = x * x;
+            y = x + x_sq * x * v_sixth;
+        }
+        v_endif;
 
         // Convert to bfloat16 for deterministic rounding
         y = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
