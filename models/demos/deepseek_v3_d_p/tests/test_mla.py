@@ -131,6 +131,25 @@ def test_mla(
     logger.info(f"Test: Reference vs TT Comparison ({weight_type} Weights)")
     logger.info("=" * 80)
 
+    # Print Fabric Node IDs for all devices in the mesh
+    print("\n" + "=" * 80)
+    print("Fabric Node IDs:")
+    mesh_shape = list(mesh_device.shape)
+
+    for row in range(mesh_shape[0]):
+        for col in range(mesh_shape[1]):
+            coord = ttnn.MeshCoordinate(row, col)
+            fabric_node_id = mesh_device.get_fabric_node_id(coord)
+            try:
+                # Access the raw values and convert to int
+                mesh_id_val = int(fabric_node_id.mesh_id)
+                chip_id_val = int(fabric_node_id.chip_id)
+                print(f"  MeshCoord({row}, {col}) -> mesh_id={mesh_id_val}, chip_id={chip_id_val}")
+            except Exception as e:
+                print(f"  MeshCoord({row}, {col}) -> Error accessing values: {str(e)[:100]}")
+    print("=" * 80 + "\n")
+    logger.info("=" * 80)
+
     # Conditionally load fixtures - only load what we need!
     if use_pretrained:
         config, weights = request.getfixturevalue("pretrained_weights")
@@ -204,6 +223,8 @@ def test_mla(
         memory_config=kv_mem_config,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
+
+    print("tt_kvpe_cache memory_config is: ", tt_kvpe_cache.memory_config())
 
     mla_tt = ttMLA(
         config,

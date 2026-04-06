@@ -1323,6 +1323,34 @@ void pytensor_module(nb::module_& mod) {
 
         )doc")
         .def(
+            "page_address",
+            [](const Tensor& self, uint64_t bank_id, uint64_t page_index) -> uint64_t {
+                TT_FATAL(is_device_tensor(self), "{} doesn't support page_address method", self.storage_type());
+                TT_FATAL(self.is_allocated(), "Tensor is not allocated.");
+                auto* buffer = self.mesh_buffer().get_reference_buffer();
+                TT_FATAL(buffer != nullptr, "Failed to get reference buffer");
+                return buffer->page_address(bank_id, page_index);
+            },
+            nb::arg("bank_id"),
+            nb::arg("page_index"),
+            R"doc(
+            Get the address of a specific page in a specific bank.
+
+            The tensor must be on the single device when calling this function.
+
+            Args:
+                bank_id: The bank ID to query
+                page_index: The page index within the bank
+
+            Returns:
+                The address of the page in the specified bank
+
+            .. code-block:: python
+
+                address = tt_tensor.page_address(bank_id=0, page_index=10)
+
+        )doc")
+        .def(
             "get_layout", [](const Tensor& self) { return self.layout(); }, R"doc(
             Get memory layout of TT Tensor.
 

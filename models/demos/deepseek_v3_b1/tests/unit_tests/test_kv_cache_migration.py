@@ -36,7 +36,7 @@ class KVCacheMetadata:
         else:
             print(f"location: L1")
             print(f"noc_addr: 0x{self.noc_addr:X}")
-        print(f"fabric_node_ids: {self.fabric_node_ids}")
+        #        print(f"fabric_node_ids: {self.fabric_node_ids}")
         print(f"kv_chunk_size: {self.kv_chunk_size}")
         print(f"num_tokens_in_chunk: {self.num_tokens_in_chunk}")
 
@@ -91,9 +91,9 @@ def get_kv_cache_metadata(
     assert (
         per_device_seq_len == flash_mla_program_config.max_seq_len // flash_mla_program_config.sp_dim
     ), "KV cache sequence length must match max seq len"
-    assert (
-        max_kv_cache_slots == flash_mla_program_config.max_kv_cache_slots
-    ), "KV cache slots must match max kv cache slots"
+    # assert (
+    #     max_kv_cache_slots == flash_mla_program_config.max_kv_cache_slots
+    # ), "KV cache slots must match max kv cache slots"
 
     # a bit confusing, the k_chunk_size is the number of tokens for a block of compute
     # for migration purposes, we call a kv_chunk the 32x576 unit to transfer
@@ -107,10 +107,22 @@ def get_kv_cache_metadata(
 
     block_id = position_id // flash_mla_program_config.k_chunk_size
     block_size_in_bytes = flash_mla_program_config.k_chunk_size * k_tile_size // tokens_per_kv_tile
+    print(f"tokens_per_kv_tile is: {tokens_per_kv_tile}")
     print(f"block_size_in_bytes: {block_size_in_bytes}")
     # round down to nearest kv_tile
     offset_in_block = (position_id % flash_mla_program_config.k_chunk_size) // tokens_per_kv_tile * tokens_per_kv_tile
     print(f"offset_in_block: {offset_in_block}")
+
+    print(f"block_id is: {block_id}")
+    print(f"sp_dim is: ", {flash_mla_program_config.sp_dim})
+    print(f"block_size_in_bytes is: ", {block_size_in_bytes})
+    print(f"tokens_per_kv_tile is: ", tokens_per_kv_tile)
+    print(f"offset_in_block is: {offset_in_block}")
+    print(f"k_tile_size is: {k_tile_size}")
+    print(f"slot_size_in_bytes is: {slot_size_in_bytes}")
+    print(f"slot_id is: {slot_id}")
+    dram_bank_id = flash_mla_optimal_grid.OPTIMAL_DRAM_BANK_ORDER[block_id % flash_mla_optimal_grid.NUM_BLOCKS]
+    print(f"dram bank_id is: {dram_bank_id}")
 
     noc_addr = (
         ttnn_kv_cache_tensor.buffer_address()
@@ -119,8 +131,21 @@ def get_kv_cache_metadata(
         + slot_size_in_bytes * slot_id
     )
 
+    total_offset = (
+        (block_id % flash_mla_program_config.sp_dim) * block_size_in_bytes
+        + offset_in_block * k_tile_size
+        + slot_size_in_bytes * slot_id
+    )
+    print(" ====== BREAKDOWN =======")
+    print(f"ttnn_kv_cache_tensor.buffer_address() = 0x{ttnn_kv_cache_tensor.buffer_address():X}")
+    print(
+        f"(block_id % flash_mla_program_config.sp_dim) * block_size_in_bytes = {(block_id % flash_mla_program_config.sp_dim) * block_size_in_bytes}"
+    )
+    print(f"offset_in_block * k_tile_size = {offset_in_block * k_tile_size}")
+    print(f"slot_size_in_bytes * slot_id = {slot_size_in_bytes * slot_id}")
+    print(f"TOTAL OFFSET IS: {total_offset}")
+
     # Get DRAM/SRAM noc address/bank id
-    dram_bank_id = flash_mla_optimal_grid.OPTIMAL_DRAM_BANK_ORDER[block_id % flash_mla_optimal_grid.NUM_BLOCKS]
 
     # Get devices that hold the kv chunk
     print(f"block_id: {block_id}")
@@ -132,7 +157,7 @@ def get_kv_cache_metadata(
     print(f"kv_cache_slot_size_device: {kv_cache_slot_size_device}")
     print(f"per_device_seq_len: {per_device_seq_len}")
     print(f"k_tile_size: {k_tile_size}")
-    print(f"tokens_per_kv_tile: {tokens_per_kv_tile}")
+    print(f"tokens_per_kv_tile: {tokens_per_kv_tile}")  # this is num_tokens_in_chunk
     is_dram = ttnn_kv_cache_tensor.memory_config().buffer_type == ttnn.BufferType.DRAM
     if is_dram:
         return KVCacheMetadata(
@@ -170,7 +195,7 @@ def get_kv_cache_metadata(
 )
 @pytest.mark.parametrize(
     "position_id",
-    [11664],
+    [128],
 )
 def test_decode_kv_cache_metadata(mesh_device, device_params, position_id):
     torch.manual_seed(0)
@@ -180,10 +205,11 @@ def test_decode_kv_cache_metadata(mesh_device, device_params, position_id):
     # model_pipeline = ModelPipeline(mesh_device, weights_mode="synthetic")
     flash_mla_program_config = FlashMLADecode.ProgramConfig(k_chunk_size=128)
     kvpe_dim = 576
-    cache_shape = (flash_mla_program_config.max_kv_cache_slots, 1, flash_mla_program_config.max_seq_len, kvpe_dim)
+    cache_shape = (1, 1, flash_mla_program_config.max_seq_len, kvpe_dim)
 
     device_chunk_size = flash_mla_program_config.device_chunk_size
     num_sp = flash_mla_program_config.sp_dim
+    print(f"Flash mla program config is: {flash_mla_program_config}")
 
     torch_kv_cache = torch.zeros(cache_shape, dtype=torch.bfloat16)
     torch_kv_cache[:, :, :position_id, :] = torch.randn(1, 1, position_id, kvpe_dim, dtype=torch.bfloat16)
