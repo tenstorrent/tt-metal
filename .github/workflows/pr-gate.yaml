@@ -309,7 +309,8 @@ jobs:
     if: github.event_name == 'pull_request' && !github.event.pull_request.draft
     timeout-minutes: 60
     runs-on: tt-ubuntu-2204-large-stable
-    container: ${{ needs.build-docker-images.outputs.ci-build-tag }}
+    container:
+      image: harbor.ci.tenstorrent.net/${{ needs.build-docker-images.outputs.ci-build-tag }}
     permissions:
       pull-requests: write
       contents: write  # to allow auto-closing conversations
