@@ -1,0 +1,247 @@
+graph_templates {
+  key: "bh_galaxy_node"
+  value {
+    children {
+      name: "node_0"
+      node_ref { node_descriptor: "BH_GALAXY_REV_C" }
+    }
+    internal_connections {
+      key: "QSFP_DD"
+      value {
+        connections { port_a { path: "node_0" tray_id: 1 port_id: 3 } port_b { path: "node_0" tray_id: 2 port_id: 3 } }
+        connections { port_a { path: "node_0" tray_id: 1 port_id: 4 } port_b { path: "node_0" tray_id: 2 port_id: 4 } }
+        connections { port_a { path: "node_0" tray_id: 1 port_id: 5 } port_b { path: "node_0" tray_id: 2 port_id: 5 } }
+        connections { port_a { path: "node_0" tray_id: 1 port_id: 6 } port_b { path: "node_0" tray_id: 2 port_id: 6 } }
+        connections { port_a { path: "node_0" tray_id: 3 port_id: 3 } port_b { path: "node_0" tray_id: 4 port_id: 3 } }
+        connections { port_a { path: "node_0" tray_id: 3 port_id: 4 } port_b { path: "node_0" tray_id: 4 port_id: 4 } }
+        connections { port_a { path: "node_0" tray_id: 3 port_id: 5 } port_b { path: "node_0" tray_id: 4 port_id: 5 } }
+        connections { port_a { path: "node_0" tray_id: 3 port_id: 6 } port_b { path: "node_0" tray_id: 4 port_id: 6 } }
+      }
+    }
+  }
+}
+graph_templates {
+  key: "bh_galaxy_sp"
+  value {
+    children {
+      name: "bh_galaxy_node_0"
+      graph_ref { graph_template: "bh_galaxy_node" }
+    }
+    children {
+      name: "bh_galaxy_node_1"
+      graph_ref { graph_template: "bh_galaxy_node" }
+    }
+    children {
+      name: "bh_galaxy_node_2"
+      graph_ref { graph_template: "bh_galaxy_node" }
+    }
+    children {
+      name: "bh_galaxy_node_3"
+      graph_ref { graph_template: "bh_galaxy_node" }
+    }
+    internal_connections {
+      key: "QSFP_DD"
+      value {
+        connections { port_a { path: ["bh_galaxy_node_0", "node_0"] tray_id: 1 port_id: 1 } port_b { path: ["bh_galaxy_node_1", "node_0"] tray_id: 3 port_id: 1 } }
+        connections { port_a { path: ["bh_galaxy_node_0", "node_0"] tray_id: 1 port_id: 2 } port_b { path: ["bh_galaxy_node_1", "node_0"] tray_id: 3 port_id: 2 } }
+        connections { port_a { path: ["bh_galaxy_node_0", "node_0"] tray_id: 2 port_id: 1 } port_b { path: ["bh_galaxy_node_1", "node_0"] tray_id: 4 port_id: 1 } }
+        connections { port_a { path: ["bh_galaxy_node_0", "node_0"] tray_id: 2 port_id: 2 } port_b { path: ["bh_galaxy_node_1", "node_0"] tray_id: 4 port_id: 2 } }
+        connections { port_a { path: ["bh_galaxy_node_3", "node_0"] tray_id: 1 port_id: 1 } port_b { path: ["bh_galaxy_node_2", "node_0"] tray_id: 3 port_id: 1 } }
+        connections { port_a { path: ["bh_galaxy_node_3", "node_0"] tray_id: 1 port_id: 2 } port_b { path: ["bh_galaxy_node_2", "node_0"] tray_id: 3 port_id: 2 } }
+        connections { port_a { path: ["bh_galaxy_node_3", "node_0"] tray_id: 2 port_id: 1 } port_b { path: ["bh_galaxy_node_2", "node_0"] tray_id: 4 port_id: 1 } }
+        connections { port_a { path: ["bh_galaxy_node_3", "node_0"] tray_id: 2 port_id: 2 } port_b { path: ["bh_galaxy_node_2", "node_0"] tray_id: 4 port_id: 2 } }
+        connections { port_a { path: ["bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 1 } port_b { path: ["bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 1 } }
+        connections { port_a { path: ["bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 2 } port_b { path: ["bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 2 } }
+        connections { port_a { path: ["bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 1 } port_b { path: ["bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 1 } }
+        connections { port_a { path: ["bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 2 } port_b { path: ["bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 2 } }
+        connections { port_a { path: ["bh_galaxy_node_2", "node_0"] tray_id: 1 port_id: 1 } port_b { path: ["bh_galaxy_node_0", "node_0"] tray_id: 3 port_id: 1 } }
+        connections { port_a { path: ["bh_galaxy_node_2", "node_0"] tray_id: 1 port_id: 2 } port_b { path: ["bh_galaxy_node_0", "node_0"] tray_id: 3 port_id: 2 } }
+        connections { port_a { path: ["bh_galaxy_node_2", "node_0"] tray_id: 2 port_id: 1 } port_b { path: ["bh_galaxy_node_0", "node_0"] tray_id: 4 port_id: 1 } }
+        connections { port_a { path: ["bh_galaxy_node_2", "node_0"] tray_id: 2 port_id: 2 } port_b { path: ["bh_galaxy_node_0", "node_0"] tray_id: 4 port_id: 2 } }
+      }
+    }
+  }
+}
+graph_templates {
+  key: "sp2"
+  value {
+    children {
+      name: "bh_galaxy_sp_0"
+      graph_ref { graph_template: "bh_galaxy_sp" }
+    }
+    children {
+      name: "bh_galaxy_sp_1"
+      graph_ref { graph_template: "bh_galaxy_sp" }
+    }
+    internal_connections {
+      key: "QSFP_DD"
+      value {
+        connections { port_a { path: ["bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 7 } port_b { path: ["bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 7 } }
+        connections { port_a { path: ["bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 8 } port_b { path: ["bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 8 } }
+        connections { port_a { path: ["bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 11 } port_b { path: ["bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 11 } }
+        connections { port_a { path: ["bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 12 } port_b { path: ["bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 12 } }
+        connections { port_a { path: ["bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 7 } port_b { path: ["bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 7 } }
+        connections { port_a { path: ["bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 8 } port_b { path: ["bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 8 } }
+        connections { port_a { path: ["bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 11 } port_b { path: ["bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 11 } }
+        connections { port_a { path: ["bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 12 } port_b { path: ["bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 12 } }
+        connections { port_a { path: ["bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 7 } port_b { path: ["bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 7 } }
+        connections { port_a { path: ["bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 8 } port_b { path: ["bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 8 } }
+        connections { port_a { path: ["bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 11 } port_b { path: ["bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 11 } }
+        connections { port_a { path: ["bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 12 } port_b { path: ["bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 12 } }
+        connections { port_a { path: ["bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 7 } port_b { path: ["bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 7 } }
+        connections { port_a { path: ["bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 8 } port_b { path: ["bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 8 } }
+        connections { port_a { path: ["bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 11 } port_b { path: ["bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 11 } }
+        connections { port_a { path: ["bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 12 } port_b { path: ["bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 12 } }
+      }
+    }
+  }
+}
+graph_templates {
+  key: "sp4"
+  value {
+    children {
+      name: "sp2_0"
+      graph_ref { graph_template: "sp2" }
+    }
+    children {
+      name: "sp2_1"
+      graph_ref { graph_template: "sp2" }
+    }
+    internal_connections {
+      key: "QSFP_DD"
+      value {
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 1 port_id: 9 } port_b { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 3 port_id: 9 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 1 port_id: 10 } port_b { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 3 port_id: 10 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 1 port_id: 13 } port_b { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 3 port_id: 13 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 1 port_id: 14 } port_b { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 3 port_id: 14 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 2 port_id: 9 } port_b { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 4 port_id: 9 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 2 port_id: 10 } port_b { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 4 port_id: 10 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 2 port_id: 13 } port_b { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 4 port_id: 13 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 2 port_id: 14 } port_b { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 4 port_id: 14 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 9 } port_b { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 9 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 10 } port_b { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 10 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 13 } port_b { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 13 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 14 } port_b { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 14 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 9 } port_b { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 9 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 10 } port_b { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 10 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 13 } port_b { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 13 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 14 } port_b { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 14 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 1 port_id: 9 } port_b { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 3 port_id: 9 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 1 port_id: 10 } port_b { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 3 port_id: 10 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 1 port_id: 13 } port_b { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 3 port_id: 13 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 1 port_id: 14 } port_b { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 3 port_id: 14 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 2 port_id: 9 } port_b { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 4 port_id: 9 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 2 port_id: 10 } port_b { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 4 port_id: 10 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 2 port_id: 13 } port_b { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 4 port_id: 13 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 2 port_id: 14 } port_b { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 4 port_id: 14 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 9 } port_b { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 9 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 10 } port_b { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 10 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 13 } port_b { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 13 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 14 } port_b { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 14 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 9 } port_b { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 9 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 10 } port_b { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 10 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 13 } port_b { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 13 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 14 } port_b { path: ["sp2_0", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 14 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 9 } port_b { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 9 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 10 } port_b { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 10 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 13 } port_b { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 13 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 14 } port_b { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 14 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 9 } port_b { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 9 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 10 } port_b { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 10 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 13 } port_b { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 13 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 14 } port_b { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 14 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 1 port_id: 9 } port_b { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 3 port_id: 9 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 1 port_id: 10 } port_b { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 3 port_id: 10 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 1 port_id: 13 } port_b { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 3 port_id: 13 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 1 port_id: 14 } port_b { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 3 port_id: 14 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 2 port_id: 9 } port_b { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 4 port_id: 9 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 2 port_id: 10 } port_b { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 4 port_id: 10 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 2 port_id: 13 } port_b { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 4 port_id: 13 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 2 port_id: 14 } port_b { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 4 port_id: 14 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 9 } port_b { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 9 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 10 } port_b { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 10 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 13 } port_b { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 13 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 1 port_id: 14 } port_b { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 3 port_id: 14 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 9 } port_b { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 9 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 10 } port_b { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 10 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 13 } port_b { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 13 } }
+        connections { port_a { path: ["sp2_1", "bh_galaxy_sp_0", "bh_galaxy_node_1", "node_0"] tray_id: 2 port_id: 14 } port_b { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 4 port_id: 14 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 1 port_id: 9 } port_b { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 3 port_id: 9 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 1 port_id: 10 } port_b { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 3 port_id: 10 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 1 port_id: 13 } port_b { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 3 port_id: 13 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 1 port_id: 14 } port_b { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 3 port_id: 14 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 2 port_id: 9 } port_b { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 4 port_id: 9 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 2 port_id: 10 } port_b { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 4 port_id: 10 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 2 port_id: 13 } port_b { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 4 port_id: 13 } }
+        connections { port_a { path: ["sp2_0", "bh_galaxy_sp_1", "bh_galaxy_node_3", "node_0"] tray_id: 2 port_id: 14 } port_b { path: ["sp2_1", "bh_galaxy_sp_1", "bh_galaxy_node_1", "node_0"] tray_id: 4 port_id: 14 } }
+      }
+    }
+  }
+}
+root_instance {
+  template_name: "sp4"
+  child_mappings {
+    key: "sp2_0"
+    value {
+      sub_instance {
+        template_name: "sp2"
+        child_mappings {
+          key: "bh_galaxy_sp_0"
+          value {
+            sub_instance {
+              template_name: "bh_galaxy_sp"
+              child_mappings { key: "bh_galaxy_node_0" value { sub_instance { template_name: "bh_galaxy_node" child_mappings { key: "node_0" value { host_id: 0 } } } } }
+              child_mappings { key: "bh_galaxy_node_1" value { sub_instance { template_name: "bh_galaxy_node" child_mappings { key: "node_0" value { host_id: 1 } } } } }
+              child_mappings { key: "bh_galaxy_node_2" value { sub_instance { template_name: "bh_galaxy_node" child_mappings { key: "node_0" value { host_id: 2 } } } } }
+              child_mappings { key: "bh_galaxy_node_3" value { sub_instance { template_name: "bh_galaxy_node" child_mappings { key: "node_0" value { host_id: 3 } } } } }
+            }
+          }
+        }
+        child_mappings {
+          key: "bh_galaxy_sp_1"
+          value {
+            sub_instance {
+              template_name: "bh_galaxy_sp"
+              child_mappings { key: "bh_galaxy_node_0" value { sub_instance { template_name: "bh_galaxy_node" child_mappings { key: "node_0" value { host_id: 4 } } } } }
+              child_mappings { key: "bh_galaxy_node_1" value { sub_instance { template_name: "bh_galaxy_node" child_mappings { key: "node_0" value { host_id: 5 } } } } }
+              child_mappings { key: "bh_galaxy_node_2" value { sub_instance { template_name: "bh_galaxy_node" child_mappings { key: "node_0" value { host_id: 6 } } } } }
+              child_mappings { key: "bh_galaxy_node_3" value { sub_instance { template_name: "bh_galaxy_node" child_mappings { key: "node_0" value { host_id: 7 } } } } }
+            }
+          }
+        }
+      }
+    }
+  }
+  child_mappings {
+    key: "sp2_1"
+    value {
+      sub_instance {
+        template_name: "sp2"
+        child_mappings {
+          key: "bh_galaxy_sp_0"
+          value {
+            sub_instance {
+              template_name: "bh_galaxy_sp"
+              child_mappings { key: "bh_galaxy_node_0" value { sub_instance { template_name: "bh_galaxy_node" child_mappings { key: "node_0" value { host_id: 8 } } } } }
+              child_mappings { key: "bh_galaxy_node_1" value { sub_instance { template_name: "bh_galaxy_node" child_mappings { key: "node_0" value { host_id: 9 } } } } }
+              child_mappings { key: "bh_galaxy_node_2" value { sub_instance { template_name: "bh_galaxy_node" child_mappings { key: "node_0" value { host_id: 10 } } } } }
+              child_mappings { key: "bh_galaxy_node_3" value { sub_instance { template_name: "bh_galaxy_node" child_mappings { key: "node_0" value { host_id: 11 } } } } }
+            }
+          }
+        }
+        child_mappings {
+          key: "bh_galaxy_sp_1"
+          value {
+            sub_instance {
+              template_name: "bh_galaxy_sp"
+              child_mappings { key: "bh_galaxy_node_0" value { sub_instance { template_name: "bh_galaxy_node" child_mappings { key: "node_0" value { host_id: 12 } } } } }
+              child_mappings { key: "bh_galaxy_node_1" value { sub_instance { template_name: "bh_galaxy_node" child_mappings { key: "node_0" value { host_id: 13 } } } } }
+              child_mappings { key: "bh_galaxy_node_2" value { sub_instance { template_name: "bh_galaxy_node" child_mappings { key: "node_0" value { host_id: 14 } } } } }
+              child_mappings { key: "bh_galaxy_node_3" value { sub_instance { template_name: "bh_galaxy_node" child_mappings { key: "node_0" value { host_id: 15 } } } } }
+            }
+          }
+        }
+      }
+    }
+  }
+}

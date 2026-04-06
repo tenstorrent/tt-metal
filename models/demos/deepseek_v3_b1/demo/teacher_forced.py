@@ -332,6 +332,7 @@ def run_teacher_forced_demo(
 
     result: TeacherForcedResult | None = None
     with open_mesh_device() as mesh_device:
+        logger.info("Creating model pipeline...")
         model_pipeline = ModelPipeline(
             mesh_device=mesh_device,
             weights_mode=weights_mode,
@@ -342,9 +343,11 @@ def run_teacher_forced_demo(
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
         )
+        logger.info("Model pipeline created successfully")
 
         my_mesh_id = mesh_device.get_system_mesh_id()
         if my_mesh_id == 0:
+            logger.info("Loading tokenizer...")
             tokenizer = load_tokenizer(tokenizer_name_or_path)
             messages = [{"role": "user", "content": prompt}]
             prompt_with_template = tokenizer.apply_chat_template(
