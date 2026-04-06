@@ -24,3 +24,4 @@
 {"event":"complete","operation":"hardsigmoid","final_status":"SUCCESS","output_file":".claude-analysis/frac-1/hardsigmoid_analysis.md","commit":"a0788e4da1","ts":"2026-04-06T09:41:14+00:00"}
 {"event":"complete","operation":"softshrink","final_status":"SUCCESS","output_file":".claude-analysis/frac-1/softshrink_sfpu_analysis.md","commit":"pending_orchestrator","ts":"2026-04-06T09:41:44+00:00"}
 {"event":"analysis_written","operation":"cbrt","output_file":".claude-analysis/frac-1/cbrt_analysis.md","sections":["dispatch_summary","approx_mode_resolution","abstraction_layers","call_chain","params_dispatch_summary","annotated_source","instruction_table","register_usage","addr_mode_config","local_knowledge_sources"],"ts":"2026-04-06T09:42:29+00:00"}
+{"event":"complete","operation":"hardtanh","final_status":"SUCCESS","output_file":".claude-analysis/frac-1/hardtanh_analysis.md","commit":"7486964b1f","ts":"2026-04-06T09:43:52+00:00"}

@@ -3,7 +3,7 @@
 ## Metadata
 | Field | Value |
 |-------|-------|
-| Operation | `hardsigmoid`, `softshrink`, `hardtanh` |
+| Operation | `hardsigmoid`, `softshrink`, `hardtanh`, `cbrt` |
 | Agent | `ttnn-unary-sfpu-operation-analyzer` |
 | Stages | SFPU kernel analysis (single stage per operation) |
 | Input | `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp` |
@@ -120,6 +120,51 @@
 - The kernel is a clean SFPI implementation with two sequential `v_if` blocks for min/max clamping
 - Both parameters (min_val, max_val) are passed as IEEE 754 bits (uint32_t) and reinterpreted via `Converter::as_float()`
 - Very similar pattern to softshrink but simpler (no arithmetic, just conditional assignment)
+
+---
+
+## Operation: cbrt
+
+### 1. Input Interpretation
+
+| Field | Value | Confidence | Notes |
+|-------|-------|------------|-------|
+| operation_name | `cbrt` | HIGH | Explicitly provided |
+| UnaryOpType | `CBRT` | HIGH | Found in `unary_op_types.hpp:129` |
+| compute_kernel | `eltwise_sfpu.cpp` | HIGH | `get_compute_kernel_path()` default case |
+| init_func | `cbrt_tile_init()` | HIGH | From API header `cbrt.h` |
+| tile_func | `cbrt_tile(idst)` | HIGH | From API header `cbrt.h` |
+| approx_mode | `false` | HIGH | `get_op_approx_mode()` default case |
+
+### 2. Execution Timeline
+
+- **Dispatch Tracing**: CBRT is NOT wired in `unary_op_utils.cpp` (no case in `get_op_init_and_func_default`). `SfpuType::cbrt` is absent from `llk_sfpu_types.h`. However, all SFPU kernel files exist. PASS (analysis proceeded on kernel files).
+- **Kernel Source Read**: Read `ckernel_sfpu_cbrt.h` for both WH and BH -- identical implementations. Moroz et al. magic-constant cube root approximation with Householder polynomial refinement. Two paths: FP32 (extra Halley step) and FP16B. PASS.
+- **Instruction Analysis**: Identified 11 instruction types: SFPLOAD, SFPABS, SFPCAST, SFPMAD, SFPSHFT, SFPSETSGN, SFPDIVP2, SFP_STOCH_RND, SFPSTORE, SFPLOADI, SFPCONFIG. PASS.
+- **Identifier Verification**: All function names (`calculate_cube_root`, `cube_root_init`) verified via grep. All file paths verified to exist. PASS.
+- **Analysis Writing**: Wrote to `.claude-analysis/frac-1/cbrt_analysis.md`. PASS.
+
+### 3. Deviations
+
+- CBRT dispatch is broken in this worktree: `SfpuType::cbrt` not in enum, `get_op_init_and_func_default` has no CBRT case
+- `llk_math_eltwise_unary_sfpu_params.h` read from main repo's submodule (empty tt_llk in worktree)
+
+### 4. Artifacts
+
+| Path | Purpose |
+|------|---------|
+| `.claude-analysis/frac-1/cbrt_analysis.md` | Complete SFPU kernel analysis for cbrt |
+
+### 5. Key Findings
+
+- **APPROXIMATION_MODE** is `false` but irrelevant -- the `calculate_cube_root` function has no `if constexpr (APPROXIMATION_MODE)` branches
+- WH and BH implementations are identical (byte-for-byte)
+- Uses `ADDR_MOD_7` with zero increments on both architectures
+- Algorithm: Moroz et al. magic-constant cube root (0x548c2b4b), computed via SFPCAST + SFPMAD + SFPSHFT trick
+- Uses 3 programmable constant registers for polynomial coefficients (a0, a1, a2)
+- FP32 path adds a Halley refinement step using `vConstNeg1` (-1.0) and `vConst1` (1.0) plus `addexp`/SFPDIVP2
+- Non-FP32 path uses `float_to_fp16b`/SFP_STOCH_RND for format conversion before store
+- No condition code (CC) manipulation -- purely arithmetic kernel
 
 ---
 
