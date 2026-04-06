@@ -45,6 +45,9 @@ class DistributedTensorConfig:
     mesh_mapper: Any
     mesh_composer: Any
     logical_shape_fn: Optional[Any] = None
+    # Replicated mesh + ``ConcatMeshToTensor(dim=0)`` stacks one copy per device on dim 0; set True to
+    # take ``result[: ttnn_tensor.shape[0]]`` after readback so logical batch matches a single replica.
+    replicate_compose_slice_dim0_to_leading: bool = False
 
     def get_logical_shape(self, sharded_shape):
         if self.logical_shape_fn is not None:
@@ -541,9 +544,13 @@ class NormalRun:
         def _to_torch_from_device(self):
             is_mesh_device = self.ttnn_distributed_tensor_config is not None
             if is_mesh_device:
-                return ttnn.to_torch(
-                    self.ttnn_tensor, mesh_composer=self.ttnn_distributed_tensor_config.mesh_composer
-                ).to(self.device, self.dtype)
+                cfg = self.ttnn_distributed_tensor_config
+                result = ttnn.to_torch(self.ttnn_tensor, mesh_composer=cfg.mesh_composer).to(self.device, self.dtype)
+                if getattr(cfg, "replicate_compose_slice_dim0_to_leading", False) and result.dim() >= 1:
+                    lead = int(self.ttnn_tensor.shape[0])
+                    if result.shape[0] > lead:
+                        result = result[:lead].contiguous()
+                return result
             return ttnn.to_torch(self.ttnn_tensor).to(self.device, self.dtype)
 
         if self.ttnn_tensor is None:
