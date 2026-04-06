@@ -18,7 +18,6 @@ pytestmark = pytest.mark.use_module_device
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("h", [32, 384])
 @pytest.mark.parametrize("w", [64, 1024])
-@pytest.mark.parametrize("h, w", [(31, 65)])  # added shape which is non-multiple of 32
 def test_rms_norm(device, batch_size, h, w):
     torch.manual_seed(0)
 
@@ -40,7 +39,6 @@ def test_rms_norm(device, batch_size, h, w):
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("h", [128])
 @pytest.mark.parametrize("w", [32, 4096])
-@pytest.mark.parametrize("h, w", [(31, 65)])  # added shape which is non-multiple of 32
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4, ttnn.MathFidelity.HiFi2])
 @pytest.mark.parametrize("math_approx_mode", [True, False])
 @pytest.mark.parametrize("fp32_dest_acc_en", [True, False])
