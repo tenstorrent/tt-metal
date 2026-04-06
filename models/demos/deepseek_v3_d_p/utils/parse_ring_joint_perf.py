@@ -31,6 +31,7 @@ Examples:
 """
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -120,19 +121,34 @@ def _parse_shape_val(val):
     return int(s)
 
 
+def _parse_sdpa_core_count(attributes):
+    """Parse SDPA compute grid from the ATTRIBUTES column to get actual compute core count."""
+    m = re.search(r"compute_with_storage_grid_size=\(x=(\d+);y=(\d+)\)", str(attributes))
+    if m:
+        return int(m.group(1)) * int(m.group(2))
+    return None
+
+
 def extract_hw_info(ops, rp_factor, up_factor):
     """
     Extract hardware info and global op dimensions from the CSV data.
 
     Per-device shapes from CSV are scaled up by rp_factor (sequence) and up_factor (heads)
-    to recover global dimensions.
+    to recover global dimensions. Core count is parsed from the SDPA program config in
+    ATTRIBUTES (excludes CCL cores) rather than using the total CORE COUNT column.
 
     Returns dict with all info needed for theoretical compute.
     """
     row = ops.iloc[0]
     fidelity = row["MATH FIDELITY"]
-    core_count = int(row["CORE COUNT"])
     num_devices = ops["DEVICE ID"].nunique() * ops["rank"].nunique()
+
+    # Parse actual SDPA compute cores from attributes (excludes CCL cores)
+    sdpa_cores = _parse_sdpa_core_count(row.get("ATTRIBUTES", ""))
+    if sdpa_cores is None:
+        # Fallback to CORE COUNT column
+        sdpa_cores = int(row["CORE COUNT"])
+        print(f"WARNING: Could not parse SDPA grid from ATTRIBUTES, using CORE COUNT={sdpa_cores}", file=sys.stderr)
 
     # Q: [B, nhq_per_dev, seq_per_dev, head_dim_k]
     b = _parse_shape_val(row["INPUT_0_W_PAD[LOGICAL]"])
@@ -149,7 +165,7 @@ def extract_hw_info(ops, rp_factor, up_factor):
 
     return {
         "fidelity": fidelity,
-        "core_count": core_count,
+        "core_count": sdpa_cores,
         "num_devices": num_devices,
         "b": b,
         "nhq": nhq,
