@@ -69,6 +69,7 @@ def run_test_linear_impl(
     torch_addcmul_b=None,
     addcmul_scalar=1.0,
     chunks=1,
+    broadcast_gate=True,
 ):
     ccl_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
@@ -126,7 +127,16 @@ def run_test_linear_impl(
             device=device,
             mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
         )
-        tt_addcmul_b = ttnn.from_torch(torch_addcmul_b, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        if broadcast_gate:
+            tt_addcmul_b = ttnn.from_torch(torch_addcmul_b, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        else:
+            tt_addcmul_b = ttnn.from_torch(
+                torch_addcmul_b,
+                dtype=input_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
+            )
     else:
         tt_addcmul_a = None
         tt_addcmul_b = None
@@ -339,6 +349,7 @@ def run_test_linear(
     fuse_addcmul=False,
     addcmul_scalar=1.0,
     chunks=1,
+    broadcast_gate=True,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
@@ -359,10 +370,16 @@ def run_test_linear(
     if fuse_addcmul:
         if use_non_fused:
             torch_addcmul_a = torch.randn(1, 1, M, N, dtype=torch.bfloat16)  # base value (full shape)
-            torch_addcmul_b = torch.randn(1, 1, 1, N, dtype=torch.bfloat16)  # gate (broadcast like bias)
+            if broadcast_gate:
+                torch_addcmul_b = torch.randn(1, 1, 1, N, dtype=torch.bfloat16)  # gate (broadcast like bias)
+            else:
+                torch_addcmul_b = torch.randn(1, 1, M, N, dtype=torch.bfloat16)  # gate (full, no broadcast)
         else:
             torch_addcmul_a = torch.randn(M, N, dtype=torch.bfloat16)  # base value (full shape)
-            torch_addcmul_b = torch.randn(1, N, dtype=torch.bfloat16)  # gate (broadcast like bias)
+            if broadcast_gate:
+                torch_addcmul_b = torch.randn(1, N, dtype=torch.bfloat16)  # gate (broadcast like bias)
+            else:
+                torch_addcmul_b = torch.randn(M, N, dtype=torch.bfloat16)  # gate (full, no broadcast)
     else:
         torch_addcmul_a = None
         torch_addcmul_b = None
@@ -426,6 +443,7 @@ def run_test_linear(
         torch_addcmul_b=torch_addcmul_b,
         addcmul_scalar=addcmul_scalar,
         chunks=chunks,
+        broadcast_gate=broadcast_gate,
     )
 
 
@@ -636,3 +654,67 @@ def test_linear(
             for i in range(mesh_device.get_num_devices()):
                 assert check_result[n][c][i]["pcc"] > 0.999_500
                 assert check_result[n][c][i]["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y, cluster_axis",
+    [
+        [
+            (2, 4),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
+            ttnn.Topology.Ring,
+            1,
+            4,
+            0,
+            1,
+            4,
+            4,
+            1,
+        ],
+    ],
+    ids=["2x4links1"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("broadcast_gate", [True, False], ids=["broadcast_gate", "full_gate"])
+@pytest.mark.parametrize("use_non_fused", [True, False], ids=["separate", "fused"])
+def test_linear_addcmul_gate(
+    mesh_device,
+    topology,
+    num_links,
+    num_workers_per_link,
+    sp_axis,
+    tp_axis,
+    core_grid_x,
+    core_grid_y,
+    cluster_axis,
+    broadcast_gate,
+    use_non_fused,
+):
+    """Test fused addcmul with both broadcast and non-broadcast (full) gate."""
+    check_result = run_test_linear(
+        mesh_device,
+        M=3072,
+        K=5120,
+        N=1280,
+        M_block_size=8,
+        K_block_size=8,
+        N_block_size=8,
+        subblock_h=2,
+        subblock_w=1,
+        topology=topology,
+        core_grid=ttnn.CoreCoord(core_grid_x, core_grid_y),
+        num_workers_per_link=num_workers_per_link,
+        num_links=num_links,
+        use_bias=True,
+        fuse_addcmul=True,
+        addcmul_scalar=1.0,
+        broadcast_gate=broadcast_gate,
+        use_non_fused=use_non_fused,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        cluster_axis=cluster_axis,
+    )
+    for c in range(1):
+        for i in range(mesh_device.get_num_devices()):
+            assert check_result[0][c][i]["pcc"] > 0.999_500
+            assert check_result[0][c][i]["relative_rmse"] < 0.02
