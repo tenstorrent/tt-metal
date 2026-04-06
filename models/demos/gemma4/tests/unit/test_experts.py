@@ -11,9 +11,9 @@ from models.demos.gemma4.tt.experts import Gemma4ExpertConfig, Gemma4Experts
 from ...tests.test_factory import TestFactory, compare_tensors, parametrize_batch_seq
 
 
-@parametrize_batch_seq(configs=[(1, 1)], ids=["decode"])
+@parametrize_batch_seq(configs=[(1, 1), (1, 32)], ids=["decode", "prefill_32"])
 def test_experts(batch_size, seq_len, device):
-    """Test on-device experts (decode, seq_len=1) against HF Gemma4TextExperts."""
+    """Test on-device experts (decode + prefill) against HF Gemma4TextExperts."""
     num_experts = 8
     top_k = 4
     hf_text_config = TestFactory.create_hf_text_config(num_experts=num_experts, top_k=top_k)

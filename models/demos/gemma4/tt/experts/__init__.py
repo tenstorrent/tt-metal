@@ -14,6 +14,7 @@ import torch.nn.functional as F
 import ttnn
 
 from .decode import decode_forward
+from .prefill import prefill_forward
 from .weights import ExpertWeights, load_expert_weights
 
 
@@ -77,8 +78,10 @@ class Gemma4Experts:
         """
         seq_len = hidden_states.shape[2]
 
-        if seq_len == 1 and self.weights is not None:
-            # Decode: on-device sparse_matmul
+        if self.weights is None:
+            return self._cpu_forward(hidden_states, dense_routing)
+
+        if seq_len == 1:
             return decode_forward(
                 hidden_states=hidden_states,
                 routing_weights=dense_routing,
@@ -86,8 +89,17 @@ class Gemma4Experts:
                 config=self.config,
             )
         else:
-            # Prefill: CPU fallback (sparse_matmul only supports seq_len=1)
-            return self._cpu_forward(hidden_states, dense_routing)
+            # Prefill: on-device via sparse_matmul with tile-grouped sequence
+            # Falls back to CPU if seq_len not tile-aligned
+            if seq_len % 32 == 0:
+                return prefill_forward(
+                    hidden_states=hidden_states,
+                    routing_weights=dense_routing,
+                    weights=self.weights,
+                    config=self.config,
+                )
+            else:
+                return self._cpu_forward(hidden_states, dense_routing)
 
     def _cpu_forward(self, hidden_states, dense_routing):
         """CPU expert forward for prefill (seq_len > 1)."""
