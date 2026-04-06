@@ -369,6 +369,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         is_first_chip,
         is_last_chip);
 
+    TT_FATAL(ring_size % 2 == 0, "reduce_scatter_minimal_async ring implementation doesn't support odd ring size");
+
     bool fuse_op = fused_op_signaler.has_value();
 
     // op hyperparams
