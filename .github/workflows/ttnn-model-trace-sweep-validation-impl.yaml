@@ -159,6 +159,15 @@ jobs:
           name: ${{ needs.prepare-validation-inputs.outputs.master-json-artifact-name }}
           path: /work/model_tracer/traced_operations
 
+      # Sweep generation here differs from ttnn-run-sweeps.yaml, where the sweep mode
+      # is either "model traced" or "lead models"—that workflow runs one sweep mode per job
+      # and uploads only one vectors_export/ artifact. In this workflow, inputs.scope-targets
+      # can be "all", so both model_traced and lead_models passes may run in a single job.
+      # sweeps_parameter_generator writes only to vectors_export/, so after each pass, its
+      # output is copied to validation_vectors/<scope>/ for use in compute_validation_sweep_matrix.py
+      # (--vectors-root expects those subdirs) and for producing per-scope artifacts
+      # (sweeps-vectors-model_traced vs lead_models). We always pass --master-trace to ensure
+      # generated vectors match ttnn_operations_master.json.
       - name: Generate sweep vectors
         env:
           SCOPE_TARGET: ${{ inputs.scope-targets }}
@@ -407,17 +416,10 @@ jobs:
           path: validation_results
           merge-multiple: true
 
-      - name: Split traces and validate sweep output
+      - name: Validate sweep traces
         id: validate-traces
         run: |
-          MODEL_TRACE_JSON="model_tracer/traced_operations/ttnn_operations_master.json"
-          MODEL_TRACE_SPLIT_DIR="model_tracer/traced_operations/ttnn_operations_master_split"
           SWEEP_TRACES_DIR="validation_traces"
-          VALIDATION_REPORT="validation_summary.md"
-
-          python3 model_tracer/traced_operations/split_model_trace.py \
-            "$MODEL_TRACE_JSON" \
-            -o "$MODEL_TRACE_SPLIT_DIR"
 
           shopt -s nullglob
           sweep_trace_files=("$SWEEP_TRACES_DIR"/sweep_trace_*.json)
@@ -427,17 +429,13 @@ jobs:
             exit 0
           fi
 
-          for sweep_trace_json in "${sweep_trace_files[@]}"; do
-            python3 model_tracer/traced_operations/split_model_trace.py \
-              "$sweep_trace_json" \
-              -o "${sweep_trace_json%.json}_split"
-          done
+          echo "Found ${#sweep_trace_files[@]} sweep trace file(s)"
 
           set +e
-          python3 tests/sweep_framework/validate_all_traces.py \
-            --model-trace-split "$MODEL_TRACE_SPLIT_DIR" \
-            --sweep-traces-dir "$SWEEP_TRACES_DIR" \
-            --output-report "$VALIDATION_REPORT"
+          python3 tests/sweep_framework/validate_sweep_trace.py \
+            --master-trace model_tracer/traced_operations/ttnn_operations_master.json \
+            --sweep-trace "${sweep_trace_files[@]}" \
+            --output-report validation_summary.md
           validation_exit_code=$?
           set -e
 

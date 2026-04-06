@@ -397,8 +397,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--sweep-trace",
-        default="model_tracer/traced_operations/sweep_trace.json",
-        help="Path to sweep trace JSON (default: model_tracer/traced_operations/sweep_trace.json)",
+        nargs="+",
+        default=["model_tracer/traced_operations/sweep_trace.json"],
+        help="Path(s) to sweep trace JSON file(s). Multiple files are merged before validation.",
     )
     parser.add_argument(
         "--output-report",
@@ -420,19 +421,29 @@ def main() -> int:
     args = parser.parse_args()
 
     master_path = Path(args.master_trace)
-    sweep_path = Path(args.sweep_trace)
+    sweep_paths = [Path(p) for p in args.sweep_trace]
 
     if not master_path.is_file():
         print(f"ERROR: master trace not found: {master_path}", file=sys.stderr)
         return 1
-    if not sweep_path.is_file():
-        print(f"ERROR: sweep trace not found: {sweep_path}", file=sys.stderr)
-        return 1
+    for sp in sweep_paths:
+        if not sp.is_file():
+            print(f"ERROR: sweep trace not found: {sp}", file=sys.stderr)
+            return 1
 
     with open(master_path) as f:
         master_data = json.load(f)
-    with open(sweep_path) as f:
-        sweep_data = json.load(f)
+
+    # Merge multiple sweep traces into a single operations dict
+    sweep_data: dict = {"operations": {}}
+    for sp in sweep_paths:
+        with open(sp) as f:
+            data = json.load(f)
+        for op_name, op_info in data.get("operations", {}).items():
+            existing = sweep_data["operations"].setdefault(op_name, {"configurations": []})
+            existing["configurations"].extend(op_info.get("configurations", []))
+
+    print(f"Loaded {len(sweep_paths)} sweep trace(s), {len(sweep_data['operations'])} operations")
 
     report = validate(master_data, sweep_data)
     rendered = render_report(report)
