@@ -26,6 +26,7 @@ Usage:
 """
 
 import argparse
+import os
 import time
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
@@ -880,7 +881,7 @@ class Molmo2Generator:
 
         return result
 
-    def _capture_unified_trace(self, trace_tensors: dict) -> Tuple[int, ttnn.Tensor]:
+    def _capture_unified_trace(self, trace_tensors: dict, current_run_trace: bool = False) -> Tuple[int, ttnn.Tensor]:
         """
         Capture unified trace for Vision + embed_tokens + Fusion + Text Prefill.
 
