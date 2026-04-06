@@ -225,7 +225,7 @@ def test_wan_transformer_block(
         pytest.param((2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
         pytest.param((2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
         # WH (ring) on 4x8
-        pytest.param((4, 8), (4, 8), 1, 0, 4, line_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
+        pytest.param((4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
         # BH (ring) on 4x8
         pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"),
     ],
