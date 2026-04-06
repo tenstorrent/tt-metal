@@ -233,9 +233,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
     // Transpose core grid if the output is wide (M > N)
     // If transpose core grid, we parallelize M on cores_x and N on cores_y and swap the NOCs and RISCVs
-    // When fusing with strided reduce scatter, transposing is disabled
-    // because it resulted in slightly lower performance on a case of interest.
-    // (This can be revisited if needed.)
+    // When fusing with strided reduce scatter, transposing is disabled because the RS iteration
+    // structure requires mm_N_block_wt <= slice_Wt. Transposing puts N on fewer cores (grid_size.y),
+    // which can make mm_N_block_wt > slice_Wt and violate this constraint.
     const bool fuse_srs = srs_fused_op_signaler.has_value();
     bool transpose_core_grid = M > N && !fuse_srs;
 
@@ -731,6 +731,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         if (use_fused_ternary) {
             in0_args.push_back(fused_ternary_input_a.value().buffer()->address());
             in0_args.push_back(fused_ternary_input_b.value().buffer()->address());
+            uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+            in0_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
         }
         // Add output addresses at the end (unified layout for both regular and split)
         for (const auto& output_tensor : output_tensors) {
@@ -782,6 +784,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         if (use_fused_ternary) {
             in1_args.push_back(fused_ternary_input_a.value().buffer()->address());
             in1_args.push_back(fused_ternary_input_b.value().buffer()->address());
+            uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+            in1_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
         }
         // Add output addresses at the end (unified layout for both regular and split)
         for (const auto& output_tensor : output_tensors) {
@@ -822,6 +826,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         };
         if (use_fused_ternary) {
             compute_runtime_args.push_back(*reinterpret_cast<const uint32_t*>(&fused_ternary_scalar.value()));
+            uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+            compute_runtime_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
         }
         SetRuntimeArgs(program, compute_kernels_id, core, compute_runtime_args);
     }

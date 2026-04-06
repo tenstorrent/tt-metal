@@ -188,8 +188,10 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
             ternary_a_logical[-2],
             ternary_a_logical[-1]);
         TT_FATAL(
-            ternary_b_logical[-2] == 1 && ternary_b_logical[-1] == N,
-            "fused_ternary_input_b shape must be [1, N={}] (broadcast like bias), got [{}, {}]",
+            (ternary_b_logical[-2] == 1 || ternary_b_logical[-2] == M) && ternary_b_logical[-1] == N,
+            "fused_ternary_input_b shape must be [1, N={}] (broadcast) or [M={}, N={}] (full), got [{}, {}]",
+            N,
+            M,
             N,
             ternary_b_logical[-2],
             ternary_b_logical[-1]);
