@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
 from pathlib import Path
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -18,6 +20,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     ReduceScatterAsyncMinimalConfig,
     SavedWeight,
 )
+from models.demos.deepseek_v3.utils.debug_utils import _print_memory_stats
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -184,7 +187,22 @@ class MLA2D(MLA1D):
 
         ccl = cfg["ccl"]
 
+        mesh_shape_0 = cfg["mla1d"]["mesh_shape"][0]
+        _, batch_size, seq_len_full, model_dim = x.shape
+        rs_out_seq_len = seq_len_full // mesh_shape_0
+        # x_rs = ttnn.allocate_tensor_on_device(
+        #     shape=(1, batch_size, rs_out_seq_len, model_dim),
+        #     dtype=ttnn.bfloat16,
+        #     layout=ttnn.TILE_LAYOUT,
+        #     mesh_device=x.device(),
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # )
+        x_rs = ttnn.clone(x)
+
+        _print_memory_stats(x.device(), "mla2d start")
         x_next = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["seq_ag_prefill"]))
+        _print_memory_stats(x.device(), "mla2d ag")
+        logger.debug(f"mla2d x_next - {x_next.shape} - {x_next.dtype} - {x_next.layout}")
         batch_size_per_row = cfg["mla1d"]["batch_size_per_row"]
         x_out = super().forward_prefill(
             x_next,
@@ -194,12 +212,34 @@ class MLA2D(MLA1D):
             rope_tensors=rope_tensors,
             page_table=page_table,
         )
+        _print_memory_stats(x.device(), "mla2d after mla1d before dealloc")
+        logger.debug(f"mla2d x_out - {x_out.shape} - {x_out.dtype} - {x_out.layout}")
         ttnn.deallocate(x_next)
+        _print_memory_stats(x.device(), "mla2d after mla1d before dealloc")
 
-        x_rs = (
-            ttnn.experimental.reduce_scatter_minimal_async(
-                x_out, **ccl.populate_reduce_scatter_runtime_args(cfg["seq_rs_prefill"])
+        RS_SEQ_CHUNK_SIZE = int(os.getenv("DEEPSEEK_RS_PREFILL_CHUNK_SIZE", "8192"))
+        num_chunks = (seq_len_full + RS_SEQ_CHUNK_SIZE - 1) // RS_SEQ_CHUNK_SIZE
+        for chunk_idx in range(num_chunks):
+            in_start = chunk_idx * RS_SEQ_CHUNK_SIZE
+            in_end = min(in_start + RS_SEQ_CHUNK_SIZE, seq_len_full)
+
+            x_out_chunk = ttnn.slice(x_out, [0, 0, in_start, 0], [1, batch_size, in_end, model_dim])
+            x_rs_chunk = (
+                ttnn.experimental.reduce_scatter_minimal_async(
+                    x_out_chunk, **ccl.populate_reduce_scatter_runtime_args(cfg["seq_rs_prefill"])
+                )
+                * scale
             )
-            * scale
-        )
+
+            out_start = in_start // mesh_shape_0
+            out_end = min(in_end // mesh_shape_0, rs_out_seq_len)
+            ttnn.experimental.slice_write(
+                x_rs_chunk, x_rs, [0, 0, out_start, 0], [1, batch_size, out_end, model_dim], [1, 1, 1, 1]
+            )
+            ttnn.deallocate(x_rs_chunk)
+
+        ttnn.deallocate(x_out)
+        _print_memory_stats(x.device(), "mla2d preend")
+        x_rs = ttnn.reallocate(x_rs)
+        _print_memory_stats(x.device(), "mla2d end")
         return x_rs

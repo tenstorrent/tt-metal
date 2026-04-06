@@ -361,10 +361,47 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         page_tables: Sequence[ttnn.Tensor],
         return_hidden: bool = False,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
+        CHUNK_SIZE = 65536
+        cos_dim = rope_tensors["cos_matrix"].shape[3]
+        sin_dim = rope_tensors["sin_matrix"].shape[3]
+        logits = []
+        hidden_for_mtp = []
+        for i in range(0, x.shape[2], CHUNK_SIZE):
+            start = i * CHUNK_SIZE
+            end = min((i + 1) * CHUNK_SIZE, x.shape[2])
+            x_chunk = ttnn.slice(x, [0, 0, start], [1, 1, end])
+            rope_chunk = {
+                "cos_matrix": ttnn.slice(rope_tensors["cos_matrix"], [0, 0, start, 0], [1, 1, end, cos_dim]),
+                "sin_matrix": ttnn.slice(rope_tensors["sin_matrix"], [0, 0, start, 0], [1, 1, end, sin_dim]),
+                "trans_matrix": rope_tensors["trans_matrix"],
+            }
+            logits_chunk, *hidden_for_mtp_chunk = cls._forward_prefill(
+                x_chunk, user_id, cfg, rope_chunk, page_tables, return_hidden
+            )
+            logits.append(logits_chunk)
+            if len(hidden_for_mtp_chunk) > 0:
+                hidden_for_mtp.append(hidden_for_mtp_chunk)
+        logits = ttnn.concat(logits, dim=2)
+        if len(hidden_for_mtp) == 0:
+            return logits
+        hidden_for_mtp = ttnn.concat(hidden_for_mtp, dim=2)
+        return logits, hidden_for_mtp
+
+    @classmethod
+    def _forward_prefill(
+        cls,
+        x: ttnn.Tensor,
+        user_id: int,
+        cfg: RunPrefillConfig,
+        rope_tensors: dict,
+        page_tables: Sequence[ttnn.Tensor],
+        return_hidden: bool = False,
+    ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         """Forward pass for prefill mode."""
 
         x = Embedding2D.forward_prefill(x, cfg["embedding"])
 
+        i = 0
         for (block_cfg, BlockClass), page_table in zip(
             itertools.chain(
                 zip(cfg["mlp_decoder_block"], itertools.repeat(DecoderBlock2D)),
@@ -373,16 +410,21 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             page_tables,
             strict=True,
         ):
+            logger.info(f"{BlockClass} ({i}) started")
             x = BlockClass.forward_prefill(x, user_id, block_cfg, rope_tensors, page_table)
+            logger.info(f"{BlockClass} ({i}) finished")
+            i += 1
 
         # Capture pre-norm hidden states for MTP; MTP applies its own hnorm.
         hidden_for_mtp = x if return_hidden else None
 
         x = DistributedRMSNorm.forward_prefill(x, cfg["norm"])  # no resharding needed for prefill
+        logger.debug(f"DistributedRMSNorm finished")
 
         ccl = cfg["lm_head"]["ccl"]
 
         x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["lm_head"]["all_gather"]))
+        logger.debug(f"all_gather_async finished")
         if return_hidden:
             lm_head_in = ttnn.clone(x)
             ttnn.deallocate(x)
@@ -390,6 +432,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             return logits, hidden_for_mtp
 
         logits = LMHead1D.forward_prefill(x, cfg["lm_head"])
+        logger.debug(f"LMHead1D finished")
         return logits
 
     @classmethod
