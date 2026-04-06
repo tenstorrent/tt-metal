@@ -329,17 +329,37 @@ class MoEGate(AbstractModule):
         )
         # create the bias tensor
         scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
-        scores_correction_bias = scores_correction_bias[:batch_size_per_iter, :, :]
+        scores_correction_bias = ttnn.slice(
+            scores_correction_bias,
+            slice_start=[0, 0, 0],
+            slice_end=[batch_size_per_iter, 16, 16],
+            memory_config=input_output_mem_config,
+        )
 
         # get the output tensor, input indices and output indices
         ttnn_output_tensor = cfg["gate_routing"]["ttnn_output_tensor"]
-        ttnn_output_tensor = ttnn_output_tensor[:batch_size_per_iter, :, :]
+        ttnn_output_tensor = ttnn.slice(
+            ttnn_output_tensor,
+            slice_start=[0, 0, 0],
+            slice_end=[batch_size_per_iter, 32, 32],
+            memory_config=input_output_mem_config,
+        )
 
         ttnn_input_indices = cfg["gate_routing"]["ttnn_input_indices"]
-        ttnn_input_indices = ttnn_input_indices[:batch_size_per_iter, :, :]
+        ttnn_input_indices = ttnn.slice(
+            ttnn_input_indices,
+            slice_start=[0, 0, 0],
+            slice_end=[batch_size_per_iter, 16, 16],
+            memory_config=input_output_mem_config,
+        )
 
         ttnn_output_indices = cfg["gate_routing"]["ttnn_output_indices"]
-        ttnn_output_indices = ttnn_output_indices[:batch_size_per_iter, :, :]
+        ttnn_output_indices = ttnn.slice(
+            ttnn_output_indices,
+            slice_start=[0, 0, 0],
+            slice_end=[batch_size_per_iter, 32, 32],
+            memory_config=input_output_mem_config,
+        )
 
         # we can only have one token per core at a time
         # this loop is designed to handle the huge batch size (4096)
