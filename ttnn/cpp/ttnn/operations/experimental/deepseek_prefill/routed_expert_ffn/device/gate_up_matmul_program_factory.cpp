@@ -6,7 +6,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -15,192 +15,351 @@ namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn {
 namespace {
 
 // CB indices — kept in sync with the kernel files.
-constexpr tt::CBIndex CB_IN0 = tt::CBIndex::c_0;       // x
-constexpr tt::CBIndex CB_IN1_GATE = tt::CBIndex::c_1;  // gate_proj tiles
-constexpr tt::CBIndex CB_IN1_UP = tt::CBIndex::c_2;    // up_proj tiles
-constexpr tt::CBIndex CB_GATE_INT = tt::CBIndex::c_3;  // gate intermediate (accumulator)
-constexpr tt::CBIndex CB_UP_INT = tt::CBIndex::c_4;    // up   intermediate (accumulator)
-constexpr tt::CBIndex CB_GATE_OUT = tt::CBIndex::c_5;  // gate output tiles
-constexpr tt::CBIndex CB_UP_OUT = tt::CBIndex::c_6;    // up   output tiles
+constexpr tt::CBIndex CB_IN0 = tt::CBIndex::c_0;        // x (activations)
+constexpr tt::CBIndex CB_IN1_GATE = tt::CBIndex::c_1;   // gate_proj weight tiles
+constexpr tt::CBIndex CB_IN1_UP = tt::CBIndex::c_2;     // up_proj weight tiles
+constexpr tt::CBIndex CB_GATE_INT = tt::CBIndex::c_3;   // gate accumulator (intermediate)
+constexpr tt::CBIndex CB_UP_INT = tt::CBIndex::c_4;     // up   accumulator (intermediate)
+constexpr tt::CBIndex CB_SILU_GATE = tt::CBIndex::c_5;  // silu(gate) intermediate
+constexpr tt::CBIndex CB_ACT_OUT = tt::CBIndex::c_6;    // fused silu output
 
-struct CreatedProgram {
-    tt::tt_metal::Program program;
-    GateUpMatmulSharedVariables shared_variables;
-};
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
-CreatedProgram create_program(
-    const GateUpMatmulParams& p, const GateUpMatmulInputs& inputs, std::array<Tensor, 2>& outputs) {
-    tt::tt_metal::Program program{};
-
-    // ---------------------------------------------------------------
-    // Determine core, device and data formats
-    // ---------------------------------------------------------------
-    CoreCoord core{0, 0};
-    CoreRangeSet core_set(std::vector{CoreRange(core, core)});
-
-    auto in0_df = tt::tt_metal::datatype_to_dataformat_converter(inputs.x.dtype());
-    auto in1_df = tt::tt_metal::datatype_to_dataformat_converter(inputs.gate_proj.dtype());
-
-    // Intermediate uses fp32 if dest-acc is enabled, bfloat16 otherwise.
-    // For now default to bfloat16 (fine for bfloat4/bfloat8 inputs).
-    auto interm_df = tt::DataFormat::Float16_b;
-    auto out_df = tt::tt_metal::datatype_to_dataformat_converter(outputs[0].dtype());
-
-    uint32_t in0_tile_size = tt::tile_size(in0_df);
-    uint32_t in1_tile_size = tt::tile_size(in1_df);
-    uint32_t interm_tile_size = tt::tile_size(interm_df);
-    uint32_t out_tile_size = tt::tile_size(out_df);
-
-    // ---------------------------------------------------------------
-    // Derived counts
-    // ---------------------------------------------------------------
-    uint32_t K_num_blocks = p.Kt / p.K_block_size;
-    uint32_t N_num_blocks = p.Nt / p.N_block_size;
-    uint32_t M_num_blocks = p.Mt / p.M_block_size;
-
-    uint32_t in0_block_size = p.M_block_size * p.K_block_size;
-    uint32_t in1_block_size = p.K_block_size * p.N_block_size;
-    uint32_t full_out_tiles = p.M_block_size * p.Nt;  // full N width per M block
-
-    // ---------------------------------------------------------------
-    // Circular buffers
-    // ---------------------------------------------------------------
-    // in0: one k-block at a time (M_block × K_block tiles), double-buffered
-    {
-        uint32_t cb_size = 2 * in0_block_size * in0_tile_size;
-        auto cfg = tt::tt_metal::CircularBufferConfig(cb_size, {{CB_IN0, in0_df}}).set_page_size(CB_IN0, in0_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, core_set, cfg);
+static std::vector<CoreCoord> flatten(const CoreRangeSet& crs) {
+    std::vector<CoreCoord> out;
+    for (const auto& range : crs.ranges()) {
+        for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; ++y) {
+            for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; ++x) {
+                out.push_back({x, y});
+            }
+        }
     }
-    // in1_gate: one (k_block × n_block) at a time, double-buffered
-    {
-        uint32_t cb_size = 2 * in1_block_size * in1_tile_size;
-        auto cfg = tt::tt_metal::CircularBufferConfig(cb_size, {{CB_IN1_GATE, in1_df}})
-                       .set_page_size(CB_IN1_GATE, in1_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, core_set, cfg);
-    }
-    // in1_up: same
-    {
-        uint32_t cb_size = 2 * in1_block_size * in1_tile_size;
-        auto cfg =
-            tt::tt_metal::CircularBufferConfig(cb_size, {{CB_IN1_UP, in1_df}}).set_page_size(CB_IN1_UP, in1_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, core_set, cfg);
-    }
-    // gate_interm: holds partial sums for the full N width of one M block
-    {
-        uint32_t cb_size = full_out_tiles * interm_tile_size;
-        auto cfg = tt::tt_metal::CircularBufferConfig(cb_size, {{CB_GATE_INT, interm_df}})
-                       .set_page_size(CB_GATE_INT, interm_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, core_set, cfg);
-    }
-    // up_interm: same
-    {
-        uint32_t cb_size = full_out_tiles * interm_tile_size;
-        auto cfg = tt::tt_metal::CircularBufferConfig(cb_size, {{CB_UP_INT, interm_df}})
-                       .set_page_size(CB_UP_INT, interm_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, core_set, cfg);
-    }
-    // gate_out / up_out: one M block worth of output
-    {
-        uint32_t cb_size = full_out_tiles * out_tile_size;
-        auto cfg = tt::tt_metal::CircularBufferConfig(cb_size, {{CB_GATE_OUT, out_df}})
-                       .set_page_size(CB_GATE_OUT, out_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, core_set, cfg);
-    }
-    {
-        uint32_t cb_size = full_out_tiles * out_tile_size;
-        auto cfg =
-            tt::tt_metal::CircularBufferConfig(cb_size, {{CB_UP_OUT, out_df}}).set_page_size(CB_UP_OUT, out_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, core_set, cfg);
-    }
+    return out;
+}
 
-    // ---------------------------------------------------------------
-    // Build compile-time args for each kernel
-    // ---------------------------------------------------------------
+static uint32_t tile_start(uint32_t core_idx, uint32_t n_g1, uint32_t b1, uint32_t b2, uint32_t tile_step) {
+    if (core_idx < n_g1) {
+        return core_idx * b1 * tile_step;
+    }
+    return (n_g1 * b1 + (core_idx - n_g1) * b2) * tile_step;
+}
 
-    // --- BRISC: reader_x ---
-    // ct args: [M_num_blocks, K_num_blocks, M_block_size, K_block_size, in0_tile_size,
-    //           <TensorAccessor for x>]
-    std::vector<uint32_t> reader_x_ct_args = {
-        M_num_blocks, K_num_blocks, p.M_block_size, p.K_block_size, in0_tile_size};
-    tt::tt_metal::TensorAccessorArgs(inputs.x.buffer()).append_to(reader_x_ct_args);
+// ── CB creation ───────────────────────────────────────────────────────────────
+// Creates all seven CBs for one group.  CB_SILU_GATE holds the silu(gate)
+// intermediate and CB_ACT_OUT holds the fused output written to DRAM.
+static void create_cbs(
+    tt::tt_metal::Program& program,
+    const CoreRangeSet& cores,
+    uint32_t n_blocks_local,
+    uint32_t in0_block_size,
+    uint32_t in1_block_size,
+    uint32_t in0_tile_size,
+    uint32_t in1_tile_size,
+    uint32_t interm_tile_size,
+    uint32_t out_tile_size,
+    uint32_t Mt_block_size,
+    uint32_t Nt_block_size,
+    tt::DataFormat in0_df,
+    tt::DataFormat in1_df,
+    tt::DataFormat interm_df,
+    tt::DataFormat out_df) {
+    uint32_t full_N_local = n_blocks_local * Nt_block_size;
+    uint32_t full_out_tiles = Mt_block_size * full_N_local;
 
-    auto reader_x_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateCircularBuffer(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/device/kernels/reader_x.cpp",
-        core_set,
-        tt::tt_metal::ReaderDataMovementConfig(reader_x_ct_args, {}));
+        cores,
+        tt::tt_metal::CircularBufferConfig(2 * in0_block_size * in0_tile_size, {{CB_IN0, in0_df}})
+            .set_page_size(CB_IN0, in0_tile_size));
 
-    // --- NCRISC: reader_weights_writer_outputs ---
-    // ct args: [M_num_blocks, K_num_blocks, N_num_blocks, M_block_size, K_block_size, N_block_size,
-    //           in1_tile_size, out_tile_size, Nt,
-    //           <TensorAccessor gate_proj>, <TensorAccessor up_proj>,
-    //           <TensorAccessor gate_out>, <TensorAccessor up_out>]
-    std::vector<uint32_t> rw_ct_args = {
-        M_num_blocks,
+    tt::tt_metal::CreateCircularBuffer(
+        program,
+        cores,
+        tt::tt_metal::CircularBufferConfig(2 * in1_block_size * in1_tile_size, {{CB_IN1_GATE, in1_df}})
+            .set_page_size(CB_IN1_GATE, in1_tile_size));
+
+    tt::tt_metal::CreateCircularBuffer(
+        program,
+        cores,
+        tt::tt_metal::CircularBufferConfig(2 * in1_block_size * in1_tile_size, {{CB_IN1_UP, in1_df}})
+            .set_page_size(CB_IN1_UP, in1_tile_size));
+
+    tt::tt_metal::CreateCircularBuffer(
+        program,
+        cores,
+        tt::tt_metal::CircularBufferConfig(full_out_tiles * interm_tile_size, {{CB_GATE_INT, interm_df}})
+            .set_page_size(CB_GATE_INT, interm_tile_size));
+
+    tt::tt_metal::CreateCircularBuffer(
+        program,
+        cores,
+        tt::tt_metal::CircularBufferConfig(full_out_tiles * interm_tile_size, {{CB_UP_INT, interm_df}})
+            .set_page_size(CB_UP_INT, interm_tile_size));
+
+    // CB_SILU_GATE: silu(gate) intermediate temp used by compute kernel.
+    tt::tt_metal::CreateCircularBuffer(
+        program,
+        cores,
+        tt::tt_metal::CircularBufferConfig(full_out_tiles * out_tile_size, {{CB_SILU_GATE, out_df}})
+            .set_page_size(CB_SILU_GATE, out_tile_size));
+
+    // CB_ACT_OUT: fused silu output; drained by NCRISC to DRAM.
+    tt::tt_metal::CreateCircularBuffer(
+        program,
+        cores,
+        tt::tt_metal::CircularBufferConfig(full_out_tiles * out_tile_size, {{CB_ACT_OUT, out_df}})
+            .set_page_size(CB_ACT_OUT, out_tile_size));
+}
+
+// ── Kernel creation per quadrant group ───────────────────────────────────────
+// Creates sender BRISC (x=0 cores), optional receiver BRISC (x>0 cores),
+// NCRISC (all cores), and TRISC (all cores).
+static KernelGroupInfo create_kernels_for_group(
+    tt::tt_metal::Program& program,
+    const CoreRangeSet& full_core_set,
+    uint32_t x0,
+    uint32_t x1,  // logical x bounds of this quadrant
+    uint32_t y0,
+    uint32_t y1,         // logical y bounds of this quadrant
+    uint32_t n_n_cores,  // total N columns in the grid
+    uint32_t m_blocks_local,
+    uint32_t n_blocks_local,
+    uint32_t K_num_blocks,
+    const GateUpMatmulParams& p,
+    uint32_t in0_tile_size,
+    uint32_t in1_tile_size,
+    uint32_t out_tile_size,
+    const GateUpMatmulInputs& inputs,
+    Tensor& output) {
+    KernelGroupInfo kg;
+
+    // ── Separate sender (x=0) from receiver (x>0) cores ──────────────────────
+    // Sender column exists in this quadrant only when x0 == 0.
+    bool has_sender = (x0 == 0);
+    bool has_receiver = (x1 > 0) && (n_n_cores > 1);  // x>0 cols exist in quadrant
+
+    // Sender cores: x=0, y=[y0,y1] — only if x0==0.
+    if (has_sender) {
+        CoreRangeSet sender_set(CoreRange({0, y0}, {0, y1}));
+        kg.sender_cores = flatten(sender_set);
+    }
+
+    // Receiver cores: x=[max(x0,1), x1], y=[y0,y1] — only if x1>0.
+    if (has_receiver) {
+        uint32_t rx0 = (x0 == 0) ? 1 : x0;
+        CoreRangeSet receiver_set(CoreRange({rx0, y0}, {x1, y1}));
+        kg.receiver_cores = flatten(receiver_set);
+    }
+
+    // All cores in this quadrant.
+    kg.all_cores = flatten(full_core_set);
+
+    // ── reader_x (BRISC, all cores) ──────────────────────────────────────────
+    {
+        std::vector<uint32_t> rx_ct = {K_num_blocks, m_blocks_local, p.M_block_size, p.K_block_size, in0_tile_size};
+        tt::tt_metal::TensorAccessorArgs(inputs.x.buffer()).append_to(rx_ct);
+
+        kg.sender_x_id = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/device/kernels/"
+            "reader_x.cpp",
+            full_core_set,
+            tt::tt_metal::ReaderDataMovementConfig(rx_ct, {}));
+        kg.sender_cores = flatten(full_core_set);
+    }
+
+    // ── reader_weights_writer_outputs (NCRISC, all cores) ────────────────────
+    // ct[0]=K_num_blocks, ct[1]=m_blocks_local, ct[2]=n_blocks_local,
+    // ct[3]=Mt_block_size, ct[4]=Kt_block_size, ct[5]=Nt_block_size,
+    // ct[6]=in1_tile_size, ct[7]=out_tile_size, ct[8]=Nt,
+    // ct[9..]=TensorAccessors(gate_proj, up_proj, act_out)
+    // rt[0]=gate_proj_addr, rt[1]=up_proj_addr, rt[2]=act_out_addr,
+    //    rt[3]=m_tile_start, rt[4]=n_tile_start
+    std::vector<uint32_t> rw_ct = {
         K_num_blocks,
-        N_num_blocks,
+        m_blocks_local,
+        n_blocks_local,
         p.M_block_size,
         p.K_block_size,
         p.N_block_size,
         in1_tile_size,
         out_tile_size,
         p.Nt};
-    tt::tt_metal::TensorAccessorArgs(inputs.gate_proj.buffer()).append_to(rw_ct_args);
-    tt::tt_metal::TensorAccessorArgs(inputs.up_proj.buffer()).append_to(rw_ct_args);
-    tt::tt_metal::TensorAccessorArgs(outputs[0].buffer()).append_to(rw_ct_args);
-    tt::tt_metal::TensorAccessorArgs(outputs[1].buffer()).append_to(rw_ct_args);
+    tt::tt_metal::TensorAccessorArgs(inputs.gate_proj.buffer()).append_to(rw_ct);
+    tt::tt_metal::TensorAccessorArgs(inputs.up_proj.buffer()).append_to(rw_ct);
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(rw_ct);
 
-    auto reader_weights_id = tt::tt_metal::CreateKernel(
+    kg.reader_weights_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/device/kernels/"
         "reader_weights_writer_outputs.cpp",
-        core_set,
-        tt::tt_metal::WriterDataMovementConfig(rw_ct_args, {}));
+        full_core_set,
+        tt::tt_metal::WriterDataMovementConfig(rw_ct, {}));
 
-    // --- TRISC: compute_dual_gate_up ---
-    // ct args: [M_num_blocks, K_num_blocks, N_num_blocks,
-    //           M_block_size, K_block_size, N_block_size, Nt,
-    //           subblock_h, subblock_w]
-    std::vector<uint32_t> compute_ct_args = {
-        M_num_blocks,
+    // ── compute_dual_gate_up (TRISC, all cores) ───────────────────────────────
+    std::vector<uint32_t> cp_ct = {
         K_num_blocks,
-        N_num_blocks,
+        m_blocks_local,
+        n_blocks_local,
         p.M_block_size,
         p.K_block_size,
         p.N_block_size,
-        p.Nt,
         p.subblock_h,
         p.subblock_w};
 
-    auto compute_id = tt::tt_metal::CreateKernel(
+    kg.compute_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/device/kernels/"
         "compute_dual_gate_up.cpp",
-        core_set,
+        full_core_set,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::LoFi,
             .fp32_dest_acc_en = false,
             .math_approx_mode = false,
-            .compile_args = compute_ct_args});
+            .compile_args = cp_ct});
 
-    // ---------------------------------------------------------------
-    // Runtime args
-    // ---------------------------------------------------------------
-    tt::tt_metal::SetRuntimeArgs(program, reader_x_id, core, {inputs.x.buffer()->address()});
+    return kg;
+}
 
-    tt::tt_metal::SetRuntimeArgs(
-        program,
-        reader_weights_id,
-        core,
-        {inputs.gate_proj.buffer()->address(),
-         inputs.up_proj.buffer()->address(),
-         outputs[0].buffer()->address(),
-         outputs[1].buffer()->address()});
+// ── Main program builder ──────────────────────────────────────────────────────
 
-    // Compute kernel has no runtime args (all info is in compile-time args).
+struct CreatedProgram {
+    tt::tt_metal::Program program;
+    GateUpMatmulSharedVariables shared_variables;
+};
 
-    return CreatedProgram{
-        std::move(program), GateUpMatmulSharedVariables{reader_x_id, reader_weights_id, compute_id, core}};
+CreatedProgram create_program(const GateUpMatmulParams& p, const GateUpMatmulInputs& inputs, Tensor& output) {
+    tt::tt_metal::Program program{};
+
+    // ── Data formats ─────────────────────────────────────────────────────────
+    auto in0_df = tt::tt_metal::datatype_to_dataformat_converter(inputs.x.dtype());
+    auto in1_df = tt::tt_metal::datatype_to_dataformat_converter(inputs.gate_proj.dtype());
+    auto interm_df = tt::DataFormat::Float16_b;
+    auto out_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+
+    uint32_t in0_tile_size = tt::tile_size(in0_df);
+    uint32_t in1_tile_size = tt::tile_size(in1_df);
+    uint32_t interm_tile_size = tt::tile_size(interm_df);
+    uint32_t out_tile_size = tt::tile_size(out_df);
+
+    // ── Block counts ─────────────────────────────────────────────────────────
+    uint32_t K_num_blocks = p.Kt / p.K_block_size;
+    uint32_t M_num_blocks = p.Mt / p.M_block_size;
+    uint32_t N_num_blocks = p.Nt / p.N_block_size;
+
+    uint32_t in0_block_size = p.M_block_size * p.K_block_size;
+    uint32_t in1_block_size = p.K_block_size * p.N_block_size;
+
+    // ── 2-D core grid: x-axis = N split, y-axis = M split ────────────────────
+    auto* device = inputs.x.device();
+    CoreCoord grid = device->compute_with_storage_grid_size();
+
+    uint32_t n_n_cores = std::min(N_num_blocks, (uint32_t)grid.x);
+    uint32_t n_m_cores = std::min(M_num_blocks, (uint32_t)grid.y);
+
+    uint32_t n_b1 = (N_num_blocks + n_n_cores - 1) / n_n_cores;
+    uint32_t n_b2 = N_num_blocks / n_n_cores;
+    uint32_t n_n_g1 = N_num_blocks % n_n_cores;
+
+    uint32_t m_b1 = (M_num_blocks + n_m_cores - 1) / n_m_cores;
+    uint32_t m_b2 = M_num_blocks / n_m_cores;
+    uint32_t n_m_g1 = M_num_blocks % n_m_cores;
+
+    // (No semaphores — reader_x reads X independently on every core.)
+
+    // ── Build kernels per quadrant ────────────────────────────────────────────
+    struct GroupDef {
+        uint32_t x0, x1, y0, y1;
+        uint32_t m_blocks_local;
+        uint32_t n_blocks_local;
+    };
+
+    std::vector<GroupDef> group_defs;
+    auto push = [&](uint32_t x0, uint32_t x1, uint32_t y0, uint32_t y1, uint32_t mb, uint32_t nb) {
+        if (mb > 0 && nb > 0) {
+            group_defs.push_back({x0, x1, y0, y1, mb, nb});
+        }
+    };
+
+    if (n_m_g1 > 0 && n_n_g1 > 0) {
+        push(0, n_n_g1 - 1, 0, n_m_g1 - 1, m_b1, n_b1);  // TL
+    }
+    if (n_m_g1 > 0 && n_n_g1 < n_n_cores) {
+        push(n_n_g1, n_n_cores - 1, 0, n_m_g1 - 1, m_b1, n_b2);  // TR
+    }
+    if (n_m_g1 < n_m_cores && n_n_g1 > 0) {
+        push(0, n_n_g1 - 1, n_m_g1, n_m_cores - 1, m_b2, n_b1);  // BL
+    }
+    if (n_m_g1 < n_m_cores && n_n_g1 < n_n_cores) {
+        push(n_n_g1, n_n_cores - 1, n_m_g1, n_m_cores - 1, m_b2, n_b2);  // BR
+    }
+
+    GateUpMatmulSharedVariables sv;
+
+    for (auto& gd : group_defs) {
+        CoreRangeSet core_set(CoreRange({gd.x0, gd.y0}, {gd.x1, gd.y1}));
+
+        create_cbs(
+            program,
+            core_set,
+            gd.n_blocks_local,
+            in0_block_size,
+            in1_block_size,
+            in0_tile_size,
+            in1_tile_size,
+            interm_tile_size,
+            out_tile_size,
+            p.M_block_size,
+            p.N_block_size,
+            in0_df,
+            in1_df,
+            interm_df,
+            out_df);
+
+        auto kg = create_kernels_for_group(
+            program,
+            core_set,
+            gd.x0,
+            gd.x1,
+            gd.y0,
+            gd.y1,
+            n_n_cores,
+            gd.m_blocks_local,
+            gd.n_blocks_local,
+            K_num_blocks,
+            p,
+            in0_tile_size,
+            in1_tile_size,
+            out_tile_size,
+            inputs,
+            output);
+
+        // ── NCRISC runtime args (all cores) ───────────────────────────────────
+        for (const auto& core : kg.all_cores) {
+            uint32_t m_tile_start = tile_start(core.y, n_m_g1, m_b1, m_b2, p.M_block_size);
+            uint32_t n_tile_start = tile_start(core.x, n_n_g1, n_b1, n_b2, p.N_block_size);
+
+            tt::tt_metal::SetRuntimeArgs(
+                program,
+                kg.reader_weights_id,
+                core,
+                {inputs.gate_proj.buffer()->address(),
+                 inputs.up_proj.buffer()->address(),
+                 output.buffer()->address(),
+                 m_tile_start,
+                 n_tile_start});
+        }
+
+        // ── reader_x RT args: rt[0]=x_addr, rt[1]=m_tile_start ──────────────
+        for (const auto& core : kg.sender_cores) {
+            uint32_t m_tile_start = tile_start(core.y, n_m_g1, m_b1, m_b2, p.M_block_size);
+            tt::tt_metal::SetRuntimeArgs(program, kg.sender_x_id, core, {inputs.x.buffer()->address(), m_tile_start});
+        }
+
+        sv.groups.push_back(std::move(kg));
+    }
+
+    return CreatedProgram{std::move(program), std::move(sv)};
 }
 
 }  // namespace
@@ -217,7 +376,7 @@ GateUpMatmulProgramFactory::cached_mesh_workload_t GateUpMatmulProgramFactory::c
         auto result = create_program(attrs, inputs, outputs);
         auto coord_range = ttnn::MeshCoordinateRange(coord);
         workload.add_program(coord_range, std::move(result.program));
-        shared_vars.emplace(coord_range, result.shared_variables);
+        shared_vars.emplace(coord_range, std::move(result.shared_variables));
     }
 
     return cached_mesh_workload_t{std::move(workload), std::move(shared_vars)};
@@ -231,14 +390,22 @@ void GateUpMatmulProgramFactory::override_runtime_arguments(
     for (auto& [coord_range, program] : cached_workload.workload.get_programs()) {
         auto& sv = cached_workload.shared_variables.at(coord_range);
 
-        auto& x_args = GetRuntimeArgs(program, sv.reader_x_id, sv.core);
-        x_args[0] = inputs.x.buffer()->address();
+        for (auto& group : sv.groups) {
+            for (const auto& core : group.all_cores) {
+                auto& rw_args = GetRuntimeArgs(program, group.reader_weights_id, core);
+                rw_args[0] = inputs.gate_proj.buffer()->address();
+                rw_args[1] = inputs.up_proj.buffer()->address();
+                rw_args[2] = outputs.buffer()->address();
+                // rw_args[3] = m_tile_start — unchanged
+                // rw_args[4] = n_tile_start — unchanged
+            }
 
-        auto& rw_args = GetRuntimeArgs(program, sv.reader_weights_id, sv.core);
-        rw_args[0] = inputs.gate_proj.buffer()->address();
-        rw_args[1] = inputs.up_proj.buffer()->address();
-        rw_args[2] = outputs[0].buffer()->address();
-        rw_args[3] = outputs[1].buffer()->address();
+            for (const auto& core : group.sender_cores) {
+                auto& sx_args = GetRuntimeArgs(program, group.sender_x_id, core);
+                sx_args[0] = inputs.x.buffer()->address();
+                // sx_args[1] = m_tile_start — unchanged
+            }
+        }
     }
 }
 

@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <array>
 #include <variant>
 
 #include "gate_up_matmul_types.hpp"
@@ -17,9 +16,9 @@ namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn {
 struct GateUpMatmulDeviceOperation {
     using operation_attributes_t = GateUpMatmulParams;
     using tensor_args_t = GateUpMatmulInputs;
-    using spec_return_value_t = std::array<TensorSpec, 2>;
+    using spec_return_value_t = TensorSpec;
     using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
-    using tensor_return_value_t = std::array<Tensor, 2>;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<GateUpMatmulProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
@@ -33,7 +32,8 @@ struct GateUpMatmulDeviceOperation {
 }  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn
 
 namespace ttnn::prim {
-std::array<ttnn::Tensor, 2> gate_up_matmul(
+// Returns act_out = silu(x @ gate_proj) * (x @ up_proj) (fused SiLU).
+ttnn::Tensor gate_up_matmul(
     const ttnn::Tensor& x,
     const ttnn::Tensor& gate_proj,
     const ttnn::Tensor& up_proj,
