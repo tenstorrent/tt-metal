@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -7,20 +7,35 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, create_fabric_router_config
-from models.demos.deepseek_v3_d_p.tt.moe.moe_gate_prefill2d import MoEGateConfig, MoEGatePrefill
-from models.demos.deepseek_v3_d_p.utils.test_utils import (
-    adjust_shapes_for_testing,
-    calculate_average_recall,
-    get_input_mem_config,
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    ExpertMapping,
+    create_fabric_router_config,
+    create_gate_weights,
+    get_ep_mesh_composer,
+    get_gate_outputs,
+    get_sp_mesh_composer,
 )
-from tests.ttnn.utils_for_testing import comp_pcc
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
+from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
+    ValidationResult,
+    compare_exact,
+    compare_pcc,
+    compare_recall,
+    validate_composed,
+)
+from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_validation_results
+from models.demos.deepseek_v3_d_p.utils.test_utils import adjust_shapes_for_testing, get_input_mem_config
 
 
+@pytest.mark.parametrize(
+    "gate_fallback_mode",
+    [
+        GateComputeMode.HOST_ALL,
+    ],
+)
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -75,11 +90,13 @@ def test_forward_pass(
     mesh_device,
     num_links,
     topology,
+    gate_fallback_mode,
 ):
     random.seed(42)
     torch.manual_seed(42)
 
-    config = MoEGateConfig()
+    # Create reference gate
+    config = TtMoEGateConfig()
     config.ccl_config["NUM_LINKS"] = num_links
     adjust_shapes_for_testing(config, mesh_device)
 
@@ -94,37 +111,25 @@ def test_forward_pass(
         norm_topk_prob=True,
         hidden_size=config.dim,
     )
-    reference_model = ReferenceMoEGate(ref_config, use_bitonic_sort=False)
-    tt_model = MoEGatePrefill(config, mesh_device)
+    reference_model = ReferenceMoEGate(ref_config, use_bitonic_sort=True)
 
-    torch_input = torch.randn(config.max_seq_len, config.dim, dtype=torch.bfloat16)
+    # Create dummy weights and bias
+    gate_w = create_gate_weights(config.n_routed_experts, config.dim)
+    reference_model.weight.data = gate_w["weight"]  # (n_routed_experts, dim) — HF convention
+    reference_model.e_score_correction_bias.data = gate_w["e_score_correction_bias"]
 
-    torch_weight = torch.randn(reference_model.weight.data.shape, dtype=torch.bfloat16).T
-    torch_bias = torch.randn(reference_model.e_score_correction_bias.data.shape, dtype=torch.bfloat16) * 1000
-    reference_model.weight.data = torch_weight.T
-    reference_model.e_score_correction_bias.data = torch_bias
+    # Create input tensor
+    n_sp_devices = mesh_device.shape[0]
+    torch_input = torch.randn(config.sp_dim * n_sp_devices, config.dim, dtype=torch.bfloat16) + 1
 
     # Reference forward pass
     reference_model.eval()
     reference_model.to(torch.bfloat16)
-    reference_topk_indices, reference_topk_weights = reference_model(torch_input.unsqueeze(0))
-    reference_logits = torch_input @ torch_weight
+    reference_topk_indices, reference_topk_scores = reference_model.grouped_forward(torch_input.unsqueeze(0))
+    reference_logits = torch_input @ gate_w["weight"].T
 
+    # Create TT input tensor
     sharded_mem_config = get_input_mem_config(config, mesh_device.shape)
-
-    tt_model.weight = ttnn.from_torch(
-        torch_weight,
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device,
-            dims=(None, 0),
-            mesh_shape=mesh_device.shape,
-        ),
-    )
-
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
@@ -133,20 +138,12 @@ def test_forward_pass(
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(0, 1),
+            dims=(0, -1),  # tensor parallel
             mesh_shape=mesh_device.shape,
         ),
     )
 
-    tt_model.bias = ttnn.from_torch(
-        # ttnn.experimental.deepseek_grouped_gate() requires bias to be broadcasted already
-        torch_bias.repeat(config.sp_dim).view(config.sp_dim, -1),
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        layout=ttnn.TILE_LAYOUT,
-    )
-
+    # Create TT gate
     n_sp_devices = mesh_device.shape[0]
     n_tp_devices = mesh_device.shape[1]
     n_routed_experts = config.n_routed_experts
@@ -156,167 +153,114 @@ def test_forward_pass(
         dispatch_group_size=n_sp_devices,
         num_dispatch_groups=n_tp_devices,
     )
-    tt_model.expert_dispatch_table = ttnn.from_torch(
-        dispatch_table,
-        device=mesh_device,
-        dtype=ttnn.int32,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device,
-            dims=(None, 0),
-            mesh_shape=mesh_device.shape,
-        ),
+    tt_model = TtMoEGatePrefill(
+        config,
+        mesh_device,
+        dispatch_table=dispatch_table,
+        weight=gate_w["weight"],
+        bias=gate_w["e_score_correction_bias"],
+        fallback_mode=gate_fallback_mode,
+    )
+    # TT forward pass
+    tt_topk_scores, tt_topk_indices, tt_logits, tt_dispatch_offsets, tt_total_counts_per_expert = tt_model(tt_input)
+
+    # Validation
+    seq_len_per_device = reference_logits.shape[0] // mesh_device.shape[0]
+    sp_composer = get_sp_mesh_composer(mesh_device)
+
+    # SP-replicated checks: compose into [1, n_sp_devices, ...] for validate_composed
+    host_tt_topk_indices = ttnn.to_torch(tt_topk_indices, mesh_composer=sp_composer)
+    host_tt_topk_indices = host_tt_topk_indices.view(1, n_sp_devices, seq_len_per_device, -1).sort(dim=-1).values
+    reference_topk_indices = reference_topk_indices.view(1, n_sp_devices, seq_len_per_device, -1).sort(dim=-1).values
+
+    recall_topk_indices = validate_composed(
+        host_tt_topk_indices,
+        reference_topk_indices,
+        1,
+        n_sp_devices,
+        compare_recall(0.997),
+        name="recall_topk_indices",
+        broadcast_groups=n_tp_devices,
     )
 
-    # Reshape reference outputs to match device mesh structure upfront
-    seq_len_per_device = reference_logits.shape[0] // mesh_device.shape[0]
-    reference_logits_reshaped = reference_logits.view(mesh_device.shape[0], seq_len_per_device, -1)
-    reference_topk_weights_reshaped = reference_topk_weights.view(mesh_device.shape[0], seq_len_per_device, -1)
-    reference_topk_indices_reshaped = reference_topk_indices.view(mesh_device.shape[0], seq_len_per_device, -1)
+    host_tt_logits = ttnn.to_torch(tt_logits, mesh_composer=sp_composer)
+    host_tt_logits = host_tt_logits.view(1, n_sp_devices, seq_len_per_device, -1)
+    reference_logits = reference_logits.view(1, n_sp_devices, seq_len_per_device, -1)
 
-    tt_topk_weights, tt_topk_indices, tt_logits, dispatch_offsets, total_counts_per_expert = tt_model(tt_input)
-    per_device_topk_weight = ttnn.get_device_tensors(tt_topk_weights)
-    per_device_topk_indices = ttnn.get_device_tensors(tt_topk_indices)
-    per_device_topk_logits = ttnn.get_device_tensors(tt_logits)
+    pcc_logits = validate_composed(
+        host_tt_logits,
+        reference_logits,
+        1,
+        n_sp_devices,
+        compare_pcc(0.997),
+        name="pcc_logits",
+        broadcast_groups=n_tp_devices,
+    )
 
-    all_passed = True
-    assert_msgs = []
-    for device_id in range(mesh_device.shape[0] * mesh_device.shape[1]):
-        # Convert output back to torch
-        tt_topk_weights_torch = ttnn.to_torch(per_device_topk_weight[device_id])
-        tt_topk_indices_torch = ttnn.to_torch(per_device_topk_indices[device_id])
-        tt_logits_torch = ttnn.to_torch(per_device_topk_logits[device_id])
+    host_tt_topk_scores = ttnn.to_torch(tt_topk_scores, mesh_composer=sp_composer)
+    host_tt_topk_scores = host_tt_topk_scores.view(1, n_sp_devices, seq_len_per_device, -1)
+    reference_topk_scores = reference_topk_scores.view(1, n_sp_devices, seq_len_per_device, -1)
 
-        # Calculate device position in mesh
-        row = device_id // mesh_device.shape[1]
-        col = device_id % mesh_device.shape[1]
+    pcc_scores = validate_composed(
+        host_tt_topk_scores,
+        reference_topk_scores,
+        1,
+        n_sp_devices,
+        compare_pcc(0.99),
+        name="pcc_scores",
+        broadcast_groups=n_tp_devices,
+    )
 
-        # Get the corresponding reference slice (same across columns due to reduction)
-        ref_logits = reference_logits_reshaped[row, :, :]
-        ref_weights = reference_topk_weights_reshaped[row, :, :]
-        ref_indices = reference_topk_indices_reshaped[row, :, :]
+    # EP-sharded checks: offsets and totals
+    experts_per_chip = n_routed_experts // (n_sp_devices * n_tp_devices)
+    ref_dispatch_offsets, ref_expert_token_counts, _ = get_gate_outputs(
+        indices=reference_topk_indices.view(n_sp_devices, seq_len_per_device, -1).int(),
+        dispatch_group_size=n_sp_devices,
+        num_routed_experts=n_routed_experts,
+        experts_per_chip=experts_per_chip,
+        seq_len_per_chip=seq_len_per_device,
+        num_experts_per_tok=config.n_activated_experts,
+        expert_dispatch_table=dispatch_table,
+    )
 
-        # Test recall with individual logging
-        recall = calculate_average_recall(tt_topk_indices_torch, ref_indices)
-        recall_passed = recall > 0.999
-        status_char = "✅" if recall_passed else "❌"
-        logger.info(
-            f"{status_char} Device {device_id} (row={row}, col={col}): Recall = {recall:.4f} (threshold: 0.999)"
-        )
-        if not recall_passed:
-            all_passed = False
-            assert_msgs.append(f"Device {device_id} (row={row}, col={col}): Recall is {recall:.4f}, expected > 0.999")
+    ep_composer = get_ep_mesh_composer(mesh_device)
 
-        # Test logits PCC with individual logging
-        logits_passed, logits_pcc = comp_pcc(tt_logits_torch, ref_logits, 0.99)
-        status_char = "✅" if logits_passed else "❌"
-        logger.info(
-            f"{status_char} Device {device_id} (row={row}, col={col}): Logits PCC = {logits_pcc:.4f} (threshold: 0.99)"
-        )
-        if not logits_passed:
-            all_passed = False
-            assert_msgs.append(
-                f"Device {device_id} (row={row}, col={col}): Logits PCC is {logits_pcc:.4f}, expected > 0.99"
-            )
+    tt_dispatch_offsets = ttnn.unsqueeze_to_4D(tt_dispatch_offsets)
+    host_dispatch_offsets = ttnn.to_torch(tt_dispatch_offsets, mesh_composer=ep_composer).squeeze(2).long()
 
-        # Test weights PCC with individual logging
-        weights_passed, weights_pcc = comp_pcc(tt_topk_weights_torch, ref_weights, 0.98)
-        status_char = "✅" if weights_passed else "❌"
-        logger.info(
-            f"{status_char} Device {device_id} (row={row}, col={col}): Weights PCC = {weights_pcc:.4f} (threshold: 0.98)"
-        )
-        if not weights_passed:
-            all_passed = False
-            assert_msgs.append(
-                f"Device {device_id} (row={row}, col={col}): Weights PCC is {weights_pcc:.4f}, expected > 0.99"
-            )
+    exact_dispatch_offsets = validate_composed(
+        host_dispatch_offsets,
+        ref_dispatch_offsets.long(),
+        n_tp_devices,
+        n_sp_devices,
+        compare_exact,
+        name="dispatch_offsets",
+    )
 
-    # Compute reference dispatch offsets from tt_topk_indices, masked by dispatch table
-    indices_for_gate = torch.zeros(n_sp_devices, seq_len_per_device, config.n_activated_experts, dtype=torch.int32)
-    for row in range(n_sp_devices):
-        device_id = row * n_tp_devices
-        indices_for_gate[row] = ttnn.to_torch(per_device_topk_indices[device_id]).int()
+    tt_total_counts_per_expert = ttnn.unsqueeze_to_4D(tt_total_counts_per_expert)
+    host_tt_total_counts_per_expert = (
+        ttnn.to_torch(tt_total_counts_per_expert, mesh_composer=ep_composer).squeeze(2).long()
+    )
+    # Totals replicated across chips — broadcast row 0 reference to all chips
+    ref_expert_token_counts = ref_expert_token_counts[:, 0, :].unsqueeze(1).expand(-1, n_sp_devices, -1).long()
 
-    # Unmasked expert counter: same for all dispatch groups (all groups see the same tokens)
-    expert_counter = torch.zeros((n_sp_devices, n_routed_experts), dtype=torch.int32)
-    for chip in range(n_sp_devices):
-        for token in range(seq_len_per_device):
-            for k in range(config.n_activated_experts):
-                expert_id = indices_for_gate[chip, token, k].item()
-                expert_counter[chip, expert_id] += 1
+    expert_token_counts = validate_composed(
+        host_tt_total_counts_per_expert,
+        ref_expert_token_counts,
+        n_tp_devices,
+        n_sp_devices,
+        compare_exact,
+        name="expert_token_counts",
+    )
 
-    # Per-dispatch-group masked offsets and totals
-    per_group_offsets = {}
-    per_group_totals = {}
-    for group in range(n_tp_devices):
-        group_mask = dispatch_table[group] >= 0
-        masked_counter = expert_counter.clone()
-        masked_counter[:, ~group_mask] = 0
-        cum_sum = torch.cumsum(masked_counter, dim=0)
-        offsets = torch.vstack([torch.zeros([1, n_routed_experts], dtype=torch.int32), cum_sum[:-1]])
-        per_group_offsets[group] = offsets.long()
-        per_group_totals[group] = cum_sum[-1:].long()
-
-    per_device_dispatch_offsets = ttnn.get_device_tensors(dispatch_offsets)
-    for device_id in range(len(per_device_dispatch_offsets)):
-        tt_offsets_torch = ttnn.to_torch(per_device_dispatch_offsets[device_id]).long()
-        row = device_id // n_tp_devices
-        col = device_id % n_tp_devices
-        reference_offsets = per_group_offsets[col][row : row + 1, :]
-
-        offsets_match = torch.equal(tt_offsets_torch, reference_offsets)
-        status_char = "✅" if offsets_match else "❌"
-        if offsets_match:
-            logger.info(f"{status_char} Device {device_id} (row={row}, col={col}): Dispatch offsets match exactly")
-        else:
-            diff = (tt_offsets_torch - reference_offsets).abs()
-            max_diff = diff.max().item()
-            num_mismatches = (diff > 0).sum().item()
-            total_elements = diff.numel()
-            logger.info(
-                f"{status_char} Device {device_id} (row={row}, col={col}): "
-                f"Dispatch offsets MISMATCH - max_diff={max_diff}, "
-                f"mismatches={num_mismatches}/{total_elements}"
-            )
-            all_passed = False
-            assert_msgs.append(
-                f"Device {device_id} (row={row}, col={col}): "
-                f"Dispatch offsets mismatch (max_diff={max_diff}, mismatches={num_mismatches}/{total_elements})"
-            )
-
-    per_device_totals = ttnn.get_device_tensors(total_counts_per_expert)
-    for device_id in range(len(per_device_totals)):
-        tt_totals_torch = ttnn.to_torch(per_device_totals[device_id]).long()
-        row = device_id // n_tp_devices
-        col = device_id % n_tp_devices
-        reference_totals = per_group_totals[col]
-
-        totals_match = torch.equal(tt_totals_torch, reference_totals)
-        status_char = "✅" if totals_match else "❌"
-        if totals_match:
-            logger.info(f"{status_char} Device {device_id} (row={row}, col={col}): Total counts match exactly")
-        else:
-            diff = (tt_totals_torch - reference_totals).abs()
-            max_diff = diff.max().item()
-            num_mismatches = (diff > 0).sum().item()
-            total_elements = diff.numel()
-            logger.info(
-                f"{status_char} Device {device_id} (row={row}, col={col}): "
-                f"Total counts MISMATCH - max_diff={max_diff}, "
-                f"mismatches={num_mismatches}/{total_elements}"
-            )
-            all_passed = False
-            assert_msgs.append(
-                f"Device {device_id} (row={row}, col={col}): "
-                f"Total counts mismatch (max_diff={max_diff}, mismatches={num_mismatches}/{total_elements})"
-            )
-
-    assert all_passed, "\n".join(assert_msgs)
-
-    ttnn.deallocate(tt_input)
-    ttnn.deallocate(tt_topk_weights)
-    ttnn.deallocate(tt_topk_indices)
-    ttnn.deallocate(tt_logits)
-    ttnn.deallocate(dispatch_offsets)
-    ttnn.deallocate(total_counts_per_expert)
+    all_results = [recall_topk_indices, pcc_logits, pcc_scores, exact_dispatch_offsets, expert_token_counts]
+    for res in all_results:
+        res.log_mismatches()
+    log_validation_results(
+        results=all_results,
+        num_dispatch_groups=n_tp_devices,
+        dispatch_group_size=n_sp_devices,
+        title="Gate Prefill2D Validation",
+    )
+    merged = ValidationResult.merge(all_results, name="gate_prefill2d")
+    merged.assert_passed("Gate prefill2d validation failed")

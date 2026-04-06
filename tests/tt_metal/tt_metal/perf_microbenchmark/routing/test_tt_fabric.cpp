@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -82,6 +82,8 @@ int main(int argc, char** argv) {
 
     TestContext test_context;
     test_context.init(fixture, allocation_policies, use_dynamic_policies);
+
+    test_context.set_show_workers(cmdline_parser.show_workers());
 
     // Configure progress monitoring from cmdline flags
     if (cmdline_parser.show_progress()) {

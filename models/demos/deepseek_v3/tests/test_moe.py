@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -106,9 +106,8 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
 def test_forward_pass(
     device_params,
     mode,
+    num_tokens,
     batch_size_per_row,
-    seq_len,
-    set_deterministic_env,
     reference_model,
     hf_config,
     request,
@@ -116,6 +115,7 @@ def test_forward_pass(
     mesh_device,
     ccl,
     force_recalculate_weight_config,
+    device_params,
 ):
     """Test forward pass against reference model."""
 
@@ -175,6 +175,97 @@ def test_forward_pass(
 
     logger.info(f"Mode: {mode}, Num tokens: {num_tokens}")
     assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=0.97)
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": get_fabric_config()},
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mode, batch_size_per_row, seq_len",
+    [
+        ("decode", USERS_PER_ROW, 1),
+        ("prefill", 1, _prefill_seq_len),
+    ],
+)
+@pytest.mark.parametrize(
+    "topk_fallback",
+    [
+        True,
+    ],
+)
+@pytest.mark.parametrize("weight_type", ["random", "real"])
+def test_forward_pass(
+    device_params,
+    mode,
+    batch_size_per_row,
+    seq_len,
+    set_deterministic_env,
+    reference_model,
+    hf_config,
+    request,
+    cache_path,
+    mesh_device,
+    ccl,
+    topk_fallback,
+    weight_type,
+    force_recalculate_weight_config,
+):
+    run_test_forward_pass_moe(
+        mode=mode,
+        num_tokens=batch_size_per_row * mesh_device.shape[0] if mode == "decode" else seq_len,
+        batch_size_per_row=batch_size_per_row,
+        reference_model=reference_model,
+        hf_config=hf_config,
+        request=request,
+        cache_path=cache_path,
+        mesh_device=mesh_device,
+        ccl=ccl,
+        topk_fallback=topk_fallback,
+        weight_type=weight_type,
+        force_recalculate_weight_config=force_recalculate_weight_config,
+        device_params=device_params,
+    )
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": get_fabric_config()},
+    ],
+    indirect=True,
+)
+def test_mode_decode_forward_pass_batch_8_users_per_row(
+    device_params,
+    set_deterministic_env,
+    reference_model,
+    hf_config,
+    request,
+    cache_path,
+    mesh_device,
+    ccl,
+    force_recalculate_weight_config,
+):
+    run_test_forward_pass_moe(
+        mode="decode",
+        num_tokens=8 * mesh_device.shape[0],
+        batch_size_per_row=8,
+        reference_model=reference_model,
+        hf_config=hf_config,
+        request=request,
+        cache_path=cache_path,
+        mesh_device=mesh_device,
+        ccl=ccl,
+        topk_fallback=True,
+        weight_type="real",
+        force_recalculate_weight_config=force_recalculate_weight_config,
+        device_params=device_params,
+    )
 
 
 if __name__ == "__main__":

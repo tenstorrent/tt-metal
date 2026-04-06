@@ -47,6 +47,7 @@ jobs:
           # Stable set (default path; optional per-model timeout)
           # SDXL model requires test run over 30min to successfully execute pcc test on the entire UNet loop
           STABLE='[
+            {"model":"bge_m3"},
             {"model":"common_models"},
             {"model":"functional_unet"},
             {"model":"ttt-llama3.2-1B"},

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,6 +34,8 @@ void kernel_main() {
         dfb.write_out(noc, dst_dram, {.bank_id = dst_bank_id, .addr = tlocal_dst_addr});
         tlocal_dst_addr += dfb.get_stride_size();
     }
+
+    dfb.finish();
 
     // TODO: This will be replaced with some dfb.commit or noc.async_write_barrier call
     LocalDFBInterface& local_dfb_interface = g_dfb_interface[cb_id];
