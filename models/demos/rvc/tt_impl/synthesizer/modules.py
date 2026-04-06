@@ -89,7 +89,7 @@ class WN:
                 )
             else:
                 layer_conditioning = ttnn.zeros_like(conv_out)
-
+            conv_out = ttnn.to_memory_config(conv_out, ttnn.L1_MEMORY_CONFIG)
             input_activation = ttnn.add(conv_out, layer_conditioning, output_tensor=conv_out)
             t_activation, s_activation = ttnn.chunk(input_activation, 2, dim=-1)
             gates_activations = ttnn.multiply(
@@ -97,7 +97,6 @@ class WN:
                 ttnn.tanh(t_activation, output_tensor=t_activation),
                 output_tensor=s_activation,
             )
-            gates_activations = ttnn.to_memory_config(gates_activations, ttnn.L1_MEMORY_CONFIG)
             res_skip_out = res_skip_layer(gates_activations)
             if i < self.num_layers - 1:
                 residual_out, skip_out = ttnn.chunk(res_skip_out, 2, dim=-1)
