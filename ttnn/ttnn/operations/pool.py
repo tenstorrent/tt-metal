@@ -85,8 +85,15 @@ def global_avg_pool2d(input_tensor, *, memory_config=None, dtype=None):
         padding=(0, 0),
         memory_config=memory_config,
     )
+    # avg_pool2d returns [1,1,1,C] for batch_size==1 and [1,1,N,C] for multi-batch.
+    # Only reshape when the logical shape doesn't already match the target, because
+    # ttnn.reshape recomputes padded shape via compute_padded_shape which can change
+    # tile-aligned padding and break downstream ops (e.g. conv2d sharding).
     if rank == 4:
-        return ttnn.reshape(result, (N, 1, 1, C))
+        target = [N, 1, 1, C]
+        if list(result.shape) != target:
+            return ttnn.reshape(result, target)
+        return result
     elif rank == 3:
         return ttnn.reshape(result, (1, 1, C))
     else:
@@ -100,7 +107,10 @@ def golden_global_avg_pool2d(input_tensor: ttnn.Tensor):
     import torch
 
     output_size = (1, 1)
-    return torch.nn.functional.adaptive_avg_pool2d(input_tensor, output_size)
+    # ttnn uses NHWC layout; adaptive_avg_pool2d expects NCHW
+    input_nchw = input_tensor.permute(0, 3, 1, 2)
+    output_nchw = torch.nn.functional.adaptive_avg_pool2d(input_nchw, output_size)
+    return output_nchw.permute(0, 2, 3, 1)
 
 
 ttnn.attach_golden_function(ttnn.global_avg_pool2d, golden_global_avg_pool2d)
