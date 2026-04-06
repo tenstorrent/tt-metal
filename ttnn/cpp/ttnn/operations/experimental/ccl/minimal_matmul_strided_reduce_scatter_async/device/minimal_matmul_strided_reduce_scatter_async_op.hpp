@@ -19,7 +19,6 @@
 
 #include <optional>
 #include <vector>
-#include <algorithm>
 
 /* Fusion includes */
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
