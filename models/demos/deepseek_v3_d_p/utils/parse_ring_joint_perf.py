@@ -39,6 +39,14 @@ import pandas as pd
 OP_NAME = "RingJointSDPADeviceOperation"
 DURATION_COL = "DEVICE KERNEL DURATION [ns]"
 
+# Cycles per tile operation for each math fidelity
+FIDELITY_CYCLES = {
+    "HiFi4": 64,
+    "HiFi3": 48,
+    "HiFi2": 32,
+    "LoFi": 16,
+}
+
 
 def load_single_host(csv_paths):
     """Load one or more CSV files from a single host (device IDs are globally unique)."""
@@ -106,6 +114,88 @@ def load_multi_host_ranked(ranked_csv_paths):
     return pd.concat(all_ops, ignore_index=True)
 
 
+def _parse_shape_val(val):
+    """Parse shape value like '3200[3200]' or '3200' to int."""
+    s = str(val).split("[")[0]
+    return int(s)
+
+
+def extract_hw_info(ops, rp_factor, up_factor):
+    """
+    Extract hardware info and global op dimensions from the CSV data.
+
+    Per-device shapes from CSV are scaled up by rp_factor (sequence) and up_factor (heads)
+    to recover global dimensions.
+
+    Returns dict with all info needed for theoretical compute.
+    """
+    row = ops.iloc[0]
+    fidelity = row["MATH FIDELITY"]
+    core_count = int(row["CORE COUNT"])
+    num_devices = ops["DEVICE ID"].nunique() * ops["rank"].nunique()
+
+    # Q: [B, nhq_per_dev, seq_per_dev, head_dim_k]
+    b = _parse_shape_val(row["INPUT_0_W_PAD[LOGICAL]"])
+    nhq_per_dev = _parse_shape_val(row["INPUT_0_Z_PAD[LOGICAL]"])
+    seq_per_dev = _parse_shape_val(row["INPUT_0_Y_PAD[LOGICAL]"])
+    head_dim_k = _parse_shape_val(row["INPUT_0_X_PAD[LOGICAL]"])
+
+    # V: [B, nhv_per_dev, seq_per_dev, head_dim_v]
+    head_dim_v = _parse_shape_val(row["INPUT_2_X_PAD[LOGICAL]"])
+
+    # Scale to global dimensions
+    nhq = nhq_per_dev * up_factor
+    seq_len = seq_per_dev * rp_factor
+
+    return {
+        "fidelity": fidelity,
+        "core_count": core_count,
+        "num_devices": num_devices,
+        "b": b,
+        "nhq": nhq,
+        "seq_len": seq_len,
+        "head_dim_k": head_dim_k,
+        "head_dim_v": head_dim_v,
+    }
+
+
+def compute_theoretical_ms(hw_info):
+    """
+    Compute theoretical compute time for ring joint SDPA.
+
+    For each matmul: tiles = (M/32) * (K/32) * (N/32), cycles = tiles * fidelity_cycles
+    Causal masking halves the work. Divide by total cores across all devices.
+
+    QK^T: M=B*nhq*seq_len, K=head_dim_k, N=seq_len
+    AV:   M=B*nhq*seq_len, K=seq_len,    N=head_dim_v
+
+    Returns theoretical time in ms.
+    """
+    fidelity_cycles = FIDELITY_CYCLES.get(hw_info["fidelity"])
+    if fidelity_cycles is None:
+        print(f"WARNING: Unknown fidelity '{hw_info['fidelity']}', skipping utilization", file=sys.stderr)
+        return None
+
+    b = hw_info["b"]
+    nhq = hw_info["nhq"]
+    seq_len = hw_info["seq_len"]
+    head_dim_k = hw_info["head_dim_k"]
+    head_dim_v = hw_info["head_dim_v"]
+    total_cores = hw_info["num_devices"] * hw_info["core_count"]
+
+    # QK^T: causal /2
+    qkt_tiles = (b * nhq * seq_len / 32) * (head_dim_k / 32) * (seq_len / 32) / 2
+    qkt_cycles = qkt_tiles * fidelity_cycles
+
+    # AV: causal /2
+    av_tiles = (b * nhq * seq_len / 32) * (seq_len / 32) * (head_dim_v / 32) / 2
+    av_cycles = av_tiles * fidelity_cycles
+
+    total_cycles = qkt_cycles + av_cycles
+    theoretical_ns = total_cycles / total_cores
+    return theoretical_ns / 1e6  # ms
+
+
 def parse_ring_joint_perf(ops):
     """
     Parse RingJointSDPA device kernel durations.
@@ -159,7 +249,7 @@ def build_rank_iteration_tables(ops, num_iters):
     return pd.DataFrame(max_table), pd.DataFrame(max_devs), pd.DataFrame(min_table), pd.DataFrame(min_devs)
 
 
-def print_summary(ops, num_iters):
+def print_summary(ops, num_iters, theoretical_ms=None):
     """Print a human-readable summary of the perf results."""
     ranks = sorted(ops["rank"].unique())
     num_devices = ops["device_label"].nunique()
@@ -268,13 +358,25 @@ def print_summary(ops, num_iters):
     fastest_rank = perf_max_table.mean(axis=0, skipna=True).idxmin()
     slowest_rank = perf_max_table.mean(axis=0, skipna=True).idxmax()
 
+    avg_wait_ms = iter_max.mean() / 1e6
+    avg_op_ms = iter_min.mean() / 1e6
+
     print(f"=== Summary ({num_perf_runs} perf runs, {num_devices} devices, {len(ranks)} rank(s)) ===")
     print(f"  Best run:  RUN {best_run}  {iter_max[best_run] / 1e6:.3f} ms  (bottleneck: {best_run_dev})")
     print(f"  Worst run: RUN {worst_run}  {iter_max[worst_run] / 1e6:.3f} ms  (bottleneck: {worst_run_dev})")
-    print(f"  Avg max (wait time):   {iter_max.mean() / 1e6:.3f} ms  (slowest rank: {slowest_rank})")
-    print(f"  Avg min (op time):     {iter_min.mean() / 1e6:.3f} ms  (fastest rank: {fastest_rank})")
+    print(f"  Avg max (wait time):   {avg_wait_ms:.3f} ms  (slowest rank: {slowest_rank})")
+    print(f"  Avg min (op time):     {avg_op_ms:.3f} ms  (fastest rank: {fastest_rank})")
     print(f"  Max skew:              {iter_skew.max() / 1e6:.3f} ms  (run {iter_skew.idxmax()})")
     print(f"  Spread:                {(iter_max.max() - iter_max.min()) / 1e3:.1f} us")
+
+    if theoretical_ms is not None:
+        util_wait = theoretical_ms / avg_wait_ms * 100
+        util_op = theoretical_ms / avg_op_ms * 100
+        print()
+        print(f"=== Compute utilization ===")
+        print(f"  Theoretical compute:   {theoretical_ms:.3f} ms")
+        print(f"  vs wait time:          {util_wait:.1f}%")
+        print(f"  vs op time:            {util_op:.1f}%")
 
 
 def main():
@@ -288,6 +390,14 @@ def main():
         "--rank",
         nargs="+",
         help="Explicit per-rank CSV files in order: rank0.csv rank1.csv ... (multi-host)",
+    )
+    parser.add_argument(
+        "--mesh-shape",
+        type=int,
+        nargs=2,
+        metavar=("RP", "UP"),
+        help="Mesh shape as 'RP UP' (e.g. 32 4). RP scales sequence, UP scales heads. "
+        "Required for compute utilization calculation.",
     )
     args = parser.parse_args()
 
@@ -303,7 +413,24 @@ def main():
         sys.exit(1)
 
     ops, num_iters = parse_ring_joint_perf(ops)
-    print_summary(ops, num_iters)
+
+    theoretical_ms = None
+    if args.mesh_shape:
+        rp_factor, up_factor = args.mesh_shape
+        hw_info = extract_hw_info(ops, rp_factor, up_factor)
+        theoretical_ms = compute_theoretical_ms(hw_info)
+        if theoretical_ms is not None:
+            print(
+                f"HW: {hw_info['fidelity']}, {hw_info['core_count']} cores/device, "
+                f"{hw_info['num_devices']} devices, mesh {rp_factor}x{up_factor}"
+            )
+            print(
+                f"Op: B={hw_info['b']}, nhq={hw_info['nhq']}, seq_len={hw_info['seq_len']}, "
+                f"Dk={hw_info['head_dim_k']}, Dv={hw_info['head_dim_v']}"
+            )
+            print()
+
+    print_summary(ops, num_iters, theoretical_ms)
 
 
 if __name__ == "__main__":
