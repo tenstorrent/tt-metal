@@ -58,24 +58,45 @@ def init_model_and_runner(
 
 
 def process_images(dataset, res, batch_size):
+    """One batched preprocess (faster than per-image) and optional pad to ``batch_size``."""
     torch_images, orig_images, paths_images = [], [], []
 
     for paths, im0s, _ in dataset:
-        assert len(im0s) == batch_size, f"Expected batch of size {batch_size}, but got {len(im0s)}"
-
-        paths_images.extend(paths)
-        orig_images.extend(im0s)
-
+        if not im0s:
+            continue
         for idx, img in enumerate(im0s):
             if img is None:
                 raise ValueError(f"Could not read image: {paths[idx]}")
-            tensor = preprocess([img], res=res)
-            torch_images.append(tensor)
+        paths_images.extend(paths)
+        orig_images.extend(im0s)
+        torch_images.append(preprocess(im0s, res=res))
 
-        if len(torch_images) >= batch_size:
+        if sum(t.shape[0] for t in torch_images) >= batch_size:
             break
 
+    if not torch_images:
+        raise ValueError("No images loaded from dataset")
+
     torch_input_tensor = torch.cat(torch_images, dim=0)
+    if torch_input_tensor.shape[0] > batch_size:
+        torch_input_tensor = torch_input_tensor[:batch_size]
+        orig_images = orig_images[:batch_size]
+        paths_images = paths_images[:batch_size]
+
+    n = torch_input_tensor.shape[0]
+    if n < batch_size:
+        logger.warning(
+            f"Only {n} image(s) for batch_size={batch_size}; padding by repeating the last image "
+            "(needed for multi-device sharded batch)."
+        )
+        last = torch_input_tensor[-1:].clone()
+        pad_orig = orig_images[-1].copy()
+        pad_path = paths_images[-1]
+        while torch_input_tensor.shape[0] < batch_size:
+            torch_input_tensor = torch.cat([torch_input_tensor, last], dim=0)
+            orig_images.append(pad_orig.copy())
+            paths_images.append(pad_path)
+
     return torch_input_tensor, orig_images, paths_images
 
 
@@ -83,7 +104,8 @@ def run_inference_and_save(
     model, runner, model_type, outputs_mesh_composer, im_tensor, orig_images, paths_images, save_dir, names
 ):
     if model_type == "torch_model":
-        preds = model(im_tensor)
+        with torch.inference_mode():
+            preds = model(im_tensor)
     else:
         preds = runner.run(im_tensor)
         preds = ttnn.to_torch(preds, dtype=torch.float32, mesh_composer=outputs_mesh_composer)
