@@ -776,8 +776,9 @@ def get_trainer_models(trainer_id):
         "qwen3_1_7b": "Qwen3 1.7B",
     }
 
+    model_order = ["tinyllama", "gpt2", "qwen3_0_6b", "qwen3_1_7b", "llama8b", "llama70b", "llama405b"]
     models = []
-    for model_id in sorted(model_ids):
+    for model_id in sorted(model_ids, key=lambda m: model_order.index(m) if m in model_order else len(model_order)):
         full_config_path = get_model_config_path(model_id)
         relative_config_path = (
             full_config_path.split("/configs/")[-1]
