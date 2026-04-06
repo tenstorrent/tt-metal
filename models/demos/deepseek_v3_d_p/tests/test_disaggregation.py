@@ -307,7 +307,7 @@ def test_fnids(mesh_device):
     total_rows = mesh_shape[0]
     total_cols = mesh_shape[1]
     rank_row_start = int(rank) * total_rows // int(size)
-    rank_row_end = int(rank) + total_cols * total_rows // int(size)
+    rank_row_end = rank_row_start + total_rows // int(size)
 
     logger.info(f"Rank: {rank}, Size: {size}, Row start: {rank_row_start}, Row end: {rank_row_end}")
 
