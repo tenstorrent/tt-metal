@@ -85,6 +85,8 @@ def _create_hf_text_config(num_experts=None, top_k=None, vocab_size=256, num_lay
         tc.top_k_experts = top_k
     tc.vocab_size = vocab_size
     tc.num_hidden_layers = num_layers
+    # Disable per-layer input for now (not yet implemented in TT)
+    tc.hidden_size_per_layer_input = 0
     tc._attn_implementation = "eager"
     return tc
 
@@ -117,8 +119,12 @@ def _create_hf_model(hf_text_config):
 
         def forward(self, input_ids, position_embeddings, attention_mask=None):
             x = self.embed_tokens(input_ids)
+            pli_size = getattr(self.config, "hidden_size_per_layer_input", 0) or 0
+            pli = torch.randn(1, x.shape[1], pli_size) if pli_size else None
             for layer in self.layers:
-                x = layer(x, position_embeddings=position_embeddings, attention_mask=attention_mask)
+                x = layer(
+                    x, per_layer_input=pli, position_embeddings=position_embeddings, attention_mask=attention_mask
+                )
             x = self.norm(x)
             logits = self.lm_head(x)
             # Softcapping
