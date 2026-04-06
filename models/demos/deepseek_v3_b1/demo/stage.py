@@ -33,10 +33,11 @@ from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_lo
 TOKEN_PAGE_SIZE_BYTES = 64
 TOKEN_FIFO_SIZE = 1024
 ACTIVATION_DIM = 7168
-FIFO_PAGE_SIZE = 1
+FIFO_PAGE_SIZE = 2
 
 ACTIVATION_PAGE_SIZE_BYTES = ACTIVATION_DIM * 2
-ACTIVATION_FIFO_SIZE = ACTIVATION_PAGE_SIZE_BYTES * FIFO_PAGE_SIZE
+ACTIVATION_FIFO_SIZE = ACTIVATION_PAGE_SIZE_BYTES * 2
+
 PIPELINE_CORE_COORD = ttnn.CoreCoord(12, 8)
 
 # Embedding core coords for the combined SpecLMHead+Embedding stage (column 12, outside mcast grid)

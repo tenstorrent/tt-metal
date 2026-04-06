@@ -91,6 +91,7 @@ def create_decoder_block_tensors(
     preloaded_weights=None,
     rigged_group_count: int | None = None,
     forward_metadata: bool = False,
+    validate_debug_tensors: bool = False,
 ):
     """Create all tensors required by DecoderBlock.op().
 
@@ -332,24 +333,27 @@ def create_decoder_block_tensors(
             tile=tile_1x16,
             mesh_mapper=mesh_mapper,
         )
-        moe_ref_gate_output_scores = ttnn.from_torch(
-            torch.zeros((1, 16), dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=submesh,
-            memory_config=gate_output_mem_config,
-            tile=tile_1x16,
-            mesh_mapper=mesh_mapper,
-        )
-        moe_ref_gate_output_indices = ttnn.from_torch(
-            torch.zeros((1, 16), dtype=torch.uint16),
-            dtype=ttnn.uint16,
-            layout=ttnn.TILE_LAYOUT,
-            device=submesh,
-            memory_config=gate_output_mem_config,
-            tile=tile_1x16,
-            mesh_mapper=mesh_mapper,
-        )
+        moe_ref_gate_output_scores = None
+        moe_ref_gate_output_indices = None
+        if validate_debug_tensors:
+            moe_ref_gate_output_scores = ttnn.from_torch(
+                torch.zeros((1, 16), dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=submesh,
+                memory_config=gate_output_mem_config,
+                tile=tile_1x16,
+                mesh_mapper=mesh_mapper,
+            )
+            moe_ref_gate_output_indices = ttnn.from_torch(
+                torch.zeros((1, 16), dtype=torch.uint16),
+                dtype=ttnn.uint16,
+                layout=ttnn.TILE_LAYOUT,
+                device=submesh,
+                memory_config=gate_output_mem_config,
+                tile=tile_1x16,
+                mesh_mapper=mesh_mapper,
+            )
 
     # ══════════════════════════════════════════════════════════════════════════
     # Attention input/intermediate/output mesh tensors
@@ -487,14 +491,16 @@ def create_decoder_block_tensors(
     # ).reshape(num_devices, num_slots, 1, per_device_max_seq_len, kvpe_dim)
 
     # ── KV cache clone for standalone AttentionBlock.op sanity check ──
-    ttnn_kv_cache_attn_ref = ttnn.from_torch(
-        torch_kv_cache_shuffled,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=kv_mem,
-        mesh_mapper=kv_cache_2d_mesh_mapper,
-    )
+    ttnn_kv_cache_attn_ref = None
+    if validate_debug_tensors:
+        ttnn_kv_cache_attn_ref = ttnn.from_torch(
+            torch_kv_cache_shuffled,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=kv_mem,
+            mesh_mapper=kv_cache_2d_mesh_mapper,
+        )
 
     # ── SDPA output tensor ──
     s1_cores, _ = FlashMLADecode.ProgramConfig.grid.BLOCKS[0]
@@ -511,6 +517,16 @@ def create_decoder_block_tensors(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_input_output_shard_spec
     )
     ttnn_sdpa_output = None
+    if validate_debug_tensors:
+        ttnn_sdpa_output = ttnn.from_torch(
+            torch.zeros((SDPA_INPUT_NUM_CORES * HEADS_PER_ROW, QNOPE_OUT_DIM), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=sdpa_mem,
+            mesh_mapper=mesh_mapper,
+            tile=sdpa_tile,
+        )
 
     # ── Post-SDPA tensors ──
     a_tile = ttnn.Tile([M, 32])
@@ -536,6 +552,17 @@ def create_decoder_block_tensors(
         mesh_mapper=shard_mesh_mapper,
     )
     attn_ref_output = None
+
+    if validate_debug_tensors:
+        attn_ref_output = ttnn.from_torch(
+            mesh_output_torch,
+            device=submesh,
+            layout=ttnn.TILE_LAYOUT,
+            tile=a_tile,
+            dtype=ttnn.bfloat16,
+            memory_config=output_mem_config,
+            mesh_mapper=shard_mesh_mapper,
+        )
 
     # ── SDPA worker/forwarder tensors ──
     sdpa_output_cores = FlashMLADecode.ProgramConfig.grid.output_cores(0, NUM_SDPA_WORKERS)
@@ -641,24 +668,27 @@ def create_decoder_block_tensors(
 
     # ── Standalone MoE ref reduce tensors (MoE only) ──
     if is_moe:
-        moe_ref_reduce_intermediate = ttnn.from_torch(
-            torch.zeros([4, 2, final_output_total_width * 3], dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=submesh,
-            memory_config=intermediate_mem_config,
-            tile=tile_1x32,
-            mesh_mapper=reduce_mesh_mapper,
-        )
-        moe_ref_reduce_output = ttnn.from_torch(
-            torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=submesh,
-            memory_config=reduce_output_mem,
-            tile=tile_1x32,
-            mesh_mapper=reduce_mesh_mapper,
-        )
+        moe_ref_reduce_intermediate = None
+        moe_ref_reduce_output = None
+        if validate_debug_tensors:
+            moe_ref_reduce_intermediate = ttnn.from_torch(
+                torch.zeros([4, 2, final_output_total_width * 3], dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=submesh,
+                memory_config=intermediate_mem_config,
+                tile=tile_1x32,
+                mesh_mapper=reduce_mesh_mapper,
+            )
+            moe_ref_reduce_output = ttnn.from_torch(
+                torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=submesh,
+                memory_config=reduce_output_mem,
+                tile=tile_1x32,
+                mesh_mapper=reduce_mesh_mapper,
+            )
 
     sender_core_from_residual = attn_output.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core_from_residual)])
@@ -1010,6 +1040,7 @@ def test_decoder(
         is_moe=True,
         num_routed_experts=effective_num_routed_experts,
         rigged_group_count=rigged_group_count,
+        validate_debug_tensors=validate_standalone_mla or validate_standalone_moe,
     )
 
     num_cores = device_grid_size.x * device_grid_size.y
