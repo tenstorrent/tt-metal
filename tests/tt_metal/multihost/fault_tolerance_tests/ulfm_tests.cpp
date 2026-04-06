@@ -947,6 +947,8 @@ TEST(FaultTolerance, FailureDuringNonBlockingOps) {
         raise(SIGKILL);  // never returns
     }
 
+    bool failure_detected = false;
+
     if (rank == 0) {
         // Post irecv from rank 1
         auto req = ctx->irecv(
@@ -966,6 +968,7 @@ TEST(FaultTolerance, FailureDuringNonBlockingOps) {
             // If wait() returned normally, the send completed before the kill.
             // That's acceptable — the data arrived.
         } catch (const DistributedException&) {
+            failure_detected = true;
             // The irecv failed because rank 1 died. Recovery happens below
             // via the barrier collective which all survivors call.
         }
@@ -976,8 +979,15 @@ TEST(FaultTolerance, FailureDuringNonBlockingOps) {
     try {
         ctx->barrier();
     } catch (const DistributedException&) {
+        failure_detected = true;
         ctx->revoke_and_shrink();
     }
+
+    // Rank 1 is dead, so at least one of the above (wait() or barrier) must
+    // have thrown.  Every other ULFM test asserts on failure detection — this
+    // test must too, otherwise a silent success path hides a broken detector.
+    EXPECT_TRUE(failure_detected)
+        << "Rank " << rank << ": expected failure detection via wait() or barrier";
 
     // If no exception was thrown (rank 0 got data before kill, and barrier
     // somehow succeeded), we still need to verify the communicator is healthy.
