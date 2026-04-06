@@ -47,10 +47,12 @@ void kernel_main() {
 #endif
     constexpr uint32_t scaler = get_compile_time_arg_val(src_args.next_compile_time_args_offset());
     constexpr uint32_t num_zeros_reads = 2048 / MEM_ZEROS_SIZE;
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
     experimental::UnicastEndpoint mem_zero_endpoint;
 
-    // Fill tile with zeros
+    // Fill tile with zeros by reading from local core's MEM_ZEROS region.
+    // Must supply local NOC coordinates explicitly — UnicastEndpoint defaults to (0,0) which on
+    // Blackhole is a DRAM bank, causing a stricter 64-byte DRAM alignment check in ttsim to fail
+    // because MEM_ZEROS_BASE (0x32e0) is only 32-byte aligned.
     for (uint32_t i = 0; i < num_zeros_reads; ++i) {
 #ifdef ARCH_QUASAR
         noc.async_read(
@@ -60,7 +62,7 @@ void kernel_main() {
             mem_zero_endpoint,
             experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(cb2),
             MEM_ZEROS_SIZE,
-            {.addr = MEM_ZEROS_BASE},
+            {.noc_x = my_x[noc_index], .noc_y = my_y[noc_index], .addr = MEM_ZEROS_BASE},
             {.offset_bytes = i * MEM_ZEROS_SIZE});
 #endif
     }
