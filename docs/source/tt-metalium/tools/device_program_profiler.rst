@@ -89,7 +89,7 @@ The kernel code in ``kernels/full_buffer.cpp`` uses ``DeviceZoneScopedN`` to pro
 .. code-block:: c++
     :linenos:
 
-    // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+    // SPDX-FileCopyrightText: 2023 Tenstorrent USA, Inc.
     //
     // SPDX-License-Identifier: Apache-2.0
 
