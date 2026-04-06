@@ -2,13 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def test_group_norm_large_ex_external_cb(device):
+@pytest.mark.parametrize("specify_grid", [True, False])
+def test_group_norm_large_ex_external_cb(device, specify_grid):
     torch.manual_seed(0)
     shape = (1, 1, 1280 * 720, 256)  # [N, 1, H*W, C]
     num_groups = 32
@@ -31,14 +33,16 @@ def test_group_norm_large_ex_external_cb(device):
     w_tt = ttnn.from_torch(weight_4d, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
     b_tt = ttnn.from_torch(bias_4d, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-    sharded_mem_config, grid_size = ttnn.determine_expected_group_norm_sharded_config_and_grid_size(
-        device=device,
-        num_channels=c,
-        num_groups=num_groups,
-        input_nhw=1280 * 720,
-        is_height_sharded=False,
-        is_row_major=False,
-    )
+    grid_size = None
+    if specify_grid:
+        sharded_mem_config, grid_size = ttnn.determine_expected_group_norm_sharded_config_and_grid_size(
+            device=device,
+            num_channels=c,
+            num_groups=num_groups,
+            input_nhw=1280 * 720,
+            is_height_sharded=False,
+            is_row_major=False,
+        )
     output_tensor_tt = ttnn.group_norm(
         input_tensor_tt,
         num_groups=num_groups,

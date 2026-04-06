@@ -8,6 +8,11 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/tuple.h>
+
+#include <tuple>
+
+#include <tt-metalium/core_coord.hpp>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "groupnorm.hpp"
@@ -209,6 +214,35 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
         R"doc(
             Find the largest valid CoreGrid within (max_x, max_y) bounds
             for DRAM interleaved group-norm. Raises if no valid grid exists.
+        )doc");
+    mod.def(
+        "determine_expected_group_norm_sharded_config_and_grid_size",
+        [](int32_t device_grid_x,
+           int32_t device_grid_y,
+           uint32_t num_channels,
+           int num_groups,
+           uint32_t input_nhw,
+           bool is_height_sharded,
+           bool is_row_major) {
+            auto result = ttnn::operations::normalization::determine_expected_group_norm_sharded_config_and_grid_size(
+                tt::tt_metal::CoreCoord{device_grid_x, device_grid_y},
+                num_channels,
+                num_groups,
+                input_nhw,
+                is_height_sharded,
+                is_row_major);
+            return std::make_tuple(result.memory_config, result.core_grid);
+        },
+        nb::arg("device_grid_x"),
+        nb::arg("device_grid_y"),
+        nb::arg("num_channels"),
+        nb::arg("num_groups"),
+        nb::arg("input_nhw"),
+        nb::arg("is_height_sharded"),
+        nb::arg("is_row_major") = false,
+        R"doc(
+            C++ implementation matching Python ``determine_expected_group_norm_sharded_config_and_grid_size``:
+            returns ``(MemoryConfig, CoreGrid)`` for L1 height- or block-sharded group norm, given device grid extents.
         )doc");
 }
 }  // namespace
