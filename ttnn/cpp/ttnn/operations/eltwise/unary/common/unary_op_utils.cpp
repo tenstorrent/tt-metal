@@ -21,6 +21,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::HARDSWISH: return "SFPU_OP_HARDSWISH_INCLUDE";
         case UnaryOpType::SOFTSHRINK: return "SFPU_OP_SOFTSHRINK_INCLUDE";
         case UnaryOpType::SWISH: return "SFPU_OP_SWISH_INCLUDE";
+        case UnaryOpType::FRAC: return "SFPU_OP_FRAC_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -66,6 +67,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::HARDSIGMOID: return {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
         case UnaryOpType::HARDSWISH: return {"hardswish_tile_init();", fmt::format("hardswish_tile({});", idst)};
         case UnaryOpType::SWISH: return {"swish_tile_init();", fmt::format("swish_tile({});", idst)};
+        case UnaryOpType::FRAC: return {"frac_tile_init();", fmt::format("frac_tile({});", idst)};
         default: TT_THROW("unexpected op type {}", op_type);
     };
 }

@@ -11,4 +11,5 @@ enum class SfpuType {
     hardswish,
     softshrink,
     swish,
+    frac,
 };
