@@ -126,22 +126,31 @@ JOBS_BASE_DIR = _default_jobs_base_dir()
 # Fallback when preferred partition doesn't exist.
 DEFAULT_PARTITION = os.environ.get("DEFAULT_PARTITION", "bh_sp5_aisle_c_partial")
 
-# Supported clusters exposed to users. Only these are returned in the catalog.
+# Clusters available for job submission. Only these are accepted by POST /v1/jobs.
 SUPPORTED_CLUSTERS = {"bh_galaxy", "4bh_glx"}
+
+# Canonical display order for the catalog: n150 → p150 → 4×p150 → 8×p150 → galaxy → 4×galaxy
+CLUSTER_ORDER = ["n150", "p150", "4xp150", "8xp150", "bh_galaxy", "4bh_glx"]
 
 # Human-readable display names for catalog cluster entries.
 CLUSTER_DISPLAY_NAMES = {
-    "bh_galaxy": "BH Galaxy",
-    "4bh_glx": "4× BH Galaxy",
+    "n150": "N150",
+    "p150": "P150",
+    "4xp150": "4× P150",
+    "8xp150": "8× P150",
+    "bh_galaxy": "Galaxy",
+    "4bh_glx": "4× Galaxy",
 }
 
 # Cluster size → ordered list of partitions that can satisfy it. First with free nodes wins.
 CLUSTER_TO_PARTITIONS = {
+    "n150": ["bh_lb_single"],
+    "p150": ["bh_lb_single"],
+    "4xp150": ["bh_lb_single"],
+    "8xp150": ["bh_lb_single"],
     "bh_galaxy": ["bh_sp5_aisle_c_partial"],
     "4bh_glx": ["bh_sp5_aisle_c_partial"],
-    # Disabled — not exposed in catalog
-    "8xp150": ["bh_lb_single"],
-    "4xp150": ["bh_lb_single"],
+    # Not exposed in catalog
     "bh_glx": ["bh_single", "bh_sp_5x4x32_C1_C10", "bh_pod_4x32_B45", "bh_pod_4x32_B89"],
     "5x4bh_glx": ["bh_sp_5x4x32_C1_C10"],
 }
@@ -237,6 +246,7 @@ def _get_cluster_info(cluster: str) -> dict:
     return {
         "id": cluster,
         "display_name": CLUSTER_DISPLAY_NAMES.get(cluster, cluster),
+        "supported": cluster in SUPPORTED_CLUSTERS,
         "partition": p,
         "mesh_shape": topo["mesh_shape"],
         "topology": topo,
@@ -890,7 +900,7 @@ def get_trainer_model_resources(trainer_id, model_id):
         )
 
     resource_ids = get_supported_resources(trainer_id, model_id) & SUPPORTED_CLUSTERS
-    resources = [_get_cluster_info(cluster_id) for cluster_id in sorted(resource_ids)]
+    resources = [_get_cluster_info(cluster_id) for cluster_id in CLUSTER_ORDER if cluster_id in resource_ids]
 
     return jsonify({"resources": resources})
 
@@ -1005,7 +1015,7 @@ def catalog():
             {"id": "sgd", "display_name": "SGD", "supported": False},
             {"id": "muon", "display_name": "Muon", "supported": False},
         ],
-        "clusters": [_get_cluster_info(c) for c in SUPPORTED_CLUSTERS],
+        "clusters": [_get_cluster_info(c) for c in CLUSTER_ORDER],
     }
 
     log.info("=== CATALOG RESPONSE ===")
