@@ -167,7 +167,7 @@ inline void init_fast_approx_exp_constants() {
 
 inline void fast_approx_exp(uint32_t dst_index) {
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + get_dest_buffer_base());
-    ckernel::sfpu::calculate_exponential<true, true, DST_ACCUM_MODE, true, 4, true>();
+    ckernel::sfpu::calculate_exponential<true, DST_ACCUM_MODE, true, 4, true>();
 }
 
 // TODO: Currently hardcodes the lregs used by red max
@@ -184,10 +184,11 @@ inline void non_approx_exp_mul_prev(uint32_t curr_sum_index, uint32_t corr_exp_i
     sfpi::vFloat sub_top_4 = prev_max_top_4 - curr_max_top_4;
     sfpi::vFloat sub_bottom_4 = prev_max_bottom_4 - curr_max_bottom_4;
     ckernel::sfpu::_init_sfpu_reciprocal_<false>();
-    sfpi::vFloat exp_top_4 = sfpu::ckernel_sfpu_exp_accurate<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
-        sub_top_4, scale_bf16);
+    sfpi::vFloat exp_top_4 =
+        sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
+            sub_top_4, scale_bf16);
     sfpi::vFloat exp_bottom_4 =
-        sfpu::ckernel_sfpu_exp_accurate<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
+        sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
             sub_bottom_4, scale_bf16);
     // Subtract 1. This is because the bcast mul accumulates to dest
     // Without -1: bcast = prev * exp + prev
@@ -394,10 +395,10 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
 
         // Exponentials of differences
         sfpi::vFloat exp_prev =
-            sfpu::ckernel_sfpu_exp_accurate<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
+            sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
                 diff_prev, scale_bf16);
         sfpi::vFloat exp_worker =
-            sfpu::ckernel_sfpu_exp_accurate<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
+            sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
                 diff_worker, scale_bf16);
 
         if constexpr (!final_norm) {
