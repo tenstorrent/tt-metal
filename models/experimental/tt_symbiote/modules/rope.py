@@ -109,6 +109,12 @@ class TTNNRotaryPositionEmbedding(TTNNModule):
         original_seq_len = seq_len
         rotary_dim = cos.shape[-1]
 
+        # Replicated cos/sin can be errantly all-gathered to head_dim×num_devices; slice to match Q/K.
+        if rotary_dim > head_dim:
+            cos = cos[:, :, :, :head_dim]
+            sin = sin[:, :, :, :head_dim]
+            rotary_dim = head_dim
+
         # Handle partial rotary embedding (when cos/sin dim < head_dim)
         if rotary_dim < head_dim:
             # Split q and k into rotary and pass-through portions
@@ -145,10 +151,15 @@ class TTNNRotaryPositionEmbedding(TTNNModule):
             q_rotated = ttnn.concat([q_rot_embedded, q_pass], dim=-1)
             k_rotated = ttnn.concat([k_rot_embedded, k_pass], dim=-1)
         else:
-            # Full rotary embedding - pad if needed for tile boundaries
-            if rotary_dim != head_dim:
-                cos = ttnn.pad(cos, [1, 1, cos.shape[-2], head_dim], [0, 0, 0, 0], 0.0)
-                sin = ttnn.pad(sin, [1, 1, sin.shape[-2], head_dim], [0, 0, 0, 0], 0.0)
+            # Full rotary: pad last dim to tile alignment only (never shrink cos/sin to head_dim here).
+            padded_dim = rotary_dim
+            if rotary_dim % 32 != 0:
+                padded_dim = ((rotary_dim + 31) // 32) * 32
+                pad_shape = [int(cos.shape[i]) for i in range(len(cos.shape) - 1)] + [padded_dim]
+                cos = ttnn.pad(cos, pad_shape, [0, 0, 0, 0], 0.0)
+                sin = ttnn.pad(sin, pad_shape, [0, 0, 0, 0], 0.0)
+                q = ttnn.pad(q, [batch_size, n_q_heads, seq_len, padded_dim], [0, 0, 0, 0], 0.0)
+                k = ttnn.pad(k, [batch_size2, n_k_heads, seq_len2, padded_dim], [0, 0, 0, 0], 0.0)
 
             q_rotated = ttnn.experimental.rotary_embedding(q, cos, sin)
             k_rotated = ttnn.experimental.rotary_embedding(k, cos, sin)

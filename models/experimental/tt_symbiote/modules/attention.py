@@ -3194,12 +3194,40 @@ class TTNNQwen3OmniAttention(TTNNModule):
             and self.device_state.ccl_manager is not None
         )
 
+    def _is_symbiote_replicated(self, tensor) -> bool:
+        """True when ``TorchTTNNTensor`` uses ``ReplicateTensorToMesh`` (e.g. thinker MRoPE cos/sin).
+
+        ``all_gather`` on dim=-1 for replicated tensors concatenates device copies into the last dim
+        (e.g. head_dim 128 → 1024 on 1×8 mesh), which breaks RoPE.
+        """
+        if isinstance(tensor, TorchTTNNTensor):
+            cfg = tensor.ttnn_distributed_tensor_config
+            if cfg is not None and cfg.mesh_mapper is not None:
+                return "Replicate" in type(cfg.mesh_mapper).__name__
+        return False
+
     def _to_ttnn(self, tensor):
         return tensor.to_ttnn if hasattr(tensor, "to_ttnn") else tensor
 
     def _maybe_all_gather(self, tensor):
         t = self._to_ttnn(tensor)
         if not self._is_distributed:
+            return t
+        return ttnn.experimental.all_gather_async(
+            t,
+            dim=-1,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            topology=ttnn.Topology.Ring,
+        )
+
+    def _maybe_all_gather_if_col_sharded(self, tensor):
+        """All-gather column-sharded activations; pass through replicated tensors unchanged."""
+        t = self._to_ttnn(tensor)
+        if not self._is_distributed:
+            return t
+        if self._is_symbiote_replicated(tensor):
             return t
         return ttnn.experimental.all_gather_async(
             t,
@@ -3244,8 +3272,8 @@ class TTNNQwen3OmniAttention(TTNNModule):
         key_states = ttnn.rms_norm(key_states, weight=self._k_norm_weight, epsilon=self._k_norm_eps)
 
         cos, sin = position_embeddings
-        cos = self._maybe_all_gather(cos)
-        sin = self._maybe_all_gather(sin)
+        cos = self._maybe_all_gather_if_col_sharded(cos)
+        sin = self._maybe_all_gather_if_col_sharded(sin)
 
         query_states, key_states = self.rope(query_states, key_states, cos, sin)
         query_states = self._to_ttnn(query_states)
@@ -3590,6 +3618,29 @@ class TTNNQwen3OmniMoeCode2WavAttention(TTNNModule):
             topology=ttnn.Topology.Ring,
         )
 
+    def _is_symbiote_replicated(self, tensor) -> bool:
+        """Replicated cos/sin must not be all-gathered on dim=-1 (concat breaks RoPE last dim)."""
+        if isinstance(tensor, TorchTTNNTensor):
+            cfg = tensor.ttnn_distributed_tensor_config
+            if cfg is not None and cfg.mesh_mapper is not None:
+                return "Replicate" in type(cfg.mesh_mapper).__name__
+        return False
+
+    def _maybe_all_gather_if_col_sharded(self, tensor):
+        t = self._to_ttnn(tensor)
+        if not self._is_distributed:
+            return t
+        if self._is_symbiote_replicated(tensor):
+            return t
+        return ttnn.experimental.all_gather_async(
+            t,
+            dim=-1,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            topology=ttnn.Topology.Ring,
+        )
+
     @staticmethod
     def _to_raw_ttnn(tensor):
         """Unwrap TorchTTNNTensor to raw ttnn.Tensor for ttnn ops that don't accept the wrapper."""
@@ -3688,8 +3739,8 @@ class TTNNQwen3OmniMoeCode2WavAttention(TTNNModule):
         value = ttnn.permute(value, (0, 2, 1, 3))
 
         cos, sin = position_embeddings
-        cos = self._maybe_all_gather(cos)
-        sin = self._maybe_all_gather(sin)
+        cos = self._maybe_all_gather_if_col_sharded(cos)
+        sin = self._maybe_all_gather_if_col_sharded(sin)
         query, key = self.rope(query, key, cos, sin)
         query = self._to_ttnn(query)
         key = self._to_ttnn(key)
