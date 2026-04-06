@@ -63,33 +63,15 @@ hf_hub_download('myshell-ai/OpenVoiceV2', 'converter/config.json', local_dir='ch
 "
 ```
 
-### Run Demo
-```bash
-# Voice cloning demo
-pytest --disable-warnings models/experimental/openvoice/demo/demo.py::test_voice_cloning
-
-# Full pipeline demo (TTS + Voice Conversion)
-pytest --disable-warnings models/experimental/openvoice/demo/demo.py::test_full_pipeline
-
-# Multi-language demo
-pytest --disable-warnings models/experimental/openvoice/demo/demo.py::test_multilingual
-```
-
 ### Run Tests
 ```bash
-# PCC validation (Voice Conversion + TTS)
-python models/experimental/openvoice/tests/pcc/test_pcc_validation.py
+# PCC validation (per-operation + per-module + end-to-end)
+pytest models/experimental/openvoice/tests/pcc/test_pcc.py -v
 
 # WER validation (requires: pip install openai-whisper jiwer)
 python models/experimental/openvoice/tests/pcc/test_wer_validation.py
 
-# Per-operation PCC validation
-pytest models/experimental/openvoice/tests/pcc/test_per_op_pcc.py -v
-
-# Per-module PCC validation
-pytest models/experimental/openvoice/tests/pcc/test_per_module_pcc.py -v
-
-# End-to-end tests
+# End-to-end functional tests (voice cloning, full pipeline, multilingual)
 pytest models/experimental/openvoice/tests/test_openvoice.py -v
 
 # Concurrent clones test (10 concurrent voice clones)
@@ -160,8 +142,9 @@ See [TRADEOFFS.md](TRADEOFFS.md) for detailed architecture decisions.
 models/experimental/openvoice/
 ├── README.md                 # This file
 ├── TRADEOFFS.md             # Architecture tradeoffs and tuning
-├── demo/
-│   └── demo.py              # Main demo script
+├── functional/              # Shared TTNN operations
+│   ├── operations.py        # Conv1d, LayerNorm, Attention, Flip, helpers
+│   └── preprocess.py        # Weight preprocessing
 ├── tt/                      # TTNN implementations
 │   ├── tone_color_converter.py   # High-level API
 │   ├── synthesizer.py            # Voice conversion pipeline
@@ -178,11 +161,10 @@ models/experimental/openvoice/
 │       ├── wavenet.py           # WaveNet dilated convolutions
 │       └── gru.py               # GRU implementation
 ├── tests/
+│   ├── conftest.py              # Shared test fixtures
 │   ├── test_openvoice.py        # End-to-end functional tests
 │   ├── pcc/                     # PCC accuracy tests
-│   │   ├── test_pcc_validation.py   # End-to-end PCC validation
-│   │   ├── test_per_op_pcc.py       # Per-operation PCC validation
-│   │   ├── test_per_module_pcc.py   # Per-module PCC validation
+│   │   ├── test_pcc.py          # Per-op, per-module, and E2E PCC
 │   │   ├── test_wer_validation.py   # Word Error Rate validation
 │   │   └── validation_logs/         # Test output logs
 │   └── perf/                    # Performance tests
