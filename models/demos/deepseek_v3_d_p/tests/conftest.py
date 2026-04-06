@@ -8,6 +8,7 @@ Provides mesh topology markers and pretrained weights checking.
 Automatically downloads weights from HuggingFace if not available locally.
 """
 
+import json
 import os
 from pathlib import Path
 
@@ -19,6 +20,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict, load_state_dict
+from models.demos.deepseek_v3_d_p.utils.transformer_helpers import download_infinitebench_subset
 
 
 def pytest_configure(config):
@@ -468,13 +470,16 @@ def pretrained_weights(model_path, hf_config, state_dict):
 
 
 @pytest.fixture
-def pretrained_transformer_weights(model_path, hf_config, state_dict):
+def pretrained_transformer_weights(model_path, hf_config, state_dict, request):
     """
-    Dequantized pretrained weights for 6-layer transformer in TT state_dict format.
+    Dequantized pretrained weights for N-layer transformer in TT state_dict format.
 
     Extracts embed, norm, and per-layer weights (attention, FFN/MoE) using
     sub_state_dict() + dequantize_state_dict(), matching the format produced
-    by _extract_tt_state_dict() in test_prefill_transformer.py.
+    by extract_tt_state_dict() in transformer_helpers.py.
+
+    Parametrize with num_layers (default 6) via indirect fixture or marker:
+        @pytest.mark.parametrize("pretrained_transformer_weights", [4], indirect=True)
 
     Returns:
         Tuple of (hf_config, tt_state_dict) or skips if not available
@@ -486,7 +491,7 @@ def pretrained_transformer_weights(model_path, hf_config, state_dict):
     if state_dict is None:
         pytest.skip("Failed to load state dict. Check model path and weights.")
 
-    num_layers = 6
+    num_layers = getattr(request, "param", 6)
     first_k_dense = hf_config.first_k_dense_replace  # 3
     n_routed = hf_config.n_routed_experts  # 256
 
@@ -556,3 +561,37 @@ def pretrained_transformer_weights(model_path, hf_config, state_dict):
 
     logger.info(f"Loaded pretrained transformer weights for {num_layers} layers")
     return hf_config, result
+
+
+# ---------------------------------------------------------------------------
+# InfiniteBench prompt fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def infinitebench_prompt(request):
+    """
+    Pytest fixture that provides a long prompt from InfiniteBench.
+
+    Parametrize with the subset name to select which category:
+
+        @pytest.mark.parametrize("infinitebench_prompt",
+            ["passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"],
+            indirect=True,
+        )
+        def test_prefill(infinitebench_prompt):
+            subset, prompt_text = infinitebench_prompt
+            ...
+
+    Downloads from HuggingFace on first use, then caches locally.
+
+    Returns:
+        Tuple of (subset_name, prompt_text).
+    """
+    subset = request.param
+    cached_path = download_infinitebench_subset(subset)
+
+    with open(cached_path) as f:
+        data = json.load(f)
+
+    return data["subset"], data["prompt"]
