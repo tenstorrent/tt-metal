@@ -10,11 +10,11 @@ Reuses WanPatchEmbed, WanTimeTextImageEmbedding, and utilities from models.tt_di
 Adds Lingbot-VA-specific: in_channels=48, action_embedder, condition_embedder_action,
 action_proj_out, and dual forward paths (video + action).
 
-Forward pass: hidden-state math uses ``ttnn.add`` / ``ttnn.multiply`` / ``ttnn.addcmul`` (no PyTorch
-``+`` / ``*`` on activations). ``forward()`` and the public preprocess/conditioning helpers take and return
-``ttnn.Tensor`` on the mesh. Per-token timestep conditioning uses ``numpy.unique`` on a small host view
-(read back from ``ttnn``) plus ``ttnn.full`` / ``repeat`` / ``concat``. RoPE uses ``grid_id`` as ``ttnn``.
-Weight load still uses ``_prepare_torch_state`` (``torch.Tensor`` state dict from checkpoints). Chunked self-attention KV is
+Forward pass: hidden-state math uses ``ttnn.add`` / ``ttnn.multiply`` / ``ttnn.addcmul`` (no elementwise
+Python ``+`` / ``*`` on activations). ``forward()`` and the public preprocess/conditioning helpers take and return
+``ttnn.Tensor`` on the mesh. Per-token timestep conditioning deduplicates timestep values via small
+``ttnn.slice`` / ``.item()`` reads plus ``ttnn.full`` / ``repeat`` / ``concat``. RoPE uses ``grid_id`` as ``ttnn``.
+Weight load uses ``_prepare_torch_state`` (checkpoint tensors from the loader; no ``torch`` / ``numpy`` in this module). Chunked self-attention KV is
 stored as **device-resident** ``ttnn`` tensors per layer: a list of
 ``(k, v)`` segments (speecht5-style concat prefix). When ``update_cache == 1`` the current step’s
 K/V is appended; when ``update_cache == 0`` it is ephemeral (no host gather/scatter).
@@ -23,8 +23,8 @@ K/V is appended; when ``update_cache == 0`` it is ephemeral (no host gather/scat
 from __future__ import annotations
 
 import gc
-import numpy as np
-import torch
+from typing import Any
+
 from loguru import logger
 
 import ttnn
@@ -86,13 +86,14 @@ EPS = 1e-6
 ROPE_MAX_SEQ_LEN = 1024
 
 
-def _rope_transformation_matrix_np() -> np.ndarray:
-    """Host float32 pattern for RoPE matmul (same layout as ``get_rot_transformation_mat`` in tt_dit mochi)."""
+def _rope_transformation_matrix_flat_f32() -> list[float]:
+    """Row-major float32 values for RoPE matmul (same pattern as ``get_rot_transformation_mat`` in tt_dit mochi)."""
     dhead = 32
-    m = np.zeros((1, 1, dhead, dhead), dtype=np.float32)
-    m[0, 0, np.arange(0, dhead, 2), np.arange(1, dhead, 2)] = 1.0
-    m[0, 0, np.arange(1, dhead, 2), np.arange(0, dhead, 2)] = -1.0
-    return m
+    rows = [[0.0] * dhead for _ in range(dhead)]
+    for i in range(0, dhead, 2):
+        rows[i][i + 1] = 1.0
+        rows[i + 1][i] = -1.0
+    return [rows[r][c] for r in range(dhead) for c in range(dhead)]
 
 
 class WanTransformerBlock(Module):
@@ -207,7 +208,7 @@ class WanTransformerBlock(Module):
             packer_l1_acc=True,
         )
 
-    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+    def _prepare_torch_state(self, state: dict[str, Any]) -> None:
         rename_substate(state, "ffn.net.0.proj", "ffn.ff1")
         rename_substate(state, "ffn.net.2", "ffn.ff2")
 
@@ -331,7 +332,7 @@ class WanTransformer3DModel(Module):
     TTNN WanTransformer3DModel for Lingbot-VA.
 
     ``forward`` and the ``preprocess_*`` / ``postprocess_*`` / ``prepare_*`` helpers use ``ttnn.Tensor``
-    on the mesh. Checkpoint load still goes through ``_prepare_torch_state`` / ``load_torch_state_dict``.
+    on the mesh. Checkpoint load goes through ``_prepare_torch_state`` / ``load_torch_state_dict``.
 
     - Video: ``spatial`` ``(B, in_channels, F, H, W)`` → … → ``(B, out_channels, F, H, W)``.
     - Action: ``spatial`` ``(B, action_dim, F, H, W)`` → … → ``(B, N, action_dim)``.
@@ -366,13 +367,16 @@ class WanTransformer3DModel(Module):
         self.is_fsdp = is_fsdp
         self.fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
         self.cached_rope_features = {}
-        self._rope_static_trans_mat_bf16 = ttnn.from_torch(
-            _rope_transformation_matrix_np(),
-            dtype=ttnn.bfloat16,
+        _rm_f32 = ttnn.from_buffer(
+            _rope_transformation_matrix_flat_f32(),
+            [1, 1, 32, 32],
+            dtype=ttnn.float32,
+            device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            device=mesh_device,
         )
+        self._rope_static_trans_mat_bf16 = ttnn.typecast(_rm_f32, ttnn.bfloat16)
+        _safe_deallocate_tensor(_rm_f32, "rope static trans mat f32")
 
         self.patch_size = patch_size
         self.dim = dim
@@ -556,7 +560,7 @@ class WanTransformer3DModel(Module):
         _ = batch_size, attn_window, latent_token_per_chunk, action_token_per_chunk
         self._attn_caches[cache_name] = [[] for _ in range(len(self.blocks))]
 
-    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+    def _prepare_torch_state(self, state: dict[str, Any]) -> None:
         pop_substate(state, "rope")
 
         # Map reference patch_embedding_mlp (Linear) -> patch_embedding. Ref uses input order (C, p0, p1, p2);
@@ -584,11 +588,39 @@ class WanTransformer3DModel(Module):
             state["patch_embedding.bias"] = patch_bias.reshape(1, -1)
 
     def _rope_grid_cache_key(self, grid_id: ttnn.Tensor) -> tuple:
-        """Stable cache key from grid contents (host bytes; one readback)."""
+        """Stable cache key from grid contents (device reductions + two scalar readbacks).
+
+        Uses sum and sum-of-squares over all elements; collisions are vanishingly unlikely for
+        integer-like grid coordinates used in practice.
+        """
         shape = tuple(int(x) for x in grid_id.shape)
-        th = ttnn.to_torch(ttnn.get_device_tensors(grid_id)[0])
-        payload = th.contiguous().float().numpy().tobytes()
-        return (shape, payload)
+        # ROW_MAJOR typecast on Wormhole requires last padded dim % 32 == 0; grid_id is often [B,3,L]
+        # with L not tile-aligned. Match _prepare_rope_cos_sin: TILE first, then float32 typecast.
+        tmp: list = []
+        g = grid_id
+        if g.layout != ttnn.TILE_LAYOUT:
+            g = ttnn.to_layout(g, ttnn.TILE_LAYOUT)
+            tmp.append(g)
+        if g.dtype != ttnn.float32:
+            g = ttnn.typecast(g, ttnn.float32)
+            tmp.append(g)
+
+        def _fold_sum(t: ttnn.Tensor) -> ttnn.Tensor:
+            u = t
+            for d in range(len(u.shape) - 1, -1, -1):
+                u = ttnn.sum(u, dim=d)
+            return u
+
+        s1 = _fold_sum(g)
+        g_sq = ttnn.multiply(g, g)
+        tmp.append(g_sq)
+        s2 = _fold_sum(g_sq)
+        key = (shape, float(s1.item()), float(s2.item()))
+        _safe_deallocate_tensor(s1, "rope_grid_cache_key s1")
+        _safe_deallocate_tensor(s2, "rope_grid_cache_key s2")
+        for t in tmp:
+            _safe_deallocate_tensor(t, "rope_grid_cache_key tmp")
+        return key
 
     def get_rope_features(self, grid_id: ttnn.Tensor):
         """Build RoPE cos/sin and transformation matrix from ``grid_id`` ``(B, 3, L)`` on the mesh.
@@ -596,7 +628,7 @@ class WanTransformer3DModel(Module):
         Cache key must include grid *values*, not only shape: multi-chunk generate passes the same
         token layout with different ``frame_st_id`` (temporal offset in ``get_mesh_id``). Shape-only
         keys incorrectly reuse chunk-0 RoPE for all chunks → static-looking decoded video while
-        single-chunk PCC vs torch stays high.
+        single-chunk PCC vs reference stays high.
         """
         cache_key = self._rope_grid_cache_key(grid_id)
         if cache_key not in self.cached_rope_features:
@@ -688,9 +720,14 @@ class WanTransformer3DModel(Module):
         if N_padded is None:
             N_padded = N
 
-        flat_np = ttnn.to_torch(ttnn.get_device_tensors(timestep_per_frame)[0]).reshape(-1).float().cpu().numpy()
-        unique_ts, inverse_flat = np.unique(flat_np, return_inverse=True)
-        inverse_bf = inverse_flat.reshape(B, F_frames)
+        flat_vals: list[float] = []
+        for b_idx in range(B):
+            for f_idx in range(F_frames):
+                cell = ttnn.slice(timestep_per_frame, [b_idx, f_idx], [b_idx + 1, f_idx + 1])
+                flat_vals.append(float(cell.item()))
+                _safe_deallocate_tensor(cell, "prepare_per_token ts cell")
+        unique_ts = sorted(set(flat_vals))
+        ts_to_u = {t: i for i, t in enumerate(unique_ts)}
         temb_by_idx: list = []
         proj_by_idx: list = []
         for t_val in unique_ts:
@@ -713,7 +750,7 @@ class WanTransformer3DModel(Module):
             frame_temb: list = []
             frame_proj: list = []
             for f_idx in range(F_frames):
-                u = int(inverse_bf[b_idx, f_idx])
+                u = ts_to_u[flat_vals[b_idx * F_frames + f_idx]]
                 temb_u = temb_by_idx[u]
                 proj_u = proj_by_idx[u]
                 frame_temb.append(ttnn.repeat(temb_u, (1, 1, patches_per_frame, 1)))
@@ -814,20 +851,7 @@ class WanTransformer3DModel(Module):
         if sp_factor <= 1:
             return x
         mesh_axis = self.parallel_config.sequence_parallel.mesh_axis
-        mapper_dims: list = [None, None]
-        mapper_dims[mesh_axis] = -2
-        mesh_mapper = ttnn.ShardTensor2dMesh(
-            self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=mapper_dims
-        )
-        host = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).to(dtype=torch.bfloat16).contiguous()
-        return ttnn.from_torch(
-            host,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
-        )
+        return ttnn.mesh_partition(x, dim=2, cluster_axis=mesh_axis)
 
     def preprocess_spatial_input(self, spatial: ttnn.Tensor) -> tuple[ttnn.Tensor, int]:
         """``spatial``: ``(B, C, F, H, W)`` video on the mesh (tile)."""
