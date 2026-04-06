@@ -777,8 +777,22 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     // Evenly distribute flat global q chunks across cores
     const uint32_t total_q_chunks = B * NH * num_q_chunks;
-    const uint32_t base_chunks_per_core = (num_cores == 0) ? 0 : (total_q_chunks / num_cores);
-    const uint32_t extra_chunks = (num_cores == 0) ? 0 : (total_q_chunks % num_cores);
+
+    uint32_t base_chunks_per_core = 0;
+    uint32_t extra_chunks_per_core = 0;
+    uint32_t cores_doing_extra_work = 0;
+    if (enable_zigzag_balancing) {
+        log_debug(tt::LogOp, "Enabling zigzag balancing with even num_q_chunks: {}", num_q_chunks);
+        const uint32_t total_pairs = total_q_chunks / 2;
+        cores_doing_extra_work = total_pairs % num_cores;
+        base_chunks_per_core = (num_cores == 0) ? 0 : (total_pairs / num_cores) * 2;
+        extra_chunks_per_core = (num_cores == 0) ? 0 : 2;
+    } else {
+        cores_doing_extra_work = total_q_chunks % num_cores;
+        base_chunks_per_core = (num_cores == 0) ? 0 : (total_q_chunks / num_cores);
+        extra_chunks_per_core = (num_cores == 0) ? 0 : 1;
+    }
+
     uint32_t next_global_chunk = 0;
 
     auto decode_flat_chunk = [&](uint32_t flat_chunk_index) {
@@ -794,7 +808,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         ZoneScopedN("RingJointSDPA::work_distribution");
         for (uint32_t i = 0; i < num_cores; ++i) {
             CoreCoord core = {i % grid_size.x, i / grid_size.x};
-            uint32_t chunk_count = base_chunks_per_core + ((i < extra_chunks) ? 1 : 0);
+            uint32_t chunk_count = base_chunks_per_core + ((i < cores_doing_extra_work) ? extra_chunks_per_core : 0);
             if (next_global_chunk >= total_q_chunks) {
                 chunk_count = 0;
             } else if (chunk_count > total_q_chunks - next_global_chunk) {
@@ -846,7 +860,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     {  // Chain construction
         ZoneScopedN("RingJointSDPA::chain_construction");
         for (auto& segments : head_segments) {
-            if (segments.size() < 2 || args.is_balanced) {
+            if (segments.size() < 2) {
                 continue;
             }
 
@@ -871,7 +885,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             for (std::size_t idx = start; idx < segments.size(); ++idx) {
                 const auto& seg = segments.at(idx);
                 const uint32_t core_idx = seg.core_idx;
-                const auto& hw = core_work.at(core_idx).head_work.at(seg.head_work_index);
+                const auto& work = core_work.at(core_idx);
+                const auto& hw = work.head_work.at(seg.head_work_index);
                 auto& chain = core_chain_info.at(core_idx);
 
                 chain.participates = true;
