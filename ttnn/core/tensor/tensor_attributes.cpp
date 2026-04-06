@@ -38,7 +38,7 @@ const TensorTopology& TensorAttributes::get_tensor_topology() const {
                 return host_storage.host_tensor().tensor_topology();
             },
             [](const DeviceStorage& device_storage) -> const TensorTopology& {
-                return device_storage.get_mesh_tensor().tensor_topology();
+                return device_storage.get_tensor_topology();
             },
         },
         storage_);

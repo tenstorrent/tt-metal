@@ -60,33 +60,25 @@ private:
     HostTensor tensor;
 };
 
-// DeviceStorage manages a piece of device memory and that is valid for a vector of MeshCoordinates.
+// DeviceStorage is a wrapper around the MeshTensor to fit the semantics of ttnn::Tensor.
 //
-// DeviceStorage owns the lifetime of the underlying device memory.
-// Copying the DeviceStorage will share the ownership of the underlying device memory.
+// Different from MeshTensor, DeviceStorage has the following additional features:
+// - It can be in a deallocated state.
+// - It is copyable, copying a DeviceStorage shares the underlying device memory.
+// - It represents a MeshTensor at specific coordinates of the MeshDevice.
 //
-// DeviceStorage has two possible states:
-// - Allocated: the underlying device memory is allocated.
-//   - Can query device memory state/ coordinates/ device.
-//   - The MeshCoordinates obtained from get_coords will be within the boundaries of the underlying device memory.
-//   - Can be switched to the deallocated state by calling deallocate.
-// - Deallocated: the underlying device memory is released.
-//   - Query of device memory state/ device will throw.
-//   - get_coords/ is_uniform_storage will be undefined (for transition, ideally they should all throw).
-//   - Calls to deallocate will have no effect.
-//
-// Right now the deallocated state is only restircted to have a nullptr to the MeshTensor,
-// However, the MeshTensor could still be in a deallocated state when other owners of DeviceStorage calls deallocate.
-// This is problematic in two ways:
-// 1. This breaks the invariant that the MeshTensor is always allocated.
-// 2. The definition of deallocated state is not conforming to `DeviceStorage::is_allocated()`.
-//
-// Long term, "deallocated" and `!is_allocated()` should be synonymous. Migration is difficult: some
-// operations (e.g. move) still rely on accessing tensors in a deallocated state, and asserts do not
-// cover every intentional or accidental use of deallocated tensors.
+// Invariant:
+// - A default-constructed DeviceStorage acts like a deallocated DeviceStorage. However it is not associated with
+// TensorSpec and TensorTopology.
+// - An allocated DeviceStorage always holds a non-default constructed MeshTensor. Do not move the MeshTensor out of
+//   DeviceStorage.
+// - TensorSpec and TensorTopology are always accessible for a DeviceStorage constructed from a MeshTensor. This stays
+// true even after deallocate() is called.
+// - deallocate() releases the underlying device memory.
+// - MeshTensor getters will always throw if the DeviceStorage is deallocated.
 struct DeviceStorage {
     // Construct a DeviceStorage that is deallocated
-    DeviceStorage() = default;
+    DeviceStorage();
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Constructs a DeviceStorage from a device memory
@@ -120,25 +112,23 @@ struct DeviceStorage {
     Buffer* get_buffer() const;
 
     // Get mesh buffer that represents the device memory
-    // Throws if the DeviceStorage is not allocated.
+    // Throws if the DeviceStorage is deallocated.
     const distributed::MeshBuffer& get_mesh_buffer() const;
 
+    // Get the underlying MeshTensor, throws if the DeviceStorage is deallocated.
     const MeshTensor& get_mesh_tensor() const;
+
+    // Get the underlying MeshTensor, throws if the DeviceStorage is deallocated.
+    // Please do not move the MeshTensor out of the DeviceStorage using this function.
     MeshTensor& get_mesh_tensor();
 
-    // Get the device the device memory is allocated on
-    // Throws if the DeviceStorage is not allocated.
-    distributed::MeshDevice& get_device() const;
-
-    // Returns the MeshDevice pointer if mesh_tensor exists, or nullptr otherwise.
-    // Unlike get_device(), this does NOT throw when the mesh_tensor exist but it's mesh_buffer being in a deallocated
-    // state.
+    // Returns the MeshDevice associated with the underlying device memory.
+    // Throws if the DeviceStorage is not constructed from a MeshTensor.
     //
     // Workaround for https://github.com/tenstorrent/tt-metal/issues/40716:
-    // When a tensor's DeviceStorage is copied (e.g., by view/reshape) and the original
-    // is deallocated, the copy's MeshBuffer is in DeallocatedState but still exists.
-    // This function allows retrieving the device even in that state, preventing nullptr
-    // device propagation when constructing new tensors from such storage.
+    // When DeviceStorage is copied (e.g. view/reshape) and the original is deallocated, the copy's
+    // holder becomes DeallocatedTombStone while the MeshBuffer reference is still present.
+    // This path preserves a valid device pointer when constructing new tensors from such storage.
     //
     // TODO: Remove this workaround once models properly manage tensor lifetimes and
     // don't operate on deallocated tensors.
@@ -162,7 +152,7 @@ struct DeviceStorage {
     // Deallocate will deallocate the device memory of among all shared instances.
     void deallocate();
 
-    // Returns true if no other DeviceStorage shares this storage's MeshTensor handle(s) (surface and optional root).
+    // Returns true when DeviceStorage is allocated and is the sole owner of the underlying MeshTensor.
     bool is_sole_owner_of_device_memory() const;
 
     // Returns true if the underlying device memory is allocated.
@@ -170,8 +160,14 @@ struct DeviceStorage {
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Begin internal functions:
+
+    // Returns the MeshBuffer associated with the underlying device memory.
+    // This function should be removed in-favor of `get_mesh_tensor()`.
+    // The function also leaks the ownership of the underlying device memory out.
+    // This is meant to be transitional and is to be removed.
+    // Throws if the DeviceStorage is not constructed from a MeshTensor.
     std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer_leak_ownership() const;
-    //
+
     // There are situations where we want to "reinterpret" an existing Tensor without modifying its underlying memory.
     // For example, select slice ops can be done in-place, as can select reshapes. This DeviceStorage constructor
     // addresses such cases.
@@ -194,14 +190,25 @@ struct DeviceStorage {
     //
     // Combines a vector of DeviceStorages that shares the same device storage but spread across difference coordinates
     // into a single DeviceStorage.
+    //
+    // Throws if:
+    // - The vector of DeviceStorages is empty.
+    // - The vector of DeviceStorages does not share the same device storage.
+    // - Any DeviceStorage is deallocated.
     static DeviceStorage combine_device_storages(
         const std::vector<std::reference_wrapper<const DeviceStorage>>& storages, int shard_dim);
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Update tensor topology
+    // Throws if the device storage is deallocated.
     void update_tensor_topology(const TensorTopology& tensor_topology);
 
+    // Returns the tensor spec associated with the MeshTensor.
+    // Throws if the DeviceStorage is not constructed from a MeshTensor.
     const TensorSpec& get_tensor_spec() const;
+    // Returns the tensor topology associated with the MeshTensor.
+    // Throws if the DeviceStorage is not constructed from a MeshTensor.
+    const TensorTopology& get_tensor_topology() const;
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Serialization
@@ -210,69 +217,20 @@ struct DeviceStorage {
     auto attribute_values() const { return std::forward_as_tuple(); }
 
 private:
-    struct LocallyAllocatedState {
-        // Engaged and actively sharing a MeshTensor.
-        // This does not necessarily mean the associated MeshTensor is allocated.
-        // This means that deallocate is not called on *this instance of DeviceStorage,
-        // other DeviceStorage that shares the same MeshTensor may have deallocated the DeviceMemory.
-
-        explicit LocallyAllocatedState(MeshTensor mesh_tensor) :
-            mesh_tensor_(std::make_shared<MeshTensor>(std::move(mesh_tensor))) {}
-        std::shared_ptr<MeshTensor> mesh_tensor_;
-
-        const TensorSpec& get_tensor_spec() const { return mesh_tensor_->tensor_spec(); }
-        const TensorTopology& get_tensor_topology() const { return mesh_tensor_->tensor_topology(); }
-    };
-    struct DeallocatedState {
-        // Represents the deallocated state.
-        DeallocatedState() : state_(DefaultConstructed{}) {}
-
-        // Preserve the tensor spec and topology after deallocation for backwards compatibility.
-        explicit DeallocatedState(const MeshTensor& mesh_tensor) :
-            state_(TombStone{
-                mesh_tensor.tensor_spec(),
-                mesh_tensor.tensor_topology(),
-                mesh_tensor.mesh_buffer_invariant_breaking()}) {}
-
-        struct DefaultConstructed {};
-        struct TombStone {
-            TensorSpec tensor_spec_;
-            TensorTopology tensor_topology_;
-            // This mesh_buffer_ must have been deallocated
-            // This is to allow access to the mesh_device_ without pointing to a freed-device.
-            // This should be removed once we kick mesh_device access after deallocation out.
-            std::shared_ptr<distributed::MeshBuffer> mesh_buffer_;
-        };
-        std::variant<DefaultConstructed, TombStone> state_;
-
-        const TensorSpec& get_tensor_spec() const {
-            TT_FATAL(std::holds_alternative<TombStone>(state_), "Tensor is not allocated");
-            return std::get<TombStone>(state_).tensor_spec_;
-        }
-        const TensorTopology& get_tensor_topology() const {
-            TT_FATAL(std::holds_alternative<TombStone>(state_), "Tensor is not allocated");
-            return std::get<TombStone>(state_).tensor_topology_;
-        }
-        distributed::MeshDevice* get_device() const {
-            TT_FATAL(std::holds_alternative<TombStone>(state_), "Tensor is not allocated");
-            return std::get<TombStone>(state_).mesh_buffer_->device();
-        }
-    };
-
-    using States = std::variant<DeallocatedState, LocallyAllocatedState>;
+    struct MeshTensorHolder;
 
     // Main internal constructor, performs all validation
     DeviceStorage(
-        States state, std::vector<distributed::MeshCoordinate> coords, std::shared_ptr<MeshTensor> root_mesh_tensor);
+        std::shared_ptr<MeshTensorHolder> mesh_tensor_holder,
+        std::vector<distributed::MeshCoordinate> coords,
+        std::shared_ptr<MeshTensorHolder> root_mesh_tensor_holder);
 
-    const std::shared_ptr<MeshTensor>& get_mesh_tensor_bypass_deallocate_check() const;
-
-    States state_;
+    std::shared_ptr<MeshTensorHolder> mesh_tensor_holder_;
     std::vector<distributed::MeshCoordinate> coords_;
 
     // Experimental features for viewing an existing DeviceStorage
-    const std::shared_ptr<MeshTensor>& get_root_mesh_tensor() const;
-    std::shared_ptr<MeshTensor> root_mesh_tensor_;
+    const std::shared_ptr<MeshTensorHolder>& get_root_mesh_tensor() const;
+    std::shared_ptr<MeshTensorHolder> root_mesh_tensor_holder_;
     // End experimental features
 };
 
