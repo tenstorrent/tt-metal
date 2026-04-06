@@ -233,10 +233,6 @@ def _validate_args(args: argparse.Namespace, cache_root: Path) -> None:
         logger.error("model-path must contain model.safetensors.index.json; not found at {}", index_path)
         sys.exit(1)
 
-    if not args.verify_only:
-        if not cache_root.parent.exists():
-            logger.error("Parent of cache-root must exist: {}", cache_root.parent)
-            sys.exit(1)
     cache_root.mkdir(parents=True, exist_ok=True)
 
 
@@ -256,7 +252,6 @@ def _warm(
     hf_revision: str,
     schema_version: int,
 ) -> None:
-    cache_root.mkdir(parents=True, exist_ok=True)
     _ensure_fabric_env()
     device_params = {"fabric_config": ttnn.FabricConfig.FABRIC_2D}
     with LazyStateDict(model_path) as state_dict:

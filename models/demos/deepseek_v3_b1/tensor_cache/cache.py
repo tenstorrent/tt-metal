@@ -127,6 +127,8 @@ def _sha256_file(path: Path, chunk_size: int = 1 << 20) -> str:
 class TensorCache:
     """Content-addressed cache backed by a local filesystem (NVMe).
 
+    ``local_root`` is created with ``mkdir(parents=True, exist_ok=True)`` if it does not exist.
+
     Storage layout::
 
         {local_root}/
@@ -140,6 +142,7 @@ class TensorCache:
 
     def __init__(self, local_root: Path):
         self.local_root = Path(local_root)
+        self.local_root.mkdir(parents=True, exist_ok=True)
         self._objects_dir = self.local_root / "objects"
         self._tmp_dir = self.local_root / "tmp"
 
