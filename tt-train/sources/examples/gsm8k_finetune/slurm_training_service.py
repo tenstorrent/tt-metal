@@ -26,14 +26,17 @@ falls back to X-TT-Organization header (dev/testing only).
 API contract (mirrors mock-training-service, accepts dashboard format):
     GET  /openapi.yaml                 → OpenAPI 3.0 spec
     GET  /healthz
-    GET  /v1/catalog                       → {models, datasets, clusters, trainers, optimizers}
-    GET  /v1/jobs                          → {"jobs": [...]}
-    POST /v1/jobs                          → Job (accepts dashboard format, maps model→model_config)
-    GET  /v1/jobs/{id}                     → Job
-    POST /v1/jobs/{id}/cancel              → Job
-    GET  /v1/jobs/{id}/metrics             → [MetricPoint, ...]
-    GET  /v1/jobs/{id}/logs                → [LogEntry, ...]
-    GET  /v1/jobs/{id}/checkpoints         → [Checkpoint, ...]
+    GET  /v1/catalog                                              → {models, datasets, clusters, trainers, optimizers}
+    GET  /v1/trainers/{trainer_id}/models                         → {"models": [...]}
+    GET  /v1/trainers/{trainer_id}/models/{model_id}/datasets     → {"datasets": [...]}
+    GET  /v1/trainers/{trainer_id}/models/{model_id}/resources    → {"resources": [...]}
+    GET  /v1/jobs                                                 → {"jobs": [...]}
+    POST /v1/jobs                                                 → Job (accepts dashboard format, maps model→model_config)
+    GET  /v1/jobs/{id}                                            → Job
+    POST /v1/jobs/{id}/cancel                                     → Job
+    GET  /v1/jobs/{id}/metrics                                    → [MetricPoint, ...]
+    GET  /v1/jobs/{id}/logs                                       → [LogEntry, ...]
+    GET  /v1/jobs/{id}/checkpoints                                → [Checkpoint, ...]
 """
 
 import hashlib
@@ -75,6 +78,8 @@ from training_types import (
     get_training_type,
     get_supported_trainers,
     get_supported_models,
+    get_supported_datasets,
+    get_supported_resources,
     TRAINING_TYPES,
     get_model_type,
     get_model_config_path,
@@ -796,6 +801,98 @@ def get_trainer_models(trainer_id):
         )
 
     return jsonify({"models": models})
+
+
+@app.get("/v1/trainers/<trainer_id>/models/<model_id>/datasets")
+def get_trainer_model_datasets(trainer_id, model_id):
+    """Return datasets supported by the (trainer, model) combination (no auth required)."""
+    supported_trainers = get_supported_trainers()
+    if trainer_id not in supported_trainers:
+        return (
+            jsonify(
+                {
+                    "error": {
+                        "message": f"Unknown trainer: '{trainer_id}'. Supported: {sorted(supported_trainers)}",
+                        "code": "trainer_not_found",
+                    }
+                }
+            ),
+            404,
+        )
+    training_config = get_training_type(trainer_id)
+    if model_id not in training_config.supported_model_ids:
+        return (
+            jsonify(
+                {
+                    "error": {
+                        "message": f"Unknown model '{model_id}' for trainer '{trainer_id}'. Supported: {sorted(training_config.supported_model_ids)}",
+                        "code": "model_not_found",
+                    }
+                }
+            ),
+            404,
+        )
+
+    dataset_ids = get_supported_datasets(trainer_id, model_id)
+
+    dataset_display_names = {
+        "gsm8k": "GSM8K",
+        "shakespeare": "Shakespeare",
+        "math_qa": "Math QA",
+        "aqua_rat": "AQuA-RAT",
+        "svamp": "SVAMP",
+        "mawps": "MAWPS",
+    }
+    dataset_order = ["gsm8k", "shakespeare", "math_qa", "aqua_rat", "svamp", "mawps"]
+    datasets = []
+    for dataset_id in sorted(
+        dataset_ids, key=lambda d: dataset_order.index(d) if d in dataset_order else len(dataset_order)
+    ):
+        datasets.append(
+            {
+                "id": dataset_id,
+                "display_name": dataset_display_names.get(dataset_id, dataset_id.replace("_", " ").title()),
+                "supported": True,
+            }
+        )
+
+    return jsonify({"datasets": datasets})
+
+
+@app.get("/v1/trainers/<trainer_id>/models/<model_id>/resources")
+def get_trainer_model_resources(trainer_id, model_id):
+    """Return cluster resources supported by the (trainer, model) combination (no auth required)."""
+    supported_trainers = get_supported_trainers()
+    if trainer_id not in supported_trainers:
+        return (
+            jsonify(
+                {
+                    "error": {
+                        "message": f"Unknown trainer: '{trainer_id}'. Supported: {sorted(supported_trainers)}",
+                        "code": "trainer_not_found",
+                    }
+                }
+            ),
+            404,
+        )
+    training_config = get_training_type(trainer_id)
+    if model_id not in training_config.supported_model_ids:
+        return (
+            jsonify(
+                {
+                    "error": {
+                        "message": f"Unknown model '{model_id}' for trainer '{trainer_id}'. Supported: {sorted(training_config.supported_model_ids)}",
+                        "code": "model_not_found",
+                    }
+                }
+            ),
+            404,
+        )
+
+    resource_ids = get_supported_resources(trainer_id, model_id) & SUPPORTED_CLUSTERS
+    resources = [_get_cluster_info(cluster_id) for cluster_id in sorted(resource_ids)]
+
+    return jsonify({"resources": resources})
 
 
 @app.get("/v1/jobs")
