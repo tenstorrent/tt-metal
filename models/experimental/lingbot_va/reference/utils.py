@@ -235,7 +235,6 @@ VA_CONFIGS = {"robotwin": va_robotwin_cfg}
 _INFERENCE_OVERRIDE_SPECS: tuple[tuple[str, str], ...] = (
     ("num_inference_steps", "LINGBOT_VA_NUM_INFERENCE_STEPS"),
     ("action_num_inference_steps", "LINGBOT_VA_ACTION_NUM_INFERENCE_STEPS"),
-    ("frame_chunk_size", "LINGBOT_VA_FRAME_CHUNK_SIZE"),
 )
 
 
@@ -244,13 +243,14 @@ def apply_robotwin_inference_overrides(
     *,
     num_inference_steps: int | None = None,
     action_num_inference_steps: int | None = None,
-    frame_chunk_size: int | None = None,
 ) -> None:
-    """Set inference fields on ``config`` from kwargs; when ``None``, optional ``LINGBOT_VA_*`` env fallbacks."""
+    """Set inference fields on ``config`` from kwargs; when ``None``, optional ``LINGBOT_VA_*`` env fallbacks.
+
+    ``frame_chunk_size`` is not a function argument; set ``LINGBOT_VA_FRAME_CHUNK_SIZE`` if needed.
+    """
     kw_values = {
         "num_inference_steps": num_inference_steps,
         "action_num_inference_steps": action_num_inference_steps,
-        "frame_chunk_size": frame_chunk_size,
     }
     for attr, env_var in _INFERENCE_OVERRIDE_SPECS:
         val = kw_values[attr]
@@ -260,6 +260,10 @@ def apply_robotwin_inference_overrides(
             env = os.environ.get(env_var, "").strip()
             if env:
                 setattr(config, attr, int(env))
+
+    env_fc = os.environ.get("LINGBOT_VA_FRAME_CHUNK_SIZE", "").strip()
+    if env_fc:
+        config.frame_chunk_size = int(env_fc)
 
 
 def _local_path(p):

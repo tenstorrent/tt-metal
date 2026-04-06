@@ -40,7 +40,6 @@ from tqdm import tqdm
 
 from reference.utils import (
     VA_CONFIGS,
-    apply_robotwin_inference_overrides,
     init_logger,
     load_tokenizer,
     load_vae,
@@ -1024,13 +1023,8 @@ def _reset_state(models, state, prompt):
             _free_tt_model(models, "text_encoder")
 
 
-def _infer_impl(models, state, obs, frame_st_id=0, *, single_run: bool = False):
-    """Run video + action denoise loops.
-
-    When ``single_run`` is True, returns ``(actions_tt, latents_tt)`` as ``ttnn.Tensor`` after
-    channel masking and **before** ``ttnn.to_torch`` and :func:`_postprocess_action`.
-    Otherwise returns postprocessed actions (e.g. NumPy) and ``torch`` latents.
-    """
+def _infer_impl(models, state, obs, frame_st_id=0):
+    """Video + action denoise loops; returns postprocessed actions and ``torch`` latents."""
     config = models["config"]
     dtype = models["dtype"]
     cache_name = models["cache_name"]
@@ -1239,8 +1233,6 @@ def _infer_impl(models, state, obs, frame_st_id=0, *, single_run: bool = False):
 
     ch_mask = _action_channel_mask_ttnn(mesh_device, int(actions_tt.shape[1]), action_mask)
     actions_tt = ttnn.multiply(actions_tt, ch_mask)
-    if single_run:
-        return actions_tt, latents_tt
 
     actions = ttnn.to_torch(actions_tt).to(dtype)
     latents = ttnn.to_torch(latents_tt).to(dtype)
@@ -1346,7 +1338,8 @@ def run_inference(
     *,
     num_inference_steps: int | None = None,
     action_num_inference_steps: int | None = None,
-    frame_chunk_size: int | None = None,
+    prepared: tuple[dict, dict, dict] | None = None,
+    return_latents: bool = False,
 ) -> dict:
     """
     Run Lingbot-VA inference on the input dict (same behavior as VA_Server.infer).
@@ -1354,14 +1347,45 @@ def run_inference(
     Uses config and model loading from wan_va; no VA_Server class. Resets with
     message['prompt'], then runs infer one chunk and returns {'action': ...}.
 
-    Optional keyword overrides set ``config`` fields; when omitted, env
-    ``LINGBOT_VA_*`` inference overrides may apply (see ``apply_robotwin_inference_overrides``).
+    Optional keyword overrides set ``config.num_inference_steps`` and
+    ``config.action_num_inference_steps`` when not ``None``; otherwise ``VA_CONFIGS`` defaults apply.
+
+    If ``prepared`` is ``(models, state, init_obs)`` from a prior load (e.g. perf ``TtLingbotVA.prepare``),
+    skips Phases 1–3 and only runs ``_reset_state`` + ``_infer_impl``. ``checkpoint_path`` must match
+    ``models['config'].wan22_pretrained_model_name_or_path``. When ``return_latents`` is True, the return
+    dict also includes ``latents`` (``torch.Tensor``).
     """
     t0 = time.perf_counter()
     start_ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     logger.info("run_inference: start %s", start_ts)
 
     checkpoint_path = Path(checkpoint_path).resolve()
+
+    if prepared is not None:
+        models, state, init_obs = prepared
+        cfg_ckpt = Path(models["config"].wan22_pretrained_model_name_or_path).resolve()
+        if checkpoint_path != cfg_ckpt:
+            raise ValueError(
+                f"run_inference(prepared=...): checkpoint_path {checkpoint_path} != config checkpoint {cfg_ckpt}"
+            )
+        _set_seed()
+        os.chdir(_REPO_ROOT)
+        config = models["config"]
+        if num_inference_steps is not None:
+            config.num_inference_steps = num_inference_steps
+        if action_num_inference_steps is not None:
+            config.action_num_inference_steps = action_num_inference_steps
+        prompt = message.get("prompt", "")
+        _reset_state(models, state, prompt)
+        action, latents = _infer_impl(models, state, init_obs, frame_st_id=state["frame_st_id"])
+        elapsed_s = time.perf_counter() - t0
+        end_ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        logger.info("run_inference: end %s (elapsed %.3f s, prepared path)", end_ts, elapsed_s)
+        out: dict = {"action": action}
+        if return_latents:
+            out["latents"] = latents
+        return out
+
     if not checkpoint_path.is_dir():
         raise FileNotFoundError(f"Checkpoint dir not found: {checkpoint_path}")
 
@@ -1374,14 +1398,10 @@ def run_inference(
     config.world_size = 1
     config.save_root = str(save_dir)
     config.num_chunks_to_infer = 1
-    # Do not assign None over VA_CONFIGS defaults; ``apply_robotwin_inference_overrides`` applies
-    # non-None kwargs and optional LINGBOT_VA_* env vars only.
-    apply_robotwin_inference_overrides(
-        config,
-        num_inference_steps=num_inference_steps,
-        action_num_inference_steps=action_num_inference_steps,
-        frame_chunk_size=frame_chunk_size,
-    )
+    if num_inference_steps is not None:
+        config.num_inference_steps = num_inference_steps
+    if action_num_inference_steps is not None:
+        config.action_num_inference_steps = action_num_inference_steps
     if save_dir is None:
         save_dir = _SCRIPT_DIR
     config.save_root = str(save_dir)
@@ -1431,13 +1451,16 @@ def run_inference(
     _load_transformer_into_models(models, config)
 
     _reset_state(models, state, prompt)
-    action, _ = _infer_impl(models, state, init_obs, frame_st_id=state["frame_st_id"])
+    action, latents = _infer_impl(models, state, init_obs, frame_st_id=state["frame_st_id"])
 
     elapsed_s = time.perf_counter() - t0
     end_ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     logger.info("run_inference: end %s (elapsed %.3f s)", end_ts, elapsed_s)
 
-    return {"action": action}
+    out = {"action": action}
+    if return_latents:
+        out["latents"] = latents
+    return out
 
 
 def run_generate(

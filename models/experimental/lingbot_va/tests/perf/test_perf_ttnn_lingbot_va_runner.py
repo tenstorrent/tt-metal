@@ -26,9 +26,7 @@ class LingbotVaInferenceConfig:
 
     num_inference_steps: int = 1
     action_num_inference_steps: int = 1
-    # Match ``VA_CONFIGS["robotwin"].frame_chunk_size`` (6). ``frame_chunk_size=1`` hits a fragile
-    # per-token timestep concat path on device; CLI ``demo.py`` uses the same default when kwargs omitted.
-    frame_chunk_size: int = 6
+    frame_chunk_size: int = 2
     prompt: str = "Lift the cup from the table"
     obs_seed: int = 42
     obs_h: int = 256
