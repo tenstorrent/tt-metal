@@ -73,15 +73,15 @@ ALWI void pack_untilize_dest_init(
 #endif
     // TODO NC: A workaround for tt-metal#17132. Should be addressed more systematically in tt-llk#989
 
-#ifdef ARCH_QUASAR
-    PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim>(ocb)));
-    PACK((llk_init_packer_dest_offset_registers()));
-#else
+#ifndef ARCH_QUASAR
     PACK(
         (llk_pack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE, false /*untilize*/>(ocb, face_r_dim, num_faces)));
     PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, false, narrow_row, row_num_datums, dense>(
         ocb, face_r_dim, num_faces)));
     PACK((llk_init_packer_dest_offset_registers<true, false>()));
+#else
+    PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim>(ocb)));
+    PACK((llk_init_packer_dest_offset_registers()));
 #endif
 }
 
@@ -120,13 +120,13 @@ ALWI void pack_untilize_dest_init(
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
-#ifdef ARCH_QUASAR
-    UNPACK((llk_unpack_A_init<false, DST_ACCUM_MODE>(icb)));
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
-#else
+#ifndef ARCH_QUASAR
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         false, false, icb)));  // init must be after configure
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
+#else
+    UNPACK((llk_unpack_A_init<false, DST_ACCUM_MODE>(icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
 #endif
     pack_untilize_dest_init<block_ct_dim, full_ct_dim>(ocb);
 }
@@ -161,24 +161,24 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
     for (uint32_t r = 0; r < block_rt_dim; ++r) {
         MATH((llk_math_wait_for_dest_available()));
         for (uint32_t c = 0; c < block_ct_dim; ++c) {
-#ifdef ARCH_QUASAR
-            UNPACK((llk_unpack_A(icb, c)));
-            MATH((llk_math_eltwise_unary_datacopy(c, icb)));
-#else
+#ifndef ARCH_QUASAR
             UNPACK(
                 (llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(icb, c)));
             MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(c)));
+#else
+            UNPACK((llk_unpack_A(icb, c)));
+            MATH((llk_math_eltwise_unary_datacopy(c, icb)));
 #endif
         }
 
-#ifdef ARCH_QUASAR
-        MATH((llk_math_dest_section_done()));
-        PACK((llk_packer_wait_for_math_done()));
-        PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, block_c_index)));
-#else
+#ifndef ARCH_QUASAR
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
         PACK((llk_packer_wait_for_math_done()));
         PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, FACE_R_DIM, 4, block_c_index)));
+#else
+        MATH((llk_math_dest_section_done()));
+        PACK((llk_packer_wait_for_math_done()));
+        PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, block_c_index)));
 #endif
         PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
     }
@@ -232,11 +232,11 @@ ALWI void pack_untilize_dest(
     uint32_t face_r_dim = 16,
     uint32_t num_faces = 4,
     uint32_t tile_dst_rt_offset = 0) {
-#ifdef ARCH_QUASAR
-    PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(block_rt_dim, ocb, block_c_index, tile_dst_rt_offset)));
-#else
+#ifndef ARCH_QUASAR
     PACK((llk_pack_untilize<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset, dense>(
         block_rt_dim, ocb, face_r_dim, num_faces, block_c_index, tile_dst_rt_offset)));
+#else
+    PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(block_rt_dim, ocb, block_c_index, tile_dst_rt_offset)));
 #endif
 }
 
@@ -257,10 +257,7 @@ ALWI void pack_untilize_dest(
  */
 // clang-format on
 ALWI void pack_untilize_uninit(uint32_t ocb) {
-#ifdef ARCH_QUASAR
-    // No-op: Quasar uses dedicated instructions (PACR_UNTILIZE, PACR_STRIDE) that
-    // don't conflict with standard PACR paths, so no reconfiguration is needed.
-#else
+#ifndef ARCH_QUASAR
     // Reconfigure data format to match the initial configuration, before calling init.
     // Init is called to ensure special untilize init overrides are cleaned up.
     PACK((llk_init_packer_dest_offset_registers<false>()));
@@ -270,6 +267,9 @@ ALWI void pack_untilize_uninit(uint32_t ocb) {
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_untilize_uninit(ocb)));
 #endif
+#else
+    // No-op: Quasar uses dedicated instructions (PACR_UNTILIZE, PACR_STRIDE) that
+    // don't conflict with standard PACR paths, so no reconfiguration is needed.
 #endif
 }
 
