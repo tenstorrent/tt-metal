@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .logger import logger
