@@ -119,9 +119,9 @@ def test_forward_pass(
 
     # Convert the input to TTNN tensor
     if RMSNormClass is DistributedRMSNorm:
-        input_memory_config = run_config["input_memory_config"]
+        memory_config = run_config["input_memory_config"]
     else:
-        input_memory_config = ttnn.L1_MEMORY_CONFIG
+        memory_config = ttnn.L1_MEMORY_CONFIG
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
@@ -129,20 +129,14 @@ def test_forward_pass(
             mesh_device, mesh_device.shape, dims=(0, -1 if RMSNormClass is DistributedRMSNorm else None)
         ),
         dtype=ttnn.bfloat16,
-        memory_config=input_memory_config,
+        memory_config=memory_config,
         layout=ttnn.TILE_LAYOUT,
     )
 
     # Run TTNN forward pass
     if mode == "decode":
-        output_memory_config = input_memory_config
-        tt_output = run_module_forward(
-            RMSNormClass,
-            mode,
-            tt_input,
-            run_config,
-            memory_config=input_memory_config,
-            output_memory_config=output_memory_config,
+        tt_output = RMSNormClass.forward_decode(
+            tt_input, run_config, memory_config=memory_config, output_memory_config=memory_config
         )
     else:
         tt_output = run_module_forward(RMSNormClass, mode, tt_input, run_config)
