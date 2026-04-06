@@ -172,6 +172,103 @@ def test_layer_forward(batch_size, seq_len, layer_idx, device):
     assert passing, f"Full layer (layer_idx={layer_idx}) PCC too low: {pcc_msg}"
 
 
+# ── Decode Layer Test (fully on device) ───────────────────────────────────
+
+
+@pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
+def test_layer_forward_decode(layer_idx, device):
+    """
+    Full decoder layer decode test (seq_len=1, fully on device).
+
+    Uses KV cache pre-filled with random data, then decodes one token.
+    Compares against HF reference with same KV cache state.
+    """
+    from transformers.cache_utils import DynamicCache
+    from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
+
+    from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
+
+    hf_text_config = _create_hf_text_config(num_experts=4, top_k=2)
+    hf_layer = _create_hf_reference_layer(hf_text_config, layer_idx)
+    hf_state = hf_layer.state_dict()
+    tt_state = _hf_state_to_tt_state(hf_state, layer_idx)
+    model_args = _create_gemma4_model_args(hf_text_config)
+    attn_cfg = Gemma4AttentionConfig(model_args, layer_idx)
+
+    cache_len = 32
+    mesh_config = TestFactory.create_mesh_config((1, 1))
+
+    tt_layer = Gemma4DecoderLayer(
+        mesh_device=device,
+        hf_config=model_args,
+        state_dict=tt_state,
+        layer_idx=layer_idx,
+        ccl_manager=None,
+        dtype=ttnn.bfloat16,
+        tensor_cache_path=None,
+        mesh_config=mesh_config,
+        max_seq_len=cache_len + 32,
+        max_local_batch_size=1,
+    )
+
+    # Pre-fill KV cache with random data
+    k_data = torch.randn(1, attn_cfg.num_key_value_heads, cache_len, attn_cfg.head_dim)
+    v_data = torch.randn(1, attn_cfg.num_key_value_heads, cache_len, attn_cfg.head_dim)
+
+    # Set TT KV cache
+    from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
+
+    kv_cache = init_kv_cache(device, attn_cfg, max_batch_size=1, max_seq_len=cache_len + 32, cache_dtype=ttnn.bfloat16)
+    k_fill = ttnn.from_torch(k_data.to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    v_fill = ttnn.from_torch(v_data.to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    ttnn.fill_cache(kv_cache[0], k_fill, batch_idx=0)
+    ttnn.fill_cache(kv_cache[1], v_fill, batch_idx=0)
+    tt_layer.self_attn.kv_cache = kv_cache
+
+    # Set HF KV cache
+    hf_cache = DynamicCache()
+    hf_cache.update(k_data.clone(), v_data.clone(), layer_idx=layer_idx)
+
+    # Decode input
+    x_torch = torch.randn(1, 1, model_args.hidden_size, dtype=torch.float32)
+
+    # HF reference
+    rope = Gemma4TextRotaryEmbedding(hf_text_config)
+    layer_type = hf_text_config.layer_types[layer_idx]
+    cos, sin = rope(x_torch, torch.tensor([[cache_len]]), layer_type=layer_type)
+    mask = torch.zeros(1, 1, 1, cache_len + 1)
+    with torch.no_grad():
+        hf_output = hf_layer(x_torch, position_embeddings=(cos, sin), past_key_values=hf_cache, attention_mask=mask)
+
+    # TT forward (decode, fully on device)
+    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(device, hf_text_config, cache_len + 32, layer_idx)
+    x_tt = ttnn.from_torch(
+        x_torch.unsqueeze(0).to(torch.bfloat16),
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+    )
+    position_idx_tt = ttnn.from_torch(
+        torch.tensor([[cache_len]], dtype=torch.int32),
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.int32,
+    )
+    tt_output = tt_layer(
+        x_tt,
+        rope_mats=(cos_tt, sin_tt),
+        position_idx=position_idx_tt,
+        page_table=None,
+        kv_cache=kv_cache,
+        is_decode=True,
+        token_index=cache_len,
+    )
+    tt_output_torch = ttnn.to_torch(tt_output).squeeze(0).float()
+
+    passing, pcc_msg = compare_tensors(tt_output_torch, hf_output, pcc_threshold=0.95)
+    assert passing, f"Full layer decode (layer_idx={layer_idx}) PCC too low: {pcc_msg}"
+
+
 # ── TP Layer Test ─────────────────────────────────────────────────────────
 
 

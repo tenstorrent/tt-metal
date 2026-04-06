@@ -138,7 +138,7 @@ class Gemma4DecoderLayer:
                 tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/moe" if tensor_cache_path else None,
             )
 
-    def __call__(self, hidden_states, rope_mats, position_idx, page_table, kv_cache, is_decode):
+    def __call__(self, hidden_states, rope_mats, position_idx, page_table, kv_cache, is_decode, token_index=None):
         """
         Decoder layer forward pass.
 
@@ -156,7 +156,15 @@ class Gemma4DecoderLayer:
         # 1. Attention block: norm -> attn -> post_attn_norm -> residual add
         residual = hidden_states
         normed = self.input_layernorm.forward(hidden_states)
-        attn_output = self.self_attn(normed, rope_mats, position_idx, page_table, kv_cache, is_decode)
+        attn_output = self.self_attn(
+            normed,
+            rope_mats=rope_mats,
+            position_idx=position_idx,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            is_decode=is_decode,
+            token_index=token_index,
+        )
 
         # attn_output is placeholder (torch tensor) until attention is implemented
         if isinstance(attn_output, torch.Tensor):
