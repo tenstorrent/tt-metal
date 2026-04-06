@@ -3,25 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // NCRISC dataflow kernel — reads gate_proj and up_proj weight tiles from DRAM
-// into CB_IN1_GATE and CB_IN1_UP, then writes the computed gate_out and up_out
-// tiles from L1 back to DRAM.
-//
-// Weight read order mirrors the compute kernel: M_outer -> K_outer -> N_inner.
-// For each (M_block, K_block, N_block):
-//   1. Push K_block × N_block gate_proj tiles into CB_IN1_GATE.
-//   2. Push K_block × N_block up_proj   tiles into CB_IN1_UP.
-//
-// After all K_blocks for a given M_block, drain Mt_block_size × Nt output tiles
-// from CB_GATE_OUT and CB_UP_OUT and write them to DRAM.
+// into CB_IN1_GATE and CB_IN1_UP, then writes the computed act_out (fused
+// SiLU output) tiles from L1 back to DRAM.  Single-output version.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
-    // ── Compile-time args ────────────────────────────────────────────────────
-    constexpr uint32_t M_num_blocks = get_compile_time_arg_val(0);
-    constexpr uint32_t K_num_blocks = get_compile_time_arg_val(1);
-    constexpr uint32_t N_num_blocks = get_compile_time_arg_val(2);
+    constexpr uint32_t K_num_blocks = get_compile_time_arg_val(0);
+    constexpr uint32_t m_blocks_local = get_compile_time_arg_val(1);
+    constexpr uint32_t n_blocks_local = get_compile_time_arg_val(2);
     constexpr uint32_t Mt_block_size = get_compile_time_arg_val(3);
     constexpr uint32_t Kt_block_size = get_compile_time_arg_val(4);
     constexpr uint32_t Nt_block_size = get_compile_time_arg_val(5);
@@ -29,51 +20,40 @@ void kernel_main() {
     constexpr uint32_t out_tile_size = get_compile_time_arg_val(7);
     constexpr uint32_t Nt = get_compile_time_arg_val(8);
 
-    // TensorAccessor offsets in the compile-time arg list.
     constexpr uint32_t gate_ta_offset = 9;
     constexpr auto gate_ta_args = TensorAccessorArgs<gate_ta_offset>();
     constexpr uint32_t up_ta_offset = gate_ta_args.next_compile_time_args_offset();
     constexpr auto up_ta_args = TensorAccessorArgs<up_ta_offset>();
-    constexpr uint32_t gate_out_ta_off = up_ta_args.next_compile_time_args_offset();
-    constexpr auto gate_out_ta_args = TensorAccessorArgs<gate_out_ta_off>();
-    constexpr uint32_t up_out_ta_off = gate_out_ta_args.next_compile_time_args_offset();
-    constexpr auto up_out_ta_args = TensorAccessorArgs<up_out_ta_off>();
+    constexpr uint32_t act_out_ta_off = up_ta_args.next_compile_time_args_offset();
+    constexpr auto act_out_ta_args = TensorAccessorArgs<act_out_ta_off>();
 
-    // ── Runtime args ─────────────────────────────────────────────────────────
     uint32_t argidx = 0;
     const uint32_t gate_proj_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t up_proj_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t gate_out_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t up_out_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t act_out_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t m_tile_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t n_tile_start = get_arg_val<uint32_t>(argidx++);
 
     const auto gate_acc = TensorAccessor(gate_ta_args, gate_proj_addr, in1_tile_size);
     const auto up_acc = TensorAccessor(up_ta_args, up_proj_addr, in1_tile_size);
-    const auto gate_out_acc = TensorAccessor(gate_out_ta_args, gate_out_addr, out_tile_size);
-    const auto up_out_acc = TensorAccessor(up_out_ta_args, up_out_addr, out_tile_size);
+    const auto act_out_acc = TensorAccessor(act_out_ta_args, act_out_addr, out_tile_size);
 
     constexpr uint32_t cb_in1_gate = tt::CBIndex::c_1;
     constexpr uint32_t cb_in1_up = tt::CBIndex::c_2;
-    constexpr uint32_t cb_gate_out = tt::CBIndex::c_5;
-    constexpr uint32_t cb_up_out = tt::CBIndex::c_6;
+    constexpr uint32_t cb_act_out = tt::CBIndex::c_6;
 
     constexpr uint32_t in1_block_size = Kt_block_size * Nt_block_size;
-    constexpr uint32_t full_out_tiles = Mt_block_size * Nt;
+    constexpr uint32_t full_N_local = n_blocks_local * Nt_block_size;
+    constexpr uint32_t full_out_tiles = Mt_block_size * full_N_local;
 
-    // Weight layout: tile (k_tile, n_tile) has
-    //   tile_id = k_tile * Nt + n_tile
-    constexpr uint32_t Kt_total = K_num_blocks * Kt_block_size;
+    for (uint32_t m = 0; m < m_blocks_local; m++) {
+        uint32_t m_tile_base = m_tile_start + m * Mt_block_size;
 
-    for (uint32_t m = 0; m < M_num_blocks; m++) {
-        uint32_t m_tile_base = m * Mt_block_size;
-
-        // ── Supply weight tiles: K_outer -> N_inner ───────────────────────
         for (uint32_t k = 0; k < K_num_blocks; k++) {
             uint32_t k_tile_base = k * Kt_block_size;
+            for (uint32_t n = 0; n < n_blocks_local; n++) {
+                uint32_t n_tile_base = n_tile_start + n * Nt_block_size;
 
-            for (uint32_t n = 0; n < N_num_blocks; n++) {
-                uint32_t n_tile_base = n * Nt_block_size;
-
-                // ---- gate_proj k-block × n-block ----------------------------
                 cb_reserve_back(cb_in1_gate, in1_block_size);
                 uint32_t gate_write_ptr = get_write_ptr(cb_in1_gate);
                 for (uint32_t kt = 0; kt < Kt_block_size; kt++) {
@@ -86,7 +66,6 @@ void kernel_main() {
                 noc_async_read_barrier();
                 cb_push_back(cb_in1_gate, in1_block_size);
 
-                // ---- up_proj k-block × n-block ------------------------------
                 cb_reserve_back(cb_in1_up, in1_block_size);
                 uint32_t up_write_ptr = get_write_ptr(cb_in1_up);
                 for (uint32_t kt = 0; kt < Kt_block_size; kt++) {
@@ -101,30 +80,16 @@ void kernel_main() {
             }
         }
 
-        // ── Write gate_out M-block to DRAM ────────────────────────────────
-        cb_wait_front(cb_gate_out, full_out_tiles);
-        uint32_t gate_read_ptr = get_read_ptr(cb_gate_out);
+        cb_wait_front(cb_act_out, full_out_tiles);
+        uint32_t act_read_ptr = get_read_ptr(cb_act_out);
         for (uint32_t mt = 0; mt < Mt_block_size; mt++) {
-            for (uint32_t nt = 0; nt < Nt; nt++) {
-                uint32_t tile_id = (m_tile_base + mt) * Nt + nt;
-                noc_async_write_page(tile_id, gate_out_acc, gate_read_ptr);
-                gate_read_ptr += out_tile_size;
+            for (uint32_t nt = 0; nt < full_N_local; nt++) {
+                uint32_t tile_id = (m_tile_base + mt) * Nt + (n_tile_start + nt);
+                noc_async_write_page(tile_id, act_out_acc, act_read_ptr);
+                act_read_ptr += out_tile_size;
             }
         }
         noc_async_write_barrier();
-        cb_pop_front(cb_gate_out, full_out_tiles);
-
-        // ── Write up_out M-block to DRAM ──────────────────────────────────
-        cb_wait_front(cb_up_out, full_out_tiles);
-        uint32_t up_read_ptr = get_read_ptr(cb_up_out);
-        for (uint32_t mt = 0; mt < Mt_block_size; mt++) {
-            for (uint32_t nt = 0; nt < Nt; nt++) {
-                uint32_t tile_id = (m_tile_base + mt) * Nt + nt;
-                noc_async_write_page(tile_id, up_out_acc, up_read_ptr);
-                up_read_ptr += out_tile_size;
-            }
-        }
-        noc_async_write_barrier();
-        cb_pop_front(cb_up_out, full_out_tiles);
+        cb_pop_front(cb_act_out, full_out_tiles);
     }
 }

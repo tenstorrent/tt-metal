@@ -9,38 +9,39 @@
 // tiles is pushed into CB_IN0.  The CB naturally back-pressures this kernel
 // until the compute kernel pops the previous batch (which only happens after
 // the N-inner loop has finished using those x tiles for both gate and up).
+//
+// Multi-core (2-D M×N split):
+//   - m_blocks_local is a COMPILE-TIME constant — one kernel binary per M group.
+//   - m_tile_start   is a RUNTIME arg — differs per core within the same M group.
+//   - There is no N dependence: x is independent of N.  All n_n_cores cores in
+//     the same M row read the same x tiles (necessary cost of N-splitting).
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     // ── Compile-time args ────────────────────────────────────────────────────
-    constexpr uint32_t M_num_blocks = get_compile_time_arg_val(0);
-    constexpr uint32_t K_num_blocks = get_compile_time_arg_val(1);
+    constexpr uint32_t K_num_blocks = get_compile_time_arg_val(0);
+    constexpr uint32_t m_blocks_local = get_compile_time_arg_val(1);  // M blocks for this core group
     constexpr uint32_t Mt_block_size = get_compile_time_arg_val(2);
     constexpr uint32_t Kt_block_size = get_compile_time_arg_val(3);
     constexpr uint32_t in0_tile_size = get_compile_time_arg_val(4);
 
-    // TensorAccessor compile-time metadata for x (interleaved DRAM).
     constexpr uint32_t ta_offset = 5;
     constexpr auto x_ta_args = TensorAccessorArgs<ta_offset>();
 
     // ── Runtime args ─────────────────────────────────────────────────────────
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
+    const uint32_t m_tile_start = get_arg_val<uint32_t>(1);  // absolute tile offset for this core
 
-    // Build accessor for x.
     const auto x_acc = TensorAccessor(x_ta_args, x_addr, in0_tile_size);
 
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
     constexpr uint32_t in0_block_size = Mt_block_size * Kt_block_size;
-
-    // x is laid out as a 2-D tile matrix: tile (m_tile, k_tile) has
-    // linear tile_id = m_tile * Kt_total  +  k_tile.
-    // We derive Kt_total = K_num_blocks * Kt_block_size.
     constexpr uint32_t Kt_total = K_num_blocks * Kt_block_size;
 
-    for (uint32_t m = 0; m < M_num_blocks; m++) {
-        uint32_t m_tile_base = m * Mt_block_size;
+    for (uint32_t m = 0; m < m_blocks_local; m++) {
+        uint32_t m_tile_base = m_tile_start + m * Mt_block_size;
 
         for (uint32_t k = 0; k < K_num_blocks; k++) {
             uint32_t k_tile_base = k * Kt_block_size;
