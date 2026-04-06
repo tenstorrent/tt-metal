@@ -192,22 +192,48 @@ def download_model_weights(cache_dir: Path, layer_idx: int = 0, num_layers: int 
 
         logger.info(f"✓ Configuration downloaded to: {index_dir}")
 
-        # Now download the weight shards needed for the requested layers
-        if num_layers <= 1:
-            logger.info("Step 2/2: Downloading weight files for first layer...")
-            logger.info("This will download ~3-5GB (first few shards containing layer 0 weights)")
-            # Download first 3 shards which should contain layer 0
-            shard_patterns = [
-                "*-00001-of-*.safetensors",
-                "*-00002-of-*.safetensors",
-                "*-00003-of-*.safetensors",
-            ]
-        else:
-            # For 6 layers (0-5): shards 1-9 for layer weights + shard 160 for model.norm
-            logger.info(f"Step 2/2: Downloading weight files for {num_layers} layers...")
-            logger.info("This will download ~45GB (shards 1-9 + shard 160 for model.norm)")
-            shard_patterns = [f"*-{i:05d}-of-*.safetensors" for i in range(1, 10)]
-            shard_patterns.append("*-00160-of-*.safetensors")
+        # Systematically determine which shards are needed based on the index
+        import json
+
+        index_path = Path(index_dir) / "model.safetensors.index.json"
+        with open(index_path, "r") as f:
+            index_data = json.load(f)
+
+        weight_map = index_data.get("weight_map", {})
+        required_shards = set()
+
+        # Find shards for embeddings
+        for key, shard_file in weight_map.items():
+            if "embed_tokens" in key:
+                required_shards.add(shard_file)
+
+        # Find shards for the requested layers
+        for layer_id in range(layer_idx, layer_idx + num_layers):
+            for key, shard_file in weight_map.items():
+                if f"model.layers.{layer_id}." in key:
+                    required_shards.add(shard_file)
+
+        # Find shard for model.norm (always needed by pretrained_transformer_weights fixture)
+        for key, shard_file in weight_map.items():
+            if "model.norm.weight" in key:
+                required_shards.add(shard_file)
+                break
+
+        # Convert shard filenames to patterns
+        shard_patterns = []
+        for shard_file in sorted(required_shards):
+            # Extract shard number from filename like "model-00001-of-000163.safetensors"
+            shard_num = shard_file.split("-")[1]
+            shard_patterns.append(f"*-{shard_num}-of-*.safetensors")
+
+        logger.info(
+            f"Step 2/2: Downloading weight shards for layers {layer_idx}..{layer_idx + num_layers - 1} + embeddings + norm..."
+        )
+        logger.info(
+            f"Required shards: {len(required_shards)} files ({', '.join(sorted(required_shards)[:5])}{'...' if len(required_shards) > 5 else ''})"
+        )
+        estimated_size_gb = len(required_shards) * 0.28  # Approximate 280MB per shard
+        logger.info(f"Estimated download size: ~{estimated_size_gb:.1f}GB")
 
         model_dir = snapshot_download(
             repo_id=model_id,
@@ -225,12 +251,14 @@ def download_model_weights(cache_dir: Path, layer_idx: int = 0, num_layers: int 
         raise
 
 
-def get_or_download_model(layer_idx: int = 0) -> Path:
+def get_or_download_model(layer_idx: int = 0, num_layers: int = 6) -> Path:
     """
     Get model path, downloading from HuggingFace if necessary.
 
     Args:
         layer_idx: Which layer weights to ensure are available
+        num_layers: Number of layers to download (default: 6).
+                    When >1, downloads additional shards including shard 160 for model.norm.
 
     Returns:
         Path to model directory with weights
@@ -269,10 +297,9 @@ def get_or_download_model(layer_idx: int = 0) -> Path:
     # Determine cache directory
     cache_dir = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface"))
     logger.info(f"Will cache to: {cache_dir}")
-    logger.warning("⚠️  This will download ~3-5GB for the first layer weights")
-    logger.info("The full DeepSeek-R1-0528 model is large, but we only download what's needed for testing")
+    # Note: Detailed download size is logged by download_model_weights() after analyzing the index
 
-    return download_model_weights(cache_dir, layer_idx)
+    return download_model_weights(cache_dir, layer_idx, num_layers)
 
 
 @pytest.fixture(scope="session")
