@@ -57,18 +57,11 @@ bool can_construct_on_device(
     return res;
 }
 
-bool can_construct_on_single_device(
-    const ttnn::Shape& tensor_shape, const TensorLayout& src_tensor_layout, const MemoryConfig& memory_config) {
+bool can_construct_on_single_device(const ttnn::Shape& tensor_shape, const MemoryConfig& memory_config) {
     // If the memory config is sharded, the tensor must be constructed on the host. Even if we can borrow the
     // buffer, the sharding spec may require padding, including cases where the shard dimension is larger
     // than the shape dimension.
     if (memory_config.is_sharded()) {
-        return false;
-    }
-
-    // Logical shape must match physical shape for the tensor to be constructed on the device(no padding
-    // required). TensorSpec creation must follow after memory_config.is_sharded() check to avoid fatal error
-    if (!tt::tt_metal::logical_matches_physical(TensorSpec(tensor_shape, src_tensor_layout))) {
         return false;
     }
 
@@ -205,14 +198,16 @@ Tensor create_tt_tensor_from_host_data(
 
     using namespace tt::tt_metal;
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
-        TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
         TensorLayout dst_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
 
         const bool construct_on_device = can_construct_on_device(
             device, tensor_shape, src_dtype, dst_dtype, optional_tile, enable_device_typecast, preserve_nan_values);
 
         if (mesh_mapper != nullptr) {
+            TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
+
             const auto shard_shape = estimate_per_device_shard_shape(tensor_shape, mesh_mapper->config(), device);
+
             const bool construct_on_mesh_device =
                 construct_on_device &&
                 has_sufficient_device_memory(
@@ -245,7 +240,7 @@ Tensor create_tt_tensor_from_host_data(
         // The f32 tensor does not fit in L1, but bf16 does, so the typecast is performed on the host.
         const bool can_borrow = src_dtype == convert_to_data_type<T>() && construct_on_device &&
                                 !is_data_transformation_required &&
-                                can_construct_on_single_device(tensor_shape, src_tensor_layout, memory_config) &&
+                                can_construct_on_single_device(tensor_shape, memory_config) &&
                                 has_sufficient_device_memory(
                                     device, tensor_shape, src_dtype, dst_dtype, layout, memory_config, optional_tile);
 
