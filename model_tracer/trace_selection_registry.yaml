@@ -58,11 +58,11 @@ targets:
         # - phi-3-mini-128k-instruct
         # - qwen2.5-coder-32b
         # - qwen2.5-coder-7b-instruct
-        # - qwen3-32b
+        - qwen3-32b
         # - qwen3-32b_2
         # - segmentation
         # - sentence_bert
-        # - stable_diffusion_xl_base
+        - stable_diffusion_xl_base
         # - vit
         # - vit_2
         # - whisper
