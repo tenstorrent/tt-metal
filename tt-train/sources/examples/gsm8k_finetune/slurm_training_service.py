@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 """
@@ -71,7 +71,14 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request, g, send_from_directory
 from ttml.common.utils import get_tt_metal_runtime_root
-from training_types import get_training_type, get_supported_trainers, get_supported_models, TRAINING_TYPES
+from training_types import (
+    get_training_type,
+    get_supported_trainers,
+    get_supported_models,
+    TRAINING_TYPES,
+    get_model_type,
+    get_model_config_path,
+)
 from job_manager import JobManager, JobStatus, PARTITION_DEVICE_MAPPING
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -778,17 +785,14 @@ def catalog():
         "llama8b": "Llama 3.1 8B",
         "llama70b": "Llama 3.1 70B",
         "llama405b": "Llama 3.1 405B",
+        "qwen3_0_6b": "Qwen3 0.6B",
+        "qwen3_1_7b": "Qwen3 1.7B",
     }
-
-    # Get model configs from registry (they already have proper TT_METAL_RUNTIME_ROOT paths)
-    model_configs = {}
-    for training_config in TRAINING_TYPES.values():
-        model_configs.update(training_config.model_configs)
 
     models = []
     for model_id in sorted(all_models):
         # Convert full path back to relative path for API response
-        full_config_path = model_configs.get(model_id, "")
+        full_config_path = get_model_config_path(model_id)
         relative_config_path = (
             full_config_path.split("/configs/")[-1]
             if "/configs/" in full_config_path
@@ -796,7 +800,7 @@ def catalog():
         )
 
         # Mark smaller models as supported by default, larger ones may need more resources
-        is_supported = model_id in {"tinyllama", "gpt2", "llama8b", "llama70b", "llama405b"}
+        is_supported = model_id in {"tinyllama", "gpt2", "llama8b", "llama70b", "llama405b", "qwen3_0_6b", "qwen3_1_7b"}
 
         models.append(
             {
@@ -994,15 +998,31 @@ def create_job():
         )
 
     # Map model ID → model_config (dashboard format)
-    model_config = training_config.model_configs.get(model.strip().lower())
-    if model_config:
-        training_params["model_config"] = model_config
+    model_id = model.strip().lower()
+    if model_id not in training_config.supported_model_ids:
+        return (
+            jsonify(
+                {
+                    "error": {
+                        "message": f"Unknown model: '{model}'. Supported: {sorted(training_config.supported_model_ids)}",
+                        "code": "invalid_model",
+                    }
+                }
+            ),
+            400,
+        )
+
+    model_config = get_model_config_path(model_id)
+    model_type = get_model_type(model_id)
+    training_params["model_config"] = model_config
+    training_params["model_type"] = model_type
+
     if "max_steps" not in training_params and "epochs" in training_params:
         training_params["max_steps"] = training_params["epochs"] * 20
 
     # Log parsed parameters
     log.info("=== PARSED PARAMETERS ===")
-    log.info("Model: %s -> config: %s", model, model_config)
+    log.info("Model: %s (%s) -> config: %s", model, model_type, model_config)
     log.info("Dataset URL: %s", dataset_url)
     log.info("Trainer: %s", trainer)
     log.info("Optimizer: %s", optimizer)
@@ -1056,6 +1076,8 @@ def create_job():
     }
     if training_params.get("model_config"):
         slurm_config["model_config"] = training_params["model_config"]
+    if training_params.get("model_type"):
+        slurm_config["model_type"] = training_params["model_type"]
     # Pass model ID so run_command_override callables can select per-model configs
     slurm_config["model"] = model.strip().lower()
     # Pass dataset for training script (HF name or s3:// URL)

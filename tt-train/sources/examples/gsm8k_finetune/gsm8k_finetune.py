@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
 """
 GSM8K Fine-tuning Script
-Fine-tunes a Llama model on the GSM8K math word problems dataset using TT-Metal.
+Fine-tunes a Llama/Qwen model on the GSM8K math word problems dataset using TT-Metal.
 """
 
 import logging
 import os
 import sys
 from functools import partial
+import glob
 
 import datasets
 import numpy as np
 import ttnn
 from transformers import AutoTokenizer
-from huggingface_hub import hf_hub_download
+from huggingface_hub import snapshot_download
 
 import ttml
 
@@ -54,6 +55,9 @@ from ttml.models.nanogpt import NanoGPT, NanoGPTConfig, NanoGPTExperimentalConfi
 from ttml.models.llama import Llama, LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
 from ttml.modules import LoraConfig
 from ttml.trainers import SFTConfig, SFTTrainer, TrainerCallback
+
+
+from training_types import resolve_lora_targets
 
 
 class DDPCallback(TrainerCallback):
@@ -413,20 +417,35 @@ def train():
     tc = model_config["transformer_config"]
     model_type = tc["model_type"]
 
+    _QWEN3_REPO_BY_DIM = {
+        1024: "Qwen/Qwen3-0.6B",
+        2048: "Qwen/Qwen3-1.7B",
+    }
+
     if model_type == "gpt2":
         repo_id = "gpt2"
-    else:
+    elif model_type == "llama":
         repo_id = "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
+    elif model_type == "qwen3":
+        dim = tc.get("embedding_dim", 1024)
+        repo_id = _QWEN3_REPO_BY_DIM.get(dim)
+        if repo_id is None:
+            raise ValueError(
+                f"No HuggingFace repo for qwen3 with embedding_dim={dim}. "
+                f"Known sizes: {sorted(_QWEN3_REPO_BY_DIM.keys())}"
+            )
+    else:
+        raise ValueError(f"Unsupported model_type: {model_type}. Supported: gpt2, llama, qwen3")
+
     print("Loading tokenizer...")
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
     tokenizer = AutoTokenizer.from_pretrained(repo_id)
 
     print("Downloading safetensors...")
-    safetensors_path = hf_hub_download(
+    safetensors_path = snapshot_download(
         repo_id=repo_id,
-        filename="model.safetensors",
+        allow_patterns=["*.safetensors"],
     )
-    safetensors_path = safetensors_path.replace("model.safetensors", "")
     print(f"Safetensors path: {safetensors_path}")
 
     orig_vocab_size = tokenizer.vocab_size
@@ -483,6 +502,38 @@ def train():
         max_sequence_length = llama_config.max_position_embeddings
         print("Loading Llama weights from safetensors...")
         load_from_safetensors(tt_model, safetensors_path, llama_config)
+    elif model_type == "qwen3":
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "qwen3"))
+        from safetensors.torch import load_file as load_safetensors_torch
+        from model_qwen3 import Qwen3ForCausalLM, Qwen3Config, load_weights_from_hf
+
+        tie_word_embeddings = tc.get("weight_tying", "disabled").lower() == "enabled"
+
+        hidden_size = tc.get("embedding_dim", 1024)
+        num_heads = tc.get("num_heads", 16)
+        qwen3_config = Qwen3Config(
+            vocab_size=padded_vocab_size,
+            hidden_size=hidden_size,
+            intermediate_size=tc.get("intermediate_dim", 3072),
+            num_hidden_layers=tc.get("num_blocks", 28),
+            num_attention_heads=num_heads,
+            num_key_value_heads=tc.get("num_groups", 8),
+            head_dim=hidden_size // num_heads,
+            max_position_embeddings=tc.get("max_sequence_length", 2048),
+            rope_theta=tc.get("theta", 1000000.0),
+            attention_bias=False,
+            attention_dropout=tc.get("dropout_prob", 0.0),
+        )
+        tt_model = Qwen3ForCausalLM(qwen3_config, tie_word_embeddings=tie_word_embeddings)
+        max_sequence_length = qwen3_config.max_position_embeddings
+
+        print("Loading Qwen3 weights from safetensors...")
+        st_files = sorted(glob.glob(os.path.join(safetensors_path, "*.safetensors")))
+        hf_state_dict = {}
+        for f in st_files:
+            hf_state_dict.update(load_safetensors_torch(f))
+        load_weights_from_hf(tt_model, hf_state_dict, qwen3_config, tie_word_embeddings=tie_word_embeddings)
+        del hf_state_dict
     else:
         raise ValueError(f"Unsupported model_type: {model_type}. Supported: gpt2, llama")
 
@@ -550,7 +601,7 @@ def train():
         peft_config = LoraConfig(
             rank=lora_cfg.get("rank", 8),
             alpha=lora_cfg.get("alpha", 16),
-            target_modules=lora_cfg.get("target_modules", ["q_linear", "kv_linear", "out_linear"]),
+            target_modules=lora_cfg.get("target_modules") or resolve_lora_targets(model_type),
             lora_dropout=lora_cfg.get("lora_dropout", 0.05),
             use_rslora=lora_cfg.get("use_rslora", False),
             is_bias_trainable=lora_cfg.get("is_bias_trainable", False),

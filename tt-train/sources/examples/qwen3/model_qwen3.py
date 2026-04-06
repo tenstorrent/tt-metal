@@ -12,13 +12,14 @@ Architecture: HuggingFace Transformers Qwen3 design with:
   - RoPE positional encoding
 """
 
+import sys
 from dataclasses import dataclass
 
 import torch
 from tqdm import tqdm
 import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, ModuleList, Parameter
+from ttml.modules import AbstractModuleBase, LinearLayer, ModuleList, Parameter
 
 from utils.checkpoint import checkpoint
 
@@ -27,6 +28,8 @@ from utils.tensor_utils import (
     make_weight,
     make_ones,
     make_zeros,
+    weight_initializer,
+    zeros_initializer,
 )
 from utils.param_utils import (  # noqa: F401 — re-exported for callers
     unpermute_proj_rows,
@@ -208,31 +211,6 @@ class Qwen3RMSNorm(AbstractModuleBase):
 
 
 # =====================================================================
-# LinearProjection
-# =====================================================================
-
-
-class LinearProjection(AbstractModuleBase):
-    """Linear projection layer: y = x @ W^T + optional_bias.
-
-    Weight shape: (1, 1, out_features, in_features).
-    Used as the base module for LoRA injection via inject_adapter_in_model.
-    """
-
-    def __init__(self, in_features: int, out_features: int, has_bias: bool = False):
-        super().__init__()
-        self.weight = Parameter(make_weight((1, 1, out_features, in_features)))
-        if has_bias:
-            self.bias = Parameter(make_zeros((1, 1, 1, out_features)))
-        else:
-            self.bias = None
-
-    def forward(self, x):
-        b = self.bias.tensor if self.bias is not None else None
-        return linear(x, self.weight.tensor, b)
-
-
-# =====================================================================
 # Qwen3Attention (single device)
 # =====================================================================
 
@@ -250,10 +228,20 @@ class Qwen3Attention(AbstractModuleBase):
         q_out = self.num_heads * self.head_dim
         kv_out = self.num_kv_heads * self.head_dim
 
-        self.q_proj = LinearProjection(self.hidden_size, q_out, has_bias=config.attention_bias)
-        self.k_proj = LinearProjection(self.hidden_size, kv_out, has_bias=config.attention_bias)
-        self.v_proj = LinearProjection(self.hidden_size, kv_out, has_bias=config.attention_bias)
-        self.o_proj = LinearProjection(q_out, self.hidden_size, has_bias=config.attention_bias)
+        w_init = weight_initializer()
+        b_init = zeros_initializer() if config.attention_bias else None
+        self.q_proj = LinearLayer(
+            self.hidden_size, q_out, has_bias=config.attention_bias, weight_init=w_init, bias_init=b_init
+        )
+        self.k_proj = LinearLayer(
+            self.hidden_size, kv_out, has_bias=config.attention_bias, weight_init=w_init, bias_init=b_init
+        )
+        self.v_proj = LinearLayer(
+            self.hidden_size, kv_out, has_bias=config.attention_bias, weight_init=w_init, bias_init=b_init
+        )
+        self.o_proj = LinearLayer(
+            q_out, self.hidden_size, has_bias=config.attention_bias, weight_init=w_init, bias_init=b_init
+        )
 
         self.q_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
         self.k_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
@@ -331,9 +319,10 @@ class Qwen3MLP(AbstractModuleBase):
         super().__init__()
         h = config.hidden_size
         inter = config.intermediate_size
-        self.gate_proj = LinearProjection(h, inter)
-        self.up_proj = LinearProjection(h, inter)
-        self.down_proj = LinearProjection(inter, h)
+        w_init = weight_initializer()
+        self.gate_proj = LinearLayer(h, inter, has_bias=False, weight_init=w_init)
+        self.up_proj = LinearLayer(h, inter, has_bias=False, weight_init=w_init)
+        self.down_proj = LinearLayer(inter, h, has_bias=False, weight_init=w_init)
 
     def forward(self, x):
         gate = ttml.ops.unary.silu(self.gate_proj(x))
@@ -545,6 +534,7 @@ def load_weights_from_hf(
             total=len(items),
             desc="  Loading weights",
             unit="w",
+            file=sys.stdout,
         ):
             new_tensor = future.result()
             if new_tensor is None:

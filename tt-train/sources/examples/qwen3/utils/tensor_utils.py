@@ -82,6 +82,20 @@ def make_zeros(shape):
     return torch_to_ttml(torch.zeros(shape))
 
 
+def weight_initializer(std=0.02):
+    """Return a ttml.init-compatible callable (shape -> Tensor) respecting empty_init."""
+    if is_empty_init():
+        return make_empty_on_device
+    return ttml.init.normal(std=std)
+
+
+def zeros_initializer():
+    """Return a ttml.init-compatible callable (shape -> Tensor) respecting empty_init."""
+    if is_empty_init():
+        return make_empty_on_device
+    return ttml.init.zeros()
+
+
 def make_empty_on_device(shape):
     """Allocate an empty bfloat16 TILE tensor directly on device.
 

@@ -93,6 +93,9 @@ class LoraModel(AbstractModuleBase):
         self.model = model
         verbose = config.verbose
 
+        if not config.target_modules:
+            raise ValueError("[LoRA] target_modules must not be empty")
+
         if verbose:
             print(
                 f"[LoRA] Config: rank={config.rank}, alpha={config.alpha}, "
@@ -111,6 +114,10 @@ class LoraModel(AbstractModuleBase):
             print("[LoRA] Injecting LoRA")
             for name in injected:
                 print(f"  - {name}")
+
+        unmatched = [p.pattern for p in patterns if not any(p.search(name) for name in injected)]
+        if unmatched:
+            raise ValueError(f"[LoRA] target_modules pattern(s) matched no LinearLayer in the model: {unmatched}")
 
         if config.trainable_modules:
             self._unfreeze_trainable(model, config.trainable_modules)
