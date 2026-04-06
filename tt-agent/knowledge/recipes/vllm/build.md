@@ -3,22 +3,18 @@
 ## Prerequisites
 
 - tt-metal built and importable (`import ttnn` works)
-- `VLLM_TARGET_DEVICE=tt` set **before** install
+- `uv` installed (see `recipes/developer-setup.md`)
 
-## Install (development)
+## Install
 
-```bash
-export VLLM_TARGET_DEVICE=tt
-cd vllm
-pip install -e .
-```
-
-## Install (CI-style, with uv)
+From the vllm repo root:
 
 ```bash
-export VLLM_TARGET_DEVICE=tt
-uv pip install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
+bash tt_metal/install-vllm-tt.sh
 ```
+
+This sets `VLLM_TARGET_DEVICE=tt` and runs `uv pip install -e .` with the
+correct index flags.
 
 ## Verify
 
@@ -28,6 +24,5 @@ python -c "import vllm; print(vllm.__version__)"
 
 ## Note
 
-The vLLM fork is at `tenstorrent/vllm` (branch: `dev`). It adds a TT hardware
-backend to standard vLLM. The `VLLM_TARGET_DEVICE=tt` flag is critical — without
-it, vLLM builds for CUDA.
+The vLLM fork is at `tenstorrent/vllm` (branch: `dev`). The TT backend is
+selected by `VLLM_TARGET_DEVICE=tt` — without it, vLLM builds for CUDA.

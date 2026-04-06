@@ -25,17 +25,15 @@ by workflow skills as their execution backend.
 ## Pipeline
 
 ```
-detect workspace → load recipe → compose command → route → execute → monitor → report
+detect workspace → load recipe → compose command → route → execute → report
 ```
 
 1. **Detect workspace**: Load `workspace-detect.md`. Identify repo, platform, arch.
 2. **Load recipe**: Read `knowledge/recipes/<repo>/` files relevant to the action.
-   If no recipe exists for the detected repo, proceed with explicit user commands.
-3. **Compose command**: Build the command from recipe + user intent.
-4. **Route**: Device commands → tt-device-mcp. Host commands → Bash. See `job-lifecycle.md`.
-5. **Execute**: Run the command via the chosen route.
-6. **Monitor**: For background jobs, poll status. Stream logs on failure.
-7. **Report**: Summarize result. On failure, include actionable context.
+   If no recipe exists, rely on explicit user commands or tt-learn.
+3. **Compose command**: Build command from recipe + user intent + env vars.
+4. **Route & execute**: Device → tt-device-mcp. Host → Bash. See `execution.md`.
+5. **Report**: Summarize result. On failure, include actionable context.
 
 ## MCP Routing Rule
 
@@ -52,7 +50,7 @@ When in doubt: if the command needs a TT device attached, use MCP.
 |---|---|
 | Detect workspace, repo, platform, arch | `workspace-detect.md` |
 | Workspace setup and activation | `knowledge/recipes/workspace.md` |
-| Command routing, job monitoring, recovery | `job-lifecycle.md` |
+| Command routing, env handoff, recovery | `execution.md` |
 | Build steps for detected repo | `knowledge/recipes/<repo>/build.md` |
 | Test invocation for detected repo | `knowledge/recipes/<repo>/test.md` |
 | Server lifecycle (vLLM) | `knowledge/recipes/vllm/server.md` |
