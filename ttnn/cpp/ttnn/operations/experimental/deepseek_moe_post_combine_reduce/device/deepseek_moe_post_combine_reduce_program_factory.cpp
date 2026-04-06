@@ -138,13 +138,13 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
             .set_page_size(tt::CBIndex::c_24, tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_accumulator_config);
 
-    // CB17: row-major intermediate buffer for batching 32 tokens before tilize
-    // Size: 32 rows × 7168 elements × 2 bytes = 458,752 bytes
-    // This holds 32 tokens in row-major format before hardware tilization
-    uint32_t rowmajor_cb_size = 32 * emb_dim * 2;  // 32 tokens, bfloat16
+    // CB17: intermediate buffer for batching 32 tokens before tilize
+    // Size: 32 tokens × 7 tiles × 2048 bytes = 458,752 bytes
+    // Page size = tile_size so pack_tile and TileSlice work naturally
+    uint32_t rowmajor_cb_size = 32 * emb_dim_tiles * tile_size;
     tt::tt_metal::CircularBufferConfig cb_rowmajor_config =
         tt::tt_metal::CircularBufferConfig(rowmajor_cb_size, {{tt::CBIndex::c_17, output_cb_data_format}})
-            .set_page_size(tt::CBIndex::c_17, emb_dim * 2);  // One row = 7168 elements × 2 bytes
+            .set_page_size(tt::CBIndex::c_17, tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_rowmajor_config);
 
     // Buffer info
@@ -154,13 +154,11 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
 
     bool combine_is_dram = combine_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool weight_is_dram = weight_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool output_is_dram = output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     // Reader kernel compile-time args
     std::vector<uint32_t> reader_compile_time_args = {
         static_cast<uint32_t>(combine_is_dram),
         static_cast<uint32_t>(weight_is_dram),
-        num_tokens,
         num_experts,
         emb_dim,
         emb_dim_tiles,
@@ -168,17 +166,16 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
 
     // Compute kernel compile-time args
     std::vector<uint32_t> compute_compile_time_args = {
-        num_tokens,
         num_experts,
         emb_dim_tiles,
     };
 
     // Writer kernel compile-time args
     std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(output_is_dram),
         num_tokens,
         emb_dim_tiles,
     };
+    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,

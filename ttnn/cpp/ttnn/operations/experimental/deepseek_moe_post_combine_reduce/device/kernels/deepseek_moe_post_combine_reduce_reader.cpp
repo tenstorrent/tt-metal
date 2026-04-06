@@ -10,10 +10,9 @@ constexpr uint32_t cb_weights = tt::CBIndex::c_1;
 
 constexpr bool combine_is_dram = get_compile_time_arg_val(0) == 1;
 constexpr bool weight_is_dram = get_compile_time_arg_val(1) == 1;
-constexpr uint32_t num_tokens = get_compile_time_arg_val(2);
-constexpr uint32_t num_experts = get_compile_time_arg_val(3);
-constexpr uint32_t emb_dim = get_compile_time_arg_val(4);
-constexpr uint32_t emb_dim_tiles = get_compile_time_arg_val(5);
+constexpr uint32_t num_experts = get_compile_time_arg_val(2);
+constexpr uint32_t emb_dim = get_compile_time_arg_val(3);
+constexpr uint32_t emb_dim_tiles = get_compile_time_arg_val(4);
 
 constexpr uint32_t TOKENS_PER_CORE = 32;
 

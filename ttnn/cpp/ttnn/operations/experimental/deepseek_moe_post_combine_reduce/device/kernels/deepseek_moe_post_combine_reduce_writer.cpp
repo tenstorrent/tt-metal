@@ -7,9 +7,9 @@
 
 constexpr uint32_t cb_output = tt::CBIndex::c_16;
 
-constexpr bool output_is_dram = get_compile_time_arg_val(0) == 1;
-constexpr uint32_t num_tokens = get_compile_time_arg_val(1);
-constexpr uint32_t emb_dim_tiles = get_compile_time_arg_val(2);
+constexpr uint32_t num_tokens = get_compile_time_arg_val(0);
+constexpr uint32_t emb_dim_tiles = get_compile_time_arg_val(1);
+constexpr auto output_accessor_args = TensorAccessorArgs<2>();
 
 void kernel_main() {
     uint32_t output_addr = get_arg_val<uint32_t>(0);
@@ -17,8 +17,7 @@ void kernel_main() {
 
     constexpr uint32_t tile_size = 2048;
 
-    // For TILE layout, page size is one tile
-    const InterleavedAddrGen<output_is_dram> output_addrg = {.bank_base_address = output_addr, .page_size = tile_size};
+    const auto output_addrg = TensorAccessor(output_accessor_args, output_addr, tile_size);
 
     // Each core produces 224 tiles from 32 tokens (32 rows × 224 tile-columns)
     constexpr uint32_t tiles_total = 224;
