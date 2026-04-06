@@ -5,6 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "llk_defs.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/debug/assert.h"
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
@@ -207,11 +208,7 @@ void kernel_main() {
         ckernel::ReduceDim::REDUCE_ROW,
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
         /*compute_uses_reduce_tile=*/true>();
-    dataflow_kernel_lib::prepare_reduce_scaler<
-        cb_zero_in,
-        ckernel::PoolType::SUM,
-        ckernel::ReduceDim::REDUCE_ROW,
-        /*compute_uses_reduce_tile=*/true>(0.0f);
+    dataflow_kernel_lib::prepare_zero_tile<cb_zero_in>();
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
     // Generate sliding window mask only if we have local data and need it

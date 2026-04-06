@@ -57,4 +57,16 @@ FORCE_INLINE void zero_tile(uint32_t write_addr) {
     noc.async_read_barrier();
 }
 
+/**
+ * @brief Reserve, zero-fill, and push one tile into a circular buffer
+ *
+ * @tparam cb_id Circular buffer ID whose tile byte size should be used
+ */
+template <uint32_t cb_id>
+FORCE_INLINE void prepare_zero_tile() {
+    cb_reserve_back(cb_id, 1);
+    zero_tile<cb_id>(get_write_ptr(cb_id));
+    cb_push_back(cb_id, 1);
+}
+
 }  // namespace dataflow_kernel_lib
