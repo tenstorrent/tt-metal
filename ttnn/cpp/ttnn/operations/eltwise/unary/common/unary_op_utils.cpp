@@ -24,9 +24,12 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::HARDSIGMOID: return "SFPU_OP_HARDSIGMOID_INCLUDE";
         case UnaryOpType::RPOW: return "SFPU_OP_RPOW_INCLUDE";
         case UnaryOpType::SOFTSIGN: return "SFPU_OP_SOFTSIGN_INCLUDE";
-        case UnaryOpType::SELU: return "SFPU_OP_SELU_INCLUDE";
         case UnaryOpType::HARDSWISH: return "SFPU_OP_HARDSWISH_INCLUDE";
         case UnaryOpType::SOFTSHRINK: return "SFPU_OP_SOFTSHRINK_INCLUDE";
+        case UnaryOpType::SWISH: return "SFPU_OP_SWISH_INCLUDE";
+        case UnaryOpType::FRAC: return "SFPU_OP_FRAC_INCLUDE";
+        case UnaryOpType::ATANH: return "SFPU_OP_ATANH_INCLUDE";
+        case UnaryOpType::SINH: return "SFPU_OP_SINH_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -74,8 +77,11 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::LGAMMA: return {"lgamma_tile_init();", fmt::format("lgamma_tile({});", idst)};
         case UnaryOpType::HARDSIGMOID: return {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
         case UnaryOpType::SOFTSIGN: return {"softsign_tile_init();", fmt::format("softsign_tile({});", idst)};
-        case UnaryOpType::SELU: return {"selu_tile_init();", fmt::format("selu_tile({});", idst)};
         case UnaryOpType::HARDSWISH: return {"hardswish_tile_init();", fmt::format("hardswish_tile({});", idst)};
+        case UnaryOpType::SWISH: return {"swish_tile_init();", fmt::format("swish_tile({});", idst)};
+        case UnaryOpType::FRAC: return {"frac_tile_init();", fmt::format("frac_tile({});", idst)};
+        case UnaryOpType::ATANH: return {"atanh_tile_init();", fmt::format("atanh_tile({});", idst)};
+        case UnaryOpType::SINH: return {"sinh_tile_init();", fmt::format("sinh_tile({});", idst)};
         default: TT_THROW("unexpected op type {}", op_type);
     };
 }

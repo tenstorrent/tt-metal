@@ -13,7 +13,10 @@ enum class SfpuType {
     hardsigmoid,
     rpow,
     softsign,
-    selu,
     hardswish,
     softshrink,
+    swish,
+    frac,
+    atanh,
+    sinh,
 };

@@ -101,15 +101,6 @@ def _golden_function_softsign(input_tensor_a, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.softsign, golden_function=_golden_function_softsign)
 
 
-def _golden_function_selu(input_tensor_a, *args, **kwargs):
-    import torch
-
-    return torch.nn.functional.selu(input_tensor_a)
-
-
-ttnn.attach_golden_function(ttnn.selu, golden_function=_golden_function_selu)
-
-
 def _golden_function_hardswish(input_tensor_a, *args, **kwargs):
     import torch
 
@@ -126,6 +117,42 @@ def _golden_function_softshrink(input_tensor_a, *args, lambd=0.5, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn.softshrink, golden_function=_golden_function_softshrink)
+
+
+def _golden_function_swish(input_tensor_a, *args, **kwargs):
+    import torch
+
+    return torch.nn.functional.silu(input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn.swish, golden_function=_golden_function_swish)
+
+
+def _golden_function_frac(input_tensor_a, *args, **kwargs):
+    import torch
+
+    return torch.frac(input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn.frac, golden_function=_golden_function_frac)
+
+
+def _golden_function_atanh(input_tensor_a, *args, **kwargs):
+    import torch
+
+    return torch.atanh(input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn.atanh, golden_function=_golden_function_atanh)
+
+
+def _golden_function_sinh(input_tensor_a, *args, **kwargs):
+    import torch
+
+    return torch.sinh(input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn.sinh, golden_function=_golden_function_sinh)
 
 
 try:

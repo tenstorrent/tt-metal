@@ -32,14 +32,26 @@
 #include "api/compute/eltwise_unary/softsign.h"
 #endif
 
-#if SFPU_OP_SELU_INCLUDE
-#include "api/compute/eltwise_unary/selu.h"
-#endif
-
 #if SFPU_OP_HARDSWISH_INCLUDE
 #include "api/compute/eltwise_unary/hardswish.h"
 #endif
 
 #if SFPU_OP_SOFTSHRINK_INCLUDE
 #include "api/compute/eltwise_unary/softshrink.h"
+#endif
+
+#if SFPU_OP_SWISH_INCLUDE
+#include "api/compute/eltwise_unary/swish.h"
+#endif
+
+#if SFPU_OP_FRAC_INCLUDE
+#include "api/compute/eltwise_unary/frac.h"
+#endif
+
+#if SFPU_OP_ATANH_INCLUDE
+#include "api/compute/eltwise_unary/atanh.h"
+#endif
+
+#if SFPU_OP_SINH_INCLUDE
+#include "api/compute/eltwise_unary/sinh.h"
 #endif

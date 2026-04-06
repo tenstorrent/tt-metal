@@ -25,4 +25,3 @@
 #include "llk_math_eltwise_unary_sfpu_hardtanh.h"
 #include "llk_math_eltwise_unary_sfpu_hardsigmoid.h"
 #include "llk_math_eltwise_unary_sfpu_softsign.h"
-#include "llk_math_eltwise_unary_sfpu_selu.h"
