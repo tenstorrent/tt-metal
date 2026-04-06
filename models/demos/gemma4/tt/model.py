@@ -230,17 +230,19 @@ class Gemma4Model:
         w = self.per_layer_input_weights
         pli_size = self.hidden_size_per_layer_input
         n_layers = len(self.layers)
+        # The per-layer embedding weight has ALL layers baked in
+        # Infer full layer count from the weight shape, not the (possibly overridden) config
+        embed_w = w["embed_tokens_per_layer"]  # [vocab_pli, full_n_layers * pli_size]
+        full_n_layers = embed_w.shape[-1] // pli_size
 
         # 1. Per-layer token embedding: embed_tokens_per_layer(input_ids)
-        embed_w = w["embed_tokens_per_layer"]  # [vocab_pli, n_layers * pli_size]
         pli_embed = F.embedding(input_ids_torch.long(), embed_w) * self.per_layer_embed_scale
-        # [batch, seq, n_layers * pli_size] -> [batch, seq, n_layers, pli_size]
-        pli_embed = pli_embed.reshape(*input_ids_torch.shape, n_layers, pli_size)
+        pli_embed = pli_embed.reshape(*input_ids_torch.shape, full_n_layers, pli_size)
 
         # 2. Projection from main embeddings
-        proj_w = w["per_layer_model_projection"]  # [n_layers * pli_size, hidden]
+        proj_w = w["per_layer_model_projection"]  # [full_n_layers * pli_size, hidden]
         pli_proj = F.linear(embeds_torch.float(), proj_w.float()) * self.per_layer_model_projection_scale
-        pli_proj = pli_proj.reshape(*embeds_torch.shape[:-1], n_layers, pli_size)
+        pli_proj = pli_proj.reshape(*embeds_torch.shape[:-1], full_n_layers, pli_size)
 
         # 3. Norm the projection
         norm_w = w["per_layer_projection_norm"]  # [pli_size]
