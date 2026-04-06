@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "api/dataflow/dataflow_api.h"
-#include "cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "experimental/noc.h"
 #include "experimental/circular_buffer.h"
 #include "experimental/tensor.h"
