@@ -16,13 +16,13 @@ class TtnnC2PSA:
 
     def __call__(self, device, x):
         x = self.cv1(device, x)
-        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG) if x.is_sharded() else x
         cfg = self.cv1.conv.conv
         hw = int(cfg.input_height) * int(cfg.input_width)
         hw = min(hw, x.shape[2])
         a, b = x[:, :, :hw, : int(self.out_channel_0 / 2)], x[:, :, :hw, int(self.out_channel_0 / 2) :]
         x = self.psablock(device, b)
-        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG) if x.is_sharded() else x
         x = ttnn.concat((a, x), dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = self.cv2(device, x)
         deallocate_tensors(a, b)

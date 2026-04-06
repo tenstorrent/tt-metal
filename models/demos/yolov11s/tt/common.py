@@ -4,6 +4,7 @@
 
 import math
 import os
+import warnings
 
 import ttnn
 from models.common.utility_functions import roundup32
@@ -11,16 +12,20 @@ from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
 def _default_yolov11s_conv_shard_layout():
+    """Height sharding only; width/block break TILE conv outputs when spatial shards are not 32-aligned."""
     mode = os.environ.get("YOLOV11S_CONV_SHARD", "height").strip().lower()
-    if mode == "width":
-        return ttnn.TensorMemoryLayout.WIDTH_SHARDED
-    if mode == "block":
-        return ttnn.TensorMemoryLayout.BLOCK_SHARDED
+    if mode in ("width", "block"):
+        warnings.warn(
+            f"YOLOV11S_CONV_SHARD={mode!r} is ignored for YOLOv11s: WIDTH/BLOCK conv outputs can violate "
+            f"Wormhole TILE physical shard alignment (multiple of 32). Using height sharding.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     if mode == "height":
         return ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     raise ValueError(
-        "YOLOV11S_CONV_SHARD must be one of: height, width, block "
-        f"(got {mode!r}; set e.g. export YOLOV11S_CONV_SHARD=width)"
+        "YOLOV11S_CONV_SHARD must be 'height' (width and block are unsupported for this model). " f"Got {mode!r}."
     )
 
 
@@ -188,22 +193,34 @@ class Yolov11sConv2D:
         return x
 
 
-def reshard_if_possible(x, core_grid=None):  # reshards if shard_spec is not multiples of 32
-    if x.is_sharded() and (
-        x.memory_config().shard_spec.shape[0] % 32 != 0 or x.memory_config().shard_spec.shape[1] % 32 != 0
-    ):
-        aligned_h, aligned_w = roundup32(x.memory_config().shard_spec.shape[0]), roundup32(
-            x.memory_config().shard_spec.shape[1]
-        )
-        resharded_memory_config = ttnn.create_sharded_memory_config(
-            shape=(aligned_h, aligned_w),
-            core_grid=x.memory_config().shard_spec.grid if core_grid is None else core_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=x.memory_config().shard_spec.orientation,
-            use_height_and_width_as_shard_shape=True,
-        )
-        x = ttnn.to_memory_config(x, resharded_memory_config)
-    return x
+def reshard_if_possible(x, core_grid=None):
+    """Round shard H/W up to 32 for TILE tensors; keep HEIGHT vs WIDTH vs BLOCK strategy from the tensor."""
+    if not x.is_sharded():
+        return x
+    mc = x.memory_config()
+    spec = mc.shard_spec
+    if spec is None:
+        return x
+    sh0, sh1 = spec.shape[0], spec.shape[1]
+    if sh0 % 32 == 0 and sh1 % 32 == 0:
+        return x
+    aligned_h, aligned_w = roundup32(sh0), roundup32(sh1)
+    grid = spec.grid if core_grid is None else core_grid
+    layout = mc.memory_layout
+    if layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        strategy = ttnn.ShardStrategy.WIDTH
+    elif layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        strategy = ttnn.ShardStrategy.BLOCK
+    else:
+        strategy = ttnn.ShardStrategy.HEIGHT
+    resharded_memory_config = ttnn.create_sharded_memory_config(
+        shape=(aligned_h, aligned_w),
+        core_grid=grid,
+        strategy=strategy,
+        orientation=spec.orientation,
+        use_height_and_width_as_shard_shape=True,
+    )
+    return ttnn.to_memory_config(x, resharded_memory_config)
 
 
 def sharded_concat(input_tensors, num_cores=64, dim=3, to_interleaved=True):
