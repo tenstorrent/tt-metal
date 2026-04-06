@@ -91,7 +91,7 @@ class MoEGate(AbstractModule):
                     .repeat(num_device_cores, 1, 1),
                     shard_dims=(None, None),
                     mesh_device=mesh_device,
-                    dtype=ttnn.float32,
+                    dtype=ttnn.bfloat16,
                     memory_config=input_output_mem_config,
                     layout=ttnn.TILE_LAYOUT,
                 )

@@ -34,6 +34,10 @@ def test_deepseek_moe_gate_op(device, batch_size, enable_sigmoid):
     torch_input = torch.reshape(torch_input_loaded, input_shape)
     torch_bias_loaded = torch.load("/work/scores_correction_bias.pt")
     torch_bias = torch.reshape(torch_bias_loaded, input_shape)
+    with torch.no_grad():
+        torch_bias[0, 1, :] = 0
+        torch_bias[0, 3, :] = 0
+        torch_bias[0, 5, :] = 0
     eps = 1e-20
     scaling_factor = 2.5
 
@@ -71,7 +75,7 @@ def test_deepseek_moe_gate_op(device, batch_size, enable_sigmoid):
         memory_config=input_mem_config,
         tile=input_tile,
     )
-
+    breakpoint()
     reshaped_bias = torch.transpose(torch.reshape(torch_bias, reshaped_input_shape), -2, -1)
     ttnn_bias = ttnn.from_torch(
         reshaped_bias,
