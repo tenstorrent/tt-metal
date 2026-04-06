@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,10 +7,6 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-
-#include "api/debug/dprint.h"
-#include "api/debug/dprint_tile.h"
-#include "tt-metalium/constants.hpp"
 
 void kernel_main() {
     // Define all compile-time arguments at the beginning
@@ -94,7 +90,6 @@ void kernel_main() {
                             tile_regs_acquire();  // acquire DST registers for MATH thread, resets DST to 0
                             if (reduce_output) {
                                 copy_tile_init(cb_interm2_id);
-                                // copy_tile_to_dst_init_short(cb_interm2_id);
                                 for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
                                     copy_tile(cb_interm2_id, tile_id, tile_id);  // load DST
                                 }
