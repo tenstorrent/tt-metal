@@ -13,6 +13,7 @@ from transformers import Qwen3OmniMoeConfig, Qwen3OmniMoeForConditionalGeneratio
 from transformers.activations import GELUActivation, GELUTanh, SiLUActivation
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeAudioAttention,
+    Qwen3OmniMoeCausalConvNet,
     Qwen3OmniMoeCode2WavAttention,
     Qwen3OmniMoeCode2WavDecoderResidualUnit,
     Qwen3OmniMoeCode2WavRMSNorm,
@@ -33,7 +34,7 @@ from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeMLP,
     Qwen3OmniMoeCode2WavMlp,
     Qwen3OmniMoeTalkerCodePredictorAttention,
-    SnakeBeta,
+    # SnakeBeta,
 )
 from qwen_omni_utils import process_mm_info
 
@@ -50,9 +51,10 @@ from models.experimental.tt_symbiote.modules.attention import TTNNQwen3VLMoeVisi
 from models.experimental.tt_symbiote.modules.moe import TTNNGlm4MoeMLP
 from models.experimental.tt_symbiote.modules.activation import (
     TTNNGelu,
+    TTNNQwen3OmniMoeCausalConvNet,
     TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
     TTNNSilu,
-    TTNNSnakeBeta,
+    # TTNNSnakeBeta,
 )
 
 from models.experimental.tt_symbiote.modules.linear import (
@@ -70,6 +72,7 @@ from models.experimental.tt_symbiote.modules.qwen_omni_rotary import (
     TTNNQwen3OmniMoeThinkerTextRotaryEmbedding,
     TTNNQwen3OmniMoeVisionRotaryEmbedding,
 )
+from models.experimental.tt_symbiote.modules.conv import TTNNConv1d, TTNNQwenOmniConv2dNHWC
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 
@@ -85,13 +88,20 @@ _QWEN_OMNI_ACTIVATION_NN_TO_TTNN = {
     SiLUActivation: TTNNSilu,
     GELUActivation: TTNNGelu,
     GELUTanh: TTNNGelu,
-    SnakeBeta: TTNNSnakeBeta,
+    # SnakeBeta: TTNNSnakeBeta,
 }
 
 # HF ``nn.LayerNorm`` (audio encoder, vision merger/blocks, code2wav ConvNeXt). ``TTNNQwenLayerNorm.from_torch``
 # keeps PyTorch modules when ``normalized_shape`` is not tile-aligned (``dim % 32 != 0``).
 _QWEN_OMNI_LAYERNORM_NN_TO_TTNN = {
     torch.nn.LayerNorm: TTNNQwenLayerNorm,
+}
+
+# Thinker vision downsampler uses ``nn.Conv2d`` (NCHW in HF); symbiote runs TTNN NHWC conv.
+# Use :class:`TTNNQwenOmniConv2dNHWC` so tile alignment is handled without altering ``TTNNConv2dNHWC``.
+_QWEN_OMNI_CONV_NN_TO_TTNN = {
+    torch.nn.Conv2d: TTNNQwenOmniConv2dNHWC,
+    torch.nn.Conv1d: TTNNConv1d,
 }
 
 
@@ -196,16 +206,19 @@ NN_TO_TTNN_THINKER = {
     Qwen3OmniMoeVisionRotaryEmbedding: TTNNQwen3OmniMoeVisionRotaryEmbedding,
     **_QWEN_OMNI_ACTIVATION_NN_TO_TTNN,
     **_QWEN_OMNI_LAYERNORM_NN_TO_TTNN,
+    **_QWEN_OMNI_CONV_NN_TO_TTNN,
 }
 NN_TO_TTNN_CODE2WAV = {
     Qwen3OmniMoeCode2WavAttention: TTNNQwen3OmniMoeCode2WavAttention,
+    Qwen3OmniMoeCausalConvNet: TTNNQwen3OmniMoeCausalConvNet,
     Qwen3OmniMoeCode2WavRMSNorm: TTNNDistributedRMSNorm,
     Qwen3OmniMoeCode2WavMlp: TTNNGlm4MoeMLP,
-    Qwen3OmniMoeCode2WavDecoderResidualUnit: TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
+    # Qwen3OmniMoeCode2WavDecoderResidualUnit: TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
     # ``code2wav.pre_transformer.rotary_emb`` (same HF class as code_predictor 1D RoPE)
     Qwen3OmniMoeRotaryEmbedding: TTNNQwen3OmniMoeRotaryEmbedding,
     **_QWEN_OMNI_ACTIVATION_NN_TO_TTNN,
     **_QWEN_OMNI_LAYERNORM_NN_TO_TTNN,
+    **_QWEN_OMNI_CONV_NN_TO_TTNN,
 }
 NN_TO_TTNN_TALKER = {
     Qwen3OmniMoeTalkerTextSparseMoeBlock: TTNNQwen3TalkerMoE,
