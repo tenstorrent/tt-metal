@@ -1318,6 +1318,11 @@ def load_mtp_weights(
         eh_projection=eh_projection,
     )
 
+def load_shared_head_norm_weights(path: str | Path, device) -> ttnn.Tensor:
+    """Load only the shared_head_norm tensor from the MTP cache directory."""
+    mtp_dir = Path(path) / "mtp"
+    return ttnn.load_tensor(mtp_dir / "mtp_shared_head_norm.tensorbin", device=device)
+
 
 def _core_range_set_to_list(crs: ttnn.CoreRangeSet) -> list[list[list[int]]]:
     """Serialize CoreRangeSet to JSON-serializable list of [[sx, sy], [ex, ey]]."""

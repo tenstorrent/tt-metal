@@ -146,7 +146,7 @@ FORCE_INLINE bool process_upstream_sockets(
                     receiver_sockets[worker_idx].page_size);
             } else {
                 write_data_to_local_core_with_ack(
-                    l1_read_addr, dst_addr, upstream_page_size, receiver_sockets[worker_idx].page_size);
+                    l1_read_addr, dst_addr, receiver_sockets[worker_idx].page_size);
             }
 
             socket_pop_pages(receiver_sockets[worker_idx], 1);
