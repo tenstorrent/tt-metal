@@ -287,10 +287,15 @@ def get_or_compute_host_reference(
     if cache_path.exists():
         logger.info(f"Loading cached reference results from {cache_path}")
         cached = torch.load(cache_path, weights_only=True)
-        ref_snapshots = cached["ref_snapshots"]
-        ref_kvpe_list = cached["ref_kvpe_list"]
-        logger.info(f"Loaded {len(ref_snapshots)} cached reference snapshots and {len(ref_kvpe_list)} KVPE tensors")
-        return ref_snapshots, ref_kvpe_list
+        # Check if cache has all required keys (handles old cache format)
+        if "ref_snapshots" in cached and "ref_kvpe_list" in cached:
+            ref_snapshots = cached["ref_snapshots"]
+            ref_kvpe_list = cached["ref_kvpe_list"]
+            logger.info(f"Loaded {len(ref_snapshots)} cached reference snapshots and {len(ref_kvpe_list)} KVPE tensors")
+            return ref_snapshots, ref_kvpe_list
+        else:
+            logger.warning(f"Cache file {cache_path} is outdated (missing ref_kvpe_list), regenerating...")
+            cache_path.unlink()  # Delete stale cache
 
     assert not is_ci, (
         f"Host reference cache missing in CI: {cache_path}. " "Run the test locally first to generate the cache."
