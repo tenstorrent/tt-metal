@@ -22,14 +22,20 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block import TtPrefillBlock
-from models.demos.deepseek_v3_d_p.utils.transformer_helpers import create_hf_model, extract_layer_state_dict
+from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
+    compute_reference_kvpe,
+    create_hf_model,
+    extract_layer_state_dict,
+)
 from tests.ttnn.utils_for_testing import comp_pcc
 
 PCC_THRESHOLD_DENSE = 0.999
 PCC_THRESHOLD_MOE_GATE_HOST = 0.993
 PCC_THRESHOLD_MOE_GATE_DEVICE = 0.980
+PCC_THRESHOLD_KVPE = 0.99
 
 
+@pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
 @pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
 @pytest.mark.parametrize("isl_total", [1024])
 @pytest.mark.parametrize(
@@ -69,6 +75,7 @@ def test_prefill_block(
     num_links,
     topology,
     pcc_validation,
+    return_kv_cache,
 ):
     profiler.clear()
     profiler.start("total_test_time")
@@ -107,17 +114,23 @@ def test_prefill_block(
 
     # --- Torch reference (only when pcc_validation is enabled) ---
     torch_output = None
+    ref_kvpe = None
     if pcc_validation:
         profiler.start("torch_reference")
         logger.info("Running torch reference forward...")
         position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
         attention_mask = torch.zeros(1, 1, isl_total, isl_total, dtype=torch.bfloat16)
         with torch.no_grad():
+            if return_kv_cache:
+                attn_input = hf_model.layers[layer_idx].input_layernorm(torch_input)
+                ref_kvpe = compute_reference_kvpe(hf_model.layers[layer_idx].self_attn, attn_input, position_ids)
             layer_out = hf_model.layers[layer_idx](
                 torch_input, attention_mask=attention_mask, position_ids=position_ids
             )
             torch_output = layer_out[0]
         logger.info(f"Torch reference output shape: {torch_output.shape}")
+        if ref_kvpe is not None:
+            logger.info(f"Reference KVPE shape: {ref_kvpe.shape}")
         profiler.end("torch_reference")
 
     # --- TT block ---
@@ -156,7 +169,8 @@ def test_prefill_block(
 
     profiler.start("tt_forward")
     logger.info("Running TtPrefillBlock forward...")
-    tt_output = block(tt_input, rope_tensors)
+    do_return_kv = pcc_validation and return_kv_cache
+    tt_output, tt_kvpe = block(tt_input, rope_tensors, return_kv_cache=do_return_kv)
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_forward")
     logger.info("Forward pass completed successfully")
@@ -191,6 +205,17 @@ def test_prefill_block(
         profiler.end("pcc_validation")
         logger.info(f"PCC: {pcc:.6f} (threshold: {pcc_threshold})")
         assert pcc > pcc_threshold, f"PCC {pcc:.6f} below threshold {pcc_threshold}"
+
+        # --- KVPE cache validation ---
+        if ref_kvpe is not None and tt_kvpe is not None:
+            kv_lora_rank = config.kv_lora_rank
+            _, kv_pcc = comp_pcc(ref_kvpe[:, :, :, :kv_lora_rank].float(), tt_kvpe[:, :, :, :kv_lora_rank].float())
+            _, pe_pcc = comp_pcc(ref_kvpe[:, :, :, kv_lora_rank:].float(), tt_kvpe[:, :, :, kv_lora_rank:].float())
+            logger.info(f"KVPE cache KV part PCC: {kv_pcc:.6f} (threshold: {PCC_THRESHOLD_KVPE})")
+            logger.info(f"KVPE cache PE part PCC: {pe_pcc:.6f} (threshold: {PCC_THRESHOLD_KVPE})")
+            assert kv_pcc > PCC_THRESHOLD_KVPE, f"KVPE KV PCC {kv_pcc:.6f} below threshold {PCC_THRESHOLD_KVPE}"
+            assert pe_pcc > PCC_THRESHOLD_KVPE, f"KVPE PE PCC {pe_pcc:.6f} below threshold {PCC_THRESHOLD_KVPE}"
+
         logger.success(
             f"TtPrefillBlock test passed "
             f"(layer_type={layer_type}, gate_fallback_mode={gate_fallback_mode}, PCC={pcc:.4f})"
