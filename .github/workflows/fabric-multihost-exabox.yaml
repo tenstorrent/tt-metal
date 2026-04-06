@@ -86,13 +86,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Parse docker image
+        id: parse-image
+        run: |
+          IMAGE="${{ needs.build-artifact.outputs.dev-docker-image }}"
+          REPOSITORY="${IMAGE%:*}"
+          TAG="${IMAGE##*:}"
+          echo "repository=$REPOSITORY" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
       - name: Create environment
         uses: ./.github/actions/ttop-create-environment
         timeout-minutes: 5
         with:
           environmentName:  ci-${{ github.run_id }}-reset
           allocationName:  ci-${{ github.run_id }}-metal
-          workerImage: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          workerRepository: ${{ steps.parse-image.outputs.repository }}
+          workerTag: ${{ steps.parse-image.outputs.tag }}
 
       # We use setup-tt-run just to setup MPI, MGD can be dummy
       - name: Setup tt-run
@@ -142,13 +152,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Parse docker image
+        id: parse-image
+        run: |
+          IMAGE="${{ needs.build-artifact.outputs.dev-docker-image }}"
+          REPOSITORY="${IMAGE%:*}"
+          TAG="${IMAGE##*:}"
+          echo "repository=$REPOSITORY" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
       - name: Create environment
         uses: ./.github/actions/ttop-create-environment
         timeout-minutes: 5
         with:
           environmentName:  ci-${{ github.run_id }}-metal
           allocationName:  ci-${{ github.run_id }}-metal
-          workerImage: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          workerRepository: ${{ steps.parse-image.outputs.repository }}
+          workerTag: ${{ steps.parse-image.outputs.tag }}
           sharedVolumeEnabled: 'true'
 
       - name: Setup tt-run
