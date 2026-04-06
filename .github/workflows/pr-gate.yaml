@@ -333,14 +333,14 @@ jobs:
         BASE_REF="${{ github.event.pull_request.base.ref }}"
         git remote add upstream "https://github.com/${BASE_REPO}"
         git fetch --no-tags upstream "${BASE_REF}"
-    - name: Install clang-tidy
-      timeout-minutes: 10
+    - name: Set up clang-tidy symlinks
       run: |
-        sudo apt-get update
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-          clang-tidy-20 python3.11 python3.11-venv python3.11-dev
-        sudo ln -s $(which clang-tidy-20) /usr/local/bin/clang-tidy
-        uv pip install pyyaml  # Needed for clang-tidy-diff-20.py
+        # The ci-build image ships clang-tidy-20 and clang-tidy-diff-20.py.
+        # Create unversioned symlinks if they don't already exist so the
+        # rest of the job can reference them without version suffixes.
+        command -v clang-tidy   || sudo ln -sf "$(command -v clang-tidy-20)" /usr/local/bin/clang-tidy
+        command -v clang-tidy-diff-20.py || sudo ln -sf "$(find /usr -name 'clang-tidy-diff-20.py' 2>/dev/null | head -1)" /usr/local/bin/clang-tidy-diff-20.py
+        uv pip install pyyaml  # Needed by clang-tidy-diff-20.py
     - name: Prepare compile_commands.json
       timeout-minutes: 10
       run: |
