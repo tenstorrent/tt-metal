@@ -447,7 +447,7 @@ def _load_text_encoder_into_models(models: dict, config) -> None:
         torch_dtype=dtype,
         max_prompt_length=512,
     )
-    logger.info("Loaded TT text encoder (cache miss).")
+    logger.info("Loaded TT text encoder.")
 
 
 def _prepare_state_for_vae_encode(state: dict, config) -> None:

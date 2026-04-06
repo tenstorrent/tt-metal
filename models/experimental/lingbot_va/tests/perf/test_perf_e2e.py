@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -27,6 +28,13 @@ from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_confi
 
 CHECKPOINT_PATH = "models/experimental/lingbot_va/reference/checkpoints"
 OBS_H, OBS_W = 256, 320
+
+
+def _mesh_device_param_for_e2e() -> tuple[int, int] | int:
+    """Pytest ``mesh_device`` indirect param: one physical mesh when single-chip inference is requested."""
+    if os.environ.get("LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH", "").strip().lower() in ("1", "true", "yes"):
+        return (1, 1)
+    return mesh_shape_request_param()
 
 
 def _make_message():
@@ -77,7 +85,7 @@ def _host_input_tensor_for_pipeline(mesh_device):
 
 @pytest.mark.parametrize(
     "mesh_device",
-    [mesh_shape_request_param()],
+    [_mesh_device_param_for_e2e()],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -118,7 +126,7 @@ def test_perf_lingbot_va_e2e_2cq_trace(
         action_num_inference_steps=1,
     )
 
-    # Must match models["mesh_device"] (e.g. (1,1) submesh when LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH=1).
+    # Must match models["mesh_device"] (same mesh when env opens (1,1); else (1,1) submesh inside multi-chip).
     work_mesh = tt_model.models["mesh_device"]
     image_host, dram_input_memory_config, l1_input_memory_config = _host_input_tensor_for_pipeline(work_mesh)
 
