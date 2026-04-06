@@ -146,38 +146,26 @@ class TestLoraWeightFreezing:
     def test_all_base_params_frozen_llama(self, toy_llama_config):
         model = Llama(toy_llama_config)
 
-        lora_config = LoraConfig(
-            rank=4, alpha=8.0, target_modules=["q_linear", "out_linear"]
-        )
+        lora_config = LoraConfig(rank=4, alpha=8.0, target_modules=["q_linear", "out_linear"])
         lora_model = LoraModel(model, lora_config)
 
         for name, param in lora_model.parameters().items():
             if "lora_A" in name or "lora_B" in name:
-                assert (
-                    param.get_requires_grad()
-                ), f"LoRA param {name} should be trainable"
+                assert param.get_requires_grad(), f"LoRA param {name} should be trainable"
             else:
-                assert (
-                    not param.get_requires_grad()
-                ), f"Base param {name} should be frozen"
+                assert not param.get_requires_grad(), f"Base param {name} should be frozen"
 
     def test_all_base_params_frozen_nanogpt(self, toy_gpt_config):
         model = create_nanogpt(toy_gpt_config)
 
-        lora_config = LoraConfig(
-            rank=4, alpha=8.0, target_modules=["qkv_linear", "out_linear"]
-        )
+        lora_config = LoraConfig(rank=4, alpha=8.0, target_modules=["qkv_linear", "out_linear"])
         lora_model = LoraModel(model, lora_config)
 
         for name, param in lora_model.parameters().items():
             if "lora_A" in name or "lora_B" in name:
-                assert (
-                    param.get_requires_grad()
-                ), f"LoRA param {name} should be trainable"
+                assert param.get_requires_grad(), f"LoRA param {name} should be trainable"
             else:
-                assert (
-                    not param.get_requires_grad()
-                ), f"Base param {name} should be frozen"
+                assert not param.get_requires_grad(), f"Base param {name} should be frozen"
 
 
 # =============================================================================
@@ -356,9 +344,7 @@ class TestLoraTrainableModules:
         tok_emb_found = False
         for name, param in lora_model.parameters().items():
             if "tok_emb" in name:
-                assert (
-                    param.get_requires_grad()
-                ), f"tok_emb param {name} should be trainable"
+                assert param.get_requires_grad(), f"tok_emb param {name} should be trainable"
                 tok_emb_found = True
         assert tok_emb_found, "Should find tok_emb parameters"
 
@@ -375,9 +361,7 @@ class TestLoraTrainableModules:
         tok_emb_found = False
         for name, param in lora_model.parameters().items():
             if "tok_emb" in name:
-                assert (
-                    param.get_requires_grad()
-                ), f"tok_emb param {name} should be trainable"
+                assert param.get_requires_grad(), f"tok_emb param {name} should be trainable"
                 tok_emb_found = True
         assert tok_emb_found
 
@@ -411,14 +395,7 @@ class TestLoraTrainableParameterCount:
         #   q_linear:   rank*hidden + hidden*rank
         #   kv_linear:  rank*hidden + kv_dim*rank
         #   out_linear: rank*hidden + hidden*rank
-        per_layer = (
-            rank * hidden
-            + hidden * rank
-            + rank * hidden
-            + kv_dim * rank
-            + rank * hidden
-            + hidden * rank
-        )
+        per_layer = rank * hidden + hidden * rank + rank * hidden + kv_dim * rank + rank * hidden + hidden * rank
         expected = per_layer * toy_llama_config.num_hidden_layers
         actual = _count_trainable_params(lora_model)
         assert actual == expected, f"Expected {expected} trainable params, got {actual}"
@@ -500,9 +477,7 @@ class TestLoraOptimizerState:
 
     def test_optimizer_state_matches_trainable_llama(self, toy_llama_config):
         model = Llama(toy_llama_config)
-        lora_config = LoraConfig(
-            rank=4, alpha=8.0, target_modules=["q_linear", "out_linear"]
-        )
+        lora_config = LoraConfig(rank=4, alpha=8.0, target_modules=["q_linear", "out_linear"])
         lora_model = LoraModel(model, lora_config)
 
         trainable_count = _count_trainable_tensors(lora_model)
@@ -523,9 +498,7 @@ class TestLoraOptimizerState:
 
     def test_optimizer_state_matches_trainable_nanogpt(self, toy_gpt_config):
         model = create_nanogpt(toy_gpt_config)
-        lora_config = LoraConfig(
-            rank=4, alpha=8.0, target_modules=["qkv_linear", "out_linear"]
-        )
+        lora_config = LoraConfig(rank=4, alpha=8.0, target_modules=["qkv_linear", "out_linear"])
         lora_model = LoraModel(model, lora_config)
 
         trainable_count = _count_trainable_tensors(lora_model)
@@ -565,9 +538,7 @@ class TestLoraForwardPass:
         batch_size = 2
         seq_len = toy_llama_config.max_position_embeddings
 
-        tokens = np.random.randint(
-            0, toy_llama_config.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, toy_llama_config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -598,9 +569,7 @@ class TestLoraForwardPass:
         batch_size = 2
         seq_len = toy_gpt_config.block_size
 
-        tokens = np.random.randint(
-            0, toy_gpt_config.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, toy_gpt_config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -632,9 +601,7 @@ class TestLoraForwardPass:
         batch_size = 2
         seq_len = toy_llama_config.max_position_embeddings
 
-        tokens = np.random.randint(
-            0, toy_llama_config.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, toy_llama_config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -670,24 +637,18 @@ class TestLoraTrainingStep:
         adamw_cfg = ttml.optimizers.AdamWConfig.make(0.001, 0.9, 0.999, 1e-8, 0.01)
         optimizer = ttml.optimizers.AdamW(lora_model.parameters(), adamw_cfg)
 
-        tokens = np.random.randint(
-            0, toy_llama_config.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, toy_llama_config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
-        targets = np.random.randint(
-            0, toy_llama_config.vocab_size, size=(batch_size, seq_len)
-        ).astype(np.uint32)
+        targets = np.random.randint(0, toy_llama_config.vocab_size, size=(batch_size, seq_len)).astype(np.uint32)
         target_tensor = ttml.autograd.Tensor.from_numpy(
             targets, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
 
         optimizer.zero_grad()
         logits = lora_model(input_tensor, None)
-        loss = ttml.ops.loss.cross_entropy_loss(
-            logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN
-        )
+        loss = ttml.ops.loss.cross_entropy_loss(logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN)
         loss.backward(False)
         ttml.autograd.AutoContext.get_instance().reset_graph()
         optimizer.step()
@@ -697,9 +658,7 @@ class TestLoraTrainingStep:
 
     def test_training_step_nanogpt(self, toy_gpt_config):
         model = create_nanogpt(toy_gpt_config)
-        lora_config = LoraConfig(
-            rank=4, alpha=8.0, target_modules=["qkv_linear", "out_linear"]
-        )
+        lora_config = LoraConfig(rank=4, alpha=8.0, target_modules=["qkv_linear", "out_linear"])
         lora_model = LoraModel(model, lora_config)
         lora_model.train()
 
@@ -709,24 +668,18 @@ class TestLoraTrainingStep:
         adamw_cfg = ttml.optimizers.AdamWConfig.make(0.001, 0.9, 0.999, 1e-8, 0.01)
         optimizer = ttml.optimizers.AdamW(lora_model.parameters(), adamw_cfg)
 
-        tokens = np.random.randint(
-            0, toy_gpt_config.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, toy_gpt_config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
-        targets = np.random.randint(
-            0, toy_gpt_config.vocab_size, size=(batch_size, seq_len)
-        ).astype(np.uint32)
+        targets = np.random.randint(0, toy_gpt_config.vocab_size, size=(batch_size, seq_len)).astype(np.uint32)
         target_tensor = ttml.autograd.Tensor.from_numpy(
             targets, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
 
         optimizer.zero_grad()
         logits = lora_model(input_tensor, None)
-        loss = ttml.ops.loss.cross_entropy_loss(
-            logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN
-        )
+        loss = ttml.ops.loss.cross_entropy_loss(logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN)
         loss.backward(False)
         ttml.autograd.AutoContext.get_instance().reset_graph()
         optimizer.step()
@@ -756,33 +709,25 @@ class TestLoraTrainingStep:
         adamw_cfg = ttml.optimizers.AdamWConfig.make(0.01, 0.9, 0.999, 1e-8, 0.01)
         optimizer = ttml.optimizers.AdamW(lora_model.parameters(), adamw_cfg)
 
-        tokens = np.random.randint(
-            0, toy_llama_config.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, toy_llama_config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
-        targets = np.random.randint(
-            0, toy_llama_config.vocab_size, size=(batch_size, seq_len)
-        ).astype(np.uint32)
+        targets = np.random.randint(0, toy_llama_config.vocab_size, size=(batch_size, seq_len)).astype(np.uint32)
         target_tensor = ttml.autograd.Tensor.from_numpy(
             targets, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
 
         optimizer.zero_grad()
         logits = lora_model(input_tensor, None)
-        loss = ttml.ops.loss.cross_entropy_loss(
-            logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN
-        )
+        loss = ttml.ops.loss.cross_entropy_loss(logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN)
         loss.backward(False)
         ttml.autograd.AutoContext.get_instance().reset_graph()
         optimizer.step()
 
         for name, before in frozen_before.items():
             after = lora_model.parameters()[name].to_numpy(ttnn.DataType.FLOAT32)
-            assert np.allclose(
-                before, after, atol=1e-6
-            ), f"Frozen param {name} should not change during training"
+            assert np.allclose(before, after, atol=1e-6), f"Frozen param {name} should not change during training"
 
         any_changed = False
         for name, before in lora_before.items():
@@ -814,33 +759,25 @@ class TestLoraTrainingStep:
         adamw_cfg = ttml.optimizers.AdamWConfig.make(0.01, 0.9, 0.999, 1e-8, 0.01)
         optimizer = ttml.optimizers.AdamW(lora_model.parameters(), adamw_cfg)
 
-        tokens = np.random.randint(
-            0, toy_gpt_config.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, toy_gpt_config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
-        targets = np.random.randint(
-            0, toy_gpt_config.vocab_size, size=(batch_size, seq_len)
-        ).astype(np.uint32)
+        targets = np.random.randint(0, toy_gpt_config.vocab_size, size=(batch_size, seq_len)).astype(np.uint32)
         target_tensor = ttml.autograd.Tensor.from_numpy(
             targets, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
 
         optimizer.zero_grad()
         logits = lora_model(input_tensor, None)
-        loss = ttml.ops.loss.cross_entropy_loss(
-            logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN
-        )
+        loss = ttml.ops.loss.cross_entropy_loss(logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN)
         loss.backward(False)
         ttml.autograd.AutoContext.get_instance().reset_graph()
         optimizer.step()
 
         for name, before in frozen_before.items():
             after = lora_model.parameters()[name].to_numpy(ttnn.DataType.FLOAT32)
-            assert np.allclose(
-                before, after, atol=1e-6
-            ), f"Frozen param {name} should not change during training"
+            assert np.allclose(before, after, atol=1e-6), f"Frozen param {name} should not change during training"
 
         any_changed = False
         for name, before in lora_before.items():

@@ -64,35 +64,35 @@
 2024-09-02T07:02:00.1153855Z Vulnerability Srbds:                Not affected
 2024-09-02T07:02:00.1154880Z Vulnerability Tsx async abort:      Not affected
 2024-09-02T07:02:00.1164801Z Flags:                              fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid aperfmperf pni pclmulqdq monitor ssse3 fma cx16 pcid sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpb cat_l3 cdp_l3 invpcid_single hw_pstate ssbd mba ibrs ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local clzero irperf xsaveerptr wbnoinvd arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold v_vmsave_vmload vgif umip pku ospke vaes vpclmulqdq rdpid overflow_recov succor smca
-2024-09-02T07:02:00.4500563Z 
+2024-09-02T07:02:00.4500563Z
 2024-09-02T07:02:00.4501672Z [95m Detected Chips: [93m1[0m
 2024-09-02T07:02:00.4522331Z [1A[J
 2024-09-02T07:02:00.4523310Z [95m Detected Chips: [93m1[0m
-2024-09-02T07:02:00.4523861Z 
+2024-09-02T07:02:00.4523861Z
 2024-09-02T07:02:00.4524241Z [94m Detecting ARC: [93m|[0m
-2024-09-02T07:02:00.4525216Z 
+2024-09-02T07:02:00.4525216Z
 2024-09-02T07:02:00.4525581Z [94m Detecting DRAM: [93m|[0m
-2024-09-02T07:02:00.4526121Z 
+2024-09-02T07:02:00.4526121Z
 2024-09-02T07:02:00.4526471Z  [95m[][94m ETH: [93m|[0m
 2024-09-02T07:02:00.4527305Z [4A[J
 2024-09-02T07:02:00.4527995Z [95m Detected Chips: [93m2[0m
 2024-09-02T07:02:00.4641716Z [1A[J
 2024-09-02T07:02:00.4642729Z [95m Detected Chips: [93m2[0m
-2024-09-02T07:02:00.4643302Z 
+2024-09-02T07:02:00.4643302Z
 2024-09-02T07:02:00.4643727Z [94m Detecting ARC: [93m/[0m
-2024-09-02T07:02:00.4644254Z 
+2024-09-02T07:02:00.4644254Z
 2024-09-02T07:02:00.4644813Z [94m Detecting DRAM: [93m/[0m
-2024-09-02T07:02:00.4645331Z 
+2024-09-02T07:02:00.4645331Z
 2024-09-02T07:02:00.4645707Z  [95m[][94m ETH: [93m/[0m
 2024-09-02T07:02:00.4646518Z [4A[J
 2024-09-02T07:02:00.4647197Z [95m Detected Chips: [93m3[0m
 2024-09-02T07:02:00.4664189Z [1A[J
 2024-09-02T07:02:00.4665157Z [95m Detected Chips: [93m3[0m
-2024-09-02T07:02:00.4665749Z 
+2024-09-02T07:02:00.4665749Z
 2024-09-02T07:02:00.4666136Z [94m Detecting ARC: [93m-[0m
-2024-09-02T07:02:00.4666724Z 
+2024-09-02T07:02:00.4666724Z
 2024-09-02T07:02:00.4667073Z [94m Detecting DRAM: [93m-[0m
-2024-09-02T07:02:00.4667633Z 
+2024-09-02T07:02:00.4667633Z
 2024-09-02T07:02:00.4668092Z  [95m[][94m ETH: [93m-[0m
 2024-09-02T07:02:00.4668839Z [4A[J
 2024-09-02T07:02:00.4669506Z [95m Detected Chips: [93m4[0m

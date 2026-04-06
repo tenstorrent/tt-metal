@@ -44,9 +44,7 @@ def tiny_config():
 def create_causal_mask(seq_len: int) -> ttml.autograd.Tensor:
     """Create a causal attention mask as a tensor using common utility."""
     mask_np = build_causal_mask(seq_len)
-    return ttml.autograd.Tensor.from_numpy(
-        mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
-    )
+    return ttml.autograd.Tensor.from_numpy(mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
 
 
 # =============================================================================
@@ -74,9 +72,7 @@ class TestLlama:
         seq_len = tiny_config.max_position_embeddings
 
         # Create input tokens
-        tokens = np.random.randint(
-            0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -105,9 +101,7 @@ class TestLlama:
         seq_len = tiny_config.max_position_embeddings
 
         # Create input
-        tokens = np.random.randint(
-            0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -134,9 +128,7 @@ class TestLlama:
         batch_size = 2
         seq_len = tiny_config.max_position_embeddings
 
-        tokens = np.random.randint(
-            0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -158,9 +150,7 @@ class TestLlama:
         # With weight tying, tok_emb.weight should be the same as fc weight
         emb_weight = model.tok_emb.weight
         fc_weight = model.fc.weight.tensor
-        assert (
-            emb_weight is fc_weight
-        ), "Weight tying should share embedding and output weights"
+        assert emb_weight is fc_weight, "Weight tying should share embedding and output weights"
 
         ttml.autograd.AutoContext.get_instance().reset_graph()
 
@@ -179,9 +169,7 @@ class TestLlama:
         batch_size = 2
         seq_len = cfg.max_position_embeddings
 
-        tokens = np.random.randint(
-            0, cfg.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, cfg.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -189,9 +177,7 @@ class TestLlama:
 
         logits = model(input_tensor, mask)
         logits_np = logits.to_numpy(ttnn.DataType.FLOAT32)
-        assert np.all(
-            np.isfinite(logits_np)
-        ), "Logits should be finite with RoPE scaling"
+        assert np.all(np.isfinite(logits_np)), "Logits should be finite with RoPE scaling"
 
         ttml.autograd.AutoContext.get_instance().reset_graph()
 
@@ -204,9 +190,7 @@ class TestLlama:
         batch_size = 2
         seq_len = cfg.max_position_embeddings
 
-        tokens = np.random.randint(
-            0, cfg.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, cfg.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -250,15 +234,11 @@ class TestLlamaIntegration:
         optimizer = ttml.optimizers.SGD(params, opt_cfg)
 
         # Create input and targets
-        tokens = np.random.randint(
-            0, cfg.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, cfg.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
-        targets = np.random.randint(
-            0, cfg.vocab_size, size=(batch_size, seq_len)
-        ).astype(np.uint32)
+        targets = np.random.randint(0, cfg.vocab_size, size=(batch_size, seq_len)).astype(np.uint32)
         target_tensor = ttml.autograd.Tensor.from_numpy(
             targets, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -267,9 +247,7 @@ class TestLlamaIntegration:
         # Training step
         optimizer.zero_grad()
         logits = model(input_tensor, mask)
-        loss = ttml.ops.loss.cross_entropy_loss(
-            logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN
-        )
+        loss = ttml.ops.loss.cross_entropy_loss(logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN)
         loss.backward(False)
         optimizer.step()
 
@@ -287,9 +265,7 @@ class TestLlamaIntegration:
         batch_size = 2
         seq_len = tiny_config.max_position_embeddings
 
-        tokens = np.random.randint(
-            0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )

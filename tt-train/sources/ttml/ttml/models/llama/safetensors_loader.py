@@ -62,9 +62,7 @@ def _pad_and_resize(arr: np.ndarray, tgt_rows: int, tgt_cols: int) -> np.ndarray
     if need_random:
         rng = np.random.default_rng()
         if tgt_rows > src_rows:
-            out[cr:, :] = rng.normal(0.0, 0.02, (tgt_rows - cr, tgt_cols)).astype(
-                arr.dtype
-            )
+            out[cr:, :] = rng.normal(0.0, 0.02, (tgt_rows - cr, tgt_cols)).astype(arr.dtype)
         if tgt_cols > src_cols:
             out[:cr, cc:] = rng.normal(0.0, 0.02, (cr, tgt_cols - cc)).astype(arr.dtype)
     return out
@@ -172,11 +170,7 @@ def load_from_safetensors(
         ):
             from ttml.models import WeightTyingType
 
-            emb_param_name = (
-                "Llama/fc/weight"
-                if weight_tying == WeightTyingType.Enabled
-                else "Llama/tok_emb/weight"
-            )
+            emb_param_name = "Llama/fc/weight" if weight_tying == WeightTyingType.Enabled else "Llama/tok_emb/weight"
             param = get_param(emb_param_name)
             tgt = param.shape()
             resized = _pad_and_resize(hf_arr, tgt[-2], tgt[-1])
@@ -241,9 +235,7 @@ def load_from_safetensors(
                 elif c == tr and r == tc:
                     w = w.T
                 else:
-                    raise RuntimeError(
-                        f"q_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})"
-                    )
+                    raise RuntimeError(f"q_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 _assign_tensor(param, _to_bf16_4d(w))
                 matched = True
                 break
@@ -283,9 +275,7 @@ def load_from_safetensors(
                 elif c == tr and r == tc:
                     w = w.T
                 else:
-                    raise RuntimeError(
-                        f"o_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})"
-                    )
+                    raise RuntimeError(f"o_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 _assign_tensor(param, _to_bf16_4d(w))
                 matched = True
                 break
@@ -305,9 +295,7 @@ def load_from_safetensors(
                 elif c == tr and r == tc:
                     w = w.T
                 else:
-                    raise RuntimeError(
-                        f"gate_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})"
-                    )
+                    raise RuntimeError(f"gate_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 _assign_tensor(param, _to_bf16_4d(w))
                 matched = True
                 break
@@ -327,9 +315,7 @@ def load_from_safetensors(
                 elif c == tr and r == tc:
                     w = w.T
                 else:
-                    raise RuntimeError(
-                        f"up_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})"
-                    )
+                    raise RuntimeError(f"up_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 _assign_tensor(param, _to_bf16_4d(w))
                 matched = True
                 break
@@ -349,9 +335,7 @@ def load_from_safetensors(
                 elif c == tr and r == tc:
                     w = w.T
                 else:
-                    raise RuntimeError(
-                        f"down_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})"
-                    )
+                    raise RuntimeError(f"down_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 _assign_tensor(param, _to_bf16_4d(w))
                 matched = True
                 break
@@ -362,9 +346,7 @@ def load_from_safetensors(
     # ── Report ──
     unused = [n for n in parameters if n not in used_params]
     if unused:
-        print(
-            f"Warning: {len(unused)} model parameters were NOT loaded from safetensors:"
-        )
+        print(f"Warning: {len(unused)} model parameters were NOT loaded from safetensors:")
         for n in unused:
             print(f"  - {n}")
     else:

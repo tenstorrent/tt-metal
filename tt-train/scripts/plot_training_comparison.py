@@ -119,11 +119,7 @@ def plot_loss_comparison(
             losses = losses[:max_steps]
         plt.plot(losses, label=name, linewidth=2)
 
-    title = (
-        f"{title_prefix}Loss Comparison: All Runs"
-        if title_prefix
-        else "Loss Comparison: All Runs"
-    )
+    title = f"{title_prefix}Loss Comparison: All Runs" if title_prefix else "Loss Comparison: All Runs"
     plt.title(title, fontsize=20)
     plt.xlabel("Step", fontsize=16)
     plt.ylabel("Loss", fontsize=16)
@@ -146,9 +142,7 @@ def plot_loss_difference(
 ) -> None:
     """Plot loss differences relative to baseline."""
     if baseline_name not in all_data:
-        print(
-            f"Warning: Baseline '{baseline_name}' not found, skipping loss difference plot"
-        )
+        print(f"Warning: Baseline '{baseline_name}' not found, skipping loss difference plot")
         return
 
     baseline_losses = all_data[baseline_name]["losses"]
@@ -200,11 +194,7 @@ def plot_step_time(
             steps = range(len(step_times))
             plt.plot(steps, step_times, label=name, linewidth=2)
 
-    title = (
-        f"{title_prefix}Step Time Comparison"
-        if title_prefix
-        else "Step Time Comparison"
-    )
+    title = f"{title_prefix}Step Time Comparison" if title_prefix else "Step Time Comparison"
     plt.title(title, fontsize=20)
     plt.xlabel("Step (after warmup)", fontsize=16)
     plt.ylabel("Time (ms)", fontsize=16)
@@ -253,8 +243,7 @@ Examples:
     parser.add_argument(
         "--labels",
         nargs="+",
-        help="Labels for the runs (baseline first, then compare runs). "
-        "If not provided, filenames are used.",
+        help="Labels for the runs (baseline first, then compare runs). " "If not provided, filenames are used.",
     )
     parser.add_argument(
         "--output-dir",
@@ -287,10 +276,7 @@ Examples:
     # Generate labels
     if args.labels:
         if len(args.labels) != len(all_files):
-            print(
-                f"Error: Number of labels ({len(args.labels)}) must match "
-                f"number of files ({len(all_files)})"
-            )
+            print(f"Error: Number of labels ({len(args.labels)}) must match " f"number of files ({len(all_files)})")
             sys.exit(1)
         labels = args.labels
     else:
@@ -332,9 +318,7 @@ Examples:
     plot_step_time(all_data, output_path, args.title_prefix)
 
     if len(all_data) > 1:
-        plot_loss_difference(
-            all_data, baseline_label, output_path, args.title_prefix, args.max_steps
-        )
+        plot_loss_difference(all_data, baseline_label, output_path, args.title_prefix, args.max_steps)
 
     print("\nDone!")
 

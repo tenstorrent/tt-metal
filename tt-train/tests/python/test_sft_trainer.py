@@ -42,9 +42,7 @@ class _FakeTensor:
 @pytest.fixture(autouse=True)
 def patch_tensor(monkeypatch):
     """Replace Tensor.from_numpy with a device-free stub for every test."""
-    monkeypatch.setattr(
-        ttml.autograd.Tensor, "from_numpy", staticmethod(_FakeTensor.from_numpy)
-    )
+    monkeypatch.setattr(ttml.autograd.Tensor, "from_numpy", staticmethod(_FakeTensor.from_numpy))
 
 
 # ---------------------------------------------------------------------------
@@ -137,10 +135,7 @@ def test_sft_collate_fn_prompt_zeroed_completion_nonzero():
 
 
 def _sft_examples(n):
-    return [
-        {"input_ids": list(range(i, i + 4)), "labels": [-100, i + 1, i + 2, i + 3]}
-        for i in range(n)
-    ]
+    return [{"input_ids": list(range(i, i + 4)), "labels": [-100, i + 1, i + 2, i + 3]} for i in range(n)]
 
 
 def _collate(examples):

@@ -51,9 +51,7 @@ def test_model_creation(sample_data):
     n_features = sample_data["n_features"]
 
     # Create C++ model
-    cpp_model = ttml._ttml.models.linear_regression.create_linear_regression_model(
-        n_features, 1
-    )
+    cpp_model = ttml._ttml.models.linear_regression.create_linear_regression_model(n_features, 1)
     assert cpp_model is not None
 
     # Create Python model
@@ -74,9 +72,7 @@ def test_forward_pass_shape(sample_data):
     batch_size = sample_data["batch_size"]
 
     # Create models
-    cpp_model = ttml._ttml.models.linear_regression.create_linear_regression_model(
-        n_features, 1
-    )
+    cpp_model = ttml._ttml.models.linear_regression.create_linear_regression_model(n_features, 1)
     from ttml.models.linear_regression import create_linear_regression_model
 
     py_model = create_linear_regression_model(n_features, 1)
@@ -92,9 +88,7 @@ def test_forward_pass_shape(sample_data):
     cpp_shape = cpp_output.to_numpy(ttnn.DataType.FLOAT32).shape
     py_shape = py_output.to_numpy(ttnn.DataType.FLOAT32).shape
 
-    assert (
-        cpp_shape == py_shape
-    ), f"Shape mismatch: C++ {cpp_shape} vs Python {py_shape}"
+    assert cpp_shape == py_shape, f"Shape mismatch: C++ {cpp_shape} vs Python {py_shape}"
     assert cpp_shape == (batch_size, 1, 1, 1), f"Unexpected shape: {cpp_shape}"
 
 
@@ -103,9 +97,7 @@ def test_parameter_structure(sample_data):
     n_features = sample_data["n_features"]
 
     # Create models
-    cpp_model = ttml._ttml.models.linear_regression.create_linear_regression_model(
-        n_features, 1
-    )
+    cpp_model = ttml._ttml.models.linear_regression.create_linear_regression_model(n_features, 1)
     from ttml.models.linear_regression import create_linear_regression_model
 
     py_model = create_linear_regression_model(n_features, 1)
@@ -139,9 +131,7 @@ def test_parameter_structure(sample_data):
     assert (
         cpp_weight_shape == py_weight_shape
     ), f"Weight shape mismatch: C++ {cpp_weight_shape} vs Python {py_weight_shape}"
-    assert (
-        cpp_bias_shape == py_bias_shape
-    ), f"Bias shape mismatch: C++ {cpp_bias_shape} vs Python {py_bias_shape}"
+    assert cpp_bias_shape == py_bias_shape, f"Bias shape mismatch: C++ {cpp_bias_shape} vs Python {py_bias_shape}"
 
 
 def test_training_loop(sample_data):
@@ -152,9 +142,7 @@ def test_training_loop(sample_data):
     batch_size = sample_data["batch_size"]
 
     # Create models
-    cpp_model = ttml._ttml.models.linear_regression.create_linear_regression_model(
-        n_features, 1
-    )
+    cpp_model = ttml._ttml.models.linear_regression.create_linear_regression_model(n_features, 1)
     from ttml.models.linear_regression import create_linear_regression_model
 
     py_model = create_linear_regression_model(n_features, 1)
@@ -213,9 +201,7 @@ def test_inference_consistency(sample_data):
     batch_size = sample_data["batch_size"]
 
     # Create models
-    cpp_model = ttml._ttml.models.linear_regression.create_linear_regression_model(
-        n_features, 1
-    )
+    cpp_model = ttml._ttml.models.linear_regression.create_linear_regression_model(n_features, 1)
     from ttml.models.linear_regression import create_linear_regression_model
 
     py_model = create_linear_regression_model(n_features, 1)
@@ -283,9 +269,7 @@ def test_parameter_access(sample_data):
     n_features = sample_data["n_features"]
 
     # Create models
-    cpp_model = ttml._ttml.models.linear_regression.create_linear_regression_model(
-        n_features, 1
-    )
+    cpp_model = ttml._ttml.models.linear_regression.create_linear_regression_model(n_features, 1)
     from ttml.models.linear_regression import create_linear_regression_model
 
     py_model = create_linear_regression_model(n_features, 1)
@@ -320,9 +304,7 @@ def test_model_interface_compatibility(sample_data):
     n_features = sample_data["n_features"]
 
     # Create models
-    cpp_model = ttml._ttml.models.linear_regression.create_linear_regression_model(
-        n_features, 1
-    )
+    cpp_model = ttml._ttml.models.linear_regression.create_linear_regression_model(n_features, 1)
     from ttml.models.linear_regression import create_linear_regression_model
 
     py_model = create_linear_regression_model(n_features, 1)
@@ -360,9 +342,7 @@ def test_model_interface_compatibility(sample_data):
 def test_different_feature_sizes(n_features, out_features):
     """Test both models with different feature sizes."""
     # Create models
-    cpp_model = ttml._ttml.models.linear_regression.create_linear_regression_model(
-        n_features, out_features
-    )
+    cpp_model = ttml._ttml.models.linear_regression.create_linear_regression_model(n_features, out_features)
     from ttml.models.linear_regression import create_linear_regression_model
 
     py_model = create_linear_regression_model(n_features, out_features)
@@ -390,9 +370,7 @@ def test_gradient_flow(sample_data):
     batch_size = sample_data["batch_size"]
 
     # Create models
-    cpp_model = ttml._ttml.models.linear_regression.create_linear_regression_model(
-        n_features, 1
-    )
+    cpp_model = ttml._ttml.models.linear_regression.create_linear_regression_model(n_features, 1)
     from ttml.models.linear_regression import create_linear_regression_model
 
     py_model = create_linear_regression_model(n_features, 1)
@@ -403,9 +381,7 @@ def test_gradient_flow(sample_data):
 
     cpp_weight_key = [k for k in cpp_params_before.keys() if "weight" in k.lower()][0]
     py_weight_key = [k for k in py_params_before.keys() if "weight" in k.lower()][0]
-    cpp_weight_before = cpp_params_before[cpp_weight_key].to_numpy(
-        ttnn.DataType.FLOAT32
-    )
+    cpp_weight_before = cpp_params_before[cpp_weight_key].to_numpy(ttnn.DataType.FLOAT32)
     py_weight_before = py_params_before[py_weight_key].to_numpy(ttnn.DataType.FLOAT32)
 
     # Train one step

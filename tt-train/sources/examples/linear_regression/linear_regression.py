@@ -95,9 +95,7 @@ def train_ttml_linear_regression(
     """
     model = ttml.models.linear_regression.create_linear_regression_model(n_features, 1)
     loss_fn = ttml.ops.loss.mse_loss
-    opt_cfg = ttml.optimizers.SGDConfig.make(
-        cfg.lr, cfg.momentum, cfg.weight_decay, cfg.dampening, cfg.nesterov
-    )
+    opt_cfg = ttml.optimizers.SGDConfig.make(cfg.lr, cfg.momentum, cfg.weight_decay, cfg.dampening, cfg.nesterov)
     opt = ttml.optimizers.SGD(model.parameters(), opt_cfg)
     model.train()
 
@@ -134,9 +132,7 @@ def train_ttml_linear_regression(
     return model
 
 
-def predict_ttml(
-    model, x: np.ndarray, n_features: int, batch_size: int = 256
-) -> np.ndarray:
+def predict_ttml(model, x: np.ndarray, n_features: int, batch_size: int = 256) -> np.ndarray:
     """
     Batched prediction to numpy 1D array.
     """
@@ -201,19 +197,11 @@ def evaluate(y_true: np.ndarray, y_pred: np.ndarray) -> EvalResults:
 # Main
 # ---------------------------------------------------------------------------
 def main():
-    parser = argparse.ArgumentParser(
-        description="TTML vs scikit-learn Linear Regression"
-    )
-    parser.add_argument(
-        "--n-samples", type=int, default=512, help="Total samples for synthetic data"
-    )
+    parser = argparse.ArgumentParser(description="TTML vs scikit-learn Linear Regression")
+    parser.add_argument("--n-samples", type=int, default=512, help="Total samples for synthetic data")
     parser.add_argument("--n-features", type=int, default=2, help="Number of features")
-    parser.add_argument(
-        "--noise", type=float, default=1.0, help="Noise level for make_regression"
-    )
-    parser.add_argument(
-        "--batch-size", type=int, default=32, help="TTML train batch size"
-    )
+    parser.add_argument("--noise", type=float, default=1.0, help="Noise level for make_regression")
+    parser.add_argument("--batch-size", type=int, default=32, help="TTML train batch size")
     parser.add_argument("--epochs", type=int, default=8, help="TTML training epochs")
     parser.add_argument("--test-size", type=int, default=128, help="Hold-out test size")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
@@ -243,9 +231,7 @@ def main():
         verbose=args.verbose,
     )
     # TTML predict & evaluate
-    y_pred_ttml = predict_ttml(
-        model, split.x_test, n_features=args.n_features, batch_size=32
-    )
+    y_pred_ttml = predict_ttml(model, split.x_test, n_features=args.n_features, batch_size=32)
     ttml_eval = evaluate(split.y_test, y_pred_ttml)
 
     # TTML params
@@ -253,9 +239,7 @@ def main():
     # Find weight and bias keys dynamically (works for both Python and C++ models)
     weight_key = [k for k in params.keys() if "weight" in k.lower()][0]
     bias_key = [k for k in params.keys() if "bias" in k.lower()][0]
-    ttml_w = (
-        params[weight_key].to_numpy(ttnn.DataType.FLOAT32).reshape(-1)
-    )  # shape: [n_features]
+    ttml_w = params[weight_key].to_numpy(ttnn.DataType.FLOAT32).reshape(-1)  # shape: [n_features]
     ttml_b = params[bias_key].to_numpy(ttnn.DataType.FLOAT32).item()
 
     # sklearn baseline
