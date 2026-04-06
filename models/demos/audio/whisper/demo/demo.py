@@ -435,6 +435,7 @@ def run_demo_whisper_for_conditional_generation_dataset(
     # perform model inference
     total_wer = 0
     total_cer = 0
+    num_scored = 0
     total_inputs = len(ds)
     for i in tqdm(range(0, total_inputs, batch_size), desc="Running Inference"):
         current_batch_size = min(batch_size, total_inputs - i)
@@ -486,8 +487,12 @@ def run_demo_whisper_for_conditional_generation_dataset(
                 predicted = ttnn_output[j].lower()
             total_wer += jiwer.wer(reference, predicted)
             total_cer += jiwer.cer(reference, predicted)
-    logger.info(f"Average Word Error Rate: {total_wer / len(ds):.4f}")
-    logger.info(f"Average Character Error Rate: {total_cer / len(ds):.4f}")
+            num_scored += 1
+    avg_wer = total_wer / num_scored if num_scored > 0 else 0.0
+    avg_cer = total_cer / num_scored if num_scored > 0 else 0.0
+    logger.info(f"Average Word Error Rate: {avg_wer:.4f}")
+    logger.info(f"Average Character Error Rate: {avg_cer:.4f}")
+    assert avg_wer < 0.15, f"Average WER {avg_wer:.4f} exceeds threshold 0.15 — possible multi-generation regression"
 
 
 def run_demo_whisper_for_translation_dataset(
@@ -964,6 +969,196 @@ def test_demo_for_conditional_generation_dataset(
         batch_size_per_device=batch_size_per_device,
         stream=stream,
     )
+
+
+@pytest.mark.parametrize(
+    "model_repo",
+    ("distil-whisper/distil-large-v3",),
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": WHISPER_L1_SMALL_SIZE, "trace_region_size": WHISPER_TRACE_REGION_SIZE, "num_command_queues": 2}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "batch_size_per_device",
+    [(WHISPER_BATCH_SIZE)],
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [available_devices]
+    if os.getenv("CI") != "true"
+    else ([1, available_devices] if available_devices != 1 else [available_devices]),
+    indirect=True,
+)
+def test_conditional_generation_multi_generation_regression(
+    mesh_device,
+    model_repo,
+    batch_size_per_device,
+    is_ci_env,
+    request,
+):
+    """
+    Regression test for PR #40001 / #40970: ensures multi-generation quality
+    when prompt is set.
+
+    The prompt path sets generation_start = transcription_start_pos (nonzero),
+    which previously caused garbage output on generation 2+ when the persistent
+    decode trace was reused without an un-traced first step.
+    """
+    torch.manual_seed(0)
+
+    prompt = "Transcribe the following English speech."
+
+    generation_params = GenerationParams(
+        temperatures=0.0,
+        compression_ratio_threshold=None,
+        logprob_threshold=None,
+        no_speech_threshold=None,
+        return_timestamps=False,
+    )
+
+    model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(
+        mesh_device,
+        model_repo,
+        generation_params,
+        language="English",
+        task="transcribe",
+        prompt=prompt,
+        batch_size_per_device=batch_size_per_device,
+    )
+
+    ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
+    batch_size = batch_size_per_device * mesh_device.get_num_devices()
+    num_generations = 4
+
+    for gen_idx in range(num_generations):
+        current_batch = []
+        reference_sentences = []
+        for j in range(batch_size):
+            sample_idx = gen_idx * batch_size + j
+            sample = ds[sample_idx]
+            current_batch.append((sample["audio"]["sampling_rate"], sample["audio"]["array"]))
+            reference_sentences.append(sample["text"].lower())
+
+        ttnn_output, avg_logprob, no_speech_prob = model_pipeline(
+            current_batch,
+            stream=False,
+            return_perf_metrics=False,
+        )
+
+        for j in range(batch_size):
+            if isinstance(ttnn_output[j], list):
+                predicted = " ".join([segment["text"] for segment in ttnn_output[j]]).lower()
+            else:
+                predicted = ttnn_output[j].lower()
+
+            word_count = len(predicted.split())
+            assert word_count > 3, (
+                f"Generation {gen_idx}, sample {j}: output too short ({word_count} words). " f"Output: '{predicted}'"
+            )
+
+            sample_wer = jiwer.wer(reference_sentences[j], predicted)
+            assert sample_wer < 0.5, (
+                f"Generation {gen_idx}, sample {j}: WER {sample_wer:.4f} exceeds 0.5. "
+                f"Reference: '{reference_sentences[j]}' | Predicted: '{predicted}'"
+            )
+
+        logger.info(f"Generation {gen_idx}: all {batch_size} samples passed quality checks")
+
+
+@pytest.mark.parametrize(
+    "model_repo",
+    ("distil-whisper/distil-large-v3",),
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": WHISPER_L1_SMALL_SIZE, "trace_region_size": WHISPER_TRACE_REGION_SIZE, "num_command_queues": 2}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "batch_size_per_device",
+    [(WHISPER_BATCH_SIZE)],
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [available_devices]
+    if os.getenv("CI") != "true"
+    else ([1, available_devices] if available_devices != 1 else [available_devices]),
+    indirect=True,
+)
+def test_conditional_generation_multi_generation_idempotency(
+    mesh_device,
+    model_repo,
+    batch_size_per_device,
+    is_ci_env,
+    request,
+):
+    """
+    Idempotency test: feeding identical audio through the same generator
+    multiple times must produce identical output (greedy decode, temperature=0).
+
+    Catches trace corruption bugs without needing reference transcriptions
+    or WER computation.
+    """
+    torch.manual_seed(0)
+
+    prompt = "Transcribe the following English speech."
+
+    generation_params = GenerationParams(
+        temperatures=0.0,
+        compression_ratio_threshold=None,
+        logprob_threshold=None,
+        no_speech_threshold=None,
+        return_timestamps=False,
+    )
+
+    model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(
+        mesh_device,
+        model_repo,
+        generation_params,
+        language="English",
+        task="transcribe",
+        prompt=prompt,
+        batch_size_per_device=batch_size_per_device,
+    )
+
+    ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
+    batch_size = batch_size_per_device * mesh_device.get_num_devices()
+
+    current_batch = []
+    for j in range(batch_size):
+        sample = ds[j]
+        current_batch.append((sample["audio"]["sampling_rate"], sample["audio"]["array"]))
+
+    num_repetitions = 3
+    first_output = None
+
+    for rep in range(num_repetitions):
+        ttnn_output, avg_logprob, no_speech_prob = model_pipeline(
+            current_batch,
+            stream=False,
+            return_perf_metrics=False,
+        )
+
+        normalized = []
+        for j in range(batch_size):
+            if isinstance(ttnn_output[j], list):
+                text = " ".join([segment["text"] for segment in ttnn_output[j]])
+            else:
+                text = ttnn_output[j]
+            normalized.append(text)
+
+        if first_output is None:
+            first_output = normalized
+            logger.info(f"Repetition 0 (baseline): {normalized}")
+        else:
+            for j in range(batch_size):
+                assert normalized[j] == first_output[j], (
+                    f"Repetition {rep}, sample {j}: output differs from first run. "
+                    f"First: '{first_output[j]}' | Current: '{normalized[j]}'"
+                )
+            logger.info(f"Repetition {rep}: output matches baseline")
 
 
 @pytest.mark.parametrize(
