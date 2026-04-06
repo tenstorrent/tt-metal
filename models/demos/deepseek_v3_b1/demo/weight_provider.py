@@ -204,7 +204,10 @@ def _build_synthetic_mtp_state_dict(mtp_layer_idx: int = _MTP_LAYER_IDX) -> dict
 
 
 class CacheWeightProvider:
-    """Load weights through TensorCache-backed ``prepare_*`` calls with LazyStateDict miss source."""
+    """Load weights through TensorCache-backed ``prepare_*`` calls with LazyStateDict miss source.
+
+    The cache directory is created on first use if it does not already exist.
+    """
 
     def __init__(
         self,
@@ -217,8 +220,6 @@ class CacheWeightProvider:
     ) -> None:
         cache_path = Path(cache_path)
         model_path = Path(model_path)
-        assert cache_path.exists(), f"Cache path does not exist: {cache_path}"
-        assert cache_path.is_dir(), f"Cache path is not a directory: {cache_path}"
         assert model_path.exists(), f"Model path does not exist: {model_path}"
         assert model_path.is_dir(), f"Model path is not a directory: {model_path}"
         self._cache = TensorCache(cache_path)
