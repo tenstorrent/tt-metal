@@ -1008,6 +1008,7 @@ def test_decoder(
         is_moe=True,
         num_routed_experts=effective_num_routed_experts,
         rigged_group_count=rigged_group_count,
+        validate_debug_tensors=validate_standalone_mla or validate_standalone_moe,
     )
 
     num_cores = device_grid_size.x * device_grid_size.y
