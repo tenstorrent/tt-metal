@@ -1,0 +1,53 @@
+[
+  {
+    "name": "sft_zh",
+    "mode": "sft",
+    "language": "zh",
+    "text": "你好，我是通义生成式语音大模型，请问有什么可以帮您的吗？",
+    "speaker_id": "中文女"
+  },
+  {
+    "name": "zero_shot_zh",
+    "mode": "zero_shot",
+    "language": "zh",
+    "text": "收到好友从远方寄来的生日礼物，那份意外的惊喜与深深的祝福让我心中充满了甜蜜的快乐，笑容如花儿般绽放。",
+    "prompt_text": "希望你以后能够做的比我还好呦。",
+    "prompt_audio": "asset/zero_shot_prompt.wav"
+  },
+  {
+    "name": "cross_lingual_en",
+    "mode": "cross_lingual",
+    "language": "en",
+    "text": "<|en|>And then later on, fully acquiring that company. So keeping management in line, interest in line with the asset that is coming into the family is a reason why sometimes we do not buy the whole thing.",
+    "prompt_audio": "asset/cross_lingual_prompt.wav"
+  },
+  {
+    "name": "cross_lingual_ja",
+    "mode": "cross_lingual",
+    "language": "ja",
+    "text": "<|ja|>コンニチハ。キョウ ワ テンストレント デ コジーボイス ノ テスト オ シマス。",
+    "prompt_audio": "asset/cross_lingual_prompt.wav"
+  },
+  {
+    "name": "cross_lingual_yue",
+    "mode": "cross_lingual",
+    "language": "yue",
+    "text": "<|yue|>今日我哋会用广东话试下呢个语音模型。",
+    "prompt_audio": "asset/cross_lingual_prompt.wav"
+  },
+  {
+    "name": "cross_lingual_ko",
+    "mode": "cross_lingual",
+    "language": "ko",
+    "text": "<|ko|>안녕하세요. 오늘은 코지보이스 모델을 테스트합니다.",
+    "prompt_audio": "asset/cross_lingual_prompt.wav"
+  },
+  {
+    "name": "instruct_zh",
+    "mode": "instruct",
+    "language": "zh",
+    "text": "在面对挑战时，他展现了非凡的勇气与智慧。",
+    "speaker_id": "中文男",
+    "instruction": "Theo 'Crimson', is a fiery, passionate rebel leader. Fights with fervor for justice, but struggles with impulsiveness.<|endofprompt|>"
+  }
+]
