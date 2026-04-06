@@ -79,6 +79,24 @@ def _set_seed(seed: int = REPRODUCIBLE_SEED) -> None:
     torch.manual_seed(seed)
 
 
+def _log_phase_timings_table(title: str, rows: list[tuple[str, float | None]]) -> None:
+    """Log ``rows`` as ``(phase_name, seconds | None)``; ``None`` prints as N/A."""
+    if not rows:
+        return
+    label_w = max(len("Phase"), max(len(r[0]) for r in rows))
+    lines = [
+        title,
+        f"{'Phase':<{label_w}}  {'Time (s)':>12}",
+        f"{'-' * label_w}  {'-' * 12}",
+    ]
+    for label, sec in rows:
+        if sec is None:
+            lines.append(f"{label:<{label_w}}  {'N/A':>12}")
+        else:
+            lines.append(f"{label:<{label_w}}  {sec:12.4f}")
+    logger.info("\n".join(lines))
+
+
 def _release_ttnn_runtime_configs(obj, _visited: set[int] | None = None) -> None:
     """Best-effort recursive teardown of TTNN runtime config objects."""
     if obj is None:
@@ -320,7 +338,12 @@ def _close_lingbot_mesh_stack(models: dict) -> None:
             logger.warning("close_mesh_device(parent): %s", e)
 
 
-def _load_models_phase1(config, load_text_encoder=True, mesh_device=None):
+def _load_models_phase1(
+    config,
+    load_text_encoder=True,
+    mesh_device=None,
+    timings_out: dict[str, float] | None = None,
+):
     """Load tokenizer, VAE (CPU), mesh, optional TT text encoder. Transformer and TT VAE load in later phases.
 
     Args:
@@ -328,6 +351,7 @@ def _load_models_phase1(config, load_text_encoder=True, mesh_device=None):
             via ``_open_lingbot_mesh_device``. In both cases ``inference_work_mesh_from_opened`` is applied
             so ``LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH=1`` yields a ``(1,1)`` submesh when the open mesh
             has more than one device.
+        timings_out: If provided, stores ``load_tokenizer`` wall time (seconds) for demo phase tables.
     """
     init_logger()
     device = torch.device("cpu")
@@ -385,7 +409,10 @@ def _load_models_phase1(config, load_text_encoder=True, mesh_device=None):
     )
     streaming_vae = WanVAEStreamingWrapper(vae)
 
+    t_load_tok = time.perf_counter()
     tokenizer = load_tokenizer(os.path.join(ckpt, "tokenizer"))
+    if timings_out is not None:
+        timings_out["load_tokenizer"] = time.perf_counter() - t_load_tok
 
     scheduler = FlowMatchSchedulerTtnn(mesh_device, shift=config.snr_shift, sigma_min=0.0, extra_one_step=True)
     action_scheduler = FlowMatchSchedulerTtnn(
@@ -1377,7 +1404,14 @@ def run_inference(
             config.action_num_inference_steps = action_num_inference_steps
         prompt = message.get("prompt", "")
         _reset_state(models, state, prompt)
+        t_inf0 = time.perf_counter()
         action, latents = _infer_impl(models, state, init_obs, frame_st_id=state["frame_st_id"])
+        _log_phase_timings_table(
+            "run_inference (prepared) phase timings",
+            [
+                ("infer_impl", time.perf_counter() - t_inf0),
+            ],
+        )
         elapsed_s = time.perf_counter() - t0
         end_ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         logger.info("run_inference: end %s (elapsed %.3f s, prepared path)", end_ts, elapsed_s)
@@ -1407,13 +1441,21 @@ def run_inference(
     config.save_root = str(save_dir)
 
     # Phase 1: load shared assets (VAE once, tokenizer, mesh); load TT text encoder.
-    models = _load_models_phase1(config, load_text_encoder=False)
+    _phase1_timings: dict[str, float] = {}
+    models = _load_models_phase1(config, load_text_encoder=False, timings_out=_phase1_timings)
     state = {}
     prompt = message.get("prompt", "")
     prompt_list = [prompt] if isinstance(prompt, str) else prompt
+    phase_timings: list[tuple[str, float | None]] = []
+    phase_timings.append(("load_tokenizer", _phase1_timings.get("load_tokenizer")))
+
+    t0_te = time.perf_counter()
     _load_text_encoder_into_models(models, config)
+    phase_timings.append(("load_text_encoder_tt", time.perf_counter() - t0_te))
+
     tokenizer = models["tokenizer"]
     text_encoder = models["text_encoder"]
+    t0_tok_call = time.perf_counter()
     text_inputs = tokenizer(
         prompt,
         padding="max_length",
@@ -1423,11 +1465,13 @@ def run_inference(
         return_attention_mask=True,
         return_tensors="pt",
     )
+    phase_timings.append(("tokenizer_call", time.perf_counter() - t0_tok_call))
     text_input_ids, mask = text_inputs.input_ids, text_inputs.attention_mask
 
     mesh_device = text_encoder.mesh_device
     tt_input = ttnn.from_torch(text_input_ids, dtype=ttnn.uint32, device=mesh_device)
     tt_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat16, device=mesh_device)
+    t0_enc_prompt = time.perf_counter()
     prompt_embeds, neg_embeds = _encode_prompt_ttnn(
         models,
         tt_input,
@@ -1435,6 +1479,7 @@ def run_inference(
         do_classifier_free_guidance=(config.guidance_scale > 1),
         max_sequence_length=512,
     )
+    phase_timings.append(("encode_prompt_ttnn", time.perf_counter() - t0_enc_prompt))
     state["prompt_embeds"] = prompt_embeds
     state["negative_prompt_embeds"] = neg_embeds
     state["_prompt_embeds_prompt"] = prompt_list
@@ -1443,15 +1488,28 @@ def run_inference(
     # Phase 2: load only TT VAE encoder; run _encode_obs, then free.
     _prepare_state_for_vae_encode(state, config)
     init_obs = _normalize_infer_obs_for_encode(message["obs"])
+    t0_vae_enc = time.perf_counter()
     _load_tt_vae_into_models(models)
+    phase_timings.append(("load_tt_vae_encoder", time.perf_counter() - t0_vae_enc))
+
+    t0_enc_obs = time.perf_counter()
     state["init_latent"] = _encode_obs_ttnn(models, state, init_obs)
+    phase_timings.append(("encode_obs_ttnn", time.perf_counter() - t0_enc_obs))
     _free_tt_vae_from_models(models)
 
     # Phase 3: load TT transformer and run generation.
+    t0_tr = time.perf_counter()
     _load_transformer_into_models(models, config)
+    phase_timings.append(("load_transformer", time.perf_counter() - t0_tr))
 
     _reset_state(models, state, prompt)
+    t0_infer = time.perf_counter()
     action, latents = _infer_impl(models, state, init_obs, frame_st_id=state["frame_st_id"])
+    phase_timings.append(("infer_impl", time.perf_counter() - t0_infer))
+    phase_timings.append(("load_vae_decoder", None))
+    phase_timings.append(("decode_one_video", None))
+
+    _log_phase_timings_table("run_inference phase timings", phase_timings)
 
     elapsed_s = time.perf_counter() - t0
     end_ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
@@ -1503,12 +1561,20 @@ def run_generate(
     config.num_chunks_to_infer = num_chunks
 
     # Phase 1: load shared assets (VAE once, tokenizer, mesh); load TT text encoder.
-    models = _load_models_phase1(config, load_text_encoder=False)
+    _phase1_timings: dict[str, float] = {}
+    models = _load_models_phase1(config, load_text_encoder=False, timings_out=_phase1_timings)
     state = {}
     prompt_list = [prompt] if isinstance(prompt, str) else prompt
+    gen_timings: list[tuple[str, float | None]] = []
+    gen_timings.append(("load_tokenizer", _phase1_timings.get("load_tokenizer")))
+
+    t0_te = time.perf_counter()
     _load_text_encoder_into_models(models, config)
+    gen_timings.append(("load_text_encoder_tt", time.perf_counter() - t0_te))
+
     tokenizer = models["tokenizer"]
     text_encoder = models["text_encoder"]
+    t0_tok_call = time.perf_counter()
     text_inputs = tokenizer(
         prompt,
         padding="max_length",
@@ -1518,11 +1584,13 @@ def run_generate(
         return_attention_mask=True,
         return_tensors="pt",
     )
+    gen_timings.append(("tokenizer_call", time.perf_counter() - t0_tok_call))
     text_input_ids, mask = text_inputs.input_ids, text_inputs.attention_mask
 
     mesh_device = text_encoder.mesh_device
     tt_input = ttnn.from_torch(text_input_ids, dtype=ttnn.uint32, device=mesh_device)
     tt_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat16, device=mesh_device)
+    t0_ep = time.perf_counter()
     prompt_embeds, neg_embeds = _encode_prompt_ttnn(
         models,
         tt_input,
@@ -1530,6 +1598,7 @@ def run_generate(
         do_classifier_free_guidance=(config.guidance_scale > 1),
         max_sequence_length=512,
     )
+    gen_timings.append(("encode_prompt_ttnn", time.perf_counter() - t0_ep))
     state["prompt_embeds"] = prompt_embeds
     state["negative_prompt_embeds"] = neg_embeds
     state["_prompt_embeds_prompt"] = prompt_list
@@ -1538,23 +1607,32 @@ def run_generate(
     # Phase 2: load only TT VAE encoder; run _encode_obs, then free.
     _prepare_state_for_vae_encode(state, config)
     init_obs = _load_init_obs(config, config.input_img_path)
+    t0_vae = time.perf_counter()
     _load_tt_vae_into_models(models)
+    gen_timings.append(("load_tt_vae_encoder", time.perf_counter() - t0_vae))
+
+    t0_eo = time.perf_counter()
     state["init_latent"] = _encode_obs_ttnn(models, state, init_obs)
+    gen_timings.append(("encode_obs_ttnn", time.perf_counter() - t0_eo))
     _free_tt_vae_from_models(models)
 
     # Phase 3: load TT transformer and run generation.
+    t0_tr = time.perf_counter()
     _load_transformer_into_models(models, config)
+    gen_timings.append(("load_transformer", time.perf_counter() - t0_tr))
 
     _reset_state(models, state, prompt)
 
     pred_latent_lst = []
     pred_action_lst = []
     logger.info("Generating %s chunks", config.num_chunks_to_infer)
+    t0_chunks = time.perf_counter()
     for chunk_id in range(config.num_chunks_to_infer):
         actions, latents = _infer_impl(models, state, init_obs, frame_st_id=(chunk_id * config.frame_chunk_size))
         actions = torch.from_numpy(actions)
         pred_latent_lst.append(latents)
         pred_action_lst.append(actions)
+    gen_timings.append(("infer_chunks_total", time.perf_counter() - t0_chunks))
 
     pred_latent = torch.cat(pred_latent_lst, dim=2)
 
@@ -1599,14 +1677,24 @@ def run_generate(
     models["mesh_device_parent"] = mesh_parent
     models["ccl_manager"] = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
 
+    t0_dec = time.perf_counter()
     _load_tt_vae_decoder_into_models(models, config)
+    gen_timings.append(("load_vae_decoder", time.perf_counter() - t0_dec))
+
     decoded_video = None
     if getattr(config, "enable_offload", True):
         models["vae"] = models["vae"].to(models["device"]).to(models["dtype"])
+        t0_dv = time.perf_counter()
         decoded_video = _decode_one_video(models, pred_latent, "np")[0]
+        gen_timings.append(("decode_one_video", time.perf_counter() - t0_dv))
         _free_tt_vae_decoder_from_models(models)
         if models.get("vae_decoder_tt") is not None:
             _free_tt_vae_decoder_from_models(models)
+    else:
+        gen_timings.append(("decode_one_video", None))
+
+    _log_phase_timings_table("run_generate phase timings", gen_timings)
+
     if decoded_video is not None:
         export_to_video(decoded_video, os.path.join(config.save_root, "demo.mp4"), fps=10)
     _close_lingbot_mesh_stack(models)
