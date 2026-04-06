@@ -25,3 +25,4 @@
 {"event":"analysis_written","operation":"hardswish","output_file":".claude-analysis/sinh-1/hardswish_analysis.md","sections":["dispatch_summary","call_chain","annotated_source","instruction_table","register_usage","addr_mode"],"ts":"2026-04-06T09:43:29+00:00"}
 {"event":"complete","operation":"hardswish","final_status":"SUCCESS","output_file":".claude-analysis/sinh-1/hardswish_analysis.md","commit":"f4a907d02d","ts":"2026-04-06T09:45:57+00:00"}
 {"event":"analysis_written","operation":"cbrt","output_file":".claude-analysis/sinh-1/cbrt_analysis.md","sections":["dispatch_summary","approx_mode_resolution","abstraction_layers","call_chain","params_dispatch_summary","annotated_source","instruction_table","register_usage","addr_mode_config"],"ts":"2026-04-06T09:46:32+00:00"}
+{"event":"complete","operation":"cbrt","final_status":"SUCCESS","output_file":".claude-analysis/sinh-1/cbrt_analysis.md","commit":"pending","ts":"2026-04-06T09:48:01+00:00"}
