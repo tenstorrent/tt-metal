@@ -607,7 +607,8 @@ def run_ring_joint_sdpa_perf(
     is_balanced=False,
     math_fidelity=ttnn.MathFidelity.HiFi2,
 ):
-    """Run ring joint SDPA with 1 compile run + num_perf_runs measured runs using trace and signposts."""
+    """Run ring joint SDPA with 1 compile run + num_perf_runs measured runs with signposts."""
+    logger.info("Perf test: setting up sub-devices")
     full_compute_grid = submesh.compute_with_storage_grid_size()
     sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
     ccl_core_grid_offset = (0, full_compute_grid.y - 1)
@@ -626,6 +627,7 @@ def run_ring_joint_sdpa_perf(
 
     # 1 compile run + num_perf_runs measured runs, each needs its own semaphores/buffers
     n_total_iters = 1 + num_perf_runs
+    logger.info(f"Perf test: creating {n_total_iters} sets of global semaphores")
     ccl_semaphore_handles = [create_global_semaphores(submesh, ccl_sub_device_crs, 0) for _ in range(n_total_iters)]
 
     # Persistent output buffers
@@ -640,6 +642,7 @@ def run_ring_joint_sdpa_perf(
     if nhk != 1:
         persistent_k_output_shard_dims[up_axis] = 1
 
+    logger.info(f"Perf test: creating {n_total_iters} persistent output buffer pairs")
     persistent_output_buffers = [
         [
             ttnn.as_tensor(
@@ -679,10 +682,15 @@ def run_ring_joint_sdpa_perf(
     )
 
     # Create input tensors
+    logger.info(
+        f"Perf test: creating torch input tensors (Q: [{b},{nhq},{base_seq_len},{head_dim_q}], "
+        f"K: [{b},{nhk},{base_seq_len},{head_dim_k}], V: [{b},{nhv},{base_seq_len},{head_dim_v}])"
+    )
     Q = fa_rand(b, nhq, base_seq_len, head_dim_q)
     K = fa_rand(b, nhk, base_seq_len, head_dim_k)
     V = fa_rand(b, nhv, base_seq_len, head_dim_v)
 
+    logger.info(f"Perf test: padding tensors (seq {base_seq_len} -> {padded_seq_len})")
     padded_Q = torch.cat([Q, torch.zeros(b, nhq, padded_seq_len - base_seq_len, head_dim_q)], dim=2)
     padded_K = torch.cat([K, torch.zeros(b, nhk, padded_seq_len - base_seq_len, head_dim_k)], dim=2)
     padded_V = torch.cat([V, torch.zeros(b, nhv, padded_seq_len - base_seq_len, head_dim_v)], dim=2)
@@ -690,6 +698,7 @@ def run_ring_joint_sdpa_perf(
     if is_balanced:
         rp_factor = submesh.shape[rp_axis]
         chunk_order = create_balanced_chunk_order(rp_factor)
+        logger.info(f"Perf test: applying balanced reordering (rp_factor={rp_factor})")
         padded_Q = reorder_tensor_chunks(padded_Q, chunk_order, seq_dim=2)
         padded_K = reorder_tensor_chunks(padded_K, chunk_order, seq_dim=2)
         padded_V = reorder_tensor_chunks(padded_V, chunk_order, seq_dim=2)
@@ -714,6 +723,7 @@ def run_ring_joint_sdpa_perf(
     else:
         sdpa_k_input_shard_dims[up_axis] = 1
 
+    logger.info("Perf test: converting Q to device tensor")
     tt_Q = ttnn.as_tensor(
         padded_Q,
         dtype=q_dtype,
@@ -722,6 +732,7 @@ def run_ring_joint_sdpa_perf(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
     )
+    logger.info("Perf test: converting K to device tensor")
     tt_K = ttnn.as_tensor(
         padded_K,
         dtype=kv_dtype,
@@ -730,6 +741,7 @@ def run_ring_joint_sdpa_perf(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_k_input_shard_dims),
     )
+    logger.info("Perf test: converting V to device tensor")
     tt_V = ttnn.as_tensor(
         padded_V,
         dtype=kv_dtype,
@@ -739,6 +751,7 @@ def run_ring_joint_sdpa_perf(
         mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
     )
 
+    logger.info("Perf test: converting joint tensors to device")
     tt_joint_Q = ttnn.from_torch(
         joint_Q,
         dtype=q_dtype,
@@ -765,6 +778,7 @@ def run_ring_joint_sdpa_perf(
         device=submesh,
         mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_joint_shard_dims),
     )
+    logger.info("Perf test: all tensors ready on device")
 
     def run_once(iter_idx):
         ttnn.transformer.ring_joint_scaled_dot_product_attention(
@@ -793,17 +807,20 @@ def run_ring_joint_sdpa_perf(
         )
 
     # Step 1: Compile run (caches kernels)
-    logger.info("Perf test: compile run")
+    logger.info("Perf test: compile run (1/1)")
     run_once(0)
     ttnn.synchronize_device(submesh)
+    logger.info("Perf test: compile run done")
 
     # Step 2: Execute op num_perf_runs times with signposts for tracy measurement
-    logger.info(f"Perf test: executing op {num_perf_runs} times")
+    logger.info(f"Perf test: starting {num_perf_runs} measured runs")
     signpost("start")
     for i in range(num_perf_runs):
+        logger.info(f"Perf test: run {i + 1}/{num_perf_runs}")
         run_once(1 + i)
         ttnn.synchronize_device(submesh)
     signpost("stop")
+    logger.info(f"Perf test: all {num_perf_runs} runs complete")
 
     ttnn.synchronize_device(submesh)
     ttnn.distributed_context_barrier()
