@@ -130,13 +130,7 @@ struct PipelineStageSync {
             uint32_t signalling_core_noc_y_addr,
             uint32_t semaphore_l1_addr,
             size_t fabric_arg_base) {
-            if (is_intermediate_signaller) {
-                auto semaphore_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_l1_addr);
-                noc_semaphore_wait_min(semaphore_l1_ptr, 1);
-                unified_kernels::semaphore_dec(semaphore_l1_ptr);
-                invalidate_l1_cache();
-            }
-
+            // Remote semaphore noc address
             uint64_t remote_semaphore_noc_addr;
             if (is_signalling_to_intermediate_signaller) {
                 remote_semaphore_noc_addr =
@@ -146,6 +140,7 @@ struct PipelineStageSync {
                     get_noc_addr(stalling_core_noc_x_addr, stalling_core_noc_y_addr, semaphore_l1_addr);
             }
 
+            // Setup fabric while waiting for signal (speeds things up for intermediate signallers)
             constexpr uint32_t num_connections = 1;
             tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
             open_connections(fabric_connection, num_connections, fabric_arg_base);
@@ -159,6 +154,15 @@ struct PipelineStageSync {
             packet_header_ptr->to_noc_unicast_atomic_inc(
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_semaphore_noc_addr, 1});
 
+            // Wait for signal (if intermediate signaller)
+            if (is_intermediate_signaller) {
+                auto semaphore_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_l1_addr);
+                noc_semaphore_wait_min(semaphore_l1_ptr, 1);
+                unified_kernels::semaphore_dec(semaphore_l1_ptr);
+                invalidate_l1_cache();
+            }
+
+            // Send semaphore increment over fabric
             auto& connection = fabric_connection.get(0).sender;
             connection.wait_for_empty_write_slot();
             connection.send_payload_flush_blocking_from_address(
