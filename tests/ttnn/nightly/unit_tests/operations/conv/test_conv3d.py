@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -816,3 +816,59 @@ def test_conv3d_interleaved_vs_sharded_equivalence(
     pcc_passed_gt, pcc_message_gt = check_with_pcc(gt_output, tt_output_sharded, pcc=PCC_TOLERANCE)
     logger.info(f"Sharded vs PyTorch: {pcc_message_gt}")
     assert pcc_passed_gt, f"{pcc_message_gt} - Sharded output differs from PyTorch"
+
+
+@pytest.mark.parametrize(
+    "input_shape, out_channels, kernel_size, stride, padding, padding_mode",
+    [
+        # Issue #35436: large C_in with default config caused L1 OOM because C_in_block
+        # defaulted to full C_in, making patch_size = 3*3*3*768 = 20736 elements (648 tiles).
+        # Fixed by defaulting C_in_block to TILE_WIDTH (32).
+        # Using small spatial dims to keep runtime reasonable; the bug is in C_in blocking, not spatial size.
+        [(1, 768, 4, 8, 8), 768, (3, 3, 3), (1, 1, 1), (0, 1, 1), "zeros"],
+    ],
+    ids=["issue_35436_large_c_in"],
+)
+def test_conv3d_auto_blocking_large_c_in(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
+    """Regression test for issue #35436: default conv3d config L1 OOM with large C_in.
+
+    When C_in is large (768) and no config is provided, auto-blocking must pick a
+    C_in_block small enough to fit circular buffers in L1.
+    """
+    tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
+        input_shape, out_channels, kernel_size, stride, 1, padding, padding_mode, device
+    )
+    N, D_out, H_out, W_out = output_dims
+
+    w = conv3d_module.weight.data
+    tt_weight = ttnn.from_torch(w, dtype=ttnn.DataType.BFLOAT16, pad_value=0)
+    tt_bias = ttnn.from_torch(
+        conv3d_module.bias.data.reshape(1, -1),
+        device=device,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        pad_value=0,
+    )
+
+    # No config — relies on auto-blocking defaults
+    tt_output = ttnn.experimental.conv3d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        device=device,
+        bias_tensor=tt_bias,
+        dtype=ttnn.bfloat16,
+        output_channels=out_channels,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        padding_mode=padding_mode,
+        groups=1,
+        compute_kernel_config=kernel_config,
+    )
+
+    tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+
+    assert tt_output.shape == gt_output.shape
+    pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
+    logger.info(f"Conv3d auto-blocking large C_in (issue #35436): {pcc_message}")
+    assert pcc_passed, pcc_message

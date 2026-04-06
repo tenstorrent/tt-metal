@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -256,6 +256,7 @@ def test_ttnn_dispatch(
     verbose,
 ):
     """Test TTNN dispatch operation against PyTorch reference."""
+    torch.manual_seed(42)
     num_devices = mesh_device.get_num_devices()
 
     mesh_config = extract_mesh_config(mesh_device)
@@ -296,7 +297,6 @@ def test_ttnn_dispatch(
             num_routed_experts=num_routed_experts,
             num_experts_per_tok=num_experts_per_tok,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
-            seed=42,
             num_dispatch_groups=num_dispatch_groups,
         )
         logger.debug("Using RANDOM test data")
