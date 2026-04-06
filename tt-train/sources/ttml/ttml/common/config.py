@@ -29,9 +29,6 @@ class DeviceConfig:
         self.enable_tp = device_config.get("enable_tp", False)
         self.enable_ddp = device_config.get("enable_ddp", False)
 
-        # Based on current configs, DDP and TP cannot be both enabled
-        assert not (self.enable_ddp and self.enable_tp), "DDP and TP cannot be both enabled."
-
     def total_devices(self) -> int:
         """Get total number of devices in mesh.
 

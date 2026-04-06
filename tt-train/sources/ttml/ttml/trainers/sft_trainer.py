@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import pickle
+import sys
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
@@ -231,7 +232,7 @@ class SFTTrainer:
                 data_iter = iter(self.train_dataloader)
                 return next(data_iter)
 
-        bar = tqdm(range(cfg.max_steps), desc="SFTTrainer")
+        bar = tqdm(range(cfg.max_steps), desc="SFTTrainer", file=sys.stdout)
         for _ in bar:
             # self.step is 0-based so external lr_schedule callables (e.g.
             # SpeedrunScheduler.lr_at) receive the expected step index.
@@ -313,7 +314,8 @@ class SFTTrainer:
             B, _, T, _ = mask_np.shape
             expected = float(B * T)
             actual = float(mask_np.sum())
-            if abs(actual - expected) > 1e-3:
+            # use relative tolerance to avoid BF16 precision issues
+            if abs(actual - expected) / expected > 0.01:
                 logger.warning(
                     "loss_mask sum (%.2f) differs from expected B*T (%d). "
                     "If you are using a custom collate function, make sure "
@@ -357,7 +359,13 @@ class SFTTrainer:
         state = {}
         for name, param in self.model.parameters().items():
             tensor = param.tensor if hasattr(param, "tensor") else param
-            state[name] = tensor.to_numpy(ttnn.DataType.FLOAT32)
+            # In multi-device (DDP) setups the tensor is distributed across the
+            # mesh and to_numpy() without a composer fails.  Since DDP replicates
+            # weights, all devices hold identical copies — extract the first one.
+            # TODO: We need to be able to pass a custom composer for TP models
+            device_tensors = ttnn.get_device_tensors(tensor.get_value())
+            single = ttml.autograd.Tensor(device_tensors[0], False)
+            state[name] = single.to_numpy(ttnn.DataType.FLOAT32)
 
         with open(path, "wb") as f:
             pickle.dump({"step": self.step, "model_state": state}, f)

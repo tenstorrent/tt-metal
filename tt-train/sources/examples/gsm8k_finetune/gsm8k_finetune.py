@@ -8,7 +8,9 @@ GSM8K Fine-tuning Script
 Fine-tunes a Llama model on the GSM8K math word problems dataset using TT-Metal.
 """
 
+import logging
 import os
+import sys
 from functools import partial
 
 import datasets
@@ -18,6 +20,18 @@ from transformers import AutoTokenizer
 from huggingface_hub import hf_hub_download
 
 import ttml
+
+# Route DEBUG/INFO/WARNING to stdout; ERROR/CRITICAL stay on stderr.
+_root_logger = logging.getLogger()
+_root_logger.setLevel(logging.DEBUG)
+_root_logger.handlers.clear()
+_stdout_handler = logging.StreamHandler(sys.stdout)
+_stdout_handler.setLevel(logging.DEBUG)
+_stdout_handler.addFilter(lambda r: r.levelno < logging.ERROR)
+_stderr_handler = logging.StreamHandler(sys.stderr)
+_stderr_handler.setLevel(logging.ERROR)
+_root_logger.addHandler(_stdout_handler)
+_root_logger.addHandler(_stderr_handler)
 from ttml.common.config import (
     TrainingConfig,
     DeviceConfig,
@@ -25,7 +39,6 @@ from ttml.common.config import (
     load_config,
     yaml_deep_update,
 )
-from ttml.common.model_factory import TransformerModelFactory
 from ttml.common.schedulers import SpeedrunScheduler
 from ttml.common.utils import (
     round_up_to_tile,
@@ -36,7 +49,44 @@ from ttml.common.utils import (
 )
 from ttml.common.data import build_causal_mask
 from ttml.datasets import Batch, InMemoryDataloader
-from ttml.trainers import SFTConfig, SFTTrainer
+from ttml.models import RunnerType, WeightTyingType
+from ttml.models.nanogpt import NanoGPT, NanoGPTConfig, NanoGPTExperimentalConfig, load_gpt2_from_safetensors
+from ttml.models.llama import Llama, LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
+from ttml.modules import LoraConfig
+from ttml.trainers import SFTConfig, SFTTrainer, TrainerCallback
+
+
+class DDPCallback(TrainerCallback):
+    """Synchronise gradients across all DDP devices before the optimiser step."""
+
+    def on_before_optimizer_step(self, trainer):
+        ttml.core.distributed.synchronize_gradients(trainer.model.parameters())
+
+
+class MetricsLogger(TrainerCallback):
+    """Write metric lines to output.txt in the format expected by slurm_training_service.
+
+    Format: LR: <lr>, training_loss: <loss>, [val_loss: <val>,] step: <step>, epoch: 1
+    """
+
+    def __init__(self, path: str = "output.txt"):
+        self._path = path
+        self._last_loss: float = 0.0
+        self._last_lr: float = 0.0
+
+    def on_step_end(self, trainer, step, loss, lr):
+        self._last_loss = loss
+        self._last_lr = lr
+        with open(self._path, "a") as f:
+            f.write(f"LR: {lr}, training_loss: {loss:.4f}, step: {step}, epoch: 1\n")
+
+    def on_eval_end(self, trainer, step, eval_loss):
+        with open(self._path, "a") as f:
+            f.write(
+                f"LR: {self._last_lr}, training_loss: {self._last_loss:.4f}, "
+                f"val_loss: {eval_loss:.4f}, step: {step}, epoch: 1\n"
+            )
+
 
 # Configuration
 CONFIG = "training_gsm8k_tinyllama.yaml"
@@ -46,6 +96,7 @@ def gsm8k_collate_fn(
     batch: list,
     eos_token_id: int,
     max_sequence_length: int,
+    mapper=None,
 ) -> Batch:
     """Collate (question_tokens, answer_tokens) pairs into a :class:`Batch`.
 
@@ -102,9 +153,9 @@ def gsm8k_collate_fn(
         loss_mask_np *= (batch_size * max_sequence_length) / total_weight
 
     return Batch(
-        input_ids=ttml.autograd.Tensor.from_numpy(input_ids_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32),
-        labels=ttml.autograd.Tensor.from_numpy(labels_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32),
-        loss_mask=ttml.autograd.Tensor.from_numpy(loss_mask_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16),
+        input_ids=ttml.autograd.Tensor.from_numpy(input_ids_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper),
+        labels=ttml.autograd.Tensor.from_numpy(labels_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper),
+        loss_mask=ttml.autograd.Tensor.from_numpy(loss_mask_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper),
     )
 
 
@@ -309,23 +360,24 @@ def train():
     """
     Main training loop for fine-tuning on GSM8K dataset.
     """
-
-    print("Loading tokenizer and config...")
-    os.environ["TOKENIZERS_PARALLELISM"] = "true"
-    # Disable tokenizer parallelism to avoid conflicts with DataLoader multiprocessing
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
-
     yaml_config = load_config(CONFIG, f"{get_tt_metal_runtime_root()}/tt-train/configs/training_configs")
-    model_config = load_config(yaml_config["training_config"]["model_config"])
 
-    override_config_path = f"{get_tt_metal_runtime_root()}/tt-train/configs/training_overrides.yaml"
+    override_config_path = os.environ.get(
+        "TT_TRAIN_OVERRIDES_PATH",
+        f"{get_tt_metal_runtime_root()}/tt-train/configs/training_overrides.yaml",
+    )
 
+    override_config = None
     if os.path.isfile(override_config_path):
         print("Applying training overrides...")
 
         override_config = load_config(override_config_path)
-
         yaml_config = yaml_deep_update(yaml_config, override_config)
+
+    # Load model_config after applying overrides so that a model_config path change
+    # (e.g. switching from tinyllama to gpt2) is reflected before the file is read.
+    model_config = load_config(yaml_config["training_config"]["model_config"])
+    if override_config is not None:
         model_config = yaml_deep_update(model_config, override_config)
 
         # pretty output of yaml config
@@ -342,38 +394,97 @@ def train():
 
     # initialize device
     device_config = DeviceConfig(yaml_config)
-    ttml.autograd.AutoContext.get_instance().initialize_parallelism_context(
-        ttml.autograd.DistributedConfig(enable_ddp=device_config.enable_ddp, enable_tp=device_config.enable_tp)
-    )
+
     # no need to initialize device if #devices=1
     if device_config.total_devices() > 1:
         initialize_device(yaml_config)
 
-    # Download safetensors
+    if device_config.total_devices() > 1:
+        ttml.autograd.AutoContext.get_instance().initialize_parallelism_context(
+            ttml.autograd.DistributedConfig(enable_ddp=device_config.enable_ddp, enable_tp=device_config.enable_tp)
+        )
+
+    use_ddp = device_config.enable_ddp and device_config.total_devices() > 1
+    mapper = None
+    if use_ddp:
+        device = ttml.autograd.AutoContext.get_instance().get_device()
+        mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
+
+    tc = model_config["transformer_config"]
+    model_type = tc["model_type"]
+
+    if model_type == "gpt2":
+        repo_id = "gpt2"
+    else:
+        repo_id = "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
+    print("Loading tokenizer...")
+    os.environ["TOKENIZERS_PARALLELISM"] = "true"
+    tokenizer = AutoTokenizer.from_pretrained(repo_id)
+
     print("Downloading safetensors...")
     safetensors_path = hf_hub_download(
-        repo_id="gpt2",
+        repo_id=repo_id,
         filename="model.safetensors",
     )
-
     safetensors_path = safetensors_path.replace("model.safetensors", "")
     print(f"Safetensors path: {safetensors_path}")
 
-    # Setup model
-    print("Setting up model...")
     orig_vocab_size = tokenizer.vocab_size
-    tt_model_factory = TransformerModelFactory(model_config)
-    tt_model_factory.transformer_config.vocab_size = orig_vocab_size
-    print("Created Model Factory")
-
-    max_sequence_length = tt_model_factory.transformer_config.max_sequence_length
+    padded_vocab_size = round_up_to_tile(orig_vocab_size, 32)
 
     print("Creating model...")
-    tt_model = tt_model_factory.create_model()
-    print("Loading from safetensors...")
-    tt_model.load_from_safetensors(safetensors_path)
-
-    padded_vocab_size = round_up_to_tile(orig_vocab_size, 32)
+    if model_type == "gpt2":
+        runner_type = RunnerType.from_string(tc.get("runner_type", "default"))
+        weight_tying = WeightTyingType.from_string(tc.get("weight_tying", "disabled"))
+        gpt2_config = NanoGPTConfig(
+            vocab_size=padded_vocab_size,
+            block_size=tc.get("max_sequence_length", 1024),
+            n_embd=tc.get("embedding_dim", 768),
+            n_layer=tc.get("num_blocks", 12),
+            n_head=tc.get("num_heads", 12),
+            dropout=tc.get("dropout_prob", 0.2),
+            runner_type=runner_type,
+            weight_tying=weight_tying,
+            experimental=NanoGPTExperimentalConfig(
+                use_composite_layernorm=tc.get("experimental", {}).get("use_composite_layernorm", False),
+            ),
+        )
+        tt_model = NanoGPT(gpt2_config)
+        max_sequence_length = gpt2_config.block_size
+        print("Loading GPT-2 weights from safetensors...")
+        load_gpt2_from_safetensors(tt_model, safetensors_path, gpt2_config)
+    elif model_type == "llama":
+        runner_type = RunnerType.from_string(tc.get("runner_type", "default"))
+        weight_tying = WeightTyingType.from_string(tc.get("weight_tying", "disabled"))
+        rope_scaling_cfg = LlamaRopeScalingConfig()
+        if "rope_scaling" in tc:
+            rs = tc["rope_scaling"]
+            rope_scaling_cfg = LlamaRopeScalingConfig(
+                scaling_factor=rs.get("scaling_factor", 0.0),
+                high_freq_factor=rs.get("high_freq_factor", 4.0),
+                low_freq_factor=rs.get("low_freq_factor", 1.0),
+                original_context_length=rs.get("original_context_length", 0),
+            )
+        llama_config = LlamaConfig(
+            hidden_size=tc.get("embedding_dim", 384),
+            num_hidden_layers=tc.get("num_blocks", 6),
+            num_attention_heads=tc.get("num_heads", 6),
+            num_key_value_heads=tc.get("num_groups", 3),
+            vocab_size=padded_vocab_size,
+            max_position_embeddings=tc.get("max_sequence_length", 256),
+            rope_theta=tc.get("theta", 10000.0),
+            attention_dropout=tc.get("dropout_prob", 0.0),
+            mlp_dropout=tc.get("dropout_prob", 0.0),
+            runner_type=runner_type,
+            weight_tying=weight_tying,
+            rope_scaling=rope_scaling_cfg,
+        )
+        tt_model = Llama(llama_config)
+        max_sequence_length = llama_config.max_position_embeddings
+        print("Loading Llama weights from safetensors...")
+        load_from_safetensors(tt_model, safetensors_path, llama_config)
+    else:
+        raise ValueError(f"Unsupported model_type: {model_type}. Supported: gpt2, llama")
 
     # Load dataset
     print("Loading GSM8K dataset...")
@@ -390,6 +501,7 @@ def train():
         gsm8k_collate_fn,
         eos_token_id=tokenizer.eos_token_id,
         max_sequence_length=max_sequence_length,
+        mapper=mapper,
     )
 
     num_devices = device_config.total_devices()
@@ -428,6 +540,23 @@ def train():
     mask_np = build_causal_mask(max_sequence_length)
     causal_mask = ttml.autograd.Tensor.from_numpy(mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
 
+    callbacks = [MetricsLogger()]
+    if use_ddp:
+        callbacks.append(DDPCallback())
+
+    peft_config = None
+    lora_cfg = yaml_config.get("lora_config")
+    if lora_cfg:
+        peft_config = LoraConfig(
+            rank=lora_cfg.get("rank", 8),
+            alpha=lora_cfg.get("alpha", 16),
+            target_modules=lora_cfg.get("target_modules", ["q_linear", "kv_linear", "out_linear"]),
+            lora_dropout=lora_cfg.get("lora_dropout", 0.05),
+            use_rslora=lora_cfg.get("use_rslora", False),
+            is_bias_trainable=lora_cfg.get("is_bias_trainable", False),
+            verbose=True,
+        )
+
     trainer = SFTTrainer(
         model=tt_model,
         train_dataloader=train_loader,
@@ -436,11 +565,16 @@ def train():
         optimizer=optimizer_cfg,
         lr_schedule=sched.lr_at,  # SpeedrunScheduler uses 0-based step index
         attention_mask=causal_mask,
+        callbacks=callbacks,
+        peft_config=peft_config,
     )
 
     print(f"Starting training for max {training_config.steps} steps...")
     trainer.train()
     print("Training completed!")
+
+    # Cleanup
+    ttml.autograd.AutoContext.get_instance().close_device()
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@
 
 """Training loop and batch preparation for pipeline parallel transformer models."""
 
+import os
 import numpy as np
 import ttnn
 import ttml
@@ -163,5 +164,13 @@ def train(
             print(
                 f"Step {step}/{cfg.steps}: Loss = {accum_loss:.4f}, Samples/s = {samples_per_second:.2f}, Tokens/s = {tokens_per_second:.2f}"
             )
+            output_file = os.environ.get("TT_TRAIN_OUTPUT_FILE")
+            if output_file:
+                try:
+                    lr = optim.get_lr()
+                except AttributeError:
+                    lr = 0.0
+                with open(output_file, "a") as f:
+                    f.write(f"LR: {lr:.2e}, training_loss: {accum_loss:.4f}, step: {step}, epoch: 1\n")
 
     return train_losses, val_losses

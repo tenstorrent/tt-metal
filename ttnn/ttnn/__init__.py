@@ -10,7 +10,21 @@ import pathlib
 import re
 from types import ModuleType
 
+import sys as _sys
+
 from loguru import logger
+
+# Route DEBUG/INFO to stdout (informational) and WARNING+ to stderr
+# (genuine problems). Only apply this default if the user has not already
+# configured loguru — if handler 0 (the default stderr sink) is still
+# present we replace it; if it's already gone the user owns the config.
+try:
+    logger.remove(0)
+except ValueError:
+    pass  # user already reconfigured loguru — leave it alone
+else:
+    logger.add(_sys.stdout, level="DEBUG", filter=lambda r: r["level"].no < 30)
+    logger.add(_sys.stderr, level="WARNING")
 
 import ttnn._ttnn
 
