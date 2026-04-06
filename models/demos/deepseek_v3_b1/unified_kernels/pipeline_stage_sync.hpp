@@ -12,13 +12,8 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
-#include "tt_metal/fabric/hw/inc/noc_addr.h"
-#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
-#include "tt_metal/fabric/hw/inc/api_common.h"
 
 using namespace tt::tt_fabric::linear::experimental;
-using namespace tt::tt_fabric::common::experimental;
 
 #endif
 

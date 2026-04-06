@@ -98,7 +98,7 @@ from models.demos.deepseek_v3_b1.micro_ops.pipeline_stage_sync.op import Pipelin
             ttnn.MeshCoordinate((0, 0)),
             ttnn.CoreCoord(1, 1),
             False,
-        ),  # backwards
+        ),  # backwards across rows
     ],
 )
 @pytest.mark.parametrize("num_iterations", [50])
