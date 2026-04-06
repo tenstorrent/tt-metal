@@ -43,6 +43,7 @@ void bind_strided_reduce_scatter_async(nb::module_& mod) {
             topology (ttnn.Topology, optional): Topology (only Ring is supported). Defaults to Ring.
             subdevice_id (Optional[SubDeviceId]): Sub-device identifier.
             cluster_axis (Optional[int]): Cluster axis for multi-device operation.
+            chunks_per_sync (Optional[int]): Number of chunks between synchronizations.
             num_workers_per_link (Optional[int]): Number of workers per link.
             num_buffers_per_channel (Optional[int]): Number of buffers per channel.
             mm_cores_y (Optional[int]): Number of cores in Y direction for matmul output layout.
@@ -72,6 +73,7 @@ void bind_strided_reduce_scatter_async(nb::module_& mod) {
         nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("cluster_axis") = nb::none(),
+        nb::arg("chunks_per_sync") = nb::none(),
         nb::arg("num_workers_per_link") = nb::none(),
         nb::arg("num_buffers_per_channel") = nb::none(),
         nb::arg("mm_cores_y") = nb::none(),

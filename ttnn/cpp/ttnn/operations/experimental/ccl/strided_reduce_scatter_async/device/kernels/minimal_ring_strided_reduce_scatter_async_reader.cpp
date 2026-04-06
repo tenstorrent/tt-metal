@@ -151,7 +151,8 @@ void kernel_main() {
     auto addcmul_a_addrgen = TensorAccessor(addcmul_a_tensor_args, addcmul_a_address, page_size);
     auto addcmul_b_addrgen = TensorAccessor(addcmul_b_tensor_args, addcmul_b_address, page_size);
     // a tile index: batch * (mm_cores_y * slice_Ht_per_core * slice_Wt) + slice_row * slice_Wt + col_in_slice
-    // b tile index: batch * slice_Wt + col_in_slice  (b has 1 row per batch)
+    // b tile index (broadcast):     batch * slice_Wt + col_in_slice  (b has 1 row per batch)
+    // b tile index (non-broadcast): same as a  (b has full N rows per batch)
 #endif
 
     /**
@@ -159,6 +160,8 @@ void kernel_main() {
     In particular, for each chunk, perform a full ring reduce-scatter iteration before going to the next one.
     Note that each chunk can be composed of multiple pieces if mm_N_full_blocks_per_slice > 1.
     */
+    ASSERT(dim == 3);      // strided reduce-scatter only supports scattering on dim 3
+    ASSERT(slice_C == 1);  // note: this can be relaxed if needed but is omitted to avoid nested loops
 
     const uint32_t batch_size = input_tensor_B;
     const uint32_t last_mm_core_idx = mm_cores_y - 1;
@@ -171,7 +174,7 @@ void kernel_main() {
     const uint32_t effective_advance_by_tiles = 2 * num_workers;
 
     // Snapshot the semaphore's value at startup
-    uint32_t out_ready_sem_target = 0;
+    uint32_t out_ready_sem_target = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem);
 
     for (uint32_t b = 0; b < batch_size; b++) {
         const uint32_t batch_offset = input_batch_num_pages * b;
@@ -294,7 +297,12 @@ void kernel_main() {
                                     if (is_final_ring_step) {
                                         const uint32_t a_tile_idx =
                                             b * addcmul_a_batch_pages + slice_row * slice_Wt + col_in_slice;
+#ifdef ADDCMUL_B_BROADCAST
                                         const uint32_t b_gate_idx = b * slice_Wt + col_in_slice;
+#else
+                                        const uint32_t b_gate_idx =
+                                            b * addcmul_a_batch_pages + slice_row * slice_Wt + col_in_slice;
+#endif
                                         noc_async_read(
                                             get_noc_addr(a_tile_idx, addcmul_a_addrgen),
                                             addcmul_a_l1_write_addr,
