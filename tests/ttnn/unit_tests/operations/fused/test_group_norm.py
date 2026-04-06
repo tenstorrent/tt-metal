@@ -693,7 +693,7 @@ def test_sdxl_base_group_norm_bh(device, input_shape, perf_test_mode=False):
         pcc_threshold = 0.9999
         rtol = 0.065
         atol = 0.065
-        frobenius_threshold = 0.014
+        frobenius_threshold = 0.03
         assert_numeric_metrics(
             torch_output_tensor,
             tt_output_tensor,

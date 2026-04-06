@@ -390,11 +390,6 @@ def do_test_main(
             atol = 0.065
             frobenius_threshold = 0.014
     else:
-        # Thresholds from tests/ttnn/unit_tests/operations/fused/all_numeric_results_fused.csv
-        # (test_rms_norm_sharded_numeric_results, do_test_main[rms_norm,...]). ~10% margin on
-        # max_abs / frobenius; PCC ~= min - 1.5e-4; rtol from max rel among rows with rel < 10
-        # (BF16) / atol-dominated rtol (FP32) to avoid near-zero blowups in CSV max_rel.
-        # Max CSV ULP is large; no check_ulp (ulp_threshold would be >= 12).
         if dtype == torch.bfloat16:
             pcc_threshold = 0.999
             rtol = 0.031

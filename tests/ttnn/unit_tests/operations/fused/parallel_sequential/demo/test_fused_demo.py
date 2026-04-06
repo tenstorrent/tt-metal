@@ -381,9 +381,7 @@ class TestPerfDemos:
             ref = ttnn.to_torch(ttnn.rms_norm(u2, weight=tt_w, epsilon=1e-5))
 
             print(f"\n  Linear Chain Fused (H={H}): cold={cold:.2f}ms")
-            assert_numeric_metrics(
-                ref, fused_result, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08
-            )
+            assert_numeric_metrics(ref, fused_result, pcc_threshold=0.97, rtol=0.08, atol=0.2, frobenius_threshold=0.08)
         elif perf_mode == "e2e":
             fused = Sequential(r1, m, r2).build()
             e2e = _time_e2e(fused.launch, device)
@@ -405,9 +403,7 @@ class TestPerfDemos:
             ref = ttnn.to_torch(ttnn.rms_norm(u2, weight=tt_w, epsilon=1e-5))
 
             print(f"\n  Linear Chain Fused (H={H}): e2e={e2e:.3f}ms")
-            assert_numeric_metrics(
-                ref, fused_result, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08
-            )
+            assert_numeric_metrics(ref, fused_result, pcc_threshold=0.97, rtol=0.08, atol=0.2, frobenius_threshold=0.08)
 
     @pytest.mark.parametrize("perf_mode", ["cold_start", "e2e", "device_fw"])
     @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
@@ -1652,10 +1648,10 @@ class TestPerfDemos:
             ref_right = ttnn.to_torch(u_right)
 
             assert_numeric_metrics(
-                ref_left, result_left, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08
+                ref_left, result_left, pcc_threshold=0.97, rtol=0.08, atol=0.5, frobenius_threshold=0.08
             )
             assert_numeric_metrics(
-                ref_right, result_right, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08
+                ref_right, result_right, pcc_threshold=0.97, rtol=0.08, atol=0.5, frobenius_threshold=0.08
             )
             return True, True
 

@@ -14,7 +14,6 @@ from tt_lib.utils import (
     tilize_to_list,
     untilize,
 )
-from models.common.utility_functions import print_diff_argmax
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 

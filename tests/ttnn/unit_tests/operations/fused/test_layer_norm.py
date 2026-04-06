@@ -37,7 +37,7 @@ allclose_thresholds = {
 def assert_output_accuracy(torch_output, ttnn_output):
     dtype = ttnn_output.dtype
     if dtype == torch.bfloat16:
-        return assert_numeric_metrics(
+        assert_numeric_metrics(
             torch_output,
             ttnn_output,
             rtol=allclose_thresholds[dtype].rtol,
@@ -50,7 +50,7 @@ def assert_output_accuracy(torch_output, ttnn_output):
         # (see https://github.com/tenstorrent/tt-metal/issues/33621).
         # So we'll use relative Frobenius norm of the error instead, which is
         # looser than allclose (since it's a global metric), but better than PCC.
-        return assert_numeric_metrics(
+        assert_numeric_metrics(
             torch_output, ttnn_output, frobenius_threshold=0.01, check_pcc=False, check_allclose=False
         )
     else:
