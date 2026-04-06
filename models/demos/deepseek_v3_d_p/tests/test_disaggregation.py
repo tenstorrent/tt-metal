@@ -223,10 +223,13 @@ def test_kv_cache_address_table(mesh_device, seq_len):
     num_chunks_in_strip = num_tokens_in_strip // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     logger.info(f"Num tokens in strip is: {num_tokens_in_strip} num_chunks in strip is: {num_chunks_in_strip}")
 
+    # describes high and low sequence length per rank
+    seq_len_per_rank = seq_len // (int(size) * 2)
+
     device_position_indices_low_strip = []
     device_position_indices_high_strip = []
-    low_strip_start_idx = 0
-    high_strip_end_idx = seq_len - 1
+    low_strip_start_idx = seq_len_per_rank * int(rank)
+    high_strip_end_idx = seq_len_per_rank * (int(size) - int(rank)) - 1
     for row in range(len(device_group_idx_per_row)):
         low_strip_end_idx = low_strip_start_idx + num_chunks_in_strip * NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK - 1
         device_position_indices_low_strip.append((low_strip_start_idx, low_strip_end_idx))
