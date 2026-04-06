@@ -27,6 +27,14 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
             tt::tt_metal::NOC::RISCV_0_default);
 
     const uint32_t num_cores = dram_bank2core_coords.size();
+    constexpr uint32_t required_cores = 12;
+    TT_FATAL(
+        num_cores == required_cores,
+        "moe_gate_mm requires exactly {} DRAM-aligned cores (Wormhole); got {}. "
+        "This op's ring algorithm is hardcoded for Wormhole's 12 DRAM views and does not support other "
+        "architectures.",
+        required_cores,
+        num_cores);
     auto all_cores = tt::tt_metal::CoreRangeSet(dram_bank2core_coords);
 
     // CBs used in the MoE Gate MM operation
