@@ -257,14 +257,9 @@ class Gemma4DecoderLayer:
         residual.deallocate(True)
         hidden_states.deallocate(True)
 
-        # Layer scalar
-        if self.layer_scalar != 1.0:
-            hidden_states = ttnn.mul(combined, self.layer_scalar)
-            combined.deallocate(True)
-        else:
-            hidden_states = combined
+        hidden_states = combined
 
-        # Per-layer input embeddings (E2B/E4B feature)
+        # Per-layer input embeddings (E2B/E4B) — BEFORE layer_scalar (matching HF order)
         if self.hidden_size_per_layer_input and per_layer_input is not None and hasattr(self, "per_layer_input_gate"):
             residual_pli = hidden_states
             gated = ttnn.linear(hidden_states, self.per_layer_input_gate)
@@ -273,8 +268,11 @@ class Gemma4DecoderLayer:
             projected = ttnn.linear(gated, self.per_layer_projection)
             normed_pli = self.post_per_layer_input_norm.forward(projected)
             hidden_states = ttnn.add(residual_pli, normed_pli)
-            # Ensure output stays 4D (some ops may add dimensions)
             if len(hidden_states.shape) > 4:
                 hidden_states = ttnn.reshape(hidden_states, (1, 1, hidden_states.shape[-2], self.hidden_size))
+
+        # Layer scalar — AFTER PLI (matching HF order)
+        if self.layer_scalar != 1.0:
+            hidden_states = ttnn.mul(hidden_states, self.layer_scalar)
 
         return hidden_states
