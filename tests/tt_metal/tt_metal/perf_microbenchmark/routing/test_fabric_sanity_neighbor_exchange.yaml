@@ -3,7 +3,7 @@ allocation_policies:
       max_configs_per_core: 1
 
 Tests:
-  - name: "LinearNeighborExchangeLooped"
+  - name: "LinearNeighborExchange"
     fabric_setup:
       topology: Linear
 
@@ -36,7 +36,7 @@ Tests:
     patterns:
       - type: neighbor_exchange
 
-  - name: "MeshNeighborExchangeLooped"
+  - name: "MeshNeighborExchange"
     fabric_setup:
       topology: Mesh
 
@@ -65,38 +65,6 @@ Tests:
     defaults:
       ftype: unicast
       num_packets: 1000000
-
-    patterns:
-      - type: neighbor_exchange
-
-  - name: "MeshNeighborExchangeSizeSweep"
-    fabric_setup:
-      topology: Mesh
-
-    parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
-      num_links: [1, 2]
-      size: [1024, 2048, 4096]
-
-    defaults:
-      ftype: unicast
-      num_packets: 1000
-
-    patterns:
-      - type: neighbor_exchange
-
-  - name: "LinearNeighborExchangeSizeSweep"
-    fabric_setup:
-      topology: Linear
-
-    parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
-      num_links: [1, 2]
-      size: [1024, 2048, 4096]
-
-    defaults:
-      ftype: unicast
-      num_packets: 1000
 
     patterns:
       - type: neighbor_exchange
