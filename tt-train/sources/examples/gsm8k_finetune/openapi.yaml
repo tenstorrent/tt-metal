@@ -259,13 +259,14 @@ components:
         model:
           type: string
           description: |
-            Model identifier. Supported values (mapped to model_config path):
-            - tinyllama → model_configs/tinyllama.yaml
-            - gpt2 → model_configs/gpt2s.yaml
-            - llama-3.1-8b → model_configs/llama8b.yaml (if available)
-            - qwen3_0_6b → model_configs/qwen3_0_6b.yaml
-            - qwen3_1_7b → model_configs/qwen3_1_7b.yaml
-            Any other value is passed through; training service does not validate.
+            Model identifier. Supported values vary by trainer (see GET /v1/catalog):
+            - tinyllama → model_configs/tinyllama.yaml (sft, lora)
+            - gpt2 → model_configs/gpt2s.yaml (sft, lora)
+            - qwen3_0_6b → model_configs/qwen3_0_6b.yaml (sft, lora)
+            - qwen3_1_7b → model_configs/qwen3_1_7b.yaml (sft, lora)
+            - llama8b → model_configs/llama8b.yaml (pretrain)
+            - llama70b → model_configs/llama70b_tp32.yaml (pretrain)
+            - llama405b → model_configs/llama405b.yaml (pretrain)
           example: tinyllama
         dataset_url:
           type: string
@@ -293,7 +294,7 @@ components:
       properties:
         type:
           type: string
-          enum: [sft, lora, grpo]
+          enum: [pretrain, lora, sft, grpo]
           description: Trainer type; serves as the trainer selector.
         params:
           oneOf:

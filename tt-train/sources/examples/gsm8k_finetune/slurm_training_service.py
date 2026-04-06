@@ -1078,6 +1078,8 @@ def create_job():
         slurm_config["model_config"] = training_params["model_config"]
     if training_params.get("model_type"):
         slurm_config["model_type"] = training_params["model_type"]
+    # Pass model ID so run_command_override callables can select per-model configs
+    slurm_config["model"] = model.strip().lower()
     # Pass dataset for training script (HF name or s3:// URL)
     slurm_config["dataset"] = dataset_url
     if not slurm_config["dataset"]:
