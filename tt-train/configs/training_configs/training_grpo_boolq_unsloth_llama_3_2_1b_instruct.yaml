@@ -1,7 +1,7 @@
 training_config:
   batch_size: 2                # 2 prompts * 8 group_size = 16 completions per iter
   num_epochs: 1
-  model_config: "model_configs/llama3_2_1B.yaml"
+  model_config: "model_configs/llama3_2_1B_boolq.yaml"
 
   optimizer:
     type: MorehAdamW
@@ -16,7 +16,7 @@ training_config:
 grpo_config:
   group_size: 8
   micro_batch_size: 16
-  warmup_steps: 100
+  warmup_steps: 0
   max_tokens_to_complete: 256
   prompts_to_train: 1600
   clip_eps: 0.2
