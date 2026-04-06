@@ -8,7 +8,33 @@ import torch
 
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule
+from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig
 from models.experimental.tt_symbiote.core.utils import tree_map
+
+
+def _code2wav_bct_replicated_mesh_config(mesh_device):
+    """Mesh config for code2wav ``[B, C, T]`` activations (replicated, not 2D NCHW/NHWC shard)."""
+    if mesh_device is None or mesh_device.get_num_devices() <= 1:
+        return None
+    return DistributedTensorConfig(
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+    )
+
+
+def _ttnn_mesh_to_torch_one_replica(tt_tensor: ttnn.Tensor, mesh_device) -> torch.Tensor:
+    """Host tensor for one logical mesh replica.
+
+    ``ConcatMeshToTensor(dim=0)`` + ``[:batch]`` assumes dim 0 is the only stacked axis. For code2wav
+    ``[B, C, T]`` that often mismatches TTNN layout metadata and slices the **time** dimension →
+    truncated audio. Reading ``get_device_tensors(...)[0]`` matches replicated-activation readback.
+    """
+    if mesh_device is None or mesh_device.get_num_devices() <= 1:
+        return ttnn.to_torch(tt_tensor).contiguous()
+    shards = ttnn.get_device_tensors(tt_tensor)
+    if not shards:
+        return ttnn.to_torch(tt_tensor).contiguous()
+    return ttnn.to_torch(shards[0]).contiguous()
 
 
 class TTNNSilu(TTNNModule):
@@ -101,11 +127,10 @@ class TTNNSnakeBeta(TTNNModule):
         )
 
     def set_output_tensors_config_impl(self, output_tensors):
-        """code2wav ``[B, C, T]``: avoid grid ``ConcatMesh2d`` on the last dim (breaks ``+ residual``).
+        """code2wav ``[B, C, T]``: materialize one mesh replica on host (no ``ConcatMeshToTensor`` + ``[:b]``).
 
-        Do **not** use ``MeshComposerConfig([0, len(shape)])`` for rank-3 tensors: TTNN treats entries as
-        dimension indices, so ``[0, 3]`` is invalid for 3D (dims are 0..2). Same pattern as
-        ``TTNNQwenLayerNorm`` gather path: ``ConcatMeshToTensor(dim=0)`` + keep one batch replica.
+        That concat/slice pattern can crop **T** when metadata is not a pure batch stack; see
+        :func:`_ttnn_mesh_to_torch_one_replica`.
         """
         if self.device_state is None or self.device is None or self.device.get_num_devices() <= 1:
             return super().set_output_tensors_config_impl(output_tensors)
@@ -116,13 +141,13 @@ class TTNNSnakeBeta(TTNNModule):
             if not isinstance(t, TorchTTNNTensor) or t.ttnn_tensor is None:
                 return t
             tt = t.ttnn_tensor
-            b = int(tt.shape[0])
-            pt = ttnn.to_torch(tt, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
-            if pt.shape[0] > b:
-                pt = pt[:b]
+            pt = _ttnn_mesh_to_torch_one_replica(tt, self.device)
             t.elem = pt.contiguous()
             t.ttnn_tensor = None
-            if getattr(t, "_distributed_tensor_config", None) is not None:
+            cfg = _code2wav_bct_replicated_mesh_config(self.device)
+            if cfg is not None:
+                t.set_distributed_tensor_config(cfg)
+            elif getattr(t, "_distributed_tensor_config", None) is not None:
                 t._distributed_tensor_config = None
             return t
 
@@ -150,18 +175,8 @@ class TTNNSnakeBeta(TTNNModule):
 
 
 def _materialize_code2wav_bct_from_ttnn(tt_tensor: ttnn.Tensor, mesh_device) -> torch.Tensor:
-    """One logical ``[B, C, T]`` batch on host (replicated mesh → concat batch, keep first replica)."""
-    if mesh_device is None or mesh_device.get_num_devices() <= 1:
-        return ttnn.to_torch(tt_tensor).contiguous()
-    b = int(tt_tensor.shape[0])
-    pt = ttnn.to_torch(
-        tt_tensor,
-        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
-        device=mesh_device,
-    )
-    if pt.shape[0] > b:
-        pt = pt[:b]
-    return pt.contiguous()
+    """One logical ``[B, C, T]`` on host (see :func:`_ttnn_mesh_to_torch_one_replica`)."""
+    return _ttnn_mesh_to_torch_one_replica(tt_tensor, mesh_device)
 
 
 def _materialize_code2wav_chain_output(x, mesh_device) -> torch.Tensor:
@@ -196,6 +211,26 @@ class TTNNQwen3OmniMoeCode2WavDecoderResidualUnit(TTNNModule):
         new.act2 = TTNNSnakeBeta.from_torch(m.act2)
         new.conv2 = m.conv2
         return new
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        """Override default 2D mesh config for rank-3 ``hidden + residual`` (``[B, C, T]``).
+
+        ``post_process`` wraps the torch sum in ``TorchTTNNTensor``; ``get_tensor_config_for_tensor`` can
+        attach ``ShardTensor2dMesh`` when ``T`` divides the mesh width. Then ``to_ttnn`` shards time and
+        readback keeps one device → truncated audio. Force replication for this block only.
+        """
+        cfg = _code2wav_bct_replicated_mesh_config(self.device)
+        if cfg is None:
+            return super().set_output_tensors_config_impl(output_tensors)
+
+        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+        def apply_cfg(t):
+            if isinstance(t, TorchTTNNTensor):
+                t.set_distributed_tensor_config(cfg)
+            return t
+
+        return tree_map(apply_cfg, output_tensors)
 
     def forward(self, hidden_state):
         dev = self.device

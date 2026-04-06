@@ -10,9 +10,11 @@ from torch import nn
 import ttnn
 from models.tt_cnn.tt.builder import Conv2dConfiguration, MaxPool2dConfiguration, TtConv2d, TtMaxPool2d
 from models.experimental.tt_symbiote.core.module import TTNNModule
+from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig, trace_enabled
+from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+from models.experimental.tt_symbiote.core.utils import torch_dtype_to_ttnn_dtype, tree_map
 from models.experimental.tt_symbiote.modules.activation import TTNNReLU
 from models.experimental.tt_symbiote.modules.tensor import TTNNPermute, TTNNReshape
-from models.experimental.tt_symbiote.core.run_config import trace_enabled
 
 
 def fold_batch_norm2d_into_conv2d(weight, bias, scale, shift, running_mean, running_var, eps):
@@ -206,18 +208,19 @@ class TTNNConv2dNHWC(TTNNModule):
 
     def forward(self, input_tensor: ttnn.Tensor, reshape_output=True) -> ttnn.Tensor:
         """Forward pass through linear layer."""
-        input_shape = get_shape_from_module_name(self.module_name, self.model_config)
-        if input_shape is None:
-            batch_size, input_height, input_width, _ = input_tensor.shape
-            if isinstance(self.model_config, dict):
-                self.model_config[self.module_name] = {
-                    "input_shapes": [list(input_tensor.shape)],
-                    "reshape_output": reshape_output,
-                }
-        else:
-            assert len(input_shape) == 1, f"Only single input shape is supported. Got {input_shape}."
-            batch_size, input_height, input_width, _ = input_shape[0]
-            reshape_output = self.model_config[self.module_name].get("reshape_output", reshape_output)
+        # Always use the live NHWC spatial size. Cached ``input_shapes`` from ``model_config`` must not
+        # override this: code2wav / decoder activations have **variable time length** across calls; reusing
+        # the first-seen width makes ``TtConv2d`` and ``reshape`` match a shorter sequence → truncated audio.
+        shape = input_tensor.shape
+        batch_size, input_height, input_width, _ = (int(shape[0]), int(shape[1]), int(shape[2]), int(shape[3]))
+        if isinstance(self.model_config, dict):
+            prev = self.model_config.get(self.module_name)
+            if prev is not None:
+                reshape_output = prev.get("reshape_output", reshape_output)
+            self.model_config[self.module_name] = {
+                "input_shapes": [[batch_size, input_height, input_width, int(shape[3])]],
+                "reshape_output": reshape_output,
+            }
 
         hash = (
             input_height,
@@ -261,6 +264,95 @@ class TTNNConv2dNHWC(TTNNModule):
         if input_tensor.memory_config().is_sharded():
             input_tensor = ttnn.sharded_to_interleaved(input_tensor)
         return layer(input_tensor)
+
+
+def _conv1d_to_height1_conv2d(conv1d: nn.Conv1d) -> nn.Conv2d:
+    """Map ``nn.Conv1d`` to ``nn.Conv2d`` with ``kernel_size=(1, k)`` for TTNN 2D conv."""
+
+    def _one(x):
+        if isinstance(x, int):
+            return x
+        return int(x[0])
+
+    k = _one(conv1d.kernel_size)
+    s = _one(conv1d.stride)
+    p = _one(conv1d.padding)
+    d = _one(conv1d.dilation)
+
+    conv2d = nn.Conv2d(
+        in_channels=conv1d.in_channels,
+        out_channels=conv1d.out_channels,
+        kernel_size=(1, k),
+        stride=(1, s),
+        padding=(0, p),
+        dilation=(1, d),
+        groups=conv1d.groups,
+        bias=conv1d.bias is not None,
+        device=conv1d.weight.device,
+        dtype=conv1d.weight.dtype,
+    )
+    with torch.no_grad():
+        conv2d.weight.copy_(conv1d.weight.unsqueeze(2))
+        if conv1d.bias is not None:
+            conv2d.bias.copy_(conv1d.bias)
+    return conv2d
+
+
+class TTNNConv1d(TTNNModule):
+    """1D convolution via TTNN ``conv2d`` with height 1 (activations ``[B, C, T]`` → NHWC ``[B, 1, T, C]``).
+
+    Pairs with :class:`TTNNQwen3OmniMoeCausalConvNet` in ``activation`` for HF ``Qwen3OmniMoeCausalConvNet``.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.conv2d = None
+
+    @classmethod
+    def from_torch(cls, conv1d: nn.Conv1d, slice_config=None):
+        new = cls()
+        new._fallback_torch_layer = conv1d
+        equiv = _conv1d_to_height1_conv2d(conv1d)
+        new.conv2d = TTNNConv2dNHWC.from_torch(equiv, slice_config=slice_config)
+        return new
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        cfg = _qwen_omni_conv2d_mesh_output_config(self.device)
+        if cfg is None:
+            return super().set_output_tensors_config_impl(output_tensors)
+
+        def apply(e):
+            if isinstance(e, TorchTTNNTensor):
+                e.set_distributed_tensor_config(cfg)
+            return e
+
+        return tree_map(apply, output_tensors)
+
+    def forward(self, input_tensor, reshape_output=True):
+        """``input_tensor``: ``ttnn.Tensor`` or ``torch.Tensor`` ``[B, C, T]``. Returns ``[B, C_out, T_out]``.
+
+        TTNN children of TTNN parents use ``_bypass_tensor_wrapping`` (see ``device_management``), so
+        :class:`TTNNQwen3OmniMoeCausalConvNet` passes host torch after ``F.pad``; convert here.
+        """
+        if isinstance(input_tensor, TorchTTNNTensor):
+            input_tensor = input_tensor.ttnn_tensor if input_tensor.ttnn_tensor is not None else input_tensor.elem
+        if isinstance(input_tensor, torch.Tensor):
+            mesh_mapper = None
+            dev = self.device
+            if dev is not None and hasattr(dev, "get_num_devices") and dev.get_num_devices() > 1:
+                mesh_mapper = ttnn.ReplicateTensorToMesh(dev)
+            input_tensor = ttnn.from_torch(
+                input_tensor,
+                dtype=torch_dtype_to_ttnn_dtype(input_tensor.dtype),
+                layout=ttnn.TILE_LAYOUT,
+                device=dev,
+                mesh_mapper=mesh_mapper,
+            )
+        x = ttnn.permute(input_tensor, (0, 2, 1))
+        x = ttnn.unsqueeze(x, 1)
+        out = self.conv2d(x, reshape_output=reshape_output)
+        out = ttnn.squeeze(out, 1)
+        return ttnn.permute(out, (0, 2, 1))
 
 
 class TTNNConv2dBNNHWC(TTNNConv2dNHWC):
@@ -764,3 +856,124 @@ class TTNNConv2dNHWCInputMultipleOf16(TTNNConv2dNHWC):
         )
         new_conv._fallback_torch_layer = NHWCConvPytorch(conv)
         return new_conv
+
+
+def _qwen_omni_conv2d_mesh_output_config(mesh_device):
+    """Mesh readback for Qwen Omni audio/vision conv outputs (replicated activations per device).
+
+    Default ``DistributedConfig`` uses ``ConcatMesh2dToTensor`` + ``logical_shape_for_batch_channel_sharding``,
+    which does **not** match full spatial NHWC conv outputs and can inflate a dimension (e.g. time/freq
+    13 → 104 on an 8-device mesh), breaking ``padded_embed[mask]`` in the HF audio encoder.
+
+    Use the same pattern as :func:`models.experimental.tt_symbiote.modules.qwen_omni_lm_head._lm_head_logits_dtensor_config`:
+    replicate mapper, compose on batch dim, then slice to one replica. (TTNN ``conv2d`` selects cores from
+    ``device.compute_with_storage_grid_size()`` in the runtime; this path only fixes host logical shape.)
+    """
+    if mesh_device is None or mesh_device.get_num_devices() <= 1:
+        return None
+    return DistributedTensorConfig(
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+        replicate_compose_slice_dim0_to_leading=True,
+    )
+
+
+@trace_enabled
+class TTNNQwenOmniConv2dNHWC(TTNNConv2dNHWC):
+    """Qwen3-Omni ``nn.Conv2d`` for thinker vision (NHWC) and audio tower (NCHW).
+
+    Audio encoder feeds **NCHW** ``[B, C, F, T]`` into ``conv2d*``; base :class:`TTNNConv2dNHWC`
+    assumes **NHWC** ``[B, H, W, C]``, which mis-sized the conv and caused reshape errors in
+    ``ttnn.conv2d``. This class permutes using the **logical** ``conv.in_channels`` (before any
+    width pad), pads activations when :class:`TTNNConv2dNHWCInputMultipleOf16` widened channels,
+    then restores NCHW for the next HF layer when the input was NCHW.
+
+    ``from_torch`` always returns this type (never a bare :class:`TTNNConv2dNHWC`) so this
+    ``forward`` always runs.
+    """
+
+    def _logical_in_channels(self) -> int:
+        tl = self.torch_layer
+        if tl is None:
+            return int(self.in_channels)
+        inner = getattr(tl, "conv", None)
+        if inner is not None:
+            return int(inner.in_channels)
+        return int(self.in_channels)
+
+    @classmethod
+    def from_torch(cls, conv: nn.Conv2d, slice_config=None) -> "TTNNQwenOmniConv2dNHWC":
+        # Mirror :class:`TTNNConv2dNHWCInputMultipleOf16` but always construct ``cls`` so
+        # :meth:`forward` below is used (``InputMultipleOf16.from_torch`` returns ``TTNNConv2dNHWC``).
+        if conv.in_channels > 16 or conv.in_channels % 16 == 0:
+            new_mod = cls(
+                in_channels=conv.in_channels,
+                out_channels=conv.out_channels,
+                kernel_size=conv.kernel_size,
+                stride=conv.stride,
+                padding=conv.padding,
+                dilation=conv.dilation,
+                groups=conv.groups,
+                slice_config=slice_config,
+            )
+            new_mod._fallback_torch_layer = NHWCConvPytorch(conv)
+            return new_mod
+        new_mod = cls(
+            in_channels=16,
+            out_channels=conv.out_channels,
+            kernel_size=conv.kernel_size,
+            stride=conv.stride,
+            padding=conv.padding,
+            dilation=conv.dilation,
+            groups=conv.groups,
+            slice_config=slice_config,
+        )
+        conv.weight = nn.Parameter(
+            torch.nn.functional.pad(conv.weight, (0, 0, 0, 0, 0, (16 - conv.in_channels % 16) % 16))
+        )
+        new_mod._fallback_torch_layer = NHWCConvPytorch(conv)
+        return new_mod
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        cfg = _qwen_omni_conv2d_mesh_output_config(self.device)
+        if cfg is None:
+            return super().set_output_tensors_config_impl(output_tensors)
+
+        def apply(e):
+            if isinstance(e, TorchTTNNTensor):
+                e.set_distributed_tensor_config(cfg)
+            return e
+
+        return tree_map(apply, output_tensors)
+
+    def forward(self, input_tensor: ttnn.Tensor, reshape_output=True) -> ttnn.Tensor:
+        logical_in = self._logical_in_channels()
+        shape = input_tensor.shape
+        nchw_in = False
+        if len(shape) != 4:
+            raise RuntimeError(f"TTNNQwenOmniConv2dNHWC: expected 4D input, got shape={list(shape)}")
+        if int(shape[1]) == logical_in and int(shape[-1]) != logical_in:
+            nchw_in = True
+            input_tensor = ttnn.permute(input_tensor, (0, 2, 3, 1))
+        elif int(shape[-1]) != logical_in and int(shape[1]) != logical_in:
+            raise RuntimeError(
+                f"TTNNQwenOmniConv2dNHWC: cannot match in_channels={logical_in} to layout " f"shape={list(shape)}"
+            )
+
+        if int(self.in_channels) > logical_in and int(input_tensor.shape[-1]) == logical_in:
+            pad_c = int(self.in_channels) - logical_in
+            layout_in = input_tensor.layout
+            if layout_in == ttnn.TILE_LAYOUT:
+                input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+            input_tensor = ttnn.pad(
+                input_tensor,
+                ((0, 0), (0, 0), (0, 0), (0, pad_c)),
+                value=0.0,
+            )
+            if layout_in == ttnn.TILE_LAYOUT:
+                input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
+
+        out = TTNNConv2dNHWC.forward(self, input_tensor, reshape_output=reshape_output)
+        if nchw_in:
+            out = ttnn.permute(out, (0, 3, 1, 2))
+        return out
