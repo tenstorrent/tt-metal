@@ -499,34 +499,34 @@ def get_supported_models(trainer_name: Optional[str] = None) -> Set[str]:
 # Hardcoded for now; swap the body of get_supported_datasets to change the
 # lookup strategy (e.g. DB, remote config) without updating callers.
 _TRAINER_MODEL_DATASETS: Dict[Tuple[str, str], Set[str]] = {
-    ("sft", "tinyllama"): {"gsm8k", "shakespeare", "math_qa", "aqua_rat", "svamp", "mawps"},
-    ("sft", "gpt2"): {"gsm8k", "shakespeare", "math_qa", "aqua_rat", "svamp", "mawps"},
-    ("sft", "qwen3_0_6b"): {"gsm8k", "shakespeare", "math_qa", "aqua_rat", "svamp", "mawps"},
-    ("sft", "qwen3_1_7b"): {"gsm8k", "shakespeare", "math_qa", "aqua_rat", "svamp", "mawps"},
-    ("lora", "tinyllama"): {"gsm8k", "shakespeare", "math_qa", "aqua_rat", "svamp", "mawps"},
-    ("lora", "gpt2"): {"gsm8k", "shakespeare", "math_qa", "aqua_rat", "svamp", "mawps"},
-    ("lora", "qwen3_0_6b"): {"gsm8k", "shakespeare", "math_qa", "aqua_rat", "svamp", "mawps"},
-    ("lora", "qwen3_1_7b"): {"gsm8k", "shakespeare", "math_qa", "aqua_rat", "svamp", "mawps"},
+    ("sft", "tinyllama"): {"gsm8k", "math_qa", "aqua_rat", "svamp", "mawps"},
+    ("sft", "gpt2"): {"gsm8k", "math_qa", "aqua_rat", "svamp", "mawps"},
+    ("sft", "qwen3_0_6b"): {"gsm8k", "math_qa", "aqua_rat", "svamp", "mawps"},
+    ("sft", "qwen3_1_7b"): {"gsm8k", "math_qa", "aqua_rat", "svamp", "mawps"},
+    ("lora", "tinyllama"): {"gsm8k", "math_qa", "aqua_rat", "svamp", "mawps"},
+    ("lora", "gpt2"): {"gsm8k", "math_qa", "aqua_rat", "svamp", "mawps"},
+    ("lora", "qwen3_0_6b"): {"gsm8k", "math_qa", "aqua_rat", "svamp", "mawps"},
+    ("lora", "qwen3_1_7b"): {"gsm8k", "math_qa", "aqua_rat", "svamp", "mawps"},
     ("pretrain", "llama8b"): {"shakespeare"},
     ("pretrain", "llama70b"): {"shakespeare"},
     ("pretrain", "llama405b"): {"shakespeare"},
 }
 
-# (trainer_id, model_id) → set of supported cluster/resource IDs.
+# (trainer_id, model_id) → mapping of clusters to show and is_supported.
 # Hardcoded for now; swap the body of get_supported_resources to change the
 # lookup strategy (e.g. DB, remote config) without updating callers.
-_TRAINER_MODEL_RESOURCES: Dict[Tuple[str, str], Set[str]] = {
-    ("sft", "tinyllama"): {"bh_galaxy", "4bh_glx"},
-    ("sft", "gpt2"): {"bh_galaxy", "4bh_glx"},
-    ("sft", "qwen3_0_6b"): {"bh_galaxy", "4bh_glx"},
-    ("sft", "qwen3_1_7b"): {"bh_galaxy", "4bh_glx"},
-    ("lora", "tinyllama"): {"bh_galaxy", "4bh_glx"},
-    ("lora", "gpt2"): {"bh_galaxy", "4bh_glx"},
-    ("lora", "qwen3_0_6b"): {"bh_galaxy", "4bh_glx"},
-    ("lora", "qwen3_1_7b"): {"bh_galaxy", "4bh_glx"},
-    ("pretrain", "llama8b"): {"bh_galaxy", "4bh_glx"},
-    ("pretrain", "llama70b"): {"4bh_glx"},
-    ("pretrain", "llama405b"): {"4bh_glx"},
+_TRAINER_MODEL_RESOURCES: Dict[Tuple[str, str], Dict[str, bool]] = {
+    ("sft", "tinyllama"): {"bh_galaxy": True, "4bh_glx": False},
+    ("sft", "gpt2"): {"bh_galaxy": True, "4bh_glx": False},
+    ("sft", "qwen3_0_6b"): {"bh_galaxy": True, "4bh_glx": False},
+    ("sft", "qwen3_1_7b"): {"bh_galaxy": True, "4bh_glx": False},
+    ("lora", "tinyllama"): {"bh_galaxy": True, "4bh_glx": False},
+    ("lora", "gpt2"): {"bh_galaxy": True, "4bh_glx": False},
+    ("lora", "qwen3_0_6b"): {"bh_galaxy": True, "4bh_glx": False},
+    ("lora", "qwen3_1_7b"): {"bh_galaxy": True, "4bh_glx": False},
+    ("pretrain", "llama8b"): {"bh_galaxy": True, "4bh_glx": False},
+    ("pretrain", "llama70b"): {"4bh_glx": True},
+    ("pretrain", "llama405b"): {"4bh_glx": True},
 }
 
 
@@ -539,10 +539,10 @@ def get_supported_datasets(trainer_id: str, model_id: str) -> Set[str]:
     return _TRAINER_MODEL_DATASETS.get((trainer_id, model_id), set())
 
 
-def get_supported_resources(trainer_id: str, model_id: str) -> Set[str]:
+def get_supported_resources(trainer_id: str, model_id: str) -> Dict[str, bool]:
     """Return supported cluster/resource IDs for a (trainer, model) combination.
 
     Implementation is intentionally encapsulated here — swap the lookup
     strategy (DB, remote config, etc.) without changing callers.
     """
-    return _TRAINER_MODEL_RESOURCES.get((trainer_id, model_id), set())
+    return _TRAINER_MODEL_RESOURCES.get((trainer_id, model_id), dict())

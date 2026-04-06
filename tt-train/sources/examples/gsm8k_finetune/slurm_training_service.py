@@ -144,7 +144,7 @@ CLUSTER_DISPLAY_NAMES = {
 
 # Cluster size → ordered list of partitions that can satisfy it. First with free nodes wins.
 CLUSTER_TO_PARTITIONS = {
-    "n150": ["bh_lb_single"],
+    # "n150": ["bh_lb_single"], # No WH partitions in exabox
     "p150": ["bh_lb_single"],
     "4xp150": ["bh_lb_single"],
     "8xp150": ["bh_lb_single"],
@@ -899,8 +899,15 @@ def get_trainer_model_resources(trainer_id, model_id):
             404,
         )
 
-    resource_ids = get_supported_resources(trainer_id, model_id) & SUPPORTED_CLUSTERS
-    resources = [_get_cluster_info(cluster_id) for cluster_id in CLUSTER_ORDER if cluster_id in resource_ids]
+    support_matrix = get_supported_resources(trainer_id, model_id)
+    resources = []
+    for cluster_id in CLUSTER_ORDER:
+        if cluster_id not in support_matrix:
+            continue
+        info = _get_cluster_info(cluster_id)
+        # patch support based on what is supported in table
+        info["supported"] = support_matrix[cluster_id]
+        resources.append(info)
 
     return jsonify({"resources": resources})
 
