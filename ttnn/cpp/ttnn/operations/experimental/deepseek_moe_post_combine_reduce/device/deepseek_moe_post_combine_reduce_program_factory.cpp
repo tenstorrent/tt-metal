@@ -129,16 +129,8 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
             .set_page_size(tt::CBIndex::c_16, tile_size);
     auto cb_output_handle = tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_output_config);
 
-    // CB24: intermediate accumulation buffer for packer L1 accumulation
-    // Size: 7 tiles (accumulator for one token's result across all experts)
-    // Used for accumulation with push/pop between experts
-    uint32_t accumulator_cb_size = emb_dim_tiles * tile_size;
-    tt::tt_metal::CircularBufferConfig cb_accumulator_config =
-        tt::tt_metal::CircularBufferConfig(2 * accumulator_cb_size, {{tt::CBIndex::c_24, output_cb_data_format}})
-            .set_page_size(tt::CBIndex::c_24, tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_accumulator_config);
-
     // CB17: intermediate buffer for batching 32 tokens before tilize
+    // Also used for L1 accumulation directly (no separate accumulator CB needed)
     // Size: 32 tokens × 7 tiles × 2048 bytes = 458,752 bytes
     // Page size = tile_size so pack_tile and TileSlice work naturally
     uint32_t rowmajor_cb_size = 32 * emb_dim_tiles * tile_size;

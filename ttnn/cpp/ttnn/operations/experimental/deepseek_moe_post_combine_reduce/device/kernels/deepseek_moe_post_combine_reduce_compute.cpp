@@ -11,7 +11,6 @@
 
 constexpr uint32_t cb_combine_input = tt::CBIndex::c_0;
 constexpr uint32_t cb_weights = tt::CBIndex::c_1;
-constexpr uint32_t cb_accumulator = tt::CBIndex::c_24;
 constexpr uint32_t cb_output = tt::CBIndex::c_16;
 constexpr uint32_t cb_rowmajor = tt::CBIndex::c_17;
 
@@ -31,7 +30,6 @@ void kernel_main() {
         cb_wait_front(cb_combine_input, total_expert_tiles);
         cb_wait_front(cb_weights, num_experts);
 
-        cb_reserve_back(cb_accumulator, emb_dim_tiles);
         mul_tiles_bcast_scalar_init_short(cb_combine_input, cb_weights);
 
         bool first_active = true;
@@ -61,34 +59,13 @@ void kernel_main() {
             tile_regs_wait();
 
             for (uint32_t j = 0; j < emb_dim_tiles; j++) {
-                // out_of_order_output=true to write to explicit tile index and accumulate
-                pack_tile<true>(j, cb_accumulator, j);
+                pack_tile<true>(j, cb_rowmajor, i * emb_dim_tiles + j);
             }
 
             tile_regs_release();
         }
-        cb_push_back(cb_accumulator, emb_dim_tiles);
         pack_reconfig_l1_acc(0);
 
-        cb_wait_front(cb_accumulator, emb_dim_tiles);
-
-        tile_regs_acquire();
-
-        copy_tile_init(cb_accumulator);
-        for (uint32_t j = 0; j < emb_dim_tiles; j++) {
-            copy_tile(cb_accumulator, j, j);
-        }
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        for (uint32_t j = 0; j < emb_dim_tiles; j++) {
-            pack_tile(j, cb_rowmajor, i * emb_dim_tiles + j);
-        }
-
-        tile_regs_release();
-
-        cb_pop_front(cb_accumulator, emb_dim_tiles);
         cb_pop_front(cb_combine_input, total_expert_tiles);
         cb_pop_front(cb_weights, num_experts);
     }
