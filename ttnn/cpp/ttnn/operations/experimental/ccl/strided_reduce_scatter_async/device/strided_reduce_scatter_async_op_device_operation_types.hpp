@@ -43,7 +43,6 @@ struct operation_attributes_t {
     bool using_persistent_buffers;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     std::optional<uint32_t> cluster_axis;
-    std::optional<uint32_t> chunks_per_sync;
     std::optional<uint32_t> num_workers_per_link;
     std::optional<uint32_t> num_buffers_per_channel;
     std::optional<uint32_t> mm_cores_y;
@@ -66,7 +65,6 @@ struct operation_attributes_t {
         attrs.emplace_back("barrier_semaphore", barrier_semaphore);
         attrs.emplace_back("using_persistent_buffers", using_persistent_buffers);
         attrs.emplace_back("cluster_axis", cluster_axis);
-        attrs.emplace_back("chunks_per_sync", chunks_per_sync);
         attrs.emplace_back("num_workers_per_link", num_workers_per_link);
         attrs.emplace_back("num_buffers_per_channel", num_buffers_per_channel);
         attrs.emplace_back("mm_cores_y", mm_cores_y);
@@ -87,14 +85,6 @@ struct tensor_args_t {
 using spec_return_value_t = std::vector<ttnn::TensorSpec>;
 using tensor_return_value_t = std::vector<Tensor>;
 
-// Common validation function
-void strided_reduce_scatter_common_validates(
-    const ttnn::Tensor& input_tensor,
-    ttnn::ccl::Topology topology,
-    uint32_t dim,
-    uint32_t num_links,
-    uint32_t ring_size,
-    const ttnn::MemoryConfig& memory_config,
-    const std::optional<ttnn::Tensor>& optional_output_tensor);
-
 }  // namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail
+
+#include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_validate_utils.hpp"
