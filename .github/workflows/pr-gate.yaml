@@ -393,7 +393,7 @@ jobs:
         jq --arg prefix "$PREFIX/" -r \
           '.[].file | sub("^" + $prefix; "")' \
           build/compile_commands.json > relative_files_in_build.txt
-        git diff --name-only "_pr_base..." > changed_files.txt
+        git diff --name-only "_pr_base" HEAD > changed_files.txt
         grep -F -f relative_files_in_build.txt changed_files.txt > common_files.txt || true
 
         # Exit if there are no modified files known to CMake
