@@ -32,12 +32,12 @@ class PipelineStageSync:
         pseudo_input_tensor: ttnn.Tensor,
         pseudo_output_tensor: ttnn.Tensor,
         mesh_device: ttnn.MeshDevice,
-        dst_device_mesh_coord: ttnn.MeshCoordinate,
-        stalling_core: ttnn.CoreCoord,
-        run_stalling_kernel_on_ncrisc: bool,
         src_device_mesh_coord: ttnn.MeshCoordinate,
         signalling_core: ttnn.CoreCoord,
         run_signalling_kernel_on_ncrisc: bool,
+        dst_device_mesh_coord: ttnn.MeshCoordinate,
+        stalling_core: ttnn.CoreCoord,
+        run_stalling_kernel_on_ncrisc: bool,
         num_iterations: int = 1,
     ) -> None:
         """
@@ -80,7 +80,7 @@ class PipelineStageSync:
         global_semaphore = ttnn.create_global_semaphore(mesh_device, all_cores_core_range_set, 0)
         semaphore_l1_addr = ttnn.get_global_semaphore_address(global_semaphore)
 
-        # construct path - horizontal then vertical
+        # construct path
         mesh_shape = mesh_device.shape
         mesh_rows = mesh_shape[0]
         mesh_cols = mesh_shape[1]
@@ -101,6 +101,8 @@ class PipelineStageSync:
         else:
             row_step = -1
             row_hops = backward_distance
+
+        print(row_step)
 
         for _ in range(row_hops):
             row = (row + row_step) % mesh_rows
@@ -132,22 +134,22 @@ class PipelineStageSync:
                     mesh_coord in signaller_devices and target_device in intermediate_signaller_devices
                 )
 
-                stalling_core_phys = mesh_device.worker_core_from_logical_core(stalling_core)
-                stalling_core_noc_x_addr = stalling_core_phys.x
-                stalling_core_noc_y_addr = stalling_core_phys.y
-
                 signalling_core_phys = mesh_device.worker_core_from_logical_core(signalling_core)
                 signalling_core_noc_x_addr = signalling_core_phys.x
                 signalling_core_noc_y_addr = signalling_core_phys.y
+
+                stalling_core_phys = mesh_device.worker_core_from_logical_core(stalling_core)
+                stalling_core_noc_x_addr = stalling_core_phys.x
+                stalling_core_noc_y_addr = stalling_core_phys.y
 
                 fabric_arg_base = 0
                 reader_named_ct_args = [
                     ("is_intermediate_signaller", is_intermediate_signaller),
                     ("is_signalling_to_intermediate_signaller", is_signalling_to_intermediate_signaller),
-                    ("stalling_core_noc_x_addr", stalling_core_noc_x_addr),
-                    ("stalling_core_noc_y_addr", stalling_core_noc_y_addr),
                     ("signalling_core_noc_x_addr", signalling_core_noc_x_addr),
                     ("signalling_core_noc_y_addr", signalling_core_noc_y_addr),
+                    ("stalling_core_noc_x_addr", stalling_core_noc_x_addr),
+                    ("stalling_core_noc_y_addr", stalling_core_noc_y_addr),
                     ("semaphore_l1_addr", semaphore_l1_addr),
                     ("fabric_arg_base", fabric_arg_base),
                     ("num_iterations", num_iterations),
@@ -156,18 +158,6 @@ class PipelineStageSync:
                 compute_name_ct_args = [("num_iterations", num_iterations)]
 
                 # === Unified Kernel Descriptor ===
-
-                # select risc for stalling cores
-                if mesh_coord == dst_device_mesh_coord:
-                    if run_stalling_kernel_on_ncrisc:
-                        run_stalling_logic_on_ncrisc = True
-                        run_stalling_logic_on_brisc = False
-                    else:
-                        run_stalling_logic_on_ncrisc = False
-                        run_stalling_logic_on_brisc = True
-                else:
-                    run_stalling_logic_on_ncrisc = False
-                    run_stalling_logic_on_brisc = False
 
                 # select risc for signalling cores
                 if mesh_coord in signaller_devices:
@@ -181,6 +171,18 @@ class PipelineStageSync:
                     run_signalling_logic_on_ncrisc = False
                     run_signalling_logic_on_brisc = False
 
+                # select risc for stalling cores
+                if mesh_coord == dst_device_mesh_coord:
+                    if run_stalling_kernel_on_ncrisc:
+                        run_stalling_logic_on_ncrisc = True
+                        run_stalling_logic_on_brisc = False
+                    else:
+                        run_stalling_logic_on_ncrisc = False
+                        run_stalling_logic_on_brisc = True
+                else:
+                    run_stalling_logic_on_ncrisc = False
+                    run_stalling_logic_on_brisc = False
+
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source=kernel_path,
                     core_ranges=all_cores_core_range_set,
@@ -191,16 +193,6 @@ class PipelineStageSync:
                     brisc_common_runtime_args=[],
                     per_core_compile_time_descriptors=[
                         PerCoreCompileTimeDescriptor(
-                            named_compile_time_arg="run_stalling_logic_on_ncrisc",
-                            core_values=[(stalling_core, run_stalling_logic_on_ncrisc)],
-                            other_value=0,
-                        ),
-                        PerCoreCompileTimeDescriptor(
-                            named_compile_time_arg="run_stalling_logic_on_brisc",
-                            core_values=[(stalling_core, run_stalling_logic_on_brisc)],
-                            other_value=0,
-                        ),
-                        PerCoreCompileTimeDescriptor(
                             named_compile_time_arg="run_signalling_logic_on_ncrisc",
                             core_values=[(signalling_core, run_signalling_logic_on_ncrisc)],
                             other_value=0,
@@ -208,6 +200,16 @@ class PipelineStageSync:
                         PerCoreCompileTimeDescriptor(
                             named_compile_time_arg="run_signalling_logic_on_brisc",
                             core_values=[(signalling_core, run_signalling_logic_on_brisc)],
+                            other_value=0,
+                        ),
+                        PerCoreCompileTimeDescriptor(
+                            named_compile_time_arg="run_stalling_logic_on_ncrisc",
+                            core_values=[(stalling_core, run_stalling_logic_on_ncrisc)],
+                            other_value=0,
+                        ),
+                        PerCoreCompileTimeDescriptor(
+                            named_compile_time_arg="run_stalling_logic_on_brisc",
+                            core_values=[(stalling_core, run_stalling_logic_on_brisc)],
                             other_value=0,
                         ),
                     ],
@@ -221,7 +223,6 @@ class PipelineStageSync:
                     cbs=[],
                 )
 
-                # TODO: (GR)
                 if mesh_coord in signaller_devices:
                     if run_signalling_kernel_on_ncrisc:
                         kernel_idx = kernel_result.get_group_by_arg(
@@ -235,9 +236,6 @@ class PipelineStageSync:
                     per_core_rt_args_ref = program.kernels[kernel_idx].runtime_args[signalling_core.x][
                         signalling_core.y
                     ]
-
-                    # signalling_fabric_node_id = mesh_device.get_fabric_node_id(src_device_mesh_coord)
-                    # stalling_device_fabric_node_id = mesh_device.get_fabric_node_id(dst_device_mesh_coord)
 
                     fabric_src_node_id = mesh_device.get_fabric_node_id(mesh_coord)
                     fabric_dst_node_id = mesh_device.get_fabric_node_id(target_device)

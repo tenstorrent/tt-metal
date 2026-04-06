@@ -35,10 +35,10 @@ struct PipelineStageSync {
         uint32_t runSignallingLogicOnNCRISC,
         uint32_t isIntermediateSignaller,
         uint32_t isSignallingToIntermediateSignaller,
-        uint32_t stallingCoreNocXAddr,
-        uint32_t stallingCoreNocYAddr,
         uint32_t signallingCoreNocXAddr,
         uint32_t signallingCoreNocYAddr,
+        uint32_t stallingCoreNocXAddr,
+        uint32_t stallingCoreNocYAddr,
         uint32_t semaphoreL1Addr,
         uint32_t fabricArgBase>
     struct ReaderCTArgs {
@@ -46,10 +46,10 @@ struct PipelineStageSync {
         static constexpr bool run_signalling_logic_on_ncrisc = runSignallingLogicOnNCRISC == 1;
         static constexpr bool is_intermediate_signaller = isIntermediateSignaller == 1;
         static constexpr bool is_signalling_to_intermediate_signaller = isSignallingToIntermediateSignaller == 1;
-        static constexpr uint32_t stalling_core_noc_x_addr = stallingCoreNocXAddr;
-        static constexpr uint32_t stalling_core_noc_y_addr = stallingCoreNocYAddr;
         static constexpr uint32_t signalling_core_noc_x_addr = signallingCoreNocXAddr;
         static constexpr uint32_t signalling_core_noc_y_addr = signallingCoreNocYAddr;
+        static constexpr uint32_t stalling_core_noc_x_addr = stallingCoreNocXAddr;
+        static constexpr uint32_t stalling_core_noc_y_addr = stallingCoreNocYAddr;
         static constexpr uint32_t semaphore_l1_addr = semaphoreL1Addr;
         static constexpr uint32_t fabric_arg_base = fabricArgBase;
     };
@@ -63,10 +63,10 @@ struct PipelineStageSync {
         uint32_t runSignallingLogicOnBRISC,
         uint32_t isIntermediateSignaller,
         uint32_t isSignallingToIntermediateSignaller,
-        uint32_t stallingCoreNocXAddr,
-        uint32_t stallingCoreNocYAddr,
         uint32_t signallingCoreNocXAddr,
         uint32_t signallingCoreNocYAddr,
+        uint32_t stallingCoreNocXAddr,
+        uint32_t stallingCoreNocYAddr,
         uint32_t semaphoreL1Addr,
         uint32_t fabricArgBase>
     struct WriterCTArgs {
@@ -74,10 +74,10 @@ struct PipelineStageSync {
         static constexpr bool run_signalling_logic_on_brisc = runSignallingLogicOnBRISC == 1;
         static constexpr bool is_intermediate_signaller = isIntermediateSignaller == 1;
         static constexpr bool is_signalling_to_intermediate_signaller = isSignallingToIntermediateSignaller == 1;
-        static constexpr uint32_t stalling_core_noc_x_addr = stallingCoreNocXAddr;
-        static constexpr uint32_t stalling_core_noc_y_addr = stallingCoreNocYAddr;
         static constexpr uint32_t signalling_core_noc_x_addr = signallingCoreNocXAddr;
         static constexpr uint32_t signalling_core_noc_y_addr = signallingCoreNocYAddr;
+        static constexpr uint32_t stalling_core_noc_x_addr = stallingCoreNocXAddr;
+        static constexpr uint32_t stalling_core_noc_y_addr = stallingCoreNocYAddr;
         static constexpr uint32_t semaphore_l1_addr = semaphoreL1Addr;
         static constexpr uint32_t fabric_arg_base = fabricArgBase;
     };
@@ -124,10 +124,10 @@ struct PipelineStageSync {
         static FORCE_INLINE void signalling_impl(
             bool is_intermediate_signaller,
             bool is_signalling_to_intermediate_signaller,
-            uint32_t stalling_core_noc_x_addr,
-            uint32_t stalling_core_noc_y_addr,
             uint32_t signalling_core_noc_x_addr,
             uint32_t signalling_core_noc_y_addr,
+            uint32_t stalling_core_noc_x_addr,
+            uint32_t stalling_core_noc_y_addr,
             uint32_t semaphore_l1_addr,
             size_t fabric_arg_base) {
             // Remote semaphore noc address
@@ -183,10 +183,10 @@ struct PipelineStageSync {
                 signalling_impl(
                     CTArgs::is_intermediate_signaller,
                     CTArgs::is_signalling_to_intermediate_signaller,
-                    CTArgs::stalling_core_noc_x_addr,
-                    CTArgs::stalling_core_noc_y_addr,
                     CTArgs::signalling_core_noc_x_addr,
                     CTArgs::signalling_core_noc_y_addr,
+                    CTArgs::stalling_core_noc_x_addr,
+                    CTArgs::stalling_core_noc_y_addr,
                     CTArgs::semaphore_l1_addr,
                     CTArgs::fabric_arg_base);
             }
@@ -206,10 +206,10 @@ struct PipelineStageSync {
                 signalling_impl(
                     CTArgs::is_intermediate_signaller,
                     CTArgs::is_signalling_to_intermediate_signaller,
-                    CTArgs::stalling_core_noc_x_addr,
-                    CTArgs::stalling_core_noc_y_addr,
                     CTArgs::signalling_core_noc_x_addr,
                     CTArgs::signalling_core_noc_y_addr,
+                    CTArgs::stalling_core_noc_x_addr,
+                    CTArgs::stalling_core_noc_y_addr,
                     CTArgs::semaphore_l1_addr,
                     CTArgs::fabric_arg_base);
             }
