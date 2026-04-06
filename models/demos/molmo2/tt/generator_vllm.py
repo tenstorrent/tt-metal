@@ -19,6 +19,7 @@ from tqdm import tqdm
 from transformers import BatchFeature
 
 import ttnn
+from models.demos.molmo2.tt.prefill_attention_mask import build_molmo2_prefill_attention_bias
 from models.demos.molmo2.tt.trace_capture_utils import trace_capture_run_begin, trace_capture_run_end
 from vllm.model_executor.models.interfaces import SupportsMultiModal
 from vllm.model_executor.models.molmo import MolmoProcessingInfo, get_patches_grid_size, select_tiling
@@ -194,41 +195,53 @@ def allocate_molmo2_kv_cache(
     kv_cache_shape: Tuple[int, ...],
     dtype: torch.dtype,
     num_layers: int,
-    mesh_device: ttnn.MeshDevice,
-    tt_cache_path: str,
+    mesh_device: ttnn.MeshDevice = None,
+    tt_cache_path: str = None,
+    submesh_devices: List[ttnn.MeshDevice] = None,
 ) -> List[List[ttnn.Tensor]]:
     """
     Allocate vLLM-style KV cache for Molmo2 text model.
+
+    Supports both DP=1 (single mesh_device) and DP>1 (list of submesh_devices).
 
     Args:
         kv_cache_shape: Shape of each KV cache tensor (num_blocks, num_kv_heads, block_size, head_size)
         dtype: Data type for KV cache
         num_layers: Number of transformer layers
-        mesh_device: TT mesh device
+        mesh_device: Single TT mesh device (DP=1, backward compat)
         tt_cache_path: Path for caching TT tensors
+        submesh_devices: List of per-replica submesh devices (DP>1)
 
     Returns:
-        List of [K cache, V cache] pairs for each layer
+        List of per-DP-replica KV caches: [dp_idx][layer][k_or_v]
     """
-    kv_cache = []
-    cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
+    if submesh_devices is None:
+        submesh_devices = [mesh_device]
 
-    for layer_num in tqdm(range(num_layers), desc="Allocating TT KV caches for Molmo2"):
-        kv_tt_i = [
-            ttnn.as_tensor(
-                cache_kv,
-                device=mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                dtype=ttnn.bfloat16,  # Molmo2 uses bfloat16 for KV cache
-                cache_file_name=tt_cache_path / f"empty_{kv}cache_paged_attention{kv_cache_shape}",
-            )
-            for kv in ["k", "v"]
-        ]
-        kv_cache.append(kv_tt_i)
+    all_kv_caches = []
+    for mesh_idx, submesh in enumerate(submesh_devices):
+        kv_cache = []
+        cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
+        for layer_num in tqdm(
+            range(num_layers),
+            desc=f"Allocating TT KV caches for Molmo2 (submesh {mesh_idx + 1}/{len(submesh_devices)})",
+        ):
+            kv_tt_i = [
+                ttnn.as_tensor(
+                    cache_kv,
+                    device=submesh,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat16,  # Molmo2 uses bfloat16 for KV cache
+                    cache_file_name=tt_cache_path / f"empty_{kv}cache_paged_attention{kv_cache_shape}",
+                )
+                for kv in ["k", "v"]
+            ]
+            kv_cache.append(kv_tt_i)
+        all_kv_caches.append(kv_cache)
 
-    return [kv_cache]  # Wrap in list for data parallel compatibility
+    return all_kv_caches  # [dp_idx][layer][k_or_v]
 
 
 class Molmo2ProcessorWrapper:
@@ -1126,67 +1139,157 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
 
     def __init__(
         self,
-        model: "Molmo2Model",
-        model_args: Molmo2ModelArgs,
-        mesh_device: ttnn.MeshDevice,
-        tokenizer,
+        model: "Molmo2Model" = None,
+        model_args: Molmo2ModelArgs = None,
+        mesh_device: ttnn.MeshDevice = None,
+        tokenizer=None,
+        # DP-mode parameters (used when data_parallel > 1)
+        models: List["Molmo2Model"] = None,
+        model_args_list: List[Molmo2ModelArgs] = None,
+        data_parallel: int = 1,
+        batch_per_dp: int = None,
     ):
-        self.model = model
-        self.model_args = model_args
-        self.mesh_device = mesh_device
+        # Normalize single-model (backward compat) vs list (DP mode)
+        if models is None:
+            assert model is not None, "Either 'model' or 'models' must be provided"
+            models = [model]
+        if model_args_list is None:
+            assert model_args is not None, "Either 'model_args' or 'model_args_list' must be provided"
+            model_args_list = [model_args]
+
+        assert (
+            len(models) == len(model_args_list) == data_parallel
+        ), f"models/model_args_list length {len(models)} must equal data_parallel={data_parallel}"
+
+        self.data_parallel = data_parallel
+        self.models = models
+        self.model_args_list = model_args_list
+        # _full_mesh_device: original full mesh (Galaxy 32-chip or T3K 8-chip)
+        self._full_mesh_device = mesh_device if mesh_device is not None else models[0].mesh_device
         self.tokenizer = tokenizer
-        self.max_gen_len = model_args.max_seq_len - 1
+        self.max_gen_len = model_args_list[0].max_seq_len - 1
+        self.batch_per_dp = batch_per_dp if batch_per_dp is not None else model_args_list[0].max_batch_size
 
-        # State management (previously on Molmo2Generator)
-        self.kv_caches = None  # Will use vLLM's paged cache
-        self.current_pos = None  # Position tensor for decode
-        self.rot_mat_idxs = None  # Rotation matrix indices for decode
-        self.decode_position = 0  # Python-side position counter
+        # Per-replica state lists (indexed by dp_idx)
+        self.kv_caches_per_dp = [None] * data_parallel
+        self.current_pos_per_dp = [None] * data_parallel
+        self.rot_mat_idxs_per_dp = [None] * data_parallel
+        self.decode_position_per_dp = [0] * data_parallel
+        self.prefill_traces_per_dp = [{} for _ in range(data_parallel)]
+        self.decode_trace_id_per_dp = [None] * data_parallel
+        self.decode_trace_tensors_per_dp = [None] * data_parallel
+        self.decode_trace_output_per_dp = [None] * data_parallel
+        self.vision_trace_id_per_dp = [None] * data_parallel
+        self.vision_trace_tensors_per_dp = [None] * data_parallel
+        self.vision_trace_outputs_per_dp = [None] * data_parallel
+        self.decode_trace_needs_reset_per_dp = [True] * data_parallel
+        self.prev_page_table_per_dp = [None] * data_parallel
+        self._prefill_compiled_buckets_per_dp = [set() for _ in range(data_parallel)]
+        self.mesh_mapper_per_dp = [ttnn.ReplicateTensorToMesh(m.mesh_device) for m in models]
 
-        # Trace state
-        self.prefill_traces = {}  # seq_len -> (trace_id, trace_tensors, trace_output)
-        self.decode_trace_id = None
-        self.decode_trace_tensors = None
-        self.decode_trace_output = None
-        self.vision_trace_id = None
-        self.vision_trace_tensors = None
-        self.vision_trace_outputs = None
+        # sentinel so _set_active_replica skips save on first call
+        self._active_dp_idx = -1
 
-        # Mesh mapper for tensor operations
-        self.mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+        # Initialize active replica to 0 (sets self.model, self.mesh_device, etc.)
+        self._set_active_replica(0)
 
     def __del__(self):
         """Release traces and cleanup resources on destruction."""
         try:
-            # Release prefill traces
-            if hasattr(self, "prefill_traces") and self.prefill_traces:
-                for seq_len, (trace_id, _, _) in self.prefill_traces.items():
+            # Save current active replica state before iterating
+            if hasattr(self, "_active_dp_idx") and self._active_dp_idx >= 0:
+                self._save_active_replica(self._active_dp_idx)
+
+            for dp_idx in range(getattr(self, "data_parallel", 1)):
+                mesh_dev = None
+                if hasattr(self, "models") and dp_idx < len(self.models):
+                    mesh_dev = self.models[dp_idx].mesh_device
+                elif hasattr(self, "mesh_device"):
+                    mesh_dev = self.mesh_device
+
+                # Release prefill traces for this replica
+                prefill_traces = {}
+                if hasattr(self, "prefill_traces_per_dp") and dp_idx < len(self.prefill_traces_per_dp):
+                    prefill_traces = self.prefill_traces_per_dp[dp_idx] or {}
+                if prefill_traces and mesh_dev:
+                    for seq_len, (trace_id, _, _) in prefill_traces.items():
+                        try:
+                            ttnn.release_trace(mesh_dev, trace_id)
+                        except Exception as e:
+                            logger.warning(f"Failed to release prefill trace dp={dp_idx} seq={seq_len}: {e}")
+                    prefill_traces.clear()
+
+                # Release decode trace for this replica
+                decode_trace_id = None
+                if hasattr(self, "decode_trace_id_per_dp") and dp_idx < len(self.decode_trace_id_per_dp):
+                    decode_trace_id = self.decode_trace_id_per_dp[dp_idx]
+                if decode_trace_id is not None and mesh_dev:
                     try:
-                        ttnn.release_trace(self.mesh_device, trace_id)
-                        logger.debug(f"Released prefill trace for seq_len={seq_len}")
+                        ttnn.release_trace(mesh_dev, decode_trace_id)
                     except Exception as e:
-                        logger.warning(f"Failed to release prefill trace: {e}")
-                self.prefill_traces.clear()
+                        logger.warning(f"Failed to release decode trace dp={dp_idx}: {e}")
 
-            # Release decode trace
-            if hasattr(self, "decode_trace_id") and self.decode_trace_id is not None:
-                try:
-                    ttnn.release_trace(self.mesh_device, self.decode_trace_id)
-                    logger.debug("Released decode trace")
-                except Exception as e:
-                    logger.warning(f"Failed to release decode trace: {e}")
-                self.decode_trace_id = None
-
-            # Release vision trace
-            if hasattr(self, "vision_trace_id") and self.vision_trace_id is not None:
-                try:
-                    ttnn.release_trace(self.mesh_device, self.vision_trace_id)
-                    logger.debug("Released vision trace")
-                except Exception as e:
-                    logger.warning(f"Failed to release vision trace: {e}")
-                self.vision_trace_id = None
+                # Release vision trace for this replica
+                vision_trace_id = None
+                if hasattr(self, "vision_trace_id_per_dp") and dp_idx < len(self.vision_trace_id_per_dp):
+                    vision_trace_id = self.vision_trace_id_per_dp[dp_idx]
+                if vision_trace_id is not None and mesh_dev:
+                    try:
+                        ttnn.release_trace(mesh_dev, vision_trace_id)
+                    except Exception as e:
+                        logger.warning(f"Failed to release vision trace dp={dp_idx}: {e}")
         except Exception as e:
             logger.warning(f"Error in Molmo2ForConditionalGeneration.__del__: {e}")
+
+    def _set_active_replica(self, dp_idx: int) -> None:
+        """
+        Switch instance state to the specified DP replica.
+
+        Saves the current replica's state first (if any), then loads the target
+        replica's state into the instance attributes that the rest of the code uses.
+        For DP=1 this is called once (dp_idx=0) and is effectively a no-op after init.
+        """
+        if self._active_dp_idx >= 0:
+            self._save_active_replica(self._active_dp_idx)
+
+        self._active_dp_idx = dp_idx
+        model = self.models[dp_idx]
+        self.model = model
+        self.model_args = self.model_args_list[dp_idx]
+        self.mesh_device = model.mesh_device
+        self.mesh_mapper = self.mesh_mapper_per_dp[dp_idx]
+        self.kv_caches = self.kv_caches_per_dp[dp_idx]
+        self.current_pos = self.current_pos_per_dp[dp_idx]
+        self.rot_mat_idxs = self.rot_mat_idxs_per_dp[dp_idx]
+        self.decode_position = self.decode_position_per_dp[dp_idx]
+        self.prefill_traces = self.prefill_traces_per_dp[dp_idx]
+        self.decode_trace_id = self.decode_trace_id_per_dp[dp_idx]
+        self.decode_trace_tensors = self.decode_trace_tensors_per_dp[dp_idx]
+        self.decode_trace_output = self.decode_trace_output_per_dp[dp_idx]
+        self.decode_trace_needs_reset = self.decode_trace_needs_reset_per_dp[dp_idx]
+        self.prev_page_table = self.prev_page_table_per_dp[dp_idx]
+        self.vision_trace_id = self.vision_trace_id_per_dp[dp_idx]
+        self.vision_trace_tensors = self.vision_trace_tensors_per_dp[dp_idx]
+        self.vision_trace_outputs = self.vision_trace_outputs_per_dp[dp_idx]
+        self._prefill_compiled_buckets = self._prefill_compiled_buckets_per_dp[dp_idx]
+
+    def _save_active_replica(self, dp_idx: int) -> None:
+        """Save current instance state back to DP replica storage."""
+        self.kv_caches_per_dp[dp_idx] = self.kv_caches
+        self.current_pos_per_dp[dp_idx] = self.current_pos
+        self.rot_mat_idxs_per_dp[dp_idx] = self.rot_mat_idxs
+        self.decode_position_per_dp[dp_idx] = self.decode_position
+        self.prefill_traces_per_dp[dp_idx] = self.prefill_traces
+        self.decode_trace_id_per_dp[dp_idx] = self.decode_trace_id
+        self.decode_trace_tensors_per_dp[dp_idx] = self.decode_trace_tensors
+        self.decode_trace_output_per_dp[dp_idx] = self.decode_trace_output
+        self.decode_trace_needs_reset_per_dp[dp_idx] = self.decode_trace_needs_reset
+        self.prev_page_table_per_dp[dp_idx] = self.prev_page_table
+        self.vision_trace_id_per_dp[dp_idx] = self.vision_trace_id
+        self.vision_trace_tensors_per_dp[dp_idx] = self.vision_trace_tensors
+        self.vision_trace_outputs_per_dp[dp_idx] = self.vision_trace_outputs
+        if hasattr(self, "_prefill_compiled_buckets"):
+            self._prefill_compiled_buckets_per_dp[dp_idx] = self._prefill_compiled_buckets
 
     def init_kv_cache(self) -> None:
         """
@@ -1242,6 +1345,13 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 logger.error(f"_prepare_text_inputs: Device sync FAILED: {e}")
                 raise
 
+            # Detect raw image format [C, H, W] vs pre-unfolded [num_crops, num_patches, 588]
+            # and normalize to [B, C, H, W] for embed_image
+            patch_features = 14 * 14 * 3  # 588
+            if pixel_values.dim() == 3 and pixel_values.shape[-1] != patch_features:
+                # Raw image [C, H, W] -> [1, C, H, W]
+                pixel_values = pixel_values.unsqueeze(0)
+
             logger.info(f"_prepare_text_inputs: Calling embed_image...")
             visual_embeddings_ttnn, valid_token = self.model.embed_image(pixel_values, pooled_patches_idx)
             # CRITICAL: Synchronize after vision backbone to ensure operations complete
@@ -1277,6 +1387,31 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             ttnn.deallocate(input_ids_ttnn)
             return fused_ttnn
 
+    def _build_mm_prefill_attn_mask(
+        self,
+        token_type_ids: Optional[torch.Tensor],
+        hf_attention_mask: Optional[torch.Tensor],
+        seq_len: int,
+    ) -> Optional["ttnn.Tensor"]:
+        """HF-style multimodal prefill additive mask; ``None`` if not applicable."""
+        if token_type_ids is None or seq_len <= 1:
+            return None
+        if token_type_ids.shape[1] != seq_len:
+            raise ValueError(f"token_type_ids length {token_type_ids.shape[1]} != hidden seq_len {seq_len}")
+        if hf_attention_mask is not None and hf_attention_mask.shape[1] != seq_len:
+            raise ValueError(f"hf_attention_mask length {hf_attention_mask.shape[1]} != seq_len {seq_len}")
+        bias = build_molmo2_prefill_attention_bias(token_type_ids, attention_mask=hf_attention_mask).to(torch.bfloat16)
+        is_mesh = self.mesh_device.__class__.__name__ == "MeshDevice"
+        mm = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh else None
+        return ttnn.from_torch(
+            bias,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mm,
+        )
+
     def _run_prefill(
         self,
         input_ids: torch.Tensor,
@@ -1287,6 +1422,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         use_unified_trace: bool = False,
         page_table: Optional["ttnn.Tensor"] = None,
         user_id: int = 0,
+        attn_mask: Optional["ttnn.Tensor"] = None,
     ) -> Tuple["ttnn.Tensor", dict]:
         """
         Run prefill forward pass directly on the model.
@@ -1302,6 +1438,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             use_unified_trace: Whether to use unified trace (ignored for now)
             page_table: Page table tensor for paged attention
             user_id: Batch index for multi-user batching (determines KV cache slot)
+            attn_mask: Optional additive attention mask (for multimodal cross-attention)
 
         Returns:
             Tuple of (logits_ttnn, timing_dict)
@@ -1380,7 +1517,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             logits_ttnn, _ = self.model.text_model.forward(
                 hidden_states=hidden_states_ttnn,
                 start_pos=0,
-                attn_mask=None,
+                attn_mask=attn_mask,
                 kv_caches=prefill_kv_cache,
                 rot_mats=rot_mats,
                 page_table=page_table,
@@ -1510,47 +1647,71 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         """
         Initialize Molmo2-8B for vLLM inference.
 
+        For tt_data_parallel > 1 (e.g. Galaxy DP=4), the mesh_device is split
+        into tt_data_parallel submeshes and one model replica is created per
+        submesh, following the same pattern as tt_transformers (Llama/Qwen VL).
+
         Args:
             hf_config: HuggingFace model config
-            mesh_device: TT mesh device
-            max_batch_size: Maximum batch size
+            mesh_device: TT mesh device (full Galaxy mesh for DP>1)
+            max_batch_size: Maximum batch size (total across all DP replicas)
             max_seq_len: Maximum sequence length
-            tt_data_parallel: Data parallel factor
+            tt_data_parallel: Data parallel factor (e.g. 4 for Galaxy)
             optimizations: Optimization mode (not used for Molmo2)
 
         Returns:
             Initialized Molmo2ForConditionalGeneration instance
         """
-        logger.info(f"Initializing Molmo2-8B for vLLM with max_batch_size={max_batch_size}, max_seq_len={max_seq_len}")
+        logger.info(
+            f"Initializing Molmo2-8B for vLLM: max_batch_size={max_batch_size}, "
+            f"max_seq_len={max_seq_len}, data_parallel={tt_data_parallel}"
+        )
 
-        # Set HF_MODEL env var for tt_transformers model_config.py compatibility
-        # This is needed because vLLM spawns subprocesses that may not inherit the env var
         import os
 
         os.environ["HF_MODEL"] = "allenai/Molmo2-8B"
 
-        # Load tokenizer
+        # Load tokenizer and weights (shared across all DP replicas)
         tokenizer = load_processor()
-
-        # Load model weights
         state_dict = load_model_weights()
 
-        # Create model
-        model = create_model(mesh_device, state_dict, num_layers=None)
+        # Split mesh into submeshes for data parallelism.
+        # For DP=1 (T3K), create_submeshes returns [mesh_device] unchanged.
+        # For DP=4 (Galaxy 8x4), returns 4 submeshes of shape (1, 8).
+        from models.tt_transformers.tt.generator import create_submeshes
 
-        # Create model args
-        model_args = Molmo2ModelArgs(
-            mesh_device=mesh_device,
-            max_batch_size=max_batch_size,
-            max_seq_len=max_seq_len,
-        )
+        submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
+        batch_per_dp = max_batch_size // tt_data_parallel
+        logger.info(f"Created {len(submesh_devices)} submesh(es), batch_per_dp={batch_per_dp}")
 
-        # Create instance (no Molmo2Generator - vLLM manages state directly)
+        # Create one model replica per submesh (weights shared via state_dict)
+        models_list = []
+        model_args_list = []
+        for dp_idx, submesh in enumerate(submesh_devices):
+            logger.info(f"Creating Molmo2 model replica {dp_idx} on {submesh.shape} submesh...")
+            model_i = create_model(
+                submesh,
+                state_dict,
+                num_layers=None,
+                max_batch_size=batch_per_dp,
+                max_seq_len=max_seq_len,
+            )
+            model_args_i = Molmo2ModelArgs(
+                mesh_device=submesh,
+                max_batch_size=batch_per_dp,
+                max_seq_len=max_seq_len,
+            )
+            models_list.append(model_i)
+            model_args_list.append(model_args_i)
+
+        # Create instance with all replicas
         instance = cls(
-            model=model,
-            model_args=model_args,
+            models=models_list,
+            model_args_list=model_args_list,
             mesh_device=mesh_device,
             tokenizer=tokenizer,
+            data_parallel=tt_data_parallel,
+            batch_per_dp=batch_per_dp,
         )
 
         # Note: Trace warmup is handled by TTWorker.compile_or_warm_up_model()
@@ -1558,7 +1719,6 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         # Do NOT call _warmup_traces here - it would create duplicate traces.
 
         logger.info("Molmo2-8B initialized successfully for vLLM")
-
         return instance
 
     @property
@@ -1650,6 +1810,10 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             # image_grid_thw might be nested lists - flatten to get actual grid data
             # But note: image_grid_thw format may differ from image_grids
 
+        # Extract multimodal attention mask inputs from kwargs (vLLM may pass these)
+        token_type_ids = kwargs.get("token_type_ids", None)
+        hf_attention_mask = kwargs.get("attention_mask", None)
+
         # Handle prompt_lens default
         if prompt_lens is None:
             prompt_lens = torch.tensor([tokens.shape[1]] * batch_size)
@@ -1676,9 +1840,31 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         output_logits = []
 
         for user_id in range(batch_size):
+            # Route this user to the correct DP replica.
+            # Users [0 .. batch_per_dp-1]  -> replica 0
+            # Users [batch_per_dp .. 2*batch_per_dp-1] -> replica 1, etc.
+            model_id = min(user_id // self.batch_per_dp, self.data_parallel - 1)
+            if model_id != self._active_dp_idx:
+                self._set_active_replica(model_id)
+                # Refresh trace_num_blocks from the newly-active replica's traces
+                trace_num_blocks = None
+                if page_table is not None and self.prefill_traces:
+                    for _sl, (_tid, _tt, _to) in self.prefill_traces.items():
+                        if "page_table" in _tt:
+                            trace_num_blocks = list(_tt["page_table"].shape)[-1]
+                        break
+
             # Create per-user page_table_tt with proper padding for trace tensors
             # This is critical for batched requests - trace expects [1, num_blocks]
             page_table_tt = self._get_user_page_table_tt(page_table, user_id, trace_num_blocks)
+
+            # Build multimodal prefill attention mask for this user (if token_type_ids provided)
+            user_token_type_ids = None
+            user_hf_attention_mask = None
+            if token_type_ids is not None:
+                user_token_type_ids = token_type_ids[user_id : user_id + 1]
+            if hf_attention_mask is not None:
+                user_hf_attention_mask = hf_attention_mask[user_id : user_id + 1]
 
             # Check for VIDEO first (new vLLM multimodal flow)
             # NOTE: pixel_values_videos may be [[None]] for image requests (filled with None in tt_model_runner)
@@ -1755,6 +1941,9 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 # don't work with vision input due to device write restrictions during trace execution.
                 # Demo.py confirms video works without traces.
                 logger.info(f"  VIDEO: Running prefill WITHOUT traces (traces incompatible with vision)")
+                user_attn_mask = self._build_mm_prefill_attn_mask(
+                    user_token_type_ids, user_hf_attention_mask, user_tokens.shape[1]
+                )
                 logits_ttnn, prefill_timing = self._run_prefill(
                     input_ids=user_tokens,
                     pixel_values=pv_tensor,
@@ -1763,6 +1952,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                     use_vision_trace=False,
                     page_table=page_table_tt,
                     user_id=user_id,
+                    attn_mask=user_attn_mask,
                 )
 
                 # Convert ttnn tensor to torch tensor (same as image/text path)
@@ -1919,8 +2109,12 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 # don't work correctly with vision-fused embeddings, producing garbled output.
                 # Video path already uses use_trace=False and produces coherent output.
                 logger.info(f"  IMAGE: Running prefill WITHOUT traces (vision incompatible with text traces)")
+                user_tokens_img = tokens[user_id : user_id + 1, : prompt_lens[user_id]]
+                user_attn_mask = self._build_mm_prefill_attn_mask(
+                    user_token_type_ids, user_hf_attention_mask, user_tokens_img.shape[1]
+                )
                 logits_ttnn, prefill_timing = self._run_prefill(
-                    input_ids=tokens[user_id : user_id + 1, : prompt_lens[user_id]],
+                    input_ids=user_tokens_img,
                     pixel_values=pv_tensor,
                     pooled_patches_idx=pooling,
                     use_trace=False,  # DISABLED for images - same as video path
@@ -1928,6 +2122,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                     use_unified_trace=False,
                     page_table=page_table_tt,
                     user_id=user_id,
+                    attn_mask=user_attn_mask,
                 )
                 original_seq_len = prefill_timing.get("original_seq_len", prompt_lens[user_id])
             else:
@@ -1942,8 +2137,12 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                     image_inputs = preprocess_image_molmo2(image)
 
                     # Run prefill with image
+                    user_tokens_pil = tokens[user_id : user_id + 1, : prompt_lens[user_id]]
+                    user_attn_mask = self._build_mm_prefill_attn_mask(
+                        user_token_type_ids, user_hf_attention_mask, user_tokens_pil.shape[1]
+                    )
                     logits_ttnn, prefill_timing = self._run_prefill(
-                        input_ids=tokens[user_id : user_id + 1, : prompt_lens[user_id]],
+                        input_ids=user_tokens_pil,
                         pixel_values=image_inputs["pixel_values"],
                         pooled_patches_idx=image_inputs["image_token_pooling"].unsqueeze(0),
                         use_trace=enable_trace,
@@ -1951,18 +2150,24 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                         use_unified_trace=False,
                         page_table=page_table_tt,
                         user_id=user_id,
+                        attn_mask=user_attn_mask,
                     )
                     original_seq_len = prefill_timing.get("original_seq_len", prompt_lens[user_id])
                 else:
                     # Run prefill without image (text-only)
+                    user_tokens_txt = tokens[user_id : user_id + 1, : prompt_lens[user_id]]
+                    user_attn_mask = self._build_mm_prefill_attn_mask(
+                        user_token_type_ids, user_hf_attention_mask, user_tokens_txt.shape[1]
+                    )
                     logits_ttnn, prefill_timing = self._run_prefill(
-                        input_ids=tokens[user_id : user_id + 1, : prompt_lens[user_id]],
+                        input_ids=user_tokens_txt,
                         pixel_values=None,
                         pooled_patches_idx=None,
                         use_trace=enable_trace,
                         use_vision_trace=False,
                         page_table=page_table_tt,
                         user_id=user_id,
+                        attn_mask=user_attn_mask,
                     )
                     original_seq_len = prefill_timing.get("original_seq_len", prompt_lens[user_id])
 
@@ -2038,11 +2243,16 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         """
         batch_size = tokens.shape[0]
 
-        # Debug logging for shape investigation
         logger.info(
             f"decode_forward called: batch_size={batch_size}, tokens.shape={tokens.shape}, "
             f"start_pos.shape={start_pos.shape}, page_table.shape={page_table.shape if page_table is not None else None}"
         )
+
+        # For DP>1, delegate to the per-replica decode path
+        if self.data_parallel > 1:
+            return self._decode_forward_dp(tokens, start_pos, page_table, kv_cache, enable_trace, read_from_device)
+
+        # --- Single-replica (DP=1) decode path ---
 
         # Prepare batch-sized decode inputs using vLLM's per-request positions
         token_id_ttnn, current_pos_tt, rot_mat_idxs_tt, page_table_tt = self.prepare_decode_inputs(
@@ -2172,6 +2382,133 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
 
         return logits
 
+    def _decode_forward_dp(
+        self,
+        tokens: torch.Tensor,
+        start_pos: torch.Tensor,
+        page_table: Optional[torch.Tensor],
+        kv_cache,
+        enable_trace: bool,
+        read_from_device: bool,
+    ) -> torch.Tensor:
+        """
+        Decode forward pass for DP>1: chunk the batch across DP replicas and
+        run each chunk on its corresponding model replica.
+
+        Tokens [B, 1] are split into data_parallel chunks along dim=0.
+        Each chunk [B//DP, 1] runs on replica dp_idx with kv_cache[dp_idx].
+        Logits from all replicas are concatenated and returned.
+        """
+        batch_size = tokens.shape[0]
+        vocab_size = 152064  # Molmo2 vocab size
+
+        # Chunk inputs along batch dimension across DP replicas
+        tokens_chunks = tokens.chunk(self.data_parallel, dim=0)
+        pos_chunks = start_pos.chunk(self.data_parallel, dim=0)
+        pt_chunks = (
+            page_table.chunk(self.data_parallel, dim=0) if page_table is not None else [None] * self.data_parallel
+        )
+
+        all_logits = []
+
+        for dp_idx, (tok_chunk, pos_chunk, pt_chunk) in enumerate(zip(tokens_chunks, pos_chunks, pt_chunks)):
+            chunk_batch = tok_chunk.shape[0]
+
+            # Switch to this replica (saves previous replica state automatically)
+            self._set_active_replica(dp_idx)
+
+            # Use the per-replica KV cache
+            if kv_cache is not None and dp_idx < len(kv_cache) and kv_cache[dp_idx] is not None:
+                self.kv_caches = kv_cache[dp_idx]
+
+            # Prepare decode inputs for this chunk on the replica's device
+            token_id_ttnn, current_pos_tt, rot_mat_idxs_tt, page_table_tt = self.prepare_decode_inputs(
+                tok_chunk, pos_chunk, pt_chunk
+            )
+
+            # Embed tokens on this replica
+            hidden_states = self.model.text_model.embed_tokens(token_id_ttnn)
+            ttnn.deallocate(token_id_ttnn)
+
+            # Check per-replica trace availability
+            has_trace_id = self.decode_trace_id is not None
+            has_trace_tensors = self.decode_trace_tensors is not None
+            use_traced_decode = enable_trace and has_trace_id and has_trace_tensors and chunk_batch == 1
+
+            if use_traced_decode:
+                new_pos = ttnn.from_torch(
+                    pos_chunk[:1].int(),
+                    device=self.mesh_device,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+                ttnn.copy(new_pos, self.current_pos)
+                ttnn.copy(new_pos, self.rot_mat_idxs)
+                ttnn.deallocate(new_pos)
+
+                ttnn.copy(hidden_states, self.decode_trace_tensors["hidden_states"])
+                ttnn.deallocate(hidden_states)
+
+                if page_table_tt is not None and "page_table" in self.decode_trace_tensors:
+                    ttnn.copy(page_table_tt, self.decode_trace_tensors["page_table"])
+                if page_table_tt is not None:
+                    ttnn.deallocate(page_table_tt)
+
+                ttnn.deallocate(current_pos_tt)
+                ttnn.deallocate(rot_mat_idxs_tt)
+
+                ttnn.execute_trace(self.mesh_device, self.decode_trace_id, cq_id=0, blocking=True)
+                logits_ttnn = self.decode_trace_output
+            else:
+                logits_ttnn = self.model.text_model.forward_decode(
+                    hidden_states=hidden_states,
+                    kv_caches=self.kv_caches,
+                    current_pos=current_pos_tt,
+                    rot_mat_idxs=rot_mat_idxs_tt,
+                    page_table=page_table_tt,
+                )
+                ttnn.deallocate(hidden_states)
+                ttnn.deallocate(current_pos_tt)
+                ttnn.deallocate(rot_mat_idxs_tt)
+                if page_table_tt is not None:
+                    ttnn.deallocate(page_table_tt)
+
+            # Save replica state (includes updated kv_caches reference)
+            self._save_active_replica(dp_idx)
+
+            if not read_from_device:
+                all_logits.append(torch.zeros(chunk_batch, 1, vocab_size))
+                if not use_traced_decode:
+                    ttnn.deallocate(logits_ttnn)
+                continue
+
+            # Read logits from this replica
+            ttnn.synchronize_device(self.mesh_device)
+            mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+            logits_i = ttnn.to_torch(logits_ttnn, mesh_composer=mesh_composer)[0]
+
+            if not use_traced_decode:
+                ttnn.deallocate(logits_ttnn)
+
+            # Reshape to [chunk_batch, 1, vocab_size]
+            if logits_i.dim() == 4:
+                logits_i = logits_i[0, 0, :chunk_batch, :].unsqueeze(1)
+            elif logits_i.dim() == 3:
+                logits_i = logits_i[0, :chunk_batch, :].unsqueeze(1)
+            elif logits_i.dim() == 2:
+                logits_i = logits_i[:chunk_batch, :].unsqueeze(1)
+            elif logits_i.dim() == 1:
+                logits_i = logits_i.unsqueeze(0).unsqueeze(1)
+
+            all_logits.append(logits_i)
+
+        if not read_from_device:
+            return torch.zeros(batch_size, 1, vocab_size)
+
+        return torch.cat(all_logits, dim=0)
+
     def allocate_kv_cache(
         self,
         kv_cache_shape: Tuple[int, ...],
@@ -2181,19 +2518,22 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         """
         Allocate KV cache for Molmo2 text model.
 
+        For DP>1, allocates a separate KV cache per DP replica (submesh).
+        Returns list indexed by [dp_idx][layer][k_or_v].
+
         Args:
             kv_cache_shape: Shape of KV cache tensors
             dtype: Data type for KV cache
             num_layers: Number of transformer layers
 
         Returns:
-            List of KV cache tensor pairs per layer
+            List of per-DP-replica KV cache lists: [dp_idx][layer][k_or_v]
         """
         return allocate_molmo2_kv_cache(
             kv_cache_shape=kv_cache_shape,
             dtype=dtype,
             num_layers=num_layers,
-            mesh_device=self.mesh_device,
+            submesh_devices=[model.mesh_device for model in self.models],
             tt_cache_path=self.cache_path,
         )
 
@@ -2210,18 +2550,41 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         """
         Warmup prefill path for Molmo2.
 
-        This method is called by tt-inference-server to capture prefill traces.
-        Uses a two-phase approach to avoid trace memory corruption:
-        Phase 1: Allocate ALL trace tensors before capturing any traces
-        Phase 2: Capture traces for each bucket
+        For DP>1, iterates over all DP replicas and warms up each one separately
+        using its per-replica KV cache.
 
         Args:
-            kv_cache: KV cache tensors from vLLM (paged format)
+            kv_cache: KV cache tensors from vLLM (paged format) [dp_idx][layer][k_or_v]
             enable_trace: Whether to capture prefill trace
             can_sample_on_device: Whether sampling can happen on device
             non_greedy_decoding_on_device: Whether non-greedy decoding is on device
             num_blocks: Number of KV cache blocks
             max_seq_len: Maximum sequence length (buckets exceeding this are skipped)
+        """
+        for dp_idx in range(self.data_parallel):
+            logger.info(f"Warmup prefill: starting replica {dp_idx}/{self.data_parallel}")
+            self._set_active_replica(dp_idx)
+
+            # Select this replica's KV cache: kv_cache[dp_idx] is [layer][k_or_v]
+            per_dp_kv = [kv_cache[dp_idx]] if (kv_cache and dp_idx < len(kv_cache)) else kv_cache
+
+            self._warmup_prefill_single_replica(per_dp_kv, enable_trace, num_blocks, max_seq_len)
+            self._save_active_replica(dp_idx)
+            logger.info(f"Warmup prefill: replica {dp_idx} done")
+
+    def _warmup_prefill_single_replica(
+        self,
+        kv_cache,
+        enable_trace: bool,
+        num_blocks: int = 64,
+        max_seq_len: int = 8192,
+    ) -> None:
+        """
+        Warmup prefill for the currently active DP replica.
+
+        kv_cache must be [per_replica_kv_cache] (list with one element that is
+        [layer][k_or_v]).  self.model / self.mesh_device / self.kv_caches must
+        already be set to the target replica via _set_active_replica().
         """
         # Always run vision compile warmup, even when traces are disabled
         # This compiles the vision + prefill path during initialization, not during inference
@@ -2235,9 +2598,8 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
 
         # Use vLLM's paged KV cache if provided, otherwise fall back to internal cache
         if kv_cache is not None and len(kv_cache) > 0 and kv_cache[0] is not None:
-            # vLLM provides kv_cache as [data_parallel_idx][layer_idx][k_or_v]
-            # We need to reshape to [layer_idx][k, v] for our model
-            warmup_kv_cache = kv_cache[0]  # Use first data parallel shard
+            # kv_cache[0] is this replica's [layer][k_or_v] cache
+            warmup_kv_cache = kv_cache[0]
             # CRITICAL: Set generator's kv_caches to vLLM's cache so run_prefill uses it
             self.kv_caches = warmup_kv_cache
             logger.info(f"Warmup: Using vLLM paged KV cache with {len(warmup_kv_cache)} layers")
@@ -2486,41 +2848,53 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         """
         Warmup decode path for Molmo2.
 
-        This method is called by tt-inference-server to capture decode traces.
+        For DP>1, iterates over all DP replicas and warms up each one separately
+        using its per-replica KV cache.
 
         Args:
-            kv_cache: KV cache tensors from vLLM (paged format)
+            kv_cache: KV cache tensors from vLLM (paged format) [dp_idx][layer][k_or_v]
             enable_trace: Whether to capture decode trace
-            max_batch_size: Maximum batch size
+            max_batch_size: Maximum batch size (total across all DP replicas)
             num_blocks: Number of KV cache blocks
         """
         if not enable_trace:
             logger.info("Decode trace disabled - skipping warmup_model_decode")
             return
 
+        for dp_idx in range(self.data_parallel):
+            logger.info(f"Warmup decode: starting replica {dp_idx}/{self.data_parallel}")
+            self._set_active_replica(dp_idx)
+
+            # Select this replica's KV cache
+            per_dp_kv = [kv_cache[dp_idx]] if (kv_cache and dp_idx < len(kv_cache)) else kv_cache
+
+            self._warmup_decode_single_replica(per_dp_kv, num_blocks)
+            self._save_active_replica(dp_idx)
+            logger.info(f"Warmup decode: replica {dp_idx} done")
+
+    def _warmup_decode_single_replica(self, kv_cache, num_blocks: int = 64) -> None:
+        """
+        Capture decode trace for the currently active DP replica.
+
+        kv_cache must be [per_replica_kv_cache] (list with one element that is
+        [layer][k_or_v]).  self.model / self.mesh_device must already be set to
+        the target replica via _set_active_replica().
+        """
         logger.info("Warmup: Capturing decode trace...")
 
         # Use vLLM's paged KV cache if provided, otherwise fall back to internal cache
         if kv_cache is not None and len(kv_cache) > 0 and kv_cache[0] is not None:
-            # vLLM provides kv_cache as [data_parallel_idx][layer_idx][k_or_v]
-            warmup_kv_cache = kv_cache[0]  # Use first data parallel shard
-            # CRITICAL: Set generator's kv_caches to vLLM's cache so run_decode_step uses it
+            warmup_kv_cache = kv_cache[0]  # This replica's [layer][k_or_v] cache
             self.kv_caches = warmup_kv_cache
             logger.info(f"Warmup: Using vLLM paged KV cache with {len(warmup_kv_cache)} layers")
 
-            # CRITICAL: Infer actual num_blocks from KV cache shape
-            # KV cache shape is [num_blocks, 1, num_kv_heads, head_dim]
-            # The num_blocks parameter default (64) is often wrong - vLLM allocates more blocks
             if len(warmup_kv_cache) > 0 and warmup_kv_cache[0] is not None:
-                k_cache = warmup_kv_cache[0][0]  # First layer's K cache
+                k_cache = warmup_kv_cache[0][0]
                 actual_num_blocks = k_cache.shape[0]
                 if actual_num_blocks != num_blocks:
-                    logger.info(
-                        f"Warmup decode: Overriding num_blocks from {num_blocks} to {actual_num_blocks} (from KV cache shape)"
-                    )
+                    logger.info(f"Warmup decode: Overriding num_blocks from {num_blocks} to {actual_num_blocks}")
                     num_blocks = actual_num_blocks
         else:
-            # Fall back to internal generator cache (for non-paged mode)
             if not hasattr(self, "kv_caches") or self.kv_caches is None:
                 logger.info("Warmup: Initializing internal KV cache...")
                 self.init_kv_cache()
@@ -2568,7 +2942,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         logger.info("Warmup: Capturing decode trace...")
         trace_id, trace_output = self._capture_decode_trace(decode_trace_tensors, kv_cache=warmup_kv_cache)
 
-        # Store trace for reuse
+        # Store trace for reuse in this replica's state
         self.decode_trace_id = trace_id
         self.decode_trace_tensors = decode_trace_tensors
         self.decode_trace_output = trace_output
@@ -2848,6 +3222,81 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             "page_table": trace_page_table,
         }
 
+    def _copy_decode_trace_inputs(
+        self,
+        trace_tensors: dict,
+        hidden_states: "ttnn.Tensor",
+        page_table: Optional["ttnn.Tensor"] = None,
+    ) -> None:
+        """Copy runtime decode inputs into persistent trace input buffers."""
+        ttnn.copy(hidden_states, trace_tensors["hidden_states"])
+
+        if page_table is not None and "page_table" in trace_tensors:
+            trace_page_table_shape = list(trace_tensors["page_table"].shape)
+            page_table_shape = list(page_table.shape)
+            if page_table_shape[-1] < trace_page_table_shape[-1]:
+                pad_size = trace_page_table_shape[-1] - page_table_shape[-1]
+                page_table_torch = ttnn.to_torch(
+                    page_table, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+                )[0]
+                page_table_padded = torch.nn.functional.pad(page_table_torch, (0, pad_size), value=0)
+                page_table_tt = ttnn.from_torch(
+                    page_table_padded.unsqueeze(0) if page_table_padded.dim() == 1 else page_table_padded,
+                    device=self.mesh_device,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=self.mesh_mapper,
+                )
+                ttnn.copy(page_table_tt, trace_tensors["page_table"])
+                ttnn.deallocate(page_table_tt)
+            else:
+                ttnn.copy(page_table, trace_tensors["page_table"])
+
+    def _execute_decode_trace(
+        self,
+        trace_id: int,
+        trace_tensors: dict,
+        trace_output: "ttnn.Tensor",
+        hidden_states: "ttnn.Tensor",
+        page_table: Optional["ttnn.Tensor"] = None,
+    ) -> "ttnn.Tensor":
+        """Execute captured decode trace with new inputs.
+
+        Tracks state changes and forces full synchronization when switching between
+        requests. This prevents stale state from causing incorrect behavior across
+        multiple sequential inferences.
+
+        Position tensors (current_pos, rot_mat_idxs) are kept on device and
+        incremented via ttnn.plus_one after trace execution.
+        The trace reads their current values for RoPE and KV cache updates.
+        """
+        reset_inputs = self.decode_trace_needs_reset
+
+        if page_table is not None:
+            if self.prev_page_table is None:
+                reset_inputs = True
+            else:
+                try:
+                    mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+                    curr_pt = ttnn.to_torch(page_table, mesh_composer=mesh_composer)[0]
+                    prev_pt = ttnn.to_torch(self.prev_page_table, mesh_composer=mesh_composer)[0]
+                    if not torch.equal(curr_pt, prev_pt):
+                        reset_inputs = True
+                except Exception:
+                    reset_inputs = True
+
+        if reset_inputs:
+            ttnn.synchronize_device(self.mesh_device)
+            logger.debug("Decode trace: full input reset (new request or page_table changed)")
+            if page_table is not None:
+                self.prev_page_table = page_table
+            self.decode_trace_needs_reset = False
+
+        self._copy_decode_trace_inputs(trace_tensors, hidden_states, page_table)
+        ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=True)
+        return trace_output
+
     def _capture_decode_trace(self, trace_tensors: dict, kv_cache=None) -> Tuple[int, ttnn.Tensor]:
         """
         Capture trace for decode phase (single token generation).
@@ -2878,7 +3327,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         # path is a different graph and does not JIT the traced path. forward_decode deallocates
         # inputs — never run compile on trace_tensors["hidden_states"]. Avoid allocations/writes
         # inside begin/end_trace_capture (TT_FATAL: writes not supported during trace capture).
-        rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode_traced(self.rot_mat_idxs)
+        rot_mats_warmup = self.model.text_model.rotary_setup.get_rot_mats_decode_traced(self.rot_mat_idxs)
         logger.info("Compile warmup: decode forward (rot_mats path, scratch buffer)...")
         compile_hidden = ttnn.allocate_tensor_on_device(
             ttnn.Shape(list(trace_tensors["hidden_states"].shape)),
@@ -2892,7 +3341,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             hidden_states=compile_hidden,
             kv_caches=kv_cache,
             current_pos=self.current_pos,
-            rot_mats=rot_mats,
+            rot_mats=rot_mats_warmup,
             page_table=page_table,
         )
         ttnn.deallocate(compile_hidden)
@@ -2902,6 +3351,10 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         tok = trace_capture_run_begin()
         try:
             trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+
+            # RoPE embedding lookup INSIDE trace capture so it uses updated rot_mat_idxs
+            # on each trace replay. This is critical for correct position encoding.
+            rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode_traced(self.rot_mat_idxs)
 
             logits_trace = self.model.text_model.forward_decode(
                 hidden_states=trace_tensors["hidden_states"],
