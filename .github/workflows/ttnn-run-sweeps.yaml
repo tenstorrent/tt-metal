@@ -1275,25 +1275,32 @@ jobs:
           fi
           echo "RUN_TYPE=$RUN_TYPE" >> $GITHUB_ENV
           python3 tests/sweep_framework/run_collective_update.py --run-type "$RUN_TYPE"
-      - name: Print sweep run stats
-        continue-on-error: true
-        run: |
-          python3 tests/sweep_framework/print_run_stats.py \
-            --results-dir /work/tests/sweep_framework/results_export \
-            --run-type "$RUN_TYPE"
-      - name: Publish sweep run stats summary
-        continue-on-error: true
-        run: |
-          python3 tests/sweep_framework/print_run_stats.py \
-            --results-dir /work/tests/sweep_framework/results_export \
-            --run-type "$RUN_TYPE" \
-            --format markdown >> "$GITHUB_STEP_SUMMARY"
       - name: Upload runs
         uses: actions/upload-artifact@v4
         with:
           name: sweeps-run-result
           path: /work/tests/sweep_framework/results_export/oprun_*.json
           retention-days: 7
+      - name: Generate sweep summary
+        continue-on-error: true
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          ARCH_NAME: ${{ needs.resolve-inputs.outputs.arch }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          python3 /work/.github/actions/sweep-run-analysis/scripts/push_sweep_results.py \
+            --summary-only \
+            /work/tests/sweep_framework/results_export/ \
+            "$RUN_TYPE"
+      - name: Upload test results CSV
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweep-test-results-csv
+          path: /tmp/sweep_test_results.csv
+          retention-days: 14
       - name: Push results to database (lead models only)
         if: env.RUN_TYPE == 'lead_models'
         env:
