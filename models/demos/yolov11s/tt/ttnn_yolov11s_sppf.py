@@ -14,8 +14,9 @@ class TtnnSPPF:
 
     def __call__(self, device, x, use_sharded_concat=True):
         x = self.cv1(device, x, output_rm_needed=True)
-        if x.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        # if x.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+        #     x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+
         x1 = x
         core_grid_64 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
         sharded_memory_config_64cores = ttnn.create_sharded_memory_config(
