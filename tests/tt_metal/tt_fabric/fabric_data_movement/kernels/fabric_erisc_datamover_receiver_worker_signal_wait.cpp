@@ -16,14 +16,20 @@ void kernel_main() {
 
     DPRINT << "receiver_signal_wait: Starting. Waiting for " << expected_num_signals
            << " signals at global semaphore addr: " << (uint32_t)completion_semaphore_address << "\n";
+    DEVICE_PRINT(
+        "receiver_signal_wait: Starting. Waiting for {} signals at global semaphore addr: {}\n",
+        expected_num_signals,
+        (uint32_t)completion_semaphore_address);
 
     // Wait for the sender to signal completion
     noc_semaphore_wait(completion_semaphore_address, expected_num_signals);
 
     DPRINT << "receiver_signal_wait: Received completion signal. All data has been received.\n";
+    DEVICE_PRINT("receiver_signal_wait: Received completion signal. All data has been received.\n");
 
     // Reset the global semaphore to 0 before exit for potential reuse
     *completion_semaphore_address = 0;
 
     DPRINT << "receiver_signal_wait: Reset global semaphore to 0. Exiting.\n";
+    DEVICE_PRINT("receiver_signal_wait: Reset global semaphore to 0. Exiting.\n");
 }

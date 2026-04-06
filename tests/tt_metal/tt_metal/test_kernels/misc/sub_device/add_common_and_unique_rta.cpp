@@ -20,5 +20,6 @@ void kernel_main() {
 
     // Sample print statement
     //  DPRINT << 123;
+    //  DEVICE_PRINT("123\n");
     result[0] = arg_a[0] + arg_b[0];
 }

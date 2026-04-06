@@ -73,12 +73,28 @@ void kernel_main() {
     DPRINT << "total_num_tiles: " << total_num_tiles << ", num_tiles_per_read: " << num_tiles_per_read
            << ", tile_size: " << tile_size << ", read_size: " << read_size << "block row size " << block_row_size
            << ENDL();
+    DEVICE_PRINT(
+        "total_num_tiles: {}, num_tiles_per_read: {}, tile_size: {}, read_size: {}, block_row_size: {}\n",
+        total_num_tiles,
+        num_tiles_per_read,
+        tile_size,
+        read_size,
+        block_row_size);
     DPRINT << "untilized CB ID: " << cb_untilized_id << " Out CB ID: " << cb_out_id << ENDL();
+    DEVICE_PRINT("untilized CB ID: {} Out CB ID: {}\n", cb_untilized_id, cb_out_id);
     DPRINT << "pad_addr : " << pad_addr << ", pad_noc_addr : " << pad_noc_addr
            << ", padded_channels_elems: " << padded_channels_elems << ENDL();
+    DEVICE_PRINT(
+        "pad_addr : {} pad_noc_addr : {} padded_channels_elems: {}\n", pad_addr, pad_noc_addr, padded_channels_elems);
     DPRINT << "Unaligned " << is_non_aligned << ENDL();
+    DEVICE_PRINT("Unaligned {}\n", is_non_aligned);
     DPRINT << "Output Row Size Elems " << output_row_size_elems << " Bytes: " << output_row_size_bytes
            << ", Output Elem Size: " << output_elem_size << ENDL();
+    DEVICE_PRINT(
+        "Output Row Size Elems {} Bytes: {} Output Elem Size: {}\n",
+        output_row_size_elems,
+        output_row_size_bytes,
+        output_elem_size);
 #endif
 
     const uint32_t output_end_width_in_input = output_end[1] + output_start_in_input[1];
@@ -101,10 +117,26 @@ void kernel_main() {
                << ", Width Tile Start in Input: " << width_tile_start_in_input
                << ", Read Start Offset: " << read_start_offset << ", Read Rows Size: " << read_rows_size << "Remaining "
                << rows_remaining << ENDL();
+        DEVICE_PRINT(
+            "Width Start in Input: {} Width Tile Start in Input: {} Read Start Offset: {} Read Rows Size: {} Remaining "
+            "{}\n",
+            width_start_in_input,
+            width_tile_start_in_input,
+            read_start_offset,
+            read_rows_size,
+            rows_remaining);
 
         DPRINT << "Tiles Read " << tiles_read << " Output Coord: " << output_coord[0] << ", " << output_coord[1] << ", "
                << output_coord[2] << ", " << output_coord[3] << ENDL();
+        DEVICE_PRINT(
+            "Tiles Read {} Output Coord: {} {} {} {}\n",
+            tiles_read,
+            output_coord[0],
+            output_coord[1],
+            output_coord[2],
+            output_coord[3]);
         DPRINT << "Write Addr " << write_addr << ", Offset " << write_addr - base_write_addr << ENDL();
+        DEVICE_PRINT("Write Addr {} Offset {}\n", write_addr, write_addr - base_write_addr);
 
 #endif
 
@@ -129,11 +161,15 @@ void kernel_main() {
             volatile tt_l1_ptr uint16_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
                 pad_addr + output_row_size_bytes - padded_channels_bytes);
             DPRINT << "Pad Data = ";
+            DEVICE_PRINT("Pad Data = ");
             for (uint32_t i = 0; i < padded_channels_elems; ++i) {
                 DPRINT << pad_ptr[i] << " ";
+                DEVICE_PRINT("{} ", pad_ptr[i]);
             }
             DPRINT << ENDL();
+            DEVICE_PRINT("\n");
             DPRINT << "Pad Write Addr : " << pad_write_addr << ENDL();
+            DEVICE_PRINT("Pad Write Addr : {}\n", pad_write_addr);
 #endif
             for (uint32_t row_index = 0; row_index < read_rows_size; row_index++) {
                 noc_async_read(pad_noc_addr, pad_write_addr, padded_channels_elems * output_elem_size);

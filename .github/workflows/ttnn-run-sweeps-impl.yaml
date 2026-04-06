@@ -63,6 +63,7 @@ jobs:
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
         TT_SMI_RESET_COMMAND: ${{ matrix.tt_smi_cmd }}
+        TEST_GROUP_NAME: ${{ matrix.test_group_name }}
         TRACY_NO_INVARIANT_CHECK: 1
         TTNN_OPS_DATABASE_URL: ${{ (inputs['sweep-name'] == 'ALL SWEEPS (Model Traced)' || inputs['sweep-name'] == 'ALL SWEEPS (Lead Models)') && secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL || '' }}
         LEAD_MODELS_RUN: ${{ startsWith(matrix.test_group_name, 'lead-models') && '1' || '0' }}

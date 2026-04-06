@@ -295,6 +295,7 @@ void process_write_host_h() {
     uint64_t wlength = cmd->write_linear_host.length;
     bool is_event = cmd->write_linear_host.is_event;
     // DPRINT << "process_write_host_h: " << length << ENDL();
+    // DEVICE_PRINT("process_write_host_h: length {}\n", length);
     uint32_t data_ptr = cmd_ptr;
 #if !defined(FABRIC_RELAY)
 #if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
@@ -386,6 +387,8 @@ void relay_to_next_cb(uint32_t data_ptr, uint64_t wlength) {
     static_assert(preamble_size == 0, "Dispatcher preamble size must be 0. This is not supported anymore with Fabric");
 
     // DPRINT << "relay_to_next_cb: " << data_ptr << " " << dispatch_cb_reader.cb_fence << " " << wlength << ENDL();
+    // DEVICE_PRINT("relay_to_next_cb: data_ptr {} dispatch_cb_reader.cb_fence {} wlength {}\n", data_ptr,
+    // dispatch_cb_reader.cb_fence, wlength);
 
     // First page should be valid since it has the command
     ASSERT(data_ptr <= dispatch_cb_end - dispatch_cb_page_size);
@@ -504,6 +507,8 @@ void process_write_linear(uint32_t num_mcast_dests) {
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmdLarge);
     // DPRINT << "process_write_linear noc_xy:0x" << HEX() << dst_noc << ", write_offset:" << write_offset_index << ",
     // dst_addr:0x" << dst_addr << ", length:0x" << length << ", data_ptr:0x" << data_ptr << DEC() << ENDL();
+    // DEVICE_PRINT("process_write_linear noc_xy:0x{:x} write_offset:{} dst_addr:0x{08x} length:{} data_ptr:0x{08x}\n",
+    // dst_noc, write_offset_index, dst_addr, length, data_ptr);
     if (multicast) {
         cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, true>(0, dst_noc, dst_addr);
     } else {
@@ -565,6 +570,8 @@ void process_write_paged() {
 
     // DPRINT << "process_write_paged - pages: " << pages << " page_size: " << page_size
     //        << " dispatch_cb_page_size: " << dispatch_cb_page_size << ENDL();
+    // DEVICE_PRINT("process_write_paged - pages: {} page_size: {} dispatch_cb_page_size: {}\n", pages, page_size,
+    // dispatch_cb_page_size);
 
     while (write_length != 0) {
         // Transfer size is min(remaining_length, data_available_in_cb)
@@ -637,6 +644,8 @@ void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
 
     // DPRINT << "dispatch_write_packed: " << xfer_size << " " << stride << " " << data_ptr << " " << count << " " <<
     // dst_addr << " " << ENDL();
+    // DEVICE_PRINT("dispatch_write_packed: xfer_size {} stride {} data_ptr 0x{:08x} count {} dst_addr 0x{:08x}\n",
+    // xfer_size, stride, data_ptr, count, dst_addr);
     uint32_t writes = 0;
     uint32_t mcasts = 0;
     auto wait_for_barrier = [&]() {
@@ -967,6 +976,7 @@ static void process_wait() {
 
     if (barrier) {
         // DPRINT << " DISPATCH BARRIER\n";
+        // DEVICE_PRINT("dispatch barrier\n");
 #ifdef TRACE_WRITE_BARRIERS
         DeviceZoneScopedN("noc_async_write_barrier");
 #endif
@@ -979,6 +989,7 @@ static void process_wait() {
         uint32_t addr = cmd->wait.addr;
         volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
         // DPRINT << " DISPATCH WAIT " << HEX() << addr << DEC() << " count " << count << ENDL();
+        // DEVICE_PRINT("DISPATCH WAIT 0x{:08x} count {}\n", addr, count);
         do {
             invalidate_l1_cache();
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
@@ -990,6 +1001,7 @@ static void process_wait() {
         volatile uint32_t* sem_addr = reinterpret_cast<volatile uint32_t*>(
             STREAM_REG_ADDR(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
         // DPRINT << " DISPATCH WAIT STREAM " << HEX() << stream << DEC() << " count " << count << ENDL();
+        // DEVICE_PRINT("DISPATCH WAIT STREAM 0x{:08x} count {}\n", stream, count);
         do {
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
         } while (!stream_wrap_ge(*sem_addr, count));
@@ -1101,6 +1113,7 @@ void process_notify_dispatch_s_go_signal_cmd() {
     // write barrier to wait before sending the go signal
     if (wait) {
         // DPRINT << " DISPATCH_S_NOTIFY BARRIER\n";
+        // DEVICE_PRINT("dispatch_s_notify barrier\n");
 #ifdef TRACE_WRITE_BARRIERS
         DeviceZoneScopedN("noc_async_write_barrier");
 #endif
@@ -1148,12 +1161,14 @@ re_run_command:
         case CQ_DISPATCH_CMD_WRITE_LINEAR:
             WAYPOINT("DWB");
             // DPRINT << "cmd_write_linear\n";
+            // DEVICE_PRINT("cmd_write_linear\n");
             process_write();
             WAYPOINT("DWD");
             break;
 
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H:
             // DPRINT << "cmd_write_linear_h\n";
+            // DEVICE_PRINT("cmd_write_linear_h\n");
             if (is_h_variant) {
                 process_write();
             } else {
@@ -1163,6 +1178,7 @@ re_run_command:
 
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST:
             // DPRINT << "cmd_write_linear_h_host\n";
+            // DEVICE_PRINT("cmd_write_linear_h_host\n");
             if (is_h_variant) {
                 process_write_host_h();
             } else {
@@ -1172,6 +1188,7 @@ re_run_command:
 
         case CQ_DISPATCH_CMD_WRITE_PAGED:
             // DPRINT << "cmd_write_paged is_dram: " << (uint32_t)cmd->write_paged.is_dram << ENDL();
+            // DEVICE_PRINT("cmd_write_paged is_dram: {}\n", cmd->write_paged.is_dram);
             if (cmd->write_paged.is_dram) {
                 process_write_paged<true>();
             } else {
@@ -1181,6 +1198,7 @@ re_run_command:
 
         case CQ_DISPATCH_CMD_WRITE_PACKED: {
             // DPRINT << "cmd_write_packed" << ENDL();
+            // DEVICE_PRINT("cmd_write_packed\n");
             uint32_t flags = cmd->write_packed.flags;
             // Must match unpacking code in tt_metal/impl/profiler/profiler.cpp.
             uint32_t data = ((flags & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_MASK) >>
@@ -1196,11 +1214,13 @@ re_run_command:
 
         case CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL:
             // DPRINT << "cmd_notify_dispatch_s_go_signal" << ENDL();
+            // DEVICE_PRINT("cmd_notify_dispatch_s_go_signal\n");
             process_notify_dispatch_s_go_signal_cmd();
             break;
 
         case CQ_DISPATCH_CMD_WRITE_PACKED_LARGE:
             // DPRINT << "cmd_write_packed_large" << ENDL();
+            // DEVICE_PRINT("cmd_write_packed_large\n");
             // Must match unpacking code in tt_metal/impl/profiler/profiler.cpp.
             DeviceTimestampedData("packed_large_data_dispatch", cmd->write_packed_large.type);
             process_write_packed_large(l1_cache);
@@ -1208,30 +1228,38 @@ re_run_command:
 
         case CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST:
             // DPRINT << "cmd_write_packed_large_unicast" << ENDL();
+            // DEVICE_PRINT("cmd_write_packed_large_unicast\n");
             DeviceTimestampedData("packed_large_unicast_data_dispatch", cmd->write_packed_large_unicast.type);
             process_write_packed_large_unicast(l1_cache);
             break;
 
         case CQ_DISPATCH_CMD_WAIT:
             // DPRINT << "cmd_wait" << ENDL();
+            // DEVICE_PRINT("cmd_wait\n");
             process_wait();
             break;
 
-        case CQ_DISPATCH_CMD_SINK: DPRINT << "cmd_sink" << ENDL(); break;
+        case CQ_DISPATCH_CMD_SINK:
+            DPRINT << "cmd_sink" << ENDL();
+            DEVICE_PRINT("cmd_sink\n");
+            break;
 
         case CQ_DISPATCH_CMD_DEBUG:
             DPRINT << "cmd_debug" << ENDL();
+            DEVICE_PRINT("cmd_debug\n");
             cmd_ptr = process_debug_cmd(cmd_ptr);
             goto re_run_command;
             break;
 
         case CQ_DISPATCH_CMD_DELAY:
             DPRINT << "cmd_delay" << ENDL();
+            DEVICE_PRINT("cmd_delay\n");
             process_delay_cmd();
             break;
 
         case CQ_DISPATCH_CMD_EXEC_BUF_END:
             // DPRINT << "cmd_exec_buf_end\n";
+            // DEVICE_PRINT("cmd_exec_buf_end\n");
             if (is_h_variant) {
                 process_exec_buf_end_h();
             } else {
@@ -1241,11 +1269,13 @@ re_run_command:
 
         case CQ_DISPATCH_CMD_SEND_GO_SIGNAL:
             // DPRINT << "cmd_go_send_go_signal" << ENDL();
+            // DEVICE_PRINT("cmd_send_go_signal\n");
             process_go_signal_mcast_cmd();
             break;
 
         case CQ_DISPATCH_SET_NUM_WORKER_SEMS:
             // DPRINT << "cmd_set_num_worker_sems" << ENDL();
+            // DEVICE_PRINT("cmd_set_num_worker_sems\n");
             // This command is only used by dispatch_s
             ASSERT(0);
             cmd_ptr += sizeof(CQDispatchCmd);
@@ -1258,6 +1288,9 @@ re_run_command:
             // "
             //        << cmd->set_write_offset.offset2 << " host id " << cmd->set_write_offset.program_host_id <<
             //        ENDL();
+            // DEVICE_PRINT("write offset: {} {} {} host id {}\n", cmd->set_write_offset.offset0,
+            // cmd->set_write_offset.offset1,
+            //              cmd->set_write_offset.offset2, cmd->set_write_offset.program_host_id);
             DeviceTimestampedData("runtime_host_id_dispatch", cmd->set_write_offset.program_host_id);
             uint32_t offset_count = cmd->set_write_offset.offset_count;
 
@@ -1273,6 +1306,7 @@ re_run_command:
 
         case CQ_DISPATCH_CMD_TERMINATE:
             // DPRINT << "dispatch terminate\n";
+            // DEVICE_PRINT("dispatch terminate\n");
             if (is_d_variant && !is_h_variant) {
                 relay_to_next_cb<split_dispatch_page_preamble_size>(cmd_ptr, sizeof(CQDispatchCmd));
             }
@@ -1288,6 +1322,18 @@ re_run_command:
             DPRINT << HEX() << *((uint32_t*)cmd_ptr + 1) << ENDL();
             DPRINT << HEX() << *((uint32_t*)cmd_ptr + 2) << ENDL();
             DPRINT << HEX() << *((uint32_t*)cmd_ptr + 3) << ENDL();
+            DEVICE_PRINT(
+                "dispatcher_d invalid command: {} {} {} {} xx\n",
+                cmd_ptr,
+                dispatch_cb_reader.available_bytes(cmd_ptr),
+                dispatch_cb_base,
+                dispatch_cb_end);
+            DEVICE_PRINT(
+                "0x{:08x}\n0x{:08x}\n0x{:08x}\n0x{:08x}\n",
+                *(uint32_t*)cmd_ptr,
+                *((uint32_t*)cmd_ptr + 1),
+                *((uint32_t*)cmd_ptr + 2),
+                *((uint32_t*)cmd_ptr + 3));
             WAYPOINT("!CMD");
             ASSERT(0);
     }
@@ -1304,20 +1350,24 @@ static inline bool process_cmd_h(uint32_t& cmd_ptr) {
     switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H:
             // DPRINT << "dispatch_h write_linear_h\n";
+            // DEVICE_PRINT("dispatch_h write_linear_h\n");
             process_write();
             break;
 
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST:
             // DPRINT << "dispatch_h linear_h_host\n";
+            // DEVICE_PRINT("dispatch_h linear_h_host\n");
             process_write_host_h();
             break;
 
         case CQ_DISPATCH_CMD_EXEC_BUF_END:
             // DPRINT << "dispatch_h exec_buf_end\n";
+            // DEVICE_PRINT("dispatch_h exec_buf_end\n");
             process_exec_buf_end_h();
             break;
         case CQ_DISPATCH_CMD_TERMINATE:
             // DPRINT << "dispatch_h terminate\n";
+            // DEVICE_PRINT("dispatch_h terminate\n");
             cmd_ptr += sizeof(CQDispatchCmd);
             done = true;
             break;
@@ -1331,6 +1381,18 @@ static inline bool process_cmd_h(uint32_t& cmd_ptr) {
             DPRINT << HEX() << *((uint32_t*)cmd_ptr + 1) << ENDL();
             DPRINT << HEX() << *((uint32_t*)cmd_ptr + 2) << ENDL();
             DPRINT << HEX() << *((uint32_t*)cmd_ptr + 3) << ENDL();
+            DEVICE_PRINT(
+                "dispatcher_h invalid command: {} {} {} {} xx\n",
+                cmd_ptr,
+                dispatch_cb_reader.available_bytes(cmd_ptr),
+                dispatch_cb_base,
+                dispatch_cb_end);
+            DEVICE_PRINT(
+                "0x{:08x}\n0x{:08x}\n0x{:08x}\n0x{:08x}\n",
+                *(uint32_t*)cmd_ptr,
+                *((uint32_t*)cmd_ptr + 1),
+                *((uint32_t*)cmd_ptr + 2),
+                *((uint32_t*)cmd_ptr + 3));
             WAYPOINT("!CMD");
             ASSERT(0);
     }
@@ -1343,8 +1405,10 @@ void kernel_main() {
 #if defined(FABRIC_RELAY)
     DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start (fabric relay. 2d = " << (uint32_t)is_2d_fabric
            << ")" << ENDL();
+    DEVICE_PRINT("dispatch_{}{}: start (fabric relay. 2d = {})\n", is_h_variant, is_d_variant, is_2d_fabric);
 #else
     DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start" << ENDL();
+    DEVICE_PRINT("dispatch_{}{}: start\n", is_h_variant, is_d_variant);
 #endif
     // Get runtime args
     my_dev_id = get_arg_val<uint32_t>(OFFSETOF_MY_DEV_ID);
@@ -1442,5 +1506,6 @@ void kernel_main() {
         relay_client.template teardown<upstream_noc_index, upstream_noc_xy, upstream_dispatch_cb_sem_id>();
     }
     // DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": out" << ENDL();
+    // DEVICE_PRINT("dispatch_{}{}: out\n", is_h_variant, is_d_variant);
     set_l1_data_cache<false>();
 }

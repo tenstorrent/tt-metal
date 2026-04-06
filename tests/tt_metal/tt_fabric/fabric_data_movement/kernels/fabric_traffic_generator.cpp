@@ -74,6 +74,7 @@ void kernel_main() {
             total_send_size);
     }
     DPRINT << "TEARDOWN\n";
+    DEVICE_PRINT("TEARDOWN\n");
 
     // Graceful shutdown - close fabric connection
     fabric_connection.close();

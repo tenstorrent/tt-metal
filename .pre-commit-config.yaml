@@ -16,6 +16,7 @@ repos:
   hooks:
     - id: black
       language_version: python3
+      exclude: ^tt_metal/tt-llk/  # LLK uses black 25.9.0 — see LLK hooks section below
 - repo: https://github.com/PyCQA/autoflake
   rev: v2.3.1
   hooks:
@@ -100,3 +101,60 @@ repos:
       language: system
       pass_filenames: false
       files: ^tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden/.*bandwidth.*\.csv$
+
+# ---- LLK hooks (tt_metal/tt-llk/) ----
+# LLK lives at tt_metal/tt-llk/ and has its own formatting standards.
+# Metal's hooks above are excluded from that subtree; these entries replace them.
+- repo: local
+  hooks:
+    - id: llk-fix-cstdint
+      name: "llk: fix std::uint*_t and add cstdint include"
+      entry: python3 tt_metal/tt-llk/infra/fix_cstdint.py
+      language: system
+      args: ["--fix", "--quiet"]
+      files: ^tt_metal/tt-llk/.*\.(cpp|cc|h|hpp|py)$
+      exclude: tensix\.h$
+- repo: https://github.com/PyCQA/autoflake
+  rev: v2.3.1
+  hooks:
+    - id: autoflake
+      name: autoflake (llk)
+      args: [--remove-all-unused-imports, --in-place, --recursive, --exclude=__init__.py]
+      files: ^tt_metal/tt-llk/
+- repo: https://github.com/PyCQA/isort
+  rev: 6.1.0
+  hooks:
+    - id: isort
+      name: isort (llk)
+      args: ["--settings-path=tt_metal/tt-llk/pyproject.toml"]
+      files: ^tt_metal/tt-llk/
+- repo: https://github.com/psf/black-pre-commit-mirror
+  rev: 25.9.0
+  hooks:
+    - id: black
+      name: black (llk)
+      language_version: python3
+      args: ["--target-version", "py310"]
+      files: ^tt_metal/tt-llk/
+- repo: https://github.com/PyCQA/pylint
+  rev: v3.0.0
+  hooks:
+    - id: pylint
+      name: pylint (llk)
+      args: [--disable=all, --enable=wildcard-import]
+      files: ^tt_metal/tt-llk/
+- repo: local
+  hooks:
+    - id: llk-validate-copyright-headers
+      name: "llk: validate copyright headers"
+      entry: python3 tt_metal/tt-llk/infra/validate_copyright.py
+      language: system
+      args: ["--quiet", "--fix"]
+      files: ^tt_metal/tt-llk/.*\.(cpp|cc|h|hpp|py|ld)$
+- repo: https://github.com/codespell-project/codespell
+  rev: v2.4.1
+  hooks:
+    - id: codespell
+      name: codespell (llk)
+      args: ["-I", "tt_metal/tt-llk/.codespellignore", "-w"]
+      files: ^tt_metal/tt-llk/

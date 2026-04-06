@@ -20,6 +20,8 @@ void kernel_main() {
 
     // DPRINT << "t6 consumer trisc_id: " << trisc_id << " consumer_idx: " << consumer_idx
     //        << " num_entries_per_consumer: " << num_entries_per_consumer << ENDL();
+    // DEVICE_PRINT("t6 consumer trisc_id: {} consumer_idx: {} num_entries_per_consumer: {}\n", trisc_id, consumer_idx,
+    // num_entries_per_consumer);
 
     // Each consumer pops exactly num_entries_per_consumer entries from its own TC(s).
     // No modulo-skip is needed: the DFB hardware delivers only this consumer's entries
@@ -27,10 +29,13 @@ void kernel_main() {
     for (uint32_t tile_id = 0; tile_id < num_entries_per_consumer; tile_id++) {
         dfb.wait_front(1);
         UNPACK(DPRINT << "unpack consumer tile id " << tile_id << ENDL());
+        DEVICE_PRINT_UNPACK("unpack consumer tile id {}\n", tile_id);
         dfb.pop_front(1);
         PACK(DPRINT << "pack consumer tile id " << tile_id << ENDL());
+        DEVICE_PRINT_PACK("pack consumer tile id {}\n", tile_id);
     }
     DPRINT << "CBWW" << ENDL();
     dfb.finish();
     DPRINT << "CBWD" << ENDL();
+    DEVICE_PRINT("CBWD\n");
 }

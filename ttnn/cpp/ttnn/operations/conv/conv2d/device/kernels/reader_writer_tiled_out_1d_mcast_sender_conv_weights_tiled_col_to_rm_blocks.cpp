@@ -221,6 +221,7 @@ void kernel_main() {
                     // loop over weight block tiles along w
                     for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
                         // DPRINT << "weight_tile_id=" << weight_tile_id << ENDL();
+                        // DEVICE_PRINT("weight_tile_id={}\n", weight_tile_id);
                         noc_async_read_tile(weight_tile_id, s_weight, weight_write_l1_addr);
                         weight_write_l1_addr += weight_tile_nbytes;
                         weights_block_size_bytes += weight_tile_nbytes;

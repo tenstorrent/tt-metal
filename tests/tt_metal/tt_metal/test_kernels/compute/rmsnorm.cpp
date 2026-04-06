@@ -153,6 +153,7 @@ void kernel_main() {
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             // if (ht == 1) UNPACK(( DPRINT << "wt_2=" << wt << " " ));
             // if (ht == 1) UNPACK(( DPRINT << "rem_2=" << rem << ENDL() ));
+            // if (ht == 1) DEVICE_PRINT_UNPACK("wt_2={} rem_2={}\n", wt, rem);
             cb_reserve_back(cb_im_or_out, blk);
 
             ACQ();

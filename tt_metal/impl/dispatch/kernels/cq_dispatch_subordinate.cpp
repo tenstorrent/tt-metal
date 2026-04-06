@@ -328,6 +328,7 @@ void set_go_signal_noc_data() {
 void kernel_main() {
     set_l1_data_cache<true>();
     DPRINT << "dispatch_s : start" << ENDL();
+    DEVICE_PRINT("dispatch_s : start\n");
     // Initialize customized command buffers.
     dispatch_s_wr_reg_cmd_buf_init();
     dispatch_s_atomic_cmd_buf_init();
@@ -358,7 +359,10 @@ void kernel_main() {
             case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;
             case CQ_DISPATCH_CMD_WAIT: process_dispatch_s_wait_cmd(); break;
             case CQ_DISPATCH_CMD_TERMINATE: done = true; break;
-            default: DPRINT << "dispatcher_s invalid command" << ENDL(); ASSERT(0);
+            default:
+                DPRINT << "dispatcher_s invalid command" << ENDL();
+                DEVICE_PRINT("dispatcher_s invalid command\n");
+                ASSERT(0);
         }
         // Dispatch s only supports single page commands for now
         ASSERT(cmd_ptr <= ((uint32_t)cmd + cb_page_size));
@@ -383,5 +387,6 @@ void kernel_main() {
     noc_async_full_barrier();
 #endif
     DPRINT << "dispatch_s : done" << ENDL();
+    DEVICE_PRINT("dispatch_s : done\n");
     set_l1_data_cache<false>();
 }

@@ -17,6 +17,7 @@ void kernel_main() {
 
     for (uint32_t tile_id = 0; tile_id < num_entries; tile_id++) {
         // DPRINT << "rbw" << ENDL();
+        // DEVICE_PRINT("rbw\n");
         dfb_in.wait_front(1);
         // do some processing on unpacker
         dfb_in.pop_front(1);
@@ -28,8 +29,11 @@ void kernel_main() {
         // do some processing on packer
         dfb_out.push_back(1);
         // DPRINT << "pbd" << ENDL();
+        // DEVICE_PRINT("pbd\n");
     }
     DPRINT << "PFW" << ENDL();
+    DEVICE_PRINT("PFW\n");
     dfb_out.finish();
     DPRINT << "PFD" << ENDL();
+    DEVICE_PRINT("PFD\n");
 }
