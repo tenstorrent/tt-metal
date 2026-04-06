@@ -1153,7 +1153,7 @@ class DeepseekGenerator(WarmupForwardMixin):
     def _deallocate_rope_tensors(rope_tensors: dict[str, ttnn.Tensor] | None) -> None:
         if rope_tensors is None:
             return
-        for key in ("cos_matrix", "sin_matrix"):
+        for key in ("cos_matrix", "sin_matrix", "cos_matrix_prefill_shape", "sin_matrix_prefill_shape"):
             tensor = rope_tensors.get(key)
             if tensor is not None:
                 ttnn.deallocate(tensor)
