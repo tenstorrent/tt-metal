@@ -1690,7 +1690,7 @@ class TestBinaryRowMajor:
     SHAPES = [
         pytest.param((1, 1, 32, 32), id="tile_aligned"),
         pytest.param((1, 1, 35, 35), id="non_tile_aligned"),
-        # pytest.param((4, 2, 17, 19), id="weird_nc_hw"),
+        pytest.param((4, 2, 17, 19), id="weird_nc_hw"),
         pytest.param((2, 3, 33, 64), id="multi_nc_multi_row"),
         pytest.param((1, 1, 3, 1025), id="wide_over_1024"),
         pytest.param((1, 1, 1025, 32), id="tall_over_1024"),
@@ -1701,6 +1701,14 @@ class TestBinaryRowMajor:
         pytest.param((1, 1, 1, 2049), id="two_full_chunks_remainder"),
         pytest.param((1, 1, 1, 4096), id="extreme_row_width"),
         pytest.param((1, 1, 2, 1, 1, 3, 1025), id="rank7_weird_wide"),
+        # Alignment boundary edge cases (element_size vs element_size_aligned)
+        pytest.param((1, 1, 1, 2), id="w2_4bytes"),
+        pytest.param((1, 1, 1, 16), id="w16_wh_dram_align"),
+        pytest.param((1, 1, 1, 31), id="w31_just_under_bh_align"),
+        pytest.param((1, 1, 1, 32), id="w32_exact_bh_align"),
+        pytest.param((1, 1, 1, 33), id="w33_just_over_bh_align"),
+        pytest.param((1, 1, 512, 3), id="many_rows_narrow_w3"),
+        pytest.param((1, 1, 7, 13), id="prime_dims_7x13"),
     ]
 
     DTYPE_CASES = [
@@ -1791,6 +1799,48 @@ class TestBinaryRowMajor:
             assert torch.equal(tt_out, torch.add(pt_a, pt_b))
         else:
             assert_with_pcc(tt_out, torch.add(pt_a, pt_b))
+
+    SCALAR_SHAPES = [
+        pytest.param((1, 1, 32, 32), id="tile_aligned"),
+        pytest.param((1, 1, 35, 35), id="non_tile_aligned"),
+        pytest.param((4, 2, 17, 19), id="weird_nc_hw"),
+        pytest.param((1, 1, 1, 1), id="tiny"),
+        pytest.param((1, 1, 1, 33), id="w33_just_over_bh_align"),
+        pytest.param((1, 1, 512, 3), id="many_rows_narrow_w3"),
+    ]
+
+    SCALAR_DTYPE_CASES = [
+        pytest.param(torch.bfloat16, ttnn.bfloat16, id="bfloat16"),
+        pytest.param(torch.float32, ttnn.float32, id="float32"),
+    ]
+
+    @pytest.mark.parametrize("shape", SCALAR_SHAPES)
+    @pytest.mark.parametrize("dtype_pt,dtype_tt", SCALAR_DTYPE_CASES)
+    @pytest.mark.parametrize(
+        "a_config",
+        [
+            pytest.param(ttnn.DRAM_MEMORY_CONFIG, id="dram"),
+            pytest.param(ttnn.L1_MEMORY_CONFIG, id="l1"),
+        ],
+    )
+    def test_binary_row_major_scalar(self, device, shape, dtype_pt, dtype_tt, a_config):
+        torch.manual_seed(0)
+        scalar_val = 2.5
+
+        pt_a = torch.randn(shape, dtype=dtype_pt)
+        tt_a = ttnn.from_torch(
+            pt_a,
+            dtype=dtype_tt,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=a_config,
+        )
+
+        with ttnn.manage_config("throw_exception_on_fallback", True):
+            tt_out = ttnn.add(tt_a, scalar_val, use_legacy=None)
+
+        tt_out = ttnn.to_torch(tt_out)
+        assert_with_pcc(tt_out, torch.add(pt_a, scalar_val))
 
 
 @pytest.mark.parametrize(

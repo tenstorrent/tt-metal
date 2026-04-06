@@ -156,10 +156,10 @@ void kernel_main() {
 #if SRC_BCAST
                             const uint32_t current_read_len_b = align(current_chunk_bytes, alignment_b);
                             const uint64_t addr_a = get_noc_addr(row_block_a, src);
-                            const uint32_t src_low_bits = static_cast<uint32_t>(addr_a & 0xF);
+                            const uint32_t src_low_bits = static_cast<uint32_t>(addr_a & (alignment_a - 1));
                             const uint32_t scratch_l1_addr = l1_write_addr_src + src_low_bits;
 
-                            noc_async_read(addr_a, scratch_l1_addr, element_size_aligned_a);
+                            noc_async_read(addr_a, scratch_l1_addr, element_size);
                             noc_async_read_barrier();
 
                             copy_one_element<element_size>(l1_write_addr_src, scratch_l1_addr);
@@ -187,10 +187,10 @@ void kernel_main() {
                             noc_async_read_barrier();
 
                             const uint64_t addr_b = get_noc_addr(row_block_b, src_b);
-                            const uint32_t src_low_bits = static_cast<uint32_t>(addr_b & 0xF);
+                            const uint32_t src_low_bits = static_cast<uint32_t>(addr_b & (alignment_b - 1));
                             const uint32_t scratch_l1_addr = l1_write_addr_src_b + src_low_bits;
 
-                            noc_async_read(addr_b, scratch_l1_addr, element_size_aligned_b);
+                            noc_async_read(addr_b, scratch_l1_addr, element_size);
                             noc_async_read_barrier();
 
                             copy_one_element<element_size>(l1_write_addr_src_b, scratch_l1_addr);
