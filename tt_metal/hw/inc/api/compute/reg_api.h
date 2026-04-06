@@ -67,11 +67,7 @@ ALWI void tile_regs_wait() {
  */
 [[deprecated("Use tile_regs_release() instead")]]
 ALWI void release_dst() {
-#ifndef ARCH_QUASAR
     MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
-#else
-    MATH((llk_math_dest_section_done()));
-#endif
     PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
 }
 
@@ -81,13 +77,8 @@ ALWI void release_dst() {
  * Release lock on DST register by MATH thread. The lock had to be previously acquired with tile_regs_acquire.
  */
 ALWI void tile_regs_commit() {
-#ifndef ARCH_QUASAR
     MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
-#else
-    MATH((llk_math_dest_section_done()));
-#endif
 }
-
 /**
  * Release lock on DST register by PACK thread. The lock had to be previously acquired with tile_regs_wait.
  */
