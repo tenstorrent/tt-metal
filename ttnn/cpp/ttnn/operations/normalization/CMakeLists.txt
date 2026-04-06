@@ -11,13 +11,7 @@ set_target_properties(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(
-    GLOB_RECURSE kernels
-    batch_norm/device/kernels/*
-    kernel_util/compute/*
-    kernel_util/dataflow/*
-    kernel_util/generic/*
-)
+file(GLOB_RECURSE kernels batch_norm/device/kernels/*)
 target_sources(
     ttnn_op_normalization
     PUBLIC
