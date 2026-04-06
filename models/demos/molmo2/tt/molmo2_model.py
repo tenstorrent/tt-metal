@@ -849,17 +849,21 @@ class Molmo2Model(LightweightModule):
         # Reshape visual embeddings to 3D: [1, num_valid, hidden_dim]
         visual_3d = ttnn.reshape(valid_visual_ttnn, [1, num_valid, hidden_dim])
 
-        # Create index tensor: [1, num_valid, hidden_dim] - each row has same index, broadcast across hidden_dim
+        # Create index tensor on device: [1, num_valid, hidden_dim]
         # image_positions[i] tells us where visual_emb[i] goes in text_emb
-        index_cpu = image_positions.unsqueeze(0).unsqueeze(-1).expand(1, num_valid, hidden_dim).to(torch.int32)
-        index_ttnn = ttnn.from_torch(
-            index_cpu,
+        # Upload compact [1, num_valid, 1] then repeat on device to avoid large CPU tensor
+        index_compact = image_positions.reshape(1, num_valid, 1).to(torch.int32)
+        index_compact_ttnn = ttnn.from_torch(
+            index_compact,
             device=self.mesh_device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper,
         )
+        # Expand on device: [1, num_valid, 1] -> [1, num_valid, hidden_dim]
+        index_ttnn = ttnn.repeat(index_compact_ttnn, [1, 1, hidden_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(index_compact_ttnn)
 
         # Convert to ROW_MAJOR for scatter_add
         text_3d_rm = ttnn.to_layout(text_3d, ttnn.ROW_MAJOR_LAYOUT)
