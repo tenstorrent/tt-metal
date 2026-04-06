@@ -1,0 +1,8 @@
+﻿ttnn.typecast
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.typecast:
+
+.. autooperation:: ttnn.typecast

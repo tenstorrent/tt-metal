@@ -1,0 +1,14 @@
+﻿ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig
+=================================================================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig:
+
+
+.. autoclass:: ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :inherited-members:
+   :member-order: bysource
