@@ -17,8 +17,8 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
-COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.LoFi,
+COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
     math_approx_mode=False,
     fp32_dest_acc_en=False,
     packer_l1_acc=True,
@@ -56,7 +56,7 @@ class TtSharedExpert(LightweightModule):
         topology: ttnn.Topology = ttnn.Topology.Linear,
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
-        compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_LOFI,
+        compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_HIFI2,
     ):
         """
         Initialize TtSharedExpert module.
