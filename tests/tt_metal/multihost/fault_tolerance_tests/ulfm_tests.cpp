@@ -24,6 +24,7 @@ using tt::tt_metal::distributed::multihost::FailurePolicy;
 using tt::tt_metal::distributed::multihost::Key;
 using tt::tt_metal::distributed::multihost::MPIRankFailureException;
 using tt::tt_metal::distributed::multihost::Rank;
+using tt::tt_metal::distributed::multihost::Tag;
 
 // NOTE: Tests that kill ranks or call revoke_and_shrink() mutate the shared
 // world communicator.  This creates an ordering dependency: tests that shrink
