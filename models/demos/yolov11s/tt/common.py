@@ -24,6 +24,17 @@ def _default_yolov11s_conv_shard_layout():
     )
 
 
+def yolov11s_softmax_compute_config(device):
+    """LoFi softmax to match conv math settings and reduce softmax kernel time vs HiFi4 defaults."""
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+        math_approx_mode=True,
+    )
+
+
 class Yolov11sConv2D:
     def __init__(
         self,
@@ -199,28 +210,30 @@ def sharded_concat(input_tensors, num_cores=64, dim=3, to_interleaved=True):
     # bool is a subclass of int; accidental positional `to_interleaved` used to set num_cores=False → // 0.
     nc = num_cores if isinstance(num_cores, int) and not isinstance(num_cores, bool) and num_cores > 0 else 64
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
-    in_shard_width = input_tensors[0].shape[-1]
     shard_height = (input_tensors[0].shape[2] + nc - 1) // nc
-    input_sharded_memory_config = ttnn.create_sharded_memory_config(
-        (shard_height, in_shard_width),
-        core_grid=shard_grid,
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        use_height_and_width_as_shard_shape=True,
-    )
+    # Branches can differ on the channel dim (e.g. C3k2 bk path: 32 + 32 + 16). One shared shard width
+    # (from the first tensor) mis-shards narrower tensors and destroys PCC (~0.07 vs torch).
+    prepared = []
     out_shard_width = 0
-    for i in range(len(input_tensors)):
-        t = input_tensors[i]
+    for t in input_tensors:
         if t.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
             t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
-        out_shard_width += t.shape[-1]
-        input_tensors[i] = ttnn.to_memory_config(t, input_sharded_memory_config)
+        w = int(t.shape[-1])
+        out_shard_width += w
+        per_tensor_cfg = ttnn.create_sharded_memory_config(
+            (shard_height, w),
+            core_grid=shard_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+        prepared.append(ttnn.to_memory_config(t, per_tensor_cfg))
     output_sharded_memory_config = ttnn.create_sharded_memory_config(
         (shard_height, out_shard_width),
         core_grid=shard_grid,
         strategy=ttnn.ShardStrategy.HEIGHT,
         use_height_and_width_as_shard_shape=True,
     )
-    output = ttnn.concat(input_tensors, dim, memory_config=output_sharded_memory_config)
+    output = ttnn.concat(prepared, dim, memory_config=output_sharded_memory_config)
     if to_interleaved:
         output = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
 

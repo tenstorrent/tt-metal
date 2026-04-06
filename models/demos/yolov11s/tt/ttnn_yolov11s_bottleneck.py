@@ -26,7 +26,11 @@ class TtnnBottleneck:
         else:
             residual = _to_l1_interleaved(residual)
             x = _to_l1_interleaved(x)
-            # residual = residual[:, :, :hw, :]
-            # x = x[:, :, :hw, :]
+            # Tile-aligned conv outputs often have shape[2] > hw; add must use the same trimmed spatial
+            # for residual and branch or PCC collapses (C3k2 + Bottleneck path).
+            if int(residual.shape[2]) > hw:
+                residual = residual[:, :, :hw, :]
+            if int(x.shape[2]) > hw:
+                x = x[:, :, :hw, :]
             x = ttnn.add(residual, x, memory_config=ttnn.L1_MEMORY_CONFIG)
         return x

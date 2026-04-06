@@ -72,16 +72,18 @@ class TtnnC3k2:
         cfg = self.cv1_a.conv.conv
         spatial_hw = int(cfg.input_height) * int(cfg.input_width)
         cv1_a = self.cv1_a(device, x, output_rm_needed=True)
-        cv1_b = self.cv1_b(device, x, to_interleaved=x.shape[2] > spatial_hw)
+        # Match cv1_a: conv can return flat dim > H*W; without output_rm, cv1_b keeps padding and bk path PCC collapses.
+        cv1_b = self.cv1_b(device, x, output_rm_needed=True, to_interleaved=x.shape[2] > spatial_hw)
         mid = self.k if self.is_bk_enabled else self.c3k
         y3 = mid(device, cv1_b)
 
         cv1_a = _align_spatial_for_concat(cv1_a, spatial_hw)
         cv1_b = _align_spatial_for_concat(cv1_b, spatial_hw)
         y3 = _align_spatial_for_concat(y3, spatial_hw)
-        if use_shard_concat:
-            # to_interleaved = True if (cv1_a.shape[3] < tile_shape) else False
-            x = sharded_concat([cv1_a, cv1_b, y3], to_interleaved=False)
+        # Height-sharded 3-way concat is fine for C3K-only C3k2; with Bottleneck + large spatial (e.g. 160²)
+        # it still yields ~0.07 PCC vs torch — use L1 interleaved concat for that path only.
+        if use_shard_concat and not self.is_bk_enabled:
+            x = sharded_concat([cv1_a, cv1_b, y3], dim=3, to_interleaved=False)
         else:
             cv1_a = ttnn.sharded_to_interleaved(cv1_a, ttnn.L1_MEMORY_CONFIG) if cv1_a.is_sharded() else cv1_a
             cv1_b = ttnn.sharded_to_interleaved(cv1_b, ttnn.L1_MEMORY_CONFIG) if cv1_b.is_sharded() else cv1_b

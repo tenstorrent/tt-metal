@@ -3,7 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.yolov11s.tt.common import TtnnConv, Yolov11sConv2D, deallocate_tensors, sharded_concat_2
+from models.demos.yolov11s.tt.common import (
+    TtnnConv,
+    Yolov11sConv2D,
+    deallocate_tensors,
+    sharded_concat_2,
+    yolov11s_softmax_compute_config,
+)
 
 _DETECT_CV3_STEM = {
     "act_block_h": 32,
@@ -132,6 +138,7 @@ class TtnnDetect:
         ]
 
         self.dfl = Yolov11sConv2D(parameter.dfl.conv, conv_pt.dfl.conv, device=device, is_dfl=True, config_override=dfl)
+        self._softmax_compute_config = yolov11s_softmax_compute_config(device)
         self.anchors = ttnn.to_memory_config(conv_pt.anchors, memory_config=ttnn.L1_MEMORY_CONFIG)
         self.strides = ttnn.to_memory_config(conv_pt.strides, memory_config=ttnn.L1_MEMORY_CONFIG)
         self.anchor = self.anchors
@@ -162,17 +169,29 @@ class TtnnDetect:
         y = ttnn.squeeze(y, dim=0)
         ya, yb = y[:, :, :64], y[:, :, 64:144]
         # deallocate_tensors(y1, y2, y3, x1, x2, x3, x4, x5, x6, y)
-        ya = ttnn.reshape(ya, (ya.shape[0], y.shape[1], 4, 16))  # ya
-        ya = ttnn.softmax_in_place(ya, dim=-1, numeric_stable=False)
+        b0, l_spatial = int(ya.shape[0]), int(y.shape[1])
+        # Permute into (B, 4, L, 16) before softmax so DFL sees DFL layout without a post-softmax permute.
+        ya = ttnn.reshape(ya, (b0, l_spatial, 4, 16))
         ya = ttnn.permute(ya, (0, 2, 1, 3))
+        ya = ttnn.softmax_in_place(
+            ya,
+            dim=-1,
+            numeric_stable=False,
+            compute_kernel_config=self._softmax_compute_config,
+        )
         c = self.dfl(ya)
         ttnn.deallocate(ya)
         deallocate_tensors(x1, x2, x3, x4, x5, x6)
         if c.is_sharded():
             c = ttnn.sharded_to_interleaved(c, memory_config=ttnn.L1_MEMORY_CONFIG)
-        c = ttnn.permute(c, (0, 3, 1, 2))
-        b0, d3 = int(c.shape[0]), int(c.shape[3])
-        c = ttnn.reshape(c, (b0, 4, d3 // 4))
+        b0 = int(c.shape[0])
+        # DFL conv matches torch (B, 1, 4, W): squeeze is metadata-only vs permute+reshape on many builds.
+        if len(c.shape) == 4 and int(c.shape[1]) == 1 and int(c.shape[2]) == 4:
+            c = ttnn.squeeze(c, dim=1)
+        else:
+            c = ttnn.permute(c, (0, 3, 1, 2))
+            d3 = int(c.shape[3])
+            c = ttnn.reshape(c, (b0, 4, d3 // 4))
         c1, c2 = c[:, :2, :], c[:, 2:4, :]
         c1 = self.anchor - c1
         c2 = self.anchor + c2
