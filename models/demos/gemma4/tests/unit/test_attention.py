@@ -324,3 +324,114 @@ def test_attention_decode_tp(layer_idx, mesh_device, device_params):
 
     passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=0.95)
     assert passing, f"Attention TP decode (layer_idx={layer_idx}) PCC too low: {pcc_msg}"
+
+
+# ── Paged Attention Tests ─────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
+def test_attention_decode_paged(layer_idx, device):
+    """
+    Test decode attention with paged KV cache against HF reference.
+
+    Creates a paged cache, fills it with random KV data via shuffled page table,
+    then decodes one token and compares against HF (which uses standard cache).
+    """
+    from transformers.cache_utils import DynamicCache
+    from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
+
+    from models.tt_transformers.tt.common import PagedAttentionConfig
+
+    hf_text_config = TestFactory.create_hf_text_config()
+    hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx)
+    hf_attn = hf_layer.self_attn
+    config = Gemma4AttentionConfig(TestFactory.create_hf_config(), layer_idx)
+    hidden_size = config.hidden_size
+    cache_len = 32
+
+    state_dict = {k: v.clone() for k, v in hf_attn.state_dict().items() if not k.startswith("v_norm")}
+
+    # Paged attention config
+    block_size = 32
+    max_num_blocks = 4  # 4 blocks × 32 tokens = 128 max seq_len
+    paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
+
+    mesh_config = TestFactory.create_mesh_config((1, 1))
+    from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
+
+    kv_cache = init_kv_cache(
+        mesh_device=device,
+        config=config,
+        paged_attention_config=paged_attention_config,
+        cache_dtype=ttnn.bfloat16,
+    )
+
+    tt_attn = Gemma4Attention(
+        mesh_device=device,
+        config=config,
+        state_dict=state_dict,
+        ccl_manager=None,
+        mesh_config=mesh_config,
+        program_config=None,
+        layer_idx=layer_idx,
+    )
+    tt_attn.kv_cache = kv_cache
+
+    # Create random KV data for cache_len positions
+    k_data = torch.randn(1, config.num_key_value_heads, cache_len, config.head_dim)
+    v_data = torch.randn(1, config.num_key_value_heads, cache_len, config.head_dim)
+
+    # HF cache (standard, no paging)
+    hf_cache = DynamicCache()
+    hf_cache.update(k_data.clone(), v_data.clone(), layer_idx=layer_idx)
+
+    # Page table: sequential mapping (block 0 → physical 0, block 1 → physical 1, ...)
+    blocks_per_batch = max_num_blocks
+    page_table = torch.arange(blocks_per_batch, dtype=torch.int32).reshape(1, blocks_per_batch)
+    page_table_tt = ttnn.from_torch(page_table, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+
+    # Fill paged cache: reshape KV data into blocks and use paged_fill_cache
+    k_cache_tt, v_cache_tt = kv_cache
+    # For fill: need K/V in [1, heads, seq_len, head_dim] format
+    k_fill = ttnn.from_torch(k_data.to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    v_fill = ttnn.from_torch(v_data.to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    ttnn.experimental.paged_fill_cache(k_cache_tt, k_fill, page_table_tt, batch_idx=0)
+    ttnn.experimental.paged_fill_cache(v_cache_tt, v_fill, page_table_tt, batch_idx=0)
+
+    # Decode input
+    x_torch = torch.randn(1, 1, hidden_size, dtype=torch.float32)
+
+    # HF reference
+    rope = Gemma4TextRotaryEmbedding(hf_text_config)
+    layer_type = hf_text_config.layer_types[layer_idx]
+    cos, sin = rope(x_torch, torch.tensor([[cache_len]]), layer_type=layer_type)
+    mask = torch.zeros(1, 1, 1, cache_len + 1)
+    with torch.no_grad():
+        ref_output, _ = hf_attn(x_torch, position_embeddings=(cos, sin), past_key_values=hf_cache, attention_mask=mask)
+
+    # TT paged decode
+    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(device, hf_text_config, 128, layer_idx)
+    x_tt = ttnn.from_torch(
+        x_torch.unsqueeze(0).to(torch.bfloat16),
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+    )
+    position_idx_tt = ttnn.from_torch(
+        torch.tensor([[cache_len]], dtype=torch.int32),
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.int32,
+    )
+    tt_output = tt_attn(
+        x_tt,
+        rope_mats=(cos_tt, sin_tt),
+        position_idx=position_idx_tt,
+        is_decode=True,
+        token_index=cache_len,
+        page_table=page_table_tt,
+    )
+    tt_output_torch = ttnn.to_torch(tt_output).squeeze(0).float()
+
+    passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=0.95)
+    assert passing, f"Attention paged decode (layer_idx={layer_idx}) PCC too low: {pcc_msg}"

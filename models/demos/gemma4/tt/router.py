@@ -2,16 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Gemma4 Router: RMSNorm -> scale -> linear -> per-expert-scale -> softmax -> topk -> normalize -> per_expert_scale
+Gemma4 Router: RMSNorm -> scale -> linear -> softmax -> topk -> normalize -> per_expert_scale
 
 Gemma4 uses softmax-THEN-topk (opposite of GPT-OSS).
 
-HF weight names (from state_dict with "router." prefix stripped):
-  proj.weight: [num_experts, hidden_size] = [128, 2816]
-  scale: [hidden_size] = [2816]
-  per_expert_scale: [num_experts] = [128]
-
-The router norm has no learned weight (with_scale=False).
+On-device operations: norm, scale, linear, softmax, topk
+CPU operations: normalize, per_expert_scale (small [seq_len, top_k] tensors)
 """
 
 import torch
@@ -44,18 +40,22 @@ class Gemma4Router:
             scale_weight = state_dict["scale"].reshape(1, 1, 1, -1)
             # proj.weight: [num_experts, hidden_size] -> transpose to [1, 1, hidden_size, num_experts]
             proj_weight = substate(state_dict, "proj")["weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
-            # per_expert_scale: [num_experts] - kept on CPU for topk indexing
+            # per_expert_scale: kept on CPU for post-topk indexing
             self.per_expert_scale_torch = state_dict["per_expert_scale"]
         else:
             scale_weight = None
             proj_weight = None
             self.per_expert_scale_torch = None
 
+        is_mesh = hasattr(mesh_device, "shape")
+        replicate_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
+
         self.scale = ttnn.as_tensor(
             scale_weight,
             device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=replicate_mapper,
             cache_file_name=get_cache_file_name(tensor_cache_path, "scale"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -65,6 +65,7 @@ class Gemma4Router:
             device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=replicate_mapper,
             cache_file_name=get_cache_file_name(tensor_cache_path, "proj.weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -75,42 +76,43 @@ class Gemma4Router:
 
         Args:
             hidden_states: [1, 1, seq_len, hidden_size] on device, TILE_LAYOUT
-                Note: HF flattens to [B*S, H] before calling router. We keep 4D.
 
         Returns:
-            top_k_weights: [seq_len, top_k] torch tensor (CPU) - routing weights after normalize + per_expert_scale
-            top_k_indices: [seq_len, top_k] torch tensor (CPU) - selected expert indices
+            top_k_weights: [seq_len, top_k] torch tensor (CPU)
+            top_k_indices: [seq_len, top_k] torch tensor (CPU)
         """
-        # 1. RMSNorm (no learned weight)
+        # 1. RMSNorm (no learned weight) — on device
         normed = self.norm.forward(hidden_states)
 
-        # 2. Scale: normed * scale * scalar_root_size
+        # 2. Scale: normed * scale * scalar_root_size — on device
         scaled = ttnn.mul(normed, self.scale)
         normed.deallocate(True)
         scaled = ttnn.mul(scaled, self.scalar_root_size)
 
-        # 3. Linear projection -> [1, 1, seq_len, num_experts]
+        # 3. Linear projection -> [1, 1, seq_len, num_experts] — on device
         expert_scores = ttnn.linear(scaled, self.proj_weight)
         scaled.deallocate(True)
 
-        # Move to CPU for softmax + topk (these are small tensors, num_experts=128)
-        # On mesh devices, extract device 0 (all devices have same replicated data)
-        scores_for_cpu = expert_scores
-        if hasattr(self.mesh_device, "shape"):
-            scores_for_cpu = ttnn.get_device_tensors(expert_scores)[0]
-        expert_scores_torch = ttnn.to_torch(scores_for_cpu).squeeze(0).squeeze(0)  # [seq_len, num_experts]
+        # 4. Softmax — on device
+        router_probs = ttnn.softmax(expert_scores, dim=-1)
         expert_scores.deallocate(True)
 
-        # 4. Softmax
-        router_probs = torch.nn.functional.softmax(expert_scores_torch.float(), dim=-1)
+        # 5. TopK — on device
+        top_k_values, top_k_indices_tt = ttnn.topk(router_probs, k=self.top_k, dim=-1)
+        router_probs.deallocate(True)
 
-        # 5. TopK
-        top_k_weights, top_k_indices = torch.topk(router_probs, k=self.top_k, dim=-1)
+        # Move small [seq_len, top_k] tensors to CPU for normalize + per_expert_scale
+        if hasattr(self.mesh_device, "shape"):
+            top_k_values = ttnn.get_device_tensors(top_k_values)[0]
+            top_k_indices_tt = ttnn.get_device_tensors(top_k_indices_tt)[0]
 
-        # 6. Normalize weights to sum to 1
+        top_k_weights = ttnn.to_torch(top_k_values).squeeze(0).squeeze(0).float()
+        top_k_indices = ttnn.to_torch(top_k_indices_tt).squeeze(0).squeeze(0).to(torch.int64)
+
+        # 6. Normalize weights to sum to 1 — CPU (small tensor)
         top_k_weights = top_k_weights / top_k_weights.sum(dim=-1, keepdim=True)
 
-        # 7. Apply per-expert scale
+        # 7. Apply per-expert scale — CPU (small tensor, requires indexing)
         if self.per_expert_scale_torch is not None:
             top_k_weights = top_k_weights * self.per_expert_scale_torch[top_k_indices].float()
 
