@@ -14,20 +14,26 @@ from transformers.activations import GELUActivation, GELUTanh, SiLUActivation
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeAudioAttention,
     Qwen3OmniMoeCode2WavAttention,
+    Qwen3OmniMoeCode2WavDecoderResidualUnit,
     Qwen3OmniMoeCode2WavRMSNorm,
     Qwen3OmniMoeRMSNorm,
+    Qwen3OmniMoeRotaryEmbedding,
     Qwen3OmniMoeTalkerResizeMLP,
+    Qwen3OmniMoeTalkerRotaryEmbedding,
     Qwen3OmniMoeTalkerTextSparseMoeBlock,
     Qwen3OmniMoeTextRMSNorm,
     Qwen3OmniMoeThinkerTextAttention,
     Qwen3OmniMoeThinkerTextRMSNorm,
+    Qwen3OmniMoeThinkerTextRotaryEmbedding,
     Qwen3OmniMoeThinkerTextSparseMoeBlock,
     Qwen3OmniMoeVisionMLP,
     Qwen3OmniMoeVisionAttention,
+    Qwen3OmniMoeVisionRotaryEmbedding,
     Qwen3OmniMoeThinkerTextMLP,
     Qwen3OmniMoeMLP,
     Qwen3OmniMoeCode2WavMlp,
     Qwen3OmniMoeTalkerCodePredictorAttention,
+    # SnakeBeta,
 )
 from qwen_omni_utils import process_mm_info
 
@@ -41,14 +47,31 @@ from models.experimental.tt_symbiote.modules.attention import TTNNQwen3OmniMoeCo
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3Attention
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3OmniAttention
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3VLMoeVisionAttention
+from models.experimental.tt_symbiote.modules.conv import TTNNQwenOmniConv2dNHWC
 from models.experimental.tt_symbiote.modules.moe import TTNNGlm4MoeMLP
-from models.experimental.tt_symbiote.modules.activation import TTNNGelu, TTNNSilu
+from models.experimental.tt_symbiote.modules.activation import (
+    TTNNGelu,
+    # TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
+    TTNNSilu,
+    TTNNSnakeBeta,
+)
 
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNQwen3OmniTalkerResizeMLP,
     TTNNQwen3OmniVisionMLP,
 )
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm, TTNNQwenLayerNorm
+from models.experimental.tt_symbiote.modules.qwen_omni_lm_head import (
+    TTNNQwenOmniThinkerLmHead,
+    replace_thinker_lm_head_with_ttnn,
+)
+
+# from models.experimental.tt_symbiote.modules.qwen_omni_rotary import (
+#    TTNNQwen3OmniMoeRotaryEmbedding,
+#    TTNNQwen3OmniMoeTalkerRotaryEmbedding,
+#    TTNNQwen3OmniMoeThinkerTextRotaryEmbedding,
+#    TTNNQwen3OmniMoeVisionRotaryEmbedding,
+# )
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 
@@ -57,18 +80,24 @@ _ALLOWED_SYMBIOTE_RUN_MODES = frozenset({"CPU", "NORMAL", "NORMAL_WITH_FALLBACK"
 _QWEN_OMNI_AUDIO_SAMPLE_RATE_HZ = 24000
 
 # HF ``ACT2FN`` / ``nn.*`` activations → TTNN (``GELUTanh`` uses ``ttnn.gelu`` as a practical stand-in for vision).
+# ``SnakeBeta`` is used in Qwen3-Omni-MoE ``code2wav`` decoder blocks (see ``modeling_qwen3_omni_moe``).
 _QWEN_OMNI_ACTIVATION_NN_TO_TTNN = {
     torch.nn.SiLU: TTNNSilu,
     torch.nn.GELU: TTNNGelu,
     SiLUActivation: TTNNSilu,
     GELUActivation: TTNNGelu,
     GELUTanh: TTNNGelu,
+    # SnakeBeta: TTNNSnakeBeta,
 }
 
 # HF ``nn.LayerNorm`` (audio encoder, vision merger/blocks, code2wav ConvNeXt). ``TTNNQwenLayerNorm.from_torch``
 # keeps PyTorch modules when ``normalized_shape`` is not tile-aligned (``dim % 32 != 0``).
 _QWEN_OMNI_LAYERNORM_NN_TO_TTNN = {
     torch.nn.LayerNorm: TTNNQwenLayerNorm,
+}
+
+_QWEN_OMNI_CONV_NN_TO_TTNN = {
+    torch.nn.Conv2d: TTNNQwenOmniConv2dNHWC,
 }
 
 
@@ -169,24 +198,41 @@ NN_TO_TTNN_THINKER = {
     Qwen3OmniMoeVisionAttention: TTNNQwen3VLMoeVisionAttention,
     Qwen3OmniMoeVisionMLP: TTNNQwen3OmniVisionMLP,
     Qwen3OmniMoeAudioAttention: TTNNQwenAudioAttention,
+    # Qwen3OmniMoeThinkerTextRotaryEmbedding: TTNNQwen3OmniMoeThinkerTextRotaryEmbedding,
+    # Qwen3OmniMoeVisionRotaryEmbedding: TTNNQwen3OmniMoeVisionRotaryEmbedding,
     **_QWEN_OMNI_ACTIVATION_NN_TO_TTNN,
     **_QWEN_OMNI_LAYERNORM_NN_TO_TTNN,
+    **_QWEN_OMNI_CONV_NN_TO_TTNN,
 }
 NN_TO_TTNN_CODE2WAV = {
     Qwen3OmniMoeCode2WavAttention: TTNNQwen3OmniMoeCode2WavAttention,
     Qwen3OmniMoeCode2WavRMSNorm: TTNNDistributedRMSNorm,
     Qwen3OmniMoeCode2WavMlp: TTNNGlm4MoeMLP,
+    # Qwen3OmniMoeCode2WavDecoderResidualUnit: TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
+    # ``code2wav.pre_transformer.rotary_emb`` (same HF class as code_predictor 1D RoPE)
+    # Qwen3OmniMoeRotaryEmbedding: TTNNQwen3OmniMoeRotaryEmbedding,
     **_QWEN_OMNI_ACTIVATION_NN_TO_TTNN,
     **_QWEN_OMNI_LAYERNORM_NN_TO_TTNN,
+    **_QWEN_OMNI_CONV_NN_TO_TTNN,
 }
 NN_TO_TTNN_TALKER = {
     Qwen3OmniMoeTalkerTextSparseMoeBlock: TTNNQwen3TalkerMoE,
     Qwen3OmniMoeThinkerTextAttention: TTNNQwen3Attention,
+    Qwen3OmniMoeThinkerTextRMSNorm: TTNNDistributedRMSNorm,
+    Qwen3OmniMoeThinkerTextMLP: TTNNGlm4MoeMLP,
     Qwen3OmniMoeTalkerCodePredictorAttention: TTNNQwen3Attention,
     Qwen3OmniMoeTalkerResizeMLP: TTNNQwen3OmniTalkerResizeMLP,
     Qwen3OmniMoeRMSNorm: TTNNDistributedRMSNorm,
+    # Qwen3OmniMoeTalkerRotaryEmbedding: TTNNQwen3OmniMoeTalkerRotaryEmbedding,
     **_QWEN_OMNI_ACTIVATION_NN_TO_TTNN,
     **_QWEN_OMNI_LAYERNORM_NN_TO_TTNN,
+    **_QWEN_OMNI_CONV_NN_TO_TTNN,
+}
+
+# Code predictor shares most talker mappings plus ``Qwen3OmniMoeRotaryEmbedding`` (not MRoPE).
+NN_TO_TTNN_CODE_PREDICTOR = {
+    **NN_TO_TTNN_TALKER,
+    # Qwen3OmniMoeRotaryEmbedding: TTNNQwen3OmniMoeRotaryEmbedding,
 }
 
 MODEL_NAME = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
@@ -238,7 +284,7 @@ def _register_code_predictor_nn_to_ttnn(model) -> dict:
     cp = getattr(talker, "code_predictor", None) if talker is not None else None
     if cp is None:
         return {}
-    return register_module_replacement_dict(cp, NN_TO_TTNN_TALKER, model_config=None)
+    return register_module_replacement_dict(cp, NN_TO_TTNN_CODE_PREDICTOR, model_config=None)
 
 
 def _restore_torch_rmsnorm_in_code_predictor(model) -> None:
@@ -460,6 +506,31 @@ pytestmark = [
     ),
     pytest.mark.parametrize("mesh_device", [_mesh_param_for_request()], indirect=True),
 ]
+
+
+def test_qwen_omni_thinker_lm_head_pcc(mesh_device, full_omni_model_for_pcc):
+    _require_symbiote_run_mode()
+    m = full_omni_model_for_pcc
+    torch_lm = m.thinker.lm_head
+    tt_lm = TTNNQwenOmniThinkerLmHead.from_torch(torch_lm)
+    set_device(tt_lm, mesh_device)
+    tt_lm.preprocess_weights()
+    tt_lm.move_weights_to_device()
+
+    text_config = m.config.thinker_config.text_config
+    x = torch.randn(1, 8, text_config.hidden_size, dtype=torch.bfloat16)
+    with torch.no_grad():
+        torch_out = torch_lm(x)
+    tt_x = ttnn.from_torch(
+        x,
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=_replicate_mesh_mapper(mesh_device),
+    )
+    tt_ret = tt_lm(tt_x)
+    passing, pcc = _comp_pcc_in_test(torch_out, tt_ret, mesh_device)
+    assert passing, f"Thinker lm_head PCC too low: {pcc}"
 
 
 def test_qwen_omni_thinker_attention_pcc(mesh_device, full_omni_model_for_pcc):
@@ -742,8 +813,11 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
     _register_code_predictor_nn_to_ttnn(model)
     _register_code2wav_nn_to_ttnn(model)
     _restore_torch_rmsnorm_in_code_predictor(model)
+    replace_thinker_lm_head_with_ttnn(model.thinker)
     set_device(model, mesh_device)
     _patch_thinker_talker_device_dtype(model)
+
+    # assert isinstance(model.thinker.lm_head, TTNNQwenOmniThinkerLmHead)
 
     n_thinker = len(model.thinker.model.layers)
     for i, layer in enumerate(model.thinker.model.layers):
@@ -845,6 +919,7 @@ def test_qwen_omni(mesh_device):
     _register_code_predictor_nn_to_ttnn(model)
     _register_code2wav_nn_to_ttnn(model)
     _restore_torch_rmsnorm_in_code_predictor(model)
+    replace_thinker_lm_head_with_ttnn(model.thinker)
 
     # Set device for all TTNN modules
     print(f"Setting device for TTNN modules (mesh: {mesh_device.get_num_devices()} device(s))...")
