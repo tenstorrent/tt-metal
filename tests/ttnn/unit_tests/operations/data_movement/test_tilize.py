@@ -15,7 +15,7 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
 from tests.ttnn.utils_for_testing import assert_equal, assert_allclose
-from models.common.utility_functions import skip_for_slow_dispatch
+from models.common.utility_functions import skip_for_slow_dispatch, skip_for_blackhole
 
 shapes = [[[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]]]
 
@@ -253,6 +253,7 @@ def test_run_tilize_large_row_input(device, input_shape):
     assert_equal(input, output)
 
 
+@skip_for_blackhole("Test not supported on Blackhole")
 @pytest.mark.parametrize("shape", [(1, 7168, 2304)])
 @pytest.mark.parametrize("shard_shape", [(7168, 192)])
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat4_b])
