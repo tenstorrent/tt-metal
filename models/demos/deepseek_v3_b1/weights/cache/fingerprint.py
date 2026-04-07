@@ -67,6 +67,7 @@ def _canonical_fusion_group(target: FusionGroupSpec) -> dict:
         "regions": [_canonical_region(r) for r in target.regions],
         "sharding_strategy": target.sharding_strategy.name,
         "mesh_mapper_config": _canonical_mesh_mapper(target.mesh_mapper_config),
+        "transform_version": target.transform_version,
     }
 
 
@@ -82,6 +83,7 @@ def canonical(fingerprint: Fingerprint) -> dict:
             "memory_config": json.loads(target.memory_config.to_json()),
             "tile_shape": list(target.tile_shape),
             "mesh_mapper_config": _canonical_mesh_mapper(target.mesh_mapper_config),
+            "transform_version": target.transform_version,
         }
     elif isinstance(target, FusionGroupSpec):
         target_dict = _canonical_fusion_group(target)
@@ -92,7 +94,6 @@ def canonical(fingerprint: Fingerprint) -> dict:
         "source": sorted(fingerprint.source.names),
         "hf_model_id": fingerprint.hf_model_id,
         "hf_revision": fingerprint.hf_revision,
-        "transform_version": fingerprint.transform_version,
         "mesh_shape": list(fingerprint.mesh_shape),
         "target": target_dict,
     }

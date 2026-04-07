@@ -48,7 +48,6 @@ def _make_fingerprint(**overrides) -> Fingerprint:
         source=SourceTensorSelection(names=("weight_a", "weight_b")),
         hf_model_id="deepseek-ai/DeepSeek-V3",
         hf_revision="d1a891dd58e6bb0a671bfc6f3046e29e3478e924",
-        transform_version=4,
         mesh_shape=(4, 2),
         target=TensorTarget(
             name="test_tensor",
@@ -90,10 +89,19 @@ class TestFingerprint:
         fingerprint2 = _make_fingerprint(source=SourceTensorSelection(names=("b",)))
         assert compute_artifact_id(fingerprint1) != compute_artifact_id(fingerprint2)
 
-    def test_sensitivity_transform_version(self):
-        fingerprint1 = _make_fingerprint(transform_version=1)
-        fingerprint2 = _make_fingerprint(transform_version=2)
-        assert compute_artifact_id(fingerprint1) != compute_artifact_id(fingerprint2)
+    def test_sensitivity_tensor_target_transform_version(self):
+        t1 = TensorTarget(name="t", transform_version=1)
+        t2 = TensorTarget(name="t", transform_version=2)
+        fp1 = _make_fingerprint(target=t1)
+        fp2 = _make_fingerprint(target=t2)
+        assert compute_artifact_id(fp1) != compute_artifact_id(fp2)
+
+    def test_sensitivity_fusion_group_transform_version(self):
+        fg1 = _sample_fusion_group_spec(transform_version=1)
+        fg2 = _sample_fusion_group_spec(transform_version=2)
+        fp1 = _make_fingerprint(target=fg1)
+        fp2 = _make_fingerprint(target=fg2)
+        assert compute_artifact_id(fp1) != compute_artifact_id(fp2)
 
     def test_sensitivity_mesh_shape(self):
         fingerprint1 = _make_fingerprint(mesh_shape=(4, 2))
@@ -522,10 +530,9 @@ class TestCacheContext:
             schema_version=1,
             hf_model_id="deepseek-ai/DeepSeek-V3",
             hf_revision="abc123",
-            transform_version=1,
             mesh_shape=(4, 2),
         )
-        target = TensorTarget(name="embedding", dtype=ttnn.bfloat16)
+        target = TensorTarget(name="embedding", dtype=ttnn.bfloat16, transform_version=1)
         source = SourceTensorSelection(names=("model.embed_tokens.weight",))
         fingerprint = ctx.fingerprint(source=source, target=target)
 
@@ -533,14 +540,13 @@ class TestCacheContext:
         assert fingerprint.schema_version == 1
         assert fingerprint.hf_model_id == "deepseek-ai/DeepSeek-V3"
         assert fingerprint.hf_revision == "abc123"
-        assert fingerprint.transform_version == 1
         assert fingerprint.mesh_shape == (4, 2)
         assert fingerprint.target is target
         assert fingerprint.source is source
 
     def test_different_contexts_different_ids(self):
-        ctx1 = CacheContext(schema_version=1, hf_model_id="m", hf_revision="a", transform_version=1, mesh_shape=(4, 2))
-        ctx2 = CacheContext(schema_version=1, hf_model_id="m", hf_revision="b", transform_version=1, mesh_shape=(4, 2))
+        ctx1 = CacheContext(schema_version=1, hf_model_id="m", hf_revision="a", mesh_shape=(4, 2))
+        ctx2 = CacheContext(schema_version=1, hf_model_id="m", hf_revision="b", mesh_shape=(4, 2))
         target = TensorTarget(name="t")
         source = SourceTensorSelection(names=("w",))
         fingerprint1 = ctx1.fingerprint(source=source, target=target)
@@ -548,7 +554,7 @@ class TestCacheContext:
         assert compute_artifact_id(fingerprint1) != compute_artifact_id(fingerprint2)
 
     def test_same_context_same_ids(self):
-        ctx = CacheContext(schema_version=1, hf_model_id="m", hf_revision="a", transform_version=1, mesh_shape=(4, 2))
+        ctx = CacheContext(schema_version=1, hf_model_id="m", hf_revision="a", mesh_shape=(4, 2))
         target = TensorTarget(name="t")
         source = SourceTensorSelection(names=("w",))
         fingerprint1 = ctx.fingerprint(source=source, target=target)
@@ -733,7 +739,6 @@ class TestGetOrCreateFused:
             schema_version=1,
             hf_model_id="deepseek-ai/DeepSeek-V3",
             hf_revision="d1a891dd58e6bb0a671bfc6f3046e29e3478e924",
-            transform_version=99,
             mesh_shape=(4, 2),
         )
         fingerprint = ctx.fingerprint(
@@ -772,7 +777,6 @@ class TestGetOrCreateFused:
             schema_version=1,
             hf_model_id="m",
             hf_revision="r",
-            transform_version=1,
             mesh_shape=(4, 2),
         )
         fingerprint = ctx.fingerprint(

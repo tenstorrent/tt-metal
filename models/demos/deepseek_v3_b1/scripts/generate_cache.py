@@ -41,7 +41,6 @@ from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.deepseek_v3_b1.demo.weight_provider import CacheWeightProvider
 from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext, TensorCache
 from models.demos.deepseek_v3_b1.weights.prepare import (
-    CURRENT_TRANSFORM_VERSION,
     NUM_ROUTED_EXPERTS,
     DeepSeekV3DenseLayerWeights,
     DeepSeekV3MoELayerWeights,
@@ -71,7 +70,6 @@ def _cache_config(
             schema_version=schema_version,
             hf_model_id=hf_model_id,
             hf_revision=hf_revision,
-            transform_version=CURRENT_TRANSFORM_VERSION,
             mesh_shape=(submesh.shape[0], submesh.shape[1]),
         ),
     )

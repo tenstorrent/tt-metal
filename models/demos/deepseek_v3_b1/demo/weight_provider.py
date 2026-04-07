@@ -23,7 +23,6 @@ from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
 from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext, TensorCache
 from models.demos.deepseek_v3_b1.weights.prepare import (
     _MTP_LAYER_IDX,
-    CURRENT_TRANSFORM_VERSION,
     NUM_ROUTED_EXPERTS,
     DeepSeekV3DenseLayerWeights,
     DeepSeekV3EmbeddingLayerWeights,
@@ -233,7 +232,6 @@ class CacheWeightProvider:
             schema_version=self._schema_version,
             hf_model_id=self._hf_model_id,
             hf_revision=self._hf_revision,
-            transform_version=CURRENT_TRANSFORM_VERSION,
             mesh_shape=(device.shape[0], device.shape[1]),
         )
         return CacheConfig(cache=self._cache, context=context)

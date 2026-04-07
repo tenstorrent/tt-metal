@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     DeepSeekV3MTPWeights,
     DenseRoutedExpertWeights,
     MoERoutedExpertWeights,
+    SharedExpertWeights,
     prepare_attention_weights,
     prepare_dense_layer_weights,
     prepare_embedding_weights,
@@ -94,6 +95,39 @@ def _assert_overlapped_tensors_match(a: OverlappedTensor, b: OverlappedTensor) -
     assert _core_range_set_to_tuples(a.core_range_set) == _core_range_set_to_tuples(b.core_range_set)
 
 
+_ATTENTION_OVERLAPPED_FIELDS = (
+    "q_a_proj",
+    "q_b_proj",
+    "kv_a_proj",
+    "o_proj",
+    "gate_mm",
+    "attn_norm",
+    "q_norm",
+    "kv_norm",
+    "ffn_norm",
+    "kv_b1_proj",
+    "kv_b2_proj",
+)
+_SHARED_EXPERT_OVERLAPPED_FIELDS = ("shared_gate_proj", "shared_up_proj")
+
+
+def _assert_attention_metadata_matches(cold: AttentionWeights, warm: AttentionWeights) -> None:
+    """Assert cold and warm cache runs produce identical OverlappedTensor metadata for attention."""
+    for field in _ATTENTION_OVERLAPPED_FIELDS:
+        a = getattr(cold, field, None)
+        b = getattr(warm, field, None)
+        if a is None and b is None:
+            continue
+        assert a is not None and b is not None, f"{field}: one is None, other is not"
+        _assert_overlapped_tensors_match(a, b)
+
+
+def _assert_shared_expert_metadata_matches(cold: SharedExpertWeights, warm: SharedExpertWeights) -> None:
+    """Assert cold and warm cache runs produce identical OverlappedTensor metadata for shared expert."""
+    for field in _SHARED_EXPERT_OVERLAPPED_FIELDS:
+        _assert_overlapped_tensors_match(getattr(cold, field), getattr(warm, field))
+
+
 def _assert_on_device(tensor: ttnn.Tensor) -> None:
     """Assert the tensor storage type is DEVICE."""
     assert tensor.storage_type() == ttnn.StorageType.DEVICE, f"Expected DEVICE storage, got {tensor.storage_type()}"
@@ -120,7 +154,6 @@ def _test_cache_context(mesh_shape: tuple[int, int] = (4, 2)) -> CacheContext:
         schema_version=1,
         hf_model_id="test-model",
         hf_revision="test-rev",
-        transform_version=1,
         mesh_shape=mesh_shape,
     )
 
@@ -721,6 +754,7 @@ def test_prepare_attention_weights_with_cache_dense_4x2(bh_2d_mesh_device, tmp_p
     attn_hit = prepare_attention_weights(submesh, state, 0, is_moe=False, cache_config=cache_config)
     assert attn_hit.gate_mm is None
     assert attn_hit.q_a_proj.tensor_shape == attn.q_a_proj.tensor_shape
+    _assert_attention_metadata_matches(attn, attn_hit)
 
     objects_dir = cache_config.cache.local_root / "objects"
     artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
@@ -751,6 +785,7 @@ def test_prepare_attention_weights_with_cache_moe_4x2(bh_2d_mesh_device, tmp_pat
     attn_hit = prepare_attention_weights(submesh, state, 0, is_moe=True, cache_config=cache_config)
     assert attn_hit.gate_mm is not None
     assert attn_hit.gate_bias.shape == (16, 16)
+    _assert_attention_metadata_matches(attn, attn_hit)
 
     objects_dir = cache_config.cache.local_root / "objects"
     artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
@@ -779,6 +814,7 @@ def test_prepare_shared_expert_weights_with_cache_dense_4x2(bh_2d_mesh_device, t
 
     shared_hit = prepare_shared_expert_weights(submesh, state, 0, is_moe=False, cache_config=cache_config)
     assert shared_hit.shared_gate_proj.tensor_shape == shared.shared_gate_proj.tensor_shape
+    _assert_shared_expert_metadata_matches(shared, shared_hit)
 
     objects_dir = cache_config.cache.local_root / "objects"
     artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
@@ -807,6 +843,7 @@ def test_prepare_shared_expert_weights_with_cache_moe_4x2(bh_2d_mesh_device, tmp
 
     shared_hit = prepare_shared_expert_weights(submesh, state, 0, is_moe=True, cache_config=cache_config)
     assert shared_hit.shared_gate_proj.tensor_shape == shared.shared_gate_proj.tensor_shape
+    _assert_shared_expert_metadata_matches(shared, shared_hit)
 
     objects_dir = cache_config.cache.local_root / "objects"
     artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
@@ -906,6 +943,8 @@ def test_prepare_dense_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path)
     layer_hit = prepare_dense_layer_weights(submesh, state, 0, cache_config=cache_config)
     assert isinstance(layer_hit, DeepSeekV3DenseLayerWeights)
     assert layer_hit.q_a_proj.tensor_shape == layer.q_a_proj.tensor_shape
+    _assert_attention_metadata_matches(layer, layer_hit)
+    _assert_shared_expert_metadata_matches(layer, layer_hit)
 
     objects_dir = cache_config.cache.local_root / "objects"
     artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
@@ -951,6 +990,8 @@ def test_prepare_moe_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
         cache_config=cache_config,
     )
     assert weights_hit.gate_bias.shape == expected_gate_bias
+    _assert_attention_metadata_matches(weights, weights_hit)
+    _assert_shared_expert_metadata_matches(weights, weights_hit)
 
     objects_dir = cache_config.cache.local_root / "objects"
     artifact_dirs = list(objects_dir.rglob("data.tensorbin"))

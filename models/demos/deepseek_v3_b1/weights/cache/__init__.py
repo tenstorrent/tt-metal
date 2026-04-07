@@ -50,7 +50,6 @@ class CacheConfig:
                 schema_version=0,
                 hf_model_id="ephemeral",
                 hf_revision="ephemeral",
-                transform_version=0,
                 mesh_shape=(1, 1),
             ),
         )

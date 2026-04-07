@@ -64,6 +64,7 @@ class TensorTarget:
     memory_config: ttnn.MemoryConfig = field(default_factory=lambda: ttnn.DRAM_MEMORY_CONFIG)
     tile_shape: tuple[int, int] = (32, 32)
     mesh_mapper_config: MeshMapperConfig = field(default_factory=ReplicateMeshMapper)
+    transform_version: int = 0  # bump when preprocess logic for this target changes
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,7 @@ class FusionGroupSpec:
     regions: tuple[RegionSpec, ...] = ()
     sharding_strategy: ttnn.TensorMemoryLayout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
     mesh_mapper_config: MeshMapperConfig = field(default_factory=ReplicateMeshMapper)
+    transform_version: int = 0  # bump when shuffle/preprocess logic changes
 
 
 ArtifactTarget = TensorTarget | FusionGroupSpec
@@ -95,13 +97,17 @@ ArtifactTarget = TensorTarget | FusionGroupSpec
 
 @dataclass(frozen=True)
 class Fingerprint:
-    """Cache key. All fields are known before any computation runs."""
+    """Cache key. All fields are known before any computation runs.
+
+    The ``transform_version`` lives inside the ``target`` field
+    (:class:`TensorTarget` or :class:`FusionGroupSpec`), not here, so that
+    each artifact carries its own version next to the code it protects.
+    """
 
     schema_version: int
     source: SourceTensorSelection
     hf_model_id: str
     hf_revision: str
-    transform_version: int
     mesh_shape: tuple[int, int]
     target: ArtifactTarget
 
@@ -111,13 +117,13 @@ class CacheContext:
     """Bundles the common cache key fields shared across all tensors in a model.
 
     Prepare functions accept this to avoid repeating hf_model_id, hf_revision, etc.
-    for every standalone tensor they cache.
+    for every standalone tensor they cache.  The ``transform_version`` is not
+    here — it lives on each :class:`TensorTarget` / :class:`FusionGroupSpec`.
     """
 
     schema_version: int
     hf_model_id: str
     hf_revision: str
-    transform_version: int
     mesh_shape: tuple[int, int]
 
     def fingerprint(self, *, source: SourceTensorSelection, target: ArtifactTarget) -> Fingerprint:
@@ -126,7 +132,6 @@ class CacheContext:
             source=source,
             hf_model_id=self.hf_model_id,
             hf_revision=self.hf_revision,
-            transform_version=self.transform_version,
             mesh_shape=self.mesh_shape,
             target=target,
         )
