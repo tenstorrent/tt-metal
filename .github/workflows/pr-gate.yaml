@@ -432,6 +432,9 @@ jobs:
         python_path: python3
         # NOTE: only resolves when ALL are fixed
         auto_resolve_conversations: true
+        # TT internal runners mount the workspace at /__w/ not /home/runner/work/.
+        # Without this, fixes.yml paths don't match the PR diff and comments are silently dropped.
+        repo_path_prefix: /__w
 
   # LLK Functional Unit Tests on Wormhole (PR gate - runs when LLK engine, tests, or perf code changed)
   llk-test-wormhole:
