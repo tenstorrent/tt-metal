@@ -326,7 +326,7 @@ def get_device_name():
         ttnn.cluster.ClusterType.N300_2x2: "n300_2x2",
         ttnn.cluster.ClusterType.T3K: "t3k",
         ttnn.cluster.ClusterType.GALAXY: "galaxy",
-        ttnn.cluster.ClusterType.BLACKHOLE_GALAXY: "blackhole_galaxy",
+        ttnn.cluster.ClusterType.BLACKHOLE_GALAXY: "bh_galaxy",
         ttnn.cluster.ClusterType.P100: "p100",
         ttnn.cluster.ClusterType.P150: "p150",
         ttnn.cluster.ClusterType.P150_X2: "p150x2",
