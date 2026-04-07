@@ -21,18 +21,18 @@ class RMSNormLayer(AbstractModuleBase):
         features: int,
         epsilon: float = 1e-5,
         use_composite: bool = False,
+        weight_init=None,
     ) -> None:
+        super().__init__()
         self.epsilon = epsilon
         self.use_composite = use_composite
 
         self.gamma = Parameter(
             TensorMetadata(
                 shape=(1, 1, 1, features),
-                init_fn=ttml.init.ones(),
+                init_fn=weight_init or ttml.init.ones(),
             )
         )
-
-        super().__init__()
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         if self.use_composite:
@@ -52,6 +52,8 @@ class LlamaMLP(AbstractModuleBase):
         intermediate_size: Optional[int] = None,
         dropout: float = 0.0,
     ) -> None:
+        super().__init__()
+
         self.embedding_size = embedding_size
         self.dropout_prob = dropout
 
@@ -64,8 +66,6 @@ class LlamaMLP(AbstractModuleBase):
         self.w1 = LinearLayer(embedding_size, intermediate_size, False)
         self.w3 = LinearLayer(embedding_size, intermediate_size, False)
         self.w2 = LinearLayer(intermediate_size, embedding_size, False)
-
-        super().__init__()
 
     def forward(self, input: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         swished = ttml.ops.unary.silu(self.w1(input))
@@ -91,6 +91,7 @@ class LlamaBlock(AbstractModuleBase):
         intermediate_size: Optional[int] = None,
         attention_bias: bool = False,
     ) -> None:
+        super().__init__()
         self.mlp = LlamaMLP(hidden_size, intermediate_size, mlp_dropout)
         self.attention_norm = RMSNormLayer(hidden_size)
         self.mlp_norm = RMSNormLayer(hidden_size)
@@ -102,8 +103,6 @@ class LlamaBlock(AbstractModuleBase):
             rope_params=rope_params,
             bias_linears=attention_bias,
         )
-
-        super().__init__()
 
     def forward(
         self,

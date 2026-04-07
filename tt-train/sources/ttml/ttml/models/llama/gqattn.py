@@ -23,6 +23,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         rope_params: ttml.ops.rope.RotaryEmbeddingParams,
         bias_linears: bool = False,
     ) -> None:
+        super().__init__()
         if embedding_size % num_heads != 0:
             raise ValueError(
                 "Embedding size must be divisible by the number of attention heads. "
@@ -41,8 +42,6 @@ class GroupedQueryAttention(AbstractModuleBase):
         self.q_linear = LinearLayer(embedding_size, embedding_size, bias_linears)
         self.kv_linear = LinearLayer(embedding_size, concat_kv_dim, bias_linears)
         self.out_linear = LinearLayer(embedding_size, embedding_size, bias_linears)
-
-        super().__init__()
 
     def parallelize(self, mesh_device, tp_axis, cp_axis=None):
         from functools import partial

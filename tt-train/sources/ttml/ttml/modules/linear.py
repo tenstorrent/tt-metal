@@ -20,7 +20,10 @@ class LinearLayer(AbstractModuleBase):
         in_features: int,
         out_features: int,
         has_bias: bool = True,
+        weight_init=None,
+        bias_init=None,
     ) -> None:
+        super().__init__()
         self.in_features = in_features
         self.out_features = out_features
 
@@ -29,7 +32,7 @@ class LinearLayer(AbstractModuleBase):
         self.weight = Parameter(
             TensorMetadata(
                 shape=(1, 1, out_features, in_features),
-                init_fn=ttml.init.uniform(-k, k),
+                init_fn=weight_init or ttml.init.uniform(-k, k),
             )
         )
 
@@ -37,13 +40,11 @@ class LinearLayer(AbstractModuleBase):
             self.bias = Parameter(
                 TensorMetadata(
                     shape=(1, 1, 1, out_features),
-                    init_fn=ttml.init.uniform(-k, k),
+                    init_fn=bias_init or ttml.init.uniform(-k, k),
                 )
             )
         else:
             self.bias = None
-
-        super().__init__()
 
     def __reduce__(self):
         return (
