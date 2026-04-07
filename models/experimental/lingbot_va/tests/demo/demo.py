@@ -1602,6 +1602,10 @@ def run_generate(
     gen_timings.append(("infer_chunks_total", time.perf_counter() - t0_chunks))
 
     pred_latent = pred_latent_lst[0] if len(pred_latent_lst) == 1 else ttnn.concat(pred_latent_lst, dim=2)
+    if len(pred_latent_lst) > 1:
+        for i, pl in enumerate(pred_latent_lst):
+            _safe_deallocate_tensor(pl, f"run_generate pred_latent chunk {i} (post-concat)")
+    pred_latent_lst.clear()
 
     # Teardown transformer + streaming VAE encoder on the **same** mesh (do not close/reopen mesh here).
     # ``pred_latent`` stays valid on device; TT VAE decoder loads next on this mesh for ``_decode_one_video``.
@@ -1642,7 +1646,10 @@ def run_generate(
 
     models["vae"] = models["vae"].to(models["device"]).to(models["dtype"])
     t0_dv = time.perf_counter()
-    decoded_video = _decode_one_video(models, pred_latent, "np")[0]
+    try:
+        decoded_video = _decode_one_video(models, pred_latent, "np")[0]
+    finally:
+        _safe_deallocate_tensor(pred_latent, "run_generate pred_latent after decode")
     gen_timings.append(("decode_one_video", time.perf_counter() - t0_dv))
     _free_tt_vae_decoder_from_models(models)
 
