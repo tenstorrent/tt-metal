@@ -69,7 +69,7 @@ def assert_blitz_pipeline_inter_mesh_exit_invariants(pipeline_config, num_procs)
 )
 def test_blitz_decode_pipeline_inter_mesh_exit_coords_distinct(mesh_device):
     """Lightweight check: generate_blitz_decode_pipeline pairs distinct entry/exit chips per stage."""
-    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
     num_procs = int(ttnn.distributed_context_get_size())
     assert_blitz_pipeline_inter_mesh_exit_invariants(pipeline_config, num_procs)
 
@@ -110,7 +110,7 @@ def test_blitz_decode_pipeline_inter_mesh_exit_coords_distinct(mesh_device):
 )
 def test_multi_host_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size, num_iterations, h2d_mode):
     """Test multi-stage pipeline with embedding: H2D receives token, looks up embedding, streams through all devices, D2H sends embedding row back."""
-    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
     num_procs = int(ttnn.distributed_context_get_size())
     assert_blitz_pipeline_inter_mesh_exit_invariants(pipeline_config, num_procs)
 
@@ -295,7 +295,7 @@ def test_multi_host_loopback_pipeline_with_embedding(
     mesh_device, h2d_mode, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor
 ):
     """Test multi-host pipeline with embedding: H2D receives token, looks up embedding row, streams it through pipeline stages across hosts, D2H sends embedding row back."""
-    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
     num_procs = int(ttnn.distributed_context_get_size())
     assert_blitz_pipeline_inter_mesh_exit_invariants(pipeline_config, num_procs)
 

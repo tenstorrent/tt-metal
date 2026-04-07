@@ -19,8 +19,9 @@
 #include <tt-metalium/distributed_context.hpp>
 
 #include <map>
-#include <unordered_map>
 #include <memory>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace tt {
@@ -259,6 +260,9 @@ public:
     // Merge inter-mesh exit FabricNodeId sets from all hosts so local queries see every mesh pair.
     void collect_and_merge_intermesh_exit_fabric_node_ids_from_all_hosts();
 
+    // Merge inter-mesh exit/peer FabricNodeId pair lists from all hosts (each host only fills edges from its mesh).
+    void collect_and_merge_intermesh_exit_peer_fabric_node_id_pairs_from_all_hosts();
+
     // Get the mesh graph from the control plane
     const MeshGraph& get_mesh_graph() const;
 
@@ -286,6 +290,12 @@ public:
     // Exit fabric nodes on `src_mesh_id` with inter-mesh connectivity to `dst_mesh_id` (as assigned during intermesh
     // setup). In multi-host runs, this is populated for source meshes local to this rank; other pairs return {}.
     std::vector<FabricNodeId> get_exit_fabric_node_ids_between_meshes(MeshId src_mesh_id, MeshId dst_mesh_id) const;
+
+    // For each inter-mesh link from `src_mesh_id` to `dst_mesh_id`, the exit `FabricNodeId` on the source mesh and
+    // the peer `FabricNodeId` on the destination mesh (cabled pair). Vectors are sorted by `pair.first` so link
+    // indices align with `get_exit_fabric_node_ids_between_meshes(src_mesh_id, dst_mesh_id)`.
+    std::vector<std::pair<FabricNodeId, FabricNodeId>> get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(
+        MeshId src_mesh_id, MeshId dst_mesh_id) const;
 
     // Getters
     FabricConfig get_fabric_config() const { return fabric_config_; }
@@ -360,6 +370,9 @@ private:
     // Unique exit FabricNodeIds on src mesh for each dst mesh (inter-mesh edges)
     std::unordered_map<MeshId, std::unordered_map<MeshId, std::unordered_set<FabricNodeId>>>
         intermesh_exit_fabric_node_ids_;
+    // Directed inter-mesh links: exit node on src mesh paired with peer node on dst mesh (same cable / logical port).
+    std::unordered_map<MeshId, std::unordered_map<MeshId, std::vector<std::pair<FabricNodeId, FabricNodeId>>>>
+        intermesh_exit_peer_fabric_node_id_pairs_;
     // Mapping from MeshId, MeshHostRankId to MPI rank
     std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, tt_metal::distributed::multihost::Rank>> mpi_ranks_;
     std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>

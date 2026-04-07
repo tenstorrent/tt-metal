@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -291,21 +291,19 @@ TEST(PhysicalMappingGeneration, Generate2x4SliceToPCIeDeviceMapping) {
         }
 
         // A Slice is defined as a 2x4 Grid that spans 2 Trays. Each tray contributes a 2x2 Grid to the slice.
-        bool rev_c = physical_system_desc.is_bh_galaxy_rev_c();
-        uint32_t tray_id_top_right = rev_c ? 2 : 3;
-        uint32_t tray_id_bottom_left = rev_c ? 3 : 2;
+        // Note that this definition corresponds to the tray layout for BH Galaxy Rev A & B
         const std::unordered_map<uint32_t, std::unordered_map<TrayID, std::vector<ASICLocation>>> devices_per_slice = {
             {0,
              {{TrayID{1}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}},
-              {TrayID{tray_id_top_right}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}}}},
+              {TrayID{2}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}}}},
             {1,
              {{TrayID{1}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}},
-              {TrayID{tray_id_top_right}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}}}},
+              {TrayID{2}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}}}},
             {2,
-             {{TrayID{tray_id_bottom_left}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}},
+             {{TrayID{3}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}},
               {TrayID{4}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}}}},
             {3,
-             {{TrayID{tray_id_bottom_left}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}},
+             {{TrayID{3}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}},
               {TrayID{4}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}}}}};
         const auto& pcie_id_to_asic_location = physical_system_desc.get_pcie_id_to_asic_location();
         const auto& pcie_devices_per_tray = physical_system_desc.get_pcie_devices_per_tray();
