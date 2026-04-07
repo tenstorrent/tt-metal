@@ -1,0 +1,117 @@
+{
+  "op_name": "layernorm",
+  "phase": "discovery",
+  "planning_mode": "Hybrid",
+  "requirements_summary": {
+    "implementation_target": "ttnn/cpp/ttnn/operations/normalization/layernorm",
+    "execution_model": "real C++ host/device operation with on-device kernels",
+    "integration_points": [
+      "ttnn/cpp/ttnn/operations/normalization/CMakeLists.txt",
+      "ttnn/cpp/ttnn/operations/normalization/normalization_nanobind.cpp",
+      "per-op nanobind binding"
+    ],
+    "inferred_math": "layer normalization over the last logical dimension with same-shape output, epsilon, and optional affine weight/bias",
+    "initial_layout_assumption": "single-device tiled input to tiled output",
+    "automation_mode": "fully_automated_phase0_only"
+  },
+  "references": [
+    {
+      "role": "host_api_surface",
+      "operation": "batch_norm",
+      "path": "ttnn/cpp/ttnn/operations/normalization/batch_norm/batch_norm.cpp",
+      "reason": "Closest host-side normalization wrapper in the target namespace; shows optional affine arguments, memory/kernel config forwarding, and separation between host-side prep and prim launch."
+    },
+    {
+      "role": "device_validation_and_launch",
+      "operation": "batch_norm",
+      "path": "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/batch_norm_device_operation.cpp",
+      "reason": "Shows normalization-module device-op validation, output tensor spec creation, and device_operation launch plumbing."
+    },
+    {
+      "role": "device_program_factory",
+      "operation": "batch_norm",
+      "path": "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/batch_norm_program_factory.cpp",
+      "reason": "Closest accessible normalization program factory with CB setup, reader/compute/writer kernels, epsilon handling, and optional weight/bias tensor wiring."
+    },
+    {
+      "role": "last_dim_reduction_pattern",
+      "operation": "moreh_norm",
+      "path": "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_program_factory_w_other.cpp",
+      "reason": "Best accessible reference for last-dimension reduction scheduling and per-row work partitioning, which layernorm needs for normalization over the final axis."
+    },
+    {
+      "role": "operation_binding",
+      "operation": "batch_norm",
+      "path": "ttnn/cpp/ttnn/operations/normalization/batch_norm/batch_norm_nanobind.cpp",
+      "reason": "Shows per-op nanobind binding style, docstring layout, and keyword argument exposure pattern for normalization ops."
+    },
+    {
+      "role": "module_registration",
+      "operation": "batch_norm",
+      "path": "ttnn/cpp/ttnn/operations/normalization/normalization_nanobind.cpp",
+      "reason": "Shows how a normalization op is registered into the module-level nanobind entrypoint."
+    },
+    {
+      "role": "build_integration",
+      "operation": "batch_norm",
+      "path": "ttnn/cpp/ttnn/operations/normalization/CMakeLists.txt",
+      "reason": "Shows normalization library source registration, kernel globbing, and install layout that layernorm must extend."
+    }
+  ],
+  "assumptions": [
+    "Initial implementation scope is single-device and non-distributed; distributed layer_norm_pre_all_gather and layer_norm_post_all_gather are out of scope for this discovery run.",
+    "Initial data path is on-device tiled input to tiled output; no row-major tilize/untilize references were selected.",
+    "Layernorm is assumed to normalize over the last logical dimension and preserve the full input shape.",
+    "Optional affine weight and bias are in scope because local tests and docs use them.",
+    "Optional residual_input_tensor support is not assumed to be part of the minimum target, but later phases should reconcile it against the existing local API/tests.",
+    "The current working tree does not contain checked-in normalization/layernorm or normalization/rmsnorm source files, so downstream phases must derive the implementation from the selected references."
+  ],
+  "candidate_operations_considered": [
+    {
+      "operation": "batch_norm",
+      "status": "selected",
+      "paths": [
+        "ttnn/cpp/ttnn/operations/normalization/batch_norm/batch_norm.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/batch_norm_device_operation.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/batch_norm_program_factory.cpp"
+      ],
+      "reason": "Closest accessible TTNN normalization op with the required host/device/integration surfaces."
+    },
+    {
+      "operation": "moreh_norm",
+      "status": "selected",
+      "paths": [
+        "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_program_factory_w_other.cpp"
+      ],
+      "reason": "Best accessible reference for last-dimension reduction mechanics."
+    },
+    {
+      "operation": "deepseek_grouped_gate",
+      "status": "rejected",
+      "paths": [
+        "ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/device/deepseek_grouped_gate_program_factory.cpp"
+      ],
+      "reason": "Contains useful reduction-and-normalization ideas but is too specialized around gating/top-k behavior."
+    },
+    {
+      "operation": "normalization/layernorm and normalization/rmsnorm",
+      "status": "rejected_missing_sources",
+      "paths": [],
+      "reason": "Mentioned by local tests, docs, build artifacts, and kernel-library notes, but the actual source files are missing from the current working tree."
+    },
+    {
+      "operation": "dit_rms_norm_unary_fused",
+      "status": "rejected_supporting_evidence_only",
+      "paths": [
+        "ttnn/cpp/ttnn/operations/experimental/transformer/dit_rms_norm_unary_fused/dit_rms_norm_unary_fused.cpp"
+      ],
+      "reason": "Confirms intended prim layer_norm call shape, but depends on missing normalization/layernorm headers and is not a usable primary reference."
+    }
+  ],
+  "observations": [
+    "ttnn/ttnn/operations/layernorm exists in the current working tree but only contains pycache and the references directory.",
+    "ttnn/cpp/ttnn/operations/normalization/layernorm exists as empty directories in the current working tree.",
+    "Local docs and tests already exercise ttnn.layer_norm, ttnn.rms_norm, and distributed norm API names.",
+    "Local kernel-library markdown documents mention layernorm and rmsnorm kernel families even though the source files are absent from the current working tree."
+  ]
+}

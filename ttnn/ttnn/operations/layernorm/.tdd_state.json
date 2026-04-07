@@ -1,0 +1,395 @@
+{
+  "op_name": "layer_norm",
+  "op_path": "ttnn/ttnn/operations/layernorm",
+  "spec_path": "ttnn/ttnn/operations/layernorm/op_design.md",
+  "layout": "TILE_LAYOUT",
+  "current_stage_index": 6,
+  "last_passing_commit": "50f413641803a1119774590cdf0c83fed091669f",
+  "stages": [
+    {
+      "name": "data_pipeline",
+      "type": "implementation",
+      "description": "Establish reader/compute/writer plumbing and row-order writeback before stats math.",
+      "kernel_files": [
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_layernorm.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/writer_layernorm.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_kernel.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sfpu_kernel.cpp"
+      ],
+      "test_file": "test_stage_data_pipeline.py",
+      "reference_body": "return input_tensor",
+      "tolerance": {
+        "rtol": 0.0,
+        "atol": 0.0
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 32, 96)",
+        "(2, 3, 64, 70)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_ref_params": "",
+      "extra_ref_args": "",
+      "stage_notes": "Stage 1 keeps compute trivial: copy input to output, preserve tile traversal order, and ensure final-width masking works on tail shapes.",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "param_matrix": {},
+      "status": "passed",
+      "commit": "50f413641803a1119774590cdf0c83fed091669f",
+      "attempts": 2,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": [
+        {
+          "classification": "numerical_mismatch",
+          "summary": "Numerical mismatch \u2014 max diff: 3.256608589673044e+38",
+          "details": {
+            "max_diff": "3.256608589673044e+38"
+          },
+          "suggested_action": "Check helper parameters against design. Verify CB data format and tile counts. Compare tolerance values \u2014 intermediate stages may need looser tolerances.",
+          "attempt": 1,
+          "free_retries": 0,
+          "cost": "HARD",
+          "stage": "data_pipeline",
+          "remaining_attempts": 5,
+          "remaining_free_retries": 10,
+          "budget_exhausted": false
+        },
+        {
+          "classification": "hang_unknown",
+          "summary": "Hang detected (stuck: unknown)",
+          "details": {
+            "stuck_riscv": null,
+            "stuck_function": null,
+            "stuck_cb": null,
+            "core_count": null,
+            "triage_path": "/tmp/tt-test-triage-dev0.log"
+          },
+          "suggested_action": "Check triage log at /tmp/tt-test-triage-dev0.log for more details. Verify all three kernels (reader/compute/writer) are making progress.",
+          "attempt": 2,
+          "free_retries": 0,
+          "cost": "HARD",
+          "stage": "data_pipeline",
+          "remaining_attempts": 4,
+          "remaining_free_retries": 10,
+          "budget_exhausted": false
+        }
+      ]
+    },
+    {
+      "name": "mean_reduce",
+      "type": "implementation",
+      "description": "Verify masked row-mean accumulation with temporary one-tile-wide output.",
+      "kernel_files": [
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_kernel.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sfpu_kernel.cpp"
+      ],
+      "test_file": "test_stage_mean_reduce.py",
+      "reference_body": "return input_tensor.float().mean(dim=-1, keepdim=True)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 32, 96)",
+        "(2, 3, 64, 70)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_ref_params": "",
+      "extra_ref_args": "",
+      "stage_notes": "Temporary output spec is one tile wide. Compare only column 0 because REDUCE_ROW produces a COL-shaped tile.",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "list(shape[:-1]) + [32]",
+      "compare_slice": "[..., 0:1]",
+      "dtype_parametrize": "",
+      "param_matrix": {},
+      "status": "passed",
+      "commit": "50f413641803a1119774590cdf0c83fed091669f",
+      "attempts": 3,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": [
+        {
+          "classification": "numerical_mismatch",
+          "summary": "Numerical mismatch \u2014 max diff: 2.0319900512695312",
+          "details": {
+            "max_diff": "2.0319900512695312"
+          },
+          "suggested_action": "Check helper parameters against design. Verify CB data format and tile counts. Compare tolerance values \u2014 intermediate stages may need looser tolerances.",
+          "attempt": 1,
+          "free_retries": 0,
+          "cost": "HARD",
+          "stage": "mean_reduce",
+          "remaining_attempts": 5,
+          "remaining_free_retries": 10,
+          "budget_exhausted": false
+        },
+        {
+          "classification": "numerical_mismatch",
+          "summary": "Numerical mismatch \u2014 max diff: 0.2235286980867386",
+          "details": {
+            "max_diff": "0.2235286980867386"
+          },
+          "suggested_action": "Check helper parameters against design. Verify CB data format and tile counts. Compare tolerance values \u2014 intermediate stages may need looser tolerances.",
+          "attempt": 2,
+          "free_retries": 0,
+          "cost": "HARD",
+          "stage": "mean_reduce",
+          "remaining_attempts": 4,
+          "remaining_free_retries": 10,
+          "budget_exhausted": false
+        },
+        {
+          "classification": "numerical_mismatch",
+          "summary": "Numerical mismatch \u2014 max diff: 0.2235286980867386",
+          "details": {
+            "max_diff": "0.2235286980867386"
+          },
+          "suggested_action": "Check helper parameters against design. Verify CB data format and tile counts. Compare tolerance values \u2014 intermediate stages may need looser tolerances.",
+          "attempt": 3,
+          "free_retries": 0,
+          "cost": "HARD",
+          "stage": "mean_reduce",
+          "remaining_attempts": 3,
+          "remaining_free_retries": 10,
+          "budget_exhausted": false
+        }
+      ]
+    },
+    {
+      "name": "invstd_reduce",
+      "type": "implementation",
+      "description": "Lock the row-stat finalization path: variance, epsilon add, and rsqrt with one-tile-wide output.",
+      "kernel_files": [
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_kernel.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sfpu_kernel.cpp"
+      ],
+      "test_file": "test_stage_invstd_reduce.py",
+      "reference_body": "mean = input_tensor.float().mean(dim=-1, keepdim=True)\n    var = ((input_tensor.float() - mean) ** 2).mean(dim=-1, keepdim=True)\n    return torch.rsqrt(var + 1e-5)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 32, 96)",
+        "(2, 3, 64, 70)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_ref_params": "",
+      "extra_ref_args": "",
+      "stage_notes": "Still uses temporary one-tile-wide output. This stage should finish c_26/c_27 accumulation and produce c_28 invstd correctly.",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "list(shape[:-1]) + [32]",
+      "compare_slice": "[..., 0:1]",
+      "dtype_parametrize": "",
+      "param_matrix": {},
+      "status": "passed",
+      "commit": "50f413641803a1119774590cdf0c83fed091669f",
+      "attempts": 1,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": [
+        {
+          "classification": "numerical_mismatch",
+          "summary": "Numerical mismatch \u2014 max diff: 3.19246244430542",
+          "details": {
+            "max_diff": "3.19246244430542"
+          },
+          "suggested_action": "Check helper parameters against design. Verify CB data format and tile counts. Compare tolerance values \u2014 intermediate stages may need looser tolerances.",
+          "attempt": 1,
+          "free_retries": 0,
+          "cost": "HARD",
+          "stage": "invstd_reduce",
+          "remaining_attempts": 5,
+          "remaining_free_retries": 10,
+          "budget_exhausted": false
+        }
+      ]
+    },
+    {
+      "name": "normalize",
+      "type": "implementation",
+      "description": "Return full-shape output and verify mean subtraction plus invstd broadcast without optional tensors.",
+      "kernel_files": [
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_kernel.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sfpu_kernel.cpp"
+      ],
+      "test_file": "test_stage_normalize.py",
+      "reference_body": "return torch.nn.functional.layer_norm(input_tensor.float(), (input_tensor.shape[-1],), weight=None, bias=None, eps=1e-5)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 32, 96)",
+        "(2, 3, 64, 70)"
+      ],
+      "extra_imports": "",
+      "extra_args": ", epsilon=1e-5",
+      "extra_ref_params": "",
+      "extra_ref_args": "",
+      "stage_notes": "Stage 4 restores the final full-shape output contract and validates final-width masking after normalization.",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "param_matrix": {},
+      "status": "passed",
+      "commit": "50f413641803a1119774590cdf0c83fed091669f",
+      "attempts": 1,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": [
+        {
+          "classification": "numerical_mismatch",
+          "summary": "Numerical mismatch \u2014 max diff: 0.7801871299743652",
+          "details": {
+            "max_diff": "0.7801871299743652"
+          },
+          "suggested_action": "Check helper parameters against design. Verify CB data format and tile counts. Compare tolerance values \u2014 intermediate stages may need looser tolerances.",
+          "attempt": 1,
+          "free_retries": 0,
+          "cost": "HARD",
+          "stage": "normalize",
+          "remaining_attempts": 5,
+          "remaining_free_retries": 10,
+          "budget_exhausted": false
+        }
+      ]
+    },
+    {
+      "name": "residual_affine",
+      "type": "implementation",
+      "description": "Add residual reread and row-broadcast affine streams on top of the base normalization path.",
+      "kernel_files": [
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_layernorm.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_kernel.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sfpu_kernel.cpp"
+      ],
+      "test_file": "test_stage_residual_affine.py",
+      "reference_body": "x = input_tensor.float() + residual_tensor.float()\n    return torch.nn.functional.layer_norm(x, (x.shape[-1],), weight=weight_tensor.float().reshape(-1), bias=bias_tensor.float().reshape(-1), eps=1e-5)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 32, 96)",
+        "(2, 3, 64, 70)"
+      ],
+      "extra_imports": "",
+      "extra_args": ", epsilon=1e-5, residual_input_tensor=ttnn_residual, weight=ttnn_weight, bias=ttnn_bias",
+      "extra_ref_params": ", residual_tensor, weight_tensor, bias_tensor",
+      "extra_ref_args": ", residual_tensor=torch_residual, weight_tensor=torch_weight, bias_tensor=torch_bias",
+      "stage_notes": "All optional tensors are enabled in this stage so the reader and compute kernels must exercise every new stream/path before acceptance.",
+      "extra_setup": "gamma_shape = [1] * len(shape)\n    gamma_shape[-1] = shape[-1]\n    torch_residual = torch.randn(shape, dtype=torch.bfloat16)\n    torch_weight = torch.randn(tuple(gamma_shape), dtype=torch.bfloat16)\n    torch_bias = torch.randn(tuple(gamma_shape), dtype=torch.bfloat16)",
+      "extra_ttnn_setup": "ttnn_residual = ttnn.from_torch(torch_residual, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)\n    ttnn_weight = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)\n    ttnn_bias = ttnn.from_torch(torch_bias, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "param_matrix": {},
+      "status": "passed",
+      "commit": "50f413641803a1119774590cdf0c83fed091669f",
+      "attempts": 0,
+      "free_retries": 1,
+      "max_attempts": 6,
+      "failure_history": [
+        {
+          "classification": "compilation_error",
+          "summary": "Compilation error: kernel_main()':\n/localdev/dstoiljkovic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_layernorm.cpp:67:43: error: no matching function for call to 'noc_async_",
+          "details": {
+            "error_snippet": "kernel_main()':\n/localdev/dstoiljkovic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_layernorm.cpp:67:43: error: no matching function for call to 'noc_async_read_tile_helper(const uint32_t&, int, long unsigned int, const TensorAccessor<tensor_accessor::Dis"
+          },
+          "suggested_action": "Check includes and template parameters. Verify kernel API signatures. Ensure compute_kernel_hw_startup() is called before helpers.",
+          "attempt": 0,
+          "free_retries": 1,
+          "cost": "FREE",
+          "stage": "residual_affine",
+          "remaining_attempts": 6,
+          "remaining_free_retries": 9,
+          "budget_exhausted": false
+        }
+      ]
+    },
+    {
+      "name": "acceptance",
+      "type": "acceptance",
+      "description": "Full parameter cross-product validation on the public layer_norm wrapper.",
+      "kernel_files": [],
+      "test_file": "test_stage_acceptance.py",
+      "reference_body": "x = input_tensor.float()\n    x = x if residual_tensor is None else x + residual_tensor.float()\n    w = None if weight_tensor is None else weight_tensor.float().reshape(-1)\n    b = None if bias_tensor is None else bias_tensor.float().reshape(-1)\n    return torch.nn.functional.layer_norm(x, (x.shape[-1],), weight=w, bias=b, eps=epsilon)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 32, 96)",
+        "(2, 3, 64, 70)",
+        "(1, 2, 96, 128)"
+      ],
+      "extra_imports": "",
+      "extra_args": ", epsilon=epsilon, residual_input_tensor=ttnn_residual, weight=ttnn_weight, bias=ttnn_bias",
+      "extra_ref_params": ", residual_tensor, weight_tensor, bias_tensor, epsilon",
+      "extra_ref_args": ", residual_tensor=torch_residual, weight_tensor=torch_weight, bias_tensor=torch_bias, epsilon=epsilon",
+      "stage_notes": "Acceptance should only exercise already-implemented paths. No new kernel code belongs in this stage.",
+      "extra_setup": "gamma_shape = [1] * len(shape)\n    gamma_shape[-1] = shape[-1]\n    torch_residual = torch.randn(shape, dtype=torch.bfloat16) if use_residual else None\n    torch_weight = torch.randn(tuple(gamma_shape), dtype=torch.bfloat16) if use_weight else None\n    torch_bias = torch.randn(tuple(gamma_shape), dtype=torch.bfloat16) if use_bias else None",
+      "extra_ttnn_setup": "ttnn_residual = ttnn.from_torch(torch_residual, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG) if torch_residual is not None else None\n    ttnn_weight = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG) if torch_weight is not None else None\n    ttnn_bias = ttnn.from_torch(torch_bias, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG) if torch_bias is not None else None",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "param_matrix": {
+        "use_residual": {
+          "values": [
+            false,
+            true
+          ],
+          "pass_to_ref": false,
+          "pass_to_op": false
+        },
+        "use_weight": {
+          "values": [
+            false,
+            true
+          ],
+          "pass_to_ref": false,
+          "pass_to_op": false
+        },
+        "use_bias": {
+          "values": [
+            false,
+            true
+          ],
+          "pass_to_ref": false,
+          "pass_to_op": false
+        },
+        "epsilon": {
+          "values": [
+            1e-05,
+            1e-06
+          ],
+          "pass_to_ref": false,
+          "pass_to_op": false
+        }
+      },
+      "status": "passed",
+      "commit": "50f413641803a1119774590cdf0c83fed091669f",
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    }
+  ]
+}
