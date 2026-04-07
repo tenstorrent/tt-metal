@@ -153,6 +153,7 @@ CopyDeviceOperation::spec_return_value_t CopyDeviceOperation::compute_output_spe
     }
 
     const Tensor& input_tensor = tensor_args.input;
+
     auto output_layout = TensorLayout(
         operation_attributes.output_dtype, PageConfig(input_tensor.layout()), operation_attributes.output_mem_config);
     auto output_padded_shape = output_layout.compute_padded_shape(
@@ -160,9 +161,9 @@ CopyDeviceOperation::spec_return_value_t CopyDeviceOperation::compute_output_spe
                                         // padded_shape due to having a differrent shard_spec.
     return {TensorSpec(
         input_tensor.logical_shape(),
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::TensorLayout::fromPaddedShape(
             operation_attributes.output_dtype,
-            PageConfig(input_tensor.layout()),
+            tt::tt_metal::PageConfig(input_tensor.layout()),
             operation_attributes.output_mem_config,
             input_tensor.logical_shape(),
             output_padded_shape))};
