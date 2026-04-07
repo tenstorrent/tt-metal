@@ -1,7 +1,6 @@
 """CLI entry point for bug_checker.
 
-Invoked via: python .github/run_bug_checker.py [args]
-Or directly if bug_checker is already in sys.modules.
+Invoked via: python .github/bug_checker/run_bug_checker.py [args]
 """
 
 from __future__ import annotations
