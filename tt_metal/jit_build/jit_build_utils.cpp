@@ -4,6 +4,7 @@
 
 #include "jit_build_utils.hpp"
 
+#include <cerrno>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -15,10 +16,12 @@
 #include <system_error>
 
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/fmt.hpp>
+#include "common/filesystem_utils.hpp"
 
 namespace tt::jit_build::utils {
 
-bool run_command(const std::string& cmd, const std::string& log_file, bool verbose) {
+bool run_command(const std::string& cmd, const std::filesystem::path& log_file, bool verbose) {
     // ZoneScoped;
     // ZoneText( cmd.c_str(), cmd.length());
     int ret;
@@ -32,21 +35,31 @@ bool run_command(const std::string& cmd, const std::string& log_file, bool verbo
         }
         ret = system(cmd.c_str());
     } else {
-        std::string redirected_cmd = cmd + " >> " + log_file + " 2>&1";
+        std::string redirected_cmd = cmd + " >> " + log_file.string() + " 2>&1";
         ret = system(redirected_cmd.c_str());
     }
 
     return (ret == 0);
 }
 
-void create_file(const std::string& file_path_str) {
+void create_file(const std::filesystem::path& file_path) {
     namespace fs = std::filesystem;
 
-    fs::path file_path(file_path_str);
-    fs::create_directories(file_path.parent_path());
+    tt::filesystem::safe_create_directories(file_path.parent_path());
 
-    std::ofstream ofs(file_path);
-    ofs.close();
+    // just making sure the file is there. Don't need to worry about the state
+    [[maybe_unused]] std::error_code open_ec;
+    [[maybe_unused]] auto _ = tt::filesystem::retry_on_estale_ec(
+        [&](std::error_code& ec) {
+            std::ofstream file(file_path);
+            if (!file.is_open() || file.fail()) {
+                ec.assign(errno, std::system_category());
+                return false;
+            }
+            file.close();
+            return true;
+        },
+        open_ec);
 }
 
 uint64_t FileRenamer::unique_id_ = []() {
@@ -55,31 +68,29 @@ uint64_t FileRenamer::unique_id_ = []() {
     return distr(rd);
 }();
 
-std::string FileRenamer::generate_temp_path(const std::filesystem::path& target_path) {
-    std::filesystem::path path(target_path);
-    if (path.has_extension()) {
-        path.replace_extension(fmt::format("{}{}", unique_id_, path.extension().string()));
-        return path.string();
-    }
-    return fmt::format("{}.{}", target_path.string(), unique_id_);
+std::filesystem::path FileRenamer::generate_temp_path(const std::filesystem::path& target_path) {
+    // stem() gives you the filename without the last extension, and extension() is empty when
+    // there isn't one, so this covers both cases:
+    // foo.txt -> foo.42.txt
+    // foo -> foo.42
+
+    std::filesystem::path filename = target_path.stem();
+    filename += ".";
+    filename += std::to_string(unique_id_);
+    filename += target_path.extension();
+    return target_path.parent_path() / filename;
 }
 
-FileRenamer::FileRenamer(const std::string& target_path) :
+FileRenamer::FileRenamer(const std::filesystem::path& target_path) :
     temp_path_(generate_temp_path(target_path)), target_path_(target_path) {}
 
 FileRenamer::~FileRenamer() {
-    std::error_code ec;
     if (target_path_.empty()) {
         return;
     }
-    std::filesystem::rename(temp_path_, target_path_, ec);
-    if (ec) {
+    if (!tt::filesystem::safe_rename(temp_path_, target_path_)) {
         log_error(
-            tt::LogBuildKernels,
-            "Failed to rename temporary file {} to target file {}: {}",
-            temp_path_,
-            target_path_,
-            ec.message());
+            tt::LogBuildKernels, "Failed to rename temporary file {} to target file {}", temp_path_, target_path_);
     }
 }
 

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <filesystem>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -19,18 +20,19 @@ ParsedDependencies parse_dependency_file(std::istream& file);
 // Sets badbit on `hash_file` on any failure.
 void write_dependency_hashes(
     const ParsedDependencies& dependencies,
-    const std::string& out_dir,
-    const std::string& obj,
+    const std::filesystem::path& out_dir,
+    const std::filesystem::path& obj,
     std::ostream& hash_file);
 
 // Reads dependencies from .d file and writes their hashes to .hash file.
 // Deletes the .hash file on any failure.
-void write_dependency_hashes(const std::string& out_dir, const std::string& obj, const std::string& hash_path);
+void write_dependency_hashes(
+    const std::filesystem::path& out_dir, const std::filesystem::path& obj, const std::filesystem::path& hash_path);
 
 // Returns true if all dependencies' hashes match those stored in `hash_file`.
 bool dependencies_up_to_date(std::istream& hash_file);
 
 // Returns true if all dependencies' hashes match those stored in the .hash file.
-bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj);
+bool dependencies_up_to_date(const std::filesystem::path& out_dir, const std::filesystem::path& obj);
 
 }  // namespace tt::jit_build

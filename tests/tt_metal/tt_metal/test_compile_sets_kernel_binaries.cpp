@@ -32,11 +32,12 @@ using namespace tt::tt_metal;
 
 namespace {
 
-std::string get_latest_kernel_binary_path(const std::string& kernel_root_path, const std::shared_ptr<Kernel>& kernel) {
+std::filesystem::path get_latest_kernel_binary_path(
+    const std::filesystem::path& kernel_root_path, const std::shared_ptr<Kernel>& kernel) {
     TT_FATAL(kernel != nullptr, "Error");
-    TT_FATAL(std::filesystem::exists(kernel_root_path + kernel->name()), "Error");
+    const std::filesystem::path kernel_path = kernel_root_path / kernel->name();
+    TT_FATAL(std::filesystem::exists(kernel_path), "Error");
 
-    std::filesystem::path kernel_path{kernel_root_path + kernel->name()};
     std::filesystem::file_time_type ftime = std::filesystem::last_write_time(*kernel_path.begin());
     std::string latest_hash;
     for (const auto& dir_entry : std::filesystem::directory_iterator{kernel_path}) {
@@ -47,7 +48,7 @@ std::string get_latest_kernel_binary_path(const std::string& kernel_root_path, c
         }
     }
     TT_FATAL(not latest_hash.empty(), "Error");
-    return kernel->name() + "/" + latest_hash;
+    return std::filesystem::path(kernel->name()) / latest_hash;
 }
 
 void construct_program(Program& program, IDevice* device, CoreCoord& core) {
@@ -171,13 +172,13 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
 
     int num_compiles = 3;
     for (int iter = 0; iter < 3; iter++) {
-        std::vector<std::string> kernel_names = {"reader_unary_push_4", "writer_unary", "eltwise_copy_3m"};
+        std::vector<std::filesystem::path> kernel_names = {"reader_unary_push_4", "writer_unary", "eltwise_copy_3m"};
         for (int i = 0; i < num_devices_; i++) {
             for (const auto& kernel_name : kernel_names) {
                 std::filesystem::remove_all(
                     BuildEnvManager::get_instance()
                         .get_device_build_env(devices_[i]->id())
-                        .build_env.get_out_kernel_root_path() +
+                        .build_env.get_out_kernel_root_path() /
                     kernel_name);
             }
         }
@@ -227,50 +228,50 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
                     TT_FATAL(riscv0_kernel->binaries(mask) == brisc_binaries.at(mask), "Error");
                     TT_FATAL(riscv1_kernel->binaries(mask) == ncrisc_binaries.at(mask), "Error");
 
-                    std::string kernel_name = get_latest_kernel_binary_path(
+                    std::filesystem::path kernel_rel_path = get_latest_kernel_binary_path(
                         BuildEnvManager::get_instance()
                             .get_device_build_env(device->build_id())
                             .build_env.get_out_kernel_root_path(),
                         riscv0_kernel);
-                    std::string brisc_hex_path =
+                    std::filesystem::path brisc_hex_path =
                         BuildEnvManager::get_instance()
                             .get_kernel_build_state(device->build_id(), programmable_core_index, dm_class_idx, 0)
-                            .get_target_out_path(kernel_name);
+                            .get_target_out_path(kernel_rel_path.string());
                     const ll_api::memory& brisc_binary =
-                        llrt::get_risc_binary(brisc_hex_path, ll_api::memory::Loading::CONTIGUOUS_XIP);
+                        llrt::get_risc_binary(brisc_hex_path.string(), ll_api::memory::Loading::CONTIGUOUS_XIP);
                     TT_FATAL(
                         brisc_binary == *brisc_binaries.at(mask).at(0),
                         "Expected saved BRISC binary to be the same as binary in persistent cache");
-                    kernel_name = get_latest_kernel_binary_path(
+                    kernel_rel_path = get_latest_kernel_binary_path(
                         BuildEnvManager::get_instance()
                             .get_device_build_env(device->build_id())
                             .build_env.get_out_kernel_root_path(),
                         riscv1_kernel);
-                    std::string ncrisc_hex_path =
+                    std::filesystem::path ncrisc_hex_path =
                         BuildEnvManager::get_instance()
                             .get_kernel_build_state(device->build_id(), programmable_core_index, dm_class_idx, 1)
-                            .get_target_out_path(kernel_name);
+                            .get_target_out_path(kernel_rel_path.string());
                     auto load_type = (device->arch() == tt::ARCH::WORMHOLE_B0)
                                          ? ll_api::memory::Loading::CONTIGUOUS
                                          : ll_api::memory::Loading::CONTIGUOUS_XIP;
-                    const ll_api::memory& ncrisc_binary = llrt::get_risc_binary(ncrisc_hex_path, load_type);
+                    const ll_api::memory& ncrisc_binary = llrt::get_risc_binary(ncrisc_hex_path.string(), load_type);
                     TT_FATAL(
                         ncrisc_binary == *ncrisc_binaries.at(mask).at(0),
                         "Expected saved NCRISC binary to be the same as binary in persistent cache");
                     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
-                        kernel_name = get_latest_kernel_binary_path(
+                        kernel_rel_path = get_latest_kernel_binary_path(
                             BuildEnvManager::get_instance()
                                 .get_device_build_env(device->build_id())
                                 .build_env.get_out_kernel_root_path(),
                             compute_kernel);
                         std::string trisc_id_str = std::to_string(trisc_id);
-                        std::string trisc_hex_path =
+                        std::filesystem::path trisc_hex_path =
                             BuildEnvManager::get_instance()
                                 .get_kernel_build_state(
                                     device->build_id(), programmable_core_index, compute_class_idx, trisc_id)
-                                .get_target_out_path(kernel_name);
+                                .get_target_out_path(kernel_rel_path.string());
                         const ll_api::memory& trisc_binary =
-                            llrt::get_risc_binary(trisc_hex_path, ll_api::memory::Loading::CONTIGUOUS_XIP);
+                            llrt::get_risc_binary(trisc_hex_path.string(), ll_api::memory::Loading::CONTIGUOUS_XIP);
                         TT_FATAL(
                             trisc_binary == *compute_binaries.at(mask).at(trisc_id),
                             "Expected saved TRISC binary for {} to be the same as binary in persistent cache",
