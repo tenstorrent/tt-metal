@@ -117,8 +117,10 @@ inline void debug_checkpoint_barrier() {
 }
 
 // ---------------------------------------------------------------------------
-// CB dump: each RISC prints its view of circular buffer state.
-// Supports DPRINT, DEVICE_PRINT, or no-print (barrier-only) mode.
+// CB dump: prints CB state and optionally dest registers.
+// CB interfaces are shared L1 — only BRISC prints CB metadata to avoid
+// redundant output. TRISC1 (Math) prints dest registers if dump_dest=true.
+// All other RISCs skip the dump but still participate in the barriers.
 // ---------------------------------------------------------------------------
 template <uint8_t num_cbs = 0, uint16_t words_per_cb = 0, bool dump_dest = false>
 inline void debug_checkpoint_dump_cbs([[maybe_unused]] uint8_t checkpoint_id) {
@@ -126,27 +128,20 @@ inline void debug_checkpoint_dump_cbs([[maybe_unused]] uint8_t checkpoint_id) {
     // No print backend available — checkpoint acts as barrier only, skip dump.
     return;
 #else
-    uint32_t my_idx = internal_::get_hw_thread_idx();
-
-#if defined(USE_DEVICE_PRINT)
-    DEVICE_PRINT("=== CKPT {} RISC {} ===", (uint32_t)checkpoint_id, my_idx);
-#else
-    DPRINT << "=== CKPT " << (uint32_t)checkpoint_id << " RISC " << my_idx << " ===" << ENDL();
-#endif
 
 #if defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC == 1)
-    // Math thread cannot access CB interfaces
+    // Math thread: optionally dump dest registers (only Math can access them)
     if constexpr (dump_dest) {
-        // Read and print dest register contents directly (no dbg_halt/dbg_unhalt
-        // since the checkpoint barrier already synchronizes all RISCs).
-        // Note: dest reg row helpers use DPRINT internally, so dump_dest is only
-        // supported with the DPRINT backend.
+#if defined(USE_DEVICE_PRINT)
+        DEVICE_PRINT("=== CKPT {} dest regs ===", (uint32_t)checkpoint_id);
+#else
+        DPRINT << "=== CKPT " << (uint32_t)checkpoint_id << " dest regs ===" << ENDL();
+#endif
         uint32_t data_format_reg_field_value = READ_HW_CFG_0_REG_FIELD(ALU_FORMAT_SPEC_REG2_Dstacc);
         if (READ_HW_CFG_0_REG_FIELD(ALU_ACC_CTRL_Fp32_enabled)) {
             data_format_reg_field_value = (uint32_t)DataFormat::Float32;
         }
         DPRINT << FIXED() << SETW(WIDTH) << SETPRECISION(PRECISION);
-        DPRINT << "dest regs tile 0:" << ENDL();
         uint32_t row = 0;
         for (int face_id = 0; face_id < NUM_FACES_PER_TILE; ++face_id) {
             for (int row_id = 0; row_id < NUM_ROWS_PER_FACE; ++row_id) {
@@ -164,23 +159,24 @@ inline void debug_checkpoint_dump_cbs([[maybe_unused]] uint8_t checkpoint_id) {
                 row++;
             }
         }
-    } else {
-#if defined(USE_DEVICE_PRINT)
-        DEVICE_PRINT("(math thread, no CB access)");
-#else
-        DPRINT << "(math thread, no CB access)" << ENDL();
-#endif
     }
+    // If dump_dest is false, Math thread prints nothing (no CB access).
+
+#elif defined(COMPILE_FOR_BRISC)
+    // BRISC prints CB metadata. CBs are shared L1 so only one RISC needs to print.
+#if defined(USE_DEVICE_PRINT)
+    DEVICE_PRINT("=== CKPT {} CBs ===", (uint32_t)checkpoint_id);
 #else
-    // BRISC, NCRISC, TRISC0, TRISC2 can access CB interfaces
+    DPRINT << "=== CKPT " << (uint32_t)checkpoint_id << " CBs ===" << ENDL();
+#endif
+
     constexpr uint32_t max_cb = (num_cbs == 0) ? NUM_CIRCULAR_BUFFERS : num_cbs;
     for (uint32_t cb = 0; cb < max_cb; cb++) {
         auto& iface = get_local_cb_interface(cb);
         if (iface.fifo_size == 0) {
-            continue;  // Skip unconfigured CBs
+            continue;
         }
 
-        // Print CB metadata
 #if defined(USE_DEVICE_PRINT)
         DEVICE_PRINT(
             "CB{} sz={} rd={} wr={} ack={} rcv={}",
@@ -195,7 +191,6 @@ inline void debug_checkpoint_dump_cbs([[maybe_unused]] uint8_t checkpoint_id) {
                << " ack=" << iface.tiles_acked << " rcv=" << iface.tiles_received << ENDL();
 #endif
 
-        // Optionally dump L1 data starting at read pointer
         if constexpr (words_per_cb > 0) {
             volatile tt_l1_ptr uint32_t* data_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.fifo_rd_ptr << cb_addr_shift);
@@ -215,7 +210,10 @@ inline void debug_checkpoint_dump_cbs([[maybe_unused]] uint8_t checkpoint_id) {
             }
         }
     }
-#endif  // COMPILE_FOR_TRISC
+
+#endif  // COMPILE_FOR_TRISC / COMPILE_FOR_BRISC
+    // NCRISC, TRISC0, TRISC2: no output (CB data is same as BRISC's view).
+    // They still participate in the barriers.
 #endif  // CHECKPOINT_PRINT_ENABLED
 }
 

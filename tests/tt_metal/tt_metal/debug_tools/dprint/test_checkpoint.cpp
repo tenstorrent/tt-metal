@@ -137,8 +137,8 @@ static void run_checkpoint_test(
     EXPECT_TRUE(FileContainsAllStrings(
         fixture->dprint_file_name,
         {
-            "=== CKPT 1 RISC *",  // Checkpoint marker (glob pattern)
-            "CB0 sz=*",           // Input CB metadata
+            "=== CKPT 1 CBs ===",  // Checkpoint header (printed by BRISC)
+            "CB0 sz=*",            // Input CB metadata
         }));
 }
 
