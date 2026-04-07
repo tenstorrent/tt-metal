@@ -693,8 +693,6 @@ PERF_COUNTER_CSV_HEADERS = [
     "TDMA vs NOC L1 Share Avg (%)",
 ]
 
-_PERF_COUNTER_CSV_HEADERS_SET = set(PERF_COUNTER_CSV_HEADERS)
-
 
 def extract_perf_counters(events: List[Any], arch: str = "") -> Optional[pd.DataFrame]:
     # If perf counter data exists, extract relevant columns and return as a dataframe
