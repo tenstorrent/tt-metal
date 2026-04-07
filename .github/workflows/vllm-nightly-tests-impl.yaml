@@ -329,6 +329,7 @@ jobs:
       - ${{ matrix.test-group.runner-label }}
       - ${{ matrix.test-group.arch }}
       - in-service
+      # topology-6u tag is used for WH galaxies. Currently pipeline-perf machines have mlperf access and pipeline-functional machines do not.
       - ${{ ((matrix.test-group.runner-label == 'BH-QB-GE' || matrix.test-group.runner-label == 'topology-6u') && 'pipeline-perf') || 'pipeline-functional' }}
     container:
       image: ${{ inputs.docker-image }}
