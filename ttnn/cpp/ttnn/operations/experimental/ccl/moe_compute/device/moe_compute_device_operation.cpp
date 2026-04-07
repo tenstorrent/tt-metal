@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moe_compute_device_operation.hpp"
+#include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.hpp"
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
@@ -33,7 +34,7 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
 }
 
 MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::compute_output_specs(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     const ttnn::Tensor& tilize_input_tensor = tensor_args.tilize_input_tensor;
@@ -129,11 +130,32 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
      */
 
     const auto& tilize_output_layout = tilize_output_spec.tensor_layout();
-    const tt::tt_metal::TensorLayout output_layout(
+    const tt::tt_metal::TensorLayout matmul_output_layout(
         tilize_output_layout.get_data_type(), ROW_MAJOR_LAYOUT, tilize_output_layout.get_memory_config());
-    const auto output_spec = TensorSpec(tilize_output_shape, output_layout);
+    const auto matmul_output_spec = TensorSpec(tilize_output_shape, matmul_output_layout);
 
-    return {tilize_per_expert_total_tokens_spec, tilize_expert_activation_spec, tilize_e_t_spec, tilize_output_spec, output_spec};
+    //-------------------------------------------------------------------------
+    // a2a combine output
+    //-------------------------------------------------------------------------
+    using namespace tt::tt_metal;
+
+    ttnn::experimental::prim::SelectiveReduceCombineTensors combine_tensor_args{
+        .dense_input_tensor = tilize_input_tensor,
+        .dense_activations_tensor = tilize_input_tensor,
+        .dense_token_maps_tensor = tilize_input_tensor,
+        .dense_token_counts_tensor = tilize_input_tensor,
+        .optional_output_tensor = std::nullopt,
+    };
+    const auto output_spec = ttnn::experimental::prim::SelectiveReduceCombineDeviceOperation::compute_output_specs(
+        args.combine_params, combine_tensor_args);
+
+    return {
+        tilize_per_expert_total_tokens_spec,
+        tilize_expert_activation_spec,
+        tilize_e_t_spec,
+        tilize_output_spec,
+        matmul_output_spec,
+        output_spec};
 }
 
 MoEComputeDeviceOperation::tensor_return_value_t MoEComputeDeviceOperation::create_output_tensors(
@@ -146,14 +168,18 @@ MoEComputeDeviceOperation::tensor_return_value_t MoEComputeDeviceOperation::crea
     const auto& output_storage = tilize_output_tensor.device_storage();
     const auto& output_spec = output_specs[4];
     const auto& output_topology = tilize_output_tensor.tensor_attributes->get_tensor_topology();
-    const ttnn::Tensor output_tensor(output_storage,output_spec,output_topology);
+    const ttnn::Tensor matmul_output_tensor(output_storage, output_spec, output_topology);
+
+    const auto& combine_output_tensor = tensor_args.optional_output_tensor.value_or(
+        create_device_tensor(output_specs[5], tensor_args.tilize_input_tensor.device()));
 
     return {
         create_device_tensor(output_specs[0], tensor_args.tilize_input_tensor.device()),
         create_device_tensor(output_specs[1], tensor_args.tilize_input_tensor.device()),
         create_device_tensor(output_specs[2], tensor_args.tilize_input_tensor.device()),
         tilize_output_tensor,
-        output_tensor};
+        matmul_output_tensor,
+        combine_output_tensor};
 }
 
 }  // namespace ttnn::experimental::prim
@@ -170,22 +196,58 @@ std::vector<ttnn::Tensor> moe_compute(
     const uint32_t layer_id,
     const uint32_t output_height_shard_dim,
     const uint32_t output_width_shard_dim,
-    const std::optional<uint32_t>& cluster_axis) {
+    const std::optional<uint32_t>& cluster_axis,
+    const std::optional<tt::tt_fabric::Topology>& topology,
+    const std::optional<uint32_t>& num_links,
+    const std::optional<CoreRangeSet>& mux_core_range_set,
+    const std::optional<ttnn::MemoryConfig>& output_memory_config,
+    const std::optional<ttnn::Tensor>& optional_output_tensor,
+    const std::optional<GlobalSemaphore>& optional_cross_device_semaphore) {
     using OperationType = ttnn::experimental::prim::MoEComputeDeviceOperation;
+
+    const auto& input_shape = tilize_input_tensor.tensor_spec().logical_shape();
+    const auto& mapping_shape = tilize_expert_mapping_tensor.tensor_spec().logical_shape();
+    const auto& indices_shape = tilize_expert_indices_tensor.tensor_spec().logical_shape();
+    const uint32_t hidden_size = input_shape[-1];
+    const uint32_t experts = mapping_shape[-1];
+    const uint32_t select_experts_k = indices_shape[-1];
+    const uint32_t total_tokens = input_shape[0] * input_shape[1];
+
+    const auto& num_token_parallel_cores = output_height_shard_dim;
+    const auto& num_data_parallel_cores = output_width_shard_dim;
+    auto* mesh_device = tilize_input_tensor.device();
+    const auto& combine_cores = get_moe_combine_cores(mesh_device);
+
+    ttnn::experimental::prim::SelectiveReduceCombineParams combine_params{
+        .hidden_size = hidden_size,
+        .batch_size = 1,
+        .seq_size = total_tokens,
+        .select_experts_k = select_experts_k,
+        .experts = experts,
+        .num_links = num_links.value_or(4),
+        .axis = cluster_axis,
+        .topology = topology.value_or(tt::tt_fabric::Topology::Ring),
+        .num_token_parallel_cores = num_token_parallel_cores,
+        .num_data_parallel_cores = num_data_parallel_cores,
+        .worker_cores = combine_cores,
+        .mux_core_range_set = mux_core_range_set.value_or(CoreRangeSet{}),
+        .output_memory_config = output_memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG),
+        .optional_cross_device_semaphore = optional_cross_device_semaphore};
 
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .layer_id = layer_id,
             .output_height_shard_dim = output_height_shard_dim,
             .output_width_shard_dim = output_width_shard_dim,
-            .cluster_axis = cluster_axis},
+            .combine_params = combine_params},
         OperationType::tensor_args_t{
             .tilize_input_tensor = tilize_input_tensor,
             .tilize_expert_indices_tensor = tilize_expert_indices_tensor,
             .tilize_expert_scores_tensor = tilize_expert_scores_tensor,
             .tilize_expert_mapping_tensor = tilize_expert_mapping_tensor,
             .matmul_w0_w1_tensor = matmul_w0_w1_tensor,
-            .matmul_w2_tensor = matmul_w2_tensor});
+            .matmul_w2_tensor = matmul_w2_tensor,
+            .optional_output_tensor = optional_output_tensor});
 }
 
 }  // namespace ttnn::prim
