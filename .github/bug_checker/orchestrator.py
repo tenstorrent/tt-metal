@@ -51,6 +51,11 @@ def run_bug_check(
         f"{', '.join(r.id for r in matched_rules)}"
     )
 
+    # Preflight: verify LLM is configured before entering the per-rule loop.
+    # This catches hard config errors (missing API key, missing anthropic package)
+    # early so the job fails loudly instead of silently skipping every rule.
+    LLMSession()
+
     all_findings: list[Finding] = []
     rules_used: list[str] = []
     skipped_rules: list[str] = []

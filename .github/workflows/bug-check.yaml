@@ -61,8 +61,7 @@ jobs:
             --verbose
 
       - name: Upload SARIF
-        if: always()
+        if: always() && hashFiles('.github/bug-checker-results.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: .github/bug-checker-results.sarif
-        continue-on-error: true
