@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,12 @@ import torch
 import math
 import ttnn
 
-from models.common.utility_functions import comp_pcc, is_blackhole, is_llk_assert_enabled, skip_for_blackhole
+from models.common.utility_functions import (
+    is_blackhole,
+    is_llk_assert_enabled,
+    skip_for_blackhole,
+    skip_for_slow_dispatch,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics
 from ttnn.operations.activations import get_golden_function_for_activation
 
@@ -3252,6 +3257,7 @@ def _teardown_subdevice(device, sub_device_manager):
     device.remove_sub_device_manager(sub_device_manager)
 
 
+@skip_for_slow_dispatch()
 @pytest.mark.parametrize(
     "m_size, k_size, n_size",
     [

@@ -42,7 +42,7 @@ op6 = descriptors.rms_norm(op3.output_tensors[0], core_range_set=right_cores,
                            weight=rms_w, epsilon=1e-5,
                            compute_kernel_config=compute_cfg)
 
-fused = Sequential(
+out4, out5, out6 = Sequential(
     op1,                          # matmul on all 64 cores
     Parallel(
         Sequential(               # left half (32 cores)
@@ -51,15 +51,12 @@ fused = Sequential(
         ),
         Sequential(op3, op6),     # right half: slice → RMS (32 cores)
     ),
-).build()
-
-fused.launch()
+).run(results=[op4, op5, op6])
 ttnn.synchronize_device(device)
 
-# Read leaf outputs
-result_op4 = ttnn.to_torch(op4.output_tensors[0])
-result_op5 = ttnn.to_torch(op5.output_tensors[0])
-result_op6 = ttnn.to_torch(op6.output_tensors[0])
+result_op4 = ttnn.to_torch(out4)
+result_op5 = ttnn.to_torch(out5)
+result_op6 = ttnn.to_torch(out6)
 ```
 
 The compositional framework both encourages op genericity and reuse and reduces the need to write single-use custom fused ops for cases where the performance of existing ops is satisfactory.
@@ -90,7 +87,7 @@ The rest of this document provides implementation details for the various compon
 - [Argument Concatenation](#argument-concatenation)
   - [Runtime Args](#runtime-args) | [Compile-Time Args](#compile-time-args)
 - [Build Cache](#build-cache)
-  - [Cache Key](#cache-key) | [Cache Hit](#cache-hit-fast-path) | [Cache Miss](#cache-miss-full-build) | [What Gets Cached](#what-gets-cached) | [Cache Invalidation](#cache-invalidation)
+  - [Deferred OpDescriptor](#deferred-opdescriptor) | [Cache Key](#cache-key) | [What Gets Cached](#what-gets-cached) | [Cache Hit](#cache-hit-fast-path) | [Cache Miss](#cache-miss-full-build) | [Dispatch: patchable_generic_op](#dispatch-patchable_generic_op) | [Steady-State Pattern: run()](#steady-state-pattern-run) | [Cache Invalidation](#cache-invalidation)
 - [Constraints and Limitations](#constraints-and-limitations)
 - [File Map](#file-map)
 
@@ -117,46 +114,53 @@ subsets. A linear chain is a tree with branching factor 1.
 Chains ops in temporal order. Items can be `OpDescriptor`, `Sequential`, or
 `Parallel` objects. Nested `Sequential` items are flattened.
 
-`build()` returns a `FusedOp`. Call `fused.launch()` to dispatch. Device is
-auto-extracted from input tensors (or pass explicitly to `build(device=...)`).
+`run()` builds the fused program (cached after the first call) and dispatches
+it. Pass `results=[desc1, desc2, ...]` to select which descriptors' outputs
+are returned. When `results` is omitted, returns `None`.
 
 ```python
-# Linear chain
-fused = Sequential(op0, op1, op2).build()
-fused.launch()
+# Linear chain — run and get last op's output
+[out] = Sequential(op0, op1, op2).run(results=[op2])
 
 # Incremental construction
 s = Sequential(op0)
 s.add(op1).add(op2)
-fused = s.build()
+[out] = s.run(results=[op2])
 
 # Composition via nesting (flattened automatically)
 stem = Sequential(op0, op1)
-full = Sequential(stem, op2).build()  # equivalent to op0 -> op1 -> op2
+[out] = Sequential(stem, op2).run(results=[op2])  # equivalent to op0 -> op1 -> op2
 ```
+
+For advanced use, `build()` returns a `FusedOp` with a `launch()` method
+for direct dispatch control (e.g. benchmarking).
 
 ### `Parallel`
 
 Groups items that run concurrently on disjoint core subsets. Requires at least
 2 items. Items can be `OpDescriptor`, `Sequential`, or `Parallel`.
 
+The fusion build cache key includes per-op hashes in branch order, so
+swapping branch order is a different cache entry (and may produce a
+different merged program).
+
 ```python
 # Branching tree: stem runs first, then two branches in parallel
-fused = Sequential(stem_op, Parallel(branch_a, branch_b)).build()
-fused.launch()
+a_out, b_out = Sequential(
+    stem_op, Parallel(branch_a, branch_b)
+).run(results=[branch_a, branch_b])
 
 # Standalone: independent ops merged into one dispatch
-fused = Parallel(op_a, op_b).build()
-fused.launch()
+q_out, kv_out = Parallel(q_rms, kv_rms).run(results=[q_rms, kv_rms])
 
 # Nested: Parallel items can contain Sequential chains with further splits
-fused = Sequential(
+a1_out, a2_out, b_out = Sequential(
     stem,
     Parallel(
         Sequential(op_a, Parallel(op_a1, op_a2)),
         op_b,
     ),
-).build()
+).run(results=[op_a1, op_a2, op_b])
 ```
 
 Items after a `Parallel` in a `Sequential` are not allowed — the tree
@@ -2516,95 +2520,271 @@ without any runtime search.
 
 Building a fused kernel is expensive: codegen, CB allocation, barrier setup,
 and C++ source generation are orders of magnitude slower than simply patching
-runtime args.  Since `FusedOp`s are designed to be rebuilt on every call (the
-source ops have new tensors with new buffer addresses each time), an
-**in-memory build cache** avoids repeating this work.  The cache lives in a
-process-global dict and does not persist to disk — it is lost on process exit.
+tensor addresses.  An **in-memory build cache** avoids repeating this work
+when the same fusion topology is built again with different tensor buffers.
+
+Fused dispatch uses a **three-level caching architecture**:
+
+| Level | Key | Stores | Avoids |
+|-------|-----|--------|--------|
+| **Fusion Build** (`_BUILD_CACHE`) | topology + branch hashes + mesh id | Fused `ProgramDescriptor` + metadata (no tensors) | Codegen, CB allocation, barrier setup |
+| **Device Program** (`ProgramCache`) | `type_hash` + descriptor hash | `MeshWorkload` + slot indices | `Program` creation from descriptor |
+| **Slot Patching** (per-launch) | per-slot address comparison | `prev_io_addresses` | Patching unchanged address slots |
+
+The fusion build cache lives in a process-global dict and does not persist to
+disk — it is lost on process exit.  The device program cache and slot
+patching are handled by `patchable_generic_op` on the C++ side.
+
+
+### Deferred OpDescriptor
+
+`OpDescriptor` supports both eager and deferred construction.  Deferred
+descriptors carry a `program_cache_key` (stable integer hash, computable
+without calling the C++ factory) and a `factory_fn`.  The
+`ProgramDescriptor` is materialized only when `.descriptor` is first accessed:
+
+```python
+class OpDescriptor:
+    program_cache_key: int  # Always available — no .descriptor access needed
+
+    @property
+    def descriptor(self):
+        if self._descriptor is None:
+            self._descriptor = self._factory_fn()  # Lazy materialization
+        return self._descriptor
+```
+
+Eager descriptors (e.g. matmul, slice) pass `descriptor=` directly and
+`program_cache_key` is auto-computed from it.  Deferred descriptors (e.g.
+rms_norm, layer_norm) pass `factory_fn=` and an explicit `program_cache_key`.
+
+This is the key enabler of the build cache: a cache **hit** never touches
+`.descriptor`, so the expensive C++ factory call is skipped entirely on
+steady state.  The `program_cache_key` is typically the device op's
+`compute_program_hash`, optionally extended via
+`extend_branch_program_cache_key(device_hash, *extras)` when the factory
+takes side-channel arguments (e.g. `core_range_set` for interleaved
+layernorm) not covered by the device hash.
+
 
 ### Cache Key
 
-The cache key is the **structural hash** of the input ops — a tuple of
-per-op hashes that capture the compile-time shape of each op (kernel sources,
-compile-time args, CB layouts, core ranges):
+The cache key is a single integer — the hash of three components:
 
 ```python
-ops = _flatten_ops(items)  # Sequential/Parallel → ordered op list
-key = tuple(ttnn.compute_program_descriptor_hash(op.descriptor) for op in ops)
+def _fusion_cache_key_from_ops(items, container_prefix, ops, device_id):
+    surface = _build_cache_surface_key(items, container_prefix)
+    return (surface, tuple(_branch_program_cache_key(op) for op in ops), device_id)
 ```
+
+1. **Topology fingerprint** (`surface`): Encodes the tree shape and container
+   kind as a string — `"S(O,O,O)"` for a three-op `Sequential`,
+   `"S(O,P(O,O))"` for a `Sequential` ending in a two-branch `Parallel`,
+   etc.  `O` = op, `S(...)` = `Sequential`, `P(...)` = `Parallel`.
+
+2. **Per-branch program cache keys**: A tuple of one integer per flattened
+   branch op, obtained via `op.program_cache_key`.  This field is always
+   available on `OpDescriptor` — for deferred ops it is passed at construction,
+   for eager ops it is auto-computed from the descriptor.  No `.descriptor`
+   access is needed for cache lookup.
+
+3. **Mesh device id**: `MeshDevice.id()` when available (monotonic Metal mesh
+   id), else Python `id(device)`, else `0` when no device is known.  This
+   prevents cross-mesh cache collisions — the device program cache behind
+   `patchable_generic_op` is tied to a specific mesh.
 
 Two builds with the same key have identical fused kernel source, CB layout,
-barrier configuration, and semaphore addresses.  Only **runtime args** (which
-encode tensor buffer addresses) and **CB buffer pointers** (for sharded
-tensors) change between calls.
+barrier configuration, and semaphore structure.  Only runtime args (tensor
+buffer addresses) and CB buffer pointers (for sharded tensors) change between
+calls.
 
-### Cache Hit: Fast Path
-
-On a cache hit, `_update_cached_descriptor` patches the cached
-`ProgramDescriptor` in-place:
-
-```
-1. Per fused kernel: clear RT args, re-append from fresh source ops,
-   append barrier suffix (constant), append rebind values (recomputed)
-2. Per fused kernel: rebuild common_runtime_args from source ops
-3. Per sharded CB: copy new buffer address from source op's CB
-4. Per GlobalCB-backed CB: copy new GlobalCircularBuffer pointer from source op's CB
-5. Rebuild input/output tensor lists from fresh ops
-```
-
-The barrier suffix (GlobalSemaphore L1 addresses) is **constant** across
-builds because `FusedOp.semaphores` keeps the semaphore objects alive.
-Sharded CB rebind values are recomputed from the new ops' CB buffer
-addresses.  GlobalCircularBuffer pointers are copied from the fresh source
-ops' CBs because each invocation may allocate new GlobalCBs at different L1
-addresses — the hash does not include the actual pointer, only whether one
-is present.
-
-When `generic_op` dispatches the cached `FusedOp`, it calls
-`override_runtime_arguments` on the underlying cached `Program`, which copies
-the patched RT args and CB buffer pointers into the program's device-side
-buffers.
-
-### Cache Miss: Full Build
-
-On a cache miss, the full build pipeline runs (codegen → CB allocation →
-barrier setup → fused source generation → `KernelDescriptor` construction).
-After building, the result is recorded for future hits:
-
-```python
-entry = _BUILD_CACHE.get(key)
-if entry is not None:
-    return _update_cached_descriptor(entry, ops)   # fast: patch RT args only
-
-fused = self._build_internal(device)               # slow: full codegen pipeline
-_BUILD_CACHE[key] = _cache_build_result(fused, ops, kernel_phase_map)
-```
 
 ### What Gets Cached
 
-`_CacheEntry` stores everything needed to patch fresh ops into the cached
-`FusedOp` without rebuilding:
+`_CacheEntry` stores everything needed to reconstruct a `FusedOp` on cache
+hit without re-running codegen:
 
-| Field | Purpose |
-|-------|---------|
-| `fused_op` | The built `FusedOp` (updated in-place on hit) |
-| `origin_kernel_map` | Per fused kernel: which source op kernels' RT args to concatenate |
-| `barrier_suffix` | Per fused kernel: fixed barrier RT arg values (semaphore addresses) |
-| `rebind_spec` | Per fused kernel: `(op_idx, cb_idx, total_size)` for sharded CB rebind args |
-| `sharded_cb_map` | `(merged_cb_idx, op_idx, orig_cb_idx)` for descriptor-level CB pointer updates |
-| `global_cb_map` | `(merged_cb_idx, op_idx, orig_cb_idx)` for GlobalCircularBuffer pointer updates |
-| `output_sources` | Which source ops produce the `FusedOp`'s output tensors |
+| Field | Type | Purpose |
+|-------|------|---------|
+| `cached_descriptor` | `ProgramDescriptor` | The fused descriptor — dispatched via `patchable_generic_op` on every launch |
+| `semaphores` | `tuple` | Keeps `GlobalSemaphore` objects alive (pinning their L1 addresses) |
+| `kernel_labels` | `tuple` | Op name labels for `_apply_kernel_dir` file naming |
+| `output_sources` | `tuple((op_idx, tensor_idx), ...)` or `None` | Maps each merged output to its source branch op and tensor index |
+| `merged_input_len` | `int` or `None` | Length of deduped input list; enables preallocated list on cache hit |
 
-The cache works for all topologies — linear chains (`Sequential`), parallel
-branches (`Parallel`), and branching trees (`Sequential` + `Parallel`).
+**No IO tensors are stored.**  The cache holds only the descriptor and
+metadata — never references to `Tensor` objects.  This avoids pinning device
+buffers in the cache and prevents stale-buffer bugs when activations are
+reallocated between forward passes.
+
+
+### Cache Hit: Fast Path
+
+On a cache hit, `_fused_op_from_cache_entry` constructs a **new** `FusedOp`
+from the cached descriptor and the caller's current branch ops' tensor lists:
+
+```python
+cache_id, ops = _fusion_cache_id_and_ops(self._items, "S", cache_device)
+entry = _BUILD_CACHE.get(cache_id)
+if entry is not None:
+    result = _fused_op_from_cache_entry(entry, ops)
+    return result
+```
+
+The hit path:
+
+1. **Collect merged inputs**: Identity-deduplicate branch `input_tensors` in
+   flatten order.  The preallocated list size (`merged_input_len`) avoids
+   dynamic resizing.
+2. **Recover merged outputs**: The `output_sources` map `(op_idx, tensor_idx)`
+   indexes into the current branch ops' `output_tensors` — no descriptor
+   access needed.
+3. **Wrap**: A new `FusedOp` is returned with the cached `ProgramDescriptor`,
+   the fresh IO lists, and the pinned semaphore/label metadata.
+
+The `.descriptor` property of deferred branch `OpDescriptor` objects is **never
+accessed** on a cache hit.  Only their `input_tensors` / `output_tensors`
+(which the caller populated before `build()`) are read.
+
+
+### Cache Miss: Full Build
+
+On a cache miss, the full build pipeline runs (codegen, CB allocation, barrier
+setup, fused source generation, `KernelDescriptor` construction).  After
+building, the result is stored:
+
+```python
+r = self._build_internal(device)                # slow: full codegen pipeline
+fused = FusedOp(op=..., semaphores=r.semaphores, kernel_labels=r.kernel_labels, ...)
+
+_BUILD_CACHE[cache_id] = _cache_build_result(fused, ops, r.output_source_map)
+```
+
+`_cache_build_result` performs two optimizations before storing:
+
+1. **Memoize descriptor hash**: Sets `desc.custom_program_hash` to the
+   pre-computed `compute_program_descriptor_hash(desc)`.  This turns every
+   subsequent device program cache lookup (inside `patchable_generic_op`) into
+   an O(1) integer read instead of an O(descriptor) walk over all kernels, CBs,
+   and semaphores.
+
+2. **Index-based output map**: Converts the build result's
+   `output_source_map` (which uses object references) into
+   `(op_index, tensor_index)` pairs that survive across `build()` calls with
+   different op object instances.
+
+
+### Dispatch: patchable_generic_op
+
+`FusedOp.launch()` dispatches via `patchable_generic_op` — a C++ device
+operation designed for address-slot patching:
+
+```python
+def launch(self, *branch_ops_override):
+    if branch_ops_override:
+        self.refresh_merged_io(list(branch_ops_override))
+    elif self._branch_ops is not None:
+        self.refresh_merged_io(list(self._branch_ops))
+    io_tensors = list(self.input_tensors) + list(self.output_tensors)
+    ttnn._ttnn.operations.experimental.patchable_generic_op(io_tensors, self.descriptor)
+    return self.output_tensors  # results written in-place to pre-allocated output tensors
+```
+
+Before dispatch, `refresh_merged_io` copies the current branch ops' tensor
+lists into the fused op's merged IO lists in place — so in-place updates to
+branch tensor lists (e.g. activation buffer swaps between forward passes) are
+visible to the dispatch.
+
+On the C++ side, `PatchableGenericMeshProgramFactory` implements a two-phase
+protocol:
+
+**First dispatch (device program cache miss):** `create_mesh_workload` builds
+the `Program` from the `ProgramDescriptor`, then scans all runtime args
+(per-core and common) and CB buffer pointers to discover "slots" — positions
+whose values match an `io_tensors` buffer address.  Each slot records
+`(kernel_idx, core, arg_idx, io_tensor_index)` or
+`(cb_idx, io_tensor_index)`.
+
+**Subsequent dispatches (device program cache hit):**
+`override_runtime_arguments` compares each slot's `io_tensor_index` address
+against `prev_io_addresses`.  Only slots whose tensor address actually changed
+are patched.  This skip-if-unchanged behavior means that when only a subset
+of activations are reallocated between calls (common for static weight
+tensors), the patching cost is proportional to the number of changed tensors,
+not the total slot count.
+
+The three slot types:
+
+| Slot type | Patched via |
+|-----------|-------------|
+| `PerCoreRuntimeArgSlot` | `GetRuntimeArgs(program, kernel_idx, core)[arg_idx] = addr` |
+| `CommonRuntimeArgSlot` | `GetCommonRuntimeArgs(program, kernel_idx)[arg_idx] = addr` |
+| `CBTensorSlot` | `UpdateDynamicCircularBufferAddress(program, cb_handle, buf)` |
+
+
+### Steady-State Pattern: run()
+
+`Sequential.run()` and `Parallel.run()` combine `build()` + `launch()` into
+a single call optimized for the training-loop pattern where the same fusion
+graph is dispatched repeatedly with in-place tensor swaps.
+
+Pass `results=[desc1, desc2, ...]` to select which descriptors' first output
+tensors are returned.  When `results` is omitted, returns `None` (outputs
+are still written in-place to the descriptor objects' pre-allocated tensors).
+
+```python
+# Explicit result selection
+q_out, kv_out = Parallel(q_rms, kv_rms).run(results=[q_rms, kv_rms])
+
+# Fire-and-forget (read from descriptors later if needed)
+Sequential(op0, op1, op2).run()
+```
+
+The implementation caches the `FusedOp` on the container object:
+
+```python
+def _container_run(container, surface_prefix, results, device=None, kernel_dir=None):
+    cache_id, ops = _fusion_cache_id_and_ops(container._items, surface_prefix, cache_device)
+    sig = (cache_id, tuple(id(op) for op in ops), kernel_dir)
+    if container._run_fused is None or container._run_signature != sig:
+        container._run_fused = container.build(device=device, kernel_dir=kernel_dir)
+        container._run_signature = sig
+    container._run_fused.launch()
+    if results is not None:
+        return [desc.output_tensors[0] for desc in results]
+    return None
+```
+
+The signature includes both the fusion cache id and the Python `id()` of each
+branch op object.  This means:
+
+- **Same ops, new tensors** (typical forward pass): signature matches, skip
+  `build()`, go straight to `launch()` which calls `refresh_merged_io` to
+  copy the current branch tensor lists into the fused op's IO.
+- **Different op objects** (reconfiguration): signature misses, `build()` is
+  called (which itself hits the fusion build cache if the structure is
+  unchanged), and a new `FusedOp` is stored.
+
+The steady-state hot path is: `run()` → signature match → `launch()`
+→ `refresh_merged_io` (Python list copy) → `patchable_generic_op` → device
+program cache hit → slot patching (skip unchanged) → enqueue → extract
+`results`.
+
 
 ### Cache Invalidation
 
-The cache uses `compute_program_descriptor_hash` which is sensitive to
-compile-time structure (kernel sources, CT args, core ranges, CB formats).
-If any of these change, the hash changes and a full rebuild occurs.
+The fusion build cache key incorporates the topology fingerprint, all branch
+`program_cache_key` values, and the mesh device id.  If any of these change
+— different op structure, different kernel config, different device — the
+hash changes and a full rebuild occurs.
 
 `clear_build_cache()` manually clears all entries.  This is useful during
-development or when switching between different device configurations.
+development or when switching between device configurations.
+
+The `run()` cache (the stored `FusedOp` on the container) is invalidated
+separately via `invalidate_run()`, which is called automatically by `.add()`.
+Replacing `_items` entries in place requires calling `invalidate_run()`
+manually.
 
 
 ## Constraints and Limitations
@@ -2636,7 +2816,7 @@ development or when switching between different device configurations.
 | `models/experimental/ops/descriptors/fusion/common.py` | Shared data classes + geometry utilities (leaf module) |
 | `models/experimental/ops/descriptors/fusion/cb_allocator.py` | CB pool allocation + analysis + phantom/rebind helpers |
 | `models/experimental/ops/descriptors/fusion/fusion.py` | `Sequential`, `Parallel`, `FusedOp` (high-level API) |
-| `models/experimental/ops/descriptors/fusion/graph.py` | `OpNode`, `OpGraphBuilder`, `build_op_graph`, global pool + projection |
+| `models/experimental/ops/descriptors/fusion/graph.py` | `OpNode`, `OpGraphBuilder`, global pool + projection |
 | `models/experimental/ops/descriptors/fusion/codegen/cpp_parser.py` | C++ lexer, body extraction, include inlining |
 | `models/experimental/ops/descriptors/fusion/codegen/barrier.py` | C++ templates + unified barrier generator |
 | `models/experimental/ops/descriptors/fusion/codegen/source_gen.py` | Source utils, transforms, phase NS, fused source gen |
