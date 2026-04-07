@@ -104,10 +104,8 @@ wormhole_b0:
 
   # Fused tests
   - tests/ttnn/unit_tests/operations/fused/test_batch_norm.py
-  - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_softmax.py
   - tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py
-  - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
   - tests/ttnn/unit_tests/operations/fused/test_group_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_eltwise_softmax_in_place.py
   - tests/ttnn/unit_tests/operations/fused/parallel_sequential/
@@ -224,10 +222,8 @@ blackhole:
 
   # Fused tests (same simulator limitations as wormhole + BH-specific)
   - tests/ttnn/unit_tests/operations/fused/test_batch_norm.py
-  - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_softmax.py
   - tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py
-  - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
   - tests/ttnn/unit_tests/operations/fused/test_group_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_eltwise_softmax_in_place.py
   - tests/ttnn/unit_tests/operations/fused/parallel_sequential/

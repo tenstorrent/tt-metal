@@ -31,7 +31,6 @@ def test_ci_dispatch(hf_model_name, is_ci_env, model_location_generator):
         "models/demos/multimodal/gemma3/tests/test_vision_attention.py",
         "models/demos/multimodal/gemma3/tests/test_vision_cross_attention_transformer.py",
         "models/demos/multimodal/gemma3/tests/test_vision_embedding.py",
-        "models/demos/multimodal/gemma3/tests/test_vision_layernorm.py",
         "models/demos/multimodal/gemma3/tests/test_vision_mlp.py",
         "models/demos/multimodal/gemma3/tests/test_vision_pipeline.py",
         # "models/demos/multimodal/gemma3/tests/test_vision_rmsnorm.py",

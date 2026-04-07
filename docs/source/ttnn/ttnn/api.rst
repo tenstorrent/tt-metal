@@ -428,9 +428,6 @@ Normalization
 
    ttnn.batch_norm
    ttnn.group_norm
-   ttnn.layer_norm
-   ttnn.layer_norm_post_all_gather
-   ttnn.layer_norm_pre_all_gather
    ttnn.rms_norm
    ttnn.rms_norm_post_all_gather
    ttnn.rms_norm_pre_all_gather

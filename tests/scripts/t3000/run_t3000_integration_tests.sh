@@ -262,9 +262,6 @@ run_t3000_tteager_tests() {
 
   echo "LOG_METAL: Running run_t3000_tteager_tests"
 
-  # distributed layernorm
-  pytest tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py ; fail+=$?
-
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
