@@ -279,10 +279,26 @@ def _compute_cos_sin_cache(
     max_seq_len: int,
     rope_theta: float,
     partial_rotary_factor: float = 1.0,
+    use_head_dim_for_freq: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Compute cos/sin cache in Meta interleaved format, identity-padded for partial rotary."""
+    """Compute cos/sin cache in Meta interleaved format, identity-padded for partial rotary.
+
+    Args:
+        head_dim: Full head dimension.
+        max_seq_len: Maximum sequence length.
+        rope_theta: RoPE base frequency.
+        partial_rotary_factor: Fraction of head_dim to apply rotary to.
+        use_head_dim_for_freq: If True, use head_dim as the denominator in the
+            inv_freq formula (matching HuggingFace Gemma3/4 convention where
+            inv_freq is computed over the full head_dim and only a prefix is
+            used). If False (default), use rotary_dim as the denominator
+            (matching the standard RoPE / HuggingFace Phi convention where
+            inv_freq is computed over only the rotary dimensions).
+            When partial_rotary_factor == 1.0, both choices are equivalent.
+    """
     rotary_dim = int(head_dim * partial_rotary_factor)
-    inv_freq = 1.0 / (rope_theta ** (torch.arange(0, rotary_dim, 2).float() / rotary_dim))
+    freq_dim = head_dim if use_head_dim_for_freq else rotary_dim
+    inv_freq = 1.0 / (rope_theta ** (torch.arange(0, rotary_dim, 2).float() / freq_dim))
     t = torch.arange(max_seq_len, dtype=inv_freq.dtype)
     freqs = torch.outer(t, inv_freq)
 
@@ -321,8 +337,13 @@ class BailingRotarySetup:
         rope_theta: float,
         partial_rotary_factor: float = 1.0,
         datatype: ttnn.DataType = ttnn.bfloat16,
+        use_head_dim_for_freq: bool = False,
     ) -> None:
-        """Initialize with pre-computed cos/sin cache and transformation matrices."""
+        """Initialize with pre-computed cos/sin cache and transformation matrices.
+
+        Args:
+            use_head_dim_for_freq: See _compute_cos_sin_cache docstring.
+        """
         self.device = device
         self.head_dim = head_dim
         self.rotary_dim = int(head_dim * partial_rotary_factor)
@@ -338,6 +359,7 @@ class BailingRotarySetup:
             max_seq_len=max_seq_len,
             rope_theta=rope_theta,
             partial_rotary_factor=partial_rotary_factor,
+            use_head_dim_for_freq=use_head_dim_for_freq,
         )
 
         mesh_mapper = ttnn.ReplicateTensorToMesh(device) if self.is_mesh_device else None
@@ -390,6 +412,23 @@ class BailingRotarySetup:
         )
         self._trans_mat_decode_torch = trans_mat_decode_torch.to(torch.bfloat16)
         self._trans_mat_decode_sharded_cache = {}
+
+        # Pre-allocate typecast padding buffer for trace-safe decode path.
+        # batch_size=1 during decode -> pad_amount = 31 (32 - 1 % 32).
+        pad_amount = 32 - 1  # = 31
+        pad_torch = torch.zeros(pad_amount, dtype=torch.int32)
+        self._typecast_pad_buffer = ttnn.from_torch(
+            pad_torch,
+            device=device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+
+        # Pre-populate sharded trans_mat for decode (batch_size=1) to avoid
+        # lazy ttnn.from_torch during trace capture.
+        self.get_trans_mat_decode_sharded(1)
 
         trans_mat_prefill_torch = _get_rotation_transformation_mat(ttnn.TILE_SIZE)
         self.trans_mat_prefill = ttnn.from_torch(

@@ -104,7 +104,8 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs):
                         _set_device_recursive(v, parent_is_ttnn=isinstance(current_obj, TTNNModule))
         elif isinstance(current_obj, TTNNModule):
             # Set bypass based on parent type: TTNN children of TTNN modules bypass wrapping
-            current_obj._bypass_tensor_wrapping = parent_is_ttnn
+            if not getattr(current_obj, "_bypass_tensor_wrapping", False):
+                current_obj._bypass_tensor_wrapping = parent_is_ttnn
             _initialize_module_on_device(current_obj, device, device_init)
             if hasattr(current_obj, "call"):
                 if not hasattr(current_obj.call, "_is_timed"):

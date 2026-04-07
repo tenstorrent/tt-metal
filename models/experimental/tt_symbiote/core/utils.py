@@ -126,6 +126,21 @@ def ensure_tile_layout(tensor: ttnn.Tensor) -> ttnn.Tensor:
     return tensor
 
 
+def flat_map_bypass(func, data):
+    """Fast single-level map for bypass path. No recursion, no ABC imports.
+
+    Only handles flat dicts, tuples, and lists — does NOT recurse into nested
+    structures. Safe for decoder layer args/kwargs which are always flat.
+    """
+    if isinstance(data, dict):
+        return {k: func(v) for k, v in data.items()}
+    elif isinstance(data, tuple):
+        return tuple(func(x) for x in data)
+    elif isinstance(data, list):
+        return [func(x) for x in data]
+    return func(data)
+
+
 def optimized_tree_map_with_only_dict_list(*args, **kwargs):
     # don't use pytorch
     from collections.abc import Mapping, Sequence

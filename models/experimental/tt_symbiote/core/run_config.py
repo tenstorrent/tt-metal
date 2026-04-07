@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, Type
 
 import torch
-from models.experimental.tt_symbiote.core.utils import tree_map
+from models.experimental.tt_symbiote.core.utils import tree_map, flat_map_bypass
 from tracy import signpost
 
 import ttnn
@@ -283,6 +283,9 @@ class DispatchManager:
         assert isinstance(file_name, str), "file_name must be a string"
         assert file_name.endswith(".csv"), "file_name must end with .csv"
         df = DispatchManager.get_timing_entries_stats()
+        if df.empty:
+            print(f"[WARN] No timing entries recorded. Skipping save to {file_name}")
+            return
         df.to_csv(file_name, index=True)
         pivot_table = df.pivot_table(
             index=["func_name", "module_name"], columns="backend", values="duration", aggfunc="sum", fill_value=0
@@ -596,10 +599,11 @@ class NormalRun:
             transform = fast_unwrap_to_device(self.device)
         else:
             transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
-        func_args = tree_map(transform, args)
+        _map = flat_map_bypass if bypass else tree_map
+        func_args = _map(transform, args)
         # TODO: fix kwds not being passed correctly
         other_kwargs = {k: v for k, v in kwds.items() if "past_key_value" not in k}
-        func_kwargs = tree_map(transform, other_kwargs)
+        func_kwargs = _map(transform, other_kwargs)
         func_kwargs.update({k: v for k, v in kwds.items() if "past_key_value" in k})
         begin = time.time()
         self.preprocess_weights()
@@ -943,6 +947,8 @@ class TracedRun(LightweightRun):
     _input_memory_config: Any = None
     _trace_cache: Dict[Tuple, TraceEntry] = {}
     _warmup_keys: Set[Tuple] = set()  # keys that have completed warm-up (run 1)
+    _base_pre_trace_execute: Any = None
+    _base_post_trace_execute: Any = None
 
     @classmethod
     def configure(
@@ -952,11 +958,15 @@ class TracedRun(LightweightRun):
         input_memory_config=None,
     ) -> None:
         """Configure traced run mode."""
+        from models.experimental.tt_symbiote.core.module import TTNNModule
+
         cls._device = device
         cls._cq_id = cq_id
         cls._input_memory_config = input_memory_config or ttnn.DRAM_MEMORY_CONFIG
         cls._trace_cache = {}
         cls._warmup_keys = set()
+        cls._base_pre_trace_execute = TTNNModule.pre_trace_execute
+        cls._base_post_trace_execute = TTNNModule.post_trace_execute
 
     @classmethod
     def cache_size(cls) -> int:
@@ -1050,7 +1060,7 @@ class TracedRun(LightweightRun):
         trace_inputs = []
         trace_func_args = []
 
-        for arg in func_args:
+        for arg_idx, arg in enumerate(func_args):
             if isinstance(arg, ttnn.Tensor):
                 host_tensor = arg.cpu() if arg.storage_type() != ttnn.StorageType.HOST else arg
                 trace_input = ttnn.to_device(host_tensor, device, memory_config=mem_config)
@@ -1126,6 +1136,7 @@ class TracedRun(LightweightRun):
         # before starting trace capture. Without this, in-flight CCL ops can
         # cause "Writes/Reads are not supported during trace capture" errors.
         ttnn.synchronize_device(device)
+
         # Capture — the output from THIS forward is the trace_output whose
         # device buffer will be rewritten by every subsequent execute_trace.
         trace_id = ttnn.begin_trace_capture(device, cq_id=cq_id)
@@ -1147,16 +1158,16 @@ class TracedRun(LightweightRun):
     @staticmethod
     def module_run(self, *args, **kwds):
         assert self.device is not None, "Device must be set for TTNN module execution."
-        begin_full = time.time()
         # Transform inputs
         bypass = getattr(self, "_bypass_tensor_wrapping", False)
         if bypass:
             transform = fast_unwrap_to_device(self.device)
         else:
             transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
-        func_args = tree_map(transform, args)
+        _map = flat_map_bypass if bypass else tree_map
+        func_args = _map(transform, args)
         other_kwargs = {k: v for k, v in kwds.items() if "past_key_value" not in k}
-        func_kwargs = tree_map(transform, other_kwargs)
+        func_kwargs = _map(transform, other_kwargs)
         func_kwargs.update({k: v for k, v in kwds.items() if "past_key_value" in k})
 
         begin = time.time()
@@ -1210,8 +1221,12 @@ class TracedRun(LightweightRun):
             print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} [TRACED]")
             TracedRun._copy_inputs_to_trace_buffer(func_args, entry.trace_inputs)
             TracedRun._copy_kwargs_to_trace_buffer(func_kwargs, entry.trace_kwargs)
+            if type(self).pre_trace_execute is not TracedRun._base_pre_trace_execute:
+                self.pre_trace_execute(func_args, func_kwargs)
             ttnn.execute_trace(entry.device, entry.trace_id, cq_id=TracedRun._cq_id, blocking=False)
             result = entry.trace_output
+            if type(self).post_trace_execute is not TracedRun._base_post_trace_execute:
+                self.post_trace_execute(func_args, func_kwargs, result)
         elif cache_key in TracedRun._warmup_keys:
             # === RUN 2: CAPTURE (system already warmed up for this key) ===
             _TRACE_RUNNING = True
@@ -1234,10 +1249,6 @@ class TracedRun(LightweightRun):
         end = time.time()
         DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
         DispatchManager.set_current_module_name(None)
-        end_full = time.time()
-        DispatchManager.record_timing(
-            "TorchModules", self.module_name, self.__class__.__name__, {}, end_full - begin_full
-        )
         if bypass:
             return result
         return post_process_ttnn_module_output(self, result)

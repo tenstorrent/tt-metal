@@ -142,6 +142,17 @@ class TTNNQwenPagedAttentionKVCache(TTNNPagedAttentionKVCache):
         cache_idx = self._get_cache_idx(layer_idx)
         super().paged_update_on_device(key_states, value_states, cache_idx, current_pos)
 
+    def update_seq_length(self, layer_idx: int, seq_len: int = 1) -> None:
+        """Increment Python-side sequence counters, mapping layer_idx to cache_idx.
+
+        Silently skips layers not in the cache mapping (e.g. linear attention
+        layers in Qwen3.5 hybrid attention).
+        """
+        if self._layer_to_cache_idx is not None and layer_idx not in self._layer_to_cache_idx:
+            return  # This layer doesn't use paged KV cache
+        cache_idx = self._get_cache_idx(layer_idx)
+        super().update_seq_length(cache_idx, seq_len)
+
     def paged_sdpa_decode(
         self,
         query: ttnn.Tensor,
@@ -773,7 +784,8 @@ class TTNNQwen3FullAttention(TTNNModule):
         kv_value = ttnn.to_memory_config(kv_value, shard_cfg)
 
         # --- update the on-device paged KV cache ---
-        # paged_update_on_device handles _seq_lengths and _seen_tokens updates internally
+        # NOTE: _seq_lengths / _seen_tokens are updated by the caller via
+        # update_seq_length() outside the trace boundary.
         past_key_values.paged_update_on_device(
             kv_key,
             kv_value,

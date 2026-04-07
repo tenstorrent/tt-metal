@@ -140,7 +140,7 @@ class TTNNBailingMoeV2Model(TTNNModule):
         layers = self.layers[: -self.num_nextn_predict_layers] if self.num_nextn_predict_layers > 0 else self.layers
         mtp_layers = self.layers[-self.num_nextn_predict_layers :] if self.num_nextn_predict_layers > 0 else None
 
-        for decoder_layer in layers:
+        for layer_idx, decoder_layer in enumerate(layers):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
@@ -168,6 +168,15 @@ class TTNNBailingMoeV2Model(TTNNModule):
                     position_embeddings=position_embeddings,
                 )
             hidden_states = layer_outputs[0]
+
+            # Update KV cache Python-side counters OUTSIDE the trace boundary.
+            # During trace replay, execute_trace only replays device ops;
+            # _seq_lengths increments inside paged_update_on_device / paged_fill_on_device
+            # do NOT execute. By updating here, the counters advance correctly
+            # in all phases (warmup, capture, replay).
+            if past_key_values is not None and hasattr(past_key_values, "update_seq_length"):
+                seq_len = inputs_embeds.shape[1]  # prefill: SEQ_LEN, decode: 1
+                past_key_values.update_seq_length(layer_idx=layer_idx, seq_len=seq_len)
 
             if use_cache:
                 next_decoder_cache = layer_outputs[2 if output_attentions else 1]

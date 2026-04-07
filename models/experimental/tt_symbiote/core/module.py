@@ -219,6 +219,20 @@ class TTNNModule:
         """Forward pass - must be implemented by subclasses."""
         raise NotImplementedError("Forward method must be implemented by subclasses.")
 
+    def pre_trace_execute(self, func_args, func_kwargs):
+        """Hook called before ttnn.execute_trace during trace replay.
+
+        Override to copy trace-sensitive inputs to module-owned persistent
+        buffers (avoiding TTNN trace allocator buffer aliasing).
+        """
+
+    def post_trace_execute(self, func_args, func_kwargs, result):
+        """Hook called after ttnn.execute_trace during trace replay.
+
+        Override to perform post-processing on trace outputs or update
+        module state based on the replayed result.
+        """
+
     def named_modules(self, memo=None, prefix="", remove_duplicate=True):
         """Iterator over all modules in the network, yielding both the name of the module as well as the module itself."""
         if memo is None:
