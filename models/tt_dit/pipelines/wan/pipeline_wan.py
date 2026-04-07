@@ -1026,6 +1026,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             self._prepare_vae()
             tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h, use_cache=self.vae_use_cache)
 
+            # On-device post-processing for np output: [-1,1] → [0,1]
+            # VAE output is ROW_MAJOR; arithmetic ops require TILE_LAYOUT.
+            if output_type == "np":
+                tt_video_BCTHW = ttnn.to_layout(tt_video_BCTHW, ttnn.TILE_LAYOUT)
+                tt_video_BCTHW = ttnn.add(tt_video_BCTHW, 1.0)
+                tt_video_BCTHW = ttnn.multiply(tt_video_BCTHW, 0.5)
+                tt_video_BCTHW = ttnn.to_layout(tt_video_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
+
             concat_dims = [None, None]
             concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
             concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
@@ -1033,7 +1041,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             video_torch = video_torch[:, :, :, :new_logical_h, :]
 
             if output_type == "np":
-                video = (video_torch * 0.5 + 0.5).clamp(0, 1).permute(0, 2, 3, 4, 1).float().numpy()
+                video = video_torch.permute(0, 2, 3, 4, 1).float().numpy()
             else:
                 video = self.video_processor.postprocess_video(video_torch, output_type=output_type)
         else:
