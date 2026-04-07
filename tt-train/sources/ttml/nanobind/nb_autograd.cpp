@@ -85,9 +85,7 @@ void py_module(nb::module_& m) {
             "get_value",
             &Tensor::get_value,
             nb::arg("precision") = PreferredPrecision::HALF,
-            "Get underlying tensor value. "
-            "Note: PreferredPrecision.FULL returns the canonical/original stored view, "
-            "it does not force FLOAT32.");
+            "Get underlying tensor value");
         py_tensor.def("get_grad", nb::overload_cast<>(&Tensor::get_grad, nb::const_), "Get gradient");
         py_tensor.def("get_grad_rw", nb::overload_cast<>(&Tensor::get_grad), "Get/set gradient");
         // Return gradient wrapped as TensorPtr for Python use (e.g., gradient clipping)
