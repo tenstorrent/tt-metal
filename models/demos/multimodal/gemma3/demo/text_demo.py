@@ -959,38 +959,45 @@ def test_demo_text(
             f"page_table_shape={tuple(page_table.shape) if page_table is not None else None}"
         )
 
-        logger.info(f"Starting prefill...")
-        profiler.start(f"inference_prefill", iteration=batch_idx)
-        logits = generator.prefill_forward_text(
-            input_tokens_prefill_pt,
-            page_table=page_table,
-            kv_cache=tt_kv_cache,
-            prompt_lens=decoding_pos,
-            warmup_prefill=False,
-        )
-        prefilled_token = torch.argmax(logits, dim=-1)
-        logger.info(
-            f"[VERIFY PREFILL] logits_shape={tuple(logits.shape)} argmax_first={prefilled_token.flatten()[:4].tolist()}"
-        )
-        profiler.end(f"inference_prefill", iteration=batch_idx)
-        logger.info(f"Prefill finished")
-
-        # Keep track of generated outputs to print out every iteration
-        all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(global_batch_size)]
-        for user in range(global_batch_size):
-            user_tok = int(prefilled_token[user].item())
-            all_outputs[user].append(user_tok)
-
-        user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
-
         sampling_on_device = can_sample_on_device
-
         if sampling_on_device:
             device_sampling_params = SamplingParams(
                 temperature=sampling_params["temperature"], top_k=32, top_p=sampling_params["top_p"]
             )
         else:
             device_sampling_params = None
+
+        logger.info(f"Starting prefill...")
+        profiler.start(f"inference_prefill", iteration=batch_idx)
+        prefill_out = generator.prefill_forward_text(
+            input_tokens_prefill_pt,
+            page_table=page_table,
+            kv_cache=tt_kv_cache,
+            prompt_lens=decoding_pos,
+            warmup_prefill=False,
+            sampling_params=device_sampling_params,
+        )
+        if device_sampling_params is not None:
+            prefill_tokens, _prefill_lp = prefill_out
+            prefilled_token = prefill_tokens.long()
+            logger.info(f"[VERIFY PREFILL] device_sampling first_token_ids={prefilled_token.flatten()[:4].tolist()}")
+        else:
+            logits = prefill_out
+            prefilled_token = torch.argmax(logits, dim=-1)
+            logger.info(
+                f"[VERIFY PREFILL] logits_shape={tuple(logits.shape)} argmax_first={prefilled_token.flatten()[:4].tolist()}"
+            )
+        profiler.end(f"inference_prefill", iteration=batch_idx)
+        logger.info(f"Prefill finished")
+
+        # Keep track of generated outputs to print out every iteration
+        prefilled_flat = prefilled_token.view(global_batch_size, -1).squeeze(-1)
+        all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(global_batch_size)]
+        for user in range(global_batch_size):
+            user_tok = int(prefilled_flat[user].item())
+            all_outputs[user].append(user_tok)
+
+        user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
 
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] for b in range(global_batch_size)])
