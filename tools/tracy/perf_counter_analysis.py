@@ -605,6 +605,581 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
     print("\n" + "=" * 100 + "\n")
 
 
+def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cores):
+    """Compute all perf counter metrics from the perf_counter_df DataFrame.
+
+    Parameters
+    ----------
+    perf_counter_df : pd.DataFrame
+        DataFrame with columns including "counter type", "value", "ref cnt",
+        "run_host_id", "trace_id_count", "core_x", "core_y".
+    device_arch : str
+        Device architecture string (e.g. "wormhole_b0", "blackhole").
+    total_compute_cores : int
+        Number of compute cores on the device.
+
+    Returns
+    -------
+    dict with two keys:
+        "per_op_stats" : dict mapping metric_base_name -> {"min": dict, "median": dict, "max": dict, "avg": dict}
+        "per_op_counts" : dict mapping count_name -> dict
+    """
+
+    per_op_stats = {}
+    per_op_counts = {}
+
+    # ---- Helper functions ----
+
+    def get_counter_series(counter_name):
+        mask = perf_counter_df["counter type"] == counter_name
+        return perf_counter_df[mask].set_index(["run_host_id", "trace_id_count", "core_x", "core_y"])["value"]
+
+    def get_counter_ref_cnt(counter_name):
+        mask = perf_counter_df["counter type"] == counter_name
+        return perf_counter_df[mask].set_index(["run_host_id", "trace_id_count", "core_x", "core_y"])["ref cnt"]
+
+    def has_counter(counter_name):
+        return counter_name in perf_counter_df["counter type"].values
+
+    def compute_util_metric(counter_name, scale=100):
+        """Compute value / ref_cnt * scale per core, aggregate by op."""
+        val = get_counter_series(counter_name)
+        ref = get_counter_ref_cnt(counter_name)
+        ratio = (val / ref * scale).replace([float("inf"), -float("inf")], nan)
+        grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+        return {
+            "min": grouped.min().to_dict(),
+            "median": grouped.median().to_dict(),
+            "max": grouped.max().to_dict(),
+            "avg": grouped.mean().to_dict(),
+        }
+
+    def compute_avg_channel_util(counter_a, counter_b, scale=100):
+        """Average two channel utilizations per core, then aggregate by op."""
+        val_a = get_counter_series(counter_a)
+        val_b = get_counter_series(counter_b)
+        ref = get_counter_ref_cnt(counter_a)
+        ratio = ((val_a + val_b) / 2 / ref * scale).replace([float("inf"), -float("inf")], nan)
+        grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+        return {
+            "min": grouped.min().to_dict(),
+            "median": grouped.median().to_dict(),
+            "max": grouped.max().to_dict(),
+            "avg": grouped.mean().to_dict(),
+        }
+
+    def compute_ratio_metric(numerator_name, denominator_name, scale=100):
+        """Compute numerator / denominator * scale per core, aggregate by op."""
+        num = get_counter_series(numerator_name)
+        den = get_counter_series(denominator_name)
+        ratio = (num / den * scale).replace([float("inf"), -float("inf")], nan)
+        grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+        return {
+            "min": grouped.min().to_dict(),
+            "median": grouped.median().to_dict(),
+            "max": grouped.max().to_dict(),
+            "avg": grouped.mean().to_dict(),
+        }
+
+    def compute_complement_metric(counter_name, total_name):
+        """Compute (total - counter) / total * 100 — for blocked/stall rates."""
+        val = get_counter_series(counter_name)
+        total = get_counter_series(total_name)
+        ratio = ((total - val) / total * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
+        grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+        return {
+            "min": grouped.min().to_dict(),
+            "median": grouped.median().to_dict(),
+            "max": grouped.max().to_dict(),
+            "avg": grouped.mean().to_dict(),
+        }
+
+    def compute_backpressure(req_ch0, req_ch1, grant_ch0, grant_ch1):
+        """Compute avg back-pressure across two channels: (req-grant)/req * 100."""
+        r0 = get_counter_series(req_ch0)
+        r1 = get_counter_series(req_ch1)
+        g0 = get_counter_series(grant_ch0)
+        g1 = get_counter_series(grant_ch1)
+        bp = (((r0 - g0) + (r1 - g1)) / (r0 + r1) * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
+        grouped = bp.groupby(level=["run_host_id", "trace_id_count"])
+        return {
+            "min": grouped.min().to_dict(),
+            "median": grouped.median().to_dict(),
+            "max": grouped.max().to_dict(),
+            "avg": grouped.mean().to_dict(),
+        }
+
+    def _group_to_stat_dict(series):
+        """Group a per-core series by op and return min/median/max/avg dicts."""
+        grouped = series.groupby(level=["run_host_id", "trace_id_count"])
+        return {
+            "min": grouped.min().to_dict(),
+            "median": grouped.median().to_dict(),
+            "max": grouped.max().to_dict(),
+            "avg": grouped.mean().to_dict(),
+        }
+
+    # ---- Metric computation (moved from process_ops_logs.py) ----
+
+    # Get all counter series needed for metrics
+    sfpu_counter = get_counter_series("SFPU_COUNTER")
+    sfpu_ref_cnt = get_counter_ref_cnt("SFPU_COUNTER")
+    fpu_counter = get_counter_series("FPU_COUNTER")
+    fpu_ref_cnt = get_counter_ref_cnt("FPU_COUNTER")
+    math_counter = get_counter_series("MATH_COUNTER")
+    math_ref_cnt = get_counter_ref_cnt("MATH_COUNTER")
+    srca_write = get_counter_series("SRCA_WRITE")
+    srcb_write = get_counter_series("SRCB_WRITE")
+    unpack0_busy = get_counter_series("UNPACK0_BUSY_THREAD0")
+    unpack1_busy = get_counter_series("UNPACK1_BUSY_THREAD0")
+    srca_write_avail = get_counter_series("SRCA_WRITE_AVAILABLE")
+    srcb_write_avail = get_counter_series("SRCB_WRITE_AVAILABLE")
+    packer_dest_read = get_counter_series("PACKER_DEST_READ_AVAILABLE")
+    packer_busy = get_counter_series("PACKER_BUSY")
+    math_instrn_started = get_counter_series("MATH_INSTRN_STARTED")
+    math_instrn_available = get_counter_series("MATH_INSTRN_AVAILABLE")
+    available_math = get_counter_series("AVAILABLE_MATH")
+    fpu_instrn_available_1 = get_counter_series("FPU_INSTRN_AVAILABLE_1")
+
+    # Calculate utilization metrics (value / ref_cnt * 100)
+    sfpu_util = (sfpu_counter / sfpu_ref_cnt * 100).replace([float("inf"), -float("inf")], nan)
+    fpu_util = (fpu_counter / fpu_ref_cnt * 100).replace([float("inf"), -float("inf")], nan)
+    math_util = (math_counter / math_ref_cnt * 100).replace([float("inf"), -float("inf")], nan)
+
+    # SFPU Counter aggregations
+    per_op_stats["SFPU Util"] = _group_to_stat_dict(sfpu_util)
+    per_op_counts["avg_sfpu_count"] = (
+        sfpu_counter.groupby(level=["run_host_id", "trace_id_count"]).sum() / total_compute_cores
+    ).to_dict()
+
+    # FPU Counter aggregations
+    per_op_stats["FPU Util"] = _group_to_stat_dict(fpu_util)
+    per_op_counts["avg_fpu_count"] = (
+        fpu_counter.groupby(level=["run_host_id", "trace_id_count"]).sum() / total_compute_cores
+    ).to_dict()
+
+    # MATH Counter aggregations
+    per_op_stats["MATH Util"] = _group_to_stat_dict(math_util)
+    per_op_counts["avg_math_count"] = (
+        math_counter.groupby(level=["run_host_id", "trace_id_count"]).sum() / total_compute_cores
+    ).to_dict()
+
+    # Calculate per-core efficiency metrics
+    unpack0_eff = (srca_write / unpack0_busy * 100).replace([float("inf"), -float("inf")], nan)
+    unpack1_eff = (srcb_write / unpack1_busy * 100).replace([float("inf"), -float("inf")], nan)
+
+    # Packer Efficiency: On WH, PACKER_DEST_READ_AVAILABLE / PACKER_BUSY.
+    # On BH, PACKER_BUSY is always 0 (packer completes within gated clock window).
+    # Fallback: use DEST_READ_GRANTED_1 / PACKER_DEST_READ_AVAILABLE which measures
+    # what fraction of dest read requests were granted (same signal on silicon,
+    # confirmed both read 3968 on matmul = 0% backpressure = 100% efficiency).
+    if packer_busy is not None and packer_busy.sum() > 0:
+        pack_eff = (packer_dest_read / packer_busy * 100).replace([float("inf"), -float("inf")], nan)
+    elif has_counter("DEST_READ_GRANTED_1"):
+        dest_granted_1 = get_counter_series("DEST_READ_GRANTED_1")
+        pack_eff = (dest_granted_1 / packer_dest_read * 100).replace([float("inf"), -float("inf")], nan)
+    else:
+        pack_eff = pd.Series(dtype=float)
+
+    # Math Pipeline Utilization: On BH, MATH_INSTRN_STARTED is always 0 (RTL dead).
+    # Fall back to FIDELITY_PHASE_STALLS / ref_cnt (compute_util_metric) which measures
+    # what % of time the math pipeline was actively executing (including HiFi phases).
+    if math_instrn_started is not None and math_instrn_started.sum() > 0:
+        math_pipe_util = (math_instrn_started / math_instrn_available * 100).replace([float("inf"), -float("inf")], nan)
+    else:
+        # Use FIDELITY_PHASE_STALLS as a proxy: it counts cycles where
+        # math_instrn_valid & fidelity_phases_ongoing, i.e. math pipeline active.
+        fidelity = get_counter_series("FIDELITY_PHASE_STALLS") if has_counter("FIDELITY_PHASE_STALLS") else None
+        fidelity_ref = get_counter_ref_cnt("FIDELITY_PHASE_STALLS") if has_counter("FIDELITY_PHASE_STALLS") else None
+        if fidelity is not None and fidelity_ref is not None:
+            math_pipe_util = (fidelity / fidelity_ref * 100).replace([float("inf"), -float("inf")], nan)
+        else:
+            math_pipe_util = pd.Series(dtype=float)
+
+    # Math-to-Pack Handoff Efficiency: On BH, PACKER_BUSY is always 0.
+    # Fall back to AVAILABLE_MATH / ref_cnt (% of time math not stalled by scoreboard).
+    if packer_busy is not None and packer_busy.sum() > 0:
+        math_pack_eff = (available_math / packer_busy * 100).replace([float("inf"), -float("inf")], nan)
+    elif available_math is not None:
+        avail_ref = get_counter_ref_cnt("AVAILABLE_MATH") if has_counter("AVAILABLE_MATH") else None
+        if avail_ref is not None:
+            math_pack_eff = (available_math / avail_ref * 100).replace([float("inf"), -float("inf")], nan)
+        else:
+            math_pack_eff = pd.Series(dtype=float)
+    else:
+        math_pack_eff = pd.Series(dtype=float)
+
+    unpack_math_flow = (
+        ((srca_write_avail + srcb_write_avail) / 2) / ((unpack0_busy + unpack1_busy) / 2) * 100
+    ).replace([float("inf"), -float("inf")], nan)
+
+    # Aggregate per operation (min, median, max, avg)
+    per_op_stats["Unpacker0 Write Efficiency"] = _group_to_stat_dict(unpack0_eff)
+    per_op_stats["Unpacker1 Write Efficiency"] = _group_to_stat_dict(unpack1_eff)
+
+    # Combined Unpacker Write Efficiency (average per core, then aggregate)
+    unpack_combined = pd.concat([unpack0_eff, unpack1_eff], axis=1).mean(axis=1, skipna=True)
+    per_op_stats["Unpacker Write Efficiency"] = _group_to_stat_dict(unpack_combined)
+
+    per_op_stats["Packer Efficiency"] = _group_to_stat_dict(pack_eff)
+
+    # FPU Execution Efficiency: FPU_COUNTER / FPU_INSTRN_AVAILABLE_1
+    fpu_exec_eff = (fpu_counter / fpu_instrn_available_1 * 100).replace([float("inf"), -float("inf")], nan)
+    per_op_stats["FPU Execution Efficiency"] = _group_to_stat_dict(fpu_exec_eff)
+
+    # Math Pipeline Utilization
+    per_op_stats["Math Pipeline Utilization"] = _group_to_stat_dict(math_pipe_util)
+
+    # Math-to-Pack Handoff Efficiency
+    per_op_stats["Math-to-Pack Handoff Efficiency"] = _group_to_stat_dict(math_pack_eff)
+
+    # Unpacker-to-Math Data Flow
+    per_op_stats["Unpacker-to-Math Data Flow"] = _group_to_stat_dict(unpack_math_flow)
+
+    # === Thread stall metrics ===
+    for t in range(3):
+        name = f"THREAD_STALLS_{t}"
+        if has_counter(name):
+            per_op_stats[f"Thread {t} Stall Rate"] = compute_util_metric(name)
+
+    # Thread IPC: no RTL counter for instruction counts. IPC metric removed.
+
+    # Pipeline wait metrics
+    pipeline_wait_counters = {
+        "SrcA Valid Wait": "WAITING_FOR_SRCA_VALID",
+        "SrcB Valid Wait": "WAITING_FOR_SRCB_VALID",
+        "SrcA Clear Wait": "WAITING_FOR_SRCA_CLEAR",
+        "SrcB Clear Wait": "WAITING_FOR_SRCB_CLEAR",
+        "Math Idle Wait T1": "WAITING_FOR_MATH_IDLE_1",
+        "Pack Idle Wait T2": "WAITING_FOR_PACK_IDLE_2",
+        "Unpack Idle Wait T0": "WAITING_FOR_UNPACK_IDLE_0",
+    }
+    for metric_name, counter_name in pipeline_wait_counters.items():
+        if has_counter(counter_name):
+            per_op_stats[metric_name] = compute_util_metric(counter_name)
+
+    # Semaphore wait metrics
+    for t in range(3):
+        zero_name = f"WAITING_FOR_NONZERO_SEM_{t}"
+        full_name = f"WAITING_FOR_NONFULL_SEM_{t}"
+        if has_counter(zero_name):
+            per_op_stats[f"Semaphore Zero Wait T{t}"] = compute_util_metric(zero_name)
+        if has_counter(full_name):
+            per_op_stats[f"Semaphore Full Wait T{t}"] = compute_util_metric(full_name)
+
+    # === TDMA_UNPACK data hazard ===
+    if has_counter("DATA_HAZARD_STALLS_MOVD2A"):
+        per_op_stats["Data Hazard Stall Rate"] = compute_util_metric("DATA_HAZARD_STALLS_MOVD2A")
+
+    # === L1 Bank 0 ===
+    if has_counter("L1_0_UNPACKER_0"):
+        per_op_stats["L1 Unpacker Port Util"] = compute_util_metric("L1_0_UNPACKER_0")
+    if has_counter("L1_0_TDMA_BUNDLE_0_RISC") and has_counter("L1_0_TDMA_BUNDLE_1_TRISC"):
+        per_op_stats["L1 TDMA Bundle Util"] = compute_avg_channel_util(
+            "L1_0_TDMA_BUNDLE_0_RISC", "L1_0_TDMA_BUNDLE_1_TRISC"
+        )
+    if has_counter("L1_0_NOC_RING0_OUTGOING_0") and has_counter("L1_0_NOC_RING0_OUTGOING_1"):
+        per_op_stats["NOC Ring 0 Outgoing Util"] = compute_avg_channel_util(
+            "L1_0_NOC_RING0_OUTGOING_0", "L1_0_NOC_RING0_OUTGOING_1"
+        )
+    if has_counter("L1_0_NOC_RING0_INCOMING_0") and has_counter("L1_0_NOC_RING0_INCOMING_1"):
+        per_op_stats["NOC Ring 0 Incoming Util"] = compute_avg_channel_util(
+            "L1_0_NOC_RING0_INCOMING_0", "L1_0_NOC_RING0_INCOMING_1"
+        )
+
+    # L1 Port 1 (arch-specific: BH unified packer or WH unpacker#1/ECC/pack1)
+    if has_counter("L1_0_UNIFIED_PACKER"):
+        per_op_stats["L1 Packer Port Util"] = compute_util_metric("L1_0_UNIFIED_PACKER")
+    elif has_counter("L1_0_UNPACKER_1_ECC_PACK1"):
+        per_op_stats["L1 Packer Port Util"] = compute_util_metric("L1_0_UNPACKER_1_ECC_PACK1")
+
+    # L1 back-pressure metrics (from grant counters)
+    if has_counter("L1_0_NOC_RING0_OUTGOING_0") and has_counter("L1_0_NOC_RING0_OUTGOING_0_GRANT"):
+        per_op_stats["NOC Ring 0 Outgoing Backpressure"] = compute_backpressure(
+            "L1_0_NOC_RING0_OUTGOING_0",
+            "L1_0_NOC_RING0_OUTGOING_1",
+            "L1_0_NOC_RING0_OUTGOING_0_GRANT",
+            "L1_0_NOC_RING0_OUTGOING_1_GRANT",
+        )
+    if has_counter("L1_0_NOC_RING0_INCOMING_0") and has_counter("L1_0_NOC_RING0_INCOMING_0_GRANT"):
+        per_op_stats["NOC Ring 0 Incoming Backpressure"] = compute_backpressure(
+            "L1_0_NOC_RING0_INCOMING_0",
+            "L1_0_NOC_RING0_INCOMING_1",
+            "L1_0_NOC_RING0_INCOMING_0_GRANT",
+            "L1_0_NOC_RING0_INCOMING_1_GRANT",
+        )
+
+    # === Grant counter derived metrics ===
+    # Fidelity cycle breakdown
+    if has_counter("INSTRN_2_HF_CYCLES") and has_counter("MATH_INSTRN_STARTED"):
+        num = get_counter_series("INSTRN_2_HF_CYCLES")
+        den = get_counter_series("MATH_INSTRN_STARTED")
+        ratio = (num / den * 100).replace([float("inf"), -float("inf")], nan)
+        per_op_stats["HiFi2 Instrn Rate"] = _group_to_stat_dict(ratio)
+    if has_counter("INSTRN_1_HF_CYCLE") and has_counter("MATH_INSTRN_STARTED"):
+        num = get_counter_series("INSTRN_1_HF_CYCLE")
+        den = get_counter_series("MATH_INSTRN_STARTED")
+        ratio = (num / den * 100).replace([float("inf"), -float("inf")], nan)
+        per_op_stats["LoFi Instrn Rate"] = _group_to_stat_dict(ratio)
+
+    # Math source data readiness
+    # On WH, MATH_INSTRN_NOT_BLOCKED_SRC (counter_sel 256) measures 4-HF-cycle instructions,
+    # not math-blocked-by-src. Only compute this metric on BH where it's the correct signal.
+    is_wh = device_arch.lower() in ("wormhole", "wormhole_b0")
+    if not is_wh and has_counter("MATH_INSTRN_NOT_BLOCKED_SRC") and has_counter("MATH_INSTRN_AVAILABLE"):
+        num = get_counter_series("MATH_INSTRN_NOT_BLOCKED_SRC")
+        den = get_counter_series("MATH_INSTRN_AVAILABLE")
+        ratio = (num / den * 100).replace([float("inf"), -float("inf")], nan)
+        per_op_stats["Math Src Data Ready Rate"] = _group_to_stat_dict(ratio)
+
+    # SrcA write port blocked rate
+    if has_counter("SRCA_WRITE_AVAILABLE") and has_counter("SRCA_WRITE_NOT_BLOCKED_OVR"):
+        avail = get_counter_series("SRCA_WRITE_AVAILABLE")
+        unblocked = get_counter_series("SRCA_WRITE_NOT_BLOCKED_OVR")
+        ratio = ((avail - unblocked) / avail * 100).replace([float("inf"), -float("inf")], nan)
+        per_op_stats["SrcA Write Port Blocked Rate"] = _group_to_stat_dict(ratio)
+
+    # Dest read backpressure
+    dest_grant_name = "DEST_READ_GRANTED_1" if has_counter("DEST_READ_GRANTED_1") else "DEST_READ_GRANTED_0"
+    if has_counter("PACKER_DEST_READ_AVAILABLE") and has_counter(dest_grant_name):
+        req = get_counter_series("PACKER_DEST_READ_AVAILABLE")
+        grant = get_counter_series(dest_grant_name)
+        ratio = ((req - grant) / req * 100).replace([float("inf"), -float("inf")], nan)
+        per_op_stats["Dest Read Backpressure"] = _group_to_stat_dict(ratio)
+
+    # Math dest write port stall and scoreboard stall
+    if has_counter("MATH_INSTRN_AVAILABLE") and has_counter("MATH_NOT_STALLED_DEST_WR_PORT"):
+        unstalled = get_counter_series("MATH_NOT_STALLED_DEST_WR_PORT")
+        # On BH, MATH_NOT_STALLED_DEST_WR_PORT is always 0 (RTL dead), producing
+        # a bogus 100% stall rate. Only compute when the counter has real data.
+        if unstalled.sum() > 0:
+            avail = get_counter_series("MATH_INSTRN_AVAILABLE")
+            ratio = ((avail - unstalled) / avail * 100).replace([float("inf"), -float("inf")], nan)
+            per_op_stats["Math Dest Write Port Stall Rate"] = _group_to_stat_dict(ratio)
+    if has_counter("MATH_INSTRN_AVAILABLE") and has_counter("AVAILABLE_MATH"):
+        avail = get_counter_series("MATH_INSTRN_AVAILABLE")
+        unstalled = get_counter_series("AVAILABLE_MATH")
+        ratio = ((avail - unstalled) / avail * 100).replace([float("inf"), -float("inf")], nan)
+        per_op_stats["Math Scoreboard Stall Rate"] = _group_to_stat_dict(ratio)
+
+    # Instruction issue rates per thread
+    if has_counter("UNPACK_INSTRN_ISSUED_0"):
+        per_op_stats["Unpack Instrn Issue Rate T0"] = compute_util_metric("UNPACK_INSTRN_ISSUED_0", scale=1)
+    if has_counter("FPU_INSTRN_ISSUED_1"):
+        per_op_stats["Math Instrn Issue Rate T1"] = compute_util_metric("FPU_INSTRN_ISSUED_1", scale=1)
+    if has_counter("PACK_INSTRN_ISSUED_2"):
+        per_op_stats["Pack Instrn Issue Rate T2"] = compute_util_metric("PACK_INSTRN_ISSUED_2", scale=1)
+
+    # === L1 Bank 1 ===
+    if has_counter("L1_1_NOC_RING1_OUTGOING_0") and has_counter("L1_1_NOC_RING1_OUTGOING_1"):
+        per_op_stats["NOC Ring 1 Outgoing Util"] = compute_avg_channel_util(
+            "L1_1_NOC_RING1_OUTGOING_0", "L1_1_NOC_RING1_OUTGOING_1"
+        )
+    if has_counter("L1_1_NOC_RING1_INCOMING_0") and has_counter("L1_1_NOC_RING1_INCOMING_1"):
+        per_op_stats["NOC Ring 1 Incoming Util"] = compute_avg_channel_util(
+            "L1_1_NOC_RING1_INCOMING_0", "L1_1_NOC_RING1_INCOMING_1"
+        )
+
+    # === Derived stall metrics (req - grant) / req * 100 ===
+    if has_counter("L1_1_NOC_RING1_OUTGOING_0") and has_counter("L1_1_NOC_RING1_OUTGOING_0_GRANT"):
+        per_op_stats["NOC Ring 1 Outgoing Backpressure"] = compute_backpressure(
+            "L1_1_NOC_RING1_OUTGOING_0",
+            "L1_1_NOC_RING1_OUTGOING_1",
+            "L1_1_NOC_RING1_OUTGOING_0_GRANT",
+            "L1_1_NOC_RING1_OUTGOING_1_GRANT",
+        )
+    if has_counter("L1_1_NOC_RING1_INCOMING_0") and has_counter("L1_1_NOC_RING1_INCOMING_0_GRANT"):
+        per_op_stats["NOC Ring 1 Incoming Backpressure"] = compute_backpressure(
+            "L1_1_NOC_RING1_INCOMING_0",
+            "L1_1_NOC_RING1_INCOMING_1",
+            "L1_1_NOC_RING1_INCOMING_0_GRANT",
+            "L1_1_NOC_RING1_INCOMING_1_GRANT",
+        )
+    if has_counter("L1_0_UNPACKER_0") and has_counter("L1_0_UNPACKER_0_GRANT"):
+        req = get_counter_series("L1_0_UNPACKER_0")
+        grant = get_counter_series("L1_0_UNPACKER_0_GRANT")
+        # On BH, the L1 unpacker grant counter measures a different event than
+        # the req counter (grant ~25-45 while req ~8000+, and grant > req on some
+        # cores). The resulting 96-100% backpressure is an artifact of signal
+        # mismatch, not real L1 contention. Only compute when the median
+        # grant/req ratio is reasonable (>10%), indicating the counters track
+        # related events.
+        valid = req[req > 0]
+        grant_valid = grant[req > 0]
+        median_ratio = (grant_valid / valid).median() if len(valid) > 0 else 0
+        if median_ratio > 0.1:
+            ratio = ((req - grant) / req * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
+            per_op_stats["L1 Unpacker Backpressure"] = _group_to_stat_dict(ratio)
+    if has_counter("L1_0_UNIFIED_PACKER") and has_counter("L1_0_PORT1_GRANT"):
+        req = get_counter_series("L1_0_UNIFIED_PACKER")
+        grant = get_counter_series("L1_0_PORT1_GRANT")
+        ratio = ((req - grant) / req * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
+        per_op_stats["L1 Packer Port Backpressure"] = _group_to_stat_dict(ratio)
+    elif has_counter("L1_0_UNPACKER_1_ECC_PACK1") and has_counter("L1_0_PORT1_GRANT"):
+        req = get_counter_series("L1_0_UNPACKER_1_ECC_PACK1")
+        grant = get_counter_series("L1_0_PORT1_GRANT")
+        ratio = ((req - grant) / req * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
+        per_op_stats["L1 Packer Port Backpressure"] = _group_to_stat_dict(ratio)
+
+    # === Per-type instruction issue efficiency ===
+    if has_counter("CFG_INSTRN_AVAILABLE_0"):
+        per_op_stats["CFG Instrn Avail Rate T0"] = compute_util_metric("CFG_INSTRN_AVAILABLE_0")
+    if has_counter("SYNC_INSTRN_AVAILABLE_0"):
+        per_op_stats["SYNC Instrn Avail Rate T0"] = compute_util_metric("SYNC_INSTRN_AVAILABLE_0")
+    if has_counter("THCON_INSTRN_AVAILABLE_0"):
+        per_op_stats["THCON Instrn Avail Rate T0"] = compute_util_metric("THCON_INSTRN_AVAILABLE_0")
+    if has_counter("MOVE_INSTRN_AVAILABLE_0"):
+        per_op_stats["MOVE Instrn Avail Rate T0"] = compute_util_metric("MOVE_INSTRN_AVAILABLE_0")
+    if has_counter("FPU_INSTRN_AVAILABLE_1"):
+        per_op_stats["MATH Instrn Avail Rate T1"] = compute_util_metric("FPU_INSTRN_AVAILABLE_1")
+    if has_counter("UNPACK_INSTRN_AVAILABLE_0"):
+        per_op_stats["UNPACK Instrn Avail Rate T0"] = compute_util_metric("UNPACK_INSTRN_AVAILABLE_0")
+    if has_counter("PACK_INSTRN_AVAILABLE_2"):
+        per_op_stats["PACK Instrn Avail Rate T2"] = compute_util_metric("PACK_INSTRN_AVAILABLE_2")
+
+    # === Write port blocking ===
+    if has_counter("SRCB_WRITE_AVAILABLE") and has_counter("SRCB_WRITE_NOT_BLOCKED_PORT"):
+        per_op_stats["SrcB Write Port Blocked Rate"] = compute_complement_metric(
+            "SRCB_WRITE_NOT_BLOCKED_PORT", "SRCB_WRITE_AVAILABLE"
+        )
+    if has_counter("SRCA_WRITE_ACTUAL") and has_counter("SRCA_WRITE_AVAILABLE"):
+        per_op_stats["SrcA Write Actual Efficiency"] = compute_ratio_metric("SRCA_WRITE_ACTUAL", "SRCA_WRITE_AVAILABLE")
+    if has_counter("SRCB_WRITE_ACTUAL") and has_counter("SRCB_WRITE_AVAILABLE"):
+        per_op_stats["SrcB Write Actual Efficiency"] = compute_ratio_metric("SRCB_WRITE_ACTUAL", "SRCB_WRITE_AVAILABLE")
+
+    # === Fidelity analysis ===
+    if has_counter("MATH_INSTRN_STARTED") and has_counter("INSTRN_2_HF_CYCLES") and has_counter("INSTRN_1_HF_CYCLE"):
+        total = get_counter_series("MATH_INSTRN_STARTED")
+        hf2 = get_counter_series("INSTRN_2_HF_CYCLES")
+        hf1 = get_counter_series("INSTRN_1_HF_CYCLE")
+        # On WH, MATH_INSTRN_NOT_BLOCKED_SRC (counter_sel 256) is actually the 4-HF-cycle
+        # counter (o_math_instrnbuf_rden & hf_cycles==2'b11). Use it directly when available.
+        # On BH, counter_sel 256 is dead (o_math_instrnbuf_rden inactive), so derive by subtraction.
+        if has_counter("MATH_INSTRN_NOT_BLOCKED_SRC"):
+            hf4_direct = get_counter_series("MATH_INSTRN_NOT_BLOCKED_SRC")
+            # If the counter has data and total > 0, use it directly (WH).
+            # If it's all zeros (BH dead), fall back to derivation.
+            if hf4_direct is not None and hf4_direct.sum() > 0:
+                hf4 = hf4_direct
+            else:
+                hf4 = total - hf2 - hf1
+        else:
+            hf4 = total - hf2 - hf1
+        ratio = (hf4 / total * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
+        per_op_stats["HiFi4 Instrn Rate"] = _group_to_stat_dict(ratio)
+    if has_counter("FIDELITY_PHASE_STALLS"):
+        per_op_stats["Fidelity Phase Overhead"] = compute_util_metric("FIDELITY_PHASE_STALLS")
+
+    # === Packer engine granularity ===
+    if has_counter("PACKER_BUSY_0"):
+        per_op_stats["Packer Engine 0 Util"] = compute_util_metric("PACKER_BUSY_0")
+    if has_counter("PACKER_BUSY_1"):
+        per_op_stats["Packer Engine 1 Util"] = compute_util_metric("PACKER_BUSY_1")
+    if has_counter("PACKER_BUSY_2"):
+        per_op_stats["Packer Engine 2 Util"] = compute_util_metric("PACKER_BUSY_2")
+
+    # === Low priority waits ===
+    if has_counter("WAITING_FOR_MMIO_IDLE_0"):
+        per_op_stats["MMIO Idle Wait T0"] = compute_util_metric("WAITING_FOR_MMIO_IDLE_0")
+    if has_counter("WAITING_FOR_SFPU_IDLE_1"):
+        per_op_stats["SFPU Idle Wait T1"] = compute_util_metric("WAITING_FOR_SFPU_IDLE_1")
+    if has_counter("WAITING_FOR_THCON_IDLE_0"):
+        per_op_stats["THCON Idle Wait T0"] = compute_util_metric("WAITING_FOR_THCON_IDLE_0")
+    if has_counter("WAITING_FOR_MOVE_IDLE_0"):
+        per_op_stats["MOVE Idle Wait T0"] = compute_util_metric("WAITING_FOR_MOVE_IDLE_0")
+    if has_counter("L1_1_RISC_CORE"):
+        per_op_stats["RISC Core L1 Util"] = compute_util_metric("L1_1_RISC_CORE")
+
+    # === L1 composite metrics (multi-counter) ===
+    if has_counter("L1_0_UNPACKER_0") and has_counter("L1_0_NOC_RING0_OUTGOING_0"):
+        # L1 Total Bandwidth Util: sum of all 8 port reqs / (8 * ref_cnt)
+        packer_key = "L1_0_UNIFIED_PACKER" if has_counter("L1_0_UNIFIED_PACKER") else "L1_0_UNPACKER_1_ECC_PACK1"
+        port_keys = [
+            "L1_0_UNPACKER_0",
+            packer_key,
+            "L1_0_TDMA_BUNDLE_0_RISC",
+            "L1_0_TDMA_BUNDLE_1_TRISC",
+            "L1_0_NOC_RING0_OUTGOING_0",
+            "L1_0_NOC_RING0_OUTGOING_1",
+            "L1_0_NOC_RING0_INCOMING_0",
+            "L1_0_NOC_RING0_INCOMING_1",
+        ]
+        total_req = sum(get_counter_series(k) for k in port_keys if has_counter(k))
+        ref = get_counter_ref_cnt("L1_0_UNPACKER_0")
+        ratio = (total_req / (8 * ref) * 100).replace([float("inf"), -float("inf")], nan)
+        per_op_stats["L1 Total Bandwidth Util"] = _group_to_stat_dict(ratio)
+
+        # L1 Read vs Write Ratio
+        reads = (
+            get_counter_series("L1_0_UNPACKER_0")
+            + get_counter_series("L1_0_NOC_RING0_OUTGOING_0")
+            + get_counter_series("L1_0_NOC_RING0_OUTGOING_1")
+        )
+        writes = (
+            get_counter_series(packer_key)
+            + get_counter_series("L1_0_NOC_RING0_INCOMING_0")
+            + get_counter_series("L1_0_NOC_RING0_INCOMING_1")
+        )
+        ratio = (reads / (reads + writes) * 100).replace([float("inf"), -float("inf")], nan)
+        per_op_stats["L1 Read vs Write Ratio"] = _group_to_stat_dict(ratio)
+
+        # NOC Ring 0 Asymmetry
+        noc_out = get_counter_series("L1_0_NOC_RING0_OUTGOING_0") + get_counter_series("L1_0_NOC_RING0_OUTGOING_1")
+        noc_in = get_counter_series("L1_0_NOC_RING0_INCOMING_0") + get_counter_series("L1_0_NOC_RING0_INCOMING_1")
+        ratio = (noc_out / (noc_out + noc_in) * 100).replace([float("inf"), -float("inf")], nan)
+        per_op_stats["NOC Ring 0 Asymmetry"] = _group_to_stat_dict(ratio)
+
+        # TDMA vs NOC L1 Share
+        tdma = get_counter_series("L1_0_TDMA_BUNDLE_0_RISC") + get_counter_series("L1_0_TDMA_BUNDLE_1_TRISC")
+        ratio = (tdma / (tdma + noc_out + noc_in) * 100).replace([float("inf"), -float("inf")], nan)
+        per_op_stats["TDMA vs NOC L1 Share"] = _group_to_stat_dict(ratio)
+
+    if has_counter("L1_0_UNPACKER_0_GRANT") and has_counter("L1_0_NOC_RING0_OUTGOING_0_GRANT"):
+        # L1 Contention Index
+        bp_pairs = [
+            ("L1_0_UNPACKER_0", "L1_0_UNPACKER_0_GRANT"),
+            ("L1_0_NOC_RING0_OUTGOING_0", "L1_0_NOC_RING0_OUTGOING_0_GRANT"),
+            ("L1_0_NOC_RING0_OUTGOING_1", "L1_0_NOC_RING0_OUTGOING_1_GRANT"),
+            ("L1_0_NOC_RING0_INCOMING_0", "L1_0_NOC_RING0_INCOMING_0_GRANT"),
+            ("L1_0_NOC_RING0_INCOMING_1", "L1_0_NOC_RING0_INCOMING_1_GRANT"),
+        ]
+        bp_sum = None
+        bp_count = 0
+        for req_k, grant_k in bp_pairs:
+            if has_counter(req_k) and has_counter(grant_k):
+                req_s = get_counter_series(req_k)
+                grant_s = get_counter_series(grant_k)
+                bp = ((req_s - grant_s) / req_s * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
+                bp_sum = bp if bp_sum is None else bp_sum + bp
+                bp_count += 1
+        if bp_count > 0:
+            avg_bp = bp_sum / bp_count
+            per_op_stats["L1 Contention Index"] = _group_to_stat_dict(avg_bp)
+
+    if has_counter("L1_0_UNPACKER_0_GRANT") and has_counter("UNPACK0_BUSY_THREAD0"):
+        per_op_stats["Unpacker L1 Efficiency"] = compute_ratio_metric("L1_0_UNPACKER_0_GRANT", "UNPACK0_BUSY_THREAD0")
+
+    if has_counter("L1_0_PORT1_GRANT") and has_counter("PACKER_BUSY"):
+        # Packer port is shared (other traffic uses it too), so cap at 100%
+        grant = get_counter_series("L1_0_PORT1_GRANT")
+        busy = get_counter_series("PACKER_BUSY")
+        ratio = (grant / busy * 100).clip(upper=100).replace([float("inf"), -float("inf")], nan)
+        per_op_stats["Packer L1 Efficiency"] = _group_to_stat_dict(ratio)
+
+    if has_counter("FPU_COUNTER") and has_counter("L1_0_NOC_RING0_OUTGOING_0"):
+        noc_total = (
+            get_counter_series("L1_0_NOC_RING0_OUTGOING_0")
+            + get_counter_series("L1_0_NOC_RING0_OUTGOING_1")
+            + get_counter_series("L1_0_NOC_RING0_INCOMING_0")
+            + get_counter_series("L1_0_NOC_RING0_INCOMING_1")
+        )
+        fpu = get_counter_series("FPU_COUNTER")
+        ratio = (noc_total / (fpu + noc_total) * 100).replace([float("inf"), -float("inf")], nan)
+        per_op_stats["NOC vs Compute Balance"] = _group_to_stat_dict(ratio)
+
+    return {"per_op_stats": per_op_stats, "per_op_counts": per_op_counts}
+
+
 def get_device_op_data(ops: Dict[int, OpDict], host_device_op_compare) -> Tuple[DeviceOpsDict, bool]:
     """Group host ops per device and record whether trace runs exist."""
 
