@@ -223,8 +223,8 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
 
     Fuses the following into a single WIDTH_SHARDED raw buffer:
 
-    * **o_proj** — BFP8, (16384, 7168) full, TP along mesh columns (tp_dim=(None, 0)),
-      WIDTH_SHARDED on 112 cores.
+    * **o_proj** — BFP8, base logical shape (8192, 7168), TP along mesh
+      columns (tp_dim=(None, 0)), WIDTH_SHARDED on 112 cores.
     * **gate_mm** — BFP16, (7168, 256), WIDTH_SHARDED on 8 cores.
     * **attn_norm** — BFP16, (1, 7168), on core (12, 9).
       Attention input norm (attn_norm / mla_norm) — applied to hidden
@@ -253,9 +253,7 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
                     ttnn.CoreRange(ttnn.CoreCoord(1, 8), ttnn.CoreCoord(8, 9)),  # 16 cores
                 }
             ),
-            raw_tensor_shape=(16384, 7168),
-            # Logical per-device o_proj shape exposed to consumers.
-            logical_tensor_shape=(8192, 7168),
+            raw_tensor_shape=(8192, 7168),
             dtype=ttnn.DataType.BFLOAT8_B,
             tp_dim=(None, 0),
         )
