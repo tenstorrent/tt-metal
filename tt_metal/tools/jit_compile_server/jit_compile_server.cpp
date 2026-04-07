@@ -307,10 +307,10 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
             outstanding);
 
         if (!request.generated_files.empty()) {
-            const std::string genfiles_dir = kernel_cache_dir(request.build_key, request.kernel_name);
+            const fs::path genfiles_dir = kernel_cache_dir(request.build_key, request.kernel_name);
             fs::create_directories(genfiles_dir);
             for (const auto& file : request.generated_files) {
-                std::string target_path = genfiles_dir + file.name;
+                std::string target_path = (genfiles_dir / file.name).string();
                 tt::jit_build::utils::FileRenamer tmp(target_path);
                 std::ofstream out(tmp.path(), std::ios::binary);
                 if (!out.is_open()) {
