@@ -271,7 +271,7 @@ namespace ttnn {
 // index.size(d) <= self.size(d) for all dimensions d != dim.Note that index and src do not broadcast.
 Tensor scatter(
     const Tensor& input_tensor,
-    const int32_t& dim,
+    int32_t dim,
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config,
@@ -285,6 +285,9 @@ Tensor scatter(
     check_support(input_tensor, index_tensor, source_tensor, dim);
     validate_inputs(input_tensor, index_tensor, source_tensor, dim, opt_reduction_string);
 
+    // Normalize negative dimension to positive index
+    dim = dim < 0 ? dim + input_tensor_rank : dim;
+
     const auto& original_index_tensor_lshape = index_tensor.logical_shape();
     if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{}) {
         return input_tensor;
@@ -292,7 +295,7 @@ Tensor scatter(
     const auto original_layout = input_tensor.layout();
 
     // index and source tensors should have same rank as input tensor
-    const bool input_tensor_is_dim_last_idx = (dim == -1 || dim == input_tensor_rank - 1);
+    const bool input_tensor_is_dim_last_idx = (dim == input_tensor_rank - 1);
     const bool input_tensor_is_rank_le_4d = input_tensor_rank <= 4;
 
     // tensors sent to the device operation must be:
@@ -334,7 +337,7 @@ Tensor scatter(
 
 Tensor scatter_add(
     const Tensor& input_tensor,
-    const int32_t& dim,
+    int32_t dim,
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config,

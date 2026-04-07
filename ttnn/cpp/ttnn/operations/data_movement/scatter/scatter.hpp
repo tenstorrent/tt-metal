@@ -15,7 +15,7 @@ namespace ttnn {
 
 Tensor scatter(
     const Tensor& input_tensor,
-    const int32_t& dim,
+    int32_t dim,
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config = std::nullopt,
@@ -24,7 +24,7 @@ Tensor scatter(
 
 Tensor scatter_add(
     const Tensor& input_tensor,
-    const int32_t& dim,
+    int32_t dim,
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config = std::nullopt,
