@@ -82,6 +82,7 @@ class PipelineStageSync:
 
         Args:
             mesh_device: mesh_device micro op operates on
+            semaphore: global semaphore used in op
             src_device_mesh_coord: src mesh coordinate
             signalling_core: core that signalling logic is executed on
             run_signalling_kernel_on_ncrisc: whether to run the signalling kernel on ncrisc or brisc
@@ -105,7 +106,8 @@ class PipelineStageSync:
         # kernel path
         kernel_path = "models/demos/deepseek_v3_b1/micro_ops/pipeline_stage_sync/kernels/pipeline_stage_sync_kernel.cpp"
 
-        assert not (src_device_mesh_coord == dst_device_mesh_coord), f"src and dst device cannot be the same"
+        if src_device_mesh_coord == dst_device_mesh_coord:
+            raise ValueError("src and dst device cannot be the same")
 
         # cores
         if stalling_core == signalling_core:

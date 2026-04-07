@@ -142,7 +142,7 @@ def test_pipeline_stage_sync_2d(
 
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
 
-    logger.info(f"\n=== Testing pipeline_stage_sync (num_iterations={num_iterations}) ===")
+    logger.info(f"=== Testing pipeline_stage_sync (num_iterations={num_iterations}) ===")
 
     # Pseudo input/output tensors
     pseudo_input_tensor = ttnn.from_torch(
