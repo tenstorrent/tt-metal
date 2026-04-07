@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "api/dataflow/dataflow_api.h"
+#include <api/dataflow/dataflow_api.h>
 #include "api/debug/dprint.h"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
     constexpr uint32_t cb_id_weight = get_compile_time_arg_val(0);
@@ -42,6 +43,11 @@ void kernel_main() {
     const uint32_t bias_pagesize =
         fuse_bias ? get_tile_size(bias_cb_id) : 0;  // dummy but valid value in case bias is not enabled
     const auto s_bias = TensorAccessor(s_bias_args, bias_addr_dram_base, bias_pagesize);
+
+    experimental::CB weight_cb(cb_id_weight);
+    experimental::CB bias_cb(bias_cb_id);
+    experimental::Noc noc;
+
     bool to_load_bias = true;
 
     for (uint32_t act_block_h_index = 0; act_block_h_index < act_num_blocks_h; act_block_h_index++) {
@@ -60,15 +66,13 @@ void kernel_main() {
             // Stride = in_channels*out_channels*sizeof(elem)/num_cores.
             for (uint32_t remote_weight_block_index = 0; remote_weight_block_index < remote_weight_height_blocks;
                  remote_weight_block_index++) {
-                cb_reserve_back(cb_id_weight, weight_block_num_tiles);
+                weight_cb.reserve_back(weight_block_num_tiles);
                 if (is_active) {
-                    uint32_t weight_write_l1_addr = get_write_ptr(cb_id_weight);
-                    uint32_t weights_start_address = weight_write_l1_addr;
-                    uint32_t weights_block_size_bytes = 0;
                     uint32_t weight_current_block_start_tile_id = weight_block_start_tile_id;
 
                     // for window size, picking up the channels for that window.
                     // Stride is in_channels*out_channels*sizeof(elem).
+                    uint32_t weight_write_offset = 0;
                     for (uint32_t block_weight_h = 0; block_weight_h < window_size_hw; block_weight_h++) {
                         uint32_t weight_row_start_tile_id = weight_current_block_start_tile_id;
 
@@ -80,32 +84,41 @@ void kernel_main() {
                             // loop over output channels, width of the output/weights.
                             for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles;
                                  ++weight_tile_w_i) {
-                                noc_async_read_tile(weight_tile_id, s_weight, weight_write_l1_addr);
-                                weight_write_l1_addr += weight_tile_nbytes;
-                                weights_block_size_bytes += weight_tile_nbytes;
+                                noc.async_read(
+                                    s_weight,
+                                    weight_cb,
+                                    weight_tile_nbytes,
+                                    {.page_id = weight_tile_id},
+                                    {.offset_bytes = weight_write_offset});
+                                weight_write_offset += weight_tile_nbytes;
                                 weight_tile_id += 1;
                             }  // for weight_block_w
                             weight_row_start_tile_id += weight_matrix_width_ntiles;
                         }  // for weight_block_h
                         weight_current_block_start_tile_id += weight_next_channel_stride_h;
                     }
-                    noc_async_read_barrier();
+                    noc.async_read_barrier();
                 }
-                cb_push_back(cb_id_weight, weight_block_num_tiles);
+                weight_cb.push_back(weight_block_num_tiles);
                 weight_block_start_tile_id += weight_next_block_other_core_stride_h;
             }
             weight_start_tile_id += weight_next_block_this_core_stride_h;
             if (to_load_bias) {
                 if constexpr (fuse_bias) {
-                    cb_reserve_back(bias_cb_id, weight_block_width_ntiles);
-                    uint32_t bias_l1_addr = get_write_ptr(bias_cb_id);
+                    bias_cb.reserve_back(weight_block_width_ntiles);
+                    uint32_t bias_write_offset = 0;
                     for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
-                        noc_async_read_tile(bias_start_tile_id, s_bias, bias_l1_addr);
-                        bias_l1_addr += bias_pagesize;
+                        noc.async_read(
+                            s_bias,
+                            bias_cb,
+                            bias_pagesize,
+                            {.page_id = bias_start_tile_id},
+                            {.offset_bytes = bias_write_offset});
+                        bias_write_offset += bias_pagesize;
                         bias_start_tile_id += 1;
                     }
-                    noc_async_read_barrier();
-                    cb_push_back(bias_cb_id, weight_block_width_ntiles);
+                    noc.async_read_barrier();
+                    bias_cb.push_back(weight_block_width_ntiles);
                 }
                 to_load_bias = false;
             }

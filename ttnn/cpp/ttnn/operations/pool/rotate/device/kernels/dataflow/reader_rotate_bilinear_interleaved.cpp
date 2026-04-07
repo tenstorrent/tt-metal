@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "api/dataflow/dataflow_api.h"
+#include <api/dataflow/dataflow_api.h>
 
 #include "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/grid_sample_reader_common.hpp"
 #include "ttnn/cpp/ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp"
@@ -23,13 +23,13 @@ void kernel_main() {
     uint32_t center_y_bits = get_arg_val<uint32_t>(6);
     uint32_t fill_value_bits = get_arg_val<uint32_t>(7);
 
-    constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t scalar_cb_index = get_compile_time_arg_val(1);
+    constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t scalar_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t input_stick_nbytes = get_compile_time_arg_val(2);
     constexpr uint32_t input_batch = get_compile_time_arg_val(3);
     constexpr uint32_t input_height = get_compile_time_arg_val(4);
     constexpr uint32_t input_width = get_compile_time_arg_val(5);
-    constexpr uint32_t fill_cb_index = get_compile_time_arg_val(6);
+    constexpr uint32_t fill_cb_id = get_compile_time_arg_val(6);
     constexpr uint32_t input_channels = get_compile_time_arg_val(7);
     constexpr bool fill_is_zero = get_compile_time_arg_val(8) != 0;
     constexpr uint32_t element_size = get_compile_time_arg_val(9);
@@ -46,9 +46,14 @@ void kernel_main() {
 
     const uint32_t end_stick_id = start_stick_id + num_sticks;
 
-    uint32_t fill_stick_addr = get_write_ptr(fill_cb_index);
+    experimental::CB input_cb(input_cb_id);
+    experimental::CB scalar_cb(scalar_cb_id);
+    experimental::CB fill_cb(fill_cb_id);
+    experimental::Noc noc;
+
+    uint32_t fill_stick_addr = fill_cb.get_write_ptr();
     if constexpr (fill_is_zero) {
-        zero_out_page<fill_cb_index>(fill_stick_addr);
+        zero_out_page<fill_cb_id>(noc, fill_cb);
     } else {
         volatile tt_l1_ptr uint32_t* fill_ptr32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fill_stick_addr);
         if constexpr (element_size == 2) {
@@ -68,7 +73,7 @@ void kernel_main() {
             }
         }
     }
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 
     uint32_t curr_batch = start_stick_id / hw_size;
     uint32_t spatial_pos_in_batch = start_stick_id % hw_size;
@@ -113,10 +118,10 @@ void kernel_main() {
         const uint16_t weight_sw_bf = fixed_to_bf16(weight_sw_q16);
         const uint16_t weight_se_bf = fixed_to_bf16(weight_se_q16);
 
-        cb_reserve_back(input_cb_index, 1);
-        const uint32_t l1_write_input_addr = get_write_ptr(input_cb_index);
+        input_cb.reserve_back(1);
 
         read_four_corner_inputs_with_fill(
+            noc,
             input_tensor_accessor,
             batch_offset,
             input_width,
@@ -126,16 +131,16 @@ void kernel_main() {
             w0,
             w1,
             input_height,
-            l1_write_input_addr,
+            input_cb,
             fill_stick_addr);
 
-        cb_reserve_back(scalar_cb_index, 1);
-        const uint32_t l1_write_scalar_addr = get_write_ptr(scalar_cb_index);
+        scalar_cb.reserve_back(1);
+        const uint32_t l1_write_scalar_addr = scalar_cb.get_write_ptr();
         fill_four_val(l1_write_scalar_addr, weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf);
-        cb_push_back(scalar_cb_index, 1);
+        scalar_cb.push_back(1);
 
-        noc_async_read_barrier();
-        cb_push_back(input_cb_index, 1);
+        noc.async_read_barrier();
+        input_cb.push_back(1);
 
         ++spatial_pos_in_batch;
         if (spatial_pos_in_batch == hw_size) {

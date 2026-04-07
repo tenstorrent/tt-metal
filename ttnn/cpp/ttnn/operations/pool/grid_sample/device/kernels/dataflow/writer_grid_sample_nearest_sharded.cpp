@@ -4,10 +4,11 @@
 
 #include <cmath>
 #include <stdint.h>
-#include "api/dataflow/dataflow_api.h"
+#include <api/dataflow/dataflow_api.h>
 #include "api/debug/dprint.h"
 #include <ttnn/cpp/ttnn/operations/pool/device/kernels/pool_kernels_common.hpp>
 #include "../grid_sample_reader_common.hpp"
+// experimental headers already included via grid_sample_reader_common.hpp
 
 // Process single grid point for nearest neighbor - adapted from common utilities
 template <
@@ -22,11 +23,13 @@ template <
     typename TensorAccessor,
     typename GridPtrType>
 ALWI void process_grid_point_nearest(
+    experimental::Noc noc,
     GridPtrType grid_ptr,
     uint32_t grid_idx,
     const TensorAccessor& input_tensor_accessor,
     uint32_t batch_offset,
-    uint32_t l1_write_output_addr,
+    experimental::CB output_cb,
+    uint32_t output_write_offset,
     uint32_t fill_stick_addr) {
     // Compute scaling factors to match prepare_grid.cpp
     constexpr float input_height_f = float(input_height);
@@ -91,10 +94,20 @@ ALWI void process_grid_point_nearest(
     if (h_valid && w_valid) {
         // Read the nearest neighbor pixel
         const uint32_t input_stick_index = batch_offset + (nearest_h * input_width) + nearest_w;
-        const uint64_t input_noc_addr = input_tensor_accessor.get_noc_addr(input_stick_index);
-        noc_async_read(input_noc_addr, l1_write_output_addr, input_stick_nbytes);
+        noc.async_read(
+            input_tensor_accessor,
+            output_cb,
+            input_stick_nbytes,
+            {.page_id = input_stick_index},
+            {.offset_bytes = output_write_offset});
     } else {
-        noc_async_read(get_noc_addr(fill_stick_addr), l1_write_output_addr, input_stick_nbytes);
+        experimental::UnicastEndpoint self_ep;
+        noc.async_read(
+            self_ep,
+            output_cb,
+            input_stick_nbytes,
+            {.noc_x = my_x[0], .noc_y = my_y[0], .addr = fill_stick_addr},
+            {.offset_bytes = output_write_offset});
     }
 }
 
@@ -173,15 +186,19 @@ void kernel_main() {
     const uint32_t starting_batch = global_grid_stick_start / grid_hw;
 
     // Get local grid data base address (already in L1)
-    const uint32_t l1_grid_base_addr = get_write_ptr(grid_cb_index);
-    const uint32_t l1_write_output_base_addr = get_write_ptr(output_cb_index);
+    experimental::CB grid_cb(grid_cb_index);
+    experimental::CB output_cb(output_cb_index);
+    experimental::CB fill_cb(fill_cb_index);
+    experimental::Noc noc;
+
+    const uint32_t l1_grid_base_addr = grid_cb.get_write_ptr();
 
     // Process each grid stick assigned to this core
     uint32_t grid_stick_idx = 0;
     uint32_t l1_grid_addr = l1_grid_base_addr;
 
-    uint32_t fill_stick_addr = get_write_ptr(fill_cb_index);
-    zero_out_page<fill_cb_index>(fill_stick_addr);
+    uint32_t fill_stick_addr = fill_cb.get_write_ptr();
+    zero_out_page<fill_cb_index>(noc, fill_cb);
 
     // For split reader: track grid point index starting from reader_id
     uint32_t in_grid_row_idx = 0;
@@ -209,14 +226,12 @@ void kernel_main() {
         uint32_t batch_offset = curr_batch * input_height * input_width;
 
         if constexpr (!is_sharded) {
-            uint64_t grid_noc_addr = grid_tensor_accessor.get_noc_addr(grid_stick_idx + start_page_id);
-
-            noc_async_read(grid_noc_addr, l1_grid_base_addr, grid_stick_nbytes);
-            noc_async_read_barrier();
+            noc.async_read(
+                grid_tensor_accessor, grid_cb, grid_stick_nbytes, {.page_id = grid_stick_idx + start_page_id}, {});
+            noc.async_read_barrier();
         }
-        uint32_t l1_write_output_addr =
-            l1_write_output_base_addr +
-            (grid_stick_idx * grid_batching_factor * input_stick_nbytes + in_grid_row_idx * input_stick_nbytes);
+        uint32_t output_write_offset =
+            grid_stick_idx * grid_batching_factor * input_stick_nbytes + in_grid_row_idx * input_stick_nbytes;
 
         if (curr_batch < batch_size) {
             // Process nearest neighbor sampling and write directly to output
@@ -229,15 +244,23 @@ void kernel_main() {
                 input_width,
                 input_stick_nbytes,
                 output_cb_index>(
+                noc,
                 grid_stick_ptr,
                 in_grid_row_idx,
                 input_tensor_accessor,
                 batch_offset,
-                l1_write_output_addr,
+                output_cb,
+                output_write_offset,
                 fill_stick_addr);
         } else {
             // Padding stick beyond valid batches - write zeros
-            noc_async_read(get_noc_addr(fill_stick_addr), l1_write_output_addr, input_stick_nbytes);
+            experimental::UnicastEndpoint self_ep;
+            noc.async_read(
+                self_ep,
+                output_cb,
+                input_stick_nbytes,
+                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = fill_stick_addr},
+                {.offset_bytes = output_write_offset});
         }
 
         // Always advance once after processing
@@ -266,5 +289,5 @@ void kernel_main() {
                 grid_nsticks_per_core);
         }
     }
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }

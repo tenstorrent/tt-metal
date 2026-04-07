@@ -4,7 +4,7 @@
 
 #include <cmath>
 #include <stdint.h>
-#include "api/dataflow/dataflow_api.h"
+#include <api/dataflow/dataflow_api.h>
 #include "ttnn/operations/pool/device/kernels/pool_kernels_common.hpp"
 #include "../grid_sample_reader_common.hpp"
 
@@ -20,15 +20,15 @@
 // so we must push placeholder pages to keep reader and compute in sync.
 // The scalar page is zeroed so the interpolation weight is 0, making the
 // padded output harmless (written to the shard but masked by valid_sticks).
-template <uint32_t input_cb_index, uint32_t scalar_cb_index>
-ALWI void push_noop_sticks() {
-    cb_reserve_back(input_cb_index, 1);
-    cb_push_back(input_cb_index, 1);
+template <uint32_t scalar_cb_index>
+ALWI void push_noop_sticks(experimental::Noc& noc, experimental::CB& input_cb, experimental::CB& scalar_cb) {
+    input_cb.reserve_back(1);
+    input_cb.push_back(1);
 
-    cb_reserve_back(scalar_cb_index, 1);
-    zero_out_page<scalar_cb_index>(get_write_ptr(scalar_cb_index));
-    noc_async_read_barrier();
-    cb_push_back(scalar_cb_index, 1);
+    scalar_cb.reserve_back(1);
+    zero_out_page<scalar_cb_index>(noc, scalar_cb);
+    noc.async_read_barrier();
+    scalar_cb.push_back(1);
 }
 
 ALWI void advance_grid_index_bounded(
@@ -88,10 +88,14 @@ void kernel_main() {
     const uint32_t starting_batch = global_grid_stick_start / grid_hw;
 
     // Zero out input CB to handle invalid coordinates properly
-    zero_out_tiles<input_cb_index>();
+    experimental::Noc noc;
+    experimental::CB input_cb(input_cb_index);
+    experimental::CB scalar_cb(scalar_cb_index);
+    zero_out_tiles<input_cb_index>(noc, input_cb);
 
     // Get local grid data base address (already in L1)
-    const uint32_t l1_grid_base_addr = get_read_ptr(grid_cb_index);
+    experimental::CB grid_cb(grid_cb_index);
+    const uint32_t l1_grid_base_addr = grid_cb.get_read_ptr();
 
     // Clamp this core's stick count to exclude height-sharding padding.
     // Padding sticks contain garbage that would produce invalid NOC addresses.
@@ -140,11 +144,12 @@ void kernel_main() {
                 input_width,
                 input_stick_nbytes,
                 input_cb_index,
-                scalar_cb_index>(grid_stick_ptr, in_grid_row_idx, input_tensor_accessor, batch_offset);
+                scalar_cb_index>(
+                noc, input_cb, scalar_cb, grid_stick_ptr, in_grid_row_idx, input_tensor_accessor, batch_offset);
         } else {
             // Padding stick from height-sharding — push zero-weight data to CBs
             // so the compute kernel receives the expected number of items.
-            push_noop_sticks<input_cb_index, scalar_cb_index>();
+            push_noop_sticks<scalar_cb_index>(noc, input_cb, scalar_cb);
         }
 
         // Always advance once after processing

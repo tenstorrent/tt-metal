@@ -11,6 +11,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/add_int_sfpu.h"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 #define DEBUG_PRINT 0
 
@@ -83,6 +84,14 @@ void kernel_main() {
                                      window_size_hw <= FACE_HEIGHT && !last_tile_is_partial;
 
     constexpr uint32_t tilize_untilize_cb = is_output_tiled ? pre_tilize_cb_id : out_cb_id;
+
+    experimental::CB in_scalar_cb_0(in_scalar_cb_id_0);
+    experimental::CB in_scalar_cb_1(in_scalar_cb_id_1);
+    experimental::CB in_cb_0(in_cb_id_0);
+    experimental::CB in_cb_1(in_cb_id_1);
+    experimental::CB out_cb(out_cb_id);
+    experimental::CB pre_tilize_cb(pre_tilize_cb_id);
+
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
         in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, tilize_untilize_cb, num_faces_in_input_tile, face_r_dim);
     pack_untilize_dest_init<max_tiles_per_iter>(tilize_untilize_cb, num_out_sticks, num_faces_in_output_tile);
@@ -93,7 +102,7 @@ void kernel_main() {
 
     // wait for initialization to complete
     if constexpr (one_scalar_per_core) {
-        cb_wait_front(in_scalar_cb_id_0, 1);
+        in_scalar_cb_0.wait_front(1);
     }
 
     // if max out sticks is non-zero then this will be used as the number of out sticks for every core
@@ -107,13 +116,16 @@ void kernel_main() {
     uint32_t tilize_stick_total = 0;
     for (uint32_t n = 0; n < num_out_sticks_this_core; ++n) {
         const bool reader0 = !(use_split_reader && (n & 0x1));
-        const uint32_t curr_scalar_cb_id = (!reader0 && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
+        const bool use_reader1_scalar = !reader0 && !one_scalar_per_core;
+        const uint32_t curr_scalar_cb_id = use_reader1_scalar ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
         const uint32_t curr_in_cb_id = !reader0 ? in_cb_id_1 : in_cb_id_0;
+        experimental::CB curr_scalar_cb = use_reader1_scalar ? in_scalar_cb_1 : in_scalar_cb_0;
+        experimental::CB curr_in_cb = reader0 ? in_cb_0 : in_cb_1;
         if constexpr (!one_scalar_per_core) {
-            cb_wait_front(curr_scalar_cb_id, 1);
+            curr_scalar_cb.wait_front(1);
         }
         if (is_output_tiled && !tilize_stick_counter) {
-            cb_reserve_back(out_cb_id, in_ntiles_c);
+            out_cb.reserve_back(in_ntiles_c);
         }
         for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
             const bool last_c_block = c_i == in_nblocks_c - 1;
@@ -126,7 +138,7 @@ void kernel_main() {
                     ? (number_of_tiles - 1) * num_faces_in_output_tile + num_faces_in_last_output_tile
                     : number_of_tiles * num_faces_in_output_tile;
             if constexpr (!is_output_tiled) {
-                cb_reserve_back(out_cb_id, output_faces);
+                out_cb.reserve_back(output_faces);
             }
             if constexpr (tilize_reconfig) {
                 if (first_c_block || last_c_block) {
@@ -136,7 +148,7 @@ void kernel_main() {
             }
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
-                cb_wait_front(curr_in_cb_id, 1);
+                curr_in_cb.wait_front(1);
                 unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                     curr_in_cb_id,
                     curr_scalar_cb_id,
@@ -147,7 +159,7 @@ void kernel_main() {
                 for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
                     reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
                 }
-                cb_pop_front(curr_in_cb_id, 1);
+                curr_in_cb.pop_front(1);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -156,29 +168,29 @@ void kernel_main() {
                 if (last_c_block) {
                     pack_untilize_dest<partial_iter_output_tiles>(
                         pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                    cb_push_back(pre_tilize_cb_id, partial_iter_output_tiles);
+                    pre_tilize_cb.push_back(partial_iter_output_tiles);
                     tilize_stick_counter++;
                     tilize_stick_total++;
                 } else {
                     pack_untilize_dest<max_tiles_per_iter>(
                         pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                    cb_push_back(pre_tilize_cb_id, max_tiles_per_iter);
+                    pre_tilize_cb.push_back(max_tiles_per_iter);
                 }
                 tile_regs_release();
 
                 bool last_tile = num_out_sticks_this_core - tilize_stick_total < last_tile_height;
                 if (tilize_stick_counter == TILE_HEIGHT || (last_tile && tilize_stick_counter == last_tile_height)) {
                     if (last_tile && last_tile_height != TILE_HEIGHT) {
-                        cb_wait_front(pre_tilize_cb_id, last_tile_height * in_ntiles_c);
+                        pre_tilize_cb.wait_front(last_tile_height * in_ntiles_c);
                         // if the last tile is not whole we won't have pushed enough sticks, so we need to
                         // push some filler sticks to reach TILE_HEIGHT to make sure the CB pointers are correct
                         // before calling tilize
                         uint32_t filler_stick_tiles =
                             (TILE_HEIGHT - last_tile_height) *
                             ((in_nblocks_c - 1) * max_tiles_per_iter + partial_iter_output_tiles);
-                        cb_push_back(pre_tilize_cb_id, filler_stick_tiles);
+                        pre_tilize_cb.push_back(filler_stick_tiles);
                     }
-                    cb_wait_front(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
+                    pre_tilize_cb.wait_front(TILE_HEIGHT * in_ntiles_c);
                     PACK((pack_untilize_uninit(pre_tilize_cb_id)));
 
                     unpack_tilizeA_B_uninit(curr_in_cb_id);
@@ -188,9 +200,9 @@ void kernel_main() {
                     fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
                     fast_tilize_uninit(pre_tilize_cb_id, out_cb_id);
 
-                    cb_push_back(out_cb_id, in_ntiles_c);
-                    cb_pop_front(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
-                    cb_reserve_back(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
+                    out_cb.push_back(in_ntiles_c);
+                    pre_tilize_cb.pop_front(TILE_HEIGHT * in_ntiles_c);
+                    pre_tilize_cb.reserve_back(TILE_HEIGHT * in_ntiles_c);
 
                     tilize_stick_counter = 0;
 
@@ -219,12 +231,12 @@ void kernel_main() {
                 } else {
                     pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
                 }
-                cb_push_back(out_cb_id, output_faces);
+                out_cb.push_back(output_faces);
                 tile_regs_release();
             }
         }
         if constexpr (!one_scalar_per_core) {
-            cb_pop_front(curr_scalar_cb_id, 1);
+            curr_scalar_cb.pop_front(1);
         }
     }
 }

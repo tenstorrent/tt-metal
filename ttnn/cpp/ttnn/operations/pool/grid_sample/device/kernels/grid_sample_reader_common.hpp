@@ -6,7 +6,8 @@
 
 #include <cmath>
 #include <stdint.h>
-#include "api/dataflow/dataflow_api.h"
+#include <api/dataflow/dataflow_api.h>
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 #define ALWI inline __attribute__((always_inline))
 
@@ -136,9 +137,10 @@ struct GridCoordinateReader {
 };
 
 // Input data reading template - handles both tensor accessor and direct NOC reads
-template <typename TensorAccessor>
+template <typename TensorAccessorT>
 ALWI void read_four_corner_inputs(
-    const TensorAccessor& input_tensor_accessor,
+    experimental::Noc noc,
+    const TensorAccessorT& input_tensor_accessor,
     uint32_t batch_offset,
     uint32_t input_width,
     uint32_t input_stick_nbytes,
@@ -147,47 +149,64 @@ ALWI void read_four_corner_inputs(
     int32_t w0,
     int32_t w1,
     uint32_t input_height,
-    uint32_t l1_write_input_addr) {
+    experimental::CB input_cb) {
     // Boundary checks (recompute for performance)
     const bool h0_valid = is_coordinate_valid(h0, input_height);
     const bool h1_valid = is_coordinate_valid(h1, input_height);
     const bool w0_valid = is_coordinate_valid(w0, input_width);
     const bool w1_valid = is_coordinate_valid(w1, input_width);
 
-    uint32_t write_addr = l1_write_input_addr;
+    uint32_t write_offset = 0;
 
     // Read 4 corner input sticks via NOC from remote input tensor
     if (h0_valid && w0_valid) {
         const uint32_t north_west_stick_index = batch_offset + (h0 * input_width) + w0;
-        const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(north_west_stick_index);
-        noc_async_read(remote_noc_addr, write_addr, input_stick_nbytes);
+        noc.async_read(
+            input_tensor_accessor,
+            input_cb,
+            input_stick_nbytes,
+            {.page_id = north_west_stick_index},
+            {.offset_bytes = write_offset});
     }
-    write_addr += input_stick_nbytes;
+    write_offset += input_stick_nbytes;
 
     if (h0_valid && w1_valid) {
         const uint32_t north_east_stick_index = batch_offset + (h0 * input_width) + w1;
-        const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(north_east_stick_index);
-        noc_async_read(remote_noc_addr, write_addr, input_stick_nbytes);
+        noc.async_read(
+            input_tensor_accessor,
+            input_cb,
+            input_stick_nbytes,
+            {.page_id = north_east_stick_index},
+            {.offset_bytes = write_offset});
     }
-    write_addr += input_stick_nbytes;
+    write_offset += input_stick_nbytes;
 
     if (h1_valid && w0_valid) {
         const uint32_t south_west_stick_index = batch_offset + (h1 * input_width) + w0;
-        const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(south_west_stick_index);
-        noc_async_read(remote_noc_addr, write_addr, input_stick_nbytes);
+        noc.async_read(
+            input_tensor_accessor,
+            input_cb,
+            input_stick_nbytes,
+            {.page_id = south_west_stick_index},
+            {.offset_bytes = write_offset});
     }
-    write_addr += input_stick_nbytes;
+    write_offset += input_stick_nbytes;
 
     if (h1_valid && w1_valid) {
         const uint32_t south_east_stick_index = batch_offset + (h1 * input_width) + w1;
-        const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(south_east_stick_index);
-        noc_async_read(remote_noc_addr, write_addr, input_stick_nbytes);
+        noc.async_read(
+            input_tensor_accessor,
+            input_cb,
+            input_stick_nbytes,
+            {.page_id = south_east_stick_index},
+            {.offset_bytes = write_offset});
     }
 }
 
-template <typename TensorAccessor>
+template <typename TensorAccessorT>
 ALWI void read_four_corner_inputs_with_fill(
-    const TensorAccessor& input_tensor_accessor,
+    experimental::Noc noc,
+    const TensorAccessorT& input_tensor_accessor,
     uint32_t batch_offset,
     uint32_t input_width,
     uint32_t input_stick_nbytes,
@@ -196,48 +215,85 @@ ALWI void read_four_corner_inputs_with_fill(
     int32_t w0,
     int32_t w1,
     uint32_t input_height,
-    uint32_t l1_write_input_addr,
+    experimental::CB input_cb,
     uint32_t fill_stick_addr) {
     const bool h0_valid = is_coordinate_valid(h0, input_height);
     const bool h1_valid = is_coordinate_valid(h1, input_height);
     const bool w0_valid = is_coordinate_valid(w0, input_width);
     const bool w1_valid = is_coordinate_valid(w1, input_width);
 
-    uint32_t write_addr = l1_write_input_addr;
+    experimental::UnicastEndpoint self_ep;
+    uint32_t write_offset = 0;
 
     if (h0_valid && w0_valid) {
         const uint32_t north_west_stick_index = batch_offset + (h0 * input_width) + w0;
-        const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(north_west_stick_index);
-        noc_async_read(remote_noc_addr, write_addr, input_stick_nbytes);
+        noc.async_read(
+            input_tensor_accessor,
+            input_cb,
+            input_stick_nbytes,
+            {.page_id = north_west_stick_index},
+            {.offset_bytes = write_offset});
     } else {
-        noc_async_read(get_noc_addr(fill_stick_addr), write_addr, input_stick_nbytes);
+        noc.async_read(
+            self_ep,
+            input_cb,
+            input_stick_nbytes,
+            {.noc_x = my_x[0], .noc_y = my_y[0], .addr = fill_stick_addr},
+            {.offset_bytes = write_offset});
     }
-    write_addr += input_stick_nbytes;
+    write_offset += input_stick_nbytes;
 
     if (h0_valid && w1_valid) {
         const uint32_t north_east_stick_index = batch_offset + (h0 * input_width) + w1;
-        const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(north_east_stick_index);
-        noc_async_read(remote_noc_addr, write_addr, input_stick_nbytes);
+        noc.async_read(
+            input_tensor_accessor,
+            input_cb,
+            input_stick_nbytes,
+            {.page_id = north_east_stick_index},
+            {.offset_bytes = write_offset});
     } else {
-        noc_async_read(get_noc_addr(fill_stick_addr), write_addr, input_stick_nbytes);
+        noc.async_read(
+            self_ep,
+            input_cb,
+            input_stick_nbytes,
+            {.noc_x = my_x[0], .noc_y = my_y[0], .addr = fill_stick_addr},
+            {.offset_bytes = write_offset});
     }
-    write_addr += input_stick_nbytes;
+    write_offset += input_stick_nbytes;
 
     if (h1_valid && w0_valid) {
         const uint32_t south_west_stick_index = batch_offset + (h1 * input_width) + w0;
-        const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(south_west_stick_index);
-        noc_async_read(remote_noc_addr, write_addr, input_stick_nbytes);
+        noc.async_read(
+            input_tensor_accessor,
+            input_cb,
+            input_stick_nbytes,
+            {.page_id = south_west_stick_index},
+            {.offset_bytes = write_offset});
     } else {
-        noc_async_read(get_noc_addr(fill_stick_addr), write_addr, input_stick_nbytes);
+        noc.async_read(
+            self_ep,
+            input_cb,
+            input_stick_nbytes,
+            {.noc_x = my_x[0], .noc_y = my_y[0], .addr = fill_stick_addr},
+            {.offset_bytes = write_offset});
     }
-    write_addr += input_stick_nbytes;
+    write_offset += input_stick_nbytes;
 
     if (h1_valid && w1_valid) {
         const uint32_t south_east_stick_index = batch_offset + (h1 * input_width) + w1;
-        const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(south_east_stick_index);
-        noc_async_read(remote_noc_addr, write_addr, input_stick_nbytes);
+        noc.async_read(
+            input_tensor_accessor,
+            input_cb,
+            input_stick_nbytes,
+            {.page_id = south_east_stick_index},
+            {.offset_bytes = write_offset});
     } else {
-        noc_async_read(get_noc_addr(fill_stick_addr), write_addr, input_stick_nbytes);
+        noc.async_read(
+            self_ep,
+            input_cb,
+            input_stick_nbytes,
+            {.noc_x = my_x[0], .noc_y = my_y[0], .addr = fill_stick_addr},
+            {.offset_bytes = write_offset});
     }
 }
 
@@ -253,7 +309,13 @@ template <
     typename TensorAccessor,
     typename GridPtrType>
 ALWI void process_grid_point(
-    GridPtrType grid_ptr, uint32_t grid_idx, const TensorAccessor& input_tensor_accessor, uint32_t batch_offset) {
+    experimental::Noc noc,
+    experimental::CB input_cb,
+    experimental::CB scalar_cb,
+    GridPtrType grid_ptr,
+    uint32_t grid_idx,
+    const TensorAccessor& input_tensor_accessor,
+    uint32_t batch_offset) {
     // Compute scaling factors as constexpr
     constexpr float input_height_f = float(input_height);
     constexpr float input_width_f = float(input_width);
@@ -307,12 +369,11 @@ ALWI void process_grid_point(
         }
     }
 
-    // Reserve CB space for 4 corner input sticks for this grid point
-    cb_reserve_back(input_cb_index, 1);
-    const uint32_t l1_write_input_addr = get_write_ptr(input_cb_index);
+    input_cb.reserve_back(1);
 
     // Read 4 corner input sticks
     read_four_corner_inputs(
+        noc,
         input_tensor_accessor,
         batch_offset,
         input_width,
@@ -322,14 +383,14 @@ ALWI void process_grid_point(
         w0,
         w1,
         input_height,
-        l1_write_input_addr);
+        input_cb);
 
     // Store bilinear interpolation weights for this grid point
-    cb_reserve_back(scalar_cb_index, 1);
-    const uint32_t l1_write_scalar_addr = get_write_ptr(scalar_cb_index);
+    scalar_cb.reserve_back(1);
+    const uint32_t l1_write_scalar_addr = scalar_cb.get_write_ptr();
     fill_four_val(l1_write_scalar_addr, weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf);
-    cb_push_back(scalar_cb_index, 1);
+    scalar_cb.push_back(1);
 
-    noc_async_read_barrier();
-    cb_push_back(input_cb_index, 1);
+    noc.async_read_barrier();
+    input_cb.push_back(1);
 }

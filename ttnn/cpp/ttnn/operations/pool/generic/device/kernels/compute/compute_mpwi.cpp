@@ -13,6 +13,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/add_int_sfpu.h"
 #include "api/compute/copy_dest_values.h"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 #define DEBUG_PRINT 0
 
@@ -73,6 +74,21 @@ void kernel_main() {
     constexpr uint32_t kernel_w = get_compile_time_arg_val(35);
     constexpr uint32_t indexes_32_bit = get_compile_time_arg_val(36);
 
+    // experimental::CB wrappers for CB operations
+    experimental::CB in_scalar_cb(in_scalar_cb_id_0);
+    experimental::CB in_idx_cb(in_idx_cb_id);
+    experimental::CB pack_tmp_cb(pack_tmp_cb_id);
+    experimental::CB pack_idx_tmp_cb(pack_idx_tmp_cb_id);
+    experimental::CB right_inc_cb(right_inc_cb_id);
+    experimental::CB down_left_wrap_inc_cb(down_left_wrap_inc_cb_id);
+    experimental::CB up_left_wrap_inc_cb(up_left_wrap_inc_cb_id);
+    experimental::CB out_idx_cb(out_idx_cb_id);
+    experimental::CB intra_kernel_right_inc_cb(intra_kernel_right_inc_cb_id);
+    experimental::CB intra_kernel_down_left_wrap_inc_cb(intra_kernel_down_left_wrap_inc_cb_id);
+    experimental::CB compute_tmp_idx_cb(compute_tmp_idx_cb_id);
+    experimental::CB clear_value_cb(clear_value_cb_id);
+    experimental::CB in_cb_0(in_cb_id_0);
+
     constexpr DataFormat copy_format = indexes_32_bit ? DataFormat::UInt32 : DataFormat::UInt16;
 
     constexpr uint32_t mpwi_cb_tile_idx = 0;
@@ -104,7 +120,7 @@ void kernel_main() {
                                                                            : kernel_w / max_sticks_for_reduction + 1;
     constexpr uint32_t interm_reduction_chunks = is_large_kernel ? w_chunks * kernel_h : 1;
 
-    cb_wait_front(in_scalar_cb_id_0, 1);
+    in_scalar_cb.wait_front(1);
 
     uint32_t current_idx_col;
     uint32_t current_idx_row;
@@ -114,13 +130,13 @@ void kernel_main() {
     current_idx_row = start_row;
 
     constexpr uint32_t sticks_per_chunk = kernel_w <= max_sticks_for_reduction ? kernel_w : max_sticks_for_reduction;
-    cb_wait_front(right_inc_cb_id, 1);
-    cb_wait_front(down_left_wrap_inc_cb_id, 1);
-    cb_wait_front(up_left_wrap_inc_cb_id, 1);
+    right_inc_cb.wait_front(1);
+    down_left_wrap_inc_cb.wait_front(1);
+    up_left_wrap_inc_cb.wait_front(1);
     if constexpr (is_large_kernel) {
-        cb_wait_front(intra_kernel_right_inc_cb_id, 1);
-        cb_wait_front(intra_kernel_down_left_wrap_inc_cb_id, 1);
-        cb_wait_front(clear_value_cb_id, 1);
+        intra_kernel_right_inc_cb.wait_front(1);
+        intra_kernel_down_left_wrap_inc_cb.wait_front(1);
+        clear_value_cb.wait_front(1);
     }
 
     unary_op_init_common(in_cb_id_0, in_cb_id_0);
@@ -133,7 +149,6 @@ void kernel_main() {
 
     bool first_iteration = true;
     for (uint32_t n = 0; n < num_out_sticks_this_core; ++n) {
-        const uint32_t curr_in_cb_id = in_cb_id_0;
         for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
             const bool last_c_block = c_i == in_nblocks_c - 1;
 
@@ -143,14 +158,14 @@ void kernel_main() {
             reconfig_data_format_srca(compute_tmp_idx_cb_id);
             copy_tile_to_dst_init_short(compute_tmp_idx_cb_id);
             if (first_iteration) {  // move the initial indexes from the reader to DST
-                cb_wait_front(in_idx_cb_id, 1);
+                in_idx_cb.wait_front(1);
                 copy_tile(in_idx_cb_id, mpwi_cb_tile_idx, index_dst_idx);
-                cb_pop_front(in_idx_cb_id, 1);
+                in_idx_cb.pop_front(1);
                 first_iteration = false;
             } else {  // move incremented indexes from compute back to DST
-                cb_wait_front(compute_tmp_idx_cb_id, 1);
+                compute_tmp_idx_cb.wait_front(1);
                 copy_tile(compute_tmp_idx_cb_id, mpwi_cb_tile_idx, index_dst_idx);
-                cb_pop_front(compute_tmp_idx_cb_id, 1);
+                compute_tmp_idx_cb.pop_front(1);
             }
             if constexpr (is_large_kernel) {
                 // clear the accumulation tiles since they will contain garbage data which is partially loaded
@@ -167,10 +182,10 @@ void kernel_main() {
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 bool last_chunk = chunk == interm_reduction_chunks - 1;
 
-                cb_wait_front(curr_in_cb_id, 1);
-                reconfig_data_format_srca(curr_in_cb_id);
-                copy_tile_to_dst_init_short(curr_in_cb_id);
-                copy_tile(curr_in_cb_id, mpwi_cb_tile_idx, data_dst_idx);
+                in_cb_0.wait_front(1);
+                reconfig_data_format_srca(in_cb_id_0);
+                copy_tile_to_dst_init_short(in_cb_id_0);
+                copy_tile(in_cb_id_0, mpwi_cb_tile_idx, data_dst_idx);
 
                 // increments happen between every chunk within a C block, and between C blocks
                 bool increment_needed = false;
@@ -230,7 +245,7 @@ void kernel_main() {
                     }
                 }
 
-                cb_pop_front(curr_in_cb_id, 1);
+                in_cb_0.pop_front(1);
             }
 
             // After all chunks: if not last C block, restore base indices for next C block
@@ -243,27 +258,27 @@ void kernel_main() {
             tile_regs_commit();
             tile_regs_wait();
 
-            cb_reserve_back(pack_tmp_cb_id, 1);
+            pack_tmp_cb.reserve_back(1);
             pack_reconfig_data_format(pack_tmp_cb_id);
             pack_tile<true>(data_dst_idx, pack_tmp_cb_id, mpwi_cb_tile_idx);  // for reader (output data)
-            cb_push_back(pack_tmp_cb_id, 1);
+            pack_tmp_cb.push_back(1);
 
-            cb_reserve_back(pack_idx_tmp_cb_id, 1);
+            pack_idx_tmp_cb.reserve_back(1);
             pack_reconfig_data_format(pack_idx_tmp_cb_id);
             pack_tile<true>(index_dst_idx, pack_idx_tmp_cb_id, mpwi_cb_tile_idx);  // for reader (output indexes)
-            cb_push_back(pack_idx_tmp_cb_id, 1);
+            pack_idx_tmp_cb.push_back(1);
 
             // Only push to compute_tmp_idx_cb_id if there's a next iteration that will consume it
             // This prevents leaving stale data in the CB between program runs when using caching
             bool is_last_iteration = (n == num_out_sticks_this_core - 1) && last_c_block;
             if (!is_last_iteration) {
-                cb_reserve_back(compute_tmp_idx_cb_id, 1);
+                compute_tmp_idx_cb.reserve_back(1);
                 pack_reconfig_data_format(compute_tmp_idx_cb_id);
                 pack_tile<true>(
                     index_scratch_out_dst_idx,
                     compute_tmp_idx_cb_id,
                     mpwi_cb_tile_idx);  // for compute (incremented indexes)
-                cb_push_back(compute_tmp_idx_cb_id, 1);
+                compute_tmp_idx_cb.push_back(1);
             }
 
             tile_regs_release();
@@ -271,13 +286,13 @@ void kernel_main() {
     }
 
     // This prevents leaving stale data in the CB between program runs when using caching
-    cb_pop_front(in_scalar_cb_id_0, 1);
-    cb_pop_front(right_inc_cb_id, 1);
-    cb_pop_front(down_left_wrap_inc_cb_id, 1);
-    cb_pop_front(up_left_wrap_inc_cb_id, 1);
+    in_scalar_cb.pop_front(1);
+    right_inc_cb.pop_front(1);
+    down_left_wrap_inc_cb.pop_front(1);
+    up_left_wrap_inc_cb.pop_front(1);
     if constexpr (is_large_kernel) {
-        cb_pop_front(intra_kernel_right_inc_cb_id, 1);
-        cb_pop_front(intra_kernel_down_left_wrap_inc_cb_id, 1);
-        cb_pop_front(clear_value_cb_id, 1);
+        intra_kernel_right_inc_cb.pop_front(1);
+        intra_kernel_down_left_wrap_inc_cb.pop_front(1);
+        clear_value_cb.pop_front(1);
     }
 }

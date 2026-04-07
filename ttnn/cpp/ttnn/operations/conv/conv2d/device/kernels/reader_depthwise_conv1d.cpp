@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "api/dataflow/dataflow_api.h"
+#include <api/dataflow/dataflow_api.h>
 #include "api/compile_time_args.h"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 // conv1D reader kernel
 void kernel_main() {
@@ -43,9 +44,14 @@ void kernel_main() {
         reader_offset += conv_act_size_w_padded;
     }
 
+    experimental::CB act_cb(cb_id_act);
+    experimental::CB sharded_act_cb(cb_id_sharded_act);
+    experimental::CB reader_indices_cb(cb_reader_indices);
+    experimental::Noc noc;
+
     // LOOP TO FILL READER INDICES
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_cb.get_write_ptr());
 
     uint32_t reader_idx = 0;
 
@@ -54,26 +60,25 @@ void kernel_main() {
     // currently works for the case of num_coalesced_reads == weight_size_w since these reads are contiguous on both
     // src/dst side we check if window_inner == weight_size_w to make sure coalescing is legal along full window_inner
     // so the loop can be removed
-    constexpr bool coalesce_window_inner_reads = true;
     constexpr uint32_t num_coalesced_reads = weight_size_w;
     constexpr uint32_t coalesced_read_bytes = num_coalesced_reads * conv_act_c_read_bytes;
     // the conditional selecting between coalescing and no-colescing must be constexpr to that compiler can optimized
     // the other path away this has shown to be a big perf win
     reader_offset_idx = 0;
     uint32_t act_l1_offset = 0;
-    uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
+    uint32_t act_l1_read_addr = sharded_act_cb.get_read_ptr();
 
     // static_assert(coalesced_read_bytes <= NOC_MAX_BURST_SIZE);
     //  set_state uses just x/y from the get_noc_addr, addr is ignored
-    noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
+    experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
     uint32_t start_reader_idx = 0;
     for (uint32_t bh = 0; bh < act_num_blocks_h; bh++) {
         for (uint32_t outer = 0; outer < window_outer; outer++) {
             // Reset reader_idx to finish act_block_h_datums
             reader_idx = start_reader_idx;
 
-            cb_reserve_back(cb_id_act, act_block_num_tiles);
-            uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
+            act_cb.reserve_back(act_block_num_tiles);
+            uint32_t l1_write_addr_act = act_cb.get_write_ptr();
             uint32_t reader_offset = act_l1_read_addr + (reader_offsets[reader_offset_idx] * conv_act_c_read_bytes);
             // #pragma GCC unroll 4 // unroll didn't help, but act_block_h_datums (loop bound) being const does help
             uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
@@ -89,12 +94,12 @@ void kernel_main() {
 
                 for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
                     act_l1_offset = reader_offset + (ind * conv_act_c_read_bytes);
-                    noc_async_read(get_noc_addr(act_l1_offset), l1_write_addr_act, coalesced_read_bytes);
+                    experimental::read_with_state(noc, l1_write_addr_act, act_l1_offset);
                     l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
                 }
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_id_act, act_block_num_tiles);
+            noc.async_read_barrier();
+            act_cb.push_back(act_block_num_tiles);
 
             reader_offset_idx += window_inner;
         }

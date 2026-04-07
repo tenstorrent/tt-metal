@@ -4,8 +4,9 @@
 
 #include <stdint.h>
 
-#include "api/dataflow/dataflow_api.h"
+#include <api/dataflow/dataflow_api.h>
 #include <ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp>
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
     // Runtime arguments
@@ -28,6 +29,9 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<9>();
     const auto input_tensor_accessor = TensorAccessor(src_args, input_buffer_addr, aligned_stick_nbytes);
 
+    experimental::CB out_cb(cb_id_out);
+    experimental::Noc noc;
+
     // Process sticks assigned to this core
     uint32_t page_id = start_stick_id;
     for (uint32_t i = 0; i < num_sticks; i++) {
@@ -41,8 +45,6 @@ void kernel_main() {
         const uint32_t x_out = remainder % output_width;
 
         // Map output coordinates to input coordinates using fixed-point arithmetic
-        // src_y = floor(y_out * reciprocal_scale_h) = floor(y_out / scale_h)
-        // src_x = floor(x_out * reciprocal_scale_w) = floor(x_out / scale_w)
         const uint32_t src_y =
             static_cast<uint32_t>(fixed_point_arithmetic::fixed_mul(y_out, reciprocal_scale_h_fixed));
         const uint32_t src_x =
@@ -58,20 +60,16 @@ void kernel_main() {
                                       clamped_src_x * num_pages_per_width + in_stick_offset;
 
         // Reserve space in output CB
-        cb_reserve_back(cb_id_out, 1);
-
-        // Get L1 write address
-        uint32_t l1_write_addr = get_write_ptr(cb_id_out);
+        out_cb.reserve_back(1);
 
         // Read source stick from DRAM
-        uint64_t src_noc_addr = input_tensor_accessor.get_noc_addr(src_stick_id);
-        noc_async_read(src_noc_addr, l1_write_addr, aligned_stick_nbytes);
+        noc.async_read(input_tensor_accessor, out_cb, aligned_stick_nbytes, {.page_id = src_stick_id}, {});
 
         // Wait for read to complete
-        noc_async_read_barrier();
+        noc.async_read_barrier();
 
         // Push to CB
-        cb_push_back(cb_id_out, 1);
+        out_cb.push_back(1);
 
         page_id++;
     }
