@@ -210,14 +210,22 @@ void run_single_dfb_program(
 
     // For Tensix → DM: pre-fill each core's DFB L1 with its input chunk so the
     // Tensix producer kernel can read from L1 while DM consumer drains to DRAM.
+    //
+    // l1_by_core addresses are not populated until allocate_dataflow_buffers() runs
+    // during program compilation. Since this is a single-DFB test it is always placed at the L1 base allocator address.
     if (producer_type == DFBPorCType::TENSIX) {
-        for (const auto& group : dfb->groups) {
-            for (const auto& [core, alloc_addr] : group.l1_by_core) {
-                const uint32_t co = core_to_chunk_offset.at(core);
-                std::vector<uint32_t> slice(
-                    input.begin() + co * entry_size / sizeof(uint32_t),
-                    input.begin() + co * entry_size / sizeof(uint32_t) + words_per_core);
-                detail::WriteToDeviceL1(device, core, alloc_addr, slice);
+        const uint32_t dfb_l1_addr =
+            static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
+        for (const CoreRange& cr : core_range_set.ranges()) {
+            for (auto y = cr.start_coord.y; y <= cr.end_coord.y; y++) {
+                for (auto x = cr.start_coord.x; x <= cr.end_coord.x; x++) {
+                    const CoreCoord core(x, y);
+                    const uint32_t co = core_to_chunk_offset.at(core);
+                    std::vector<uint32_t> slice(
+                        input.begin() + co * entry_size / sizeof(uint32_t),
+                        input.begin() + co * entry_size / sizeof(uint32_t) + words_per_core);
+                    detail::WriteToDeviceL1(device, core, dfb_l1_addr, slice);
+                }
             }
         }
     }
