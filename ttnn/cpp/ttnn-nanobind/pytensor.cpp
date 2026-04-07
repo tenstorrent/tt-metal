@@ -1514,6 +1514,10 @@ void pytensor_module(nb::module_& mod) {
                 host_tensor.logical_shape(),
                 TensorLayout(host_tensor.dtype(), host_tensor.tensor_spec().page_config(), mem_config));
 
+            TT_FATAL(
+                experimental::per_core_allocation::is_per_core_allocation(tensor_spec.compute_buffer_sharding_args()),
+                "experimental_to_single_device requires per-core allocation sharding config");
+
             auto mesh_buffer = experimental::per_core_allocation::create_on_single_device(
                 tt::tt_metal::distributed::ReplicatedBufferConfig{
                     .size = tensor_spec.compute_packed_buffer_size_bytes()},
@@ -1541,7 +1545,11 @@ void pytensor_module(nb::module_& mod) {
             mesh_device->mesh_command_queue().enqueue_write_shards(mesh_buffer, {transfer}, /*blocking=*/true);
 
             DeviceStorage device_storage(std::move(mesh_buffer), {coord});
-            return Tensor(std::move(device_storage), tensor_spec, TensorTopology{});
+            TensorTopology topology(
+                tt::tt_metal::distributed::MeshShape(1, 1),
+                {tt::tt_metal::distributed::MeshMapperConfig::Replicate{}},
+                {coord});
+            return Tensor(std::move(device_storage), tensor_spec, std::move(topology));
         },
         nb::arg("host_tensor"),
         nb::arg("mesh_device"),
