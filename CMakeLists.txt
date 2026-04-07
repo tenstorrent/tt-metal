@@ -208,7 +208,7 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-stringop-overread>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-unused-local-typedefs>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-pessimizing-move>"
-    "$<$<AND:$<CXX_COMPILER_ID:GNU>,$<VERSION_GREATER_EQUAL:$<CXX_COMPILER_VERSION>,13>>:-Wno-dangling-reference>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-dangling-reference>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-overloaded-virtual>"
 )
 
@@ -291,21 +291,13 @@ endif()
 include(helper_functions)
 add_subdirectory(tt_stl)
 
-if(NOT TT_METAL_USE_EMULE)
-    add_subdirectory(tools)
-    add_subdirectory(tt_metal)
-    add_subdirectory(ttnn)
-
-    if(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
-        add_subdirectory(${PROJECT_SOURCE_DIR}/tests)
-    endif()
-else()
-    # Emulation mode: build real tt_metal (with EmulatedChip at UMD level),
-    # then add tt_emule tests on top.  No fake headers needed — tests link
-    # the real library and run with TT_METAL_EMULE_MODE=1 at runtime.
-    add_subdirectory(tools)
-    add_subdirectory(tt_metal)
-    add_subdirectory(ttnn)
+add_subdirectory(tools)
+add_subdirectory(tt_metal)
+add_subdirectory(ttnn)
+if(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
+    add_subdirectory(${PROJECT_SOURCE_DIR}/tests)
+endif()
+if(TT_METAL_USE_EMULE)
     add_subdirectory(tt_emule)
 endif()
 
@@ -315,17 +307,15 @@ endif()
 # For top level install: cmake --build build --target install  or  make/ninja install -C build
 ############################################################################################################################
 # Install for build artifacts that will upload build/lib
-if(NOT TT_METAL_USE_EMULE)
-    install(
-        TARGETS
-            tt_metal
-        ARCHIVE
-            DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        LIBRARY
-            DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            COMPONENT tar
-    )
-endif()
+install(
+    TARGETS
+        tt_metal
+    ARCHIVE
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT tar
+)
 
 if(NOT TT_USE_SYSTEM_SFPI)
     # FIXME(17578): figure out what bits we actually need to ship and omit the rest

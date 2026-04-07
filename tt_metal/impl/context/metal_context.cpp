@@ -337,7 +337,6 @@ void MetalContext::teardown() {
     if (dprint_server_) {
         if (!get_cluster().is_mock_or_emulated()) {
             dprint_server_->detach_devices();
-            watcher_server_->detach_devices();
         }
         dprint_server_.reset();
         rtoptions().set_disable_dma_ops(false);

@@ -1485,6 +1485,7 @@ void detail::ProgramImpl::set_cb_tile_dims(const std::vector<CoreRange>& crs, Ji
 }
 
 void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
+    // Mock/emulated devices don't dispatch to hardware, skip dispatch data population
     if (tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_cluster().is_mock_or_emulated()) {
         return;
     }
@@ -1918,6 +1919,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         sync_build_steps(events);
     }
 
+    // Mock/emulated devices don't have binaries to read.
     if (!is_mock) {
         for (const auto& kernels : kernels_) {
             for (const auto& pair : kernels) {

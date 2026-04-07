@@ -842,7 +842,6 @@ void LaunchProgram(
 void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done, bool force_slow_dispatch) {
     {  // Profiler scope start
         ZoneScoped;
-
         /// This function is shared between FD and SD.
         // We call this function when initializing HW Command Queues or when reading Profiler Device to Device
         // sync information from the accelerators.
@@ -853,8 +852,12 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
             TT_ASSERT(!MetalContext::instance().device_manager()->is_dispatch_firmware_active());
         }
 
-        // Shared path: compile, finalize, configure, write RT args
-        detail::CompileProgram(device, program);
+#ifdef TT_METAL_USE_EMULE
+        if (MetalContext::instance().get_cluster().get_target_device_type() != tt::TargetDevice::Emule)
+#endif
+        {
+            detail::CompileProgram(device, program);
+        }
         program.impl().finalize_dataflow_buffer_configs();
         if (!program.impl().is_finalized()) {
             program.impl().finalize_offsets(device);
@@ -866,11 +869,11 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         auto device_id = device->id();
 
 #ifdef TT_METAL_USE_EMULE
-        if (MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emulated) {
+        if (MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
             // JIT-compile kernels to x86 and execute synchronously.
-            // No firmware go-signals or mailbox polling needed.
             emule::execute_program_emulated(device, program);
-        } else
+            return;
+        }
 #endif
         {
             MetalContext::instance().get_cluster().dram_barrier(device_id);
@@ -954,7 +957,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
 
     bool is_emulated = false;
 #ifdef TT_METAL_USE_EMULE
-    is_emulated = MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emulated;
+    is_emulated = MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
 #endif
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();

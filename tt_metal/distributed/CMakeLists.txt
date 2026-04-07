@@ -88,7 +88,3 @@ if(USE_MPI)
 endif()
 
 target_include_directories(distributed SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
-
-if(TT_METAL_USE_EMULE)
-    target_compile_definitions(distributed PRIVATE TT_METAL_USE_EMULE=1)
-endif()

@@ -1393,6 +1393,7 @@ void issue_read_buffer_dispatch_command_sequence(
 
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
 
+    // Mock/emulated devices don't have real hardware to read from, skip actual dispatch
     if (tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id()).get_cluster().is_mock_or_emulated()) {
         return;
     }

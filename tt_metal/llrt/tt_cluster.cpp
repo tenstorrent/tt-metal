@@ -232,7 +232,7 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
     TT_FATAL(this->driver_, "UMD cluster object must be initialized and available");
     this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(*this->driver_);
 
-    if (this->target_type_ != tt::TargetDevice::Mock && this->target_type_ != tt::TargetDevice::Emulated) {
+    if (this->target_type_ != tt::TargetDevice::Mock && this->target_type_ != tt::TargetDevice::Emule) {
         this->assert_risc_reset();
     }
 }
@@ -245,13 +245,13 @@ void Cluster::detect_arch_and_target() {
     if (this->target_type_ == tt::TargetDevice::Mock) {
         log_warning(tt::LogDevice, "Currently using mock cluster descriptor, all device driver calls will be mocked");
     }
-    if (this->target_type_ == tt::TargetDevice::Emulated) {
+    if (this->target_type_ == tt::TargetDevice::Emule) {
         log_warning(tt::LogDevice, "Using emulated device mode with memory-backed I/O");
     }
 
     TT_FATAL(
         this->target_type_ == tt::TargetDevice::Silicon || this->target_type_ == tt::TargetDevice::Simulator ||
-            this->target_type_ == tt::TargetDevice::Mock || this->target_type_ == tt::TargetDevice::Emulated,
+            this->target_type_ == tt::TargetDevice::Mock || this->target_type_ == tt::TargetDevice::Emule,
         "Target type={} is not supported",
         this->target_type_);
 }
@@ -276,7 +276,7 @@ void Cluster::generate_cluster_descriptor() {
             "Custom fabric mesh graph descriptor path must be specified for CUSTOM cluster type");
     }
     if (this->target_type_ == TargetDevice::Simulator || this->target_type_ == TargetDevice::Mock ||
-        this->target_type_ == TargetDevice::Emulated) {
+        this->target_type_ == TargetDevice::Emule) {
         return;
     }
 
@@ -431,7 +431,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
             .sdesc_path = sdesc_path,
             .cluster_descriptor = mock_cluster_desc.get(),
         });
-    } else if (this->target_type_ == TargetDevice::Emulated) {
+    } else if (this->target_type_ == TargetDevice::Emule) {
         auto mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
 
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{

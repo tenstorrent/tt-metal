@@ -443,7 +443,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: Disabled
         // Usage: export TT_METAL_EMULE_MODE=1
         case EnvVarID::TT_METAL_EMULE_MODE:
-            this->runtime_target_device_ = tt::TargetDevice::Emulated;
+            this->runtime_target_device_ = tt::TargetDevice::Emule;
             // Emulated mode requires slow dispatch (no HWCommandQueue)
             this->using_slow_dispatch = true;
             this->fast_dispatch = false;

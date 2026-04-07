@@ -15,7 +15,7 @@ enum class TargetDevice : std::uint8_t {
     Silicon = 0,
     Simulator = 1,
     Mock = 2,
-    Emulated = 3,
+    Emule = 3,
     Invalid = 0xFF,
 };
 

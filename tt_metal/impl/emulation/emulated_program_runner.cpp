@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -191,6 +191,38 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
 }
 
 namespace tt::tt_metal::emule {
+
+// ---------------------------------------------------------------------------
+// Shared types used across subfunctions
+// ---------------------------------------------------------------------------
+
+struct KernelInfo {
+    std::function<void()> fn;
+    std::vector<uint32_t> rt_args;
+    std::vector<uint32_t> common_rt_args;
+};
+
+struct DeferredCompile {
+    std::string src_path;
+    std::vector<uint32_t> compile_args;
+    std::unordered_map<std::string, uint32_t> named_compile_args;
+    std::map<std::string, std::string> defines;
+    std::string extra_inc;
+};
+
+struct PendingKernelInfo {
+    std::string cache_key;
+    std::vector<uint32_t> rt_args;
+    std::vector<uint32_t> common_rt_args;
+};
+
+struct CoreSetup {
+    CoreCoord logical_core;
+    tt_emule::Core* core;
+    std::vector<KernelInfo>* ki_list;
+    uint8_t phys_x;
+    uint8_t phys_y;
+};
 
 // ---------------------------------------------------------------------------
 // Last-run stats (populated by execute_program_emulated)
@@ -447,167 +479,123 @@ static tt::umd::SWEmuleChip* get_sw_emulated_chip(ChipId device_id) {
 // Program Execution — multi-threaded with CB synchronization
 // ---------------------------------------------------------------------------
 
-void execute_program_emulated(IDevice* device, Program& program) {
-    auto& impl = program.impl();
-    auto device_id = device->id();
-    log_debug(tt::LogMetal, "execute_program_emulated: device {} starting", device_id);
-
-    // Get SWEmuleChip — memory is owned by tt_emule::Core objects inside it
-    auto* sw_emu = get_sw_emulated_chip(device_id);
-
-    // Get DRAM core for bridge pointer (first DRAM channel, for legacy __emule_dram_ptr)
-    tt_emule::Core* dram_core = nullptr;
-    uint32_t num_dram_channels = 0;
-    if (sw_emu) {
-        auto& soc = sw_emu->get_soc_descriptor();
-        auto dram_channels = soc.get_dram_cores();
-        num_dram_channels = static_cast<uint32_t>(dram_channels.size());
-
-        if (!dram_channels.empty() && !dram_channels[0].empty()) {
-            auto& dc = dram_channels[0][0];
-            dram_core = sw_emu->get_core(tt_xy_pair(dc.x, dc.y));
-        }
-
-        // Populate bank mapping arrays using metal_SocDescriptor (matches host write path).
-        // The host write path uses get_preferred_worker_core_for_dram_view() for core coords
-        // and get_address_offset() for per-bank offsets, so we must match exactly.
-        auto& metal_soc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
-        num_dram_channels = static_cast<uint32_t>(metal_soc.get_num_dram_views());
-
-        // noc_xy encoding: (y << 6) | x (matching Blackhole firmware encoding).
-        std::memset(dram_bank_to_noc_xy, 0, sizeof(dram_bank_to_noc_xy));
-        std::memset(bank_to_dram_offset, 0, sizeof(bank_to_dram_offset));
-        for (uint32_t ch = 0; ch < num_dram_channels && ch < 32; ch++) {
-            auto dc = metal_soc.get_preferred_worker_core_for_dram_view(ch, 0 /* NOC 0 */);
-            uint16_t noc_xy = (static_cast<uint16_t>(dc.y) << NOC_NODE_ID_BITS) | static_cast<uint16_t>(dc.x);
-            dram_bank_to_noc_xy[0][ch] = noc_xy;  // NOC 0
-            dram_bank_to_noc_xy[1][ch] = noc_xy;  // NOC 1 (same for emulation)
-            bank_to_dram_offset[ch] = static_cast<int32_t>(metal_soc.get_address_offset(ch));
-            log_debug(
-                tt::LogMetal,
-                "  DRAM bank[{}]: core({},{}) noc_xy=0x{:04x} offset=0x{:x}",
-                ch,
-                dc.x,
-                dc.y,
-                noc_xy,
-                bank_to_dram_offset[ch]);
-        }
-
-        // L1 bank mapping — for now, all worker cores use themselves as bank 0.
-        // Real L1 banking is not yet emulated.
-        std::memset(l1_bank_to_noc_xy, 0, sizeof(l1_bank_to_noc_xy));
-        std::memset(bank_to_l1_offset, 0, sizeof(bank_to_l1_offset));
+// ---------------------------------------------------------------------------
+// populate_bank_mapping: Set up DRAM/L1 bank arrays from SoC descriptor.
+// ---------------------------------------------------------------------------
+static void populate_bank_mapping(
+    tt::umd::SWEmuleChip* sw_emu, ChipId device_id, tt_emule::Core*& dram_core_out, uint32_t& num_dram_channels_out) {
+    dram_core_out = nullptr;
+    num_dram_channels_out = 0;
+    if (!sw_emu) {
+        return;
     }
 
-    // Build worker logical→virtual coordinate mapping for JIT kernels.
-    // D2M-generated kernels use convert_logical_x_to_translated / convert_logical_y_to_translated
-    // which index into lookup tables. We populate these from the device's coordinate mapping.
-    std::string worker_col_map_str, worker_row_map_str;
-    {
-        auto grid = device->compute_with_storage_grid_size();
-        // Build column mapping: logical x → virtual x
-        std::ostringstream col_ss;
-        for (uint32_t lx = 0; lx < 64; lx++) {
-            if (lx) {
-                col_ss << ',';
-            }
-            if (lx < grid.x) {
-                auto virt = device->virtual_core_from_logical_core(CoreCoord(lx, 0), CoreType::WORKER);
-                col_ss << virt.x;
-            } else {
-                col_ss << 0;
-            }
-        }
-        worker_col_map_str = col_ss.str();
-        // Build row mapping: logical y → virtual y
-        std::ostringstream row_ss;
-        for (uint32_t ly = 0; ly < 64; ly++) {
-            if (ly) {
-                row_ss << ',';
-            }
-            if (ly < grid.y) {
-                auto virt = device->virtual_core_from_logical_core(CoreCoord(0, ly), CoreType::WORKER);
-                row_ss << virt.y;
-            } else {
-                row_ss << 0;
-            }
-        }
-        worker_row_map_str = row_ss.str();
+    auto& soc = sw_emu->get_soc_descriptor();
+    auto dram_channels = soc.get_dram_cores();
+    num_dram_channels_out = static_cast<uint32_t>(dram_channels.size());
+
+    if (!dram_channels.empty() && !dram_channels[0].empty()) {
+        auto& dc = dram_channels[0][0];
+        dram_core_out = sw_emu->get_core(tt_xy_pair(dc.x, dc.y));
     }
 
-    // Build extra include flags (project source dir for ttnn kernel includes)
+    // Populate bank mapping arrays using metal_SocDescriptor (matches host write path).
+    auto& metal_soc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
+    num_dram_channels_out = static_cast<uint32_t>(metal_soc.get_num_dram_views());
+
+    // noc_xy encoding: (y << 6) | x (matching Blackhole firmware encoding).
+    std::memset(dram_bank_to_noc_xy, 0, sizeof(dram_bank_to_noc_xy));
+    std::memset(bank_to_dram_offset, 0, sizeof(bank_to_dram_offset));
+    for (uint32_t ch = 0; ch < num_dram_channels_out && ch < 32; ch++) {
+        auto dc = metal_soc.get_preferred_worker_core_for_dram_view(ch, 0 /* NOC 0 */);
+        uint16_t noc_xy = (static_cast<uint16_t>(dc.y) << NOC_NODE_ID_BITS) | static_cast<uint16_t>(dc.x);
+        dram_bank_to_noc_xy[0][ch] = noc_xy;  // NOC 0
+        dram_bank_to_noc_xy[1][ch] = noc_xy;  // NOC 1 (same for emulation)
+        bank_to_dram_offset[ch] = static_cast<int32_t>(metal_soc.get_address_offset(ch));
+        log_debug(
+            tt::LogMetal,
+            "  DRAM bank[{}]: core({},{}) noc_xy=0x{:04x} offset=0x{:x}",
+            ch,
+            dc.x,
+            dc.y,
+            noc_xy,
+            bank_to_dram_offset[ch]);
+    }
+
+    // L1 bank mapping — for now, all worker cores use themselves as bank 0.
+    std::memset(l1_bank_to_noc_xy, 0, sizeof(l1_bank_to_noc_xy));
+    std::memset(bank_to_l1_offset, 0, sizeof(bank_to_l1_offset));
+}
+
+// ---------------------------------------------------------------------------
+// build_worker_coord_maps: Build logical→virtual coordinate mapping strings.
+// ---------------------------------------------------------------------------
+static void build_worker_coord_maps(IDevice* device, std::string& worker_col_map_str, std::string& worker_row_map_str) {
+    auto grid = device->compute_with_storage_grid_size();
+    std::ostringstream col_ss;
+    for (uint32_t lx = 0; lx < 64; lx++) {
+        if (lx) {
+            col_ss << ',';
+        }
+        if (lx < grid.x) {
+            auto virt = device->virtual_core_from_logical_core(CoreCoord(lx, 0), CoreType::WORKER);
+            col_ss << virt.x;
+        } else {
+            col_ss << 0;
+        }
+    }
+    worker_col_map_str = col_ss.str();
+
+    std::ostringstream row_ss;
+    for (uint32_t ly = 0; ly < 64; ly++) {
+        if (ly) {
+            row_ss << ',';
+        }
+        if (ly < grid.y) {
+            auto virt = device->virtual_core_from_logical_core(CoreCoord(0, ly), CoreType::WORKER);
+            row_ss << virt.y;
+        } else {
+            row_ss << 0;
+        }
+    }
+    worker_row_map_str = row_ss.str();
+}
+
+// ---------------------------------------------------------------------------
+// get_extra_include_flags: Build -I flags for JIT compilation.
+// ---------------------------------------------------------------------------
+static std::string get_extra_include_flags() {
 #ifdef TT_EMULE_PROJECT_SOURCE_DIR
     const std::string project_src = TT_EMULE_PROJECT_SOURCE_DIR;
     std::string extra_inc;
     extra_inc += "-I\"" + project_src + "/ttnn/cpp\"";
     extra_inc += " -I\"" + project_src + "\"";
-    // Real hw/inc headers for TensorAccessorArgs (pure C++17, no KERNEL_BUILD needed)
     extra_inc += " -I\"" + project_src + "/tt_metal/hw/inc\"";
     extra_inc += " -I\"" + project_src + "/tt_metal/hostdevcommon/api\"";
+    return extra_inc;
 #else
-    std::string extra_inc;
+    return {};
 #endif
+}
 
-    // -----------------------------------------------------------------------
-    // Phase 1: Collect all kernels grouped by logical core.
-    // -----------------------------------------------------------------------
-
-    struct KernelInfo {
-        std::function<void()> fn;
-        std::vector<uint32_t> rt_args;
-        std::vector<uint32_t> common_rt_args;
-    };
-
-    // Map logical core → list of kernels to run on it.
-    std::map<CoreCoord, std::vector<KernelInfo>> core_kernels;
-
-    // Deferred compilation info for cache misses.
-    struct DeferredCompile {
-        std::string src_path;
-        std::vector<uint32_t> compile_args;
-        std::unordered_map<std::string, uint32_t> named_compile_args;
-        std::map<std::string, std::string> defines;
-        std::string extra_inc;
-    };
-
-    // Per-kernel info before function pointer resolution.
-    struct PendingKernelInfo {
-        std::string cache_key;
-        std::vector<uint32_t> rt_args;
-        std::vector<uint32_t> common_rt_args;
-    };
-
-    // Map logical core → pending kernels (resolved after parallel compile).
-    std::map<CoreCoord, std::vector<PendingKernelInfo>> pending_core_kernels;
-
-    // Unique cache misses to compile in parallel.
-    std::map<std::string, DeferredCompile> deferred_compiles;
-
-    // Cache hits resolved immediately.
-    std::unordered_map<std::string, std::function<void()>> resolved_fns;
-
-    // Inline source temp files to clean up after compilation.
-    std::vector<std::string> inline_src_temps;
-
-    // ---- Compute semaphore base from HAL kernel config layout ----
-    // Matches real firmware: sem_addr = kernel_config_base + sem_offset + sem_id * L1_ALIGNMENT
-    // finalize_offsets() has already been called, so ProgramConfig.sem_offset is populated.
+// ---------------------------------------------------------------------------
+// collect_kernels: Gather per-core kernel info, check caches, defer misses.
+// ---------------------------------------------------------------------------
+static void collect_kernels(
+    detail::ProgramImpl& impl,
+    uint32_t num_dram_channels,
+    const std::string& worker_col_map_str,
+    const std::string& worker_row_map_str,
+    uint32_t emule_sem_base,
+    const std::string& extra_inc,
+    std::map<CoreCoord, std::vector<PendingKernelInfo>>& pending_core_kernels,
+    std::map<std::string, DeferredCompile>& deferred_compiles,
+    std::unordered_map<std::string, std::function<void()>>& resolved_fns,
+    std::vector<std::string>& inline_src_temps) {
     static constexpr uint32_t EMULE_SEM_ALIGN = 16;
-    const auto& hal = MetalContext::instance().hal();
-    uint32_t tensix_pct_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-    uint32_t kernel_config_base =
-        static_cast<uint32_t>(hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG));
-    const auto& prog_config = impl.get_program_config(tensix_pct_index);
-    uint32_t emule_sem_base = kernel_config_base + prog_config.sem_offset;
-    log_debug(
-        tt::LogMetal,
-        "  EMULE_SEM_BASE: 0x{:x} (kernel_config_base=0x{:x}, sem_offset=0x{:x})",
-        emule_sem_base,
-        kernel_config_base,
-        prog_config.sem_offset);
 
-    // ---- Phase 1a: Collect (sequential) ----
-    for (uint32_t pct = 0; pct < NumHalProgrammableCoreTypes; ++pct) {
+    const uint32_t num_pct = MetalContext::instance().hal().get_programmable_core_type_count();
+    for (uint32_t pct = 0; pct < num_pct; ++pct) {
         auto& kernels = impl.get_kernels(pct);
         for (auto& [kernel_id, kernel] : kernels) {
             const auto& ksrc = kernel->kernel_source();
@@ -636,18 +624,13 @@ void execute_program_emulated(IDevice* device, Program& program) {
             auto named_compile_args = kernel->named_compile_time_args();
             auto defines = kernel->defines();
 
-            // DRAM bank mapping defines for JIT kernels.
             defines["NUM_DRAM_BANKS"] = std::to_string(num_dram_channels ? num_dram_channels : 1);
             defines["NUM_L1_BANKS"] = "1";
             defines["NUM_NOCS"] = "2";
             defines["DRAM_ALIGNMENT"] = "32";
             defines["L1_ALIGNMENT"] = "16";
-
-            // Worker coordinate mapping for D2M kernels (logical → virtual).
             defines["EMULE_WORKER_COL_MAP"] = worker_col_map_str;
             defines["EMULE_WORKER_ROW_MAP"] = worker_row_map_str;
-
-            // Dynamic semaphore base — computed above to avoid CB/semaphore overlap.
             {
                 std::ostringstream sb;
                 sb << "0x" << std::hex << emule_sem_base;
@@ -680,12 +663,11 @@ void execute_program_emulated(IDevice* device, Program& program) {
                 }
             }
 
-            // JIT cache key — use source content hash for inline kernels (temp paths change each run)
+            // JIT cache key
             std::string cache_key;
             if (ksrc.source_type_ == KernelSource::FILE_PATH) {
                 cache_key = src_path;
             } else {
-                // Hash inline source content for stable cache key across runs
                 char hex[17];
                 std::snprintf(hex, sizeof(hex), "%016lx", fnv1a_hash(ksrc.source_));
                 cache_key = std::string("inline:") + hex;
@@ -709,7 +691,6 @@ void execute_program_emulated(IDevice* device, Program& program) {
                 } else if (
                     resolved_fns.find(cache_key) == resolved_fns.end() &&
                     deferred_compiles.find(cache_key) == deferred_compiles.end()) {
-                    // Try disk cache (survives --forked subprocess restarts)
                     std::string mtime_path = (ksrc.source_type_ == KernelSource::FILE_PATH) ? src_path : "";
                     auto disk_fn = disk_cache_lookup(cache_key, mtime_path);
                     if (disk_fn) {
@@ -722,10 +703,7 @@ void execute_program_emulated(IDevice* device, Program& program) {
                 }
             }
 
-            // Common runtime args for this kernel
             auto& common_rt = kernel->common_runtime_args();
-
-            // Add to pending per-core map
             const auto& core_range_set = kernel->core_range_set();
             for (const auto& core_range : core_range_set.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
@@ -739,8 +717,15 @@ void execute_program_emulated(IDevice* device, Program& program) {
             }
         }
     }
+}
 
-    // ---- Phase 1b: Compile cache misses in parallel (output to disk cache) ----
+// ---------------------------------------------------------------------------
+// jit_compile_pending: Compile cache misses in parallel, resolve all fns.
+// ---------------------------------------------------------------------------
+static void jit_compile_pending(
+    std::map<std::string, DeferredCompile>& deferred_compiles,
+    std::unordered_map<std::string, std::function<void()>>& resolved_fns,
+    std::vector<std::string>& inline_src_temps) {
     if (!deferred_compiles.empty()) {
         log_info(tt::LogMetal, "JIT parallel compile: {} unique kernels to compile", deferred_compiles.size());
 
@@ -756,7 +741,6 @@ void execute_program_emulated(IDevice* device, Program& program) {
                 }));
         }
 
-        // Wait for all compilations and store results
         for (auto& [key, fut] : futures) {
             auto fn = fut.get();
             resolved_fns[key] = fn;
@@ -765,7 +749,7 @@ void execute_program_emulated(IDevice* device, Program& program) {
         }
     }
 
-    // Clean up inline source temp files (no longer needed after compilation)
+    // Clean up inline source temp files
     if (!std::getenv("TT_EMULE_KEEP_JIT_SRC")) {
         for (auto& tmp : inline_src_temps) {
             std::filesystem::remove(tmp);
@@ -775,60 +759,15 @@ void execute_program_emulated(IDevice* device, Program& program) {
             fprintf(stderr, "[EMULE-DBG] kept JIT source: %s\n", tmp.c_str());
         }
     }
+}
 
-    // ---- Phase 1c: Resolve pending kernels to function pointers ----
-    for (auto& [logical_core, pending_list] : pending_core_kernels) {
-        for (auto& pk : pending_list) {
-            core_kernels[logical_core].push_back(
-                KernelInfo{resolved_fns.at(pk.cache_key), pk.rt_args, pk.common_rt_args});
-        }
-    }
-
-    // Record execution metadata for test introspection
-    {
-        g_last_run_stats.num_cores = static_cast<uint32_t>(core_kernels.size());
-        g_last_run_stats.kernel_paths.clear();
-        std::set<std::string> seen_paths;
-        for (uint32_t pct = 0; pct < NumHalProgrammableCoreTypes; ++pct) {
-            auto& kernels = impl.get_kernels(pct);
-            for (auto& [kernel_id, kernel] : kernels) {
-                const auto& ksrc = kernel->kernel_source();
-                std::string basename;
-                if (ksrc.source_type_ == KernelSource::FILE_PATH) {
-                    basename = std::filesystem::path(ksrc.path_).filename().string();
-                } else {
-                    basename = "<inline>";
-                }
-                if (seen_paths.insert(basename).second) {
-                    g_last_run_stats.kernel_paths.push_back(basename);
-                }
-            }
-        }
-        log_info(
-            tt::LogMetal,
-            "execute_program_emulated: {} logical cores, {} unique kernels",
-            core_kernels.size(),
-            g_last_run_stats.kernel_paths.size());
-        for (auto& kp : g_last_run_stats.kernel_paths) {
-            log_info(tt::LogMetal, "  JIT kernel: {}", kp);
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Phase 2: Set up cores and launch ALL cores concurrently.
-    // Core's L1 is already mmap'd below 4 GB by tt_emule::Core.
-    // Concurrent launch is required for cross-core synchronization (multicast).
-    // -----------------------------------------------------------------------
-
-    static constexpr uint32_t MAX_CBS = 32;
-
-    // Build core map: physical {x,y} → tt_emule::Core* for cross-core NOC access.
-    // Shared by all kernel threads for resolving NOC addresses.
-    // Must include ALL worker cores on the device, not just the current program's
-    // cores, because kernels may read from cores used by previous programs (e.g.,
-    // multicast sender reading tilized data stored by a prior tilize program).
-    // Cached per device_id since the chip topology doesn't change between calls.
-    // Not mutex-protected — safe because emulation runs in slow dispatch mode (single-threaded host).
+// ---------------------------------------------------------------------------
+// build_core_map: Build physical {x,y} → tt_emule::Core* for NOC resolution.
+// Cached per device_id since chip topology doesn't change between calls.
+// ---------------------------------------------------------------------------
+static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
+    tt::umd::SWEmuleChip* sw_emu, IDevice* device, ChipId device_id) {
+    // Not mutex-protected — safe because emulation runs in slow dispatch mode.
     static std::unordered_map<uint32_t, std::shared_ptr<std::unordered_map<uint64_t, tt_emule::Core*>>>
         g_core_map_cache;
 
@@ -845,8 +784,7 @@ void execute_program_emulated(IDevice* device, Program& program) {
                 (*core_map)[key] = core;
             }
         }
-        // Add DRAM cores using both coordinate systems:
-        // 1. UMD SoC descriptor coords (for legacy / get_dram_cores() lookups)
+        // Add DRAM cores (UMD SoC descriptor coords)
         auto& umd_soc = sw_emu->get_soc_descriptor();
         for (auto& dc_vec : umd_soc.get_dram_cores()) {
             for (auto& dc : dc_vec) {
@@ -855,7 +793,7 @@ void execute_program_emulated(IDevice* device, Program& program) {
                 (*core_map)[key] = core;
             }
         }
-        // 2. metal_SocDescriptor preferred worker coords (used by host write path)
+        // Add DRAM cores (metal_SocDescriptor preferred worker coords)
         {
             auto& msoc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
             for (uint32_t ch = 0; ch < msoc.get_num_dram_views() && ch < 32; ch++) {
@@ -868,16 +806,21 @@ void execute_program_emulated(IDevice* device, Program& program) {
     } else if (!core_map) {
         core_map = std::make_shared<std::unordered_map<uint64_t, tt_emule::Core*>>();
     }
+    return core_map.get();
+}
 
-    // Pre-structure: collect per-core setup info before launching threads
-    struct CoreSetup {
-        CoreCoord logical_core;
-        tt_emule::Core* core;
-        std::vector<KernelInfo>* ki_list;
-        uint8_t phys_x;
-        uint8_t phys_y;
-    };
-    std::vector<CoreSetup> core_setups;
+// ---------------------------------------------------------------------------
+// setup_core_state: Configure CBs and semaphores per core, build CoreSetup list.
+// ---------------------------------------------------------------------------
+static void setup_core_state(
+    detail::ProgramImpl& impl,
+    IDevice* device,
+    tt::umd::SWEmuleChip* sw_emu,
+    std::map<CoreCoord, std::vector<KernelInfo>>& core_kernels,
+    uint32_t emule_sem_base,
+    std::vector<CoreSetup>& core_setups) {
+    static constexpr uint32_t MAX_CBS = 32;
+    static constexpr uint32_t EMULE_SEM_ALIGN = 16;
 
     for (auto& [logical_core, ki_list] : core_kernels) {
         tt_emule::Core* core = nullptr;
@@ -892,10 +835,8 @@ void execute_program_emulated(IDevice* device, Program& program) {
             continue;
         }
 
-        // Reset CB sync state from previous run
         core->reset_cb_sync();
 
-        // Read CB config from program and populate Core's CB sync array
         auto cb_impls = impl.circular_buffers_on_core(logical_core);
         for (auto& cb_impl : cb_impls) {
             for (uint8_t idx : cb_impl->local_buffer_indices()) {
@@ -920,8 +861,6 @@ void execute_program_emulated(IDevice* device, Program& program) {
             }
         }
 
-        // Initialize semaphores in Core L1 at dynamic offset
-        // Semaphore region: emule_sem_base + id * EMULE_SEM_ALIGN
         auto& semaphores = impl.semaphores();
         for (auto& sem : semaphores) {
             if (!sem.initialized_on_logical_core(logical_core)) {
@@ -946,11 +885,15 @@ void execute_program_emulated(IDevice* device, Program& program) {
 
         core_setups.push_back({logical_core, core, &ki_list, phys_x, phys_y});
     }
+}
 
-    // Launch all cores concurrently — each core runner spawns kernel threads
-    uint8_t* dram_data = dram_core ? dram_core->l1_data() : nullptr;
-    auto core_map_ptr = core_map.get();
-
+// ---------------------------------------------------------------------------
+// launch_cores: Spawn concurrent threads per core, each runs its kernels.
+// ---------------------------------------------------------------------------
+static void launch_cores(
+    std::vector<CoreSetup>& core_setups,
+    uint8_t* dram_data,
+    std::unordered_map<uint64_t, tt_emule::Core*>* core_map_ptr) {
     std::vector<std::thread> core_threads;
 
     for (auto& cs : core_setups) {
@@ -962,7 +905,6 @@ void execute_program_emulated(IDevice* device, Program& program) {
                 uint8_t px = cs.phys_x;
                 uint8_t py = cs.phys_y;
 
-                // Launch one thread per kernel on this core
                 std::vector<std::thread> threads;
                 uint32_t lx = cs.logical_core.x;
                 uint32_t ly = cs.logical_core.y;
@@ -1042,6 +984,112 @@ void execute_program_emulated(IDevice* device, Program& program) {
     for (auto& t : core_threads) {
         t.join();
     }
+}
+
+// ---------------------------------------------------------------------------
+// execute_program_emulated: Main entry point.
+// ---------------------------------------------------------------------------
+void execute_program_emulated(IDevice* device, Program& program) {
+    auto& impl = program.impl();
+    auto device_id = device->id();
+    log_debug(tt::LogMetal, "execute_program_emulated: device {} starting", device_id);
+
+    auto* sw_emu = get_sw_emulated_chip(device_id);
+
+    // Phase 0: Populate bank mapping arrays
+    tt_emule::Core* dram_core = nullptr;
+    uint32_t num_dram_channels = 0;
+    populate_bank_mapping(sw_emu, device_id, dram_core, num_dram_channels);
+
+    // Build worker coordinate mapping strings
+    std::string worker_col_map_str, worker_row_map_str;
+    build_worker_coord_maps(device, worker_col_map_str, worker_row_map_str);
+
+    std::string extra_inc = get_extra_include_flags();
+
+    // Compute semaphore base from HAL kernel config layout
+    const auto& hal = MetalContext::instance().hal();
+    uint32_t tensix_pct_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    uint32_t kernel_config_base =
+        static_cast<uint32_t>(hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG));
+    const auto& prog_config = impl.get_program_config(tensix_pct_index);
+    uint32_t emule_sem_base = kernel_config_base + prog_config.sem_offset;
+    log_debug(
+        tt::LogMetal,
+        "  EMULE_SEM_BASE: 0x{:x} (kernel_config_base=0x{:x}, sem_offset=0x{:x})",
+        emule_sem_base,
+        kernel_config_base,
+        prog_config.sem_offset);
+
+    // Phase 1: Collect kernels and resolve/compile
+    std::map<CoreCoord, std::vector<PendingKernelInfo>> pending_core_kernels;
+    std::map<std::string, DeferredCompile> deferred_compiles;
+    std::unordered_map<std::string, std::function<void()>> resolved_fns;
+    std::vector<std::string> inline_src_temps;
+
+    collect_kernels(
+        impl,
+        num_dram_channels,
+        worker_col_map_str,
+        worker_row_map_str,
+        emule_sem_base,
+        extra_inc,
+        pending_core_kernels,
+        deferred_compiles,
+        resolved_fns,
+        inline_src_temps);
+
+    jit_compile_pending(deferred_compiles, resolved_fns, inline_src_temps);
+
+    // Resolve pending kernels to function pointers
+    std::map<CoreCoord, std::vector<KernelInfo>> core_kernels;
+    for (auto& [logical_core, pending_list] : pending_core_kernels) {
+        for (auto& pk : pending_list) {
+            core_kernels[logical_core].push_back(
+                KernelInfo{resolved_fns.at(pk.cache_key), pk.rt_args, pk.common_rt_args});
+        }
+    }
+
+    // Record execution metadata for test introspection
+    {
+        g_last_run_stats.num_cores = static_cast<uint32_t>(core_kernels.size());
+        g_last_run_stats.kernel_paths.clear();
+        std::set<std::string> seen_paths;
+        const uint32_t num_pct2 = MetalContext::instance().hal().get_programmable_core_type_count();
+        for (uint32_t pct = 0; pct < num_pct2; ++pct) {
+            auto& kernels = impl.get_kernels(pct);
+            for (auto& [kernel_id, kernel] : kernels) {
+                const auto& ksrc = kernel->kernel_source();
+                std::string basename;
+                if (ksrc.source_type_ == KernelSource::FILE_PATH) {
+                    basename = std::filesystem::path(ksrc.path_).filename().string();
+                } else {
+                    basename = "<inline>";
+                }
+                if (seen_paths.insert(basename).second) {
+                    g_last_run_stats.kernel_paths.push_back(basename);
+                }
+            }
+        }
+        log_info(
+            tt::LogMetal,
+            "execute_program_emulated: {} logical cores, {} unique kernels",
+            core_kernels.size(),
+            g_last_run_stats.kernel_paths.size());
+        for (auto& kp : g_last_run_stats.kernel_paths) {
+            log_info(tt::LogMetal, "  JIT kernel: {}", kp);
+        }
+    }
+
+    // Phase 2: Build core map and set up per-core state
+    auto* core_map_ptr = build_core_map(sw_emu, device, device_id);
+
+    std::vector<CoreSetup> core_setups;
+    setup_core_state(impl, device, sw_emu, core_kernels, emule_sem_base, core_setups);
+
+    // Phase 3: Launch all cores concurrently
+    uint8_t* dram_data = dram_core ? dram_core->l1_data() : nullptr;
+    launch_cores(core_setups, dram_data, core_map_ptr);
 
     log_debug(tt::LogMetal, "execute_program_emulated: device {} done", device_id);
 }

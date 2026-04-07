@@ -8,7 +8,7 @@
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/simulation/simulation_chip.hpp>
 #include "impl/context/metal_context.hpp"
-#include "llrt/tt_cluster.hpp"
+#include "llrt/tt_cluster.hpp"  // Full definition needed for Cluster::is_mock_or_emulated()
 
 #include <string>
 

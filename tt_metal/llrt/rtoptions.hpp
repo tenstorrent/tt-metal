@@ -741,10 +741,6 @@ public:
         }
     }
 
-    // Emulated mode accessors
-    bool get_emulated_enabled() const { return runtime_target_device_ == tt::TargetDevice::Emulated; }
-    void set_emulated_mode() { runtime_target_device_ = tt::TargetDevice::Emulated; }
-
     // Target device accessor
     TargetDevice get_target_device() const { return runtime_target_device_; }
 
