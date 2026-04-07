@@ -75,6 +75,7 @@ on:
         default: "amd64"
         options:
             - "amd64"
+            - "aarch64"
 
 jobs:
   check-docker-images:

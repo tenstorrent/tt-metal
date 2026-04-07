@@ -353,7 +353,7 @@ jobs:
       # Platform values from parse-platform job (handles both workflow_dispatch and workflow_call)
       DISTRO: ${{ needs.parse-platform.outputs.distro }}
       VERSION: ${{ needs.parse-platform.outputs.version }}
-      TOOLCHAIN: ${{ inputs.toolchain || needs.parse-platform.outputs.toolchain }}
+      TOOLCHAIN: ${{ inputs.toolchain || (inputs.architecture == 'aarch64' && 'cmake/aarch64-linux-clang-20-libstdcpp-toolchain.cmake') || needs.parse-platform.outputs.toolchain }}
     container:
       image: >-
         harbor.ci.tenstorrent.net/${{
