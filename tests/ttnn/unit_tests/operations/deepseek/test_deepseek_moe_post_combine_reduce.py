@@ -118,8 +118,8 @@ def test_vs_old_implementation(device):
     old_result = ttnn.to_torch(old_implementation(combine_tt, weights_tt))
     new_result = ttnn.to_torch(new_implementation(combine_tt, weights_tt))
 
-    old_pcc = assert_pcc(old_result, ref, label="old_vs_ref")
-    new_pcc = assert_pcc(new_result, ref, label="new_vs_ref")
+    assert_pcc(old_result, ref, label="old_vs_ref")
+    assert_pcc(new_result, ref, label="new_vs_ref")
     assert_pcc(old_result, new_result, label="old_vs_new")
 
 
