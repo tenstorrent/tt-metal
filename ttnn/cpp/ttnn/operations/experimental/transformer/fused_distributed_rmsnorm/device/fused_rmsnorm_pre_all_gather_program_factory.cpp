@@ -180,7 +180,6 @@ FusedRMSNormPreAllGatherProgramFactory::cached_program_t FusedRMSNormPreAllGathe
         core_grid,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    const bool use_float32_reduction = fp32_dest_acc_en;  // legacy_reduction = false
     std::vector<uint32_t> compute_args = {
         input_cb_id,
         reduce_scalar_cb_id,
@@ -188,7 +187,6 @@ FusedRMSNormPreAllGatherProgramFactory::cached_program_t FusedRMSNormPreAllGathe
         output_cb_id,
         num_tile_cols,
         dst_reg_count,
-        use_float32_reduction,
     };
 
     const auto* compute_kernel_file =

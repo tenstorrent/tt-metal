@@ -24,8 +24,6 @@ void kernel_main() {
     constexpr uint32_t output_cb = get_compile_time_arg_val(3);
     constexpr uint32_t num_tile_cols = get_compile_time_arg_val(4);
     constexpr uint32_t block_size = get_compile_time_arg_val(5);
-    // Note: get_compile_time_arg_val(6) is use_float32_reduction - unused after library migration
-    // Library auto-detects FP32 from ENABLE_FP32_DEST_ACC define
 
     uint32_t num_tile_rows_to_process = get_arg_val<uint32_t>(0);
     constexpr uint32_t onetile = 1;
