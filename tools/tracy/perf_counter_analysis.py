@@ -466,7 +466,7 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
     print(f"\nTotal operations with metrics: {len(metrics_df)}")
 
     # Define metric names (without the Min/Median/Max/Avg suffix)
-    base_metrics = [
+    pct_metrics = [
         "SFPU Util",
         "FPU Util",
         "MATH Util",
@@ -559,7 +559,7 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
     ]
 
     # Non-percentage metrics (raw rates, not %)
-    base_metrics_no_pct = [
+    rate_metrics = [
         # Thread IPC removed: no RTL counter for instruction counts
         "Unpack Instrn Issue Rate T0",
         "Math Instrn Issue Rate T1",
@@ -567,8 +567,8 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
     ]
 
     # For each base metric, display a table with Min/Median/Max/Avg rows
-    for base_metric in base_metrics + base_metrics_no_pct:
-        is_pct = base_metric not in base_metrics_no_pct
+    for base_metric in pct_metrics + rate_metrics:
+        is_pct = base_metric not in rate_metrics
         suffix = " (%)" if is_pct else ""
         unit = "%" if is_pct else ""
 
