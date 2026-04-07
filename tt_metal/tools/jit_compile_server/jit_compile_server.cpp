@@ -60,6 +60,9 @@ std::atomic<bool> g_keep_running{true};
 std::atomic<int> g_outstanding_compiles{0};
 
 constexpr const char* kEndpointEnv = "TT_METAL_JIT_SERVER_ENDPOINT";
+// SECURITY: binds to all interfaces by default. Any host on the network can reach this
+// server and trigger arbitrary compilation (i.e., arbitrary code execution). Restrict to
+// localhost or use a firewall in shared environments.
 constexpr const char* kDefaultEndpoint = "0.0.0.0:9876";
 constexpr const char* kServerCacheRootEnv = "TT_METAL_JIT_SERVER_CACHE_ROOT";
 constexpr const char* kDefaultServerCacheRoot = "/tmp/tt-metal-cache/";
@@ -75,6 +78,10 @@ std::string normalize_cache_root(std::string cache_root) {
     return cache_root;
 }
 
+// SECURITY: kernel_name is client-supplied and used verbatim in path construction.
+// A malicious client could use "../" segments to escape the cache subtree.
+// Currently acceptable because this is a trusted internal tool; if the server is ever
+// exposed to untrusted clients, validate that kernel_name is a safe relative path.
 std::string kernel_cache_dir(std::uint64_t build_key, const std::string& kernel_name) {
     return g_server_cache_root + std::to_string(build_key) + "/kernels/" + kernel_name;
 }
@@ -133,6 +140,10 @@ bool need_link(const std::string& out_dir, const std::string& target_name) {
     return !fs::exists(elf_path) || !tt::jit_build::dependencies_up_to_date(out_dir, elf_path);
 }
 
+// SECURITY: constructs a shell command from client-supplied strings (gpp, cflags, defines,
+// includes, srcs, objs). A malicious client can inject arbitrary shell commands via any of
+// these fields. This is equivalent to remote code execution by design — the server's
+// purpose is to run the compiler on behalf of the client.
 void compile_one(
     const std::string& gpp,
     const tt::tt_metal::jit_server::TargetRecipe& target,
@@ -159,6 +170,9 @@ void compile_one(
     fs::remove(temp_d_path);
 }
 
+// SECURITY: same shell injection exposure as compile_one — lflags, extra_link_objs,
+// linker_script, and weakened_firmware_name are all client-supplied and interpolated
+// into the shell command without escaping.
 void link_one(
     const std::string& gpp,
     const tt::tt_metal::jit_server::TargetRecipe& target,
@@ -306,6 +320,9 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
             request.generated_files.size(),
             outstanding);
 
+        // SECURITY: file.name is client-supplied. While fs::path join handles separators,
+        // a name like "../../foo" could still write outside the cache. Acceptable for a
+        // trusted client; validate if the server is ever exposed to untrusted input.
         if (!request.generated_files.empty()) {
             const fs::path genfiles_dir = kernel_cache_dir(request.build_key, request.kernel_name);
             fs::create_directories(genfiles_dir);
