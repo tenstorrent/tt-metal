@@ -153,8 +153,7 @@ LayerNormPreAllGatherProgramFactory::cached_program_t LayerNormPreAllGatherProgr
         program_config = std::get<ttnn::prim::LayerNormDefaultProgramConfig>(operation_attributes.program_config);
     }
 
-    bool float32_reduction = fp32_dest_acc_en && !program_config.legacy_reduction;
-    std::vector<uint32_t> compute_args = {Wt, block_size, float32_reduction ? 1u : 0u};
+    std::vector<uint32_t> compute_args = {Wt, block_size};
 
     const auto* compute_kernel_file =
         is_rmsnorm ? "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/"
@@ -392,9 +391,7 @@ LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DP
         program_config = std::get<ttnn::prim::LayerNormDefaultProgramConfig>(operation_attributes.program_config);
     }
 
-    bool float32_reduction = fp32_dest_acc_en && !program_config.legacy_reduction;
-    std::vector<uint32_t> compute_args = {
-        tiles_per_core_x, tiles_per_core_y, block_size, cores_y, float32_reduction ? 1u : 0u};
+    std::vector<uint32_t> compute_args = {tiles_per_core_x, tiles_per_core_y, block_size, cores_y};
 
     auto compute_kernels_id = tt::tt_metal::CreateKernel(
         program,

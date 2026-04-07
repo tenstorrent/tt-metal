@@ -29,8 +29,6 @@ void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t blk = get_compile_time_arg_val(1);
-    // Note: get_compile_time_arg_val(2) is FLOAT32_REDUCTION - unused after library migration
-    // Library auto-detects FP32 from ENABLE_FP32_DEST_ACC define
 
     constexpr uint32_t onetile = 1;
 
