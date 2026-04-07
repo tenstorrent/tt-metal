@@ -107,23 +107,29 @@ void kernel_main() {
     // Phase 3: Row chain add (FP32: copy_tile UnpackToDestFp32 + add_binary_tile SFPU)
     // =========================================================================
     if (do_row_receive) {
-        cb_wait_front(cb_recv, 1);
+        // Load own scalar into DST and pop cb_scalar BEFORE waiting for cb_recv.
+        // This prevents the reader's do_row_send from grabbing the old cb_scalar
+        // value in a race with this chain add.
         cb_wait_front(cb_scalar, 1);
-        cb_reserve_back(cb_scalar, 1);
         tile_regs_acquire();
         copy_tile_init(cb_scalar);
         copy_tile(cb_scalar, 0, 0);
+        cb_pop_front(cb_scalar, 1);
+
+        // Now wait for the received tile
+        cb_wait_front(cb_recv, 1);
         copy_tile_init(cb_recv);
         copy_tile(cb_recv, 0, 1);
+        cb_pop_front(cb_recv, 1);
+
         add_binary_tile_init();
         add_binary_tile(0, 1, 0);
         tile_regs_commit();
         tile_regs_wait();
+        cb_reserve_back(cb_scalar, 1);
         pack_reconfig_data_format(cb_scalar);
         pack_tile(0, cb_scalar);
         tile_regs_release();
-        cb_pop_front(cb_recv, 1);
-        cb_pop_front(cb_scalar, 1);
         cb_push_back(cb_scalar, 1);
     }
 
@@ -131,23 +137,26 @@ void kernel_main() {
     // Phase 4: Column chain add (same as Phase 3)
     // =========================================================================
     if (do_col_receive) {
-        cb_wait_front(cb_recv, 1);
+        // Same pattern: pop cb_scalar before waiting for cb_recv to prevent race
         cb_wait_front(cb_scalar, 1);
-        cb_reserve_back(cb_scalar, 1);
         tile_regs_acquire();
         copy_tile_init(cb_scalar);
         copy_tile(cb_scalar, 0, 0);
+        cb_pop_front(cb_scalar, 1);
+
+        cb_wait_front(cb_recv, 1);
         copy_tile_init(cb_recv);
         copy_tile(cb_recv, 0, 1);
+        cb_pop_front(cb_recv, 1);
+
         add_binary_tile_init();
         add_binary_tile(0, 1, 0);
         tile_regs_commit();
         tile_regs_wait();
+        cb_reserve_back(cb_scalar, 1);
         pack_reconfig_data_format(cb_scalar);
         pack_tile(0, cb_scalar);
         tile_regs_release();
-        cb_pop_front(cb_recv, 1);
-        cb_pop_front(cb_scalar, 1);
         cb_push_back(cb_scalar, 1);
     }
 
