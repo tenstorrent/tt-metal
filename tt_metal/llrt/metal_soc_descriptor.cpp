@@ -63,10 +63,12 @@ size_t metal_SocDescriptor::get_num_dram_views() const { return this->dram_view_
 int metal_SocDescriptor::get_dram_channel_from_logical_core(const CoreCoord& logical_coord) const {
     const uint32_t num_dram_views = this->get_num_dram_views();
     TT_FATAL(
-        (logical_coord.x < num_dram_views) and (logical_coord.y == 0),
-        "Bounds-Error -- Logical_core={} is outside of logical_grid_size={}",
+        logical_coord.x < num_dram_views &&
+            (dram_bank_endpoint_coords.empty() || logical_coord.y < dram_bank_endpoint_coords[logical_coord.x].size()),
+        "Bounds-Error -- Logical DRAM core {} is outside valid range (num_views={}, endpoints_per_bank={})",
         logical_coord.str(),
-        CoreCoord(num_dram_views, 1));
+        num_dram_views,
+        dram_bank_endpoint_coords.empty() ? 1 : dram_bank_endpoint_coords[0].size());
     return logical_coord.x;
 }
 
