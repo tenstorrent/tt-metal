@@ -289,7 +289,7 @@ FusedRMSNormPostAllGatherProgramFactory::cached_program_t FusedRMSNormPostAllGat
         num_tile_cols,
         dst_reg_count,
         stats_tiles_cols,
-        W * num_devices,
+        W * num_devices,  // reduce_factor
         e.u,
         has_weight,
         fuse_rope,

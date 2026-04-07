@@ -16,7 +16,6 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 
 namespace blocks {
@@ -271,7 +270,6 @@ void normalize_scores(
     const uint32_t cb_epsilon_scalar,
     const uint32_t cb_normalized_scores) {
     // 1. Sum row (experts) to get row vector of sums [1, 32]
-    // PERSISTENT mode: waits for tile internally, no pop (tile persists for broadcast multiply)
     compute_kernel_lib::
         reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
             cb_gathered_sigmoid,
