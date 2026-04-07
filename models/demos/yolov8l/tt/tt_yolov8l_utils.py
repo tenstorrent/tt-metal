@@ -86,8 +86,9 @@ def make_anchors(device, feats, strides, grid_cell_offset=0.5, mesh_mapper=None)
     )
 
 
-def ttnn_decode_bboxes(device, distance, anchor_points, xywh=True, dim=1):
-    lt, rb = ttnn.split(distance, 2, 1, memory_config=ttnn.L1_MEMORY_CONFIG)  # if done in tile : tt-metal issue #17017
+def ttnn_decode_bboxes(device, distance, anchor_points, xywh=True, dim=1, use_dram=False):
+    mc = ttnn.DRAM_MEMORY_CONFIG if use_dram else ttnn.L1_MEMORY_CONFIG
+    lt, rb = ttnn.split(distance, 2, 1, memory_config=mc)  # if done in tile : tt-metal issue #17017
 
     x1y1 = anchor_points - lt
     x2y2 = anchor_points + rb
@@ -95,7 +96,7 @@ def ttnn_decode_bboxes(device, distance, anchor_points, xywh=True, dim=1):
         c_xy = x1y1 + x2y2
         c_xy = ttnn.div(c_xy, 2, dtype=ttnn.bfloat8_b)
         wh = ttnn.subtract(x2y2, x1y1, dtype=ttnn.bfloat8_b)
-        return ttnn.concat([c_xy, wh], 1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        return ttnn.concat([c_xy, wh], 1, memory_config=mc)
 
 
 def preprocess_parameters(state_dict, path, bias=True, bfloat8=True, mesh_mapper=None):
@@ -305,13 +306,13 @@ def custom_preprocessor(device, state_dict, inp_h=640, inp_w=640, mesh_mapper=No
     return parameters
 
 
-def create_custom_mesh_preprocessor(device, mesh_mapper=None):
+def create_custom_mesh_preprocessor(device, mesh_mapper=None, inp_h=640, inp_w=640):
     def custom_mesh_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
         return custom_preprocessor(
             device,
             model.state_dict(),
-            inp_h=640,
-            inp_w=640,
+            inp_h=inp_h,
+            inp_w=inp_w,
             mesh_mapper=mesh_mapper,
         )
 

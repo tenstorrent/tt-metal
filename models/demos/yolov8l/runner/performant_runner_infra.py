@@ -23,6 +23,7 @@ class YOLOv8lPerformanceRunnerInfra:
         mesh_mapper=None,
         mesh_composer=None,
         weights_mesh_mapper=None,
+        res=(640, 640),
     ):
         super().__init__()
         torch.manual_seed(0)
@@ -37,11 +38,13 @@ class YOLOv8lPerformanceRunnerInfra:
         self.mesh_composer = mesh_composer
         self.weights_mesh_mapper = weights_mesh_mapper
         self.num_devices = device.get_num_devices()
-        input_shape = (self.batch_size, 3, 640, 640)
-        inp_h, inp_w = input_shape[2], input_shape[3]
+        inp_h, inp_w = res
+        input_shape = (self.batch_size, 3, inp_h, inp_w)
         parameters = preprocess_model_parameters(
             initialize_model=lambda: torch_model,
-            custom_preprocessor=create_custom_mesh_preprocessor(device, self.weights_mesh_mapper),
+            custom_preprocessor=create_custom_mesh_preprocessor(
+                device, self.weights_mesh_mapper, inp_h=inp_h, inp_w=inp_w
+            ),
             device=device,
         )
         self.ttnn_yolov8_model = TtYolov8lModel(device=device, parameters=parameters, res=(inp_h, inp_w))

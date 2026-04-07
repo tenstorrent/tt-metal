@@ -49,6 +49,7 @@ def run_yolov8l(
             mesh_mapper=inputs_mesh_mapper,
             mesh_composer=output_mesh_composer,
             model_location_generator=model_location_generator,
+            res=res,
         )
 
     save_dir = "models/demos/yolov8l/demo/runs"
@@ -111,7 +112,7 @@ def run_yolov8l(
     "use_weights_from_ultralytics",
     [True],
 )
-@pytest.mark.parametrize("res", [(640, 640)])
+@pytest.mark.parametrize("res", [(640, 640), (1280, 1280)])
 def test_demo(
     device, batch_size_per_device, input_loc, model_type, use_weights_from_ultralytics, res, model_location_generator
 ):
@@ -151,7 +152,7 @@ def test_demo(
     "use_weights_from_ultralytics",
     [True],
 )
-@pytest.mark.parametrize("res", [(640, 640)])
+@pytest.mark.parametrize("res", [(640, 640), (1280, 1280)])
 def test_demo_dp(
     mesh_device,
     batch_size_per_device,

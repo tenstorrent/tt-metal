@@ -13,21 +13,10 @@ from models.demos.yolov8l.tt.ttnn_yolov8l import TtYolov8lModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8L_L1_SMALL_SIZE}], indirect=True, ids=["0"])
-@pytest.mark.parametrize(
-    "input_tensor",
-    [torch.rand((1, 3, 640, 640))],
-    ids=["input_tensor1"],
-)
-@pytest.mark.parametrize(
-    "use_pretrained_weights",
-    [True],
-)
-def test_yolov8l_640(device, input_tensor, use_pretrained_weights, model_location_generator):
+def _run_yolov8l_pcc(device, input_tensor, model_location_generator):
     inp_h, inp_w = input_tensor.shape[2], input_tensor.shape[3]
-    if use_pretrained_weights:
-        torch_model = load_torch_model(model_location_generator)
-        state_dict = torch_model.state_dict()
+    torch_model = load_torch_model(model_location_generator)
+    state_dict = torch_model.state_dict()
 
     parameters = custom_preprocessor(device, state_dict, inp_h=inp_h, inp_w=inp_w)
     ttnn_model = TtYolov8lModel(device=device, parameters=parameters, res=(inp_h, inp_w))
@@ -52,3 +41,31 @@ def test_yolov8l_640(device, input_tensor, use_pretrained_weights, model_locatio
 
     passing, pcc = assert_with_pcc(ttnn_model_output, torch_model_output, 0.99)
     logger.info(f"Passing: {passing}, PCC: {pcc}")
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8L_L1_SMALL_SIZE}], indirect=True, ids=["0"])
+@pytest.mark.parametrize(
+    "input_tensor",
+    [torch.rand((1, 3, 640, 640))],
+    ids=["input_tensor1"],
+)
+@pytest.mark.parametrize(
+    "use_pretrained_weights",
+    [True],
+)
+def test_yolov8l_640(device, input_tensor, use_pretrained_weights, model_location_generator):
+    _run_yolov8l_pcc(device, input_tensor, model_location_generator)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8L_L1_SMALL_SIZE}], indirect=True, ids=["0"])
+@pytest.mark.parametrize(
+    "input_tensor",
+    [torch.rand((1, 3, 1280, 1280))],
+    ids=["input_tensor_1280"],
+)
+@pytest.mark.parametrize(
+    "use_pretrained_weights",
+    [True],
+)
+def test_yolov8l_1280(device, input_tensor, use_pretrained_weights, model_location_generator):
+    _run_yolov8l_pcc(device, input_tensor, model_location_generator)

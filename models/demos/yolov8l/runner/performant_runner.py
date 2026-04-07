@@ -22,6 +22,7 @@ class YOLOv8lPerformantRunner:
         mesh_composer=None,
         weights_mesh_mapper=None,
         model_location_generator=None,
+        res=(640, 640),
     ):
         self.device = device
         self.mesh_mapper = mesh_mapper
@@ -34,6 +35,7 @@ class YOLOv8lPerformantRunner:
             mesh_composer=self.mesh_composer,
             weights_mesh_mapper=self.weights_mesh_mapper,
             model_location_generator=model_location_generator,
+            res=res,
         )
         (
             self.tt_inputs_host,
