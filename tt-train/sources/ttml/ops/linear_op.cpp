@@ -7,6 +7,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
+#include "core/distributed/topology_utils.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/moreh/moreh_linear_backward/moreh_linear_backward.hpp"
@@ -15,6 +16,7 @@
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 using namespace tt::constants;
+using ttml::core::distributed::propagate_topology;
 
 namespace ttml::ops {
 
@@ -42,8 +44,10 @@ void ttnn_linear_backward(
         bias->add_grad(bias_grad);
     }
     auto weight_grad = ttnn::reshape(reshaped_weight_grad, weight->get_value().logical_shape());
+    propagate_topology(out->get_grad(), tensor_value, weight_grad);
 
     auto tensor_grad = ttnn::reshape(reshaped_tensor_grad, tensor_value.logical_shape());
+    propagate_topology(out->get_grad(), weight->get_value(), tensor_grad);
 
     tensor->add_grad(tensor_grad);
     weight->add_grad(weight_grad);

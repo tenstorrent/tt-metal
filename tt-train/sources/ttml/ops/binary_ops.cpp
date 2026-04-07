@@ -18,6 +18,7 @@
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
+#include "core/distributed/topology_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -83,47 +84,16 @@ ttnn::Tensor unbroadcast_grad(const autograd::TensorPtr& input, const ttnn::Tens
     return reduced;
 }
 
-// Propagate shard topology from inputs to output.
-// If either input is sharded on a mesh axis, the output gets that shard placement.
 void propagate_topology(
     const tt::tt_metal::Tensor& src_a, const tt::tt_metal::Tensor& src_b, const autograd::TensorPtr& out) {
-    const auto& topo_a = src_a.tensor_topology();
-    const auto& topo_b = src_b.tensor_topology();
-    const auto& pa = topo_a.placements();
-    const auto& pb = topo_b.placements();
-
-    if (pa.size() <= 1 && pb.size() <= 1) {
-        return;
-    }
-
-    using Placement = tt::tt_metal::distributed::MeshMapperConfig::Placement;
-    using ShardT = tt::tt_metal::distributed::MeshMapperConfig::Shard;
-
-    size_t ndim = std::max(pa.size(), pb.size());
-    ttsl::SmallVector<Placement> merged;
-    for (size_t i = 0; i < ndim; ++i) {
-        auto p_a = (i < pa.size()) ? pa[i] : Placement{tt::tt_metal::distributed::MeshMapperConfig::Replicate{}};
-        auto p_b = (i < pb.size()) ? pb[i] : Placement{tt::tt_metal::distributed::MeshMapperConfig::Replicate{}};
-        merged.push_back(std::holds_alternative<ShardT>(p_a) ? p_a : p_b);
-    }
-
-    tt::tt_metal::TensorTopology new_topo(
-        topo_a.distribution_shape(), std::move(merged), {topo_a.mesh_coords().begin(), topo_a.mesh_coords().end()});
-
     tt::tt_metal::Tensor val = out->get_value(autograd::PreferredPrecision::FULL);
-    val.update_tensor_topology(new_topo);
+    ttml::core::distributed::propagate_topology(src_a, src_b, val);
     out->set_value(val);
 }
 
 void propagate_topology(const tt::tt_metal::Tensor& src, const autograd::TensorPtr& out) {
-    const auto& topo = src.tensor_topology();
-    const auto& placements = topo.placements();
-    if (placements.size() <= 1) {
-        return;
-    }
-
     tt::tt_metal::Tensor val = out->get_value(autograd::PreferredPrecision::FULL);
-    val.update_tensor_topology(topo);
+    ttml::core::distributed::propagate_topology(src, val);
     out->set_value(val);
 }
 
