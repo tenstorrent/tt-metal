@@ -56,9 +56,7 @@ void kernel_main() {
     constexpr uint32_t act_num_blocks_w = get_compile_time_arg_val(11);
     experimental::Semaphore<> act_mcast_sender_sem(get_compile_time_arg_val(12));
     experimental::Semaphore<> act_mcast_receiver_sem(get_compile_time_arg_val(13));
-    constexpr struct {
-        uint32_t noc_x_start, noc_y_start, noc_x_end, noc_y_end;
-    } mcast_rect = {
+    constexpr McastRect mcast_rect = {
         get_compile_time_arg_val(14),
         get_compile_time_arg_val(15),
         get_compile_time_arg_val(16),
@@ -114,6 +112,13 @@ void kernel_main() {
 
     // Experimental API multicast endpoint
     experimental::MulticastEndpoint mcast_ep;
+    // Pre-built mcast destination; .addr is updated per mcast call
+    McastDst mcast_dst = {
+        .noc_x_start = mcast_rect.noc_x_start,
+        .noc_y_start = mcast_rect.noc_y_start,
+        .noc_x_end = mcast_rect.noc_x_end,
+        .noc_y_end = mcast_rect.noc_y_end,
+        .addr = 0};
 
     // Set up remote VALID value
     act_mcast_receiver_sem.set(VALID);
@@ -218,17 +223,14 @@ void kernel_main() {
                         experimental::use<experimental::CircularBuffer::AddrSelector::READ_PTR>(tilized_in0_cb);
 
                     // Multicast tilized activations to all reader cores (including self)
+                    mcast_dst.addr = act_cb.get_write_ptr();
                     noc.async_write_multicast<experimental::Noc::McastMode::INCLUDE_SRC>(
                         tilized_src,
                         mcast_ep,
                         act_mcast_sender_size_bytes,
                         num_reader_cores,
                         {.offset_bytes = 0},
-                        {.noc_x_start = mcast_rect.noc_x_start,
-                         .noc_y_start = mcast_rect.noc_y_start,
-                         .noc_x_end = mcast_rect.noc_x_end,
-                         .noc_y_end = mcast_rect.noc_y_end,
-                         .addr = act_cb.get_write_ptr()},
+                        mcast_dst,
                         true);
 
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id and same

@@ -32,8 +32,7 @@ namespace experimental {
  *  - wait(value): Block until the semaphore is set to the specified value.  Does not decrement the semaphore.
  *  - wait_min(value): Block until the semaphore is at least the specified value.  Does not decrement the semaphore.
  *  - set(value): Set the semaphore to the specified value.
- *  - set_multicast(...): Set the semaphore value on multiple cores.
- *  - set_multicast_loopback_src(...): Set the semaphore value on multiple cores including the source.
+ *  - set_multicast(...): Set the semaphore value on multiple cores (use McastMode::INCLUDE_SRC to include sender).
  */
 template <ProgrammableCoreType core_type = ProgrammableCoreType::TENSIX>
 class Semaphore {
@@ -116,7 +115,6 @@ public:
 
     /**
      * @brief Set the semaphore value on multiple cores in a specified rectangular region of the NoC.
-     * @note Sender cannot be part of the multicast destinations.
      *
      * @param noc The Noc object representing the NoC to use for the transaction.
      * @param noc_x_start The starting X coordinate of the region (inclusive).
@@ -148,31 +146,6 @@ public:
                 local_l1_addr, multicast_addr, num_dests, linked, noc.get_noc_id());
         } else if constexpr (mcast_mode == Noc::McastMode::EXCLUDE_SRC) {
             noc_semaphore_set_multicast(local_l1_addr, multicast_addr, num_dests, linked, noc.get_noc_id());
-        }
-    }
-
-    /**
-     * @brief Set the semaphore value on multiple cores, reading the value from a separate L1 source address.
-     *
-     * Use this when the sender also waits on the same semaphore locally, to avoid a race where the
-     * local wait sees the value before the multicast completes to remote cores.
-     */
-    template <Noc::McastMode mcast_mode = Noc::McastMode::EXCLUDE_SRC>
-    void set_multicast_from(
-        const Noc& noc,
-        uint32_t src_addr,
-        uint32_t noc_x_start,
-        uint32_t noc_y_start,
-        uint32_t noc_x_end,
-        uint32_t noc_y_end,
-        uint32_t num_dests,
-        bool linked = false) {
-        const uint64_t multicast_addr =
-            get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, noc.get_noc_id());
-        if constexpr (mcast_mode == Noc::McastMode::INCLUDE_SRC) {
-            noc_semaphore_set_multicast_loopback_src(src_addr, multicast_addr, num_dests, linked, noc.get_noc_id());
-        } else if constexpr (mcast_mode == Noc::McastMode::EXCLUDE_SRC) {
-            noc_semaphore_set_multicast(src_addr, multicast_addr, num_dests, linked, noc.get_noc_id());
         }
     }
 

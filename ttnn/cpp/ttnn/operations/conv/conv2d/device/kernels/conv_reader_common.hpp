@@ -8,6 +8,16 @@
 #include <api/dataflow/dataflow_api.h>
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
+// Multicast rectangle: defines the NOC coordinate range for multicast destinations.
+struct McastRect {
+    uint32_t noc_x_start, noc_y_start, noc_x_end, noc_y_end;
+};
+
+#ifndef COMPILE_FOR_TRISC
+// Shorthand for the multicast destination args type used by Noc::async_write_multicast.
+using McastDst = experimental::noc_traits_t<experimental::MulticastEndpoint>::dst_args_mcast_type;
+#endif
+
 // Zero out all tiles for a given circular buffer.
 template <uint32_t cb_id>
 FORCE_INLINE void zero_out_tiles(experimental::Noc noc, experimental::CB cb) {

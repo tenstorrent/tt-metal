@@ -74,9 +74,7 @@ void kernel_main() {
     }
 
     // mcast args
-    const struct {
-        uint32_t noc_x_start, noc_y_start, noc_x_end, noc_y_end;
-    } mcast_rect = {
+    const McastRect mcast_rect = {
         get_arg_val<uint32_t>(i++), get_arg_val<uint32_t>(i++), get_arg_val<uint32_t>(i++), get_arg_val<uint32_t>(i++)};
     const uint32_t weights_mcast_num_dests = get_arg_val<uint32_t>(i++);
     const uint32_t weights_mcast_num_cores = get_arg_val<uint32_t>(i++);
@@ -86,6 +84,13 @@ void kernel_main() {
     experimental::CB cb_weight_obj(cb_id_weight);
     experimental::CB cb_bias_obj(bias_cb_id);
     experimental::CB cb_act_second_obj(cb_id_act_second_reader);
+    // Pre-built mcast destination; .addr is updated per mcast call
+    McastDst mcast_dst = {
+        .noc_x_start = mcast_rect.noc_x_start,
+        .noc_y_start = mcast_rect.noc_y_start,
+        .noc_x_end = mcast_rect.noc_x_end,
+        .noc_y_end = mcast_rect.noc_y_end,
+        .addr = 0};
 
     const uint32_t remaining_tiles_to_push =
         split_reader_enabled && activation_reuse_enabled ? get_arg_val<uint32_t>(i++) : 0;
@@ -244,17 +249,14 @@ void kernel_main() {
 
                 // Now we have the block in the CB address, we can mcast to dests!
                 // num_dests must not include source, since we are NOT really doing a local copy!
+                mcast_dst.addr = cb_weight_obj.get_write_ptr();
                 noc.async_write_multicast(
                     experimental::use<experimental::CB::AddrSelector::WRITE_PTR>(cb_weight_obj),
                     mcast_ep,
                     weights_block_size_bytes,
                     weights_mcast_num_cores,
                     {},
-                    {.noc_x_start = mcast_rect.noc_x_start,
-                     .noc_y_start = mcast_rect.noc_y_start,
-                     .noc_x_end = mcast_rect.noc_x_end,
-                     .noc_y_end = mcast_rect.noc_y_end,
-                     .addr = cb_weight_obj.get_write_ptr()},
+                    mcast_dst,
                     true);
 
                 // Note: no need for write barrier, since these two multicasts are done on the same noc id and
@@ -307,17 +309,14 @@ void kernel_main() {
 
                 // Now we have the block in the CB address, we can mcast to dests!
                 // num_dests must not include source, since we are NOT really doing a local copy!
+                mcast_dst.addr = cb_bias_obj.get_write_ptr();
                 noc.async_write_multicast(
                     experimental::use<experimental::CB::AddrSelector::WRITE_PTR>(cb_bias_obj),
                     mcast_ep,
                     bias_block_size_bytes,
                     weights_mcast_num_cores,
                     {},
-                    {.noc_x_start = mcast_rect.noc_x_start,
-                     .noc_y_start = mcast_rect.noc_y_start,
-                     .noc_x_end = mcast_rect.noc_x_end,
-                     .noc_y_end = mcast_rect.noc_y_end,
-                     .addr = cb_bias_obj.get_write_ptr()},
+                    mcast_dst,
                     true);
 
                 // Note: no need for write barrier, since these two multicasts are done on the same noc id and same vc

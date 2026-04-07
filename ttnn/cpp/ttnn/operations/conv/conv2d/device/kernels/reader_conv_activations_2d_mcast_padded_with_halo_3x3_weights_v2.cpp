@@ -13,12 +13,6 @@
 #include "api/debug/dprint_pages.h"
 #endif
 
-struct McastRect {
-    uint32_t noc_x_start, noc_y_start, noc_x_end, noc_y_end;
-};
-
-using McastDst = experimental::noc_traits_t<experimental::MulticastEndpoint>::dst_args_mcast_type;
-
 // Multicasts activation data from src_cb to dst_cb across cores in the multicast rectangle.
 // Three cases depending on the sender's role and number of multicast destinations:
 //   is_receiver_core && act_mcast_num_cores > 0:  mcast with INCLUDE_SRC loopback
